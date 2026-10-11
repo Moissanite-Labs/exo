@@ -31,12 +31,44 @@ matrix:
     internal: ask
     public: ask
 
-# Extra factors that raise a cell to "ask" regardless of the matrix.
-escalate_when:
-  - spends money above policies/budget.yaml limits
-  - affects a third party who has not consented
-  - changes security settings, credentials or access
-  - signs in, or creates an account, as the principal
+# Decisions also accept the gate's own words: allow (= act), log (= report), ask, deny.
 
-# Actions the principal keeps for themselves, whatever the cell says. Fill from their rulings.
+# Where actions land. Targets are repos (owner/name), hosts, chat targets or paths, matched
+# as globs. An action on a target listed here counts as internal or private, and not as a
+# third-party effect. Example: internal: ["my-org/*", "discord:#my-team"].
+scopes:
+  private: []
+  internal: []
+
+# Per-category decision that replaces the matrix cell. Categories come from exo.gate, for
+# example: read, local_write, shell, delete, history_rewrite, force_push, vcs_push, vcs_merge,
+# github_post, github_close, publish, deploy_preview, deploy_production, web_post,
+# message_send, email_send, social_post, payment, credentials, account, schedule, browser.
+# Example: vcs_merge: act
+categories: {}
+
+# Rules for finer cases. The first match wins over the matrix and the category line.
+# Match keys: category, tool, target (glob), command (regex), exposure, reversibility,
+# third_party. Example:
+#   - match: {category: vcs_merge, target: "my-org/*"}
+#     decision: act
+#     reason: merges inside the principal's own org
+rules: []
+
+# Extra factors that raise a cell to "ask" regardless of the matrix and the rules.
+escalate:
+  cost_over_budget: true      # a spend above policies/budget.yaml limits, or of unknown size
+  third_party: true           # affects someone outside the principal's scopes
+  categories: [credentials, account, payment]   # security settings, sign-ins, new accounts, money
+
+# Actions the principal keeps for themselves, whatever the cell says (always ask).
+# Each entry is a category name, "tool:<glob>", "target:<glob>", "command:<regex>",
+# or a mapping of match keys. Fill from their rulings.
 reserved: []
+
+# Actions no agent may take at all (block). Same entry format as reserved.
+deny: []
+
+# What happens when the principal does not answer an ask. The host blocks on timeout, so
+# the default is to skip the action.
+ask_default: skip
