@@ -31,6 +31,7 @@ from .ingest.cli import register as register_ingest, cmd_ingest  # noqa: F401  (
 from .ask import register as register_ask, cmd_ask  # noqa: F401
 from .eval import register as register_eval, cmd_eval  # noqa: F401
 from .brief import register as register_brief, cmd_brief  # noqa: F401
+from .consolidate import register as register_consolidate, cmd_consolidate, cmd_proposals  # noqa: F401
 
 
 def key_path(name: str) -> Path:
@@ -200,6 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_ask(sp, common)
     register_eval(sp, common)
     register_brief(sp, common)
+    register_consolidate(sp, common)
     return ap
 
 

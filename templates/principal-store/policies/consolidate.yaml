@@ -1,0 +1,8 @@
+# How corrections and rulings become beliefs. Change freely; the code reads these keys.
+version: 1
+conflict_rule: newer_wins_unless_guarded   # newer_wins | newer_wins_unless_guarded | ask
+half_life_days: {preference: 30, rule: 0}  # 0 = no decay; rulings never fade
+similarity: 0.6                            # how alike two instructions must be to count as a repeat
+rule_of_three: 3                           # repeats before proposing to encode a rule
+target_overlap: 0.6
+stale_below: 0.2                           # report taste beliefs that faded below this weight
