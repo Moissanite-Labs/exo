@@ -22,3 +22,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   memory seed and its method as Exo's ingestion pipeline v0.
 - **Why:** It already implements the guardian-angel record, router, provenance and training seeds.
 - **Rejected:** Starting the memory model from scratch.
+
+## D-004 (2026-10-11) Two goals held together: fit one person, replicate for anyone
+- **Decision:** Every component separates the **mechanism** (generic, shipped in the repo) from the
+  **principal** (one person's data, profile, tuning, rules, kept in a per-user store). A is principal #1.
+  Nothing in the core may assume A's accounts, machines, agents or names; everything about A lives in
+  his principal store (seeded from `~/hafiz`). A new user gets the same mechanism and an onboarding
+  flow that builds their own store.
+- **Why:** A: "there's two key aspects to this task, building it to fit me as well as possible and
+  making it replicable for any user."
+- **Test:** a fresh install with an empty principal store must run end to end; A's install must lose
+  nothing when the core updates.
+- **Rejected:** Building for A first and generalizing later (A-specific assumptions leak into core and
+  are expensive to remove). Building generic first (loses the fit, which is the point of a guardian angel).
