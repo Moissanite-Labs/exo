@@ -35,3 +35,27 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   nothing when the core updates.
 - **Rejected:** Building for A first and generalizing later (A-specific assumptions leak into core and
   are expensive to remove). Building generic first (loses the fit, which is the point of a guardian angel).
+
+## D-005 (2026-10-11) Base: Hermes Agent as a distribution, not a hard fork
+- **Decision:** Exo runs on upstream Hermes Agent pinned to weekly release tags. All Exo features ship
+  as Hermes plugins plus a separate `exo` Python package (this repo). A patch queue of at most 5 core
+  patches is allowed, and each must also be an open upstream PR; a patch is dropped when it merges or
+  when a hook replaces it.
+- **Why:** Evidence in `research/BASE-EVAL.md`. Hermes already covers gateways, cron, kanban,
+  delegation, memory and context-engine plugin points, TUI, desktop and 40 providers (score 81, best).
+  Upstream moves about 490 commits a day; A's open core PRs sit on files touched 86 to 170 times a month,
+  while the plugin contract files change 5 to 9 times a month. All 4 of A's merged PRs were plugin-only;
+  13 of 20 closed PRs were core-only. Plugin work lands; core work mostly does not. A already runs this
+  way (vanilla checkout plus 8 external plugins).
+- **This changes A's brief.** A leaned toward a fork that merges everything natively. "Native" here
+  means first-class Exo plugins installed by the Exo installer, not edits to Hermes core. The user sees
+  one system; the code stays rebasable.
+- **Replicability (D-004):** one installer gives any user upstream Hermes plus Exo; personal data lives
+  in a separate store.
+- **Rejected:** hard fork (73: rebase lane forever on the hottest files); OpenClaw (72: strong gateways
+  and phone apps but no investment, TypeScript, OpenAI-sponsored foundation; borrow ideas); OpenCode,
+  pi, Goose, Codex (good engines, no personal-system layer; use as workers via ACP/MCP); Letta Code
+  (best memory design, cloud-first; copy its ideas); fresh on Claude Agent SDK (54: Claude-only,
+  proprietary TS SDK, no subscription login for third parties).
+- **Revisit if:** Nous relicenses, or breaks the plugin API repeatedly, or a needed hook is refused
+  upstream twice. Then freeze at the last good tag and fork from there (MIT allows it).
