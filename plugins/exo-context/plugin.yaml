@@ -1,0 +1,17 @@
+name: exo-context
+version: 0.1.0
+manifest_version: 1
+api_version: 1
+description: "Exo context engine. Wraps Hermes's default compressor and keeps the principal's rulings, corrections and open decisions verbatim in a pinned block across compaction. Writes a self-contained handoff file on each compaction. Commands: /exo branch, /exo handoff, /exo resume."
+author: Aska Digital
+license: MIT
+tags: [context-engine, compaction, handoff, memory, exo]
+python_dependencies: []
+provides_tools: []
+provides_hooks: []
+optional_env:
+  - EXO_PRINCIPAL
+  - EXO_HOME
+  - EXO_HANDOFF_DIR
+  - EXO_LAUNCH_TEMPLATE
+config_schema: {}
