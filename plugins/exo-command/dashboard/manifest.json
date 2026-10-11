@@ -1,0 +1,11 @@
+{
+  "name": "exo-command",
+  "label": "Command",
+  "description": "Exo command centre: projects, live agents, kanban, decisions waiting on you, cost per session. Read-only.",
+  "icon": "Activity",
+  "version": "0.1.0",
+  "tab": { "path": "/command", "position": "after:chat" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

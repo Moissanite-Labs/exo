@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exo.local/schemas/decision-event.v1.json",
+  "title": "Exo decision queue event (v1)",
+  "description": "One line of the decisions JSONL queue in a principal store. Events fold in file order into the current state of each decision.",
+  "type": "object",
+  "required": ["op", "id", "ts"],
+  "properties": {
+    "v": { "const": 1 },
+    "op": { "enum": ["open", "update", "snooze", "resolve", "withdraw"] },
+    "id": { "type": "string", "minLength": 1 },
+    "ts": { "type": ["string", "number"], "description": "ISO-8601 or epoch seconds" },
+    "title": { "type": "string" },
+    "context": { "type": "string" },
+    "options": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "object", "required": ["key", "label"], "properties": { "key": { "type": "string" }, "label": { "type": "string" } } }
+        ]
+      }
+    },
+    "default": { "type": "string" },
+    "deadline": { "type": ["string", "number"] },
+    "priority": { "enum": ["high", "normal", "low"] },
+    "reversible": { "type": "boolean" },
+    "exposure": { "enum": ["private", "public", "third-party"] },
+    "cost_usd": { "type": ["number", "null"] },
+    "asked_by": {
+      "type": "object",
+      "properties": { "agent": { "type": "string" }, "profile": { "type": "string" }, "session_id": { "type": "string" } }
+    },
+    "links": { "type": "array", "items": { "type": "string" } },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "until": { "type": ["string", "number"], "description": "snooze only" },
+    "choice": { "type": "string", "description": "resolve only" },
+    "note": { "type": "string" },
+    "by": { "type": "string" },
+    "reason": { "type": "string", "description": "withdraw only" }
+  },
+  "allOf": [
+    { "if": { "properties": { "op": { "const": "open" } } }, "then": { "required": ["title"] } },
+    { "if": { "properties": { "op": { "const": "snooze" } } }, "then": { "required": ["until"] } }
+  ],
+  "additionalProperties": true
+}
