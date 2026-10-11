@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "pack": "exo-skills",
+  "note": "Generic skill pack. Principal-specific rules, agent names and accounts live in the principal store under policies/ and agents/. Point skills.external_dirs at this folder.",
+  "skills": [
+    {
+      "name": "charts-in-posts",
+      "path": "charts-in-posts",
+      "description": "Charts and visuals in GitHub posts: tables, Mermaid diagrams, hosted images, which to use and how to make each.",
+      "source": "~/.hermes/team-skills/github/charts-in-posts/",
+      "generalized": "Author line and script paths generalized.",
+      "scripts": [
+        "scripts/check-mermaid.py",
+        "scripts/visual-value-gate.py"
+      ]
+    },
+    {
+      "name": "choreography",
+      "path": "choreography",
+      "description": "Use when a multi-agent team needs its shared working contracts: the self-improving flywheel, anti-loop discipline, open-source contribution, and local preprocessing.",
+      "source": "aska-digital/protean-kit choreography/*.md",
+      "generalized": "New index SKILL.md over four kit contracts (flywheel, anti-loop, open-source contribution, local preprocessing). The tool-specific video route was left out.",
+      "scripts": []
+    },
+    {
+      "name": "clean-writing",
+      "path": "clean-writing",
+      "description": "Use when a human reads your writing. Cut filler.",
+      "source": "aska-digital/protean-doctrine skills/clean-writing/ and ~/.hermes/team-skills/scripts/check-prose.py",
+      "generalized": "Public skill kept; added the mention rule and gate docs. check-prose.py moved into the skill as scripts/check-prose.py. Hard-coded internal names removed; extra banned phrases, internal names and limits load from <store>/policies/prose.json and policies/internal-names.txt.",
+      "scripts": [
+        "scripts/check-prose.py"
+      ]
+    },
+    {
+      "name": "control-plane",
+      "path": "control-plane",
+      "description": "Use for any multi-agent dispatch, rotation, concurrency, GitHub workflow, or learning decision. Compact trigger index; load only the bundle the task names.",
+      "source": "~/.hermes/team-skills/orchestration/protean-control-plane/SKILL.md",
+      "generalized": "Rewritten from the team's control plane. Seat names became roles (mission control, orchestrator, specialists) with {{orchestrator_seat}} and {{mission_control_seat}} placeholders. Absolute paths, ledger row ids, dated owner rulings and the owner-only list moved out: records default to <store>/records/ops/, rulings and the owner-only list live in the principal store policies/. Gate scripts other than check-prose are planned for exo.dispatch and exo.records.",
+      "scripts": []
+    },
+    {
+      "name": "council",
+      "path": "council",
+      "description": "Use when a structured team council is convened: bounded question, role seats, evidence-led deliberation, decision record with owner-held gates, and execution handoff with receipts.",
+      "source": "~/.hermes/team-skills/orchestration/protean-council/",
+      "generalized": "Seat names replaced by roles; pilot lane names and the state-CLI reference generalized (mission-control state is a signed ledger event in Exo). Templates kept.",
+      "scripts": []
+    },
+    {
+      "name": "exo-bus",
+      "path": "exo-bus",
+      "description": "Message other agent seats over the signed, hash-chained Exo Bus: post, inbox, threads, claims, verify.",
+      "source": "aska-digital/divan-bus SPEC.md and README (client usage); skill ~/.hermes/skills/divan-bus not copied",
+      "generalized": "Rewritten for exo.bus and the exo-bus plugin tools. Seat names, relay host and leader seat removed; config by EXO_BUS_* variables; registry and seats are principal data.",
+      "scripts": []
+    },
+    {
+      "name": "git-authorship-identity-cleanup",
+      "path": "git-authorship-identity-cleanup",
+      "description": "Use when internal names leak into public git commits.",
+      "source": "~/.hermes/team-skills/github/git-authorship-identity-cleanup/",
+      "generalized": "Example domain made generic.",
+      "scripts": []
+    },
+    {
+      "name": "github-draft-review-html",
+      "path": "github-draft-review-html",
+      "description": "Use when a GitHub issue/PR draft must be shown for review. Render it as a self-contained GitHub-dark single-file HTML.",
+      "source": "~/.hermes/team-skills/github/draft-review-html/",
+      "generalized": "Renamed to match its frontmatter name. Owner handle, personal drafts folder, vault delivery and internal agent chain moved to settings: EXO_DRAFTS_ROOT, EXO_INTERNAL_NAMES, EXO_DRAFT_OWNERS, EXO_DRAFT_STATE. Identifier gate no longer hard-codes names; prose gate points at clean-writing/scripts/check-prose.py.",
+      "scripts": [
+        "scripts/draft_pipeline.py",
+        "scripts/render_draft_html.py"
+      ]
+    },
+    {
+      "name": "github-issue-to-pr",
+      "path": "github-issue-to-pr",
+      "description": "Carry a GitHub issue to a verified PR with honest CI state.",
+      "source": "~/.hermes/team-skills/github/github-issue-to-pr/",
+      "generalized": "Copied; no principal content found.",
+      "scripts": []
+    },
+    {
+      "name": "github-issues",
+      "path": "github-issues",
+      "description": "Create, triage, label, assign GitHub issues via gh or REST.",
+      "source": "~/.hermes/team-skills/github/github-issues/",
+      "generalized": "Copied; no principal content found.",
+      "scripts": []
+    },
+    {
+      "name": "github-pr-audit",
+      "path": "github-pr-audit",
+      "description": "Use when auditing a GitHub PR or issue before merge.",
+      "source": "~/.hermes/team-skills/github/github-pr-audit/",
+      "generalized": "Seat names to roles, script paths to <skills-root>, internal provenance labels removed.",
+      "scripts": []
+    },
+    {
+      "name": "github-pr-workflow",
+      "path": "github-pr-workflow",
+      "description": "GitHub PR lifecycle: branch, commit, open, CI, merge.",
+      "source": "~/.hermes/team-skills/github/github-pr-workflow/",
+      "generalized": "Copied; no principal content found beyond generic examples.",
+      "scripts": []
+    },
+    {
+      "name": "operating-doctrine",
+      "path": "operating-doctrine",
+      "description": "Use when running any project with the Protean pipeline. Default stages, delegation map, handoff protocol, and QA gates.",
+      "source": "aska-digital/protean-doctrine skills/protean-operating-doctrine/SKILL.md (plus team-skills orchestration/team6-operating-doctrine sections 5 and 15)",
+      "generalized": "Public doctrine kept nearly verbatim (already role-named). Added the six pre-merge gates, escape routing, adversarial QA and the two-team bounce from the team copy with agent names replaced by roles. Commit identity table with personal addresses removed. Principal note added.",
+      "scripts": []
+    },
+    {
+      "name": "sym-protocol",
+      "path": "sym-protocol",
+      "description": "Use when validating or emitting SYM-2P/1.0 packets or blackboard objects. Stdlib validator with typed fail-closed diagnostics, brief/receipt packet templates, and a worked review-fix-verify-merge example.",
+      "source": "~/.hermes/team-skills/sym-protocol/",
+      "generalized": "Validator, templates and fixtures kept. Party ids in examples and fixtures renamed to role ids (orchestrator, builder, reviewer, control). Provenance paths into a personal profile cache removed. Library form is exo.protocols.sym2p.",
+      "scripts": [
+        "scripts/sym-validate.py",
+        "tests/run-tests.py"
+      ]
+    }
+  ]
+}

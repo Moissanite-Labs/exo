@@ -1,0 +1,9 @@
+assign b441 [coordinator -> builder] (proposed) confidence 88, coverage 70
+Scope: implement sections 3-5 of sym-2p/1.0.
+Constraint: modify no existing paths.
+Acceptance: validator exits 0 on valid input, 1 on invalid.
+Requires: acknowledgement required.
+Base: mr1:v1.
+Expires in 40s.
+Relay corruption protection: on.
+

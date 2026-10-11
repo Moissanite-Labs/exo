@@ -1,0 +1,165 @@
+"""Tests for the exo-orchestra plugin and the generic skill pack."""
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[2]
+SKILLS = REPO / "skills"
+PLUGIN = REPO / "plugins" / "exo-orchestra"
+sys.path.insert(0, str(PLUGIN))
+
+from exo_orchestra import orchestra  # noqa: E402
+
+DENY = ["Ahraz", "kethuda", "askaconsult", "orda", "proteus", "hazen", "leo", "frida", "mozi",
+        "shaka", "kindi", "saga-divan"]
+DENY_RE = re.compile(r"(?<!\w)(" + "|".join(re.escape(d) for d in DENY) + r")(?![\w])", re.I)
+# Explicit allowlist: files that explain provenance may name the source seats.
+ALLOWED = {PLUGIN / "PROVENANCE.md"}
+TEXT_SUFFIXES = {".md", ".py", ".json", ".jsonl", ".yaml", ".yml", ".txt", ".sh", ".html"}
+
+
+def manifest():
+    return json.loads((SKILLS / "MANIFEST.json").read_text(encoding="utf-8"))
+
+
+def test_manifest_lists_every_skill_and_each_entry_exists():
+    doc = manifest()
+    names = [s["name"] for s in doc["skills"]]
+    assert len(names) == len(set(names))
+    dirs = sorted(p.name for p in SKILLS.iterdir() if p.is_dir() and not p.name.startswith((".", "__")))
+    assert sorted(names) == dirs
+    for s in doc["skills"]:
+        for key in ("name", "path", "description", "source", "generalized"):
+            assert s.get(key), (s["name"], key)
+        skill_md = SKILLS / s["path"] / "SKILL.md"
+        assert skill_md.is_file()
+        fm = orchestra.frontmatter(skill_md)
+        assert fm.get("name") == s["name"]
+        assert fm.get("description")
+        for script in s.get("scripts", []):
+            assert (SKILLS / s["path"] / script).is_file()
+
+
+def test_profiles_complete_and_model_free():
+    for role in orchestra.ROLES:
+        d = PLUGIN / "profiles" / role
+        soul = (d / "SOUL.md").read_text()
+        cfg = (d / "config.yaml").read_text()
+        for heading in ("## Owns", "## Does not own", "## Routing", "## Safety"):
+            assert heading in soul, (role, heading)
+        assert "model: {}" in cfg and "provider:" not in cfg, role
+        assert "exo-orchestra" in cfg and "external_dirs" in cfg
+        listed = re.findall(r"^\s+- ([\w-]+)$", cfg.split("default_skills:")[1], re.M)
+        assert listed and all((SKILLS / s / "SKILL.md").is_file() for s in listed), role
+
+
+def test_render_profile_fills_placeholders(tmp_path):
+    files = orchestra.render_profile("builder", tmp_path / "p", {"seat_name": "forge", "principal_store": "/s"})
+    text = "".join(f.read_text() for f in files)
+    assert "forge" in text and "/s" in text and "{{" not in text
+    with pytest.raises(FileExistsError):
+        orchestra.render_profile("builder", tmp_path / "p")
+    with pytest.raises(ValueError):
+        orchestra.render_profile("intern", tmp_path / "q")
+
+
+def test_plugin_register_and_command(tmp_path):
+    calls = {"commands": {}, "skills": []}
+
+    class Ctx:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def get_config(self, key, default=None):
+            return self.settings.get(key, default)
+
+        def register_command(self, name, handler, **kw):
+            calls["commands"][name] = handler
+
+        def register_skill(self, name, path, description="", frontmatter=None):
+            assert Path(path).is_file()
+            calls["skills"].append(name)
+
+    orchestra.register(Ctx({}))
+    handle = calls["commands"]["orchestra"]
+    assert "reviewer" in handle("roles")
+    assert "clean-writing" in handle("skills")
+    out = handle(f"profile reviewer {tmp_path / 'r'} --seat qa-one")
+    assert out.startswith("Wrote") and "qa-one" in (tmp_path / "r" / "SOUL.md").read_text()
+    assert calls["skills"] == []
+    orchestra.register(Ctx({"register_skills": True}))
+    assert sorted(calls["skills"]) == sorted(s["name"] for s in manifest()["skills"])
+
+
+def run_prose(*args, env=None):
+    script = SKILLS / "clean-writing" / "scripts" / "check-prose.py"
+    return subprocess.run([sys.executable, "-I", str(script), *args], capture_output=True, text=True,
+                          env=env or {"PATH": "/usr/bin:/bin"})
+
+
+def test_check_prose_gate(tmp_path):
+    good = tmp_path / "good.md"
+    good.write_text("The importer reads the file. It writes one row per record.\n")
+    bad = tmp_path / "bad.md"
+    bad.write_text("Notably, this is the right shape — trust me.\n")
+    assert run_prose(str(good)).returncode == 0
+    r = run_prose(str(bad))
+    assert r.returncode == 1 and "em dash" in r.stdout and "right shape" in r.stdout
+    assert run_prose().returncode == 3
+    dup = tmp_path / "dup.md"
+    dup.write_text("See #12. Also #12.\n")
+    assert run_prose("--dupes", str(dup)).returncode == 1
+
+
+def test_check_prose_loads_principal_policy(tmp_path):
+    store = tmp_path / "store"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "internal-names.txt").write_text("# seats\nnorthstar\n")
+    (store / "policies" / "prose.json").write_text(json.dumps({"banned_phrases": [r"\bsynergy\b"]}))
+    text = tmp_path / "t.md"
+    text.write_text("Ask northstar about synergy.\n")
+    assert run_prose(str(text)).returncode == 0  # no store: generic rules only
+    env = {"PATH": "/usr/bin:/bin", "EXO_PRINCIPAL_STORE": str(store)}
+    r = run_prose(str(text), env=env)
+    assert r.returncode == 1 and "northstar" in r.stdout and "synergy" in r.stdout
+
+
+def test_sym_protocol_skill_suite_passes():
+    r = subprocess.run([sys.executable, "-I", str(SKILLS / "sym-protocol" / "tests" / "run-tests.py")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def iter_text_files():
+    for root in (SKILLS, PLUGIN):
+        for p in root.rglob("*"):
+            if p.is_file() and p.suffix in TEXT_SUFFIXES and "__pycache__" not in p.parts:
+                yield p
+
+
+def test_no_principal_names_outside_provenance_docs():
+    hits = []
+    for p in iter_text_files():
+        if p in ALLOWED:
+            continue
+        for n, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            for m in DENY_RE.finditer(line):
+                hits.append(f"{p.relative_to(REPO)}:{n}: {m.group(0)}")
+    assert not hits, "\n".join(hits[:50])
+
+
+def test_deny_list_has_teeth(tmp_path):
+    assert DENY_RE.search("ask Leo to review")
+    assert DENY_RE.search("seat saga-divan posted")
+    assert not DENY_RE.search("a leopard and a leotard")
+    assert not DENY_RE.search("the ordaprompt router")
+
+
+def test_deny_list_catches_hyphenated_seat_names():
+    assert DENY_RE.search("route to protean-orda")

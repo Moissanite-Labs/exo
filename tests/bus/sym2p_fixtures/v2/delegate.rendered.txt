@@ -1,0 +1,4 @@
+delegate r204 [coordinator -> scout] (proposed) confidence 85, coverage 70
+Spawn builder on thread b442 to implement sections 7-9.
+Base: mr1:3.
+

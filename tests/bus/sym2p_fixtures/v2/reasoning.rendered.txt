@@ -1,0 +1,5 @@
+assign r202 [coordinator -> builder] (proposed) confidence 90, coverage 75
+Let cov = 62.
+If cov < 70 then implement section 6.
+Requires: acknowledgement required.
+
