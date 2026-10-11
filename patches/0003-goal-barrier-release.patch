@@ -1,0 +1,278 @@
+Exo patch 0003
+Upstream-PR: https://github.com/NousResearch/hermes-agent/pull/107130
+Title: fix(goal): release a stalled-subagent wait barrier promptly and from a durable driver
+State-at-capture: OPEN
+Head-SHA: 20ff5f1852bb987cb771a6cb162a2772cff7e5e8
+Head-branch: fix/goal-barrier-parked-resume (base: main)
+Captured: 2026-10-11 with: gh pr diff 107130 -R NousResearch/hermes-agent
+Note: git apply ignores these header lines. The diff starts at the first 'diff --git'.
+
+diff --git a/cli.py b/cli.py
+index c3304556081f2..f0a88a7da0dee 100644
+--- a/cli.py
++++ b/cli.py
+@@ -3872,6 +3872,10 @@ def run(self):
+ 
+         threading.Thread(target=self._tui_spinner_loop, daemon=True).start()
+         threading.Thread(target=self._tui_process_loop, daemon=True).start()
++        # Durable driver for parked-goal resume (_heartbeat_watchdog_tick): start it at run() so a
++        # parked /goal always has a timer-driven release, independent of the process loop's idle
++        # path. Harmless when no heartbeat is configured — is_active() gates the heartbeat branch.
++        self._start_heartbeat_watchdog()
+         # Wake word listener off-thread so a first-run engine install never blocks the prompt.
+         threading.Thread(target=self._tui_wake_startup, daemon=True, name="wake-startup").start()
+ 
+diff --git a/hermes_cli/cli_loops_mixin.py b/hermes_cli/cli_loops_mixin.py
+index 75c35b2cc40bd..41a255a6498b2 100644
+--- a/hermes_cli/cli_loops_mixin.py
++++ b/hermes_cli/cli_loops_mixin.py
+@@ -496,26 +496,42 @@ def _loop():
+             try:
+                 while not getattr(self, "_should_exit", False):
+                     time.sleep(POLL_SECONDS)
+-                    try:
+-                        mgr = self._get_heartbeat_manager()
+-                        if mgr is None or not mgr.is_active():
+-                            continue
+-                        busy = (
+-                            self._agent_running
+-                            or getattr(self, "_voice_recording", False)
+-                            or getattr(self, "_voice_processing", False)
+-                            or not self._pending_input.empty())
+-                        if busy:
+-                            continue
+-                        prompt = mgr.due_prompt()
+-                        if prompt:
+-                            self._pending_input.put(prompt)
+-                    except Exception as exc:
+-                        logging.debug("heartbeat watchdog tick failed: %s", exc)
++                    self._heartbeat_watchdog_tick()
+             finally:
+                 self._heartbeat_watchdog_started = False
+         threading.Thread(target=_loop, daemon=True, name="heartbeat-watchdog").start()
+ 
++    def _heartbeat_watchdog_tick(self) -> None:
++        """One daemon poll: release a parked /goal whose barrier lifted, then fire a due heartbeat.
++
++        The parked-goal resume lives HERE as well as in the interactive idle tick so a stalled-
++        subagent barrier does not depend on the process loop being idle to release. That daemon
++        polls on its own timer regardless of ``_agent_running``; the idle tick is starved while a
++        long tool call runs, and a parked goal that outlives its target must not stall the loop."""
++        try:
++            busy = (
++                self._agent_running
++                or getattr(self, "_voice_recording", False)
++                or getattr(self, "_voice_processing", False)
++                or not self._pending_input.empty())
++        except Exception:
++            return
++        if busy:
++            return
++        try:
++            self._maybe_resume_parked_goal()
++        except Exception as exc:
++            logging.debug("parked-goal watchdog resume failed: %s", exc)
++        try:
++            mgr = self._get_heartbeat_manager()
++            if mgr is None or not mgr.is_active():
++                return
++            prompt = mgr.due_prompt()
++            if prompt:
++                self._pending_input.put(prompt)
++        except Exception as exc:
++            logging.debug("heartbeat watchdog tick failed: %s", exc)
++
+     def _maybe_resume_parked_goal(self) -> None:
+         """Idle hook run from process_loop: when a parked /goal's barrier has lifted (the process
+         exited, the timer elapsed, or the wait aged past its cap), queue the continuation so the
+diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
+index cf80150fc7cf3..93d228b28e832 100644
+--- a/hermes_cli/config_defaults.py
++++ b/hermes_cli/config_defaults.py
+@@ -1297,6 +1297,10 @@ def _aux(timeout, *, reasoning_effort=True, **extra):
+         # Max continuation turns before auto-pause (/goal resume) — guards against judge false
+         # negatives and unbounded spend.
+         "max_turns": 20,
++        # Longest any wait barrier may hold the loop before judging resumes, including timed waits.
++        # The cap may shorten a requested timed wait. It bounds stalled subagent waits
++        # to minutes rather than half an hour.
++        "max_barrier_wait_seconds": 600,
+     },
+     # Loops — /loop re-runs a prompt or slash command on a cadence in-session. Fixed interval fires
+     # on the user's clock; self-paced (no interval) starts at the floor and backs off exponentially
+diff --git a/hermes_cli/goals.py b/hermes_cli/goals.py
+index d0b754f99ad0d..8bbf9e4b53530 100644
+--- a/hermes_cli/goals.py
++++ b/hermes_cli/goals.py
+@@ -50,9 +50,12 @@
+ # on concrete evidence instead of a vibe check.
+ DEFAULT_GATE_TIMEOUT_SECONDS = 300
+ DEFAULT_GATE_MAX_RETRIES = 3
+-# Longest a pid/session wait barrier may hold the loop before judging resumes. Timed barriers
+-# (``waiting_until``) carry their own deadline and are exempt.
+-_MAX_BARRIER_WAIT_S = 30 * 60
++# Default longest a pid/session wait barrier may hold the loop before judging resumes. This is an
++# upper bound even for timed barriers (``waiting_until``): a timed wait still ends early at its own
++# deadline, but the cap fires first when the deadline runs longer. Overridable per profile
++# via ``goals.max_barrier_wait_seconds`` (see ``_barrier_wait_cap_seconds``). Kept at minutes, not
++# the half hour that repeatedly parked an orchestrator on stalled subagents.
++_MAX_BARRIER_WAIT_S = 10 * 60
+ # Bounded tail of a failed gate's combined stdout/stderr fed back to the agent.
+ _GATE_OUTPUT_TAIL_CHARS = 3000
+ 
+@@ -761,6 +764,22 @@ def _goal_judge_setting(key: str, default, cast):
+     return default
+ 
+ 
++def _barrier_wait_cap_seconds() -> float:
++    """Barrier self-heal cap: ``goals.max_barrier_wait_seconds`` (default ``_MAX_BARRIER_WAIT_S``).
++    A non-positive/garbage value falls back to the default rather than pinning the loop forever.
++    ``load_config()`` is cached on (mtime, size) so this is cheap."""
++    try:
++        from hermes_cli.config import load_config
++
++        raw = (load_config().get("goals") or {}).get("max_barrier_wait_seconds", _MAX_BARRIER_WAIT_S)
++        cap = float(raw)
++        if cap > 0:
++            return cap
++    except Exception:
++        pass
++    return float(_MAX_BARRIER_WAIT_S)
++
++
+ def _goal_judge_max_tokens() -> int:
+     return _goal_judge_setting("max_tokens", DEFAULT_JUDGE_MAX_TOKENS, int)
+ 
+@@ -1416,9 +1435,10 @@ def is_waiting(self) -> bool:
+                     still = False
+         else:
+             return False
+-        if still and s.waiting_since and s.waiting_until == 0.0 and time.time() - s.waiting_since > _MAX_BARRIER_WAIT_S:
++        cap = _barrier_wait_cap_seconds()
++        if still and cap and s.waiting_since and time.time() - s.waiting_since > cap:
+             logger.info("goal %s: wait barrier on %s exceeded %ds; resuming judging",
+-                        self.session_id, s.waiting_on_session or s.waiting_on_pid, _MAX_BARRIER_WAIT_S)
++                        self.session_id, s.waiting_on_session or s.waiting_on_pid, int(cap))
+             still = False
+         if not still:
+             self.stop_waiting()
+diff --git a/tests/hermes_cli/test_cli_goal_parked_resume.py b/tests/hermes_cli/test_cli_goal_parked_resume.py
+index a5a729f342db1..1c9556e4d718d 100644
+--- a/tests/hermes_cli/test_cli_goal_parked_resume.py
++++ b/tests/hermes_cli/test_cli_goal_parked_resume.py
+@@ -24,10 +24,14 @@ class _Cli(CLILoopsMixin):
+     def __init__(self, mgr):
+         self._pending_input = queue.Queue()
+         self._mgr = mgr
++        self._agent_running = False
+ 
+     def _get_goal_manager(self):
+         return self._mgr
+ 
++    def _get_heartbeat_manager(self):
++        return None
++
+ 
+ def test_idle_hook_queues_the_continuation_when_a_timed_barrier_has_elapsed(hermes_home):
+     mgr = goals.GoalManager(session_id="resume-idle")
+@@ -56,3 +60,41 @@ def test_idle_hook_is_a_no_op_for_an_unparked_or_inactive_goal(hermes_home):
+     cli._last_goal_barrier_check = 0.0
+     cli._maybe_resume_parked_goal()
+     assert cli._pending_input.empty()
++
++
++def test_watchdog_tick_resumes_a_parked_goal_without_any_heartbeat(hermes_home):
++    """The timer-driven daemon tick releases a parked goal even with no heartbeat configured.
++
++    This is the durable driver: unlike the interactive idle tick, it is not gated on the process
++    loop being idle, so a barrier that outlives its subagent cannot stall the loop.
++    """
++    mgr = goals.GoalManager(session_id="resume-watchdog")
++    mgr.set("finish the thing")
++    mgr.wait_for_seconds(1, reason="cooldown")
++    assert mgr.state is not None
++    cli = _Cli(mgr)
++    cli._agent_running = False
++    with patch("cli._cprint"), patch("cli._DIM", ""), patch("cli._RST", ""):
++        cli._heartbeat_watchdog_tick()
++        assert cli._pending_input.empty()            # still parked
++        mgr.state.waiting_until = time.time() - 1
++        mgr._save()
++        cli._last_goal_barrier_check = 0.0
++        cli._heartbeat_watchdog_tick()
++    assert not cli._pending_input.empty()
++    assert "finish the thing" in cli._pending_input.get()
++    assert mgr.state.waiting_until == 0.0            # barrier cleared
++
++
++def test_watchdog_tick_defers_while_the_agent_is_busy(hermes_home):
++    """The daemon never injects a continuation while a turn or queued input is in flight."""
++    mgr = goals.GoalManager(session_id="resume-watchdog-busy")
++    mgr.set("g")
++    mgr.wait_for_seconds(1, reason="cooldown")
++    assert mgr.state is not None
++    mgr.state.waiting_until = time.time() - 1
++    mgr._save()
++    cli = _Cli(mgr)
++    cli._agent_running = True
++    cli._heartbeat_watchdog_tick()
++    assert cli._pending_input.empty()
+diff --git a/tests/hermes_cli/test_goals.py b/tests/hermes_cli/test_goals.py
+index 17c320913d127..104182033b6bd 100644
+--- a/tests/hermes_cli/test_goals.py
++++ b/tests/hermes_cli/test_goals.py
+@@ -926,3 +926,54 @@ def test_goal_session_db_is_the_registry_shared_handle(hermes_home):
+     finally:
+         goals._DB_CACHE.clear()
+         registry.release_or_close(db)
++
++
++# ──────────────────────────────────────────────────────────────────────
++# Wait-barrier self-heal cap (goals.max_barrier_wait_seconds)
++# ──────────────────────────────────────────────────────────────────────
++
++
++def test_barrier_cap_is_config_driven_and_releases_past_it(hermes_home, monkeypatch):
++    """The pid/session barrier self-heal cap reads config, and releases the loop past it.
++
++    Contract: a barrier younger than the configured cap still holds the loop; past the cap it
++    releases (judging resumes) instead of parking indefinitely on a stalled subagent. The cap is
++    resolved through ``_barrier_wait_cap_seconds`` so a profile can tune it below the default.
++    """
++    from hermes_cli import goals
++    from hermes_cli.goals import GoalManager
++
++    monkeypatch.setattr(goals, "_barrier_wait_cap_seconds", lambda: 60.0)
++    monkeypatch.setattr(goals, "_pid_alive", lambda _pid: True)  # target stays "alive"
++
++    mgr = GoalManager(session_id="cap-config")
++    mgr.set("g")
++    mgr.wait_on(1, reason="stalled subagent")
++    assert mgr.state is not None
++
++    mgr.state.waiting_since = time.time() - 30  # under the cap -> still parked
++    mgr._save()
++    assert mgr.is_waiting() is True
++
++    mgr.state.waiting_since = time.time() - 61  # past the cap -> released
++    mgr._save()
++    assert mgr.is_waiting() is False
++    assert mgr.state.waiting_on_pid is None
++
++
++def test_barrier_cap_also_releases_timed_waits_past_cap(hermes_home, monkeypatch):
++    """A timed deadline is an upper bound, not an exemption from the configured cap."""
++    from hermes_cli import goals
++    from hermes_cli.goals import GoalManager
++
++    monkeypatch.setattr(goals, "_barrier_wait_cap_seconds", lambda: 60.0)
++    mgr = GoalManager(session_id="timed-cap")
++    mgr.set("g")
++    mgr.wait_for_seconds(1200, reason="subagent still running")
++    assert mgr.state is not None
++
++    mgr.state.waiting_since = time.time() - 61
++    mgr._save()
++    assert mgr.state.waiting_until > time.time()  # own deadline has not elapsed
++    assert mgr.is_waiting() is False
++    assert mgr.state.waiting_until == 0.0
