@@ -1,0 +1,42 @@
+# Action gates: reversibility x exposure.
+# Every action an agent takes is placed in one cell. The cell decides whether the agent
+# acts, acts and reports, or waits for the principal. Edit the cells to fit the principal.
+#
+# reversibility: how hard it is to undo
+#   reversible    undo is one step and costs nothing (edit a draft, create a branch)
+#   costly        undo is possible but takes work or money (merge, send to a teammate)
+#   irreversible  cannot be undone (publish, delete, pay, send to a third party)
+# exposure: who can see the result
+#   private       only the principal and their agents
+#   internal      the principal's team or organisation
+#   public        anyone, or a named third party
+#
+# decisions:
+#   act         go ahead, log the action
+#   report      go ahead, include it in the next report
+#   ask         wait for the principal's approval on their channel, with a link and a default
+
+version: 1
+matrix:
+  reversible:
+    private: act
+    internal: act
+    public: ask
+  costly:
+    private: act
+    internal: report
+    public: ask
+  irreversible:
+    private: ask
+    internal: ask
+    public: ask
+
+# Extra factors that raise a cell to "ask" regardless of the matrix.
+escalate_when:
+  - spends money above policies/budget.yaml limits
+  - affects a third party who has not consented
+  - changes security settings, credentials or access
+  - signs in, or creates an account, as the principal
+
+# Actions the principal keeps for themselves, whatever the cell says. Fill from their rulings.
+reserved: []

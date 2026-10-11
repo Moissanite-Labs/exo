@@ -1,0 +1,11 @@
+# Interruption budget: how often agents may ask the principal something.
+version: 1
+questions_per_day: 5         # soft cap on questions reaching the principal
+batch: true                  # group questions into one message where possible
+quiet_hours: []              # e.g. ["23:00-08:00"] in the principal's time zone
+urgent_bypass:               # cases that may interrupt during quiet hours
+  - an irreversible action is about to happen without approval
+  - a security or data exposure incident
+question_format: >
+  One numbered question per decision, with a link to the evidence and a default answer
+  that will be used if there is no reply.

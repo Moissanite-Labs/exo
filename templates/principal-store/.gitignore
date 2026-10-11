@@ -1,0 +1,8 @@
+# Raw record. Never committed, never sent to an external service.
+corpus/private/
+# Event log and keys hold private data.
+ledger.sqlite
+ledger.sqlite-*
+*.key
+_drafts/
+.DS_Store
