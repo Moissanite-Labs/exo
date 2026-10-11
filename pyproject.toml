@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "exo"
+version = "0.1.0"
+description = "Generic mechanism for a personal AI system: signed ledger, principal store, retrieval."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Aska Digital" }]
+dependencies = ["pynacl>=1.5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+exo = "exo.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/exo"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "exo/templates"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

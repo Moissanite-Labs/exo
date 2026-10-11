@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+
+# Local data never belongs in the repo
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.key
+corpus/private/
+.DS_Store
