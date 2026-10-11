@@ -1,0 +1,73 @@
+name: exo-command
+version: "0.1.0"
+manifest_version: 2
+description: >-
+  Exo command centre for the Hermes web dashboard. One read-only view of projects
+  (clustered sessions with evidence tiers), live agents and subagents, kanban tasks,
+  decisions waiting on the principal, and cost per session. Opens every Hermes
+  database with mode=ro; never writes to state.db or kanban.db.
+author: Aska Digital
+license: MIT
+tags: [exo, dashboard, command-centre, read-only]
+hooks: []
+config_schema:
+  hermes_home:
+    type: str
+    default: ""
+    description: Hermes root to read. Empty means the running Hermes root.
+  profiles:
+    type: list
+    default: []
+    description: Profile names to scan. Empty means every profile with a state.db. The root state.db is called "default".
+  include_root_profile:
+    type: bool
+    default: true
+    description: Include <hermes_home>/state.db as the "default" profile.
+  principal_store:
+    type: str
+    default: ""
+    description: Principal store root. Empty falls back to EXO_PRINCIPAL_STORE, then EXO_HOME/principals/EXO_PRINCIPAL.
+  decisions_queue:
+    type: str
+    default: queues/decisions.jsonl
+    description: Decisions JSONL file. Relative paths resolve inside principal_store.
+  live_window_seconds:
+    type: int
+    default: 900
+    description: A session counts as live if it moved within this many seconds.
+  past_window_hours:
+    type: int
+    default: 24
+    description: Finished subagents from this window are listed under Past.
+  cost_window_days:
+    type: int
+    default: 7
+    description: Window for the cost panel.
+  cost_top_sessions:
+    type: int
+    default: 25
+    description: Rows in the top sessions by cost table.
+  kanban_done_limit:
+    type: int
+    default: 20
+    description: Newest done tasks shown per board.
+  project_window_days:
+    type: int
+    default: 90
+    description: Sessions older than this are not clustered into projects.
+  project_stall_days:
+    type: int
+    default: 7
+    description: Quiet days before a project moves to Stalled.
+  project_abandon_days:
+    type: int
+    default: 60
+    description: Quiet days before a project is flagged as possibly abandoned.
+  cache_seconds:
+    type: int
+    default: 20
+    description: Per-panel cache. The projects scan never refreshes faster than 120 seconds.
+  generic_paths:
+    type: list
+    default: []
+    description: Extra directories that must never group sessions into one project.
