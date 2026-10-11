@@ -100,3 +100,20 @@ Children grouped into branches below. Skipped: Wikipedia links (literature, law,
 - llm-catapult -> not new (1)
 - dynomight automated (from better-llm-writing) -> new (resets)
 - on-policy distillation full read (curl/WebFetch, annotation was empty) -> new (numbers)
+- gpt-3 (prompts as programming) -> not new (1)
+- spaced-repetition -> not new (2) -> branch D STOPPED. Skipped: scaling-hypothesis, rl-children, littlewood, fiction pages, meta-math, backstop, tree-embedding, e-positive (writing craft or AI theory without Exo design content).
+
+## Branch status summary
+- A learning theory (CIRL, DAgger): both new; children (DAgger regret bounds, POMDP reductions) not followed because the design lesson was complete. Stopped by judgment, not by rule.
+- B memory in weights: STOPPED by rule after CT0 and in-context pretraining.
+- C uncertainty and active learning: STOPPED by rule after hnsim and deep ensembles.
+- D gwern essays: STOPPED by rule after gpt-3 and spaced-repetition.
+- E human factors and delegation: all six pages new; Wiener (not new) plus no further children with fresh ideas. Stopped after Wiener and the Ladybird/news anecdotes judged motivation-only.
+- F security and hosting: Wiener not new, Coverage not new (cross-branch). OpenClaw Wired page blocked. Remaining children (forged legal requests news, Fourth Amendment) are legal background, skipped.
+- G second level from better-llm-writing: four new pages; AUNN and active-learning stub not logged.
+- H named prior systems: GUM and Jones new; ended by C's stop.
+- I discussion threads: both new; children (individual commenters' blogs) not followed; diminishing overlap between LW and HN.
+
+Pages logged in NOTES.md: 80 (including root). Downloads: /private/tmp/claude-501/exo-crawl/.
+
+Correction to the line above: NOTES.md holds 69 page entries (count of "- URL:" lines), not 80. A few pages were skimmed but not logged (AUNN, influence functions, active-learning stub, Wired blocked).
