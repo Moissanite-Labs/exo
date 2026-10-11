@@ -123,6 +123,8 @@ Ran in a temporary worktree at origin/main 1fd1827 with the existing venv, HOME 
 | 60 days | 29,534 (28,033 non-merge) | 1,911 |
 | 2026-10-09 to 2026-10-11 (one fetch) | 376 | |
 
+Line churn over the same 60 days: 112,359 file changes, 4,227,605 insertions, 2,672,798 deletions.
+
 That is about 490 commits a day. Much of it is likely bot or auto-merge traffic, but every commit still moves code a fork would have to absorb.
 
 ### Where upstream churns (file touches, last 30 days, non-merge)
