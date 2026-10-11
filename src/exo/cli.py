@@ -28,6 +28,9 @@ from . import __version__, crypto
 from .ledger import KINDS, Ledger, LedgerError
 from .store import PrincipalStore, exo_home, principal_root
 from .ingest.cli import register as register_ingest, cmd_ingest  # noqa: F401  (dispatched via globals)
+from .ask import register as register_ask, cmd_ask  # noqa: F401
+from .eval import register as register_eval, cmd_eval  # noqa: F401
+from .brief import register as register_brief, cmd_brief  # noqa: F401
 
 
 def key_path(name: str) -> Path:
@@ -194,6 +197,9 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument('-n', type=int, default=10)
     q.add_argument('--kind')
     register_ingest(sp, common)
+    register_ask(sp, common)
+    register_eval(sp, common)
+    register_brief(sp, common)
     return ap
 
 

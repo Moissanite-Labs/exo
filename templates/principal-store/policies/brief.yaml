@@ -1,0 +1,14 @@
+# Morning brief format. Change freely; the code reads these keys.
+version: 1
+title: Morning brief
+order: [status, blockers, decisions, questions]
+headings: {status: Status, blockers: Blockers, decisions: Decisions, questions: Questions}
+window_hours: 24
+group_by: [project, workstream]
+max_status: 8
+max_decisions: 5
+max_questions: 3
+min_voi: 0.05
+show_counts: true
+decision_format: "{n}. {title}{links}. Default: {default}."
+question_format: "{n}. {text}{node}"

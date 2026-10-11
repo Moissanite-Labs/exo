@@ -1,6 +1,12 @@
 # Interruption budget: how often agents may ask the principal something.
 version: 1
-questions_per_day: 5         # soft cap on questions reaching the principal
+questions_per_day: 5         # floor of the falling curve, or the flat cap without a curve
+window: {hours: 4, max: 2}   # at most `max` questions in any rolling `hours`
+curve: {start_per_day: 12, half_life_weeks: 2}   # front-loaded falling cap; start defaults to first question
+timezone: local              # principal's zone for days and quiet hours, e.g. America/Toronto
+ask_threshold: {default: 0.5, public: 0.2}   # prediction disagreement above which agents ask
+min_predictions: 2           # fewer predictions than this always asks
+voi: {half_life_days: 14, recency_cap: 3}
 batch: true                  # group questions into one message where possible
 quiet_hours: []              # e.g. ["23:00-08:00"] in the principal's time zone
 urgent_bypass:               # cases that may interrupt during quiet hours
