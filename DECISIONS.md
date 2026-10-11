@@ -70,3 +70,28 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Rejected:** gwern's "$1,000+ a month" default spend (conflicts with A's budget rule); dynamic
   evaluation on open weights as v1 (A's stack is frontier APIs today); passive lifelogging as the main
   data source (low information per byte).
+
+## D-007 (2026-10-11) Inventory ratified: 137 items, verdicts and open questions
+- **Decision:** `inventory/INVENTORY.md` verdicts stand (core 18, plugin 13, skill 18, patch 5, upstream 9,
+  data 28, reference 11, retire 10, drop 25), with these rulings on its open questions:
+  - **Memory:** Hermes runs one active memory provider, so **optchat-memory becomes the episodic base of
+    `exo-memory`** (its verbatim daily log and summary tree), not a separate plugin. exo-memory adds the
+    principal pack, ledger capture, belief retrieval and correction capture on top. cognition-memory retires.
+  - **Taste learning (#126940):** rebuilt in `exo.consolidate` and the principal store, not carried as a patch.
+  - **Shared auth across profiles:** no. Per-profile auth as upstream ruled; a per-principal credential broker
+    in exo later if needed.
+  - **Single source of skills:** the Exo skill pack. protean-team-skills content moves into exo; its ops
+    ledgers move to A's principal store as data.
+  - **SYM-2P and Divan Bus:** layered. Bus = signed envelope (`exo.bus`); SYM-2P = optional body for
+    agent-to-agent briefs and receipts (`exo.protocols.sym2p`). Anything shown to a person renders in plain English.
+  - **ordopilot courier** becomes `exo.intake`; ordaprompt stays the front-door router plugin.
+  - **Raptora** retires; its hiatus rule ("stale is not abandoned") moves into `exo.attention`.
+  - **Patch queue:** #119652, #98901, #107130, #110011, plus a new upstream PR for an auxiliary routing hook.
+- **Done now (reversible, local):** salvaged muse-bridge (untracked), the unpushed quota-governor commits
+  (git bundle) and the ordaprompt workspace (bundle) into `~/Work/exo-salvage-20261011/`; froze the
+  Team6-era Hermes state DBs from the iCloud backup into A's private corpus.
+- **Left for A (irreversible or outward):** deleting the 32 GB quarantine; pruning ~70 stale branches on
+  the forks; archiving protean-team and aska-digital/hermes-agent; disabling raptora's cron; confirming
+  who uses the abu-aska account. Batched in the phase report.
+- **Rejected:** carrying all 25 open core PRs (rebase cost, D-005); running optchat and exo-memory side by
+  side (one provider slot); keeping protean-team-skills as a second source (drift).
