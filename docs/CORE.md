@@ -1,0 +1,107 @@
+# exo core (v0.1.0)
+
+The `exo` package is the generic mechanism (L1 in `ARCHITECTURE.md`). It holds no data about any
+person. Everything about a principal lives in their store. Python 3.11 or newer. The only
+dependency is PyNaCl.
+
+## Modules
+
+| Module | Job |
+|---|---|
+| `exo.crypto` | Canonical JSON, Ed25519 keygen, key files (0600), sign and verify. `Signer` binds an author name to a key. |
+| `exo.ledger` | Append-only event log in SQLite. Signed, hash-chained, no updates or deletes. |
+| `exo.store` | `PrincipalStore(root)`: create from template, load nodes, BM25 find, get, budgeted ctx, links, lint, graph, index. |
+| `exo.retrieve` | `assemble(store, query, budget)` returns text and node ids. `Ranker` is the seam for embeddings and graph expansion. |
+| `exo.cli` | The `exo` command. |
+
+## Where things live
+
+- `EXO_HOME` defaults to `~/.exo`.
+- A principal store defaults to `$EXO_HOME/principals/<id>`. Any directory works with `--root`.
+- Keys default to `$EXO_HOME/keys/<name>.key`, with the public key in `<name>.pub`.
+- The ledger of a store is `<store>/ledger.sqlite`.
+- The empty store template is `templates/principal-store/`. Wheels carry it inside the package.
+
+## Event schema
+
+Each event is one canonical JSON document (sorted keys, no whitespace, UTF-8).
+
+| Field | Meaning |
+|---|---|
+| `id` | sha256 of the canonical event without `id` and `sig` |
+| `ts` | UTC time, `YYYY-MM-DDTHH:MM:SS.ffffffZ` |
+| `author` | the person or agent seat that wrote it |
+| `kind` | see below |
+| `body` | JSON object |
+| `session` | session id, or null |
+| `refs` | ids of earlier events in the same ledger |
+| `prev` | chain hash of the previous event; 64 zeros for the first |
+| `pub` | base64 Ed25519 public key of the signer |
+| `sig` | Ed25519 signature over sha256 of the canonical event without `sig` |
+
+The chain hash of an event is `sha256(prev + id)`. It is stored per row and becomes the next
+event's `prev`. `verify()` recomputes every id, link, chain hash and signature. Pass
+`trusted={author: [pubkeys]}` to also pin keys to authors.
+
+Kinds: `utterance`, `ruling`, `verdict`, `action`, `artifact`, `ingest`, `question`, `answer`,
+`belief_proposed`, `belief_accepted`, `note`.
+
+A `verdict` body needs `verdict` (one of `accept`, `edit`, `reject`, `should_have_been`) and
+`target`, the id of the judged event. The target is added to `refs`. Every ref must already
+exist in the ledger.
+
+Appends run inside `BEGIN IMMEDIATE`, so several processes can write to one ledger safely.
+SQLite triggers abort any `UPDATE` or `DELETE` on the events table.
+
+## Python API
+
+```python
+from pathlib import Path
+from exo import crypto
+from exo.ledger import Ledger
+from exo.store import PrincipalStore
+from exo.retrieve import assemble
+
+store = PrincipalStore.for_principal("someone")
+signer = crypto.Signer("agent-one", crypto.load_key(Path.home() / ".exo/keys/agent-one.key"))
+led = Ledger(store.ledger_path, signer)
+ev = led.append("utterance", {"text": "hello"}, "agent-one", session="s1")
+led.append("verdict", {"verdict": "edit", "target": ev["id"], "text": "shorter"}, "principal")
+led.verify()            # {"ok": True, "checked": 2, "head": "..."}
+
+store.find("posting rules", n=5)     # [(node_id, score), ...]
+store.ctx("posting rules", budget=1500).text
+assemble(store, "posting rules", 1500).node_ids
+```
+
+## Store checks
+
+`exo lint` reports errors for missing keys, bad types, an id that does not match its path,
+bad edge types, dangling links, a missing `INDEX.md` or `PRINCIPAL.md`, and leak patterns
+(phone numbers, API keys, tokens, passwords, private keys). It warns on orphans, long bodies,
+long summaries, nodes without sources, and unknown confidence or stability values. The
+template store lints with zero errors and zero warnings.
+
+## Budgets
+
+`ctx` estimates tokens as characters divided by 4. The header counts against the budget. A
+node whose body does not fit is listed by its summary line if that fits.
+
+## CLI
+
+```
+exo init <id> [--from-template [PATH]] [--root DIR]
+exo find|get|ctx|links|lint|graph|index ...   [--principal ID | --root DIR]
+exo log append <kind> --author NAME (--text T | --body JSON) [--session S] [--ref ID ...]
+exo log verify | exo log tail [-n 10] [--kind K]
+exo keygen <name> [--out PATH]
+```
+
+The active principal comes from `--principal`, else `$EXO_PRINCIPAL`.
+
+## Tests
+
+`pytest` runs unit tests for crypto, ledger, store, retrieve and the CLI. The acceptance
+test in `tests/acceptance/` copies a populated store (`EXO_ACCEPTANCE_STORE`) to a temp dir,
+without `corpus/private`, and checks lint, find and ctx on three queries. It skips when no
+such store is present.
