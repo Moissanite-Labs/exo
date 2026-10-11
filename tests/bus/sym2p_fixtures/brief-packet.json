@@ -1,0 +1,26 @@
+{
+  "v": 2,
+  "id": "b441",
+  "tk": "mr1",
+  "prj": "sym2integration",
+  "f": "cos",
+  "t": "builder",
+  "a": "assign",
+  "s": "mr1",
+  "st": "proposed",
+  "cf": 88,
+  "cov": 70,
+  "cond": [
+    "scope: implement SYM-2P/1.0 sections 3-5 only",
+    "constraint: no existing path may be modified",
+    "acceptance: validator exits 0 on valid fixtures, non-zero on invalid"
+  ],
+  "rq": "ack",
+  "base": "mr1:v1",
+  "exp": 40,
+  "ext": {
+    "sym2p": {
+      "rev": "1.0"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "v": 2,
+  "id": "r512",
+  "tk": "mr1",
+  "prj": "sym2integration",
+  "f": "builder",
+  "t": "cos",
+  "a": "done",
+  "s": "f88:v1",
+  "st": "verified",
+  "cf": 92,
+  "err": 6,
+  "cov": 90,
+  "ev": [
+    "e21:v1",
+    "e23:v1"
+  ],
+  "rq": "ver",
+  "base": "f88:v1",
+  "ext": {
+    "sym2p": {
+      "rev": "1.0"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "v": 2,
+  "id": "b441",
+  "tk": "t6k45",
+  "prj": "sym2integration",
+  "f": "orchestrator",
+  "t": "builder",
+  "a": "assign",
+  "s": "t6k45",
+  "st": "proposed",
+  "cf": 88,
+  "cov": 70,
+  "cond": [
+    "scope: implement SYM-2P/1.0 sections 3-5 only",
+    "constraint: no existing path may be modified",
+    "acceptance: validator exits 0 on valid fixtures, non-zero on invalid"
+  ],
+  "rq": "ack",
+  "base": "t6k45:v1",
+  "exp": 40,
+  "ext": {
+    "sym2p": {
+      "rev": "1.0"
+    }
+  }
+}

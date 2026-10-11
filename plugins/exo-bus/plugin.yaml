@@ -1,0 +1,42 @@
+name: exo-bus
+label: Exo Bus
+kind: platform
+version: "0.1.0"
+description: >
+  Exo Bus (signed, hash-chained seat-to-seat messages; wire compatible with Divan Bus) for Hermes.
+  Tools let any profile post to and read the bus. The platform adapter routes bus messages
+  addressed to this profile's seat, its team or the group into the live gateway session, and sends
+  replies back as signed envelopes. SYM-2P bodies render as plain English.
+author: "Aska Digital"
+license: "MIT"
+provides_tools:
+  - bus_post
+  - bus_inbox
+  - bus_thread
+  - bus_verify
+requires_env: []
+optional_env:
+  - name: EXO_BUS_URL
+    description: "Relay base URL, for example http://127.0.0.1:8787. Tools and the platform stay off until this and EXO_BUS_SEAT are set."
+    prompt: "Exo Bus relay URL"
+    password: false
+  - name: EXO_BUS_SEAT
+    description: "This profile's seat id in the relay's signed registry."
+    prompt: "Exo Bus seat id"
+    password: false
+  - name: EXO_BUS_KEYS_DIR
+    description: "Directory holding <seat>.key (0600). Default $EXO_HOME/keys."
+    prompt: "Exo Bus keys directory"
+    password: false
+  - name: EXO_BUS_STATE_DIR
+    description: "Where the read cursor is kept. Default $EXO_HOME/bus."
+    prompt: "Exo Bus state directory"
+    password: false
+  - name: EXO_BUS_POLL_SECONDS
+    description: "Inbox poll interval for the platform adapter (default 5)."
+    prompt: "Exo Bus poll seconds"
+    password: false
+  - name: EXO_BUS_HOME_CHANNEL
+    description: "Default recipient (seat, team:<name> or group) for cron delivery with deliver=exo_bus."
+    prompt: "Exo Bus home channel"
+    password: false
