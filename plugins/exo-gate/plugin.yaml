@@ -1,0 +1,29 @@
+name: exo-gate
+version: "0.1.0"
+description: "Exo action gate. Classifies every tool call by reversibility, exposure, cost and third-party effect, applies the principal's policies (gates, budget, posting rules) and either lets it run, logs it, asks the principal through the Hermes approval gate with a one-line summary, a link and a default, or blocks it. Every decision is appended to the principal's signed ledger when one is configured."
+author: "Aska Digital"
+license: "MIT"
+provides_hooks:
+  - pre_tool_call
+  - post_approval_response
+config_schema:
+  principal_store:
+    type: str
+    default: ""
+    description: "Path to the principal store. Empty: $EXO_PRINCIPAL_STORE, else $EXO_HOME/principals/$EXO_PRINCIPAL. No store means default policies and no ledger."
+  author:
+    type: str
+    default: "exo-gate"
+    description: "Author name on ledger events."
+  key_path:
+    type: str
+    default: ""
+    description: "Ed25519 key for signing ledger events. Empty: $EXO_HOME/keys/<author>.key."
+  mode:
+    type: str
+    default: "enforce"
+    description: "enforce: block and ask as policy says. observe: never block, only record decisions."
+  read_body_files:
+    type: bool
+    default: true
+    description: "Load the text of --body-file arguments so posting rules can check it."
