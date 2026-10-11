@@ -59,3 +59,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   proprietary TS SDK, no subscription login for third parties).
 - **Revisit if:** Nous relicenses, or breaks the plugin API repeatedly, or a needed hook is refused
   upstream twice. Then freeze at the last good tag and fork from there (MIT allows it).
+
+## D-006 (2026-10-11) Principles v1 adopted; three tensions resolved
+- **Decision:** `research/PRINCIPLES.md` (18 principles from a 69-page crawl of gwern's guardian-angel
+  essay and its links) is the design charter. Tensions: (1) cost: spend on compounding work under a
+  ceiling A sets, frugal on routine calls; (2) local-first log and store, compute wherever cheapest and
+  verifiable; (3) learn at the memory and prompt layer in v1, log training-ready for adapters later.
+- **Why:** These keep A's rulings (frugality, model choice is his, local machines) while keeping gwern's
+  core loop (log, ask-when-uncertain, corrections that stick, n=1 evaluation).
+- **Rejected:** gwern's "$1,000+ a month" default spend (conflicts with A's budget rule); dynamic
+  evaluation on open weights as v1 (A's stack is frontier APIs today); passive lifelogging as the main
+  data source (low information per byte).

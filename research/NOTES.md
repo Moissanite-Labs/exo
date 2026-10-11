@@ -414,3 +414,15 @@ in a row add nothing new.
 - Key idea: Fine-tuning Qwen3-8B on internal documents raised internal QA 18% to 43% but cut instruction following 85% to 45%. Mixing chat data could not fully restore it. On-policy distillation from the earlier model on unrelated prompts brought IF-eval back to 83% while keeping QA at 41%. LoRA learned less and still forgot.
 - Applies to Exo: Concrete recipe for a personal model: train on principal data, then repair general behavior by on-policy distillation from the original model. Generic mechanism; the principal data is the only per-user part.
 - New? yes (adds numbers to earlier entry)
+
+### GPT-3 Creative Fiction, Prompts As Programming (gwern 2020)
+- URL: https://gwern.net/gpt-3
+- Key idea: Prompts are a programming language; "sampling can prove the presence of knowledge but not the absence"; the question is not whether a prompt works but whether any prompt works.
+- Applies to Exo: Historical root of the prompt-only approach that the guardian-angel essay now says has hit its limits. Nothing new for Exo.
+- New? no
+
+### Spaced Repetition for Efficient Learning (gwern)
+- URL: https://gwern.net/spaced-repetition
+- Key idea: Review just before forgetting to retain facts efficiently; the essay is the base for the anti-spaced repetition idea.
+- Applies to Exo: Already covered by the anti-spaced repetition entry and by the engram/augmentation papers.
+- New? no
