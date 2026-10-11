@@ -1,0 +1,1129 @@
+Exo patch 0002
+Upstream-PR: https://github.com/NousResearch/hermes-agent/pull/98901
+Title: fix(gateway): session-scoped model/reasoning overrides persist across idle reaping; session-aware config.get model read
+State-at-capture: OPEN
+Head-SHA: c46d0ea740972fd83bf8dcd8c946b34295becfd1
+Head-branch: feat/session-override-persistence (base: main)
+Captured: 2026-10-11 with: gh pr diff 98901 -R NousResearch/hermes-agent
+Note: git apply ignores these header lines. The diff starts at the first 'diff --git'.
+
+diff --git a/apps/shared/src/gateway-contract.generated.ts b/apps/shared/src/gateway-contract.generated.ts
+index 711e9a33c637f..cba333c56fcba 100644
+--- a/apps/shared/src/gateway-contract.generated.ts
++++ b/apps/shared/src/gateway-contract.generated.ts
+@@ -472,6 +472,7 @@ export interface ConfigGetResult {
+   tool_progress?: string | null
+   model?: string | null
+   provider?: string | null
++  scope?: string | null
+   providers?: ConfigProviderRef[] | null
+   home?: string | null
+   cwd?: string | null
+diff --git a/apps/shared/src/gateway-contract.openrpc.json b/apps/shared/src/gateway-contract.openrpc.json
+index bc712ffe74cf2..e551b2669b6f9 100644
+--- a/apps/shared/src/gateway-contract.openrpc.json
++++ b/apps/shared/src/gateway-contract.openrpc.json
+@@ -8632,6 +8632,18 @@
+             "default": null,
+             "title": "Provider"
+           },
++          "scope": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "default": null,
++            "title": "Scope"
++          },
+           "providers": {
+             "anyOf": [
+               {
+diff --git a/gateway/run_config_loaders.py b/gateway/run_config_loaders.py
+index 5cd2a5d160af5..93ea5b2627938 100644
+--- a/gateway/run_config_loaders.py
++++ b/gateway/run_config_loaders.py
+@@ -183,6 +183,7 @@ def _resolve_session_reasoning_config(
+         """
+         resolved_session_key = self._resolve_session_key_or_none(source, session_key)
+         if resolved_session_key:
++            self._rehydrate_session_reasoning_override(resolved_session_key)
+             _r_state = self._peek_session_state(resolved_session_key)
+             if _r_state is not None and _r_state.conversation.reasoning_override is not None:
+                 return _r_state.conversation.reasoning_override
+@@ -197,6 +198,37 @@ def _set_session_reasoning_override(self, session_key: str, reasoning_config: Op
+         self._session_state(session_key).conversation.reasoning_override = (
+             None if reasoning_config is None else dict(reasoning_config)
+         )
++        # Write through so the override survives a gateway restart, mirroring the /model leg.
++        # Clearing (None) nulls the persisted field too, so a later rehydrate cannot undo it.
++        store = getattr(self, "session_store", None)
++        if store is None:
++            return
++        try:
++            store.set_reasoning_override(session_key, reasoning_config)
++        except Exception:
++            logger.debug("Failed to persist session reasoning override", exc_info=True)
++
++    def _rehydrate_session_reasoning_override(self, session_key: str) -> None:
++        """Lazily restore a persisted /reasoning override after a restart (mirrors
++        ``_rehydrate_session_model_override``). The override carries no credential, so it is restored
++        verbatim. No-op when an in-memory override exists (live state wins) or nothing is persisted
++        (conversation boundaries drop the persisted field with the route)."""
++        state = self._peek_session_state(session_key)
++        if state is not None and state.conversation.reasoning_override is not None:
++            return
++        store = getattr(self, "session_store", None)
++        if store is None:
++            return
++        try:
++            persisted = store.get_reasoning_override(session_key)
++        except Exception:
++            logger.debug("Failed to read persisted session reasoning override", exc_info=True)
++            return
++        if not isinstance(persisted, dict) or not persisted:
++            return
++        restored = dict(persisted)
++        self._session_state(session_key).conversation.reasoning_override = restored
++        logger.info("Rehydrated persisted /reasoning override for session=%s: %s", session_key, restored)
+ 
+     def _resolve_session_service_tier(self, source=None, session_key: Optional[str] = None) -> Optional[str]:
+         """Effective service tier: a session-scoped /fast override beats the config default.
+diff --git a/gateway/session.py b/gateway/session.py
+index 17067df2298e2..705580d9952f0 100644
+--- a/gateway/session.py
++++ b/gateway/session.py
+@@ -478,6 +478,24 @@ def sanitize_model_override(override: Optional[Dict[str, Any]]) -> Optional[Dict
+     return cleaned or None
+ 
+ 
++def sanitize_reasoning_override(override: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
++    """Copy of the /reasoning override with only persistable keys (``enabled``/``effort``), or None.
++
++    The override carries no credential today; restricting the persisted keys is the structural
++    guarantee that a future shape change cannot smuggle one into sessions.json. ``{"enabled": False}``
++    (reasoning explicitly disabled for the session) is a real override: presence decides, not truthiness.
++    """
++    if not isinstance(override, dict):
++        return None
++    cleaned: Dict[str, Any] = {}
++    if "enabled" in override:
++        cleaned["enabled"] = bool(override["enabled"])
++    effort = override.get("effort")
++    if isinstance(effort, str) and effort.strip():
++        cleaned["effort"] = effort.strip()
++    return cleaned or None
++
++
+ @dataclass
+ class SessionEntry:
+     """Routing-index entry: maps a session key to its current session ID and metadata."""
+@@ -530,6 +548,10 @@ class SessionEntry:
+     # Session-scoped /model override (model/provider/base_url ONLY — never credentials, see
+     # sanitize_model_override). Persisted so a restart keeps the chosen model.
+     model_override: Optional[Dict[str, str]] = None
++    # Session-scoped /reasoning override ({"enabled": bool, "effort": str}; see
++    # sanitize_reasoning_override). Persisted so a restart keeps it, like model_override; it carries
++    # no credential, so rehydration restores it verbatim.
++    reasoning_override: Optional[Dict[str, Any]] = None
+     # Profile owning the bot that received this lane's traffic (``RoutingIdentity.transport_profile``,
+     # "default" spelled out). The key namespace only says where the turn RUNS; after a restart this is
+     # what says which bot may deliver to it. None = unknown (row predates the field, or standalone).
+@@ -566,6 +588,9 @@ def to_dict(self) -> Dict[str, Any]:
+         if self.model_override:
+             # Defence-in-depth against an unsanitized dict stored directly.
+             result["model_override"] = sanitize_model_override(self.model_override)
++        if self.reasoning_override:
++            # Same defence-in-depth: only the known-safe keys reach disk.
++            result["reasoning_override"] = sanitize_reasoning_override(self.reasoning_override)
+         if self.prompt_pin:
+             # Same defence-in-depth: routing JSON must never preserve malformed pin state.
+             if pin := sanitize_prompt_pin(self.prompt_pin):
+@@ -612,6 +637,7 @@ def from_dict(cls, data: Dict[str, Any]) -> "SessionEntry":
+             last_resume_marked_at=_parse_iso(data.get("last_resume_marked_at")),
+             active_turn_token=token, active_turn_started_at=started_at,
+             model_override=sanitize_model_override(data.get("model_override")),
++            reasoning_override=sanitize_reasoning_override(data.get("reasoning_override")),
+             prompt_pin=sanitize_prompt_pin(data.get("prompt_pin")),
+             transport_profile=transport_profile if isinstance(transport_profile, str) and transport_profile else None,
+             **plain,
+@@ -1120,6 +1146,29 @@ def get_model_override(self, session_key: str) -> Optional[Dict[str, str]]:
+             entry = self._entry_locked(session_key)
+             return dict(entry.model_override) if entry and entry.model_override else None
+ 
++    def set_reasoning_override(self, session_key: str, override: Optional[Dict[str, Any]]) -> None:
++        """Persist (or clear, with ``None``) the /reasoning override; enabled/effort keys only."""
++        from dataclasses import replace
++
++        cleaned = sanitize_reasoning_override(override)
++
++        with self._lock:
++            entry = self._entry_locked(session_key)
++            if entry is None or entry.reasoning_override == cleaned:
++                return
++            # Publish only after persistence so a failed clear remains retryable.
++            data, generation = self._snapshot_routing_locked()
++            entry = self._entries[session_key]
++            data[session_key] = replace(entry, reasoning_override=cleaned).to_dict()
++            self._persist_routing_data(data, generation)
++            entry.reasoning_override = cleaned
++
++    def get_reasoning_override(self, session_key: str) -> Optional[Dict[str, Any]]:
++        """Return the persisted /reasoning override for *session_key*, if any."""
++        with self._lock:
++            entry = self._entry_locked(session_key)
++            return dict(entry.reasoning_override) if entry and entry.reasoning_override else None
++
+     def reset_session(self, session_key: str, display_name: Optional[str] = None) -> Optional[SessionEntry]:
+         """Force reset a session, creating a new session ID."""
+         with self._lock:
+@@ -1260,6 +1309,7 @@ def switch_session(
+             new_entry = self._replace_route_locked(
+                 session_key, old_entry, target_session_id, _now(),
+                 display_name=old_entry.display_name, model_override=old_entry.model_override,
++                reasoning_override=old_entry.reasoning_override,
+                 prompt_pin=(
+                     dict(old_entry.prompt_pin)
+                     if preserve_prompt_pin and old_entry.prompt_pin is not None else None
+diff --git a/gateway/slash_commands_session.py b/gateway/slash_commands_session.py
+index 4f07bbcd4309e..25506b50ea345 100644
+--- a/gateway/slash_commands_session.py
++++ b/gateway/slash_commands_session.py
+@@ -912,6 +912,8 @@ async def _handle_resume_command(self, event: MessageEvent) -> str:
+         # #119864); /resume IS one, and the funnel above clears only in-memory state — without this
+         # the next turn's _rehydrate_session_model_override resurrects the pin it just cleared.
+         await self.async_session_store.set_model_override(session_key, None)
++        # Same for the persisted /reasoning override, which switch_session carries alongside the pin.
++        await self.async_session_store.set_reasoning_override(session_key, None)
+         # Evict so the next turn rebuilds with the right session_id — the cached AIAgent's memory
+         # provider cached _session_id at initialize() and would keep writing to the wrong session.
+         self._evict_cached_agent(session_key)
+diff --git a/tests/gateway/test_session_reasoning_override_persistence.py b/tests/gateway/test_session_reasoning_override_persistence.py
+new file mode 100644
+index 0000000000000..d4d1069bc3f2d
+--- /dev/null
++++ b/tests/gateway/test_session_reasoning_override_persistence.py
+@@ -0,0 +1,272 @@
++"""Per-session /reasoning overrides must survive gateway restarts.
++
++The gateway persists the *model* half of the session-override pair
++(``SessionEntry.model_override``) but not the *reasoning* half, so a restart
++silently reverted ``/reasoning high`` to the config default while a ``/model``
++switch in the same session survived — asymmetric and surprising.
++
++``SessionEntry.reasoning_override`` closes that gap: the runner writes the
++override through on every set/clear and lazily rehydrates it on first use.
++Unlike the model override it carries no credential, so nothing is re-resolved.
++
++Covers:
++  - the override survives a simulated restart (a second SessionStore instance
++    reading the same sessions dir, and a fresh runner rehydrating from it)
++  - clearing the override (the /new, /reset and ``/reasoning reset`` path)
++    nulls BOTH the in-memory field and the persisted one
++  - live in-memory state wins over the persisted value
++  - a sessions.json written before this field existed loads without error
++  - only the known-safe keys are ever serialized
++"""
++import json
++
++import pytest
++
++from gateway.config import GatewayConfig, Platform
++from gateway.session import (
++    SessionSource,
++    SessionStore,
++    sanitize_reasoning_override,
++)
++
++OVERRIDE = {"enabled": True, "effort": "high"}
++
++
++def _make_source() -> SessionSource:
++    return SessionSource(
++        platform=Platform.TELEGRAM,
++        user_id="u1",
++        chat_id="c1",
++        user_name="tester",
++        chat_type="dm",
++    )
++
++
++@pytest.fixture
++def store_factory(tmp_path, monkeypatch):
++    """Build SessionStores over a shared sessions dir, without SQLite."""
++
++    def _raise():
++        raise RuntimeError("SQLite disabled in test")
++
++    import hermes_state
++
++    monkeypatch.setattr(hermes_state, "SessionDB", _raise)
++
++    def _make() -> SessionStore:
++        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
++        assert store._db is None
++        return store
++
++    return _make
++
++
++def _sessions_json(tmp_path) -> dict:
++    return json.loads((tmp_path / "sessions.json").read_text(encoding="utf-8"))
++
++
++def _make_runner(store):
++    from gateway.run import GatewayRunner
++
++    runner = object.__new__(GatewayRunner)
++    runner._session_reasoning_overrides = {}
++    runner.session_store = store
++    return runner
++
++
++def test_override_persists_and_survives_restart(store_factory):
++    store = store_factory()
++    entry = store.get_or_create_session(_make_source())
++    session_key = entry.session_key
++
++    store.set_reasoning_override(session_key, OVERRIDE)
++
++    # Simulated restart: a brand-new store instance reads the same dir.
++    store2 = store_factory()
++    assert store2.get_reasoning_override(session_key) == OVERRIDE
++
++
++def test_runner_write_through_survives_restart(store_factory):
++    """The runner's set/read pair round-trips through disk end to end."""
++    store = store_factory()
++    entry = store.get_or_create_session(_make_source())
++    session_key = entry.session_key
++
++    _make_runner(store)._set_session_reasoning_override(session_key, OVERRIDE)
++
++    # Simulated restart: fresh store + fresh runner with no in-memory state.
++    runner = _make_runner(store_factory())
++    runner._rehydrate_session_reasoning_override(session_key)
++
++    assert runner._session_reasoning_overrides[session_key] == OVERRIDE
++
++
++def test_clearing_nulls_memory_and_disk(store_factory, tmp_path):
++    """The clear path (/new, /reset, /reasoning reset) must drop both copies."""
++    store = store_factory()
++    entry = store.get_or_create_session(_make_source())
++    session_key = entry.session_key
++
++    runner = _make_runner(store)
++    runner._set_session_reasoning_override(session_key, OVERRIDE)
++    assert store.get_reasoning_override(session_key) == OVERRIDE
++
++    runner._set_session_reasoning_override(session_key, None)
++
++    assert session_key not in runner._session_reasoning_overrides
++    assert store.get_reasoning_override(session_key) is None
++    # And a post-restart rehydrate cannot resurrect it.
++    assert store_factory().get_reasoning_override(session_key) is None
++    assert "reasoning_override" not in _sessions_json(tmp_path)[session_key]
++
++
++def test_session_reset_drops_the_persisted_override(store_factory):
++    """/new (reset_session) is a conversation boundary — the fresh route carries no override.
++
++    (Upstream removed time-triggered expiry finalization in 1d5d059410, so reset is the boundary
++    that exercises this now.)"""
++    store = store_factory()
++    entry = store.get_or_create_session(_make_source())
++    store.set_reasoning_override(entry.session_key, OVERRIDE)
++
++    store.reset_session(entry.session_key)
++
++    assert store.get_reasoning_override(entry.session_key) is None
++    assert store_factory().get_reasoning_override(entry.session_key) is None
++
++
++def test_switch_session_carries_the_override_like_the_model_pin(store_factory):
++    """switch_session keeps the route's persisted /model pin (a re-pin is not a boundary); the
++    reasoning half travels with it. /resume clears both explicitly after the switch."""
++    store = store_factory()
++    entry = store.get_or_create_session(_make_source())
++    store.set_reasoning_override(entry.session_key, OVERRIDE)
++
++    switched = store.switch_session(entry.session_key, "20990101_000000_target")
++
++    assert switched is not None
++    assert store.get_reasoning_override(entry.session_key) == OVERRIDE
++
++
++def test_live_in_memory_override_wins_over_persisted(store_factory):
++    store = store_factory()
++    entry = store.get_or_create_session(_make_source())
++    session_key = entry.session_key
++    store.set_reasoning_override(session_key, {"enabled": True, "effort": "low"})
++
++    runner = _make_runner(store)
++    runner._session_reasoning_overrides[session_key] = OVERRIDE
++    runner._rehydrate_session_reasoning_override(session_key)
++
++    assert runner._session_reasoning_overrides[session_key] == OVERRIDE
++
++
++def test_rehydrate_is_a_noop_with_nothing_persisted(store_factory):
++    store = store_factory()
++    session_key = store.get_or_create_session(_make_source()).session_key
++
++    runner = _make_runner(store)
++    runner._rehydrate_session_reasoning_override(session_key)
++
++    assert session_key not in runner._session_reasoning_overrides
++
++
++def test_resolve_reads_the_persisted_override_after_restart(
++    store_factory, tmp_path, monkeypatch
++):
++    """The real read path — not just the rehydrate helper — must see disk.
++
++    ``_resolve_session_reasoning_config`` is what every turn calls to decide
++    the effort actually sent to the model. Wiring persistence into the store
++    but not into this resolver would leave the restart bug fully intact while
++    the round-trip tests stayed green.
++    """
++    import gateway.run as gateway_run
++
++    hermes_home = tmp_path / "hermes"
++    hermes_home.mkdir()
++    (hermes_home / "config.yaml").write_text(
++        "agent:\n  reasoning_effort: low\n", encoding="utf-8"
++    )
++    monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
++
++    store = store_factory()
++    source = _make_source()
++    session_key = store.get_or_create_session(source).session_key
++    _make_runner(store)._set_session_reasoning_override(session_key, OVERRIDE)
++
++    # Simulated restart: fresh store + fresh runner, no in-memory override.
++    runner = _make_runner(store_factory())
++    resolved = runner._resolve_session_reasoning_config(session_key=session_key)
++
++    # The config default is "low"; the persisted session override must win.
++    assert resolved == OVERRIDE
++
++
++def test_resolve_falls_back_to_config_when_nothing_persisted(
++    store_factory, tmp_path, monkeypatch
++):
++    """The mirror of the test above — no persisted override, no interference."""
++    import gateway.run as gateway_run
++
++    hermes_home = tmp_path / "hermes"
++    hermes_home.mkdir()
++    (hermes_home / "config.yaml").write_text(
++        "agent:\n  reasoning_effort: low\n", encoding="utf-8"
++    )
++    monkeypatch.setattr(gateway_run, "_hermes_home", hermes_home)
++
++    store = store_factory()
++    session_key = store.get_or_create_session(_make_source()).session_key
++
++    runner = _make_runner(store)
++    assert runner._resolve_session_reasoning_config(session_key=session_key) == {
++        "enabled": True,
++        "effort": "low",
++    }
++
++
++def test_legacy_sessions_json_without_the_key_loads(store_factory, tmp_path):
++    """A sessions.json written before this field existed must load clean."""
++    store = store_factory()
++    session_key = store.get_or_create_session(_make_source()).session_key
++
++    raw = _sessions_json(tmp_path)
++    assert "reasoning_override" not in raw[session_key]
++    # Belt and braces: strip it even if a future default starts emitting one.
++    raw[session_key].pop("reasoning_override", None)
++    (tmp_path / "sessions.json").write_text(json.dumps(raw), encoding="utf-8")
++
++    reloaded = store_factory()
++    assert reloaded.get_reasoning_override(session_key) is None
++    assert reloaded.get_or_create_session(_make_source()).session_key == session_key
++
++
++def test_only_safe_keys_are_serialized(store_factory, tmp_path):
++    """Nothing outside {enabled, effort} may reach sessions.json."""
++    store = store_factory()
++    session_key = store.get_or_create_session(_make_source()).session_key
++
++    store.set_reasoning_override(
++        session_key,
++        {"enabled": True, "effort": "high", "api_key": "sk-should-never-persist"},
++    )
++
++    persisted = _sessions_json(tmp_path)[session_key]["reasoning_override"]
++    assert persisted == OVERRIDE
++    assert "sk-should-never-persist" not in (tmp_path / "sessions.json").read_text(
++        encoding="utf-8"
++    )
++
++
++def test_sanitize_reasoning_override():
++    assert sanitize_reasoning_override(None) is None
++    assert sanitize_reasoning_override({}) is None
++    assert sanitize_reasoning_override("high") is None  # type: ignore[arg-type]
++    assert sanitize_reasoning_override({"api_key": "sk-x"}) is None
++    assert sanitize_reasoning_override(OVERRIDE) == OVERRIDE
++    # "reasoning disabled for this session" is a real override, not an absence.
++    assert sanitize_reasoning_override({"enabled": False}) == {"enabled": False}
++    assert sanitize_reasoning_override({"enabled": True, "effort": ""}) == {
++        "enabled": True
++    }
+diff --git a/tests/tui_gateway/test_session_override_persistence.py b/tests/tui_gateway/test_session_override_persistence.py
+new file mode 100644
+index 0000000000000..0fda7d5019bcb
+--- /dev/null
++++ b/tests/tui_gateway/test_session_override_persistence.py
+@@ -0,0 +1,57 @@
++"""Explicit session-scoped overrides survive idle reaping (PR #98901).
++
++A `config.set model|reasoning --session` for a non-live session persists a
++`session_override` marker into the row's model_config. On resume that marker
++must beat the Bot Mode / follow-profile exemptions in
++`_stored_session_runtime_overrides`, or the pin is silently dropped.
++"""
++import json
++
++from tui_gateway import server
++
++
++def _row(**kw):
++    base = {"id": "s1", "title": "chat", "model": "old-model", "model_config": {}}
++    base.update(kw)
++    return base
++
++
++def test_row_has_explicit_override():
++    assert server._row_has_explicit_override(None) is False
++    assert server._row_has_explicit_override(_row()) is False
++    marked = _row(model_config=json.dumps({"session_override": True, "model": "m"}))
++    assert server._row_has_explicit_override(marked) is True
++    # dict form (not just JSON text) also counts
++    assert server._row_has_explicit_override(
++        _row(model_config={"session_override": True})) is True
++
++
++def test_explicit_override_beats_room_plumbing_exemption():
++    """A Bot Mode plumbing row with an explicit pin still restores the pin."""
++    row = _row(model="pinned-model", model_config=json.dumps({
++        "room_plumbing": True,
++        "session_override": True,
++        "model": "pinned-model",
++        "provider": "nous",
++    }))
++    overrides = server._stored_session_runtime_overrides(row)
++    assert overrides.get("model_override", {}).get("model") == "pinned-model"
++    assert overrides.get("provider_override") == "nous"
++
++
++def test_explicit_override_beats_follow_profile_exemption():
++    """A follow-profile canonical row with an explicit pin still restores the pin."""
++    row = _row(title="Bot Chat", model="pinned-model", model_config=json.dumps({
++        "follow_profile_config": True,
++        "session_override": True,
++        "model": "pinned-model",
++        "provider": "nous",
++    }))
++    overrides = server._stored_session_runtime_overrides(row)
++    assert overrides.get("model_override", {}).get("model") == "pinned-model"
++
++
++def test_no_marker_no_override_for_exempt_rows():
++    """Without the marker the exemptions still apply (no behavior change)."""
++    row = _row(model_config=json.dumps({"room_plumbing": True, "model": "m"}))
++    assert server._stored_session_runtime_overrides(row) == {}
+diff --git a/tests/tui_gateway/test_session_override_scope_guards.py b/tests/tui_gateway/test_session_override_scope_guards.py
+new file mode 100644
+index 0000000000000..a28b0882fa0ab
+--- /dev/null
++++ b/tests/tui_gateway/test_session_override_scope_guards.py
+@@ -0,0 +1,95 @@
++"""Repro: the durable per-session override must only be stamped for a real
++session-scoped pick, and the session-aware model read must survive every shape
++config.yaml can hand back.
++
++These are deliberately written against the real ``config.set`` / ``config.get``
++handlers, not the helper in isolation.
++"""
++import threading
++import types
++
++from tui_gateway import server
++
++GUARDED_MODEL = "muse-spark-1.2-contributor"
++
++
++def _session(**extra):
++    return {
++        "agent": types.SimpleNamespace(),
++        "session_key": "session-key",
++        "history": [],
++        "history_lock": threading.Lock(),
++        "history_version": 0,
++        "running": False,
++        "attached_images": [],
++        "image_counter": 0,
++        "cols": 80,
++        "slash_worker": None,
++        "show_reasoning": False,
++        "tool_progress_mode": "all",
++        **extra,
++    }
++
++
++def _config_set_model(value, **extra_params):
++    params = {"session_id": "sid", "key": "model", "value": value}
++    params.update(extra_params)
++    return server.handle_request({"id": "1", "method": "config.set", "params": params})
++
++
++def _patch_switch(monkeypatch, scope):
++    monkeypatch.setattr(server, "_apply_model_switch", lambda *a, **k: {
++        "value": "anthropic/claude-sonnet-4.6", "warning": "",
++        "confirm_required": False, "scope": scope})
++    monkeypatch.setattr(server, "_emit", lambda *a, **k: None)
++    monkeypatch.setattr(server, "_restart_slash_worker", lambda *a, **k: None)
++
++
++def _records_persist(monkeypatch):
++    calls = []
++    monkeypatch.setattr(server, "_persist_session_row_override",
++                        lambda *a, **k: calls.append((a, k)) or True)
++    return calls
++
++
++def test_global_switch_does_not_stamp_a_session_override(monkeypatch):
++    _patch_switch(monkeypatch, "global")
++    calls = _records_persist(monkeypatch)
++    server._sessions["sid"] = _session()
++    try:
++        resp = _config_set_model("anthropic/claude-sonnet-4.6 --global")
++        assert not resp.get("error"), resp
++        assert calls == [], "--global must not pin the session row"
++    finally:
++        server._sessions.pop("sid", None)
++
++
++def test_once_switch_does_not_stamp_a_session_override(monkeypatch):
++    _patch_switch(monkeypatch, "once")
++    calls = _records_persist(monkeypatch)
++    server._sessions["sid"] = _session()
++    try:
++        resp = _config_set_model("anthropic/claude-sonnet-4.6 --once")
++        assert not resp.get("error"), resp
++        assert calls == [], "--once must not pin the session row"
++    finally:
++        server._sessions.pop("sid", None)
++
++
++def test_unconfirmed_midturn_pick_is_not_persisted(monkeypatch):
++    calls = _records_persist(monkeypatch)
++    server._sessions["sid"] = _session(running=True)
++    try:
++        resp = _config_set_model(GUARDED_MODEL)
++        assert resp["result"]["confirm_required"] is True, resp
++        assert "pending_model_switch" not in server._sessions["sid"]
++        assert calls == [], "a pick that was never queued must not be persisted"
++    finally:
++        server._sessions.pop("sid", None)
++
++
++def test_config_get_model_survives_a_string_model_config(monkeypatch):
++    monkeypatch.setattr(server, "_load_cfg", lambda: {"model": "some/vendor-model"})
++    out = server._CONFIG_GETTERS["model"]({"session_id": ""})
++    assert isinstance(out, dict), out
++    assert out["model"] == "some/vendor-model"
+diff --git a/tests/tui_gateway/test_session_resume_runtime_restore.py b/tests/tui_gateway/test_session_resume_runtime_restore.py
+new file mode 100644
+index 0000000000000..38039fc14a239
+--- /dev/null
++++ b/tests/tui_gateway/test_session_resume_runtime_restore.py
+@@ -0,0 +1,142 @@
++"""``session.resume`` must rebuild the agent with the STORED session runtime (#103498).
++
++During a disconnect -> reconnect window a stored session (e.g. ``gemini`` + thinking
++off) could resume with the profile DEFAULT model/thinking (e.g. ``vision-exp`` + high)
++while the persisted row stayed correct. The resumed runtime — not the row — was wrong.
++
++Pinned here, end to end through the real ``session.resume`` RPC + the real deferred
++agent build (``_start_agent_build``), with a fake ``_make_agent`` that honors the same
++override/default rule as the real one (an explicit ``reasoning_config_override`` wins,
++else the ambient default). Two holes, one contract:
++
++* a lazy resume upgraded by the first prompt rebuilt a pure profile-default agent
++  (the lazy record carried no overrides at all);
++* a stored provider that is no longer routable dropped the WHOLE overrides dict, so
++  the stored model/reasoning/tier silently reverted (only the dead provider pin may
++  fall back).
++
++The ``follow_profile_config`` case keeps following the profile (the #101514 direction
++is explicitly NOT changed by this fix).
++"""
++
++from __future__ import annotations
++
++import types
++
++import pytest
++
++from tui_gateway import server
++
++STORED_MODEL = "gemini"
++STORED_REASONING_OFF = {"enabled": False}
++PROFILE_DEFAULT_MODEL = "vision-exp"
++
++_HISTORY = [{"role": "user", "content": "hello"}]
++
++
++class _FakeDB:
++    def __init__(self, row):
++        self._row = row
++
++    def get_session(self, _target):
++        return dict(self._row)
++
++    def get_session_by_title(self, _title):
++        return None
++
++    def reopen_session(self, _target):
++        pass
++
++    def get_messages_as_conversation(self, _target, **_kwargs):
++        return [dict(m) for m in _HISTORY]
++
++    def get_resume_conversations(self, _target):
++        return self.get_messages_as_conversation(_target), self.get_messages_as_conversation(_target)
++
++    def get_ancestor_display_prefix(self, _sid):
++        return []
++
++
++def _stored_row(**model_config):
++    return {
++        "id": "stored-1",
++        "title": "test chat",
++        "model": STORED_MODEL,
++        "billing_provider": "gemini",
++        "model_config": {"provider": "gemini", "reasoning_config": dict(STORED_REASONING_OFF), **model_config},
++        "message_count": 1,
++    }
++
++
++def _install(monkeypatch, row, *, routable):
++    """Fake the agent seam + ambient profile defaults."""
++    db = _FakeDB(row)
++    events = []
++
++    def fake_make_agent(_sid, _key, **kwargs):
++        override = kwargs.get("model_override") or {}
++        # Same rule as the real _make_agent: an explicit reasoning override wins,
++        # otherwise the agent falls back to the ambient (profile default) config.
++        return types.SimpleNamespace(
++            model=override.get("model") or PROFILE_DEFAULT_MODEL,
++            provider=(override.get("provider") or "vision-provider"),
++            reasoning_config=kwargs.get("reasoning_config_override", {"enabled": True, "effort": "high"}),
++        )
++
++    monkeypatch.setattr(server, "_profile_session_db", lambda _home: (db, False))
++    monkeypatch.setattr(server, "_enable_gateway_prompts", lambda: None)
++    monkeypatch.setattr(server, "_set_session_context", lambda *a, **k: [])
++    monkeypatch.setattr(server, "_clear_session_context", lambda tokens: None)
++    monkeypatch.setattr(server, "_make_agent", fake_make_agent)
++    monkeypatch.setattr(server, "_wire_session_agent", lambda *a: True)
++    monkeypatch.setattr(server, "_announce_built_agent", lambda *a: None)
++    monkeypatch.setattr(server, "_emit", lambda *a: events.append(a))
++    monkeypatch.setattr(server, "_schedule_agent_build", lambda _sid: None)
++    monkeypatch.setattr(server, "_schedule_resume_hydration", lambda *a, **k: None)
++    monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
++    monkeypatch.setattr(server, "_maybe_schedule_auto_continue", lambda *a: None)
++    monkeypatch.setattr(server, "_is_routable_provider", lambda _p: routable)
++    # Ambient profile defaults DIFFER from the stored runtime: any leak reads as the default.
++    monkeypatch.setattr(server, "_config_model_target", lambda: (PROFILE_DEFAULT_MODEL, None))
++
++
++def _resume_and_build(monkeypatch, params, row, *, routable=True):
++    _install(monkeypatch, row, routable=routable)
++    before = set(server._sessions)
++    resp = server.handle_request({"id": "1", "method": "session.resume", "params": params})
++    assert resp is not None and "result" in resp, resp
++    sid = resp["result"]["session_id"]
++    session = server._sessions[sid]
++    try:
++        if session.get("resume_history_ready") is not None:
++            session["resume_history_ready"].set()  # transcript hydration is stubbed out
++        server._start_agent_build(sid, session)
++        session["_agent_build_thread"].join(timeout=15)
++        assert session.get("agent") is not None, session.get("agent_error")
++        return session["agent"]
++    finally:
++        for live_sid in set(server._sessions) - before:
++            server._sessions.pop(live_sid, None)
++
++
++@pytest.mark.parametrize(
++    ("params", "routable", "row_kwargs"),
++    [
++        ({"session_id": "stored-1"}, True, {}),
++        ({"session_id": "stored-1", "defer_history": True}, True, {}),
++        ({"session_id": "stored-1", "lazy": True}, True, {}),
++        ({"session_id": "stored-1"}, False, {"provider": "removed-provider", "billing_provider": "removed-provider"}),
++    ],
++    ids=["cold", "deferred", "lazy-upgrade", "unroutable-provider"],
++)
++def test_resume_restores_stored_model_and_thinking(monkeypatch, params, routable, row_kwargs):
++    agent = _resume_and_build(monkeypatch, params, _stored_row(**row_kwargs), routable=routable)
++    assert agent.model == STORED_MODEL
++    assert agent.reasoning_config == STORED_REASONING_OFF
++
++
++def test_follow_profile_config_session_still_follows_profile(monkeypatch):
++    agent = _resume_and_build(
++        monkeypatch, {"session_id": "stored-1"}, _stored_row(follow_profile_config=True), routable=True
++    )
++    assert agent.model == PROFILE_DEFAULT_MODEL
+diff --git a/tui_gateway/contracts/config_free_tier_control.py b/tui_gateway/contracts/config_free_tier_control.py
+index 5ae13b2bf4bce..b1159b8b46684 100644
+--- a/tui_gateway/contracts/config_free_tier_control.py
++++ b/tui_gateway/contracts/config_free_tier_control.py
+@@ -49,6 +49,7 @@ class ConfigGetResult(Result):
+     tool_progress: str | None = None
+     model: str | None = None
+     provider: str | None = None
++    scope: str | None = None
+     providers: list[ConfigProviderRef] | None = None
+     home: str | None = None
+     cwd: str | None = None
+diff --git a/tui_gateway/methods_config.py b/tui_gateway/methods_config.py
+index 011ebd2e7b67e..3d9fbadbadd7d 100644
+--- a/tui_gateway/methods_config.py
++++ b/tui_gateway/methods_config.py
+@@ -203,12 +203,42 @@ def _cfg_get_personality(params):
+     return {"value": active_personality_name(_load_cfg()) or "none"}
+ 
+ 
++def _profile_model_provider() -> str:
++    """Provider from the profile's ``model`` config. Handles both the dict shape and
++    the legacy string shape of ``model:`` (the model-key canon leaves a plain string as-is)."""
++    model_cfg = _load_cfg().get("model")
++    return str(model_cfg.get("provider") or "").strip() if isinstance(model_cfg, dict) else ""
++
++
++def _stored_row_session_override(params) -> dict:
++    """The stored row's ``model_config`` when it carries the explicit ``session_override``
++    marker, else ``{}``. The one read shared by the session-aware ``model`` and ``reasoning``
++    getters for a session that is not live in this process."""
++    session_id = str(params.get("session_id") or "")
++    if not session_id:
++        return {}
++    try:
++        db = _get_db()
++        row = db.get_session(session_id) if db else None
++    except Exception:
++        return {}
++    if not row:
++        return {}
++    config = _parse_model_config(row.get("model_config"), quiet=True)
++    return config if config.get("session_override") else {}
++
++
+ def _cfg_get_reasoning(params):
+     cfg = _load_cfg()
+     session = _sessions.get(params.get("session_id", "")) or {}
+     reasoning_config = session.get("create_reasoning_override")
+     if session and not isinstance(reasoning_config, dict):
+         reasoning_config = getattr(session.get("agent"), "reasoning_config", None)
++    if not isinstance(reasoning_config, dict) and not session:
++        # For a non-live session the persisted explicit override is the only source left.
++        row_reasoning = _stored_row_session_override(params).get("reasoning_config")
++        if isinstance(row_reasoning, dict):
++            reasoning_config = row_reasoning
+     if isinstance(reasoning_config, dict):
+         enabled = reasoning_config.get("enabled") is not False
+         effort = str(reasoning_config.get("effort") or "medium") if enabled else "none"
+@@ -224,6 +254,44 @@ def _cfg_get_reasoning(params):
+     return {"value": effort, "display": display}
+ 
+ 
++def _cfg_get_model(params):
++    """Session-aware model read: the model a session actually runs on.
++    Precedence: deferred pending switch > live model_override > live agent (only when it actually
++    has a model) > persisted row override > profile default. The provider comes from the profile's
++    configured ``model.provider``, never the model-slug prefix (a ``deepseek/...`` slug routed
++    through Nous Portal reports ``nous``)."""
++    model = ""
++    provider = ""
++    scope = "default"
++    session = _sessions.get(params.get("session_id", ""))
++    if session is not None:
++        pending = session.get("pending_model_switch") or {}
++        override = session.get("model_override")
++        agent = session.get("agent")
++        pending_model = str(pending.get("display_model") or "").strip()
++        override_model = str(override.get("model") or "").strip() if isinstance(override, dict) else ""
++        agent_model = str(getattr(agent, "model", "") or "").strip()
++        if pending_model:
++            model, provider = pending_model, str(pending.get("display_provider") or "").strip()
++        elif override_model:
++            model, provider = override_model, str(override.get("provider") or "").strip()
++        elif agent_model:
++            model, provider = agent_model, str(getattr(agent, "provider", "") or "").strip()
++        if model:
++            scope = "session"
++    if not model:
++        # A non-live session's persisted override must be reported BEFORE the profile default.
++        row_cfg = _stored_row_session_override(params)
++        row_model = str(row_cfg.get("model") or "").strip()
++        if row_model:
++            model, provider, scope = row_model, str(row_cfg.get("provider") or "").strip(), "session"
++    if not model:
++        model = _resolve_model()
++    if not provider:
++        provider = _profile_model_provider() or "unknown"
++    return {"model": model, "provider": provider, "scope": scope}
++
++
+ def _cfg_get_fast(params):
+     # `config.set fast` is session-scoped: prefer the session's live/pinned value over the
+     # global key (a pre-build session keeps its pin in create_service_tier_override).
+@@ -257,6 +325,7 @@ def _cfg_get_mtime(params):
+ # key -> getter(params); bind_module rebinds the table's functions onto server.py's globals.
+ _CONFIG_GETTERS = {
+     "provider": _cfg_get_provider,
++    "model": _cfg_get_model,
+     "profile": lambda params: {"home": str(_hermes_home), "display": _display_hermes_home()},
+     "project": _cfg_get_project,
+     "full": lambda params: {"config": _load_cfg()},
+diff --git a/tui_gateway/methods_config_set.py b/tui_gateway/methods_config_set.py
+index d96fea32de693..ac1e2b0bd82c5 100644
+--- a/tui_gateway/methods_config_set.py
++++ b/tui_gateway/methods_config_set.py
+@@ -74,7 +74,8 @@ def _stash_pending_model_switch(rid, key, value, session, confirmed, parsed):
+     """No live swap while a turn streams (agent.switch_model() mutates fields the worker thread
+     reads every iteration): stash the pick for the NEXT turn start. Selection guards run HERE (the
+     only moment a confirm round-trip is possible; an unconfirmed stashed pick is dropped at turn
+-    start) — on a warning nothing is stashed."""
++    start) — on a warning nothing is stashed. Returns ``(envelope, stashed)`` so the caller only
++    persists a pick that was actually queued."""
+     try:
+         pending_model = parsed.model_input
+     except Exception:
+@@ -83,12 +84,12 @@ def _stash_pending_model_switch(rid, key, value, session, confirmed, parsed):
+     if not confirmed:
+         pending_warning = _pending_switch_selection_warning(pending_model, pending_provider)
+         if pending_warning is not None:
+-            return _cfgset_model_ok(rid, key, pending_model, pending_warning, pending_warning, deferred=False)
++            return _cfgset_model_ok(rid, key, pending_model, pending_warning, pending_warning, deferred=False), False
+     # display_*: _session_info shows the user's pick while pending, not the live old model.
+     session["pending_model_switch"] = {
+         "raw": value, "confirm_expensive_model": confirmed,
+         "display_model": pending_model, "display_provider": pending_provider}
+-    return _cfgset_model_ok(rid, key, pending_model, deferred=True)
++    return _cfgset_model_ok(rid, key, pending_model, deferred=True), True
+ 
+ 
+ def _cfgset_guarded(fn):
+@@ -120,7 +121,18 @@ def _set_model(rid, params, key, value, session):
+         # model. The stash crosses the boundary in the turn frame and the child's
+         # turn thread applies it (_apply_pending_model_switch).
+         if session.get("running") or session.get("_compute_host_active"):
+-            return _stash_pending_model_switch(rid, key, value, session, confirmed, parsed_flags)
++            result, stashed = _stash_pending_model_switch(rid, key, value, session, confirmed, parsed_flags)
++            # Reap-safe: persist only a pick that was actually queued, and only a
++            # session-scoped one. A guarded/unconfirmed pick is never queued, and
++            # --global/--once must not stamp the durable row marker.
++            if stashed and not (parsed_flags.is_global or parsed_flags.is_once):
++                _persist_session_row_override(
++                    sid,
++                    {"model": getattr(parsed_flags, "model_input", "") or str(value).strip(),
++                     "provider": getattr(parsed_flags, "explicit_provider", "") or ""},
++                    model=getattr(parsed_flags, "model_input", "") or str(value).strip(),
++                )
++            return result
+         explicit_provider = parsed_flags.explicit_provider
+         failed_agent_init = session.get("agent") is None and session.get("agent_error") is not None
+         failed_ready = session.get("agent_ready") if failed_agent_init else None
+@@ -145,7 +157,37 @@ def _set_model(rid, params, key, value, session):
+                 return init_err
+             with _session_profile_runtime_scope(session):
+                 _persist_live_session_runtime(session)
++        # Reap-safe: persist the applied pick only when it is a true session-scoped
++        # override. --global already wrote config.yaml and --once restores after one
++        # turn; neither may stamp the durable row marker. Provider comes from the live
++        # agent (the switch resolved it), so an unknown one is never written.
++        if result.get("scope") == "session" and not result.get("confirm_required"):
++            _persist_session_row_override(
++                sid,
++                {"model": result.get("value") or "",
++                 "provider": explicit_provider or str(getattr(session.get("agent"), "provider", "") or "")},
++                model=result.get("value") or "",
++            )
+     else:
++        # A session-scoped write for a session that is not live in this process:
++        # persist as explicit row override instead of a GLOBAL config.yaml write.
++        if params.get("session_id"):
++            try:
++                from hermes_cli.model_switch import parse_model_switch_args as _parse_switch
++                parsed_flags = _parse_switch(value)
++                if getattr(parsed_flags, "is_session", False) and not getattr(parsed_flags, "is_global", False):
++                    model_input = str(getattr(parsed_flags, "model_input", "") or "").strip()
++                    provider = str(getattr(parsed_flags, "explicit_provider", "") or "").strip()
++                    if model_input:
++                        _persist_session_row_override(
++                            params.get("session_id", ""),
++                            {"model": model_input, "provider": provider},
++                            model=model_input,
++                        )
++                        return _kv(rid, key, model_input, warning="", confirm_required=False,
++                                  confirm_message="", scope="session", deferred=True)
++            except Exception:
++                pass
+         # --once keeps its specific 5001; other sessionless model sets 4001 so
+         # --global cannot persist profile defaults before session.create (#106397:
+         # an older Desktop client sent a fresh-draft pick this way).
+@@ -319,6 +361,13 @@ def _set_reasoning(rid, params, key, value, session):
+     if parsed is None:
+         return _err(rid, 4002, f"unknown reasoning value: {value}")
+     if scope == "global" or session is None:
++        if session is None and params.get("session_id") and scope != "global":
++            # Session-scoped reasoning for a non-live session: persist as row override
++            _persist_session_row_override(
++                params.get("session_id", ""),
++                {"reasoning_config": parsed},
++            )
++            return _kv(rid, key, arg)
+         _write_config_key("agent.reasoning_effort", arg)
+         if session is not None:
+             # /new is a full conversation boundary: session-scoped runtime overrides (/model, /reasoning,
+@@ -329,6 +378,10 @@ def _set_reasoning(rid, params, key, value, session):
+             session.pop("create_reasoning_override", None)
+     else:  # session-scoped like the gateway's `/reasoning <level>`; a menu pick must not rewrite the global
+         session["create_reasoning_override"] = parsed
++        _persist_session_row_override(
++            params.get("session_id", ""),
++            {"reasoning_config": parsed},
++        )
+     if session and session.get("agent") is not None:
+         session["agent"].reasoning_config = parsed
+         _persist_live_session_runtime(session)
+diff --git a/tui_gateway/methods_session.py b/tui_gateway/methods_session.py
+index 6373e6a2f4b30..903d72799c660 100644
+--- a/tui_gateway/methods_session.py
++++ b/tui_gateway/methods_session.py
+@@ -927,7 +927,8 @@ def _resume_lazy(ctx: _Resume) -> dict:
+         history = ctx.child_history(repair=True)
+     except Exception as e:
+         return _err(ctx.rid, 5000, resume_failed_message(e))
+-    record = ctx.record(source, cwd, history, lazy=True, todo_state=_todo_state_from_history(history))
++    record = ctx.record(source, cwd, history, _stored_session_runtime_overrides(ctx.found) or None,
++                        lazy=True, todo_state=_todo_state_from_history(history))
+     if (reused := ctx.claim(sid, record)) is not None:
+         return reused
+     # A child mid-run emits no session events — liveness comes from the relay registry.
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index 94bc00c0be44f..f0b7cf1b6bd25 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -1020,7 +1020,8 @@ def _deferred_build_agent_kwargs(current: dict, session_db) -> dict:
+     """_make_agent kwargs for a deferred (first-prompt) build. A lazy-resumed (watch) session carries the
+     stored conversation id so the upgrade continues it; a cold deferred resume restores the full persisted
+     runtime identity (like the eager resume's overrides splat) so the build can't drop the provider. No
+-    stored runtime, or an unroutable provider → this session's picked model/effort/tier, else the default."""
++    stored runtime → this session's picked model/effort/tier, else the default. An unroutable stored
++    provider still restores the stored model/reasoning/tier — only the dead provider pin falls back."""
+     kw = {"session_db": session_db, "context_cwd_is_launch_artifact": _context_cwd_is_launch_artifact(current),
+           "platform_override": _session_source(current), "cwd_override": _session_cwd(current)}
+     if resume_sid := current.get("resume_session_id"):
+@@ -1031,6 +1032,15 @@ def _deferred_build_agent_kwargs(current: dict, session_db) -> dict:
+     else:
+         if override := current.get("model_override"):
+             kw["model_override"] = override
++        if isinstance(resume_overrides, dict):
++            # A dead provider pin must fall back, but the stored model/reasoning/tier are still
++            # this session's identity (#103498): dropping the whole dict silently rebuilds the
++            # agent with the profile defaults while the persisted row stays correct.
++            kw.update({k: v for k, v in (("reasoning_config_override",
++                                          resume_overrides.get("reasoning_config_override")),
++                                         ("service_tier_override",
++                                          resume_overrides.get("service_tier_override")))
++                       if v is not None})
+         kw.update({k: v for k, v in (("reasoning_config_override", current.get("create_reasoning_override")),
+                                      ("service_tier_override", current.get("create_service_tier_override")))
+                    if v is not None})
+@@ -1635,6 +1645,45 @@ def _parse_model_config(raw, *, quiet: bool = False) -> dict:
+     return {}
+ 
+ 
++def _row_has_explicit_override(row: dict | None) -> bool:
++    """True when the row carries an EXPLICIT session-scoped model override
++    (written by `config.set model|reasoning --session`). Bot Mode plumbing and
++    canonical sessions normally always follow the profile's current config; the
++    explicit marker is the one sanctioned exception — a deliberate per-session
++    pin that must survive idle reaping and apply on resume."""
++    if not row:
++        return False
++    return bool(_parse_model_config(row.get("model_config"), quiet=True).get("session_override"))
++
++
++def _persist_session_row_override(
++    session_id: str, patch: dict, model: str = ""
++) -> bool:
++    """Persist an explicit session-scoped model/reasoning override into the
++    session row's `model_config`, stamped with the `session_override` marker so
++    `_stored_session_runtime_overrides` honors it on resume even for Bot Mode
++    plumbing/canonical sessions. Best-effort: a write failure must never break
++    the in-memory switch that already happened."""
++    try:
++        db = _get_db()
++        if db is None:
++            return False
++        row = db.get_session(session_id)
++        if not row:
++            return False
++        config = _parse_model_config(row.get("model_config"), quiet=True)
++        # Merge only what the patch actually knows: a blank provider/reasoning must
++        # not clobber the fuller runtime ``_persist_live_session_runtime`` writes.
++        config.update({k: v for k, v in patch.items() if v})
++        config["session_override"] = True
++        if hasattr(db, "update_session_meta"):
++            db.update_session_meta(session_id, json.dumps(config), model or None)
++            return True
++    except Exception:
++        logger.debug("failed to persist session override", exc_info=True)
++    return False
++
++
+ def _row_follows_profile(row: dict | None) -> bool:
+     """Whether a stored row is a canonical Bot Chat whose runtime follows the member profile's config.
+     Identity is the persisted ``follow_profile_config`` marker; the bare title compare stays ONLY here as
+@@ -1650,7 +1699,9 @@ def _stored_session_runtime_overrides(row: dict | None) -> dict:
+     resume restores the model/provider/reasoning THAT chat used, not the global pick. Plugin-owned Bot-Mode
+     sessions normally rebuild from the member profile's CURRENT config (a stale provider pin left room bots
+     "out of Nous credits" after a profile switch). A canonical Bot Chat may instead restore an explicit
+-    composer pick while the profile model it diverged from remains unchanged."""
++    composer pick while the profile model it diverged from remains unchanged. An EXPLICIT per-session
++    override (``session_override`` marker, written by ``config.set model|reasoning --session``) beats
++    every exemption."""
+     if not row:
+         return {}
+     model_config = _parse_model_config(row.get("model_config"), quiet=True)
+@@ -1661,7 +1712,9 @@ def _stored_session_runtime_overrides(row: dict | None) -> dict:
+         str(composer_profile.get("model") or "").strip(),
+         str(composer_profile.get("provider") or "").strip(),
+     ) == _config_model_target()
+-    if room_plumbing or (_row_follows_profile(row) and not composer_profile_matches):
++    if not _row_has_explicit_override(row) and (
++        room_plumbing or (_row_follows_profile(row) and not composer_profile_matches)
++    ):
+         return {}
+     overrides: dict = {}
+     model = str(row.get("model") or model_config.get("model") or "").strip()

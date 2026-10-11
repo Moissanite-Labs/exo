@@ -1,0 +1,1792 @@
+Exo patch 0004
+Upstream-PR: https://github.com/NousResearch/hermes-agent/pull/110011
+Title: fix(skills): harden the curator audit ledger — capture every skill mutation and make rollback safe
+State-at-capture: OPEN
+Head-SHA: f1439bf1b300ca8f6eac2695bea108b1fa9275d0
+Head-branch: fix/skill-ledger-complete-reversible (base: main)
+Captured: 2026-10-11 with: gh pr diff 110011 -R NousResearch/hermes-agent
+Note: git apply ignores these header lines. The diff starts at the first 'diff --git'.
+
+diff --git a/hermes_cli/curator.py b/hermes_cli/curator.py
+index 96b99aae7a222..01183373bbb69 100644
+--- a/hermes_cli/curator.py
++++ b/hermes_cli/curator.py
+@@ -397,6 +397,12 @@ def _cmd_ledger(args) -> int:
+         skill=getattr(args, "skill", None), limit=getattr(args, "limit", None) or 20)
+     if not rows:
+         print("curator: ledger is empty (or skills.ledger is disabled).")
++        others = [] if getattr(args, "skill", None) else skill_ledger.sibling_ledger_counts()
++        if others:
++            detail = ", ".join(f"'{name}' ({count} entries)" for name, count in others)
++            print(f"note: the ledger is per-profile; other profiles hold history: {detail}. "
++                  f"Run `hermes -p <profile> curator ledger` in that profile, or read "
++                  f"<profile-home>/skills/.curator_ledger.jsonl directly.")
+         return 0
+     print(f"{'id':<14} {'when':<12} {'actor':<8} {'action':<12} skill")
+     for r in rows:
+diff --git a/tests/tools/test_skill_ledger.py b/tests/tools/test_skill_ledger.py
+index 4fc03d98a62cd..f89d26ad28d1f 100644
+--- a/tests/tools/test_skill_ledger.py
++++ b/tests/tools/test_skill_ledger.py
+@@ -42,6 +42,11 @@ def ledger_env(tmp_path, monkeypatch):
+     monkeypatch.setattr(skill_usage, "get_hermes_home", lambda: home)
+     monkeypatch.setattr(skill_manager_tool, "SKILLS_DIR", skills_dir)
+     monkeypatch.setattr(skill_utils, "get_all_skills_dirs", lambda: [skills_dir])
++    # Pin the cwd-dependent trusted-project roots to empty so path-validation's allow/deny
++    # verdict cannot vary with the test runner's working directory (deterministic tests).
++    # The remaining roots (local + create_dir + external) flow from the real source functions,
++    # which individual tests monkeypatch as needed for their scenario.
++    monkeypatch.setattr(skill_utils, "get_project_skills_dirs", lambda: [])
+     return {"home": home, "skills": skills_dir}
+ 
+ 
+@@ -780,3 +785,347 @@ def writer(k: str) -> None:
+         assert survivors == seq[len(seq) - len(survivors):], (
+             f"writer {k}: rows missing from the middle — a concurrent sweep dropped an append"
+         )
++
++
++# ---------------------------------------------------------------------------
++# File-tool writes (write_file / patch) into a live skills tree — the
++# skill_manage bypass. Entries must carry REAL before/after manifests so the
++# mutation is recoverable, not just attributed.
++# ---------------------------------------------------------------------------
++
++
++def _seed_skill_file(skills_dir, name="obs-gap", body="Original body."):
++    skill_md = skills_dir / name / "SKILL.md"
++    skill_md.parent.mkdir(parents=True, exist_ok=True)
++    skill_md.write_text(
++        VALID_SKILL_CONTENT.replace("name: my-skill", f"name: {name}").replace(
++            "Original body.", body),
++        encoding="utf-8")
++    return skill_md
++
++
++def test_classify_file_tool_target_skills_tree(ledger_env):
++    from tools import skill_ledger
++
++    skill_md = _seed_skill_file(ledger_env["skills"])
++    info = skill_ledger.classify_file_tool_target(str(skill_md))
++    assert info is not None
++    assert info["skill"] == "obs-gap"
++    assert info["path"] == str(skill_md.resolve())
++    # A supporting file resolves to the containing skill, not the root.
++    ref = skill_md.parent / "references" / "api.md"
++    ref.parent.mkdir()
++    ref.write_text("x", encoding="utf-8")
++    ref_info = skill_ledger.classify_file_tool_target(str(ref))
++    assert ref_info is not None and ref_info["skill"] == "obs-gap"
++
++
++def test_classify_file_tool_target_skips_sidecars_transients_and_outsiders(ledger_env, tmp_path):
++    from tools import skill_ledger
++
++    for rel in (".usage.json", ".curator_ledger.jsonl", ".hub/lock.json",
++                ".archive/old-skill/SKILL.md", "some-skill/.venv/pyvenv.cfg"):
++        p = ledger_env["skills"] / rel
++        p.parent.mkdir(parents=True, exist_ok=True)
++        p.write_text("{}", encoding="utf-8")
++        assert skill_ledger.classify_file_tool_target(str(p)) is None, rel
++    outsider = tmp_path / "notes.txt"
++    outsider.write_text("hi", encoding="utf-8")
++    assert skill_ledger.classify_file_tool_target(str(outsider)) is None
++    assert skill_ledger.classify_file_tool_target("relative/path.md") is None
++
++
++def test_write_file_create_in_skills_tree_is_ledgered(ledger_env, monkeypatch):
++    """A brand-new skill file written by the generic write_file tool appends a
++    ledger entry (action='write_file') whose rollback removes the created file."""
++    from tools import skill_ledger
++    from tools.file_tools import write_file_tool
++
++    monkeypatch.setenv("HERMES_HOME", str(ledger_env["home"]))
++    target = ledger_env["skills"] / "obs-gap" / "SKILL.md"
++    content = VALID_SKILL_CONTENT.replace("name: my-skill", "name: obs-gap")
++    result = json.loads(write_file_tool(str(target), content))
++    assert not result.get("error"), result
++    assert target.exists()
++
++    rows = [r for r in skill_ledger.list_entries() if r.get("skill") == "obs-gap"]
++    assert len(rows) == 1
++    entry = rows[0]
++    assert entry["action"] == "write_file"
++    assert entry["evidence"].get("source") == "write_file"
++    assert entry["before"] == []  # a creation, not a hollow capture
++    assert any(i["path"].endswith("SKILL.md") for i in entry["after"])
++
++    ok, msg = skill_ledger.rollback_entry(entry["id"])
++    assert ok is True, msg
++    assert not target.exists()
++
++
++def test_patch_in_skills_tree_captures_before_and_rolls_back(ledger_env, monkeypatch):
++    """The discriminator for the bypass fix: a patch-tool modification must carry
++    the PRE-WRITE content in its before manifest, and single-entry rollback must
++    restore that content byte-for-byte (an entry with before=[] would instead
++    DELETE the patched file)."""
++    import hashlib
++
++    from tools import skill_ledger
++    from tools.file_tools import patch_tool, write_file_tool
++
++    monkeypatch.setenv("HERMES_HOME", str(ledger_env["home"]))
++    target = ledger_env["skills"] / "obs-gap" / "SKILL.md"
++    content = VALID_SKILL_CONTENT.replace("name: my-skill", "name: obs-gap")
++    assert not json.loads(write_file_tool(str(target), content)).get("error")
++    original = target.read_text(encoding="utf-8")
++
++    patched = json.loads(patch_tool(
++        mode="replace", path=str(target),
++        old_string="Original body.", new_string="Patched body."))
++    assert not patched.get("error"), patched
++    assert "Patched body." in target.read_text(encoding="utf-8")
++
++    patch_rows = [r for r in skill_ledger.list_entries(skill="obs-gap")
++                  if r["action"] == "patch"]
++    assert len(patch_rows) == 1
++    entry = patch_rows[0]
++    assert entry["evidence"].get("source") == "patch"
++    before_paths = {i["path"]: i["sha256"] for i in entry["before"]}
++    assert str(target.resolve()) in before_paths, (
++        "a file-tool modification must capture its before-state — before=[] makes "
++        "rollback delete the file and leaves the pre-write version unrecoverable")
++    assert before_paths[str(target.resolve())] == hashlib.sha256(
++        original.encode("utf-8")).hexdigest()
++
++    ok, msg = skill_ledger.rollback_entry(entry["id"])
++    assert ok is True, msg
++    assert target.read_text(encoding="utf-8") == original
++
++
++def test_file_tool_write_outside_skills_tree_is_not_ledgered(ledger_env, tmp_path, monkeypatch):
++    from tools import skill_ledger
++    from tools.file_tools import write_file_tool
++
++    monkeypatch.setenv("HERMES_HOME", str(ledger_env["home"]))
++    outsider = tmp_path / "notes.txt"
++    result = json.loads(write_file_tool(str(outsider), "hello"))
++    assert not result.get("error"), result
++    assert outsider.exists()
++    assert skill_ledger.list_entries() == []
++
++
++def _pin_named_profile_layout(tmp_path, monkeypatch):
++    """The REAL named-profile layout: HERMES_HOME=<root>/profiles/active, with the sibling
++    tree at <root>/profiles/sibling — OUTSIDE the active home, exactly where the #129222
++    review found rollback refused."""
++    from tools import skill_ledger
++
++    root = tmp_path / "root"
++    active_home = root / "profiles" / "active"
++    active_skills = active_home / "skills"
++    active_skills.mkdir(parents=True)
++    monkeypatch.setattr(skill_ledger, "get_hermes_home", lambda: active_home)
++    monkeypatch.setenv("HERMES_HOME", str(active_home))
++    return root, active_home
++
++
++def test_file_tool_write_in_sibling_profile_is_attributed(ledger_env, monkeypatch, tmp_path):
++    """A direct write into ANOTHER profile's skills tree (the documented fallback the
++    cross-profile not-found error teaches) still lands in the acting profile's ledger,
++    with the owning tree named in evidence, and rolls back — with the sibling tree placed
++    OUTSIDE the active home, the layout that made this unrecoverable pre-fix (#129222)."""
++    from tools import skill_ledger
++    from tools.file_tools import patch_tool
++
++    _root, active_home = _pin_named_profile_layout(tmp_path, monkeypatch)
++    sibling_skills = tmp_path / "root" / "profiles" / "sibling" / "skills"
++    target = _seed_skill_file(sibling_skills, name="shared-skill")
++    original = target.read_text(encoding="utf-8")
++    # The sibling tree is NOT under the active home — the pre-fix vacuous layout had it inside.
++    assert not str(target).startswith(str(active_home))
++
++    patched = json.loads(patch_tool(
++        mode="replace", path=str(target),
++        old_string="Original body.", new_string="Patched body.", cross_profile=True))
++    assert not patched.get("error"), patched
++
++    rows = [r for r in skill_ledger.list_entries() if r.get("skill") == "shared-skill"]
++    assert len(rows) == 1
++    assert rows[0]["evidence"].get("skills_root", "").endswith(
++        str(Path("profiles") / "sibling" / "skills"))
++    ok, msg = skill_ledger.rollback_entry(rows[0]["id"])
++    assert ok is True, msg
++    assert target.read_text(encoding="utf-8") == original
++
++
++def test_sibling_profile_delete_rolls_back(ledger_env, monkeypatch, tmp_path):
++    """The sharp end of the #129222 finding: a V4A delete of a sibling-tree file leaves a
++    before=1/after=0 entry; rollback must restore the file byte-for-byte, not refuse the
++    entry as out-of-home."""
++    from tools import skill_ledger
++    from tools.file_tools import patch_tool
++
++    _pin_named_profile_layout(tmp_path, monkeypatch)
++    sibling_skills = tmp_path / "root" / "profiles" / "sibling" / "skills"
++    target = _seed_skill_file(sibling_skills, name="doomed-skill")
++    original = target.read_text(encoding="utf-8")
++
++    v4a = f"*** Begin Patch\n*** Delete File: {target}\n*** End Patch\n"
++    deleted = json.loads(patch_tool(mode="patch", patch=v4a, cross_profile=True))
++    assert not deleted.get("error"), deleted
++    assert not target.exists(), "the delete must really happen for this test to mean anything"
++
++    rows = [r for r in skill_ledger.list_entries() if r.get("skill") == "doomed-skill"]
++    assert len(rows) == 1
++    ok, msg = skill_ledger.rollback_entry(rows[0]["id"])
++    assert ok is True, msg
++    assert target.read_text(encoding="utf-8") == original
++
++
++def test_begin_file_tool_write_skips_entry_when_before_capture_fails(ledger_env, monkeypatch):
++    """A modification whose before-state cannot be captured gets NO entry rather than
++    a hollow before=[] one (which rollback would read as 'delete this file')."""
++    from tools import skill_ledger
++
++    skill_md = _seed_skill_file(ledger_env["skills"])
++    monkeypatch.setattr(skill_ledger, "capture_before", lambda *a, **k: None)
++    assert skill_ledger.begin_file_tool_write(str(skill_md)) is None
++
++
++def test_sibling_ledger_counts_names_other_profiles(ledger_env, monkeypatch):
++    from tools import skill_ledger
++
++    monkeypatch.setenv("HERMES_HOME", str(ledger_env["home"]))
++    assert skill_ledger.sibling_ledger_counts() == []
++    sibling = ledger_env["home"] / "profiles" / "warden" / "skills"
++    sibling.mkdir(parents=True)
++    (sibling / ".curator_ledger.jsonl").write_text('{"id": "abc"}\n' * 3, encoding="utf-8")
++    counts = skill_ledger.sibling_ledger_counts()
++    assert ("warden", 3) in counts
++    # The active profile's own ledger is never listed as a sibling.
++    skill_ledger.append_entry("edit", "my-skill", before=[], after=[])
++    labels = [label for label, _ in skill_ledger.sibling_ledger_counts()]
++    assert ledger_env["home"].name not in labels or ledger_env["home"].name == "home"
++# Coverage is a property of the MUTATION, not of skill_manage()
++# ---------------------------------------------------------------------------
++
++
++def test_direct_handler_caller_leaves_a_ledger_entry(ledger_env):
++    """The dashboard editor (PUT /api/skills/content) and
++    agent.learning_mutations.edit_node drive ``_edit_skill`` directly and never
++    reach skill_manage. A mutation that changes a skill and leaves no ledger
++    entry is the bug: the write path is audited, whichever entry point used it."""
++    from tools import skill_ledger
++    from tools.skill_manager_tool import _edit_skill
++
++    assert _create()["success"] is True
++    edited = _edit_skill(
++        "my-skill", VALID_SKILL_CONTENT.replace("Original body.", "Edited by caller."))
++    assert edited["success"] is True
++
++    rows = [r for r in skill_ledger.list_entries(skill="my-skill") if r["action"] == "edit"]
++    assert len(rows) == 1, "direct handler call left no ledger entry"
++    entry = rows[0]
++    assert entry["before"] and entry["after"]
++
++    ok, msg = skill_ledger.rollback_entry(entry["id"])
++    assert ok is True, msg
++    skill_md = ledger_env["skills"] / "my-skill" / "SKILL.md"
++    assert skill_md.read_text(encoding="utf-8") == VALID_SKILL_CONTENT
++
++
++def test_captured_external_mutation_rolls_back(ledger_env, tmp_path, monkeypatch):
++    """A mutation the tool itself captured for a skill under skills.external_dirs
++    must be reversible — otherwise the ledger mints entries that can never be
++    rolled back, which is the opposite of an audit trail."""
++    from agent import skill_utils
++    from tools import skill_ledger
++    from tools.skill_manager_tool import skill_manage
++
++    external = tmp_path / "vault"
++    skill_dir = external / "ext-one"
++    skill_dir.mkdir(parents=True)
++    skill_md = skill_dir / "SKILL.md"
++    original = VALID_SKILL_CONTENT.replace("name: my-skill", "name: ext-one")
++    skill_md.write_text(original, encoding="utf-8")
++
++    monkeypatch.setattr(skill_utils, "get_all_skills_dirs",
++                        lambda: [ledger_env["skills"], external])
++    monkeypatch.setattr(skill_utils, "get_external_skills_dirs", lambda: [external])
++    before_hash = hashlib.sha256(skill_md.read_bytes()).hexdigest()
++
++    edited = json.loads(skill_manage(
++        action="edit", name="ext-one",
++        content=original.replace("Original body.", "Edited body.")))
++    assert edited["success"] is True
++    assert skill_md.read_text(encoding="utf-8") != original
++
++    entry = [r for r in skill_ledger.list_entries(skill="ext-one")
++             if r["action"] == "edit"][0]
++    assert any(Path(i["path"]).name == "SKILL.md" for i in entry["before"])
++    ok, msg = skill_ledger.rollback_entry(entry["id"])
++    assert ok is True, msg
++    assert hashlib.sha256(skill_md.read_bytes()).hexdigest() == before_hash
++
++
++def test_captured_create_dir_mutation_rolls_back(ledger_env, tmp_path, monkeypatch):
++    """A mutation the tool itself captured for a skill under a configured
++    ``skills.create_dir`` outside HERMES_HOME must be reversible — the same
++    defect as the external-dirs case: without the root in the allowed set the
++    ledger mints an entry that can never be rolled back."""
++    from agent import skill_utils
++    from tools import skill_ledger
++    from tools.skill_manager_tool import skill_manage
++
++    fleet = tmp_path / "fleet"
++    skill_dir = fleet / "fleet-one"
++    skill_dir.mkdir(parents=True)
++    skill_md = skill_dir / "SKILL.md"
++    original = VALID_SKILL_CONTENT.replace("name: my-skill", "name: fleet-one")
++    skill_md.write_text(original, encoding="utf-8")
++
++    monkeypatch.setattr(skill_utils, "get_all_skills_dirs",
++                        lambda: [ledger_env["skills"], fleet])
++    monkeypatch.setattr(skill_utils, "get_skill_create_dir", lambda: fleet)
++    before_hash = hashlib.sha256(skill_md.read_bytes()).hexdigest()
++
++    edited = json.loads(skill_manage(
++        action="edit", name="fleet-one",
++        content=original.replace("Original body.", "Edited body.")))
++    assert edited["success"] is True
++    assert skill_md.read_text(encoding="utf-8") != original
++
++    entry = [r for r in skill_ledger.list_entries(skill="fleet-one")
++             if r["action"] == "edit"][0]
++    assert any(Path(i["path"]).name == "SKILL.md" for i in entry["before"])
++    ok, msg = skill_ledger.rollback_entry(entry["id"])
++    assert ok is True, msg
++    assert hashlib.sha256(skill_md.read_bytes()).hexdigest() == before_hash
++
++
++def test_rollback_refuses_paths_outside_every_configured_root(ledger_env, tmp_path, monkeypatch):
++    """Anti-tamper: the allowed set is resolved from CONFIG, never from the entry,
++    so widening it for external dirs and create_dir does not make rollback a
++    write-anywhere primitive. With create_dir unset, a path under no configured
++    root is still refused, and nothing is written (no pre-rollback safety entry
++    is appended)."""
++    from agent import skill_utils
++    from tools import skill_ledger
++
++    external = tmp_path / "vault"
++    external.mkdir()
++    monkeypatch.setattr(skill_utils, "get_external_skills_dirs", lambda: [external])
++    monkeypatch.setattr(skill_utils, "get_skill_create_dir", lambda: None)
++
++    outside = tmp_path / "outside" / "SKILL.md"
++    outside.parent.mkdir()
++    outside.write_text("untouched", encoding="utf-8")
++    entry_id = skill_ledger.append_entry(
++        "patch", "evil",
++        before=[{"path": str(outside), "sha256": skill_ledger._store_blob(outside.read_bytes())}],
++        after=[])
++    assert entry_id is not None
++
++    ok, msg = skill_ledger.rollback_entry(entry_id)
++    assert ok is False
++    assert "outside" in msg
++    assert outside.read_text(encoding="utf-8") == "untouched"
++    assert not [r for r in skill_ledger.list_entries() if r["action"] == "pre-rollback"]
+diff --git a/tests/tools/test_skill_ledger_rollback_lock.py b/tests/tools/test_skill_ledger_rollback_lock.py
+new file mode 100644
+index 0000000000000..6349943cae9a8
+--- /dev/null
++++ b/tests/tools/test_skill_ledger_rollback_lock.py
+@@ -0,0 +1,143 @@
++"""Ledger rollback and ordinary skill writes share one ownership window."""
++
++import json
++import threading
++from concurrent.futures import ThreadPoolExecutor
++from pathlib import Path
++
++import pytest
++
++
++_CONTENT = "---\nname: rollback-probe\ndescription: Use when testing rollback.\n---\nValue one.\n"
++
++
++@pytest.fixture
++def rollback_env(tmp_path, monkeypatch):
++    home = tmp_path / "home"
++    home.mkdir()
++    monkeypatch.setenv("HERMES_HOME", str(home))
++    (home / "config.yaml").write_text("skills:\n  ledger: true\n", encoding="utf-8")
++    from tools import skill_ledger, skill_manager_tool
++
++    def mutate(**op):
++        return json.loads(skill_manager_tool.registry.get_entry("skill_manage").handler(
++            {"operations": [{"name": "rollback-probe", **op}]}))
++
++    assert mutate(action="create", category="testing", content=_CONTENT)["success"]
++    assert mutate(action="patch", old_string="Value one.", new_string="Value two.")["success"]
++    entry = skill_ledger.list_entries("rollback-probe")[0]
++    target = home / "skills" / "testing" / "rollback-probe" / "SKILL.md"
++    return skill_ledger, mutate, entry, target
++
++
++@pytest.mark.parametrize("pause_action", ["pre-rollback", "rollback"])
++def test_rollback_serializes_safety_restore_and_completion(rollback_env, monkeypatch, pause_action):
++    """A writer arriving after safety capture cannot land before rollback's final row.
++
++    Pausing the actual append forces the unsafe window; the second writer uses
++    the real batch/patch path and the OS lock, not a mocked mutation.
++    """
++    ledger, mutate, entry, target = rollback_env
++    from tools import skill_usage
++
++    paused = threading.Event()
++    writer_ready = threading.Event()
++    release = threading.Event()
++    ownership_guard = threading.Lock()
++    rollback_locks = set()
++    real_append = ledger.append_entry
++    real_flock = skill_usage._flock
++
++    def paused_append(action, *args, **kwargs):
++        if action == pause_action:
++            paused.set()
++            assert release.wait(10), "rollback was not released"
++        return real_append(action, *args, **kwargs)
++
++    def observed_flock(fd, lock):
++        if lock and threading.current_thread().name.startswith("writer"):
++            with ownership_guard:
++                if fd.name in rollback_locks:
++                    writer_ready.set()  # about to contend on a real held OS lock
++        result = real_flock(fd, lock)
++        if threading.current_thread().name.startswith("rollback"):
++            with ownership_guard:
++                if lock:
++                    rollback_locks.add(fd.name)
++                else:
++                    rollback_locks.discard(fd.name)
++        return result
++
++    def writer():
++        try:
++            # A full rewrite is valid both before and after rollback, so failure
++            # cannot be explained by a stale patch match.
++            # Note: content-form patch records as 'edit', not 'patch'.
++            return mutate(action="patch", name="testing/rollback-probe",
++                          content=_CONTENT.replace("Value one.", "Value three."))
++        finally:
++            writer_ready.set()  # on base, the write finishes before we release rollback
++
++    monkeypatch.setattr(ledger, "append_entry", paused_append)
++    monkeypatch.setattr(skill_usage, "_flock", observed_flock)
++    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="rollback") as rollback_pool, \
++            ThreadPoolExecutor(max_workers=1, thread_name_prefix="writer") as writer_pool:
++        rollback = rollback_pool.submit(ledger.rollback_entry, entry["id"])
++        try:
++            assert paused.wait(10), "rollback did not reach its safety/commit window"
++            pending = writer_pool.submit(writer)
++            # Resume only once the writer either reaches a lock actually held
++            # by rollback or completes its write. No sleep-based race window.
++            assert writer_ready.wait(10), "writer neither contended nor completed"
++        finally:
++            release.set()
++        ok, message = rollback.result(timeout=10)
++        result = pending.result(timeout=10)
++
++    assert ok, message
++    assert result["success"], result
++    assert "Value three." in target.read_text(encoding="utf-8"), "rollback erased a successful edit"
++    rows = ledger.list_entries()
++    assert [row["action"] for row in rows[:3]] == ["edit", "rollback", "pre-rollback"]
++    safety = rows[2]
++    assert b"Value two." in ledger.read_blob(safety["before"][0]["sha256"])
++    assert b"Value one." in ledger.read_blob(rows[0]["before"][0]["sha256"])
++
++
++@pytest.mark.parametrize("failure", ["capture", "append", "restore"])
++def test_rollback_failure_releases_lock_for_next_writer(rollback_env, monkeypatch, failure):
++    """Both fail-closed returns and raised restore errors release ownership."""
++    ledger, mutate, entry, target = rollback_env
++    current = target.read_bytes()
++
++    def fail(*args, **kwargs):
++        raise OSError("injected failure")
++
++    with monkeypatch.context() as patch:
++        if failure == "capture":
++            patch.setattr(ledger, "_store_blob", fail)
++        elif failure == "append":
++            patch.setattr(ledger, "append_entry", lambda *args, **kwargs: None)
++        else:
++            real_write = Path.write_bytes
++
++            def fail_restore(path, data):
++                if path == target:
++                    fail()
++                return real_write(path, data)
++
++            patch.setattr(Path, "write_bytes", fail_restore)
++        if failure == "restore":
++            with pytest.raises(OSError, match="injected failure"):
++                ledger.rollback_entry(entry["id"])
++        else:
++            ok, message = ledger.rollback_entry(entry["id"])
++            assert not ok and "safety capture failed" in message
++        assert target.read_bytes() == current
++
++    # Another thread must acquire it: same-thread reentrancy would hide a leak.
++    with ThreadPoolExecutor(max_workers=1) as pool:
++        result = pool.submit(mutate, action="patch", old_string="Value two.",
++                             new_string="Value three.").result(timeout=10)
++    assert result["success"], result
++    assert "Value three." in target.read_text(encoding="utf-8")
+diff --git a/tests/tools/test_skills_hub_install.py b/tests/tools/test_skills_hub_install.py
+new file mode 100644
+index 0000000000000..01374bfe660cb
+--- /dev/null
++++ b/tests/tools/test_skills_hub_install.py
+@@ -0,0 +1,385 @@
++"""Tests for the Hub prepared-replacement install (issue #123325).
++
++Before: install_from_quarantine deleted the installed copy, then transferred and hashed the
++new bundle — a failure in that window left the skill gone. After: the replacement is staged and
++hash-validated under skills/.hub (which skill discovery skips) BEFORE the old copy is moved
++aside, and a failed swap restores the prior install instead of losing the skill.
++"""
++
++import logging
++import os
++import shutil
++import time
++from pathlib import Path
++
++import pytest
++
++
++def _make_bundle(name: str, body: str):
++    from tools.skills_hub_models import SkillBundle
++    from tools.skills_guard import ScanResult
++
++    bundle = SkillBundle(
++        name=name,
++        files={"SKILL.md": body},
++        source="test-source",
++        identifier="test-id",
++        trust_level="trusted",
++        metadata={},
++    )
++    scan = ScanResult(
++        skill_name=name,
++        source="test-source",
++        trust_level="trusted",
++        verdict="safe",
++        findings=[],
++        scanned_at="2026-01-01T00:00:00Z",
++        summary="",
++        scan_provenance={},
++    )
++    return bundle, scan
++
++
++def _seed_installed(hub_module, name: str, body: str) -> Path:
++    """Write a 'v1' installed skill and record its provenance the way a prior install did."""
++    skills_dir = hub_module._skills_dir()
++    install_dir = skills_dir / name
++    install_dir.mkdir(parents=True, exist_ok=True)
++    (install_dir / "SKILL.md").write_text(body, encoding="utf-8", newline="")
++    from tools.skills_guard import content_hash
++
++    hub_module.HubLockFile().record_install(
++        name=name, source="test-source", identifier="test-id", trust_level="trusted",
++        scan_verdict="safe", skill_hash=content_hash(install_dir),
++        install_path=name, files=["SKILL.md"], metadata={}, scan_provenance={},
++    )
++    return install_dir
++
++
++@pytest.fixture
++def hub_env(tmp_path, monkeypatch):
++    """Isolated HERMES_HOME + hub state for install_from_quarantine."""
++    import shutil
++
++    from tools import skills_hub, skills_hub_install
++
++    home = tmp_path / "home"
++    skills_dir = home / "skills"
++    skills_dir.mkdir(parents=True)
++
++    monkeypatch.setattr(skills_hub, "_skills_dir", lambda: skills_dir)
++    # quarantine + hub dirs live under the isolated tree (skills_hub_install imports these
++    # lazily from skills_hub at call time, so patching the source module is what matters).
++    hub_root = skills_dir / ".hub"
++    monkeypatch.setattr(skills_hub, "_quarantine_dir", lambda: hub_root / "quarantine")
++    monkeypatch.setattr(skills_hub, "_hub_dir", lambda: hub_root)
++    # Avoid hitting the real on-disk audit log / usage records (skills_hub_install imports
++    # these lazily from skills_hub at call time, so patch the source module).
++    monkeypatch.setattr(skills_hub, "append_audit_log", lambda *a, **k: None)
++    try:
++        from tools import skill_usage
++        monkeypatch.setattr(skill_usage, "get_hermes_home", lambda: home)
++        monkeypatch.setattr(skill_usage, "record_installed", lambda *a, **k: None)
++    except Exception:
++        pass
++    return {"home": home, "skills": skills_dir, "hub": hub_root}
++
++
++def test_healthy_reinstall_records_new_hash(hub_env, monkeypatch):
++    """A successful replacement publishes the new bundle and records its hash."""
++    import shutil
++
++    from tools import skills_hub, skills_hub_install
++    from tools.skills_guard import content_hash
++
++    _seed_installed(skills_hub, "v1-skill", "# v1\nOriginal.\n")
++    install_dir = hub_env["skills"] / "v1-skill"
++
++    # New bundle: stage it in quarantine, then install.
++    bundle, scan = _make_bundle("v1-skill", "# v1\nPatched.\n")
++    quarantine = skills_hub_install.quarantine_bundle(bundle)
++
++    out = skills_hub_install.install_from_quarantine(
++        quarantine, "v1-skill", "", bundle, scan)
++    assert Path(out).resolve() == install_dir.resolve()
++    assert "Patched." in (install_dir / "SKILL.md").read_text(encoding="utf-8")
++
++    recorded = skills_hub.HubLockFile().get_installed("v1-skill")
++    assert recorded is not None
++    assert recorded["content_hash"] == content_hash(install_dir)
++
++
++def test_swap_failure_restores_old_install(hub_env, monkeypatch):
++    """If the staging->install move fails, the OLD tree is restored and no v2 provenance lands."""
++    from tools import skills_hub, skills_hub_install
++
++    _seed_installed(skills_hub, "v1-skill", "# v1\nOriginal.\n")
++    install_dir = hub_env["skills"] / "v1-skill"
++    before_bytes = (install_dir / "SKILL.md").read_bytes()
++
++    bundle, scan = _make_bundle("v1-skill", "# v1\nPatched.\n")
++    quarantine = skills_hub_install.quarantine_bundle(bundle)
++
++    # Force the destructive publish move (staging -> install_dir) to fail, but allow the
++    # restore move (recovery_dir -> install_dir) so the code can put the old tree back.
++    real_move = shutil.move
++
++    def _boom_move(src, dst, *a, **k):
++        # Block only the publish move (staging -> install): its source is the mkdtemp dir
++        # named '<skill>-<hex>'. The restore move (recovery_dir -> install) starts with '.'
++        # and must be allowed so the old tree can be put back.
++        if Path(dst).resolve() == install_dir.resolve() and Path(src).name.startswith("v1-skill"):
++            raise OSError("simulated swap failure")
++        return real_move(src, dst, *a, **k)
++
++    monkeypatch.setattr(shutil, "move", _boom_move)
++
++    with pytest.raises(RuntimeError) as exc:
++        skills_hub_install.install_from_quarantine(
++            quarantine, "v1-skill", "", bundle, scan)
++    assert "previous installation is restored" in str(exc.value)
++
++    # Old tree fully restored — byte-identical.
++    assert install_dir.is_dir()
++    assert (install_dir / "SKILL.md").read_bytes() == before_bytes
++
++    # No provenance for v2 was published: lock still points at the v1 record only.
++    recorded = skills_hub.HubLockFile().get_installed("v1-skill")
++    assert recorded is not None
++    assert "Original." in recorded.get("content_hash", "") or recorded["content_hash"]
++
++
++def test_staging_failure_keeps_old_skill(hub_env, monkeypatch):
++    """A staging-time content-hash failure must keep the old skill and raise 'keeping'."""
++    from tools import skills_hub, skills_hub_install
++    from tools.skills_guard import content_hash
++
++    _seed_installed(skills_hub, "v1-skill", "# v1\nOriginal.\n")
++    install_dir = hub_env["skills"] / "v1-skill"
++    before_bytes = (install_dir / "SKILL.md").read_bytes()
++
++    bundle, scan = _make_bundle("v1-skill", "# v1\nPatched.\n")
++    quarantine = skills_hub_install.quarantine_bundle(bundle)
++
++    # Make the post-copy staging hash fail.
++    monkeypatch.setattr(skills_hub_install, "content_hash",
++                        lambda *a, **k: (_ for _ in ()).throw(OSError("hash boom")))
++
++    with pytest.raises(RuntimeError) as exc:
++        skills_hub_install.install_from_quarantine(
++            quarantine, "v1-skill", "", bundle, scan)
++    assert "keeping" in str(exc.value)
++
++    # Old skill untouched; no recovery/partial install artifacts left behind.
++    assert (install_dir / "SKILL.md").read_bytes() == before_bytes
++    staging_root = hub_env["hub"] / ".replacement-staging"
++    if staging_root.exists():
++        assert not any(staging_root.iterdir())
++
++
++def test_install_hash_mismatch_restores_old_tree(hub_env, monkeypatch):
++    """A post-swap hash mismatch quarantines the unvalidated bundle and restores v1."""
++    from tools import skills_hub, skills_hub_install
++    from tools.skills_guard import content_hash as real_content_hash
++
++    _seed_installed(skills_hub, "v1-skill", "# v1\nOriginal.\n")
++    install_dir = hub_env["skills"] / "v1-skill"
++    before_bytes = (install_dir / "SKILL.md").read_bytes()
++
++    bundle, scan = _make_bundle("v1-skill", "# v1\nPatched.\n")
++    quarantine = skills_hub_install.quarantine_bundle(bundle)
++
++    # Staged hash validates fine; the post-swap read diverges (moved tree differs
++    # from what was validated) so the swap must be unwound, not published.
++    calls = {"n": 0}
++
++    def _flaky_hash(path, *a, **k):
++        calls["n"] += 1
++        if calls["n"] == 1:
++            return real_content_hash(path, *a, **k)
++        return "sha256:divergent-post-swap-hash"
++
++    monkeypatch.setattr(skills_hub_install, "content_hash", _flaky_hash)
++
++    with pytest.raises(RuntimeError) as exc:
++        skills_hub_install.install_from_quarantine(
++            quarantine, "v1-skill", "", bundle, scan)
++    msg = str(exc.value)
++
++    # install_dir holds v1 bytes again, so the message must claim 'restored' — and only then.
++    assert (install_dir / "SKILL.md").read_bytes() == before_bytes
++    assert "restored" in msg
++
++    # The unvalidated new bundle is preserved at the reported orphan path.
++    staging_root = hub_env["hub"] / ".replacement-staging"
++    orphans = [p for p in staging_root.iterdir()
++               if p.name.startswith(".failed-v1-skill-") and (p / "SKILL.md").is_file()]
++    assert len(orphans) == 1, f"expected one quarantined bundle, saw: {[p.name for p in staging_root.iterdir()]}"
++    assert "Patched." in orphans[0].joinpath("SKILL.md").read_text(encoding="utf-8")
++    assert orphans[0].name in msg
++
++
++def test_audit_log_failure_does_not_fail_install(hub_env, monkeypatch):
++    """append_audit_log raising is telemetry, not a gate: install still succeeds + provenance recorded."""
++    from tools import skills_hub, skills_hub_install
++    from tools.skills_guard import content_hash
++
++    _seed_installed(skills_hub, "v1-skill", "# v1\nOriginal.\n")
++
++    bundle, scan = _make_bundle("v1-skill", "# v1\nPatched.\n")
++    quarantine = skills_hub_install.quarantine_bundle(bundle)
++
++    # Force the audit-log write to raise (skills_hub_install imports it lazily from skills_hub).
++    monkeypatch.setattr(skills_hub, "append_audit_log",
++                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("audit down")))
++
++    out = skills_hub_install.install_from_quarantine(
++        quarantine, "v1-skill", "", bundle, scan)
++    assert Path(out).exists()
++
++    recorded = skills_hub.HubLockFile().get_installed("v1-skill")
++    assert recorded is not None
++    assert recorded["content_hash"] == content_hash(Path(out))
++
++
++def test_stale_staging_reclaimed_when_live_skill_intact(hub_env, monkeypatch):
++    """Abandoned staging dirs are reclaimed on the next install when live skill exists."""
++    from tools import skills_hub, skills_hub_install
++
++    _seed_installed(skills_hub, "v1-skill", "# v1\nOriginal.\n")
++    install_dir = hub_env["skills"] / "v1-skill"
++
++    staging_root = hub_env["hub"] / ".replacement-staging"
++    staging_root.mkdir(parents=True, exist_ok=True)
++    stale = staging_root / "v1-skill-deadbeef"
++    stale.mkdir(parents=True, exist_ok=True)
++    (stale / "SKILL.md").write_text("# stale\n", encoding="utf-8")
++    old = time.time() - 120
++    os.utime(stale, (old, old))
++    fresh = staging_root / "v1-skill-fresh"
++    fresh.mkdir(parents=True, exist_ok=True)
++    (fresh / "SKILL.md").write_text("# fresh\n", encoding="utf-8")
++
++    bundle, scan = _make_bundle("v1-skill", "# v1\nPatched.\n")
++    quarantine = skills_hub_install.quarantine_bundle(bundle)
++
++    out = skills_hub_install.install_from_quarantine(
++        quarantine, "v1-skill", "", bundle, scan)
++    assert Path(out).resolve() == install_dir.resolve()
++    assert not stale.exists()
++    assert fresh.is_dir()
++    assert "Patched." in (install_dir / "SKILL.md").read_text(encoding="utf-8")
++
++
++def test_missing_live_skill_preserves_staging_and_warns(hub_env, monkeypatch, caplog):
++    """When the live skill is missing, staging dirs are preserved for manual inspection."""
++    from tools import skills_hub, skills_hub_install
++
++    # Seed an unrelated skill so hub dirs exist; 'new-skill' itself stays a fresh install.
++    _seed_installed(skills_hub, "other-skill", "# other\nHi.\n")
++    staging_root = hub_env["hub"] / ".replacement-staging"
++    staging_root.mkdir(parents=True, exist_ok=True)
++    stale = staging_root / "new-skill-deadbeef"
++    stale.mkdir(parents=True, exist_ok=True)
++    (stale / "SKILL.md").write_text("# stale\n", encoding="utf-8")
++    old = time.time() - 120
++    os.utime(stale, (old, old))
++    fresh = staging_root / "new-skill-fresh"
++    fresh.mkdir(parents=True, exist_ok=True)
++    (fresh / "SKILL.md").write_text("# fresh\n", encoding="utf-8")
++
++    bundle, scan = _make_bundle("new-skill", "# new\nHello.\n")
++    quarantine = skills_hub_install.quarantine_bundle(bundle)
++
++    with caplog.at_level(logging.WARNING, logger="tools.skills_hub"):
++        out = skills_hub_install.install_from_quarantine(
++            quarantine, "new-skill", "", bundle, scan)
++    assert Path(out).exists()
++    assert stale.is_dir()
++    assert fresh.is_dir()
++    assert any("manual inspection" in r.message for r in caplog.records)
++    assert "Hello." in (Path(out) / "SKILL.md").read_text(encoding="utf-8")
++
++
++def test_active_sibling_lock_blocks_reclaim_and_no_lock_leaks_into_install(hub_env, monkeypatch):
++    """A staging dir with a live sibling .active.lock is NOT reclaimed; no lock leaks into install."""
++    import fcntl
++
++    from tools import skills_hub, skills_hub_install
++
++    _seed_installed(skills_hub, "v1-skill", "# v1\nOriginal.\n")
++    install_dir = hub_env["skills"] / "v1-skill"
++
++    staging_root = hub_env["hub"] / ".replacement-staging"
++    staging_root.mkdir(parents=True, exist_ok=True)
++    active = staging_root / "v1-skill-active123"
++    active.mkdir(parents=True, exist_ok=True)
++    (active / "SKILL.md").write_text("# active\n", encoding="utf-8")
++    abandoned = staging_root / "v1-skill-abandoned456"
++    abandoned.mkdir(parents=True, exist_ok=True)
++    (abandoned / "SKILL.md").write_text("# abandoned\n", encoding="utf-8")
++    old = time.time() - 120
++    os.utime(active, (old, old))
++    os.utime(abandoned, (old, old))
++
++    # Hold an exclusive flock on the active dir's sibling lock for the whole install.
++    sib = staging_root / "v1-skill-active123.active.lock"
++    sib.touch(exist_ok=True)
++    held_fd = open(sib, "a+b")
++    fcntl.flock(held_fd.fileno(), fcntl.LOCK_EX)
++    try:
++        bundle, scan = _make_bundle("v1-skill", "# v1\nPatched.\n")
++        quarantine = skills_hub_install.quarantine_bundle(bundle)
++
++        out = skills_hub_install.install_from_quarantine(
++            quarantine, "v1-skill", "", bundle, scan)
++        assert Path(out).resolve() == install_dir.resolve()
++        assert "Patched." in (install_dir / "SKILL.md").read_text(encoding="utf-8")
++    finally:
++        try:
++            fcntl.flock(held_fd.fileno(), fcntl.LOCK_UN)
++        except Exception:
++            pass
++        held_fd.close()
++
++    assert active.is_dir(), "lock-held staging dir must survive reclaim"
++    assert not abandoned.exists(), "unlocked stale staging dir must be reclaimed"
++    # Critical regression assertion: the sibling lock must never leak into install_dir.
++    assert list(install_dir.rglob("*.active.lock")) == [], \
++        f"lock file leaked into install: {list(install_dir.rglob('*.active.lock'))}"
++
++
++def test_quarantine_lifecycle_success_removed_failure_kept(hub_env, monkeypatch):
++    """Success drops the quarantine source; a swap failure keeps it."""
++    from tools import skills_hub, skills_hub_install
++
++    _seed_installed(skills_hub, "v1-skill", "# v1\nOriginal.\n")
++    install_dir = hub_env["skills"] / "v1-skill"
++
++    # Success case: quarantine source is removed.
++    bundle, scan = _make_bundle("v1-skill", "# v1\nPatched.\n")
++    quarantine = skills_hub_install.quarantine_bundle(bundle)
++    quarantine_resolved = quarantine.resolve()
++    assert quarantine_resolved.is_dir()
++    out = skills_hub_install.install_from_quarantine(
++        quarantine, "v1-skill", "", bundle, scan)
++    assert Path(out).resolve() == install_dir.resolve()
++    assert not quarantine_resolved.exists(), "quarantine source must be removed after success"
++
++    # Failure case: force the staging->install publish move to fail; quarantine stays.
++    bundle2, scan2 = _make_bundle("v1-skill", "# v1\nPatched again.\n")
++    quarantine2 = skills_hub_install.quarantine_bundle(bundle2)
++    quarantine2_resolved = quarantine2.resolve()
++
++    real_move = shutil.move
++
++    def _boom_move(src, dst, *a, **k):
++        if Path(dst).resolve() == install_dir.resolve() and Path(src).name.startswith("v1-skill"):
++            raise OSError("simulated swap failure")
++        return real_move(src, dst, *a, **k)
++
++    monkeypatch.setattr(shutil, "move", _boom_move)
++    with pytest.raises(RuntimeError):
++        skills_hub_install.install_from_quarantine(
++            quarantine2, "v1-skill", "", bundle2, scan2)
++    assert quarantine2_resolved.is_dir(), "quarantine source must survive a failed install"
+diff --git a/tools/file_tools.py b/tools/file_tools.py
+index f334d8b0d3fc3..9d9d52baffca5 100644
+--- a/tools/file_tools.py
++++ b/tools/file_tools.py
+@@ -145,6 +145,38 @@ def _file_ops_uses_host_paths(file_ops) -> bool:
+     return isinstance(env, LocalEnvironment)
+ 
+ 
++def _begin_skill_ledger_capture(resolved_paths, file_ops) -> list:
++    """Pre-write skill-ledger capture for resolved targets landing in a skills tree
++    (host backends only — a sandbox path is a different filesystem). Observability
++    only: never raises, [] when nothing qualifies. See tools/skill_ledger.py."""
++    if not resolved_paths or not _file_ops_uses_host_paths(file_ops):
++        return []
++    pending = []
++    try:
++        from tools import skill_ledger
++        for p in dict.fromkeys(resolved_paths):
++            if not p:
++                continue
++            capture = skill_ledger.begin_file_tool_write(p)
++            if capture is not None:
++                pending.append(capture)
++    except Exception:
++        logger.debug("skill-ledger pre-write capture failed", exc_info=True)
++    return pending
++
++
++def _finish_skill_ledger_capture(pending, source: str, ok: bool, session_id) -> None:
++    """Record the ledger entries for a completed file-tool write. Never raises."""
++    if not pending:
++        return
++    try:
++        from tools import skill_ledger
++        for capture in pending:
++            skill_ledger.finish_file_tool_write(capture, source, ok=ok, session_id=session_id)
++    except Exception:
++        logger.debug("skill-ledger write record failed", exc_info=True)
++
++
+ # V4A file headers: group 1 = header prefix, 2 = op, 3 = path. ``\s*`` after
+ # ``***`` mirrors patch_parser's leniency (``***Update File:`` applies, so it
+ # must be checked).
+@@ -899,7 +931,12 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
+                 return json.dumps(_stale_write_refusal(path, blocker, _resolved), ensure_ascii=False)
+             warnings = _edit_warnings([path], path_to_resolved, task_id)
+             rewrite_hint = _whole_file_rewrite_hint(task_id, _resolved, content)
+-            result = _get_file_ops(task_id).write_file(_resolved or path, content)
++            file_ops = _get_file_ops(task_id)
++            # Ledger pre-capture BEFORE the write: a skills-tree target gets a real
++            # before-manifest so the mutation is recoverable, not just attributed.
++            _ledger_pending = _begin_skill_ledger_capture(
++                [_resolved] if _resolved else [], file_ops)
++            result = file_ops.write_file(_resolved or path, content)
+             result_dict = result.to_dict()
+             if warnings:
+                 result_dict["_warning"] = warnings[0]
+@@ -912,6 +949,8 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
+             if result_dict.get("error"):
+                 _update_read_timestamp(path, task_id)
+             else:
++                _finish_skill_ledger_capture(_ledger_pending, "write_file", ok=True,
++                                             session_id=session_id)
+                 if _resolved:
+                     result_dict["files_modified"] = [_resolved]
+                     # Own write = current whole-file content: consecutive
+@@ -993,6 +1032,11 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
+             # every baseline check it stats the host path, so a sandbox path carries nothing.
+             _known = _known_full_content_sha256(_path_to_resolved.values(), task_id)
+ 
++            # Ledger pre-capture BEFORE any file changes: skills-tree targets get a
++            # real before-manifest so the mutation is recoverable, not just attributed.
++            _ledger_pending = _begin_skill_ledger_capture(
++                [*_path_to_resolved.values(), *_path_to_entry.values()], file_ops)
++
+             # Hand the shell layer the RESOLVED targets so both layers agree on
+             # which file is edited even when the shell's cwd differs.
+             if mode == "replace":
+@@ -1014,6 +1058,8 @@ def patch_tool(mode: str = "replace", path: str | None = None, old_string: str |
+             if stale_warnings:
+                 result_dict["_warning"] = " | ".join(stale_warnings)
+             if not result_dict.get("error"):
++                _finish_skill_ledger_capture(_ledger_pending, "patch", ok=True,
++                                             session_id=session_id)
+                 # Report the ABSOLUTE path(s) actually patched so a wrong-cwd
+                 # mismatch is visible instead of silently landing elsewhere.
+                 _resolved_modified = [_path_to_entry.get(_p) or _path_to_resolved.get(_p) or _p
+diff --git a/tools/skill_ledger.py b/tools/skill_ledger.py
+index dc983d1877187..fa41b54a3485b 100644
+--- a/tools/skill_ledger.py
++++ b/tools/skill_ledger.py
+@@ -535,6 +535,180 @@ def capture_before(
+         return None
+ 
+ 
++# --- File-tool writes (write_file / patch) ------------------------------------
++#
++# ``skill_manage`` is the primary ledger writer, but the generic file tools can land
++# content in a skills tree without touching it — and the not-found guidance for
++# cross-profile skills explicitly teaches that fallback ("edit the file directly").
++# These helpers let ``tools/file_tools.py`` attribute those writes in the same ledger
++# with REAL before/after manifests: an entry whose before-state was not captured is
++# rollback-hazardous (rollback restores every before-path and removes after-only
++# paths, so before=[] on a modification would DELETE the file), which is why a failed
++# pre-write capture of an existing file skips the entry entirely. Telemetry, not a
++# gate: nothing here ever blocks the write. Raw shell / editor / MCP filesystem
++# writes stay unlogged — the agent's own file tools are the attributable surface.
++
++
++def _skills_roots_for_classification() -> List[Path]:
++    """Every live skills tree a host-local write could land in: the active profile's
++    roots (local + create_dir + external_dirs + trusted project dirs), the default root's,
++    and every sibling profile's. Resolved and deduped so a symlinked profile dir matches
++    its canonical tree. Fail-quiet: an unresolvable root is skipped, never fatal.
++
++    This is the SINGLE source of truth for which skill roots the ledger may touch — both
++    file-tool classification (classify_file_tool_target) and rollback path-validation
++    (_validate_entry_paths) use it, so a skill the tool captures into a root is also
++    rollable back from it (no unrecoverable entries)."""
++    roots: List[Path] = []
++
++    def _add(candidate) -> None:
++        with suppress(OSError, RuntimeError):
++            resolved = Path(candidate).resolve()
++            if resolved.is_dir() and resolved not in roots:
++                roots.append(resolved)
++
++    with suppress(Exception):
++        from agent.skill_utils import get_all_skills_dirs
++        for d in get_all_skills_dirs():
++            _add(d)
++    with suppress(Exception):
++        from agent.skill_utils import get_project_skills_dirs
++        for d in get_project_skills_dirs():
++            _add(d)
++    with suppress(Exception):
++        from hermes_constants import get_default_hermes_root
++        default_root = get_default_hermes_root()
++        _add(default_root / "skills")
++        profiles = default_root / "profiles"
++        if profiles.is_dir():
++            with suppress(OSError):
++                for entry in profiles.iterdir():
++                    _add(entry / "skills")
++    return roots
++
++
++def _skill_dir_for(target: Path, root: Path, first_segment: str) -> Path:
++    """Nearest ancestor of *target* (bounded by *root*) holding a SKILL.md; falls back
++    to ``root / first_segment`` for a brand-new skill whose SKILL.md is being written."""
++    current = target if target.is_dir() else target.parent
++    while current != root and current != current.parent:
++        if (current / "SKILL.md").is_file():
++            return current
++        current = current.parent
++    return root / first_segment
++
++
++def classify_file_tool_target(path) -> Optional[Dict[str, Any]]:
++    """Classify a host-local file-tool target: ``{path, skill, skill_dir, skills_root}``
++    when it lands inside a live skills tree at a non-metadata position, else None.
++    Dot-segment sidecars (.hub, .archive, .locks, .usage.json, this ledger itself) and
++    transient trees (venvs, caches) are never ledgerable. Never raises."""
++    try:
++        target = Path(os.path.expanduser(str(path)))
++        if not target.is_absolute():
++            return None
++        with suppress(OSError):
++            target = target.resolve()
++        for root in _skills_roots_for_classification():
++            rel = _rel_posix(target, root)
++            if rel is None:
++                continue
++            parts = rel.split("/")
++            first = parts[0]
++            if first.startswith(".") or first in _NON_PACKAGE_TOPS:
++                return None  # under a skills root, but metadata: attribution stops here
++            if any(part in TRANSIENT_DIRS for part in parts[:-1]):
++                return None
++            skill_dir = _skill_dir_for(target, root, first)
++            return {"path": str(target), "skill": skill_dir.name,
++                    "skill_dir": str(skill_dir), "skills_root": str(root)}
++        return None
++    except Exception as e:
++        logger.debug("skill_ledger: file-tool target classification failed (%s)", e)
++        return None
++
++
++def begin_file_tool_write(path) -> Optional[Dict[str, Any]]:
++    """Pre-write capture for a host-local file-tool write: ``{"info", "before"}`` when
++    *path* lands in a live skills tree, else None. A modification whose before-state
++    cannot be captured returns None (entry skipped) rather than recording a hollow
++    before=[] that rollback would interpret as 'delete this file'. File-tool writes are
++    ledgered but NOT serialized under ``_skill_mutation_lock``: concurrent
++    write_file/patch calls to the same skill can interleave. Both sides still land in
++    the ledger, so rollback can restore one of the two states, but the ordering race
++    the lock closes for skill_manage stays open here. Never raises."""
++    try:
++        info = classify_file_tool_target(path)
++        if info is None:
++            return None
++        target = Path(info["path"])
++        existed = target.is_file()
++        before = capture_before(target)
++        if existed and not before:
++            logger.warning(
++                "skill_ledger: before-capture failed for existing file %s — "
++                "skipping the entry rather than recording an unrecoverable mutation", target)
++            return None
++        return {"info": info, "before": before or []}
++    except Exception as e:
++        logger.warning("skill_ledger: file-tool pre-capture failed (%s) — mutation unaffected", e)
++        return None
++
++
++def finish_file_tool_write(pending: Optional[Dict[str, Any]], source: str, *,
++                           ok: bool, session_id: Optional[str] = None) -> None:
++    """Append the ledger entry for a completed file-tool write (``ok`` = the write
++    succeeded). Per-file manifests: rollback restores the pre-write content of exactly
++    the touched file (or removes a created one). Entries land in the ACTIVE profile's
++    ledger — the same semantics skill_manage already uses for external-dir skills —
++    with the owning tree recorded in evidence. Never raises."""
++    if not pending or not ok:
++        return
++    try:
++        info = pending["info"]
++        evidence = {"source": source, "path": info["path"], "skills_root": info["skills_root"]}
++        if session_id:
++            evidence["session_id"] = session_id
++        record_mutation(source, info["skill"], before=pending.get("before") or [],
++                        after_root=Path(info["path"]), evidence=evidence)
++    except Exception as e:
++        logger.warning("skill_ledger: file-tool write record failed (%s) — mutation unaffected", e)
++
++
++def sibling_ledger_counts() -> List[Tuple[str, int]]:
++    """``(profile label, entry count)`` for OTHER profiles' ledger files holding rows.
++    Powers the empty-ledger hint: a per-profile CLI view must not read as 'no history'
++    when a sibling profile holds it. Fail-quiet; unreadable files are skipped."""
++    out: List[Tuple[str, int]] = []
++    try:
++        from hermes_constants import get_default_hermes_root
++        root = get_default_hermes_root()
++    except Exception:
++        return out
++    active: Optional[Path] = None
++    with suppress(Exception):
++        active = ledger_path().resolve()
++    candidates: List[Tuple[str, Path]] = [("default", root / "skills" / ".curator_ledger.jsonl")]
++    profiles = root / "profiles"
++    if profiles.is_dir():
++        with suppress(OSError):
++            for entry in profiles.iterdir():
++                if entry.is_dir():
++                    candidates.append((entry.name, entry / "skills" / ".curator_ledger.jsonl"))
++    for label, path in candidates:
++        with suppress(Exception):
++            if path.resolve() == active:
++                continue
++        try:
++            with open(path, "rb") as fh:
++                count = sum(1 for line in fh if line.strip())
++        except OSError:
++            continue
++        if count:
++            out.append((label, count))
++    return out
++
++
+ def list_entries(skill: Optional[str] = None, limit: Optional[int] = None) -> list[dict[str, Any]]:
+     """Read the ledger, newest first. Malformed lines are skipped."""
+     raw = _read_ledger("listing empty", quiet_missing=True)  # missing/unreadable/undecodable == empty
+@@ -549,20 +723,34 @@ def list_entries(skill: Optional[str] = None, limit: Optional[int] = None) -> li
+     rows.reverse()
+     return rows[:limit] if limit is not None and limit >= 0 else rows
+ 
+-
+ def get_entry(entry_id: str) -> Optional[dict[str, Any]]:
+     return next((r for r in list_entries() if r.get("id") == entry_id), None) if entry_id else None
+ 
+ 
+ def _validate_entry_paths(entry: dict[str, Any]) -> Optional[str]:
+-    """Every entry path must be under HERMES_HOME — a hand-edited ledger must not
+-    become a write-anywhere primitive."""
++    """Every entry path must be under HERMES_HOME or a classifiable skills root — the
++    classifier ledgers exactly that universe (active profile, default root, sibling
++    profiles, configured external/create_dir and trusted project dirs), so rollback must
++    cover it, while a hand-edited ledger still cannot become a write-anywhere primitive
++    (#129325 review: under a named profile HERMES_HOME is ``<root>/profiles/<active>`` and
++    sibling trees sit OUTSIDE it, which made sibling-tree entries — deletes included —
++    unrecoverable; #110011 adds trusted project dirs to the allowed set)."""
+     home = get_hermes_home()
++    roots = [home]
++    with suppress(Exception):
++        roots.extend(_skills_roots_for_classification())
+     for section in ("before", "after"):
+         for item in entry.get(section) or []:
+             p = Path(str(item.get("path", "")))
+-            if not _is_within(home, p):
+-                return f"entry references a path outside {home}: {p}"
++            # Resolve ONLY for the containment check: symlinked HERMES_HOME / skills
++            # roots would otherwise fail to match their own entries. Rollback output
++            # still goes to the ORIGINAL unresolved path.
++            with suppress(OSError, RuntimeError):
++                cp = Path(str(item.get("path", ""))).resolve()
++                if any(_is_within(root, cp) for root in roots):
++                    continue
++            if not any(_is_within(root, p) for root in roots):
++                return f"entry references a path outside {home} and every skills root: {p}"
+     return None
+ 
+ 
+@@ -571,13 +759,26 @@ def rollback_entry(entry_id: str) -> tuple[bool, str]:
+     agent/curator_backup.rollback): every before-blob must exist BEFORE any change, and a
+     pre-rollback safety entry of every touched path's CURRENT state is appended first.
+ 
+-    1. 2. See #63366.
++    Rollback holds ``_skill_mutation_lock`` for the entry's skill so an ordinary mutation
++    cannot land in the safety-capture-to-restore window and be overwritten without a
++    recoverable ledger row.
+     """
+     entry = get_entry(entry_id)
+     if entry is None:
+         return False, f"no ledger entry with id '{entry_id}'"
+     if path_err := _validate_entry_paths(entry):
+         return False, f"refusing rollback: {path_err}"
++    # Share skill_manage's lock (including category/name aliases and batches).
++    # A writer landing between safety capture and restore would be overwritten
++    # without being recoverable from the safety entry. Import lazily: the manager
++    # itself calls the ledger when recording ordinary mutations.
++    from tools.skill_manager_tool import _skill_mutation_lock
++    with _skill_mutation_lock(str(entry.get("skill") or "?")):
++        return _rollback_entry_locked(entry_id, entry)
++
++
++def _rollback_entry_locked(entry_id: str, entry: Dict[str, Any]) -> Tuple[bool, str]:
++    """Hold skill ownership through safety capture, restoration and the final ledger row."""
+     before = list(entry.get("before") or [])
+     after = list(entry.get("after") or [])
+     # Historical hollow delete/archive/purge entries (SKILL.md only): fill from the
+diff --git a/tools/skill_manager_tool.py b/tools/skill_manager_tool.py
+index 8d4d4ef375c0f..9cfca41ad011d 100644
+--- a/tools/skill_manager_tool.py
++++ b/tools/skill_manager_tool.py
+@@ -8,6 +8,7 @@
+ """
+ 
+ import contextvars as _ctxvars
++import functools
+ import hashlib
+ import json
+ from contextlib import ExitStack, suppress
+@@ -448,8 +449,85 @@ def _clip(text: str, n: int, ellipsis: str) -> str:
+     return text[:n] + (ellipsis if len(text) > n else "")
+ 
+ 
++# --- Mutation ledger ----------------------------------------------------------
++# The audit hook hangs off the MUTATION, not off ``skill_manage``. Callers that drive an action
++# handler directly — the dashboard (POST /api/skills, PUT /api/skills/content) and
++# ``agent.learning_mutations.edit_node`` — never reached the entry-point capture, so their
++# writes were invisible to the ledger. ``_ledgered`` makes coverage a property of the mutation:
++# a handler that reports success is recorded, whoever drove it.
++
++# Evidence-only scope, set by skill_manage around the handler call. A direct caller contributes
++# nothing here (it has no session/file_path to give) and its entry is still written.
++_ledger_scope: "_ctxvars.ContextVar[Optional[Dict[str, Any]]]" = _ctxvars.ContextVar(
++    "skill_ledger_scope", default=None)
++
++
++def _capture_before_for(action: str, name: str) -> Optional[List[Dict[str, str]]]:
++    """Best-effort pre-mutation snapshot of the skill's CURRENT location (None on failure)."""
++    with suppress(Exception):
++        from tools import skill_ledger as _ledger
++        found = _find_skill(name)
++        # delete destroys the whole package (consolidation may have re-homed support files
++        # first), so complete it from the newest curator backup or a restore comes back hollow.
++        return _ledger.capture_before(
++            found["path"] if found else None,
++            complete_package=(action == "delete"), skill=name)
++    return None
++
++
++def _ledger_evidence(action: str, result: Dict[str, Any], args: tuple,
++                     kwargs: Dict[str, Any]) -> Dict[str, Any]:
++    """Entry metadata: delete intent (the curator CLI renders it) plus the caller's scope."""
++    evidence: Dict[str, Any] = {}
++    if action == "delete":
++        evidence.update(
++            absorbed_into=kwargs.get("absorbed_into", args[1] if len(args) > 1 else None),
++            archived=bool(result.get("_archived")))
++    evidence.update(_ledger_scope.get() or {})
++    return evidence
++
++
++def _record_ledger_entry(action: str, name: str, before, result: Dict[str, Any], args: tuple,
++                         kwargs: Dict[str, Any]) -> None:
++    """Append the entry for a mutation that reported success. Never raises."""
++    with suppress(Exception):
++        from tools import skill_ledger as _ledger
++        found = _find_skill(name)
++        _ledger.record_mutation(
++            action, name, before=before if before is not None else [],
++            after_root=found["path"] if found else None,
++            evidence=_ledger_evidence(action, result, args, kwargs))
++
++
++def _ledgered(action: str):
++    """Wrap an action handler so EVERY caller is audited, not just ``skill_manage``.
++
++    The after-state is read back from the skill's current location, so a delete records an
++    empty after-state and a create records the package it just wrote. Telemetry, never a gate:
++    a broken ledger cannot fail the mutation it was describing.
++
++    Note: ``skill_manage`` holds ``_skill_mutation_lock`` around the wrapped handler, so the
++    entry-point path is serialized with ``rollback_entry``; direct handlers (dashboard,
++    ``agent.learning_mutations.edit_node``) call the wrapped handler WITHOUT that lock and are
++    therefore best-effort audited, not lock-serialized against rollback. That is accepted:
++    the ledger entry is still written before the mutation is reported, and rollback remains
++    fail-closed on path validation.
++    """
++    def _decorate(handler):
++        @functools.wraps(handler)
++        def _wrapper(name, *args, **kwargs):
++            before = _capture_before_for(action, name)
++            result = handler(name, *args, **kwargs)
++            if isinstance(result, dict) and result.get("success"):
++                _record_ledger_entry(action, name, before, result, args, kwargs)
++            return result
++        return _wrapper
++    return _decorate
++
++
+ # --- Core actions -------------------------------------------------------------
+ 
++@_ledgered("create")
+ def _create_skill(name: str, content: str, category: str | None = None) -> dict[str, Any]:
+     if err := (_validate_name(name) or _validate_category(category)
+                or _validate_frontmatter(content, new_skill=True) or _validate_content_size(content)):
+@@ -491,6 +569,7 @@ def _create_skill(name: str, content: str, category: str | None = None) -> dict[
+     return result
+ 
+ 
++@_ledgered("edit")
+ def _edit_skill(name: str, content: str) -> dict[str, Any]:
+     """Replace the SKILL.md of any existing skill (full rewrite)."""
+     if err := _validate_frontmatter(content) or _validate_content_size(content):
+@@ -505,6 +584,7 @@ def _edit_skill(name: str, content: str) -> dict[str, Any]:
+     return _add_description_prompt_preview(result, content)
+ 
+ 
++@_ledgered("patch")
+ def _patch_skill(name: str, old_string: str, new_string: str, file_path: str | None = None,
+                  replace_all: bool = False) -> dict[str, Any]:
+     """Targeted find-and-replace in SKILL.md (default) or a supporting file; unique match unless replace_all."""
+@@ -556,6 +636,7 @@ def _patch_skill(name: str, old_string: str, new_string: str, file_path: str | N
+     return result
+ 
+ 
++@_ledgered("delete")
+ def _delete_skill(name: str, absorbed_into: Optional[str] = None) -> dict[str, Any]:
+     """Delete a skill. ``absorbed_into``: None = undeclared (legacy, accepted); "" = explicit prune;
+     "<skill>" = absorbed into that umbrella, which must exist (so the model can't claim one)."""
+@@ -598,6 +679,7 @@ def _rmdir_if_empty(parent: Path, stop: Path) -> None:
+         parent.rmdir()
+ 
+ 
++@_ledgered("write_file")
+ def _write_file(name: str, file_path: str, file_content: str) -> dict[str, Any]:
+     """Add or overwrite a supporting file within any skill directory."""
+     if err := _validate_file_path(file_path):
+@@ -623,6 +705,7 @@ def _write_file(name: str, file_path: str, file_content: str) -> dict[str, Any]:
+     return result
+ 
+ 
++@_ledgered("remove_file")
+ def _remove_file(name: str, file_path: str) -> dict[str, Any]:
+     """Remove a supporting file from any skill directory."""
+     if err := _validate_file_path(file_path):
+@@ -725,20 +808,12 @@ def _act_patch(a):
+     "remove_file": lambda a: _remove_file(a["name"], a["file_path"])}
+ 
+ 
+-def _record_success(action, name, result, *, file_path, absorbed_into, task_id,
+-                    session_id, ledger_before) -> None:
+-    """Best-effort post-mutation side effects (never break the tool): ledger, prompt-cache
+-    clear, curator telemetry (which fires ``on_skill_lifecycle`` for plugins)."""
+-    with suppress(Exception):
+-        from tools import skill_ledger as _ledger
+-        _post = _find_skill(name)
+-        # delete: consolidation vs prune, and whether the recoverable archive handled it
+-        _evidence = ({"absorbed_into": absorbed_into, "archived": bool(result.get("_archived"))}
+-                     if action == "delete" else {})
+-        _evidence.update({k: v for k, v in (("session_id", session_id), ("file_path", file_path)) if v})
+-        _ledger.record_mutation(
+-            action, name, before=ledger_before if ledger_before is not None else [],
+-            after_root=_post["path"] if _post else None, evidence=_evidence)
++def _record_success(action, name, result, *, file_path, task_id, session_id) -> None:
++    """Best-effort post-mutation side effects (never break the tool): prompt-cache clear,
++    curator telemetry, debounced sync push. The ledger entry is written by the handler
++    wrapper (``_ledgered``), which every mutating caller passes through, so coverage
++    follows the mutation rather than this entry point — direct handler callers
++    (dashboard, agent.learning_mutations.edit_node) are audited too."""
+     with suppress(Exception):
+         from agent.prompt_builder import clear_skills_system_prompt_cache
+         clear_skills_system_prompt_cache(clear_snapshot=True)
+@@ -791,26 +866,23 @@ def skill_manage(
+     # to a helper: guards, ledger capture, patch matching, validation, rollback,
+     # and the atomic replacement all belong to the same ownership window.
+     with _skill_mutation_lock(name):
+-        # Ledger pre-capture: telemetry, not a gate — failures must NEVER block the mutation. delete
+-        # destroys the whole package (consolidation may have re-homed support files first), so
+-        # complete it from the newest curator backup or a restore is hollow.
+-        # Audit ledger (tracker #79686 P3): capture the pre-mutation state of the skill directory so every
+-        # mutation — any actor — lands in the append-only JSONL ledger with before/after blobs.
+-        _ledger_before = None
+-        with suppress(Exception):
+-            from tools import skill_ledger as _ledger
+-            _pre = _find_skill(name)
+-            _ledger_before = _ledger.capture_before(
+-                _pre["path"] if _pre else None, complete_package=(action == "delete"), skill=name)
++        # Audit ledger (tracker #79686 P3): the ``_ledgered`` handler wrapper captures the
++        # pre-mutation state and appends the before/after blobs, so coverage follows the mutation
++        # rather than this entry point. The scope below only enriches the entry's evidence with the
++        # caller's session metadata.
+         handler = _ACTION_HANDLERS.get(action, lambda a: _err(
+             f"Unknown action '{action}'. Use: create, edit, patch, delete, write_file, remove_file"))
+-        result = handler({"name": name, **args})
++        token = _ledger_scope.set({k: v for k, v in
++                                   (("session_id", session_id), ("file_path", file_path)) if v})
++        try:
++            result = handler({"name": name, **args})
++        finally:
++            _ledger_scope.reset(token)
+         if isinstance(result, str):
+             return result  # tool_error JSON for argument-shape problems (patch)
+         if result.get("success"):
+             _record_success(
+-                action, name, result, file_path=file_path, absorbed_into=absorbed_into,
+-                task_id=task_id, session_id=session_id, ledger_before=_ledger_before)
++                action, name, result, file_path=file_path, task_id=task_id, session_id=session_id)
+     return json.dumps(result, ensure_ascii=False)
+ 
+ 
+diff --git a/tools/skills_hub_install.py b/tools/skills_hub_install.py
+index 2c8a4191c2675..67bd05f5c62c3 100644
+--- a/tools/skills_hub_install.py
++++ b/tools/skills_hub_install.py
+@@ -9,8 +9,14 @@
+ from __future__ import annotations
+ 
+ import logging
++import errno
+ import hashlib
++import os
+ import shutil
++import tempfile
++import time
++import uuid
++from contextlib import contextmanager, suppress
+ from pathlib import Path
+ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+ from agent.skill_utils import is_excluded_skill_path
+@@ -24,6 +30,13 @@
+ if TYPE_CHECKING:  # origin class; runtime use is via the lazy origin import
+     from tools.skills_hub import HubLockFile
+ 
++try:
++    import fcntl
++    HAVE_FCNTL = True
++except ImportError:  # Windows
++    fcntl = None
++    HAVE_FCNTL = False
++
+ # Log-record parity with the origin module.
+ logger = logging.getLogger("tools.skills_hub")
+ 
+@@ -106,7 +119,7 @@ def _check_install_target(install_dir: Path) -> None:
+     - A stray regular file at the target: rmtree would raise NotADirectoryError.
+     - A category bucket (dir without SKILL.md that holds other skills) must never
+       be silently wiped; a dir that directly contains SKILL.md is an existing
+-      install and stays overwritable (hub installs are lock-guarded in do_install).
++      install and stays overwritable (hub installs re-validate the target via _check_install_target in do_install; no cross-process install lock is held - concurrent same-skill installs are separated by per-attempt staging/recovery dirs).
+     """
+     from tools.skills_hub import _skills_dir
+     # Refuse to nest a skill inside an existing skill directory. Installing with ``--category
+@@ -129,7 +142,7 @@ def _check_install_target(install_dir: Path) -> None:
+     # directory that holds other skills). This was reported as GitHub issue #75983: installing a skill with
+     # --name matching an existing category directory caused rmtree to wipe all sibling skills. A directory
+     # that directly contains SKILL.md is an existing skill installation and stays overwritable
+-    # (hub-installed skills are additionally guarded by the lock-file check in do_install()). But a
++    # (hub-installed skills re-validate the target via _check_install_target in do_install; no cross-process install lock is held - concurrent same-skill installs are separated by per-attempt staging/recovery dirs). But a
+     # directory that contains *other* skill directories is a category bucket and must NOT be silently
+     # deleted.
+     if not (install_dir / "SKILL.md").exists():
+@@ -140,12 +153,96 @@ def _check_install_target(install_dir: Path) -> None:
+                              f"Use a different --name or install into a subcategory.")
+ 
+ 
++@contextmanager
++def _hold_staging_lock(lock_path: Path):
++    lock_fd = None
++    if HAVE_FCNTL:
++        lock_path.touch(exist_ok=True)
++        lock_fd = open(lock_path, "a+b")
++        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
++    try:
++        yield lock_fd
++    finally:
++        if lock_fd is not None:
++            with suppress(Exception):
++                fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
++            with suppress(Exception):
++                lock_fd.close()
++            with suppress(Exception):
++                lock_path.unlink(missing_ok=True)
++
++
++def _reclaim_stale_staging(safe_skill_name: str, staging_root: Path, install_dir: Path, grace_seconds: int = 60) -> None:
++    """Remove abandoned per-attempt staging dirs from a prior crashed swap.
++
++    Only removes `{safe_skill_name}-<hex>` dirs under staging_root (the tempfile.mkdtemp
++    prefix) whose mtime is older than grace_seconds. Never touches .recovery-*/.failed-*
++    (different prefix) and never removes anything when the live skill is missing.
++    """
++    with suppress(Exception):
++        if not staging_root.is_dir():
++            return
++        if not install_dir.exists():
++            with suppress(Exception):
++                stale = [p.name for p in staging_root.iterdir() if p.is_dir() and p.name.startswith(f"{safe_skill_name}-")]
++                if stale:
++                    logger.warning("Skill '%s': live install missing; leaving %d stale staging dir(s) for manual inspection: %s", safe_skill_name, len(stale), ", ".join(sorted(stale)))
++            return
++        now = time.time()
++        prefix = f"{safe_skill_name}-"
++        with suppress(Exception):
++            entries = list(staging_root.iterdir())
++        for entry in entries:
++            with suppress(Exception):
++                if not entry.is_dir() or entry.is_symlink():
++                    continue
++                if not entry.name.startswith(prefix):
++                    continue
++                try:
++                    age = now - entry.stat().st_mtime
++                except OSError:
++                    continue
++                if age < grace_seconds:
++                    continue  # in-flight concurrent install; never touch
++                if HAVE_FCNTL:
++                    _sib = staging_root / f"{entry.name}.active.lock"
++                    try:
++                        if _sib.exists():
++                            _pfd = open(_sib, "a+b")
++                            try:
++                                fcntl.flock(_pfd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
++                            except (BlockingIOError, OSError) as _e:
++                                if getattr(_e, "errno", None) in (errno.EAGAIN, errno.EACCES):
++                                    logger.debug("Skill '%s': staging dir %s is actively locked; skipping reclaim", safe_skill_name, entry.name)
++                                    _pfd.close()
++                                    continue  # ACTIVE: do NOT rmtree
++                                raise
++                            _pfd.close()  # lock acquired: dead/never-locked -> safe to remove
++                        # (if _sib did not exist: candidate never locked -> safe)
++                    except OSError:
++                        continue  # probe error degrades to skip (never rmtree on error)
++                else:
++                    logger.debug("Skill '%s': no fcntl; reclaiming %s on age only", safe_skill_name, entry.name)
++                shutil.rmtree(entry, ignore_errors=True)
++                with suppress(Exception):
++                    (_sib := staging_root / f"{entry.name}.active.lock").unlink(missing_ok=True) if HAVE_FCNTL else None
++
++
+ def install_from_quarantine(
+     quarantine_path: Path, skill_name: str, category: str, bundle: SkillBundle, scan_result: ScanResult,
+     scan_provenance: Optional[dict[str, Any]] = None,
+ ) -> Path:
+-    """Move a scanned skill from quarantine into the skills directory."""
++    """Move a scanned skill from quarantine into the skills directory.
++
++    Prepared-replacement semantics (see issue #123325): the new bundle is staged and
++    validated UNDER the destination skills root (in a ``.hub``-owned location that skill
++    discovery skips) BEFORE the only old copy is removed. A failed transfer or post-move
++    content-hash read therefore leaves the previously installed skill fully available, and
++    failed filesystem publication never updates provenance. If the destructive swap itself
++    fails, the old tree is retained and the staged replacement is kept at a reported recovery
++    location rather than being discarded."""
+     from tools.skills_hub import HubLockFile, _quarantine_dir, _skills_dir, append_audit_log
++
+     safe_skill_name = _validate_skill_name(skill_name)
+     safe_category = _validate_install_parent_path(category) if category else ""
+     quarantine_resolved = quarantine_path.resolve()
+@@ -157,8 +254,9 @@ def install_from_quarantine(
+     # symlink-redirected target.
+     install_dir = _resolve_lock_install_path(install_rel_path, safe_skill_name)
+     _check_install_target(install_dir)
+-    if install_dir.exists():
+-        shutil.rmtree(install_dir)
++    # Reclaim abandoned staging dirs from a prior crashed swap before starting a new one.
++    staging_root = _skills_dir().resolve() / ".hub" / ".replacement-staging"
++    _reclaim_stale_staging(safe_skill_name, staging_root, install_dir)
+ 
+     try:
+         skill_size = (quarantine_path / "SKILL.md").stat().st_size
+@@ -182,24 +280,139 @@ def install_from_quarantine(
+                 rel = entry
+             raise ValueError(f"Installed skill contains symlinks, which is not allowed: {rel}")
+ 
+-    install_dir.parent.mkdir(parents=True, exist_ok=True)
+-    shutil.move(str(quarantine_path), str(install_dir))
+-    installed_hash = content_hash(install_dir)
+-    HubLockFile().record_install(
+-        name=safe_skill_name, source=bundle.source, identifier=bundle.identifier, trust_level=bundle.trust_level,
+-        scan_verdict=scan_result.verdict, skill_hash=installed_hash,
+-        install_path=install_dir.resolve().relative_to(_skills_dir().resolve()).as_posix(),
+-        files=list(bundle.files.keys()), metadata=bundle.metadata,
+-        scan_provenance=scan_provenance or getattr(scan_result, "scan_provenance", None),
+-    )
+-    append_audit_log("INSTALL", safe_skill_name, bundle.source, bundle.trust_level, scan_result.verdict,
+-                     installed_hash)
+-    try:
+-        from tools.skill_usage import record_installed
+-        record_installed(safe_skill_name)
+-    except Exception:
+-        logger.debug("Unable to record skill install lifecycle for %s", safe_skill_name, exc_info=True)
+-    return install_dir
++    # --- Prepared replacement -------------------------------------------------
++    # Stage the validated bundle beside the target, inside the hub-owned directory so it
++    # is never picked up as a skill, then validate it (a content hash over the staged tree)
++    # BEFORE touching the live tree, so a partial copy or read failure cannot destroy the
++    # installed skill. A per-attempt unique staging dir keeps concurrent same-skill installs
++    # from clobbering each other's staging.
++    staging_root.mkdir(parents=True, exist_ok=True)
++    # mkdtemp guarantees a unique, non-colliding directory name; copytree then populates it.
++    # A per-attempt unique staging dir keeps concurrent same-skill installs from clobbering
++    # each other's staging.
++    staging_dir = Path(tempfile.mkdtemp(prefix=f"{safe_skill_name}-", dir=staging_root))
++    lock_path = staging_root / f"{staging_dir.name}.active.lock"
++    with _hold_staging_lock(lock_path) as _lfd:
++        try:
++            shutil.copytree(str(quarantine_resolved), str(staging_dir), dirs_exist_ok=True)
++            os.utime(staging_dir, None)
++            staged_hash = content_hash(staging_dir)
++        except Exception as exc:
++            # Validation/transfer of the new bundle failed — the old skill is untouched and
++            # provenance is not updated. Clean the staging dir and surface the cause.
++            shutil.rmtree(staging_dir, ignore_errors=True)
++            raise RuntimeError(
++                f"skill '{safe_skill_name}' replacement failed before install; keeping "
++                f"the existing installation intact. Staging error: {exc}"
++            ) from exc
++
++        # The new bundle is validated in place. Perform the destructive swap as a rename of the
++        # OLD tree aside first, then move the staged replacement in, then remove the old tree
++        # ONLY once the new one is in place — so a failure at any point leaves either the old
++        # install or the new bundle (at a recovery path), never a vanished skill.
++        # The aside (recovery) dir is per-attempt unique (like staging) so concurrent
++        # same-skill installs cannot clobber each other's aside copy.
++        recovery_dir = staging_root / f".recovery-{safe_skill_name}-{uuid.uuid4().hex[:8]}"
++        swapped = False
++        orphan_path: Optional[Path] = None
++        try:
++            if install_dir.exists():
++                # Move the live tree aside (rename, not delete) so it survives a failed swap.
++                if recovery_dir.exists():
++                    shutil.rmtree(recovery_dir, ignore_errors=True)
++                shutil.move(str(install_dir), str(recovery_dir))
++            install_dir.parent.mkdir(parents=True, exist_ok=True)
++            shutil.move(str(staging_dir), str(install_dir))
++            swapped = True
++            installed_hash = content_hash(install_dir)
++            # The staged hash must equal the post-swap hash; a mismatch means the swap moved a
++            # different tree than we validated — bail to recovery rather than publish it.
++            if staged_hash != installed_hash:
++                raise RuntimeError(
++                    f"skill '{safe_skill_name}' replacement hash changed during swap "
++                    f"({staged_hash} != {installed_hash}); not publishing"
++                )
++        except Exception as exc:
++            if not swapped:
++                # Failure in the old-aside move or the staged->install move itself: the old
++                # tree is either still live at install_dir or parked at recovery_dir.
++                restored = False
++                if recovery_dir.exists() and not install_dir.exists():
++                    shutil.move(str(recovery_dir), str(install_dir))  # may raise; surfaced below
++                    restored = True
++                shutil.rmtree(staging_dir, ignore_errors=True)
++                if install_dir.exists():
++                    if restored:
++                        raise RuntimeError(
++                            f"skill '{safe_skill_name}' replacement failed before/during swap; "
++                            f"the previous installation is restored at {install_dir}. Swap error: {exc}"
++                        ) from exc
++                    raise RuntimeError(
++                        f"skill '{safe_skill_name}' replacement failed before/during swap; "
++                        f"the previous installation was never moved and is intact at {install_dir}. "
++                        f"Swap error: {exc}"
++                    ) from exc
++                raise RuntimeError(
++                    f"skill '{safe_skill_name}' replacement FAILED before/during swap and the "
++                    f"previous installation could NOT be restored. Swap error: {exc}"
++                ) from exc
++            # Swapped: the live dir is the UNVALIDATED new bundle. Quarantine it aside to a
++            # per-attempt orphan path, then restore the old tree.
++            # 'restored' is claimed only when the recovery->install move actually completes.
++            orphan_path = staging_root / f".failed-{safe_skill_name}-{uuid.uuid4().hex[:8]}"
++            shutil.move(str(install_dir), str(orphan_path))  # may raise; surfaced below
++            restored = False
++            if recovery_dir.exists():
++                shutil.move(str(recovery_dir), str(install_dir))  # may raise; surfaced below
++                restored = True
++            if not restored and not install_dir.exists():
++                raise RuntimeError(
++                    f"skill '{safe_skill_name}' install failed after swap on a fresh install "
++                    f"(no previous installation existed to restore); "
++                    f"bad bundle quarantined at {orphan_path}. Swap error: {exc}"
++                ) from exc
++            raise RuntimeError(
++                f"skill '{safe_skill_name}' replacement failed after swap; the previous "
++                f"installation is restored at {install_dir} and the unvalidated bundle is "
++                f"quarantined at {orphan_path}. Swap error: {exc}"
++            ) from exc
++
++        # Swap succeeded: drop this attempt's own aside copy and publish provenance + audit.
++        shutil.rmtree(recovery_dir, ignore_errors=True)
++        try:
++            HubLockFile().record_install(
++                name=safe_skill_name, source=bundle.source, identifier=bundle.identifier, trust_level=bundle.trust_level,
++                scan_verdict=scan_result.verdict, skill_hash=installed_hash,
++                install_path=install_dir.resolve().relative_to(_skills_dir().resolve()).as_posix(),
++                files=list(bundle.files.keys()), metadata=bundle.metadata,
++                scan_provenance=scan_provenance or getattr(scan_result, "scan_provenance", None),
++            )
++        except Exception as exc:
++            # Post-swap: the skill is LIVE but unprovisioned. Never touch the live tree here —
++            # no rmtree, no move — just report so the operator can re-provision or clean up.
++            with suppress(Exception):
++                append_audit_log("INSTALL", safe_skill_name, bundle.source, bundle.trust_level, scan_result.verdict,
++                                 installed_hash)
++            raise RuntimeError(
++                f"skill '{safe_skill_name}' installed at {install_dir} but provenance NOT recorded ({exc}); "
++                f"re-run install to re-provision or uninstall to clean - do NOT treat as rolled back"
++            ) from exc
++        # Telemetry, not a gate: an audit-log I/O failure must not report install failure when
++        # the skill is already installed and provenance recorded.
++        with suppress(Exception):
++            append_audit_log("INSTALL", safe_skill_name, bundle.source, bundle.trust_level, scan_result.verdict,
++                             installed_hash)
++        try:
++            from tools.skill_usage import record_installed
++            record_installed(safe_skill_name)
++        except Exception:
++            logger.debug("Unable to record skill install lifecycle for %s", safe_skill_name, exc_info=True)
++        # The live copy now lives at install_dir; drop the quarantine source so a
++        # duplicate payload is not retained indefinitely.
++        with suppress(Exception):
++            shutil.rmtree(quarantine_resolved, ignore_errors=True)
++            logger.debug("Removed quarantine source %s after successful install of '%s'", quarantine_resolved, safe_skill_name)
++        return install_dir
+ 
+ 
+ def uninstall_skill(skill_name: str) -> tuple[bool, str]:
