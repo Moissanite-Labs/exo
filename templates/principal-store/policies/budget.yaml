@@ -1,0 +1,12 @@
+# Spending limits. Amounts in the principal's currency. Zero means "always ask".
+version: 1
+currency: USD
+per_action_max: 0        # largest single spend an agent may make without asking
+per_day_max: 0           # total agent spend per day before every further spend needs approval
+per_month_ceiling: 0     # hard ceiling; stop and ask when reached
+model_calls:
+  default_tier: cheap    # cheap | standard | frontier
+  frontier_requires: ask # ask | report | act
+notes: >
+  Spend on work that compounds, be frugal on routine calls. Replace these defaults with the
+  principal's own rules.
