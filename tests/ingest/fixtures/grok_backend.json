@@ -1,0 +1,19 @@
+{
+  "conversations": [
+    {
+      "conversation": {"id": "gk-conv-1", "title": "Stars", "create_time": "2025-05-01T12:00:00.000Z",
+                       "modify_time": "2025-05-01T12:01:00.000Z", "user_id": "u-test"},
+      "responses": [
+        {"response": {"_id": "r1", "conversation_id": "gk-conv-1", "sender": "human",
+                      "message": "why is the sky dark at night", "model": "grok-test",
+                      "create_time": {"$date": {"$numberLong": "1746100800000"}}, "partial": false}},
+        {"response": {"_id": "r2", "conversation_id": "gk-conv-1", "sender": "ASSISTANT",
+                      "message": "Olbers' paradox: the universe has finite age.", "model": "grok-test",
+                      "thinking_trace": "secret reasoning not to ingest",
+                      "create_time": {"$date": {"$numberLong": "1746100810000"}}, "parent_response_id": "r1",
+                      "partial": false}}
+      ]
+    }
+  ],
+  "projects": [], "tasks": [], "media_posts": []
+}

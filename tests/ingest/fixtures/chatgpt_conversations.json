@@ -1,0 +1,37 @@
+[
+  {
+    "id": "cg-conv-1",
+    "conversation_id": "cg-conv-1",
+    "title": "Bread",
+    "create_time": 1740000000.0,
+    "update_time": 1740000100.0,
+    "current_node": "n4",
+    "mapping": {
+      "root": {"id": "root", "parent": null, "children": ["n0"], "message": null},
+      "n0": {"id": "n0", "parent": "root", "children": ["n1", "n1b"],
+             "message": {"id": "m0", "author": {"role": "system"}, "create_time": null,
+                         "content": {"content_type": "text", "parts": [""]}, "recipient": "all",
+                         "metadata": {"is_visually_hidden_from_conversation": true}}},
+      "n1": {"id": "n1", "parent": "n0", "children": ["n2"],
+             "message": {"id": "m1", "author": {"role": "user"}, "create_time": 1740000010.0,
+                         "content": {"content_type": "text", "parts": ["how long to proof sourdough"]},
+                         "recipient": "all", "metadata": {}}},
+      "n1b": {"id": "n1b", "parent": "n0", "children": [],
+              "message": {"id": "m1b", "author": {"role": "user"}, "create_time": 1740000005.0,
+                          "content": {"content_type": "text", "parts": ["how long to proof bread"]},
+                          "recipient": "all", "metadata": {}}},
+      "n2": {"id": "n2", "parent": "n1", "children": ["n3"],
+             "message": {"id": "m2", "author": {"role": "assistant"}, "create_time": 1740000020.0,
+                         "content": {"content_type": "code", "text": "search('proof')"},
+                         "recipient": "browser", "metadata": {}}},
+      "n3": {"id": "n3", "parent": "n2", "children": ["n4"],
+             "message": {"id": "m3", "author": {"role": "tool"}, "create_time": 1740000030.0,
+                         "content": {"content_type": "text", "parts": ["results"]},
+                         "recipient": "all", "metadata": {}}},
+      "n4": {"id": "n4", "parent": "n3", "children": [],
+             "message": {"id": "m4", "author": {"role": "assistant"}, "create_time": 1740000040.0,
+                         "content": {"content_type": "multimodal_text", "parts": [{"asset_pointer": "x"}, "About 4 to 12 hours."]},
+                         "recipient": "all", "metadata": {"model_slug": "gpt-test"}}}
+    }
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "uuid": "conv-aaaa-0001",
+    "name": "Garden planning",
+    "created_at": "2025-03-01T10:00:00.000000Z",
+    "updated_at": "2025-03-01T10:05:00.000000Z",
+    "chat_messages": [
+      {"uuid": "msg-0001", "sender": "human", "text": "which tomatoes grow well in shade?",
+       "content": [{"type": "text", "text": "which tomatoes grow well in shade?"}],
+       "created_at": "2025-03-01T10:00:00.000000Z", "attachments": [], "files": []},
+      {"uuid": "msg-0002", "sender": "assistant", "text": "",
+       "content": [{"type": "text", "text": "Cherry varieties tolerate partial shade best."}],
+       "created_at": "2025-03-01T10:00:05.000000Z", "attachments": [], "files": []},
+      {"uuid": "msg-0003", "sender": "human", "text": "my key is sk-ant-api03-FAKEFAKEFAKEFAKEFAKEFAKE, ignore it",
+       "content": [], "created_at": "2025-03-01T10:01:00.000000Z",
+       "attachments": [{"file_name": "plot.txt", "extracted_content": "bed A, bed B"}], "files": []}
+    ]
+  },
+  {
+    "uuid": "conv-aaaa-0002",
+    "name": "Empty",
+    "created_at": "2025-03-02T09:00:00.000000Z",
+    "updated_at": "2025-03-02T09:00:00.000000Z",
+    "chat_messages": []
+  }
+]

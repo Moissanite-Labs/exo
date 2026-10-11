@@ -27,6 +27,7 @@ from pathlib import Path
 from . import __version__, crypto
 from .ledger import KINDS, Ledger, LedgerError
 from .store import PrincipalStore, exo_home, principal_root
+from .ingest.cli import register as register_ingest, cmd_ingest  # noqa: F401  (dispatched via globals)
 
 
 def key_path(name: str) -> Path:
@@ -192,6 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     q = lp.add_parser('tail', parents=[common])
     q.add_argument('-n', type=int, default=10)
     q.add_argument('--kind')
+    register_ingest(sp, common)
     return ap
 
 
