@@ -95,3 +95,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   who uses the abu-aska account. Batched in the phase report.
 - **Rejected:** carrying all 25 open core PRs (rebase cost, D-005); running optchat and exo-memory side by
   side (one provider slot); keeping protean-team-skills as a second source (drift).
+
+## D-008 (2026-10-11) Build in waves of parallel agents with disjoint ownership
+- **Decision:** Phase 4 runs in waves. Wave 1 (done): core package, 40 tests. Wave 2 (running): exo-command,
+  Hermes pin + patch queue + contract tests, exo-memory (+ `exo.capture`), exo-context (+ `exo.handoff`),
+  exo-gate (+ `exo.gate`), ingest adapters. Each agent owns disjoint paths and does not commit; the lead
+  reviews, runs the full suite, commits and pushes. Wave 3: consolidate (taste and beliefs), ask loop,
+  n=1 eval, exo.bus (Divan Bus port), exo-orchestra (Protean template and skill pack), installer and
+  `exo init` interview, then migration stage M0 on a canary profile.
+- **Why:** keeps the lead's context lean (A's instruction) and avoids git races between agents.
+- **Rejected:** one agent per plugin committing directly (index-lock races, unreviewed commits); building
+  plugins before the core API existed (rework).
