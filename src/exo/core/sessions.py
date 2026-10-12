@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS findings (
     status TEXT NOT NULL DEFAULT 'open', fixed_in TEXT, fixed_at TEXT, fixed_turns INTEGER,
     sessions TEXT NOT NULL DEFAULT '[]'
 );
+CREATE TABLE IF NOT EXISTS finding_views (
+    viewer TEXT PRIMARY KEY, snapshot TEXT NOT NULL, at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS summaries (
     id TEXT PRIMARY KEY, session TEXT NOT NULL, level INTEGER NOT NULL, idx INTEGER NOT NULL,
     start_seq INTEGER NOT NULL, end_seq INTEGER NOT NULL, text TEXT NOT NULL DEFAULT '',

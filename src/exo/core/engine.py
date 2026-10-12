@@ -846,7 +846,7 @@ class CoreEngine:
         own = [{"name": "context", "description": "what the next model call carries: parts and token estimates", "args": ""},
                {"name": "compact", "description": "summarize now what is eligible in this agent's memory", "args": ""},
                {"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
-               {"name": "findings", "description": "open harness findings", "args": ""}]
+               {"name": "findings", "description": "harness findings by state", "args": ""}]
         return {"commands": own + [{"name": c.name, "description": c.description, "args": c.args_hint}
                                    for c in sorted(self.plugins.commands.values(), key=lambda c: c.name)]}
 
@@ -879,7 +879,9 @@ class CoreEngine:
         served = (json.loads(calls[0]["body"]).get("route") if calls else "") or "no model call recorded yet"
         head = [f"running on: {self.loop.model or '-'} (session model {info.model if info else '-'}, last call served "
                 f"by {served}); chain: {', '.join(r.ref for r in self.router.chain('main')) or '-'}",
-                f"harness {self.findings.version}; open findings {self.findings.open_count()}"]
+                f"harness {self.findings.version}; {self.findings.summary()}"]
+        if fixed := self.findings.list("fixed")[:5]:  # so a count that dropped can be told from findings that were lost
+            head.append("fixed, awaiting re-verification: " + ", ".join(f"{r['id']} (in {r['fixed_in']})" for r in fixed))
         if not session:
             return "\n".join(head)
         peers = trace.peer_text(self.store, session)
@@ -960,9 +962,12 @@ class CoreEngine:
         if b.name == "trace":
             return self.trace_text(b.session, int(b.args) if b.args.strip().isdigit() else 10)
         if b.name == "findings":
-            if b.args.strip() == "count":
-                return {"open": self.findings.open_count()}
-            return self.findings.text("open")
+            arg = b.args.strip()
+            if arg == "count":  # "open" is what needs work (open + reopened); by_state reconciles every finding
+                return {"open": self.findings.open_count(), "by_state": self.findings.counts()}
+            if arg in ("open", "fixed", "verified", "reopened"):
+                return self.findings.text(arg, viewer=b.session or "ui")
+            return self.findings.text("all", viewer=b.session or "ui")
         if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
             word, _, rest = b.args.strip().partition(" ")
             if word == "reload":
