@@ -191,6 +191,7 @@ class ApprovalRespond:
     decision: Literal["allow", "deny", "allow_always"]
     note: str = ""
     client: str = ""  # who answered (a client or channel id); reaches post_approval_response
+    binding: str = ""  # D-033: the ApprovalRequested.binding the answer was given for; a mismatch is refused
 
 
 @command("question.answer")
@@ -442,6 +443,10 @@ class ApprovalRequested:
     risk: str = "medium"
     call: ToolCall | None = None
     options: list[str] = field(default_factory=lambda: ["allow", "deny", "allow_always"])
+    # D-033: who may answer ("principal", "seat:<name>"); empty = any local client that is not a peer.
+    approvers: list[str] = field(default_factory=list)
+    # D-033: sha256 of the exact outbound text, target and arguments; an edit gives a new hash and a new ask.
+    binding: str = ""
 
 
 @event("approval.resolved")

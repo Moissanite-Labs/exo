@@ -7,6 +7,8 @@ export interface ApprovalRequested {
   risk?: string;
   call?: ToolCall | null;
   options?: string[];
+  approvers?: string[];
+  binding?: string;
 }
 
 export interface ApprovalResolved {
@@ -20,6 +22,7 @@ export interface ApprovalRespond {
   decision: "allow" | "deny" | "allow_always";
   note?: string;
   client?: string;
+  binding?: string;
 }
 
 export interface ApprovalsList {

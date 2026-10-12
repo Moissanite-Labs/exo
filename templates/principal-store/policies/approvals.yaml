@@ -1,0 +1,34 @@
+# Who may answer an approval, and how long an "always" answer lasts (D-033).
+#
+# Each category maps to a list of approvers:
+#   principal          the principal, typing in any local client (TUI, web, chat)
+#   seat:<name>        a named seat; its client answers as "seat:<name>"
+#   role:<name>        any seat listed under roles below
+# The principal can always answer, whatever the list says. A category not listed here uses
+# default. A peer or ingress client can never answer (D-026).
+#
+# Categories come from exo.gate, for example github_post, message_send, email_send,
+# social_post, web_post, publish, payment, delete, deploy_production, credentials.
+#
+# Example: a lead seat approves public posts for the principal.
+#   approvers:
+#     default: [principal]
+#     categories:
+#       github_post: ["role:public-reviewer"]
+#       social_post: ["role:public-reviewer"]
+#   roles:
+#     public-reviewer: ["seat:my-lead-seat"]
+
+version: 1
+approvers:
+  default: [principal]
+  categories: {}
+roles: {}
+
+# An "always" answer becomes a standing grant with a scope, an expiry and a ledger row. It
+# survives a restart. For an outward act (posts, messages, email, payments, anything public or
+# irreversible) the grant covers only the exact text and target it was given for; any edit asks
+# again. Credentials never get a grant. 0 turns standing grants off for that kind.
+always:
+  days: 30            # local and internal actions: scope is the category and the exact target
+  outward_days: 7     # outward actions: scope is the category, target and exact text
