@@ -20,6 +20,7 @@ from rich.theme import Theme as RichTheme
 from exo.config import exo_home
 from exo.core.types import ContentPart
 from exo.core.trace import money
+from exo import complete as cm
 from exo.protocol import schema as s
 from exo_tui.onboarding import INTRO_PROMPT, Onboarding, load_catalog
 from exo_tui import theme as th
@@ -27,7 +28,7 @@ from exo_tui.hero import Hero, hero_rows
 from exo_tui.boot import STEPS as BOOT_STEPS
 from exo_tui.boot import BootScreen
 from exo_tui.providers import ProvidersScreen, refuse_key_in_composer
-from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, EditScreen, Palette,
+from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, CompletionMenu, EditScreen, Palette,
                              PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
 CLIENT_ID = "exo-tui"
@@ -97,6 +98,7 @@ class ExoApp(App):
     #composer .text-area--cursor { background: $accent; color: #0a0a0a; text-style: none; }
     #composer .text-area--cursor-line { background: $background; }
     #composer .text-area--placeholder { color: $fg-3; }
+    #cmenu { height: auto; max-height: 10; background: $background; border-top: solid $line; padding: 0 2; }
     #status { height: 2; padding: 0 2; border-top: solid $line; background: $surface; }
     #approval { height: auto; border-left: outer $accent; background: $surface; padding: 0 1; margin: 0 2 1 2; }
     #hero { margin: 0; }
@@ -197,6 +199,18 @@ class ExoApp(App):
         self.intro_pending = ""  # "first" or "manual" from sending /intro until its turn starts
         self.sent: list[Any] = []  # every command body this client sent, for tests and debugging
         self._dirty = False
+        self.hist = cm.History.for_seat(home or exo_home(), seat)  # up-arrow and ghost text (D-037)
+        self.catalog: list[cm.Item] = cm.build_catalog(LOCAL_COMMANDS)
+        self.arg_ctx: dict[str, list[cm.Item]] = {}  # cached argument data by kind; fetched once when first needed
+        self.arg_at: dict[str, float] = {}
+        self.files = cm.FileIndex(os.getcwd())
+        self.sug = cm.Suggestion()
+        self.sel = 0
+        self.sug_text = ""
+        self.menu_off = ""  # text the menu was closed with esc for; it stays shut until the text changes
+        self.guide = cm.Guide()
+        self.tip: cm.Tip | None = None
+        self.gstate = cm.State()
         self.older: list[tuple] = []  # history entries not mounted yet, oldest first
         self.earlier_row: Static | None = None
         self._loading = False
@@ -211,15 +225,19 @@ class ExoApp(App):
                 with Horizontal(id="compose"):
                     yield PromptMark(PROMPT_IDLE, id="prompt")
                     yield Composer()
+                yield CompletionMenu()
             yield PanelView()
         yield StatusStrip()
 
     def on_mount(self) -> None:
         self.brand, self.strip, self.prompt = self.query_one(BrandBar), self.query_one(StatusStrip), self.query_one(PromptMark)
         self.composer = self.query_one(Composer)  # cached: a modal screen on top hides them from query_one
+        self.menu = self.query_one(CompletionMenu)
+        self.composer.key_hook = self.composer_key
         self.composer.focus()
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
         if self.motion:
+            self.set_interval(10.0, self.update_guidance)  # a pause, not an animation; events also call it
             self.set_interval(0.12, self.tick)  # spinners, the live dot and the packet on the wire
         self.watch(self.transcript, "scroll_y", self.watch_transcript_scroll, init=False)
         self.refresh_status()
@@ -278,7 +296,7 @@ class ExoApp(App):
                                         findings=self.findings)
         self.brand.set(self.seat or "main", self.thread_label, self.busy)
         self.prompt.set_state(self.busy, bool(self.question))
-        self.composer.placeholder = BUSY_HINT if self.busy else IDLE_HINT
+        self.composer.placeholder = BUSY_HINT if self.busy else self.tip_line() or IDLE_HINT
 
     def wire(self, width: int = 9) -> Text:
         """A packet travelling along a wire: data in flight. Still under reduced motion."""
@@ -357,12 +375,19 @@ class ExoApp(App):
                             break
                 self.boot_mark("model", self.model)
                 self.commands = (await self.client.call(s.CommandsList())).get("commands", [])
+                self.catalog = cm.build_catalog(LOCAL_COMMANDS, self.commands)  # the core's list, once per session
             except Exception:
                 pass
             try:
                 self.tutorial = (await self.client.call(s.ConfigGet(key="tutorial.enabled"))).get("value") is True
             except Exception:
                 self.tutorial = False  # not set yet
+            try:  # the guidance line is on unless the user turned it off (/tutorial off, or this key)
+                self.guide.enabled = (await self.client.call(s.ConfigGet(key="guidance.enabled"))).get("value") is not False
+            except Exception:
+                pass
+            self.gstate.first_run = not self.onb.onboarded
+            self.update_guidance()
             if self.resume and not self.session:
                 rows = (await self.client.call(s.SessionList(limit=20, seat=self.seat)))["sessions"]
                 rows = [r for r in rows if r.get("kind") != "subagent"]  # resume a thread, not a child's log
@@ -440,6 +465,9 @@ class ExoApp(App):
             self.requested, self.served = self.model, ""  # what this turn asked for; ModelCall says what served
             self.close_cur()
         elif isinstance(b, s.TurnCompleted):
+            self.gstate.turns += 1
+            self.gstate.long_turn = (b.timing.get("wall_ms", 0) - b.timing.get("tool_ms", 0)
+                                     - b.timing.get("approval_ms", 0)) >= LONG_TURN_MS
             self.busy = False
             self.turn_t0 = 0.0
             self.running_tools = 0
@@ -449,6 +477,7 @@ class ExoApp(App):
                     - b.timing.get("model_ms", 0)) >= LONG_TURN_MS:
                 self.hint("long_turn")
             self.run_worker(self.refresh_findings(), exit_on_error=False)
+            self.update_guidance()
         elif isinstance(b, s.ReasoningDelta):
             self.turn_t0 = 0.0
         elif isinstance(b, s.MessageDelta):
@@ -516,6 +545,7 @@ class ExoApp(App):
             if self.cache_share is None:
                 self.cache_share = self.cache_of(u)
         elif isinstance(b, s.ModelCall):
+            self.gstate.provider_error = bool(b.error)
             if b.route:
                 self.model = self.served = b.route  # the route that served, not the one asked for
             if b.requested:
@@ -541,6 +571,9 @@ class ExoApp(App):
                 self.note(f"peer {b.peer}: {b.state}" + (f" ({b.detail})" if b.detail else ""),
                           "warn" if b.state != "delivered" and b.state != "released" else "note")
         elif isinstance(b, s.JobUpdated):  # D-032: one system line per state change, cold; a bad ending is warm
+            if b.state == "done":
+                self.gstate.job_done = b.job_id
+                self.update_guidance()
             code = "" if b.exit_code is None else f", exit {b.exit_code}"
             self.note(f"job {b.job_id} {b.state}{code}: {b.command[:80]}" + (f" ({b.detail})" if b.detail and b.state != "running" else ""),
                       "warn" if b.state in ("failed", "timeout", "lost") else "job")
@@ -711,7 +744,185 @@ class ExoApp(App):
                       "the key field is hidden.", "warn")
             return
         if text:
+            self.hist.add(text)
+            self.sent_line(text)
             self.run_worker(self.submit(text), exit_on_error=False)
+
+    # ------------------------------------------------------------ completion and guidance (D-037)
+    def composer_key(self, key: str) -> bool:
+        """First look at a composer key: the dropdown, history and ghost text. True means the key was used."""
+        c = self.composer
+        if c.text != self.sug_text:  # a paste or a fast typist: the Changed message has not been handled yet
+            self.refresh_suggest()
+        if key in ("right", "end") and c.ghost and self.ghost_ok and c.at_end():
+            self.put(c.text + c.ghost)
+            return True
+        items = self.sug.items
+        shown = bool(items) and self.sug.mode in ("command", "arg", "file") and self.menu_off != c.text
+        if shown:
+            if key in ("down", "up"):
+                self.sel = (self.sel + (1 if key == "down" else -1)) % len(items)
+                self.draw_menu()
+                return True
+            if key == "tab":
+                self.accept(items[self.sel])
+                return True
+            if key == "enter":
+                if cm.complete_text(c.text, self.sug, items[self.sel]).strip() == c.text.strip():
+                    return False  # already complete: send it
+                self.accept(items[self.sel])
+                return True
+            if key == "escape":
+                self.menu_off = c.text
+                self.draw_menu()
+                return True
+            return False
+        row, last = c.cursor_location[0], c.document.line_count - 1
+        if key == "up" and row == 0:
+            v = self.hist.prev(c.text)
+            if v is not None:
+                self.put(v)
+            return True
+        if key == "down" and self.hist.browsing and row == last:
+            self.put(self.hist.next() or "")
+            return True
+        if key == "tab":
+            if c.ghost and self.ghost_ok and c.at_end():
+                self.put(c.text + c.ghost)
+                return True
+            if not c.text and self.tip is not None and self.tip.fill:
+                self.put(self.tip.fill)
+                return True
+        return False
+
+    ghost_ok = False
+
+    def put(self, text: str) -> None:
+        """Set the composer text from code (history, completion), caret at the end."""
+        self._expect = text
+        self.composer.text = text
+        self.composer.move_cursor(self.composer.document.end)
+
+    _expect = ""
+
+    def accept(self, item: cm.Item) -> None:
+        self.put(cm.complete_text(self.composer.text, self.sug, item))
+
+    def on_text_area_changed(self, event: Any) -> None:
+        if event.text_area is not self.composer:
+            return
+        if self.composer.text != self._expect:
+            self.hist.reset()  # the user edited a recalled line: it is a draft now
+        self.refresh_suggest()
+
+    def expire_ctx(self) -> None:
+        now = time.monotonic()
+        for k in [k for k, t0 in self.arg_at.items() if now - t0 > 30]:
+            self.arg_ctx.pop(k, None)
+            self.arg_at.pop(k, None)
+
+    def refresh_suggest(self) -> None:
+        c = self.composer
+        self.expire_ctx()
+        if self.hist.browsing or not c.at_end():
+            self.sug = cm.Suggestion()
+        else:
+            self.sug = cm.suggest(c.text, self.catalog, self.arg_ctx, self.files)
+        if self.sug.need and self.sug.need not in self.arg_at:
+            self.arg_at[self.sug.need] = time.monotonic()
+            self.run_worker(self.fetch_ctx(self.sug.need), exit_on_error=False)
+        self.sel, self.sug_text = 0, c.text
+        c.ghost, self.ghost_ok = ("", False) if self.hist.browsing else cm.ghost(c.text, self.sug, self.hist)
+        c.refresh()
+        self.draw_menu()
+
+    def draw_menu(self) -> None:
+        sug, text = self.sug, self.composer.text
+        if sug.mode == "shell":
+            self.menu.show([], 0, sug.hint)
+        elif sug.items and sug.mode in ("command", "arg", "file") and self.menu_off != text:
+            if sug.mode == "command":
+                rows = [(it.label, it.args, cm.short_desc(it.meta)) for it in sug.items]
+            else:
+                rows = [(it.label, "", cm.short_desc(it.meta)) for it in sug.items]
+            self.menu.show(rows, self.sel)
+        else:
+            self.menu.show([], 0)
+
+    async def fetch_ctx(self, kind: str) -> None:
+        """Load one kind of argument data (once, then cached for 30 seconds). Failures leave the list empty."""
+        items: list[cm.Item] = []
+        try:
+            if kind == "models":
+                res = await self.client.call(s.ModelsList())  # the picker's source: unsupported models are already left out
+                seen: set[str] = set()
+                for r in res.get("models", []):
+                    if r["route"] not in seen:
+                        seen.add(r["route"])
+                        items.append(cm.Item(r["route"], r["route"], f"role {r['role']}"))
+                for r in res.get("available", []):
+                    if r["route"] not in seen:
+                        seen.add(r["route"])
+                        items.append(cm.Item(r["route"], r["route"]))
+            elif kind == "threads":
+                rows = (await self.client.call(s.SessionList(limit=30))).get("sessions", [])
+                items = [cm.Item(r["id"], r.get("title") or r["id"], f"{r.get('message_count', 0)} msgs  {r['id']}")
+                         for r in rows if r.get("kind") != "subagent"]
+            elif kind == "grants":
+                out = (await self.client.call(s.CommandRun(name="grants", args="list", session=self.session))).get("output")
+                for line in str(out or "").splitlines():
+                    gid, _, rest = line.partition("  ")
+                    if gid and not gid.startswith("no "):
+                        items.append(cm.Item(gid, gid, rest.strip()))
+            elif kind == "providers":
+                from exo import providers_setup as ps
+                items = [cm.Item(r["provider"], r["provider"], str(r.get("status") or ""))
+                         for r in await asyncio.to_thread(ps.rows)]
+            elif kind == "handoff_path":
+                out = (await self.client.call(s.CommandRun(name="handoff_facts", args="", session=self.session))).get("output")
+                if isinstance(out, dict) and out.get("path"):
+                    items = [cm.Item(str(out["path"]), str(out["path"]), "default path")]
+            elif kind == "peers":
+                res = await self.client.call(s.Peers(action="list", session=self.session))
+                items = [cm.Item(r["name"], r["name"], f"{r.get('platform', '')} {r.get('title') or ''}".strip())
+                         for r in res.get("peers", [])]
+        except Exception:
+            items = []
+        self.arg_ctx[kind] = items
+        self.arg_at[kind] = time.monotonic()
+        self.refresh_suggest()
+
+    def sent_line(self, text: str) -> None:
+        """Bookkeeping for a line the user just sent: the tip is spent, the rule it came from retires."""
+        self.tip = None
+        if text.startswith("/"):
+            self.guide.used(text[1:].split(" ", 1)[0])
+            if text.startswith("/providers"):
+                self.gstate.provider_error = False
+        if "job_output" in text or self.gstate.job_done and self.gstate.job_done in text:
+            self.gstate.job_done = ""
+        self.refresh_status()
+
+    def tip_line(self) -> str:
+        if self.tip is None:
+            return ""
+        return self.tip.text + (f"  {th.DOT} tab fills it in" if self.tip.fill else "")
+
+    def update_guidance(self) -> None:
+        """Pick at most one dim line for the empty composer from local rules (no model call, rate limited)."""
+        if self.tip is not None or not hasattr(self, "composer"):
+            return
+        st = self.gstate
+        st.busy, st.findings = self.busy, self.findings
+        if st.first_run and (self.onb.onboarded or self.intro_pending or st.turns):
+            st.first_run = False
+        tip = self.guide.pick(st)
+        if tip is not None:
+            self.tip = tip
+            st.long_turn = st.long_turn and tip.key != "trace"
+            if tip.key.startswith("job:"):
+                st.job_done = ""
+            self.refresh_status()
 
     def file_parts(self, text: str) -> list[ContentPart]:
         parts, seen = [], set()
@@ -753,6 +964,14 @@ class ExoApp(App):
     async def slash(self, name: str, args: str) -> None:
         if not self.busy:
             self.hint_budget = 1
+        known = {n for n in LOCAL_COMMANDS} | {c["name"] for c in self.commands}
+        if self.commands and name not in known:  # D-037: a typo gets a suggestion, not a round trip and an error
+            guess = cm.closest(name, known)
+            if guess:
+                self.note(f"unknown command /{name}. did you mean /{guess}? It is in the composer: Enter runs it.", "warn")
+                self.composer.text = f"/{guess}" + (f" {args}" if args else "")
+                self.composer.move_cursor(self.composer.document.end)
+                return
         if name in ("exit", "quit"):
             self.exit()
         elif name == "restart":
@@ -788,6 +1007,8 @@ class ExoApp(App):
                               "warn")
                     return
                 self.open_providers(rest.strip(), add=True)
+            elif word:
+                self.open_providers(word)
             else:
                 self.open_providers()
         elif name == "new":
@@ -800,7 +1021,7 @@ class ExoApp(App):
         elif name == "tutorial":
             await self.tutorial_command(args)
         elif name in ("sessions", "resume"):
-            await self.pick_session()
+            await self.pick_session(args.strip())
         elif name == "model":
             word, _, rest = args.partition(" ")
             if word == "default":
@@ -871,6 +1092,11 @@ class ExoApp(App):
         resp = await self.post(s.ConfigSet(key="tutorial.enabled", value=on))
         if not resp.ok:
             return
+        await self.client.call(s.ConfigSet(key="guidance.enabled", value=on))  # tips and the guidance line go together
+        self.guide.enabled = on
+        if not on:
+            self.tip = None
+            self.refresh_status()
         self.tutorial = on
         if not quiet:
             self.note("tutorial mode on: short tips appear the first time something comes up" if on
@@ -1041,9 +1267,17 @@ class ExoApp(App):
         else:
             self.note("Still no provider. /providers adds one; /intro then gives the orientation.")
 
-    async def pick_session(self) -> None:
+    async def pick_session(self, want: str = "") -> None:
         rows = (await self.client.call(s.SessionList(limit=50)))["sessions"]
         rows = [r for r in rows if r.get("kind") != "subagent"]  # subagent logs open with memory_zoom, not here
+        if want:  # /resume <thread>: an id, or the best title match
+            hit = next((r for r in rows if r["id"] == want), None) or next(iter(cm.rank(want, [
+                cm.Item(r["id"], r.get("title") or r["id"]) for r in rows])), None)
+            if hit is None:
+                self.note(f"no thread matches {want!r}; /resume alone lists them", "warn")
+            else:
+                await self.load_session(hit.value if isinstance(hit, cm.Item) else hit["id"])
+            return
         tag = {"private": "private, ", "scheduled": "scheduled, "}
         items = [(f"{r.get('title') or r['id']}  ({tag.get(r.get('kind') or '', '')}{r.get('message_count', 0)} msgs,"
                   f" {r.get('status', '')})", r["id"]) for r in rows]
