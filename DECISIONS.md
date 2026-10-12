@@ -270,3 +270,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   116 added; old packets still decode. Tests build engines with `env={}` so a real key in the shell
   never causes spend.
 - **Later:** tiers for aux side calls; tier auto-selection from past receipts.
+
+## D-018 (2026-10-12) Provider agnostic; users choose models; default eval and decision models
+- **A's rulings:** "exo should be model and provider agnostic"; "users config which models are used. by
+  default, the decision model used is laya (locally run) and the evaluation model is same model as what's
+  configured and being used in the harness/chat"; "i have a typesafe api as well so we can experiment with
+  jev"; the site's repo link stays dead for now.
+- **Decision:** every role (main, aux, decision, eval, tiers) is user config. Defaults: `decision` = local
+  Laya, `eval` (judge) = the `main` route. Providers added beyond Anthropic: OpenCode Go and Nous Portal
+  (A's main providers) and TypeSafe Jev as an opt-in decision provider for experiments. Keys come from
+  env, then the OS keychain (service `exo`), then `~/.config/exo/keys.env` (mode 0600); never from chat.
+- **Resolves:** the D-012 judge-model question (eval = main) and the decision provider for A's seats
+  (Laya default, Jev for experiments). Still open: the eval monthly ceiling and a decision-API cap.
