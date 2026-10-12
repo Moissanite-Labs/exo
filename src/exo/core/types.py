@@ -17,7 +17,7 @@ Role = Literal["system", "user", "assistant", "tool"]
 PartType = Literal["text", "image", "reasoning"]
 Risk = Literal["low", "medium", "high"]
 StopReason = Literal["end", "tool_use", "max_tokens", "interrupted", "error"]
-ProviderEventKind = Literal["text", "reasoning", "tool_call", "usage", "done", "error"]
+ProviderEventKind = Literal["text", "reasoning", "tool_call", "usage", "done", "error", "notice"]
 
 
 @dataclass
@@ -150,6 +150,7 @@ class ProviderEvent:
     usage      ``usage`` for the call (may arrive more than once; last one wins).
     done       last event. ``stop_reason`` set; ``message`` is the assembled
                assistant Message (with reasoning signatures intact).
+    notice     ``text`` is a plain-words warning (the router abandoned a route); the loop shows it.
     error      ``error`` text; ``retryable``, ``status`` (HTTP code if any) and
                ``retry_after`` (seconds, if the provider said) drive router fallback.
     """

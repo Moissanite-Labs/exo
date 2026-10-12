@@ -266,3 +266,20 @@ def test_fuzzy_and_tool_collapse(tmp_path):
         assert tb.expanded and app.expanded
 
     run(tmp_path, sc)
+
+
+def test_waiting_strip_then_text_and_warn_notice(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.handle(s.Event.of(s.TurnStarted(turn_id="t1", model="kimi-k3"), 1, app.session))
+        app.turn_t0 -= 12  # twelve seconds without a byte
+        app.refresh_activity()
+        assert "waiting for kimi-k3 12s" in str(app.query_one("#activity").render())
+        app.handle(s.Event.of(s.Notice(text="a:m did not answer in 60 s; trying b:m", level="warn"), 2, app.session))
+        await pilot.pause(0.05)
+        assert "warn: a:m did not answer in 60 s; trying b:m" in app.transcript_text()
+        assert any("warn" in w.classes for w in app.transcript.children)
+        app.handle(s.Event.of(s.ReasoningDelta(message_id="m1", text="hm"), 3, app.session))
+        assert "waiting" not in str(app.query_one("#activity").render())
+        assert "working" in str(app.query_one("#activity").render())
+
+    run(tmp_path, sc)

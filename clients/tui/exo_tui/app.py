@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,7 @@ class ExoApp(App):
         self.ctx_tokens = 0
         self.cost = 0.0
         self.busy = False
+        self.turn_t0 = 0.0  # when the running turn began; 0 once text or reasoning has streamed
         self.expanded = False
         self.ready = asyncio.Event()
         self.cur: Block | None = None
@@ -98,6 +100,7 @@ class ExoApp(App):
 
     def on_mount(self) -> None:
         self.query_one(Composer).focus()
+        self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
         self.refresh_status()
         self.run_worker(self.boot(), exit_on_error=False)
 
@@ -121,6 +124,8 @@ class ExoApp(App):
         bits = []
         if self.running_tools:
             bits.append("running tool" if self.running_tools == 1 else f"running {self.running_tools} tools")
+        elif self.busy and self.turn_t0:
+            bits.append(f"waiting for {self.model or 'model'} {int(time.monotonic() - self.turn_t0)}s")
         elif self.busy:
             bits.append("working")
         live = sum(1 for v in self.agents.values() if v in ("queued", "running"))
@@ -188,14 +193,19 @@ class ExoApp(App):
         b = ev.body
         if isinstance(b, s.TurnStarted):
             self.busy = True
+            self.turn_t0 = time.monotonic()
             self.model = b.model or self.model
             self.cur = None
         elif isinstance(b, s.TurnCompleted):
             self.busy = False
+            self.turn_t0 = 0.0
             self.running_tools = 0
             self.flush()
             self.cur = None
+        elif isinstance(b, s.ReasoningDelta):
+            self.turn_t0 = 0.0
         elif isinstance(b, s.MessageDelta):
+            self.turn_t0 = 0.0
             if self.cur is None or self.cur_id != b.message_id:
                 self.cur_id = b.message_id
                 self.cur = Block("", "assistant")
@@ -262,7 +272,7 @@ class ExoApp(App):
                 self.model = b.session.model or self.model
                 self.seat = self.seat or b.session.seat
         elif isinstance(b, s.Notice):
-            self.note(f"{b.level}: {b.text}" if b.level != "info" else b.text)
+            self.note(f"{b.level}: {b.text}" if b.level != "info" else b.text, "warn" if b.level == "warn" else "note")
         elif isinstance(b, s.Error):
             self.note(f"error: {b.code}: {b.message}", "error")
         self.refresh_status()
