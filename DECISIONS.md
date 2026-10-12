@@ -724,25 +724,6 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
 
-## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
-- **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
-- **Loop:** a provider error after text was shown now stores that text (marked `interrupted` and `error`) like an
-  interrupt does. A stream that closes cleanly without a finish event or stop reason is the retryable error
-  "stream ended without a response", even after text.
-- **Memory:** undo deletes the agent-tree summaries (`agent:<name>`, keyed by log position) that cover undone
-  entries, and a summary already running cannot bring one back. A failing summary is retried with backoff up to
-  three times, then the span stays verbatim, marked `skipped`, with one `harness.error` event.
-- **Scheduler:** a failing tick is recorded and survived; an unexpected exit of the loop is recorded and noticed.
-  Scheduled runs are ordinary turns: same context tree, memory, soul refresh and turn hooks, with the job's model
-  and tools.
-- **Delegation over the bus:** the brief goes as `kind=directive`; the wire grammar has no `task`, so a real relay
-  answered 422. The test bus now rejects kinds outside `exo.bus.wire.KINDS`. The receipt kind in the design is
-  `report` for the same reason.
-- **MCP:** `ToolResult` results get the character cap; long or odd tool names get a hash suffix and a clash is
-  refused, not replaced; remote descriptions are marked untrusted third-party text.
-- **Not done:** terminal event-loop blocking and approval focus (another branch); gate, approvals, capture and
-  ledger items (other branches).
-
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
   the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
@@ -785,3 +766,22 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   heuristic.
 - **Not changed:** the TUI approval card's focus behaviour (another branch is editing the TUI); noted for later.
   The echo engine (a test double) still accepts any answer.
+
+## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
+- **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
+- **Loop:** a provider error after text was shown now stores that text (marked `interrupted` and `error`) like an
+  interrupt does. A stream that closes cleanly without a finish event or stop reason is the retryable error
+  "stream ended without a response", even after text.
+- **Memory:** undo deletes the agent-tree summaries (`agent:<name>`, keyed by log position) that cover undone
+  entries, and a summary already running cannot bring one back. A failing summary is retried with backoff up to
+  three times, then the span stays verbatim, marked `skipped`, with one `harness.error` event.
+- **Scheduler:** a failing tick is recorded and survived; an unexpected exit of the loop is recorded and noticed.
+  Scheduled runs are ordinary turns: same context tree, memory, soul refresh and turn hooks, with the job's model
+  and tools.
+- **Delegation over the bus:** the brief goes as `kind=directive`; the wire grammar has no `task`, so a real relay
+  answered 422. The test bus now rejects kinds outside `exo.bus.wire.KINDS`. The receipt kind in the design is
+  `report` for the same reason.
+- **MCP:** `ToolResult` results get the character cap; long or odd tool names get a hash suffix and a clash is
+  refused, not replaced; remote descriptions are marked untrusted third-party text.
+- **Not done:** terminal event-loop blocking and approval focus (another branch); gate, approvals, capture and
+  ledger items (other branches).
