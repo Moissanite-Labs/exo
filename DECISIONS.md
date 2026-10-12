@@ -106,3 +106,24 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Why:** keeps the lead's context lean (A's instruction) and avoids git races between agents.
 - **Rejected:** one agent per plugin committing directly (index-lock races, unreviewed commits); building
   plugins before the core API existed (rework).
+
+## D-009 (2026-10-12) A's redirect: Exo is a standalone harness; Hermes is a source, not a dependency
+- **Ruling (A, verbatim in `~/hafiz/nodes/work/exo.md`):** "I also dont want hermes to be a dependency.
+  whenever hermes updates progress significantly or there's a meaningful improvement, fix, etc. we can
+  rebase the appropriate parts of our system but I dont want a persistent lie that limits our ability to
+  iterate and evolve. this will eventually be its own standalone harness so lets make it that way."
+- **Supersedes D-005.** The plugin-and-patch-queue approach is retired as the end state. What was built on
+  Hermes plugin contracts (exo-memory, exo-context, exo-gate, exo-command, exo-bus, exo-orchestra) is kept
+  as logic and re-homed onto Exo's own core. The 0005 aux-routing PR is withdrawn: Exo owns its routing.
+- **Also set by A in the same note:**
+  - **UI:** the simplicity of opencode and Command Code, the robustness and customizability of Hermes.
+  - **Learning loop:** fuse Hermes's branch-off review loop (memory and skill learning) with Command
+    Code's branch-off taste learning into one feedback loop that aligns the harness to its user.
+  - **Store:** hafiz's design becomes the store design, merged with Arif (external-data ingest) and
+    Eldunari (router, anima, nexus). Their useful parts come in; their structures move to the new format.
+  - **Horizon:** a portable companion device (mini robot or a Muse-charm-like object) in a few years.
+    Design for this now: a portable principal store, a small-model path, local-first.
+- **Next:** research (UI, learning loops, standalone core, store merge) in parallel, then D-010 sets how
+  the standalone core is built and how Hermes improvements are pulled in.
+- **Rejected:** keeping Hermes as a pinned runtime dependency (A's ruling); a full rewrite from zero
+  before the research says what to lift (wastes the 2026 work in Hermes).
