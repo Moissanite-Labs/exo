@@ -57,6 +57,14 @@
       "scripts": []
     },
     {
+      "name": "exo-intro",
+      "path": "exo-intro",
+      "description": "Use when the user runs /intro, is new to Exo, or asks what Exo is, how it works or what it can do. Holds the facts for an interactive orientation.",
+      "source": "Written for Exo (D-030)",
+      "generalized": "Original skill, no principal content.",
+      "scripts": []
+    },
+    {
       "name": "git-authorship-identity-cleanup",
       "path": "git-authorship-identity-cleanup",
       "description": "Use when internal names leak into public git commits.",
