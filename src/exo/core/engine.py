@@ -418,14 +418,16 @@ class CoreEngine:
                 return Block(str(verdict.get("message") or "blocked by a plugin"))
             if verdict.get("action") == "approve":
                 key = "plugin_rule:" + str(verdict.get("rule_key") or call.name)
-                if key in self._always:
+                once = bool(verdict.get("once"))  # e.g. credentials: asked every time, never a standing allow
+                if key in self._always and not once:
                     continue
                 who: list[str] = []
-                decision = await self.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who)
+                decision = await self.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
+                                          options=["allow", "deny"] if once else None)
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
                 await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
                                                decided_by=who[0] if who else "client", session_id=ctx.session or "")
-                if decision == "allow_always":
+                if decision == "allow_always" and not once:
                     self._always.add(key)
                 elif decision != "allow":
                     return Block("the user denied this call")
@@ -446,6 +448,11 @@ class CoreEngine:
         loop = asyncio.get_running_loop()
 
         def emit(text: str) -> None:  # tool threads call this; publish on the event loop
+            try:
+                from exo.core.models.keys import redact_secrets
+                text = redact_secrets(text)
+            except Exception:
+                pass
             loop.call_soon_threadsafe(self.hub.publish, s.ToolOutput(call_id=call.id, text=text), sid)
 
         ctx = ToolContext(cwd=(info.cwd if info and info.cwd else self.cwd), session=sid, call_id=call.id,

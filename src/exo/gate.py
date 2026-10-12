@@ -20,6 +20,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import shlex
 from dataclasses import asdict, dataclass, field
@@ -605,6 +606,12 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     segs, bodies = split_commands(cmd or "")
     parts = [_classify_argv(s, cmd, bodies, depth) for s in segs]
     c = _most_severe(parts) or _make("shell", command=cmd)
+    hit = _shell_credential_hit(cmd, segs)
+    if hit and c.category != "credentials":
+        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
+        c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
+                  command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
+        c.signals.append("secret store")
     c.command = cmd
     # Outbound text: if several gh segments post text, keep the most severe one's text.
     if not c.text and c.category in OUTBOUND and bodies and c.category != "web_post":
@@ -665,8 +672,156 @@ TOOLS: dict[str, str] = {
     "close_terminal": "shell",
 }
 
-_SENSITIVE_PATH = re.compile(r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
-                             r"credentials(\.json)?|id_rsa|id_ed25519|[^/]+\.pem|[^/]+\.key)(/|$)")
+# One list of secret stores, used by the path tools (read/write/patch) and by shell parsing.
+# Segment patterns match at any depth; EXO_HOME and EXO_KEYS_FILE overrides are added by
+# is_sensitive_path() because they can sit anywhere.
+_SENSITIVE_PATH = re.compile(
+    r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
+    r"credentials(\.json)?|id_rsa|id_ed25519|[^/]+\.pem|[^/]+\.key|"
+    r"keys\.env|\.config/exo/keys(\.env)?|\.exo/keys|\.divan/[^/]+\.key|auth\.json|"
+    r"client_secret[^/]*\.json|\.unii/[^/]+/token|[^/]*token[^/]*\.(json|txt|pickle|ya?ml)|[^/]+\.token|"
+    r"proc/[^/]+/environ)(/|$)")
+
+# Concrete examples a shell glob is tested against ("could this glob match a secret store?").
+_SENSITIVE_SAMPLES = ("keys.env", ".exo/keys", ".config/exo/keys.env", ".divan/seat.key", "auth.json",
+                      "google_token.json", ".unii/acct/token", "client_secret_1.json", ".hermes/p/.env",
+                      ".netrc", ".env", ".npmrc", ".pypirc", ".ssh/id_rsa", ".ssh/id_ed25519", ".aws/credentials",
+                      ".gnupg/pubring.kbx", "credentials.json", "server.pem")
+
+
+def _home() -> str:
+    return os.environ.get("HOME") or os.path.expanduser("~")
+
+
+def _exo_home() -> str:
+    return os.path.expanduser(os.environ.get("EXO_HOME") or "") or os.path.join(_home(), ".exo")
+
+
+def _expand_text(text: str) -> str:
+    """~, $HOME and $EXO_HOME (also ${...}) spelled out; nothing else is evaluated."""
+    home, exo = _home(), _exo_home()
+    text = re.sub(r"\$\{?EXO_HOME\}?", lambda m: exo, text)
+    text = re.sub(r"\$\{?HOME\}?", lambda m: home, text)
+    return re.sub(r"(^|(?<=[\s'\"=:<>]))~(?=/|$|\s|['\"])", lambda m: m.group(1) + home, text)
+
+
+def _dynamic_secret_paths() -> list[str]:
+    paths = [os.path.join(_exo_home(), "keys")]
+    kf = os.environ.get("EXO_KEYS_FILE")
+    paths.append(os.path.expanduser(kf) if kf else os.path.join(_home(), ".config", "exo", "keys.env"))
+    return paths
+
+
+def is_sensitive_path(path: str) -> bool:
+    """True when ``path`` names one of the secret stores (ssh, cloud and netrc credentials, Exo's key
+    stores, signing keys, token and client-secret files, .env files). Never reads the file."""
+    path = _expand_text(str(path or "")).strip()
+    if not path:
+        return False
+    if _SENSITIVE_PATH.search(path.replace("\\", "/")):
+        return True
+    try:
+        cands = {os.path.abspath(path), os.path.realpath(path)}
+    except (OSError, ValueError):
+        cands = {path}
+    for root in _dynamic_secret_paths():
+        roots = {os.path.abspath(root), os.path.realpath(root)}
+        if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots):
+            return True
+    return False
+
+
+def _glob_hits_secret(tok: str) -> bool:
+    """A shell glob that could expand to a secret store. Bare `*` or `*.json` do not count; the last
+    component needs three literal characters, or the directory must itself be a secret store."""
+    tok = _expand_text(tok)
+    if not re.search(r"[*?\[]", tok):
+        return False
+    d, _, base = tok.rpartition("/")
+    stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
+    home = _home()
+    samples = [os.path.join(home, x) for x in _SENSITIVE_SAMPLES] + [os.path.join(_exo_home(), "keys", "seat.key"),
+                                                                       _dynamic_secret_paths()[1]]
+    d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
+    in_store_dir = bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
+    if len(stem) < 3 and not in_store_dir:
+        return False
+    pats = [tok] if tok.startswith("/") else [tok, "*/" + tok]
+    samples += list(_SENSITIVE_SAMPLES)
+    return any(fnmatch.fnmatch(x, pat) for x in samples for pat in pats)
+
+
+_PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
+                  "src", "dest", "destination")
+
+
+def args_sensitive(args: Mapping) -> str:
+    """The first path-like tool argument that names a secret store, or ''."""
+    for k in _PATH_ARG_KEYS:
+        v = args.get(k)
+        for item in (v if isinstance(v, (list, tuple)) else [v]):
+            if isinstance(item, str) and item and (is_sensitive_path(item) or _glob_hits_secret(item)):
+                return item
+    return ""
+
+
+_KEYCHAIN = re.compile(r"\bsecurity\s+(?:-\S+\s+)*(find-generic-password|find-internet-password|"
+                       r"find-key|dump-keychain|export|unlock-keychain|show-keychain-info|import)\b")
+_SECRET_VAR = re.compile(r"\$\{?[A-Za-z0-9_]*(API_KEY|_KEY|_TOKEN|_SECRET|_PASSWORD|_PASSWD)\b")
+_PIECE_SPLIT = re.compile(r"[\s'\"<>;|&()`,]+")
+
+
+def _env_dump(argv: list[str]) -> bool:
+    """env/printenv/set/export/declare printing the environment (or a secret-looking variable)."""
+    if not argv:
+        return False
+    prog, rest = argv[0].rsplit("/", 1)[-1], argv[1:]
+    if prog == "env":
+        rest = [a for a in rest if not re.fullmatch(r"[A-Za-z_]\w*=.*", a)]
+        return not [a for a in rest if not a.startswith("-")]
+    if prog == "printenv":
+        return not rest or any(re.search(r"KEY|TOKEN|SECRET|PASS", a, re.I) for a in rest)
+    if prog in ("set", "typeset", "declare", "export", "compgen", "readonly"):
+        flags = [a for a in rest if a.startswith("-")]
+        names = [a for a in rest if not a.startswith("-")]
+        if prog == "compgen":
+            return "-e" in flags or "-v" in flags
+        if prog == "set":
+            return not rest
+        return not names and (not flags or any(f in ("-p", "-x", "-px", "-xp") for f in flags))
+    return False
+
+
+def _shell_credential_hit(cmd: str, segs: list[list[str]]) -> str:
+    """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a
+    redirection or a quoted `bash -c` string), the Keychain, or a bare environment dump. '' if nothing."""
+    text = _expand_text(cmd)
+    if _KEYCHAIN.search(text):
+        return "keychain access"
+    if _SECRET_VAR.search(text):
+        return "secret environment variable"
+    pieces = [p for p in _PIECE_SPLIT.split(text) if p]
+    for seg in segs:
+        pieces += [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)", "", t) for t in seg]
+        flat, _ = _strip_prefixes_keep_env(seg)
+        if _env_dump(flat):
+            return "environment dump"
+        if flat and flat[0].rsplit("/", 1)[-1] == "security" and any(
+                a in ("-w", "-g", "-gs", "-wg") for a in flat[1:]) and len(flat) > 1 and flat[1].startswith("find"):
+            return "keychain access"
+    for p in pieces:
+        p = re.sub(r"^[\w-]+=", "", p) if "=" in p and not p.startswith("=") else p
+        if p and (is_sensitive_path(p) or _glob_hits_secret(p)):
+            return p
+    return ""
+
+
+def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
+    """Like _strip_prefixes but `env` itself is kept so a bare `env` can be seen as a dump."""
+    while argv and (re.fullmatch(r"[A-Za-z_]\w*=.*", argv[0]) or argv[0].rsplit("/", 1)[-1] in ("sudo", "doas", "command", "builtin", "exec", "nohup", "time")):
+        argv = argv[1:]
+    return argv, False
+
 
 # Name hints for tools not in the table (plugins, MCP servers). Ordered; first match wins.
 _READ_VERBS = {"get", "list", "read", "search", "fetch", "query", "view", "find", "describe", "show",
@@ -742,7 +897,7 @@ def classify(action: Any) -> Classification:
         c = classify_code(str(args.get("code") or ""))
     elif tool in ("write_file", "patch", "edit_file"):
         path = _first(args, ("path", "file_path"))
-        cat = "credentials" if _SENSITIVE_PATH.search(path) else "local_write"
+        cat = "credentials" if (is_sensitive_path(path) or args_sensitive(args)) else "local_write"
         c = _make(cat, summary=f"write {path}", target=path, link=path)
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
@@ -759,6 +914,9 @@ def classify(action: Any) -> Classification:
         c = _make("read" if action in ("list", "get", "status", "") else "schedule", summary=f"cron {action}")
     else:
         cat = TOOLS.get(tool) or classify_by_name(tool)
+        secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
+        if secret:
+            cat = "credentials"
         target = _first(args, _TARGET_KEYS)
         text = _first(args, _TEXT_KEYS) if cat in OUTBOUND else ""
         title = _first(args, _TITLE_KEYS) if cat in OUTBOUND else ""
@@ -774,6 +932,9 @@ def classify(action: Any) -> Classification:
                   title=title, cost=cost)
         if cat == "unknown":
             c.signals.append("unrecognised tool")
+        if secret:
+            c.signals.append("secret store")
+            c.summary, c.target = f"{tool} {secret}"[:120], secret
     c.tool = tool
     if c.category in ("web_post", "web_read") and c.target and _is_local_host(c.target):
         c.exposure, c.third_party = "private", False
@@ -1031,6 +1192,10 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     # Operator floor (P11): outside the principal model, cannot be lowered by policy.
     if eff.reversibility == "irreversible" and eff.exposure == "public" and eff.third_party:
         bump("ask", "irreversible, public and affects a third party", "floor")
+
+    # Credentials floor: no policy, rule, scope or escalate setting lowers this. The principal answers.
+    if eff.category == "credentials":
+        bump("ask", "credentials always ask the principal", "floor")
 
     hit = _list_matches(gates.get("deny") or [], eff)
     if hit:
