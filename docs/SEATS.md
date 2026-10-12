@@ -68,7 +68,11 @@ Sources, first name wins: the seat's folders, `$EXO_HOME/skills`, the Exo pack (
 
 `pip install 'exo[mcp]'`. `command` is stdio, `url` is streamable HTTP (`headers` allowed). Tools appear as
 `mcp__<server>__<tool>` in toolset `mcp:<server>`, risk `medium` unless set. A server that fails to start is
-reported by `seat.list` and skipped.
+reported by `seat.list` and skipped. Names are at most 64 characters; a name that had to be shortened or cleaned ends
+in an 8 character hash of the real server and tool names, so two tools never share one. A name already registered
+is never replaced: the clash is refused, listed under `refused` in the server's status and recorded as a
+`harness.error`. The model sees each remote description after a note that it is untrusted third-party text (cut at
+1000 characters). Results get the same 100,000 character cap as any tool result.
 
 ## Config and secrets
 

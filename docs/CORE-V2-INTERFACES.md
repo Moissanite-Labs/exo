@@ -27,7 +27,11 @@ additively (new optional fields with defaults). Ask the lead before changing any
 Provider contract: deltas arrive as `text` / `reasoning`; tool calls arrive whole (`tool_call`, the
 transport assembles argument deltas); `usage` may repeat, last wins; the stream ends with exactly one
 `done` (with `stop_reason` and the assembled assistant `message`) or one `error` (with `retryable` and
-`status` so the router can fall back). Common opts: `model`, `max_tokens`, `temperature`, `reasoning`,
+`status` so the router can fall back). A transport that sees the connection close without a finish event or
+a stop reason yields the retryable error "stream ended without a response", even when text came first: a cut
+stream is never a normal end. When an error arrives after text the user already saw, the loop stores that text
+as an assistant message marked `meta.interrupted` and `meta.error`, as it does for an interrupt (no retry: text
+was shown). Common opts: `model`, `max_tokens`, `temperature`, `reasoning`,
 `stop`; unknown opts are ignored.
 
 Codec: `to_dict(obj)` and `from_dict(cls, data, strict=True)` work for every dataclass here and in the

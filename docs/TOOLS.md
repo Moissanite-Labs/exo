@@ -30,6 +30,12 @@ earlier stage failed with a code other than 141 (SIGPIPE) and the last stage suc
 line in the job's end notice. Only the command's last pipeline is checked, and a command that sets its own EXIT trap
 turns the note off. The trace rule `shell.masked_exit` (docs/TRACE.md) flags it.
 
+## Result cap (D-041)
+
+Every tool result is cut at 100,000 characters (`MAX_RESULT_CHARS`) with a `[truncated N chars]` note. This now holds
+for results a handler returns as a `ToolResult` (the MCP client does) as well as plain strings: the cap is shared
+across the result's text parts.
+
 ## code_find (D-029)
 
 `code_find(question, path=".", page=1, timeout=120)` runs [jevgrep](https://github.com/dzhng/jevgrep) (`jg`, MIT)

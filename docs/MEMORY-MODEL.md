@@ -104,6 +104,18 @@ instruction, or an instruction that never reaches the principal store. Three par
 
 Same commands and events as before: no protocol change for capture.
 
+## Undo and failed summaries (D-041)
+
+- **Undo.** Undo hides the entries of the undone turns. It also deletes every tree node whose range reaches the
+  first hidden position, in the agent tree (`agent:<name>`, ranges are log positions) as well as in a
+  per-thread tree (ranges are message numbers). A summary that was already running when undo ran is not saved
+  afterwards. The next turn rebuilds the summary from the entries that are left.
+- **Failures.** A node whose summary fails is retried with backoff (30 s, then 60 s, ...; `retry_backoff`), at most
+  `max_attempts` (3) times in all; the count is stored on the node (`summaries.attempts`). During backoff the span
+  stays verbatim and the turn does not wait for it. After the last try the node is marked `skipped`: the span stays
+  verbatim for good, and one `harness.error` event (`where` = `summary`) records it, so it shows in `exo trace` and
+  findings once, not every turn.
+
 ## Concurrency
 
 - One process writes an agent's log and tree: it holds `$EXO_HOME/run/agent-<id>.lock` (an OS file lock,
