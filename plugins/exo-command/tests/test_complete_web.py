@@ -112,7 +112,8 @@ def test_files_route_over_http_needs_the_page_token(repo):
         assert (await get(path, {"X-Exo-Token": TOKEN, "Host": "evil.example"}))[0] == 403
         code, d = await get(path, {"X-Exo-Token": TOKEN})
         assert code == 200 and d["files"]
-        assert (await get("/api/complete/commands", {}))[0] == 200   # static, no token needed
+        assert (await get("/api/complete/commands", {}))[0] == 403   # D-039: every /api route needs the token
+        assert (await get("/api/complete/commands", {"X-Exo-Token": TOKEN}))[0] == 200
         await web.close()
 
     asyncio.run(go())
@@ -137,7 +138,7 @@ def test_new_modules_are_wired_and_local():
 def test_enter_is_taken_before_the_send_handler_and_files_carry_the_token():
     comp = text("composer.js")
     assert "stopImmediatePropagation" in comp and "}, true);" in comp          # capture phase, ahead of chat.js
-    assert "/api/complete/files" in comp and '"/api/complete/files"' in text("dom.js") or "/api/complete/files" in text("dom.js")
+    assert "/api/complete/files" in comp and '"X-Exo-Token": token()' in text("dom.js")   # D-039: on every call
 
 
 def test_guidance_respects_reduced_motion_and_is_one_line():
