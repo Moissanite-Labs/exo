@@ -184,7 +184,8 @@ class JobManager:
             log.write_bytes(b"")
             os.chmod(log, 0o600)
             proc = subprocess.Popen(["bash", "-c", command], cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, start_new_session=True, env=tool_env())
+                                    stderr=subprocess.STDOUT, start_new_session=True,
+                                    env=tool_env(allow=getattr(self.e, "env_allow", ())))
             if sys.platform != "win32":
                 with contextlib.suppress(ProcessLookupError):
                     proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]

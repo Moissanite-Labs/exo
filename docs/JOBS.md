@@ -72,7 +72,7 @@ Subagents cannot start jobs (their sessions end with their report) and do not ge
   and `background` and `timeout` play no part. `jobs` and `job_output` are reads; `job_kill` is a shell action on the
   agent's own job.
 - Output is not scrubbed beyond what any tool result is. Commands run with the same environment as foreground bash
-  (no bus identity, no key variables).
+  (no bus identity, no key variables, same `env_allow`; see docs/TOOLS.md).
 
 ## Not done
 
