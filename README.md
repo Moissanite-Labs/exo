@@ -14,6 +14,17 @@ Exo fuses five things that are usually separate:
 5. **A command centre.** One view of every project, every running agent and task, and every decision
    waiting on you.
 
+## Install
+
+Needs `git` and Python 3.11 or newer, on macOS or Linux (tested on Arch with Python 3.14).
+
+    git clone <exo repo> && cd exo
+    scripts/install.sh --dry-run      # print the plan, change nothing
+    scripts/install.sh                # install
+
+This is the only install section. Options, what each step does, safety rules and re-runs are in
+`docs/INSTALL.md`. To add a model key, see `docs/PROVIDERS.md`.
+
 ## Two goals, held together
 
 - **Fit one person as closely as possible.** The first principal is Ahraz Arifuddin.
