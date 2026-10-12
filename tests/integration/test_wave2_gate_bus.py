@@ -2,8 +2,9 @@
 
 1. exo-gate blocks a public, high-risk tool call until a client answers ``approval.requested``:
    deny in one run (the tool never runs), allow in another (it runs once).
-2. A signed bus message becomes a turn on the fake model, and the reply goes back as a signed
-   envelope that verifies against the seat's registry key.
+2. A signed bus message from a seat the policy lets through becomes a turn on the fake model (as the seat,
+   not the principal, D-040), and the reply goes back as a signed envelope that verifies against the seat's
+   registry key.
 
 Engines are built with ``env={}`` and the fake model, so nothing touches the network.
 """
@@ -33,7 +34,7 @@ FAKE = {"rules": [
 MODELS = {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
 
 
-def _engine(tmp_path, plugins=("exo-gate",), sent=None) -> CoreEngine:
+def _engine(tmp_path, plugins=("exo-gate",), sent=None, peers=None) -> CoreEngine:
     pm = PluginManager(config={"exo-gate": {"principal_store": "", "key_path": str(tmp_path / "none.key")}})
     for name in plugins:
         loaded = pm.load_folder(REPO / "plugins" / name)
@@ -45,7 +46,7 @@ def _engine(tmp_path, plugins=("exo-gate",), sent=None) -> CoreEngine:
             handler=lambda args, **kw: (sent.append(args["message"]), "sent")[1], risk="high")
     pm._run_register(__import__("exo.core.plugins", fromlist=["Manifest"]).Manifest(name="demo"), "dir", register)
     assert not pm.errors(), pm.errors()
-    return CoreEngine(tmp_path / "home", MODELS, plugins=pm, cwd=str(tmp_path), env={})
+    return CoreEngine(tmp_path / "home", MODELS, plugins=pm, cwd=str(tmp_path), env={}, peers=peers)
 
 
 async def _run_gated_turn(eng: CoreEngine, answer: str) -> list[s.Event]:
@@ -106,7 +107,8 @@ def test_bus_round_trip_on_the_real_engine(tmp_path, monkeypatch):
         write_keys(keys, {"beta": bus.keys["beta"]})
         extra = {"url": bus.url, "seat": "beta", "keys_dir": str(keys), "state_dir": str(tmp_path / "state"),
                  "poll_seconds": "0.1"}
-        eng = _engine(tmp_path, plugins=("exo-bus",), sent=[])
+        # D-040: a remote seat is held for the principal by default; this seat's policy lets gamma through
+        eng = _engine(tmp_path, plugins=("exo-bus",), sent=[], peers={"rules": [{"from": "gamma", "outcome": "auto"}]})
         entry = eng.plugins.channels["exo_bus"]
 
         # the channel factory is what a host calls: factory(link, **extra)
@@ -135,9 +137,12 @@ def test_bus_round_trip_on_the_real_engine(tmp_path, monkeypatch):
         assert cli.signer_of(reply, reg, head.get("relay_pubkey")) == reg["beta"]["pubkey"]
         assert wire.verify_doc(wire.core(reply), reg["beta"]["pubkey"])
         assert cli.verify()["ok"] is True
-        # the inbound message became a user turn on a bus session
+        # the inbound message became a turn on a bus session, framed as a bus message and not the principal's
+        from exo.core.context import is_principal
         sessions = eng.store.list_sessions(10, None)
         assert [i.title for i in sessions] == ["bus:gamma"]
-        assert "hello there" in eng.store.messages(sessions[0].id)[0].text()
+        first = eng.store.messages(sessions[0].id)[0]
+        assert "hello there" in first.text() and "[bus message from gamma" in first.text()
+        assert first.meta["author"] == "bus:gamma" and not is_principal(first)
     finally:
         bus.stop()

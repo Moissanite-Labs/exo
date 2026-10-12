@@ -18,6 +18,12 @@ The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It f
 Tools: `exo_recall(query, budget)`, `exo_get(id, body_only)` (a whole belief node, same store and access as recall; D-032), `exo_note(text, kind)`, `exo_should_have_been(target, wanted, reason)`,
 `exo_zoom(id, n)`, `exo_date(id)`.
 
+Who wrote it (D-040): every write above reads the author the core stamped on the message. Only a message whose
+author is `principal` becomes a ruling, a correction or a principal utterance; a peer's, a bus seat's or a job's
+turn is logged under that author. `exo_note` cannot write `ruling` or `answer` (it keeps them as a `note` of type
+`agent_note`), and `exo_should_have_been` is signed as the agent with `for: <principal>`. On first use the provider
+adds its configured principal id to the key registry, so consolidation reads that id as the principal.
+
 A correction becomes a `verdict` event that points at the agent output it judges. If that output is not
 in the ledger yet, it is logged first.
 

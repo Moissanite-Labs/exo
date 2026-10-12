@@ -214,13 +214,14 @@ export interface PeerMessage {
 }
 
 export interface Peers {
-  action?: "list" | "send" | "deliver" | "receipt";
+  action?: "list" | "send" | "deliver" | "receipt" | "bus";
   to?: string;
   text?: string;
   session?: string | null;
   via?: "agent" | "human";
   local_only?: boolean;
   envelope?: Record<string, unknown>;
+  pub?: string;
 }
 
 export interface QuestionAnswer {

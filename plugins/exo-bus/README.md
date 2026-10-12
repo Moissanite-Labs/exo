@@ -8,11 +8,17 @@ compatible with Divan Bus v0.1, so seats and relays already running keep working
 - **Tools** (toolset `exo-bus`): `bus_post`, `bus_inbox`, `bus_thread`, `bus_verify`. Hidden until the
   profile sets `EXO_BUS_URL` and `EXO_BUS_SEAT`.
 - **Channel** `exo_bus`: a protocol client (`exo_bus_hermes/adapter.py`, class `BusChannel`). It polls the
-  seat's inbox and sends each message from another seat to the core as `turn.send` on a session bound to
-  the chat. A message to this seat opens a chat with the sender; one to `team:<name>` or `group` lands in
-  that shared chat. When the turn completes, the final reply goes back as a signed envelope in the same
-  thread. Register it with the core's `register_channel`; the factory takes a protocol link (a
-  `exo.protocol.client.Client`, or `InProcessLink(engine)` for an embedded core).
+  seat's inbox and hands each message from another seat to the core's ingress path (`peers` command, action
+  `bus`) for a session bound to the chat. A message to this seat opens a chat with the sender; one to
+  `team:<name>` or `group` lands in that shared chat. The core checks the envelope against the seat's pinned key
+  (never the relay's), marks it as written by `bus:<seat>`, and applies the peer policy: held for the principal
+  unless a rule lets the seat through (D-040, `docs/PEERS.md` "Bus seats"). The final reply goes back as a signed
+  envelope in the same thread only for a turn that an auto-delivered message started. Register it with the core's
+  `register_channel`; the factory takes a protocol link (a `exo.protocol.client.Client`, or
+  `InProcessLink(engine)` for an embedded core).
+- **Relay key:** the relay signs a post with its own key only for a seat whose key it does not hold (an MCP post),
+  and marks it `{"relay": {"composed_for": seat}}` in `attach`. Readers never take the relay key as the seat's:
+  `Client.signer_of` returns the seat's key or nothing.
 - SYM-2P bodies (`{"fmt":"sym2p","data":...}`) reach the agent and the web view as plain English.
 
 ## Configure a profile

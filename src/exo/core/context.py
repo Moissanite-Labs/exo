@@ -276,13 +276,17 @@ Summarizer = Callable[..., Awaitable[str]]
 
 def is_principal(msg: Message) -> bool:
     """A message the principal wrote and a capture store should see (D-032): a live user message in a thread.
-    Not peer messages, job notices, context notes, imports, scheduled prompts, slash commands or bare acks."""
+    Not peer, bus or job text, context notes, imports, scheduled prompts, delegation briefs, slash commands or
+    bare acks. D-040: the test is the author the core stamped at ingress (exo.provenance), not the text."""
+    from exo import provenance
     from exo.capture import is_trivial
 
     if msg.role != "user":
         return False
     m = msg.meta
-    if m.get("peer") or m.get("job") or m.get("note") or m.get("local") or m.get("origin") == "import":
+    if provenance.author_of(msg) != provenance.PRINCIPAL:
+        return False
+    if m.get("peer") or m.get("bus") or m.get("job") or m.get("note") or m.get("local") or m.get("origin") == "import":
         return False
     if m.get("log_kind", "thread") not in ("thread", ""):
         return False

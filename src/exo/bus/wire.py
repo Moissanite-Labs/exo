@@ -78,6 +78,17 @@ def make_envelope(seat: str, to, body: str, prev: str, kind: str = "msg", thread
             "thread": thread, "kind": kind, "body": body, "attach": list(attach or []), "enc": enc, "prev": prev}
 
 
+def relay_mark(seat: str) -> dict:
+    """The attach item the relay adds to an envelope it signs with its own key for a seat (an MCP post)."""
+    return {"relay": {"composed_for": seat}}
+
+
+def relay_composed(env: dict) -> bool:
+    """True when the envelope says the relay composed it for its ``from`` seat (D-040). The relay key is valid
+    only on such an envelope, and a reader never takes it as the seat's own signature."""
+    return relay_mark(str(env.get("from") or "")) in (env.get("attach") or [])
+
+
 def core(env: dict) -> dict:
     """The signed document of a stored envelope (drops seq, chain and any other relay fields)."""
     return {k: v for k, v in env.items() if k in ENVELOPE_KEYS}

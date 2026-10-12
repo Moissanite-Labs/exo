@@ -21,8 +21,8 @@ the other changes course at its next step. In Exo this works between Exo session
 | you, typing `/send` from a client of the same principal | auto |
 | another session of the same principal, same machine | auto |
 | a different or unknown principal | hold |
-| a bus seat | hold |
-| bad or missing signature | deny (cannot be changed) |
+| a bus seat (signed by its pinned key) | hold |
+| bad or missing signature, or a bus seat whose key changed | deny (cannot be changed) |
 
 Hold means an approval card (TUI and web) shows the sender and text. Allow delivers it; deny drops it;
 nothing happens in 30 minutes and it expires. A held message never enters the model's context.
@@ -33,10 +33,31 @@ Change it per seat in the seat file (or `peers` in config.json):
 [peers]
 wake = true                      # a peer may start a turn on an idle session (default: off while a client is attached)
 hold_minutes = 30
-policy = { other = "deny" }      # by trust: principal, same-principal, other, remote
-rules = [{ from = "razi*", outcome = "auto" }]
+policy = { other = "deny" }      # by trust: principal, same-principal, other, remote (a bus seat)
+rules = [{ from = "razi*", outcome = "auto" }]   # a bus seat is matched by its seat id
 enabled = true
 ```
+
+## Bus seats (D-040)
+
+The exo-bus channel brings messages from other seats on the Exo Bus. It does not start turns itself. For each
+inbox envelope it calls the `peers` command with action `bus`, and the core takes it from there
+(`src/exo/bus/ingress.py`):
+
+1. **Check the signature against the seat's pinned key.** The first message from a seat pins the key the bus
+   registry lists for it (in `$EXO_HOME/keys/registry.json`). Every later message must verify against that pinned
+   key. The relay's own key is never accepted as a seat. A message signed by any other key, or from a seat whose
+   registry key has changed, is `unverified` and denied. To accept a seat's new key: `exo keys pin --seat SEAT PUB
+   --replace`.
+2. **Apply this seat's peer policy.** A verified bus seat has trust `remote`, held by default. The approval card
+   says "Bus message from seat ..."; allow delivers it, deny drops it. A `rules` entry for the seat id can make it
+   `auto` or `deny`.
+3. **Deliver it as the seat, not as you.** It lands in the bus session for that chat, framed as `[bus message from
+   <seat> ...]`, with author `bus:<seat>`. Memory capture and learning never read it as your words.
+4. **Reply only when the policy said auto.** The channel posts the turn's final answer back to the bus only for a
+   turn that a message the policy delivered on its own started. A held message you released, a denied one, and your
+   own typing in a bus session post nothing. The agent can still answer with the `bus_post` tool, which the gate
+   checks like any post.
 
 ## What a peer cannot do
 
@@ -53,11 +74,13 @@ peer client is refused. The system prompt carries a standing line saying the sam
   who wrote it and a nonce are inside the signed `attach`. The receiver checks id, signature (key from the
   sender's presence file), age and replay.
 - Local delivery goes over the target daemon's socket with the `peers` protocol command (actions `list`,
-  `send`, `deliver`, `receipt`; one command because the protocol has no command slots left). Events:
+  `send`, `deliver`, `receipt`, and `bus` for the bus channel; one command because the protocol has no command slots
+  left). Events:
   `peer.message` and `peer.delivery`. Both land in the events table and in `exo trace`.
-- Code: `core/ingress.py` (one path for anything outside your keyboard: policy, hold, deliver, receipt; the bus
-  channel, scheduler and MCP Events can plug in as sources), `core/peers.py`, `core/peer_target.py`,
-  `gate.decide_peer`.
+- Code: `core/ingress.py` (one path for anything outside your keyboard: policy, hold, deliver, receipt; peers, job
+  notices and the bus channel use it, the scheduler and MCP Events can plug in later), `core/peers.py`,
+  `core/peer_target.py`, `bus/ingress.py`, `gate.decide_peer`. Every message delivered this way carries its author
+  (`peer:<name>`, `bus:<seat>`, `job`; MEMORY-MODEL.md "Who wrote it").
 
 ## Hermes
 
@@ -82,4 +105,5 @@ The `exo-bus` plugin carries a peers module. Turn it on per profile with `EXO_PE
 ## Limits
 
 Held messages live in memory: a restart drops them. The web client gets the events through the protocol but
-has no `/peers` view yet. Bus sends are posted and not receipted.
+has no `/peers` view yet. Bus sends are posted and not receipted. A bus seat's first key is trusted as the registry
+serves it (trust on first use); pin it by hand first if the relay is not yours.

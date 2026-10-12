@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
+from exo import provenance
 from exo.core import trace, workspace
 from exo.core.agents import Delegator
 from exo.core import agentlog
@@ -63,6 +64,10 @@ CODE_FIND_LINE = ("Use code_find for unfamiliar code and behavior questions acro
                   "when you already know the symbol or path.")
 SYSTEM_PROMPT = ("You are Exo, a careful coding agent. Use the tools to read, edit and run "
                  "things in the working directory, then answer briefly.")
+
+# D-040: a turn.send from one of this seat's clients is the principal speaking. Every other way in (peers, the bus,
+# job notices, the scheduler, delegation) stamps its own author; see exo.provenance.
+PRINCIPAL_META = {"author": provenance.PRINCIPAL}
 
 
 class SqliteLog:
@@ -161,12 +166,12 @@ class ContextAdapter:
     def transcript(self, session: str, last: int | None = None) -> list[dict[str, Any]]:
         """Recent messages as OpenAI-style dicts, for plugin hooks."""
         msgs = self.tree.store.messages(session)[-(last or self.RECENT):]
-        return [{"role": m.role, "content": m.text()} for m in msgs]
+        return [provenance.flat(m) for m in msgs]  # D-040: each message says who wrote it
 
     async def _pre_compress(self, session: str, msgs: list[Message]) -> str:
         """Memory providers get the messages about to be compacted: ``on_pre_compress(messages)`` may return
         insights for the summary prompt, and ``checkpoint(session_id=, messages=, reason="pre_compress")`` runs."""
-        flat = [{"role": m.role, "content": m.text()} for m in msgs]
+        flat = [provenance.flat(m) for m in msgs]  # D-040: author and principal flag per message
         if self.memory is None:
             return ""
         _safe(self.memory, "checkpoint", session_id=session, messages=flat, reason="pre_compress")
@@ -178,8 +183,8 @@ class ContextAdapter:
         true when it took them. An error is recorded and counts as not captured."""
         from exo.core.context import is_principal
 
-        flat = [{"role": m.role, "content": m.text(), **({"principal": is_principal(m)} if m.role == "user" else {})}
-                for m in msgs]  # a user message that is not the principal (peer, job notice) says so
+        flat = [{**provenance.flat(m), **({"principal": is_principal(m)} if m.role == "user" else {})}
+                for m in msgs]  # a user message that is not the principal (peer, bus, job notice) says so
         try:
             out = _call(self.memory.capture_principal, flat, session_id=session, source="leaf")
             out = await _maybe_await(out)
@@ -702,9 +707,9 @@ class CoreEngine:
         except SessionLocked as exc:  # a finished child session takes no new turns
             raise CommandFailed("session_locked", str(exc)) from None
         if b.mode == "steer" and self.loop.state(b.session).running:
-            await self.loop.send(b.session, b.text, list(b.parts), mode="steer")
+            await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=PRINCIPAL_META)
             return {"steered": True}
-        task = asyncio.create_task(self._turn(b))
+        task = asyncio.create_task(self._turn(b, PRINCIPAL_META))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return {"accepted": True}
@@ -755,6 +760,12 @@ class CoreEngine:
             self._peer_server = None
 
     async def _peers(self, b: s.Peers) -> dict[str, Any]:
+        if b.action == "bus":  # D-040: the bus channel's inbound path, whether or not peers are on
+            from exo.bus.ingress import bus_ingress
+            try:
+                return await bus_ingress(self, b)
+            except ValueError as exc:
+                raise CommandFailed("bad_request", str(exc)) from None
         if self.peer_node is None and self.peer_autostart:
             await self.start_peers()
         node = self.peer_node

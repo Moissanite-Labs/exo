@@ -158,6 +158,8 @@ def _principal_turns(messages: list[dict]) -> list[tuple[int, dict, str]]:
     for i, m in enumerate(messages):
         if not isinstance(m, dict) or m.get('role') != 'user':
             continue
+        if m.get('principal') is False or (m.get('author') and m.get('author') != 'principal'):
+            continue  # D-040: a peer, bus or job message is not the principal's ruling
         text = message_text(m).strip()
         if len(text) < 2 or is_summary_text(text):
             continue

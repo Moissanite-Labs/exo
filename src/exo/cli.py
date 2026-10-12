@@ -15,7 +15,8 @@
   exo update [--dry-run]                   upgrade Exo in place, print old -> new, quick self-check
   exo --version                            package version, plus the git sha for a checkout install
   exo trace [SESSION] [--last N] [--json]  how the harness performed; anomaly flags (D-025)
-  exo memory [verify|threads]              each agent's one log: check the hash chain, list threads (D-028)
+  exo memory [verify|threads]              each agent's one log and the signed ledger: check them, list threads
+                                           (D-028, D-040)
   exo findings [add TITLE|fix ID --in SHA|export --md]  the harness's findings about itself
   exo upstream report|mark|check|merge     track lifted Hermes modules
   exo find <words...> [-n 8]               ranked nodes
@@ -26,9 +27,11 @@
   exo graph                                write graph/graph.json
   exo index                                refresh the node table in INDEX.md
   exo log append <kind> ...                append a signed event
-  exo log verify                           check chain and signatures
+  exo log verify                           check chain, signatures against pinned keys, head anchor (D-040)
+  exo log anchor                           anchor the current head (a store made before D-040)
   exo log tail [-n 10] [--kind K]          last events
-  exo keygen <name> [--out PATH]           create an Ed25519 key (0600)
+  exo keygen <name> [--out PATH]           create an Ed25519 key (0600); pinned when made in $EXO_HOME/keys
+  exo keys [list|pin NAME PUB|principal ID] the key registry: pinned signers, bus seats, principal ids (D-040)
 
 The active principal comes from --principal, else $EXO_PRINCIPAL. --root points at a
 store directory directly. Stores live under $EXO_HOME/principals/<id> (default ~/.exo).
@@ -150,6 +153,35 @@ def cmd_keygen(a) -> int:
     return 0
 
 
+def cmd_keys(a) -> int:
+    """`exo keys [list]`, `exo keys pin NAME PUB [--seat] [--replace]`, `exo keys principal ID` (D-040)."""
+    from .keyring import KeyRegistry
+    reg = KeyRegistry.load()
+    if a.keys_cmd == 'pin':
+        pub = Path(a.pub).read_text().strip() if Path(a.pub).is_file() else a.pub
+        try:
+            crypto.unb64(pub)
+        except ValueError:
+            sys.exit('exo keys pin: PUB must be a base64 public key or a .pub file')
+        out = (reg.pin_seat if a.seat else reg.pin)(a.name, pub, replace=a.replace)
+        print(f'{a.name}: {out}' + (' (use --replace to change a pinned key)' if out in ('conflict', 'changed') else ''))
+        return 0 if out in ('pinned', 'known', 'match') else 1
+    if a.keys_cmd == 'principal':
+        reg.add_principal(a.name)
+        print(f'principal ids: {", ".join(KeyRegistry.load().principals)}')
+        return 0
+    if getattr(a, 'json', False):
+        print(json.dumps(reg.to_dict(), indent=1, sort_keys=True))
+        return 0
+    print(f'key registry {reg.path}')
+    for name, pubs in sorted(reg.keys.items()):
+        print(f'  key   {name:<20} {", ".join(pubs)}')
+    for seat, pub in sorted(reg.seats.items()):
+        print(f'  seat  {seat:<20} {pub}')
+    print(f'  principal ids: {", ".join(reg.principals) or "(none)"}')
+    return 0
+
+
 def cmd_log(a, store) -> int:
     if a.log_cmd == 'append':
         kp = Path(a.key) if a.key else key_path(a.author)
@@ -171,9 +203,13 @@ def cmd_log(a, store) -> int:
         return 0
     with Ledger(store.ledger_path) as led:
         if a.log_cmd == 'verify':
-            res = led.verify()
+            from .keyring import KeyRegistry
+            res = led.verify(trusted=KeyRegistry.load())  # D-040: only pinned keys count
             print(json.dumps(res))
             return 0 if res['ok'] else 1
+        if a.log_cmd == 'anchor':
+            print(json.dumps(led.anchor()))
+            return 0
         events = list(led.iter(kind=a.kind))[-a.n:]
         for ev in events:
             body = json.dumps(ev['body'], ensure_ascii=False)
@@ -232,6 +268,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('name')
     p.add_argument('--out', help='key path (default: $EXO_HOME/keys/<name>.key)')
 
+    p = sp.add_parser('keys', help='pinned keys: the ledger signers, bus seats and principal ids Exo trusts (D-040)')
+    kp = p.add_subparsers(dest='keys_cmd')
+    q = kp.add_parser('list')
+    q.add_argument('--json', action='store_true')
+    q = kp.add_parser('pin', help='pin a public key under a name (or a bus seat with --seat)')
+    q.add_argument('name')
+    q.add_argument('pub', help='base64 public key, or a .pub file')
+    q.add_argument('--seat', action='store_true', help='NAME is a bus seat')
+    q.add_argument('--replace', action='store_true', help='replace the key already pinned for NAME')
+    q = kp.add_parser('principal', help='mark a ledger author id as the principal')
+    q.add_argument('name')
+
     p = sp.add_parser('log', help='the event ledger')
     lp = p.add_subparsers(dest='log_cmd', required=True)
     q = lp.add_parser('append', parents=[common])
@@ -244,6 +292,7 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument('--session')
     q.add_argument('--ref', action='append', help='referenced event id (repeatable)')
     lp.add_parser('verify', parents=[common])
+    lp.add_parser('anchor', parents=[common], help='write the current head to its anchor files (a store from before D-040)')
     q = lp.add_parser('tail', parents=[common])
     q.add_argument('-n', type=int, default=10)
     q.add_argument('--kind')
@@ -356,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_wire(a)
     if a.cmd == 'keygen':
         return cmd_keygen(a)
+    if a.cmd == 'keys':
+        return cmd_keys(a)
     store = resolve_store(a)
     return globals()['cmd_' + a.cmd](a, store)
 

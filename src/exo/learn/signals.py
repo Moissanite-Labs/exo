@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from exo import capture
+from exo import capture, provenance
 from exo.consolidate import PAIRS_FILE
 from exo.ledger import VERDICTS
 
@@ -131,8 +131,8 @@ def record_chat_signals(lr: Learner, session: str, messages: Sequence[Mapping[st
     if rt is None:
         return []
     if messages is None:
-        messages = [{"role": m.role, "content": m.text()} for m in lr.messages(session)[-12:]]
-    msgs = list(messages)
+        messages = [provenance.flat(m) for m in lr.messages(session)[-12:]]
+    msgs = provenance.principal_view(messages)  # D-040: a peer message or job notice is not the principal
     known = {(e["body"] or {}).get("capture_key") for e in rt.ledger.iter(kind=("ruling", "verdict", "question"))}
     out = []
     with rt.lock:

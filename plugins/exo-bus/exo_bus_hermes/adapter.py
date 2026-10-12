@@ -1,18 +1,23 @@
 """The bus as an Exo Channel: a protocol client between a signed bus seat and the core.
 
-Inbound: polls the seat's inbox (cursor kept on disk) and turns each message from another seat
-into ``turn.send`` on a session bound to the chat it came from. A message addressed to this seat
-opens a chat with the sender; a message to team:<name> or group lands in that shared chat.
-Outbound: the channel follows the core's event stream and, when a turn on a bus session completes,
-posts the final assistant text back as a signed envelope in the same thread.
+Inbound: polls the seat's inbox (cursor kept on disk) and hands each message from another seat to the
+core's ingress path (the ``peers`` command, action ``bus``) for a session bound to the chat it came from.
+A message addressed to this seat opens a chat with the sender; a message to team:<name> or group lands in
+that shared chat. The core, not this channel, decides (D-040): it checks the envelope against the sender
+seat's pinned key (never the relay's), stamps the author ``bus:<seat>``, and applies the receiving seat's
+peer policy (a remote seat is held for the principal unless a rule says auto).
+Outbound: the channel follows the core's event stream and, when a turn on a bus session completes, posts the
+final assistant text back as a signed envelope in the same thread, but only for a turn that a message the
+policy delivered on its own started. A held message the principal released, a refused one, or the principal
+typing in a bus session posts nothing; the agent can still reply with the bus_post tool, which the gate sees.
 
 The channel needs only a ``link``: an object with ``async call(body) -> dict`` (a protocol command,
 as ``exo.protocol.client.Client.call``) and ``events(since, session)`` (an async iterator of
 protocol events). A real deployment passes an ``exo.protocol.client.Client``; ``InProcessLink``
 wraps a running engine for tests and for an embedded core.
 
-Peer input is not the principal: bus text is framed as coming from another seat, and a bus peer
-cannot answer ``approval.requested`` (only the principal's own clients can).
+Peer input is not the principal: bus text is framed as coming from another seat (by the core), it never counts
+as the principal's words in memory capture, and a bus peer cannot answer ``approval.requested``.
 """
 from __future__ import annotations
 
@@ -92,6 +97,8 @@ class BusChannel:
         self._by_session: dict[str, str] = {}         # session id -> chat_id
         self._thread: dict[str, str] = {}             # chat_id -> thread of the last inbound message
         self._reply: dict[str, str] = {}              # session id -> last assistant text this turn
+        self._may_reply: dict[str, int] = {}          # session id -> auto-delivered messages not yet answered
+        self._reg: Optional[dict] = None              # the bus registry, cached; refreshed for an unknown seat
         self._map_path: Optional[Path] = None
         self.running = False
 
@@ -187,13 +194,34 @@ class BusChannel:
             self._cursor.set(env["seq"])
         return n
 
-    async def _dispatch(self, env: dict) -> None:
-        # inbox() has already checked the relay's chain; text() verifies the signer and decrypts.
-        text = await asyncio.to_thread(self._client.text, env)
-        chat_id, chat_type = route(env, self._client.seat)
+    async def _registry_pub(self, seat: str) -> str:
+        if self._reg is None or seat not in self._reg:
+            try:
+                self._reg = await asyncio.to_thread(self._client.registry)
+            except BusError:
+                self._reg = self._reg or {}
+        return str((self._reg.get(seat) or {}).get("pubkey") or "")
+
+    async def _dispatch(self, env: dict) -> dict:
+        """Hand one envelope to the core's ingress path. Returns its receipt (delivered, held or denied)."""
+        text = await asyncio.to_thread(self._client.text, env)  # decrypts a body sealed to this seat
+        chat_id, _ = route(env, self._client.seat)
         self._thread[chat_id] = env["thread"] or env["id"]
         sid = await self._session_for(chat_id)
-        await self.link.call(s.TurnSend(session=sid, text=frame(env, text, chat_type), mode="queue"))
+        pub = await self._registry_pub(env["from"])
+        # Counted before the call: an auto-delivered message may start and finish its turn before the receipt is back.
+        self._may_reply[sid] = self._may_reply.get(sid, 0) + 1
+        receipt: dict = {}
+        try:
+            receipt = await self.link.call(s.Peers(action="bus", session=sid, to=chat_id, text=text,
+                                                   envelope=dict(env), pub=pub)) or {}
+        finally:
+            if receipt.get("state") != "delivered" and self._may_reply.get(sid):
+                self._may_reply[sid] -= 1
+        if receipt.get("state") != "delivered":
+            logger.info("[exo-bus] message %s from %s: %s (%s)", env["id"][:12], env["from"], receipt.get("state"),
+                        receipt.get("detail", ""))
+        return receipt
 
     # ---- outbound
 
@@ -224,6 +252,9 @@ class BusChannel:
                 self._reply[sid] = m.text()
         elif isinstance(body, s.TurnCompleted):
             text = self._reply.pop(sid, "")
+            if not self._may_reply.get(sid):
+                return  # D-040: no message the policy delivered on its own started this turn: post nothing
+            self._may_reply[sid] = 0
             if text and body.stop_reason != "interrupted":
                 await self.send(self._by_session[sid], text)
 

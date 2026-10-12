@@ -128,6 +128,8 @@ Different seats are different agents. They share your store and talk through pee
 - Your rulings and corrections are kept verbatim in summaries and are copied to your principal store, so a
   summary cannot blur an instruction. `/context` says how many of your messages are not yet captured.
 - A private thread (`/new private`) is logged but never shared.
+- Only what you type counts as you. Messages from peers, bus seats, job notices and the agent's own notes are kept,
+  but never saved as your rulings or corrections, and never teach the agent your taste.
 
 Details: `docs/MEMORY-MODEL.md`.
 
@@ -190,6 +192,8 @@ Peers are other live sessions on the machine: Exo sessions, Hermes agents and bu
 - Your own sessions deliver at once. A message from another person, or from a bus seat, is held until you allow it.
   A held message that nobody answers expires after 30 minutes.
 - A peer message shows as "from another session, not from you". It is input, not an order.
+- A bus seat's message is checked against the key Exo pinned for that seat the first time, held for you by default,
+  and answered on the bus only if your rules let that seat through on its own. `exo keys` shows the pinned seats.
 
 Details: `docs/PEERS.md`.
 
@@ -268,7 +272,9 @@ Pick the store with `--principal ID` or `--root DIR`, or set `EXO_PRINCIPAL` onc
 |---|---|
 | `exo keygen <name>` | A signing key in `~/.exo/keys/<name>.key`, readable by you only. It will not overwrite an existing key. Keep it private. |
 | `exo log append <kind> --author NAME --text "..."` | Adds one signed event. Kinds include `note`, `ruling`, `utterance`, `question`, `answer`. Needs the author's key. |
-| `exo log verify` | Re-checks every event, link and signature. Prints `{"ok": true, ...}` or fails. Run it when something feels off. |
+| `exo log verify` | Re-checks every event, link and signature. Each key must be one Exo pinned, and the ledger must still reach the last head it recorded. Prints `{"ok": true, ...}` or fails. Run it when something feels off. |
+| `exo memory verify` | The same check for every store, plus each agent's memory log. A ledger that was cut short or edited fails here. |
+| `exo keys` | The keys Exo trusts: its own signing keys, the bus seats it has seen, and which ledger names are you. `exo keys pin` adds or replaces one. |
 | `exo log tail` | The last events. `-n 20` for more, `--kind ruling` to filter. |
 
 Example: make a key, write a note, check the chain.

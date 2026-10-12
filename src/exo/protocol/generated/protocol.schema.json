@@ -1108,7 +1108,8 @@
             "list",
             "send",
             "deliver",
-            "receipt"
+            "receipt",
+            "bus"
           ],
           "default": "list"
         },
@@ -1145,10 +1146,14 @@
         "envelope": {
           "type": "object",
           "default": {}
+        },
+        "pub": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,
-      "description": "Live sessions messaging each other (D-026). One command with an action, because the command cap leaves one slot: ``list`` shows peers, ``send`` posts a message from this daemon (``via`` says whether a person or a model wrote it), ``deliver`` and ``receipt`` are the daemon-to-daemon calls (a signed envelope in, a delivery receipt back)."
+      "description": "Live sessions messaging each other (D-026). One command with an action, because the command cap leaves one slot: ``list`` shows peers, ``send`` posts a message from this daemon (``via`` says whether a person or a model wrote it), ``deliver`` and ``receipt`` are the daemon-to-daemon calls (a signed envelope in, a delivery receipt back). ``bus`` is the bus channel handing in one inbox envelope (D-040): the core checks it against the seat's pinned key and puts it through the same hold and trust policy as a peer message."
     },
     "QuestionAnswer": {
       "type": "object",

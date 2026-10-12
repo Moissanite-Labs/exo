@@ -151,14 +151,22 @@ class Client:
         return self.post(to, wrap(line), kind, thread, **kw)
 
     # --- reading bodies -----------------------------------------------------------
-    def signer_of(self, env: dict, reg: dict, relay_pub: str | None) -> str | None:
-        candidates = [reg.get(env["from"], {}).get("pubkey"), relay_pub]
-        return next((p for p in candidates if p and wire.verify_doc(wire.core(env), p)), None)
+    def signer_of(self, env: dict, reg: dict, relay_pub: str | None = None) -> str | None:
+        """The sender seat's registry key when that key signed the envelope, else None. The relay's key is never
+        accepted as a seat (D-040): ``relay_pub`` is ignored here and kept only for older callers."""
+        pub = reg.get(env["from"], {}).get("pubkey")
+        return pub if pub and wire.verify_doc(wire.core(env), pub) else None
+
+    @staticmethod
+    def relay_signed(env: dict, relay_pub: str | None) -> bool:
+        """True when the relay signed a post it composed for the seat (marked, D-040): the log is intact, but the
+        seat itself did not sign it."""
+        return bool(relay_pub) and wire.relay_composed(env) and wire.verify_doc(wire.core(env), relay_pub)
 
     def decrypt(self, env: dict, reg: dict | None = None, relay_pub: str | None = None) -> str:
         """Plaintext of an envelope encrypted to me. The sender's X25519 key is whichever key signed it."""
         reg = reg if reg is not None else self.registry()
-        signer = self.signer_of(env, reg, relay_pub)
+        signer = self.signer_of(env, reg) or (relay_pub if self.relay_signed(env, relay_pub) else None)
         if not signer:
             return "<unverifiable encrypted body>"
         return wire.decrypt_body(env["body"], env["enc"], self.key, signer)
@@ -183,7 +191,7 @@ class Client:
                 c = wire.core(env)
                 if env["prev"] != prev or wire.envelope_id(c) != env["id"]:
                     return {"ok": False, "seq": env["seq"], "error": "chain or id mismatch"}
-                if not self.signer_of(env, reg, head.get("relay_pubkey")):
+                if not (self.signer_of(env, reg) or self.relay_signed(env, head.get("relay_pubkey"))):
                     return {"ok": False, "seq": env["seq"], "error": "signature does not verify"}
                 prev, seq, n = wire.chain_hash(prev, env["id"]), env["seq"], n + 1
             if len(batch) < page:

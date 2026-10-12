@@ -195,7 +195,8 @@ class Scheduler:
                                              agent=getattr(e, "agent", None), kind="scheduled")
             sid = info.id
             self._emit(job, task_id, "running", f"Running {job['title']!r}.", sid)
-            res = await e._turn(s.TurnSend(session=sid, text=job["prompt"]), loop=loop)
+            res = await e._turn(s.TurnSend(session=sid, text=job["prompt"]), meta={"author": "schedule"},
+                                loop=loop)  # D-041 normal path; D-040 not a live principal turn
             answer = res.message.text() if res is not None and res.message is not None else ""
             stop = getattr(res, "stop_reason", "error")
             if stop == "end":

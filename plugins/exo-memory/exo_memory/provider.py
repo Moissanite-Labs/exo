@@ -29,6 +29,7 @@ try:
     from exo.capture import (CORRECTION, DECISION, RULING, clip, extract_signals, is_trivial, normalize,
                              render_block, to_event)
     from exo.ledger import Ledger
+    from exo.provenance import principal_view
     from exo.retrieve import assemble
     from exo.store import PrincipalStore
     _EXO_ERROR = ""
@@ -40,7 +41,10 @@ from . import config as C
 logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "exo-memory"
-NOTE_KINDS = ("note", "ruling", "question", "answer", "action", "artifact")
+NOTE_KINDS = ("note", "question", "action", "artifact")
+# D-040: kinds in the principal's voice. The agent's exo_note cannot write them: a note claiming one is kept as an
+# agent note (kind note, type agent_note), which consolidation and learning never read as the principal.
+PRINCIPAL_KINDS = ("ruling", "answer")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 TOOLS_LINE = ("Memory tools: exo_recall(query, budget) for beliefs and past sessions; exo_get(id) reads a whole "
               "belief node when recall shows only its summary; exo_note(text, kind) to log; "
@@ -71,8 +75,9 @@ GET_SCHEMA = {
 GET_LIMIT = 40000  # characters; a node is a note, not a corpus
 NOTE_SCHEMA = {
     "name": "exo_note",
-    "description": ("Append an event to the principal's signed ledger. Use for facts, rulings the principal "
-                    "states, open questions, answers and notable actions."),
+    "description": ("Append your own note to the principal's signed ledger: facts, open questions and notable "
+                    "actions. It is signed as you, not as the principal. The principal's rulings and answers are "
+                    "captured from their own messages; you cannot write one for them."),
     "parameters": {"type": "object", "properties": {
         "text": {"type": "string", "description": "The note, in plain words."},
         "kind": {"type": "string", "enum": list(NOTE_KINDS), "description": "Event kind (default note)."}},
@@ -250,7 +255,11 @@ class ExoMemoryProvider(MemoryProvider):
             sess = st.sessions[sid] = {"primary": True, "last_idx": None, "last_user": None, "last_agent": None}
         return sess
 
-    def _user_author(self, st: _State, author_id: Any = None, is_bot: bool = False) -> str:
+    def _user_author(self, st: _State, author_id: Any = None, is_bot: bool = False, author: Any = None) -> str:
+        """The ledger author for a user-role message. ``author`` is the core's provenance (D-040): anything but
+        ``principal`` (a peer, a bus seat, a job notice, the scheduler) is written under that name."""
+        if author and author != "principal":
+            return str(author)
         if is_bot:
             return f"bot:{author_id or 'unknown'}"
         if st.principal_ids and author_id is not None and str(author_id) not in st.principal_ids:
@@ -328,6 +337,7 @@ class ExoMemoryProvider(MemoryProvider):
                 st = self._states[key] = _State(cfg, rt, agent)
                 st.core_log = core_log
                 st.pack = self._build_pack(st)
+                self._pin_principal(st)
         sid = session_id or "default"
         st.session = sid
         primary = kwargs.get("agent_context", "primary") == "primary"
@@ -337,6 +347,16 @@ class ExoMemoryProvider(MemoryProvider):
             if kwargs.get("parent_session_id"):
                 body["parent_session"] = kwargs["parent_session_id"]
             self._safe(lambda: self._append(st, "note", body, st.agent, sid))
+
+    @staticmethod
+    def _pin_principal(st: _State) -> None:
+        """D-040: ledger events this provider writes as the configured principal are the principal's voice; the
+        key registry lists that id so consolidation and learning recognise it."""
+        try:
+            from exo.keyring import KeyRegistry
+            KeyRegistry.load().add_principal(st.principal)
+        except Exception as exc:  # a registry problem never stops memory; `exo memory verify` reports it
+            logger.warning("exo-memory: cannot record the principal id in the key registry: %s", exc)
 
     def shutdown(self) -> None:
         with self._lock:
@@ -444,7 +464,7 @@ class ExoMemoryProvider(MemoryProvider):
         sess = self._sess(st, sid)
         if not sess["primary"]:
             return
-        author = self._user_author(st, kwargs.get("author_id"), bool(kwargs.get("author_is_bot")))
+        author = self._user_author(st, kwargs.get("author_id"), bool(kwargs.get("author_is_bot")), kwargs.get("author"))
         body = {"text": message, "role": "user", "turn": turn_number}
         if kwargs.get("author_name"):
             body["author_name"] = kwargs["author_name"]
@@ -470,7 +490,7 @@ class ExoMemoryProvider(MemoryProvider):
             if last and last[0] == _h(user_content):
                 user_id = last[1]
             else:
-                author = self._user_author(st, ta.get("id"), bool(ta.get("is_bot")))
+                author = self._user_author(st, ta.get("id"), bool(ta.get("is_bot")), ta.get("author"))
                 body = {"text": user_content, "role": "user"}
                 if ta.get("name"):
                     body["author_name"] = ta["name"]
@@ -500,7 +520,7 @@ class ExoMemoryProvider(MemoryProvider):
             return
         if reason == "turn" and not st.cfg.get("capture_turns", True):
             return
-        window = [m for m in messages if isinstance(m, dict)]
+        window = principal_view(messages)  # D-040: text the principal did not write is not captured
         self._safe(lambda: self._capture(st, window, reason))
 
     def capture_principal(self, messages: list[dict[str, Any]], *, session_id: str = "",
@@ -518,8 +538,9 @@ class ExoMemoryProvider(MemoryProvider):
             return 0
         if not self._sess(st, session_id or st.session)["primary"]:
             return None
-        # a user-role message the host marks "principal": False (a peer message, a job notice) is not the principal's
-        window = [({**m, "role": "other"} if m.get("principal") is False else m) for m in messages if isinstance(m, dict)]
+        # a user-role message the host marks "principal": False or with another author (a peer message, a bus seat,
+        # a job notice) is not the principal's
+        window = principal_view(messages)
         return len(self._capture(st, window, f"capture:{source}", True))
 
     def _log_episodic(self, st: _State, sess: dict, sid: str, user: str, assistant: str,
@@ -614,7 +635,7 @@ class ExoMemoryProvider(MemoryProvider):
         st = self._state()
         if st is None or not messages:
             return ""
-        signals = self._capture(st, messages, "pre_compress", bool(kwargs.get("require_checkpoint")))
+        signals = self._capture(st, principal_view(messages), "pre_compress", bool(kwargs.get("require_checkpoint")))
         return render_block(signals, st.cfg["capture_chars"])
 
     def _capture(self, st: _State, messages: list[dict[str, Any]], source: str, strict: bool = False) -> list:
@@ -685,6 +706,12 @@ class ExoMemoryProvider(MemoryProvider):
                 kind = str(args.get("kind") or "note")
                 if not text:
                     return json.dumps({"error": "exo_note needs text"})
+                if kind in PRINCIPAL_KINDS:  # D-040: the agent cannot speak in the principal's voice
+                    ev = self._append(st, "note", {"text": text, "source": "exo_note", "type": "agent_note",
+                                                   "claimed_kind": kind}, st.agent)
+                    return json.dumps({"ok": True, "id": ev["id"], "kind": "agent_note",
+                                       "note": f"kept as your own note, not a {kind}: only the principal's own words "
+                                               "become rulings and answers, and they are captured from their messages"})
                 if kind not in NOTE_KINDS:
                     return json.dumps({"error": f"kind must be one of {list(NOTE_KINDS)}"})
                 ev = self._append(st, kind, {"text": text, "source": "exo_note"}, st.agent)
@@ -736,7 +763,10 @@ class ExoMemoryProvider(MemoryProvider):
             ev = self._append(st, "artifact", {"description": target or "(unspecified output)",
                                                "source": "exo_should_have_been"}, st.agent)
             tid = ev["id"]
+        # D-040: this is the agent's report of a correction, so it is signed as the agent. Consolidation reads a
+        # correction as the principal's only from the principal's own message, which capture records.
         body = {"verdict": "should_have_been", "target": tid, "wanted": wanted,
-                "reason": str(args.get("reason") or ""), "recorded_by": st.agent}
-        ev = self._append(st, "verdict", body, self._user_author(st))
+                "reason": str(args.get("reason") or ""), "recorded_by": st.agent, "reported_by": st.agent,
+                "for": st.principal}
+        ev = self._append(st, "verdict", body, st.agent)
         return json.dumps({"ok": True, "id": ev["id"], "target": tid})
