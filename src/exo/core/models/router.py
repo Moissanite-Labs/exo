@@ -7,7 +7,7 @@ provider-stated reset is re-probed after max(60 s, 2% of the open window), never
 past the reset, and each failed probe re-stamps a shorter window. Credentials with
 siblings, and billing failures, keep the provider reset.
 
-Keys come from environment variables only (``key_env`` in the catalog).
+Keys: environment, then Keychain, then ~/.config/exo/keys.env (see keys.py).
 """
 
 from __future__ import annotations
@@ -21,19 +21,22 @@ from typing import Any, AsyncIterator, Callable, Mapping
 
 from exo.core.models.anthropic import AnthropicProvider
 from exo.core.models.base import error_event
+from exo.core.models.decision import DecisionProvider
+from exo.core.models.keys import lookup_key
 from exo.core.models.openai_chat import OpenAIChatProvider
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
 
 CATALOG_PATH = Path(__file__).with_name("catalog.toml")
 TIERS = ("fast", "standard", "deep")  # cheapest to most capable; the delegate tool picks one per child
-ROLE_FALLBACK = {"decision": ["aux", "main"], "aux": ["main"], "fast": ["standard", "main"],
+ROLE_FALLBACK = {"decision": ["aux", "main"], "eval": ["main"], "aux": ["main"], "fast": ["standard", "main"],
                  "standard": ["main"], "deep": ["main"]}
 SOLE_TTL = 60.0
 AUTH_TTL = 300.0
 LONG_TTL = 4 * 3600.0
 REPROBE_FRACTION = 0.02
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
-TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider}
+TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
+              "decision": DecisionProvider}
 
 
 def load_catalog(path: Path | str = CATALOG_PATH) -> dict[str, Any]:
@@ -69,7 +72,7 @@ class Cooldown:
 @dataclass
 class Credential:
     id: str
-    key: str | None
+    key: str | None = field(repr=False)
     provider: Provider = field(repr=False)
 
 
@@ -98,13 +101,15 @@ class Router:
     def __init__(self, roles: Mapping[str, list[str]] | None = None, providers: Mapping[str, dict] | None = None,
                  *, catalog: dict[str, Any] | None = None, instances: Mapping[str, Provider] | None = None,
                  env: Mapping[str, str] | None = None, clock: Callable[[], float] = time.time,
-                 client: Any = None) -> None:
+                 client: Any = None, key_sources: bool | None = None) -> None:
         cat = load_catalog() if catalog is None else catalog
         self.providers: dict[str, dict] = {**cat.get("providers", {}), **(providers or {})}
         self.models: dict[str, dict] = dict(cat.get("models", {}))
         self.roles: dict[str, list[str]] = {**cat.get("roles", {}), **(roles or {})}
         self.instances = dict(instances or {})
         self.env = os.environ if env is None else env
+        # Keychain and keys file are read only for the real environment, or when asked.
+        self.key_sources = (env is None) if key_sources is None else key_sources
         self.clock = clock
         self.client = client
         self.cooldowns: dict[str, Cooldown] = {}
@@ -122,7 +127,12 @@ class Router:
         refs: list[str] = []
         for r in [role, *ROLE_FALLBACK.get(role, [] if role == "main" else ["main"])]:
             refs += [x for x in self.roles.get(r) or [] if x not in refs]
-        return [Route.parse(x) for x in refs]
+        return [rt for rt in map(Route.parse, refs) if self._allows(rt.provider, role)]
+
+    def _allows(self, provider: str, role: str) -> bool:
+        """A provider may be limited to some roles (``roles = ["decision"]`` in its table)."""
+        allowed = (self.providers.get(provider) or {}).get("roles")
+        return not allowed or role in allowed
 
     def tier_route(self, tier: str) -> Route | None:
         """First route of ``tier`` (then its fallbacks) whose provider has credentials, else None."""
@@ -134,7 +144,9 @@ class Router:
 
     def set_role(self, role: str, refs: list[str]) -> None:
         for ref in refs:
-            Route.parse(ref)
+            route = Route.parse(ref)
+            if not self._allows(route.provider, role):
+                raise ValueError(f"provider {route.provider!r} cannot serve role {role!r}")
         self.roles[role] = list(refs)
 
     def credentials(self, provider: str) -> list[Credential]:
@@ -147,7 +159,7 @@ class Router:
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
-            keys = [self.env.get(e) for e in envs if self.env.get(e)] if envs else [None]
+            keys = [k for e in envs if (k := self._key(e))] if envs else [None]
             for i, key in enumerate(keys):
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
@@ -155,6 +167,9 @@ class Router:
                 creds.append(Credential(cid, key, prov))
         self._creds[provider] = creds
         return creds
+
+    def _key(self, name: str) -> str | None:
+        return lookup_key(name, self.env, sources=self.key_sources)
 
     def _available(self, key: str, now: float) -> bool:
         cd = self.cooldowns.get(key)
@@ -264,13 +279,32 @@ class Router:
     def status(self) -> list[dict[str, Any]]:
         """Routes per role with availability, for ``models.list``."""
         now, out = self.clock(), []
-        for role in sorted(set(self.roles) | {"main", "aux", "decision", *TIERS}):
+        for role in sorted(set(self.roles) | {"main", "aux", "decision", "eval", *TIERS}):
             for route in self.chain(role):
                 creds = self.credentials(route.provider)
                 out.append({"role": role, "route": route.ref, "configured": bool(creds),
                             "available": self._pick(route, now) is not None,
                             **{k: v for k, v in self.models.get(route.ref, {}).items() if k == "context"}})
         return out
+
+
+    def providers_status(self) -> list[dict[str, Any]]:
+        """Each configured provider: base URL and whether a key was found (yes/no, never the value)."""
+        out = []
+        for name, spec in sorted(self.providers.items()):
+            envs = spec.get("key_env") or []
+            envs = [envs] if isinstance(envs, str) else list(envs)
+            found = [e for e in envs if self._key(e)]
+            out.append({"provider": name, "base_url": spec.get("base_url", ""), "transport": spec.get("transport", "openai"),
+                        "local": bool(spec.get("local")), "key_env": envs,
+                        "key": ("n/a" if not envs else "yes" if found else "no"),
+                        "roles": list(spec.get("roles") or [])})
+        return out
+
+    def resolved_roles(self) -> dict[str, list[str]]:
+        """Resolved route chain per role (with fallbacks), no secrets."""
+        return {role: [r.ref for r in self.chain(role)]
+                for role in sorted(set(self.roles) | {"main", "aux", "decision", "eval", *TIERS})}
 
 
 class RoleProvider:

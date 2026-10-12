@@ -14,7 +14,7 @@ Resolution for each value, first hit wins: the environment, then the file, then 
 The environment never leaks into the file: `save()` writes only what was set on the object.
 Nothing here names a person or a machine (D-004).
 
-    python -m exo.config show | path | get KEY | set KEY VALUE | unset KEY
+    python -m exo.config show | path | roles | get KEY | set KEY VALUE | unset KEY
 """
 from __future__ import annotations
 
@@ -206,7 +206,7 @@ class Config:
         First hit wins: explicit `models.roles`; a scripted `models.fake`; a local
         OpenAI-compatible server in `models.local` ({"base_url", "model"}); the catalog
         (Anthropic) when ANTHROPIC_API_KEY is set; else the offline fake model.
-        Keys come from environment variables only; no credential file is read.
+        Keys: environment, then Keychain, then ~/.config/exo/keys.env (core/models/keys.py).
         """
         env = os.environ if env is None else env
         m = copy.deepcopy(self.data.get('models') or {})
@@ -223,7 +223,8 @@ class Config:
             ref = f"local:{local['model']}"
             return {**m, 'providers': {**(m.get('providers') or {}), 'local': prov},
                     'roles': {'main': [ref], 'aux': [ref], 'decision': []}}
-        if env.get('ANTHROPIC_API_KEY'):
+        from .core.models.keys import lookup_key
+        if lookup_key('ANTHROPIC_API_KEY', env, sources=env is os.environ):
             return m
         return {**m, **fake}
 
@@ -257,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
     sp = ap.add_subparsers(dest='op', required=True)
     sp.add_parser('show', help='every key with its effective value')
     sp.add_parser('path', help='where the file lives')
+    sp.add_parser('roles', help='resolved model route per role (no secrets)')
     p = sp.add_parser('get'); p.add_argument('key')
     p = sp.add_parser('set', help='VALUE is parsed as JSON when it can be, else kept as text')
     p.add_argument('key'); p.add_argument('value')
@@ -266,6 +268,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg = Config.load()
         if a.op == 'path':
             print(cfg.path)
+        elif a.op == 'roles':
+            from .models_cmd import build_router
+            for role, refs in build_router().resolved_roles().items():
+                print(f"{role:<9} {' > '.join(refs) or '-'}")
         elif a.op == 'show':
             print(json.dumps(cfg.resolved(), indent=2, sort_keys=True))
         elif a.op == 'get':
