@@ -827,6 +827,8 @@ class ExoApp(App):
         if self.sug.need and self.sug.need not in self.arg_at:
             self.arg_at[self.sug.need] = time.monotonic()
             self.run_worker(self.fetch_ctx(self.sug.need), exit_on_error=False)
+        if self.sug.mode == "command" and self.sug.items and c.text == "/":
+            self.hint("slash_menu")  # tutorial mode: the first time the menu opens, say what it is
         self.sel, self.sug_text = 0, c.text
         c.ghost, self.ghost_ok = ("", False) if self.hist.browsing else cm.ghost(c.text, self.sug, self.hist)
         c.refresh()

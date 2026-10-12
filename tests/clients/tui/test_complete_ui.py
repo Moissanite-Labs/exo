@@ -238,3 +238,14 @@ def test_no_timer_under_reduced_motion(tmp_path, monkeypatch):
         assert not app.motion and app.guide.enabled
 
     run(tmp_path, sc)
+
+
+def test_tutorial_hint_the_first_time_the_menu_opens(tmp_path):
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "/tutorial on")
+        await until(lambda: app.tutorial, pilot)
+        app.hint_budget = 1
+        await type_(app, pilot, "/")
+        assert "slash_menu" in app.onb.seen()
+
+    run(tmp_path, sc)

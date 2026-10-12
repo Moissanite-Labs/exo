@@ -48,6 +48,10 @@ the middle dot as separator come straight from the site.
    never styled as you). The side panel for `ui.panel` uses the same header and rule.
 4. Activity: a wire with a travelling packet and `waiting for <model> 12s`, `running tool`.
 5. Composer: block caret in the signal colour, placeholder hint, `steer ›` while busy, `answer ›` for a question.
+   Under it, when you type `/`, `@` or `!`, the completion menu (D-037): a hairline above, mono rows, an orange rule on
+   the selected row, a dim argument shape, up to eight rows then `N matches`. Ghost text is drawn dim after the caret.
+   The placeholder doubles as the one-line guidance (`job j1 finished: ask for its job_output · tab fills it in`).
+   No animation: the menu and the line change only on keys and events, so reduced motion needs no special case.
 6. Status strip: `MODEL` (the route that served, in orange with `← requested` when it fell back), `MEM` gauge,
    `CACHE` share of the last call, `COST`, open findings.
 7. Start: the site's hero motif in braille (`exo_tui/hero.py`): a shell of linked nodes around an orange core,
@@ -83,8 +87,9 @@ one note says to type `/providers`.
 
 ## Screenshots
 
-The public set is in `docs/media/` (`tui-01-start.png` to `tui-05-job.png`): start, a turn with tools, an
-approval panel, the `/context` report and a background job. They come from `scripts/promo_shots.py`, which
+The public set is in `docs/media/` (`tui-01-start.png` to `tui-09-guidance.png`): start, a turn with tools, an
+approval panel, the `/context` report, a background job, then the completion shots (`/co` menu with ghost text,
+`/model ` arguments, `@s` files, the guidance line). They come from `scripts/promo_shots.py`, which
 drives the app with Textual's pilot over an in-process core and a scripted model, with neutral demo data.
 `docs/media/README.md` has the commands. The older shots in `docs/ui/` were removed because they used internal
 names. `scripts/ui_shots.py` still renders the full set (boot, narrow 80x24) for local checks.
@@ -94,4 +99,5 @@ real status or keys) come from `scripts/ui_shots.py`.
 ## Credit
 
 The design language, colours, type choices and the terminal figure belong to the Exo site. This client follows
-them; it adds no borrowed branding.
+them; it adds no borrowed branding. The completion menu and ghost text follow an idea from the Hermes CLI; the
+code and the look are ours.

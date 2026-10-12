@@ -10,8 +10,10 @@ import asyncio
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
+from exo import complete as cm
 from exo.core.engine import CoreEngine
 from exo.core.types import ToolCall
 from exo.protocol import schema as s
@@ -22,6 +24,8 @@ from exo_tui.widgets import Composer
 MODEL = "anthropic:claude-sonnet-4-5"
 FAKE = {"rules": [{"match": "failing test", "steps": ["I'll read the test and the slugify code first, then run it."]}]}
 SIZE = (112, 42)
+DEMO_FILES = ("README.md", "pyproject.toml", "src/slugify/__init__.py", "src/slugify/core.py",
+              "tests/test_slugify.py", "docs/usage.md")
 
 
 async def settle(pilot, secs: float = 0.3) -> None:
@@ -31,10 +35,15 @@ async def settle(pilot, secs: float = 0.3) -> None:
 async def shoot(out: Path, name: str, body, *, boot: bool = False) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="slugify"))
     subprocess.run(["git", "init", "-q", str(tmp)], check=True)  # a git cwd, so no "not inside a git repo" notice
-    eng = CoreEngine(tmp / "home", {"fake": FAKE, "roles": {"main": [MODEL], "aux": [MODEL]}},
+    for rel in DEMO_FILES:  # neutral files for the @ menu
+        (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp / rel).write_text("demo\n")
+    state = Path(tempfile.mkdtemp(prefix="exo-state"))  # outside the demo folder, so the @ menu shows only demo files
+    eng = CoreEngine(state / "home", {"fake": FAKE, "roles": {"main": [MODEL], "aux": [MODEL]}},
                      cwd=str(tmp), env={})
     eng.router.instances["anthropic"] = eng.router.instances["fake"]  # the demo model answers under a public id
-    app = ExoApp(LocalClient(eng), seat="atlas", home=str(tmp / "ui"), boot_anim=boot)
+    app = ExoApp(LocalClient(eng), seat="atlas", home=str(state / "ui"), boot_anim=boot)
+    app.files = cm.FileIndex(tmp)  # the @ menu lists the demo folder, not wherever this script runs
     async with app.run_test(size=SIZE) as pilot:
         if not boot:
             await asyncio.wait_for(app.ready.wait(), 5)
@@ -109,8 +118,51 @@ async def job(app, pilot, eng):
     await settle(pilot, 0.8)
 
 
+async def type_in(app, pilot, text: str) -> None:
+    """Type like a person: one key at a time, so the menu follows."""
+    app.composer.focus()
+    for ch in text:
+        await pilot.press("space" if ch == " " else ch)
+    await settle(pilot, 0.4)
+
+
+async def a_turn(app, pilot, eng):
+    app.query_one(Composer).text = PROMPT
+    await pilot.press("enter")
+    await settle(pilot, 1.2)
+    pub(eng, app, s.TurnCompleted(turn_id="t1"))
+    await settle(pilot, 0.3)
+
+
+async def slash_menu(app, pilot, eng):  # D-037
+    await a_turn(app, pilot, eng)
+    await type_in(app, pilot, "/co")
+
+
+async def arg_menu(app, pilot, eng):
+    await a_turn(app, pilot, eng)
+    demo = ["anthropic:claude-sonnet-4-5", "anthropic:claude-opus-4-5", "openai:gpt-5", "openai:gpt-5-mini"]
+    app.arg_ctx["models"] = [cm.Item(m, m, "role main" if i == 0 else "") for i, m in enumerate(demo)]
+    app.arg_at["models"] = time.monotonic() + 3600
+    await type_in(app, pilot, "/model ")
+
+
+async def file_menu(app, pilot, eng):
+    await a_turn(app, pilot, eng)
+    await type_in(app, pilot, "look at @s")
+
+
+async def guidance_line(app, pilot, eng):
+    await a_turn(app, pilot, eng)
+    app.tip, app.gstate.first_run, app.guide.last_at = None, False, None
+    pub(eng, app, s.JobUpdated(job_id="j1", state="done", command="pytest -q", exit_code=0, elapsed_ms=12400,
+                               detail="12.4s"))
+    await settle(pilot, 0.8)
+
+
 SHOTS = [("tui-01-start", empty), ("tui-02-turn", tools_running), ("tui-03-approval", approval),
-         ("tui-04-context", context), ("tui-05-job", job)]
+         ("tui-04-context", context), ("tui-05-job", job), ("tui-06-slash", slash_menu), ("tui-07-args", arg_menu),
+         ("tui-08-files", file_menu), ("tui-09-guidance", guidance_line)]
 
 
 async def main(out: Path) -> None:

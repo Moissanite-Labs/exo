@@ -76,7 +76,7 @@ and nothing loaded from another site. It follows the system light or dark settin
 The server relays the protocol, it adds no state of its own beyond a ring of the last 3000 events and the
 list of open panels. Routes (`api.py` has the table): `GET /api/events` (SSE of every event, `?since=`,
 `?session=` or `Last-Event-ID`), `/api/chat/sessions`, `/api/chat/sessions/<id>` (+ `/send`, `/interrupt`),
-`/api/chat/panels`, `/api/feedback`, `/api/ui/respond`, `/api/tasks`, `/api/schedule`. Every write checks
+`/api/chat/panels`, `/api/complete/commands`, `/api/complete/files` (guarded, D-037), `/api/feedback`, `/api/ui/respond`, `/api/tasks`, `/api/schedule`. Every write checks
 its input, refuses a request from another origin, and answers 501 if the core does not handle that
 command yet.
 

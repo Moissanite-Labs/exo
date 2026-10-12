@@ -4,6 +4,7 @@ import { h, api, short, when, partsText, tag, empty } from "./dom.js";
 import * as bus from "./bus.js";
 import { renderPanel } from "./panels.js";
 import { createHero } from "./hero.js";
+import { attachComposer } from "./composer.js";
 
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
@@ -20,7 +21,10 @@ export function mount(root) {
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
   const stopBtn = h("button", { class: "xc-btn", onclick: () => interrupt() }, "Stop");
   const promptEl = h("span", { class: "xc-cp", "aria-hidden": "true" }, "\u203A");
-  const composer = h("div", { class: "xc-composer" }, promptEl, input, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn));
+  const inputWrap = h("div", { class: "xc-inwrap" }, input);
+  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn));
+  const help = attachComposer({ input, composer, getSession: () => current,
+    reducedMotion: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });
@@ -35,7 +39,7 @@ export function mount(root) {
     h("a", { href: "#providers" }, "Set up providers"));
   root.replaceChildren(h("div", { class: "xc-chat" },
     h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl),
-    h("main", { class: "xc-chat-main" }, setupBanner, stage, apprEl, statusEl, composer),
+    h("main", { class: "xc-chat-main" }, setupBanner, stage, apprEl, statusEl, help.guideEl, composer, help.menuEl),
     sideEl));
 
   if (sessionStorage.getItem("xc-token")) {   // quiet check: skipped on any error
@@ -90,14 +94,20 @@ export function mount(root) {
     }
     if (!mine) return;
     switch (ev.type) {
-      case "turn.started": busy = true; if (b.model) { model = b.model; requested = b.model; } drawStatus(); break;
-      case "turn.completed": busy = false; drawStatus(); loadContext(); break;
+      case "turn.started": busy = true; help.note({ busy: true }); if (b.model) { model = b.model; requested = b.model; } drawStatus(); break;
+      case "turn.completed": {
+        busy = false; drawStatus(); loadContext();
+        const tm = b.timing || {};
+        help.note({ busy: false, turns: items.filter((i) => i.kind === "user").length, longTurn: (tm.wall_ms || 0) - (tm.tool_ms || 0) - (tm.approval_ms || 0) >= 60000 });
+        break;
+      }
       case "usage.updated": {
         if (b.session_total) { costSeen = true; cost = b.session_total.cost_usd == null ? null : b.session_total.cost_usd; }   // null = unpriced, never $0
         if (b.model && !model) model = b.model;
         instruments(b.usage); drawStatus(); break;
       }
       case "model.call":
+        help.note({ providerError: !!b.error });
         if (b.route) model = b.route;
         if (b.requested) requested = b.requested;
         if (b.usage) instruments(b.usage);
@@ -105,6 +115,7 @@ export function mount(root) {
         calls = calls.slice(0, 6);
         drawStatus(); drawSide(true); break;
       case "job.updated": {
+        if (b.state === "done") help.note({ jobDone: b.job_id });
         const bits = [b.state || "running"];
         if (b.exit_code != null && b.exit_code !== 0) bits.push("exit " + b.exit_code);
         if (b.elapsed_ms) bits.push(b.elapsed_ms >= 1000 ? (b.elapsed_ms / 1000).toFixed(1) + "s" : b.elapsed_ms + "ms");
@@ -188,7 +199,7 @@ export function mount(root) {
     } catch (e) { /* older core: the instruments fall back to what the events carry */ }
     try {
       const out = await runCommand("findings", "count");
-      if (id === current && out && typeof out.open === "number") { findings = out.open; drawStatus(); }
+      if (id === current && out && typeof out.open === "number") { findings = out.open; help.note({ findings }); drawStatus(); }
     } catch (e) { /* no findings count */ }
   }
   function sys(label, text, tone) { push({ kind: "sys", id: "sys" + items.length + "-" + Date.now(), label, text, tone }); }
@@ -426,9 +437,16 @@ export function mount(root) {
   async function send() {
     const text = input.value.trim();
     if (!text) return;
+    const typo = help.typo(text);
+    if (typo) {   // D-037: a mistyped command gets a suggestion, not a message to the agent
+      flash("unknown command " + text.split(/\s/)[0] + ". did you mean /" + typo.guess + "? It is in the box: Enter runs it.");
+      input.value = typo.line; input.setSelectionRange(input.value.length, input.value.length); input.dispatchEvent(new Event("input"));
+      return;
+    }
+    if (/^\/new\s*$/.test(text)) { input.value = ""; help.sent(text); create(); return; }
     const slash = /^\/(context|findings|trace)\b\s*(.*)$/.exec(text);
     if (slash && current) {
-      input.value = "";
+      input.value = ""; help.sent(text);
       try {
         const out = await runCommand(slash[1], slash[2]);
         if (slash[1] === "context" && typeof out === "string") { ctx = parseContext(out); ctxTokens = ctx.total || ctxTokens; drawStatus(); drawSide(true); }
@@ -442,7 +460,7 @@ export function mount(root) {
         await refreshSessions();
         await open(d.session.id);
       }
-      input.value = "";
+      input.value = ""; help.sent(text);
       await api("POST", "/api/chat/sessions/" + encodeURIComponent(current) + "/send", { text, mode: busy ? "steer" : "send" });
       flash("");
     } catch (e) { fail(e); }
@@ -477,7 +495,7 @@ export function mount(root) {
   // ---------------------------------------------------------------- start
 
   const offBus = bus.on(handle);
-  const off = () => { offBus(); document.removeEventListener("keydown", onKey); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { offBus(); help.stop(); document.removeEventListener("keydown", onKey); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   refreshSessions().then(() => { if (!current && sessions.length) open(sessions[0].id); });
   return off;

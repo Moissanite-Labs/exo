@@ -286,3 +286,10 @@ def test_the_tip_is_one_short_line():
                cm.State(findings=3), cm.State(long_turn=True), cm.State(turns=50)):
         for tip in g.rules(st):
             assert "\n" not in tip.text and len(tip.text) <= 72
+
+
+def test_short_desc_cuts_at_a_clause_or_a_word():
+    assert cm.short_desc("pick the model for this session; /model <ref> sets it") == "pick the model for this session"
+    long = "summarize now what is eligible in this agent's memory then show tokens before and after it ran"
+    out = cm.short_desc(long)
+    assert out.endswith("\u2026") and len(out) <= 65 and " " not in out[-3:] and long.startswith(out[:-1])

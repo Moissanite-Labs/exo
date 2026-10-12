@@ -44,3 +44,7 @@ then = "/trace"
 [code_find]
 text = "code_find asks a decision model which files answer a question, so I read fewer files to find things."
 then = "/intro"
+
+[slash_menu]
+text = "Typing / opens a menu of every command with its arguments. Tab completes, Esc closes; @ lists files, up arrow recalls earlier lines."
+then = "/help"

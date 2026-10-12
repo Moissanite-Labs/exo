@@ -36,8 +36,8 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
 | `/new` | Start a new thread: a fresh focus, the same memory. | `private` makes a thread that is not remembered. | `ExoApp.new_session` |
-| `/sessions` | Pick one of this agent's threads to switch to. | none | `ExoApp.pick_session` (calls `session.list`) |
-| `/resume` | Same as `/sessions`. | none | same |
+| `/sessions` | Pick one of this agent's threads to switch to. | optional thread id or title | `ExoApp.pick_session` (calls `session.list`) |
+| `/resume` | Same as `/sessions`. `/resume <thread>` opens an id or the best title match without the picker. | optional thread | same |
 | `/fork` | Fork this session and open the fork. | optional title | `session.fork` |
 | `/undo` | Undo the last turn and reload the session. | none | `session.undo` |
 | `/clear` | Clear the transcript view. History is kept. | none | `ExoApp.clear_transcript` |
@@ -47,7 +47,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/quit` | Same as `/exit`. | none | same |
 | `/model` | Pick the model for this session, or set it. | `<ref>` sets it. `default <ref>` sets the default. | `ExoApp.set_model` (`models.list`, `models.set`) |
 | `/default` | Set the default model for new sessions. Saved to `models.roles.main` in `config.json`, old routes kept as fallbacks. | `<ref>`, or none to pick | `ExoApp.set_default` (`models.set`, `config.set`) |
-| `/providers` | Provider setup panel: status, masked key entry, test, remove, default. Client side; the key never reaches the composer, transcript or protocol. Sends `command.run providers reload <name>` after a change. | `add <name>` opens the key field | `ProvidersScreen` in `clients/tui/exo_tui/providers.py`, engine `src/exo/providers_setup.py` |
+| `/providers` | Provider setup panel: status, masked key entry, test, remove, default. Client side; the key never reaches the composer, transcript or protocol. Sends `command.run providers reload <name>` after a change. | `add <name>` opens the key field; `<name>` selects that provider | `ProvidersScreen` in `clients/tui/exo_tui/providers.py`, engine `src/exo/providers_setup.py` |
 | `/usage` | Show context size, cost and the model in use. | none | `ExoApp.slash` (client state, no call) |
 | `/panel` | Reopen the last panel. | none | `ExoApp.show_panel` |
 | `/peers` | List other live sessions you can message. | none | `peers` protocol command, `action="list"` |
@@ -58,10 +58,43 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/help` | List every command. | none | `ExoApp.help_text` |
 
 Not slash commands, but in the same composer: `@path` adds a file to the turn, `!cmd` asks the agent to run a shell
-command and show the output. Keys: ctrl+p palette, ctrl+o tool output, ctrl+y accept, ctrl+e edit, ctrl+r reject.
+command and show the output (both complete as you type, see "Completion and guidance"). Keys: ctrl+p palette, ctrl+o tool output, ctrl+y accept, ctrl+e edit, ctrl+r reject.
 
 Anything else the TUI does not know goes to `command.run`. That is how `/context`, `/compact`, `/trace`, `/findings`
 and plugin commands work there.
+
+### Completion and guidance
+
+The composer helps you type. It is built in `src/exo/complete.py` (no UI, no model calls) and drawn by the terminal
+client and by the web client. The idea of a `/` menu and ghost text from history comes from the Hermes CLI
+(`hermes_cli/commands_completion.py`); this is our own code.
+
+| You type | You get |
+|---|---|
+| `/` | A dropdown under the composer with every command: name, argument shape, one line of description. Client commands, core commands from `commands.list` (asked once at start) and plugin commands. |
+| `/cmp` | Fuzzy filter. Exact name, then prefix, then a word start, then contains, then the letters in order, then a word of the description. |
+| `/model ` | The next argument. `/model` and `/default` list the models the picker lists. `/resume` lists recent threads by title. `/tutorial` lists `on`, `off`, `reset`. `/grants revoke ` lists grant ids. `/providers ` lists `add` and the provider names. `/handoff ` shows the default path. `/trace`, `/copy`, `/new`, `/findings` list their words. `/send ` lists live peers. |
+| `/handoff ` | Ghost text of the expected argument (`[path]`). It is a hint, not text: right arrow does not take it. |
+| `@sr` | Files under the working folder, from `git ls-files` (tracked and untracked, minus `.gitignore`) or a bounded walk without git. A bare `@` or a path ending in `/` browses a folder, directories first. Names only: files are not read, secret stores (`gate.is_sensitive_path`) are left out, and nothing outside the folder is listed. |
+| `!ls` | A one-line note: the agent runs it in its shell tool and the gate may ask first. |
+| `/comand` | Not sent. "unknown command /comand. did you mean /compact?" and the corrected line waits in the composer. With nothing close, the line goes to the core as before. |
+
+Keys. Up and down move in the menu, Tab or Enter completes (Enter on an already complete line sends it), Esc closes
+the menu and keeps the text. With no menu: up and down walk this seat's history, and right arrow or Tab takes the
+ghost text from history (the newest earlier line that starts with what you typed, like a shell autosuggestion).
+History is per seat in `$EXO_HOME/history/<seat>.jsonl`, mode 0600, the newest 500 lines; a line that looks like a
+key or password is never kept.
+
+Guidance. With the composer empty, one dim line may suggest a next step, chosen by local rules: first run (`/intro`),
+a failed model call (`/providers` to check keys), a finished job (ask for its `job_output`), open findings
+(`/findings`), a slow turn (`/trace`), a long thread (`/context`). At most one new line per 25 seconds, each rule twice
+a session, none while a turn runs, and a rule stops once you run its command. Tab fills the line in. Turn it off with
+`/tutorial off` (this also sets `guidance.enabled` to `false`; `/tutorial on` sets it back) or set that config key. It
+is the composer placeholder, so it never moves anything, and without a timer under `EXO_REDUCED_MOTION`.
+
+The web client has the same menu for the commands it runs (`/context`, `/findings`, `/trace`, `/new`), `@` files
+through `GET /api/complete/files`, ghost text, history for the page's life and the guidance line. See
+`docs/ui/WEB.md` "The composer".
 
 ### Core built-ins (`command.run`)
 
