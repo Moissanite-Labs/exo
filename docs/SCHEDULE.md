@@ -25,4 +25,10 @@ Jobs live in `$EXO_HOME/schedule.sqlite`. `exo serve` runs the timer. A one-shot
 - It cannot use tools that need a person: `delegate`, `clarify`, `ask`, `memory`, `send_message`, `bus_post`,
   `cronjob_manage` and `ui` are blocked (`BLOCKED_TOOLS` in `core/agents/delegate.py`).
 - It goes through the same gate as any turn. An ask waits for an approval, so an unattended run can stall on one.
+- It is an ordinary turn of the agent (D-041): it uses the engine's context tree and memory provider, the soul
+  refresh and system extras, and fires the `on_turn_start` and `on_turn_end` hooks. Only the model (the job's tier),
+  the narrowed toolset and the unattended-job prompt differ.
+- The timer loop survives a failing check: the error is recorded as a `harness.error` (`scheduler tick`) and the loop
+  waits a few seconds and goes on. If the loop ever ends by itself, that is recorded too (`scheduler loop`) and a
+  warning notice is shown.
 - Runs missed while the engine was down happen once at start, not once per missed slot.

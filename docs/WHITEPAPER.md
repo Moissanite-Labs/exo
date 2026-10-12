@@ -933,8 +933,9 @@ Summaries run in parallel in two *lanes* with separate limits: live chat (8 at o
 at once). A large import, such as a year of past chats, therefore never starves the live conversation, and
 imports can be paused and resumed. Before building a turn, the context engine *settles*: it waits, up to 60
 seconds, until no live summary is pending. On timeout it proceeds, using verbatim text for the unfinished
-part. Failed or interrupted summary jobs are retried when the session is next touched, including after a
-restart. Each finished node is reported as a `memory.summarized` event. It is upkeep of the long-term memory,
+part. Interrupted summary jobs are retried when the session is next touched, including after a
+restart. A failed job is retried with backoff, at most three times; then its span stays verbatim and one finding
+is recorded (D-041). Each finished node is reported as a `memory.summarized` event. It is upkeep of the long-term memory,
 not a compaction of the live context, so it is kept apart from `context.compacted`.
 
 #### 17.4 The summarizer
