@@ -112,6 +112,7 @@ Every command `/help` lists, in one line each, so you can answer "what does /x d
 - `/new`, `/sessions`, `/resume`, `/fork`, `/undo`, `/clear`, `/cwd`, `/restart`, `/exit`, `/quit`: threads
   and the window, above.
 - `/context`, `/compact`, `/usage`: memory and cost, above.
+- `/copy` puts the last answer on the clipboard; `/copy error` the last error; `/copy all` the transcript.
 - `/model`, `/default`: models, above.
 - `/panel` reopens the last panel (an approval or a choice the agent showed you).
 - `/peers`, `/send`: peers, above.
