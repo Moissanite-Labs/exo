@@ -166,6 +166,19 @@ class GrantStore:
             return g
         return None
 
+    def list(self) -> list:
+        now = self.clock()
+        with self._lock:
+            return [g for g in self._read() if float(g.get("expires") or 0) > now]
+
+    def revoke(self, gid: str) -> Optional[dict]:
+        with self._lock:
+            rows = self._read()
+            hit = next((g for g in rows if g.get("id") == gid), None)
+            if hit is not None:
+                self._write([g for g in rows if g.get("id") != gid])
+        return hit
+
     def add(self, category: str, target: str, binding: str, days: float, by: str, tool: str = "") -> Optional[dict]:
         if not self.path or category == "credentials" or days <= 0:
             return None
@@ -467,6 +480,9 @@ class Gate:
             return None
 
     def _add_grant(self, scope: Mapping, by: str, session: Optional[str], ref: Optional[str]) -> None:
+        if gate.approver_identity(by) != "principal":  # standing grants are the principal's alone
+            logger.warning("exo-gate: %s answered always; no standing grant kept", by)
+            return
         approvals = self.policies().get("approvals") or {}
         days = float(approvals.get("outward_always_days" if scope.get("outward") else "always_days") or 0)
         try:
@@ -480,6 +496,32 @@ class Gate:
         body = {"gate": PLUGIN_ID, "phase": "grant", "grant": g["id"], "rule": g["rule"], "target": g["target"],
                 "binding": g["binding"] or None, "by": by, "expires": _iso(g["expires"])}
         self.sink.append(body, session=session, refs=(ref,) if ref else ())
+
+
+def grants_command(g: "Gate", args: str = "") -> str:
+    """``/grants`` lists live standing grants; ``/grants revoke <id>`` removes one (ledger row ``revoke``)."""
+    words = (args or "").split()
+    if words[:1] == ["revoke"]:
+        if len(words) != 2:
+            return "usage: grants revoke <id>"
+        hit = g.grants.revoke(words[1])
+        if hit is None:
+            return f"no grant {words[1]}"
+        g.sink.append({"gate": PLUGIN_ID, "phase": "revoke", "grant": hit["id"], "rule": hit.get("rule"),
+                       "target": hit.get("target"), "binding": hit.get("binding") or None})
+        return f"revoked {hit['id']}"
+    if words and words[0] != "list":
+        return "usage: grants [list] | grants revoke <id>"
+    rows = g.grants.list()
+    if not rows:
+        return "no standing grants"
+    out = []
+    for r in rows:
+        scope = f"{r.get('rule')} on {r.get('target') or '*'}"
+        if r.get("binding"):
+            scope += f", text {str(r['binding'])[:12]}"
+        out.append(f"{r['id']}  {scope}  by {r.get('by') or '?'}  until {_iso(r['expires'])}")
+    return "\n".join(out)
 
 
 def _iso(ts: float) -> str:
@@ -512,4 +554,11 @@ def register(ctx) -> Gate:
              router_getter=lambda: getattr(ctx, "router", None))
     ctx.register_hook("pre_tool_call", g.apre_tool_call)
     ctx.register_hook("post_approval_response", g.post_approval_response)
+    reg_cmd = getattr(ctx, "register_command", None)
+    if reg_cmd is not None:  # reached through command.run: no new protocol command (D-033)
+        try:
+            reg_cmd("grants", lambda args="": grants_command(g, args), "List or revoke standing approval grants",
+                    "[list] | revoke <id>")
+        except Exception:
+            logger.warning("exo-gate: could not register /grants", exc_info=True)
     return g

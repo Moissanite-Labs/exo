@@ -37,10 +37,18 @@ ingress client never can (D-026). The allowed list is sent as `approvers` on
 `approval.requested` so a client can show who must answer; the engine refuses anyone else as
 `forbidden`.
 
-A client answers as a seat by setting `client` to `seat:<name>`; any other local client answers
-as the principal. That identity is declared by the client on the local socket, so it is only as
-strong as the socket's file permissions (the same OS user). It stops a seat answering by mistake
-or by policy drift; it is not a defence against a hostile process running as the same user.
+A client answers as a seat by setting `client` to `seat:<name>` and signing the answer with that
+seat's Ed25519 key: `sig = exo.core.approvals.sign_approval(key, request_id, decision, binding,
+seat)`. The signature covers the request id, the decision, the request's binding hash and the
+seat name, so it cannot be reused for another request, decision or text. An unsigned or badly
+signed seat answer is refused as `forbidden`. The public key comes from the bus registry when
+that document verifies, else from `<keys dir>/<seat>.pub`.
+
+Any other local client answers as the principal. That identity is not signed: it is as strong as
+the socket's file permissions (the same OS user).
+
+A seat may approve one exact text with `allow`. Only the principal can answer `allow_always`; a
+seat's `allow_always` is refused.
 
 ## Standing grants ("always")
 
@@ -54,8 +62,10 @@ logged with the grant id.
 - Other acts: the scope is the category and the exact target. Default expiry 30 days
   (`always.days`).
 - Credentials never get a grant; they ask every time.
-- Set a value to 0 to turn standing grants off for that kind. To revoke grants, delete the file
-  or the row.
+- Only the principal can create a grant.
+- Set a value to 0 to turn standing grants off for that kind.
+- `/grants` (a `command.run` command, no new protocol command) lists live grants;
+  `/grants revoke <id>` removes one and writes a ledger row (`phase: revoke`).
 
 ## The outbound scrub
 

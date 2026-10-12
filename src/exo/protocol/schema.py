@@ -192,6 +192,7 @@ class ApprovalRespond:
     note: str = ""
     client: str = ""  # who answered (a client or channel id); reaches post_approval_response
     binding: str = ""  # D-033: the ApprovalRequested.binding the answer was given for; a mismatch is refused
+    sig: str = ""  # D-033: a seat's Ed25519 signature (exo.core.approvals.sign_approval); required for seat:<name>
 
 
 @command("question.answer")

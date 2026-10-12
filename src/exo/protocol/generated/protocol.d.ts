@@ -23,6 +23,7 @@ export interface ApprovalRespond {
   note?: string;
   client?: string;
   binding?: string;
+  sig?: string;
 }
 
 export interface ApprovalsList {

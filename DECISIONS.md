@@ -578,13 +578,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Who may approve:** `policies/approvals.yaml` maps category to `principal`, `seat:<name>` or `role:<name>`.
   Default is principal only, so single-user installs behave as before. The principal can always answer: their
   consent is the root. Peers still cannot (D-026). The list rides on `approval.requested` as `approvers`; the
-  engine refuses other answerers as `forbidden`. Identity is the `client` string a local client declares, so it is
-  as strong as the socket's permissions. A real setup where a lead seat approves public posts is expressible as
+  engine refuses other answerers as `forbidden`. A seat answers as `seat:<name>` and must sign the answer with its
+  seat key over request id, decision, binding hash and seat name (`exo.core.approvals`); the key comes from the
+  verified bus registry, else `<keys dir>/<seat>.pub`. Unsigned seat answers are refused. A principal answer is
+  not signed: it is as strong as the socket's permissions. A real setup where a lead seat approves public posts is expressible as
   `github_post: ["role:public-reviewer"]` with `roles: {public-reviewer: ["seat:<lead>"]}`; it is not configured
   live.
 - **Grants:** "always" becomes a grant with a scope (category plus exact target; outward also the text hash), an
   expiry (30 days, outward 7) and a ledger row, kept in the principal store (`state/approval-grants.json`, 0600),
-  else in exod's home. The store, not exod state, because a grant is the principal's consent and belongs with
+  else in exod's home. Only the principal can create one: a seat may approve one exact text with `allow`, and
+  its `allow_always` is refused. `/grants` lists live grants and `/grants revoke <id>` removes one with a ledger
+  row; it is a plugin command reached through `command.run`, so no protocol command. The store, not exod state, because a grant is the principal's consent and belongs with
   their policies and ledger, and it then holds for every seat of that principal. The gate checks grants itself
   and tells the core (`persist`) not to keep its own unscoped in-memory allow. Credentials never get a grant.
 - **Scrub:** posts to public targets are swept for seat names (seat files, bus registry, store agents), home
@@ -593,11 +597,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   also match inside words and with any separator. The footer stays empty in code; the oversight line is an
   example in the template. `footer_exposures` can limit the footer to public targets.
 - **Protocol:** no new command or event. Optional fields: `ApprovalRequested.approvers`, `.binding`;
-  `ApprovalRespond.binding`.
+  `ApprovalRespond.binding`, `.sig`.
 - **Rejected:** an unscoped "always" for outward acts (one approval would cover any later text); keeping grants
   in the core's memory (lost on restart, no expiry, no audit); a hard-coded footer (that is one principal's
   branding); substring matching for every name (a seat called "canary" would hold every post that says canary
   release).
-- **Not done:** signed answers from seats (a seat key over request id, decision and binding) to make seat identity
-  stronger than a declared string; escalation along an org graph (P1-2); TUI and web do not yet show
-  `approvers` or echo `binding`; a command to list or revoke grants (delete the file or the row for now).
+- **Rulings (coordinator, 2026-10-12):** seats sign their answers; the principal can always answer; standing
+  grants are the principal's alone; list and revoke as a `command.run` command.
+- **Not done:** escalation along an org graph (P1-2); the TUI and web clients do not yet show `approvers`, echo
+  `binding`, or sign as a seat (left for the UI work); no client helper beyond `sign_approval` for a seat to answer.

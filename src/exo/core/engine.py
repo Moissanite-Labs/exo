@@ -40,6 +40,7 @@ from exo.core.plugins import PluginManager
 from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
 from exo.gate import approver_allowed, approver_identity
+from exo.core.approvals import verify_approval
 from exo.core.seats import Seat, SeatError, list_seats
 from exo.core.seats import load as load_seat
 from exo.core.sessions import SessionLocked, SessionStore
@@ -752,6 +753,14 @@ class CoreEngine:
                                              f"it needs {' or '.join(approvers)}")
         if b.binding and binding and b.binding != binding:
             raise CommandFailed("stale", "the text changed after it was shown; read the new request and answer that")
+        ident = approver_identity(b.client)
+        if ident.startswith("seat:"):  # D-033: a seat signs its answer; a seat never gives a standing grant
+            if not verify_approval(b.sig, b.request_id, b.decision, binding, ident[5:]):
+                raise CommandFailed("forbidden", f"{ident} must sign its answer with its seat key "
+                                                 "(request id, decision, binding)")
+            if b.decision == "allow_always":
+                raise CommandFailed("forbidden", "only the principal can give a standing grant; "
+                                                 "a seat approves one exact text with allow")
         self._deciders[b.request_id] = b.client or "client"
         fut.set_result(b.decision)
         self.hub.publish(s.ApprovalResolved(request_id=b.request_id, decision=b.decision,
