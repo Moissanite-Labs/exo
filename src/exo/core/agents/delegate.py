@@ -335,7 +335,8 @@ class Delegator:
             async with self.sems.setdefault(b.depth, asyncio.Semaphore(self.limits.max_concurrent)):
                 loop = self._loop(b, provider, model)
                 info = await loop.create_session(title=f"{b.role}: {b.goal[:60]}", model=model,
-                                                 cwd=b.cwd or None, parent=parent or None)
+                                                 cwd=b.cwd or None, parent=parent or None,
+                                                 agent=getattr(self.engine, "agent", None), kind="subagent")
                 sid = info.id
                 self.allow[sid], self.loops[sid] = set(b.tools), loop
                 self.tiers[sid] = b.tier

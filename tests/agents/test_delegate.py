@@ -98,6 +98,8 @@ def test_single_child_round_trip(tmp_path):
 
     child = eng.store.get_session(done.child_session)
     assert child.parent == sid and child.cwd == str(tmp_path)
+    assert child.kind == "subagent" and eng.store.messages(child.id)  # its own log, not the parent's (D-028)
+    assert all(e.session != child.id for e in eng.store.log(eng.agent))
     first = next(c for c in fake.calls if "CHILD-A" in c["user"])
     assert [t for t in first["tools"] if t != "code_find"] == ["glob", "grep", "read_file"]  # scout (code_find is low risk, present when jg runs): low risk only, no delegate, no bash
     assert first["system"].startswith(CHILD_PROMPT) and str(tmp_path) in first["system"]
