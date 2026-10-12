@@ -406,6 +406,7 @@ export interface TurnSend {
 export interface TurnStarted {
   turn_id: string;
   model?: string;
+  soul?: string;
 }
 
 export interface UiPanel {

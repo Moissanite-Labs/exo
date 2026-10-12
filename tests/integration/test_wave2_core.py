@@ -295,3 +295,30 @@ def test_once_verdict_is_never_a_standing_allow(tmp_path):
 
     asyncio.run(main())
     assert asked == [["allow", "deny"], ["allow", "deny"], None]
+
+
+def test_soul_is_reread_at_turn_start_when_the_file_changes(tmp_path):
+    """f_e3dd66fa: an edit to SOUL.md reaches the next turn without a restart; turn.started carries the soul hash."""
+    from exo.core import seats
+
+    d = tmp_path / "home" / "seats" / "scout"
+    d.mkdir(parents=True)
+    (d / "seat.toml").write_text('[seat]\nname = "scout"\nsoul = "SOUL.md"\n')
+    (d / "SOUL.md").write_text("Soul one.")
+    eng = _eng(tmp_path, seat=seats.load(tmp_path / "home", "scout"))
+    assert "Soul one." in eng.loop.system_prompt and "demo: a demo skill" in eng.loop.system_prompt
+
+    async def turn():
+        dsp = Dispatcher(eng)
+        await _run(dsp, eng, "hi")
+        return [e.body for e in eng.hub.since(0) if isinstance(e.body, s.TurnStarted)][-1]
+
+    first = asyncio.run(turn())
+    assert first.soul and "Soul one." in eng.loop.system_prompt
+    (d / "SOUL.md").write_text("Soul two, longer.")
+    second = asyncio.run(turn())
+    assert "Soul two, longer." in eng.loop.system_prompt and "Soul one." not in eng.loop.system_prompt
+    assert "demo: a demo skill" in eng.loop.system_prompt  # the rest of the prompt is kept
+    assert second.soul and second.soul != first.soul
+    (d / "SOUL.md").unlink()  # a removed file empties the soul
+    assert asyncio.run(turn()).soul == "" and "Soul two" not in eng.loop.system_prompt

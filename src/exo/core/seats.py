@@ -89,6 +89,7 @@ class Seat:
     trace: dict[str, Any] = field(default_factory=dict)     # [trace]: threshold overrides (D-032)
     cwd: str | None = None                                  # [session] cwd: default working directory (D-032)
     soul: str = ""
+    soul_path: str = ""                                     # the SOUL.md the text came from; re-read when it changes
     path: str = ""
     key: str | None = None                                  # signing key file; default $EXO_HOME/keys/<name>.key
 
@@ -97,7 +98,7 @@ class Seat:
 
     def summary(self) -> dict[str, Any]:
         d = asdict(self)
-        d.pop("soul"), d.pop("models")
+        d.pop("soul"), d.pop("models"), d.pop("soul_path")
         return {**d, "has_soul": bool(self.soul)}
 
 
@@ -154,7 +155,10 @@ def load(home: str | Path, name: str) -> Seat:
             data = _read(p)
             soul_file = p.parent / str(_table(data.get("seat")).get("soul") or "SOUL.md")
             soul = soul_file.read_text("utf-8").strip() if p.name.startswith("seat.") and soul_file.is_file() else ""
-            return parse(data, name, str(p), soul)
+            seat = parse(data, name, str(p), soul)
+            if p.name.startswith("seat."):
+                seat.soul_path = str(soul_file)
+            return seat
     raise SeatError(f"no seat {name!r} in {seats_dir(home)}")
 
 

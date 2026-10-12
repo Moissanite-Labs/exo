@@ -96,6 +96,7 @@ class Loop:
         self.provider_opts = dict(provider_opts or {})
         self.approval_ms: dict[str, int] = {}  # session -> time spent waiting on approvals; the engine adds to it
         self.on_turn_end: Callable[[str, str], Awaitable[None]] | None = None  # (session, turn_id), after the turn
+        self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
         self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
         self._state: dict[str, _SessionState] = {}
 
@@ -184,7 +185,13 @@ class Loop:
         waited = self.approval_ms.get(session, 0)
         await self._repair(session)
         await self._add(session, user, turn_id)
-        await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or ""), session)
+        soul = ""
+        if self.before_turn is not None:
+            try:
+                soul = self.before_turn() or ""
+            except Exception as exc:  # a failed refresh keeps the old prompt; the turn still runs
+                await self._emit(trace.error_body("before_turn", exc), session)
+        await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or "", soul=soul), session)
         turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user" and not _.meta.get("note"))
         await self._memory("on_turn_start", turn_no, user.text(), session_id=session)
         result = TurnResult(turn_id=turn_id, stop_reason="end")
