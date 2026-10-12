@@ -61,6 +61,8 @@ def cmd_trace(a) -> int:
     else:
         info = store.get_session(sid)
         print(trace.table(turns, f'session {sid} ({info.seat or "no seat"}, {len(turns)} turns shown)'))
+        if peers := trace.peer_text(store, sid):
+            print("\n" + peers)
     return 0
 
 

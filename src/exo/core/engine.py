@@ -31,6 +31,9 @@ from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
 from exo.core.models.router import Router
+from exo.core import peer_target
+from exo.core.ingress import STANDING_LINE
+from exo.core.peers import PeerConfig
 from exo.core.plugins import PluginManager
 from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
@@ -186,7 +189,8 @@ class CoreEngine:
                  mcp: dict[str, dict[str, Any]] | None = None,
                  channels: dict[str, dict[str, Any]] | None = None,
                  tree_cfg: dict[str, Any] | None = None, schedule: bool = False,
-                 trace_cfg: dict[str, Any] | None = None, **loop_kw: Any) -> None:
+                 trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
+                 peers_dir: str | os.PathLike | None = None, **loop_kw: Any) -> None:
         self.home = Path(home)
         self.cwd = cwd or os.getcwd()
         self.store = SessionStore(self.home / "sessions.sqlite")
@@ -208,6 +212,11 @@ class CoreEngine:
         self.findings = Findings(self.store, self.thresholds)
         self._trace_on = (trace_cfg or {}).get("enabled", True) is not False
         trace.add_sink(self._on_harness_error)
+        self.peer_cfg = PeerConfig.of({**(peers or {}), **(seat.peers if seat else {})})  # D-026
+        self.peer_cfg_dir = peers_dir
+        self.peer_node: Any = None
+        self._peer_server: Any = None
+        self.peer_autostart = False  # create() turns it on: a real daemon or in-process TUI announces itself
         self._bridge_plugins()
         if seat and seat.tier and self.router.roles.get(seat.tier):
             self.router.set_role("main", list(self.router.roles[seat.tier]))
@@ -218,9 +227,11 @@ class CoreEngine:
         if self.registry.get("ui") is None:
             ui_tool.register(self.registry, lambda body, sid: self.hub.publish(body, sid))  # D-014 panels
         harness_tool.register(self.registry, self.trace_text, self.findings.file)  # D-025
+        peer_target.attach(self)  # D-026: peers and peer_send tools
         self.mcp = McpManager({**(mcp or {}), **(seat.mcp if seat else {})}, env)
         self._started: asyncio.Future | None = None
-        system_prompt = "\n\n".join(p for p in (system_prompt, seat.soul if seat else "", self.skills.prompt()) if p)
+        system_prompt = "\n\n".join(p for p in (system_prompt, seat.soul if seat else "", self.skills.prompt(),
+                                                   STANDING_LINE if self.peer_cfg.enabled else "") if p)
         slots = self.plugins.slots
         tree = TreeContext(self.store, DefaultCompressor(self.router.provider("aux")), **(tree_cfg or {}))
         self.loop = Loop(self.store, self.router.provider("main"), bus=HubBus(self),  # type: ignore[arg-type]
@@ -247,11 +258,13 @@ class CoreEngine:
         if allow is None:
             return self.registry.specs()
         return [sp for sp in self.registry.specs() if sp.toolset in allow or sp.toolset.split(":")[0] in allow
-                or sp.toolset in ("skills", "harness")]
+                or sp.toolset in ("skills", "harness", "peers")]
 
     async def start(self) -> None:
         """Connect MCP servers once (idempotent; the first command triggers it)."""
         if self._started is None:
+            if self.peer_autostart:
+                await self.start_peers()
             self._started = asyncio.ensure_future(self.mcp.start(self.registry))
             if self._schedule:
                 self.scheduler.start()
@@ -287,6 +300,7 @@ class CoreEngine:
     async def close(self) -> None:
         trace.remove_sink(self._on_harness_error)
         await self.stop_channels()
+        await self.stop_peers()
         await self.scheduler.stop()
         if self._started is not None:
             await self.mcp.close()
@@ -374,7 +388,8 @@ class CoreEngine:
         return await self.registry.call(call, ctx)
 
     async def ask(self, session: str | None, summary: str, call: ToolCall | None = None,
-                  risk: str = "medium", decided_by: list[str] | None = None) -> str:
+                  risk: str = "medium", decided_by: list[str] | None = None, options: list[str] | None = None,
+                  opened: list[str] | None = None) -> str:
         """Publish an approval request and wait for ``approval.respond``.
 
         ``decided_by`` (optional out list) receives the id of the client that answered."""
@@ -382,6 +397,10 @@ class CoreEngine:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._approvals[rid] = (fut, session)
         req = s.ApprovalRequested(request_id=rid, summary=summary, risk=risk, call=call)
+        if options:
+            req.options = list(options)
+        if opened is not None:
+            opened.append(rid)
         self._open_approvals[rid] = req
         self.hub.publish(req, session)
         try:
@@ -472,14 +491,68 @@ class CoreEngine:
         task.add_done_callback(self._tasks.discard)
         return {"accepted": True}
 
-    async def _turn(self, b: s.TurnSend) -> Any:
+    def start_turn(self, session: str, text: str, meta: dict[str, Any] | None = None) -> None:
+        """Start a turn in the background (a peer woke an idle session)."""
+        b = s.TurnSend(session=session, text=text)
+        task = asyncio.create_task(self._turn(b, meta))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these)."""
         hooks = self.plugins.hooks
         await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
         try:
-            return await self.loop.send(b.session, b.text, list(b.parts), mode=b.mode)
+            return await self.loop.send(b.session, b.text, list(b.parts), mode=b.mode, meta=meta)
         finally:
             await hooks.afire("on_turn_end", session_id=b.session)
+
+    # ------------------------------------------------------------ peers (D-026)
+
+    async def start_peers(self, socket: str | os.PathLike | None = None) -> None:
+        """Write this daemon's presence file. ``socket`` is exod's own socket; without one (an in-process core)
+        the engine serves a small socket of its own in the peers directory."""
+        if self.peer_node is not None or not self.peer_cfg.enabled:
+            return
+        from exo.core.peers import peers_dir
+        from exo.server.app import Dispatcher, HttpServer
+        path = str(socket) if socket else ""
+        if not path:
+            d = Path(self.peer_cfg_dir or peers_dir())
+            path = str(d / f"exo-{os.getpid()}.sock")
+            self._peer_server = HttpServer(Dispatcher(self, self.hub))
+            await self._peer_server.start_unix(path)
+        node = peer_target.build_node(self, path)
+        self.peer_node = node
+        node.start()
+
+    async def stop_peers(self) -> None:
+        if self.peer_node is not None:
+            self.peer_node.stop()
+            await self.peer_node.path.close()
+            self.peer_node = None
+        if self._peer_server is not None:
+            await self._peer_server.close()
+            self._peer_server = None
+
+    async def _peers(self, b: s.Peers) -> dict[str, Any]:
+        if self.peer_node is None and self.peer_autostart:
+            await self.start_peers()
+        node = self.peer_node
+        if node is None:
+            raise CommandFailed("unsupported", "peers are turned off for this seat")
+        try:
+            if b.action == "list":
+                return await node.list(b.session, b.local_only)
+            if b.action == "send":
+                if b.session:
+                    self._info(b.session)
+                return await node.send(b.to, b.text, b.session, b.via)
+            if b.action == "deliver":
+                return await node.deliver(b.envelope)
+            return await node.receipt(b.envelope)
+        except ValueError as exc:
+            raise CommandFailed("bad_request", str(exc)) from None
 
     async def _feedback_send(self, b: s.FeedbackSend) -> dict[str, Any]:
         from exo import learn  # outside the core; learning off just records nothing
@@ -504,6 +577,8 @@ class CoreEngine:
         return {"tasks": self.agents.list(b.session)}
 
     async def _approval_respond(self, b: s.ApprovalRespond) -> dict[str, Any]:
+        if (b.client or "").lower().startswith(("peer", "ingress")):  # D-026: input from outside is never consent
+            raise CommandFailed("forbidden", "a peer cannot answer an approval")
         fut, sid = self._approvals.get(b.request_id, (None, None))
         if fut is None or fut.done():
             raise CommandFailed("not_found", f"no open approval {b.request_id}")
@@ -576,7 +651,9 @@ class CoreEngine:
                 f"harness {self.findings.version}; open findings {self.findings.open_count()}"]
         if not session:
             return "\n".join(head)
-        return "\n".join(head + ["", trace.table(trace.build(self.store, session, last, self.thresholds))])
+        peers = trace.peer_text(self.store, session)
+        return "\n".join(head + ["", trace.table(trace.build(self.store, session, last, self.thresholds))]
+                         + (["", peers] if peers else []))
 
     async def _builtin_command(self, b: s.CommandRun) -> Any:
         if b.name == "trace":
@@ -664,9 +741,10 @@ def create(seat: str | None = None) -> CoreEngine:
         folders.append(pack)
     eng = CoreEngine(cfg.home, models, plugins=pm, cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
                       mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
-                      delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False,
+                      delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"),
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
                             if k in ("leaf_size", "tail_messages", "view_budget")})
+    eng.peer_autostart = True
     if cfg.get("learn", {}).get("enabled", True) is not False:
         from exo import learn
         learn.attach(eng)

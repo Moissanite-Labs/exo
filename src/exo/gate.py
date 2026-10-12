@@ -45,6 +45,7 @@ CATEGORIES: dict[str, tuple[str, str, bool]] = {
     "delegate":          ("reversible", "private", False),
     "web_read":          ("reversible", "private", False),
     "reaction":          ("reversible", "internal", False),
+    "peer_message":      ("reversible", "internal", False),  # D-026: the receiving seat gates it, not the sender
     "schedule":          ("costly", "private", False),
     "credentials":       ("costly", "private", False),
     "browser":           ("costly", "internal", False),
@@ -652,6 +653,7 @@ TOOLS: dict[str, str] = {
                                     "annotate_preview", "desktop_project", "edit_file")},
     **{t: "generate" for t in ("image_generate", "video_generate", "text_to_speech")},
     **{t: "delegate" for t in ("delegate_task", "start_chat")},
+    "peers": "read", "peer_send": "peer_message",
     **{t: "credentials" for t in ("browser_vault_fill", "browser_vault_unlock", "browser_vault_save_login",
                                     "browser_vault_enter_code")},
     **{t: "browser" for t in ("browser_cdp", "browser_exec", "browser_dialog", "computer_use")},
@@ -1050,6 +1052,37 @@ def summarize(c: Classification, d: Decision, default: str = "skip") -> str:
         line += f" Link: {c.link}."
     line += f" Default if no reply: {default}."
     return " ".join(line.split())
+
+
+# --- peer messages (D-026) -------------------------------------------------------------------
+
+PEER_OUTCOMES = ("auto", "hold", "deny")
+PEER_TRUST = ("principal", "same-principal", "other", "remote", "unverified")
+# Who wrote it, as the receiving side could check it. A person typing in a client of this seat is the
+# principal; another session of the same principal on this machine is same-principal; a session of a
+# different or unknown principal is other; a bus seat is remote; a bad or missing signature is unverified.
+PEER_DEFAULTS = {"principal": "auto", "same-principal": "auto", "other": "hold", "remote": "hold",
+                 "unverified": "deny"}
+
+
+def decide_peer(trust: str, sender: str = "", config: Mapping | None = None) -> tuple[str, str]:
+    """``(outcome, reason)`` for a message from ``sender`` at ``trust``: auto, hold or deny.
+
+    ``config`` is the receiving seat's ``peers`` settings: ``policy`` maps a trust level to an outcome, and
+    ``rules`` (``{"from": glob, "outcome": ...}``, first match wins) override it for named senders. An
+    unverified sender is denied whatever the config says, and no setting makes a peer message consent to
+    anything: this decides delivery only."""
+    config = config or {}
+    if trust == "unverified":
+        return "deny", "the signature did not verify"
+    for rule in config.get("rules") or []:
+        if isinstance(rule, Mapping) and fnmatch.fnmatch(sender, str(rule.get("from") or "")):
+            out = str(rule.get("outcome") or "")
+            if out in PEER_OUTCOMES:
+                return out, f"rule for {rule['from']}"
+    table = {**PEER_DEFAULTS, **{k: v for k, v in (config.get("policy") or {}).items() if v in PEER_OUTCOMES}}
+    out = table.get(trust, "hold")
+    return out, f"{trust} sender: {out}"
 
 
 # --- YAML subset reader (stdlib only) ------------------------------------------------------

@@ -128,8 +128,17 @@ class Loop:
             st.interrupt.set()
         return st.running
 
+    def steer(self, session: str, msg: Message) -> bool:
+        """Put a message into the running turn at its next tool round. False when no turn is running
+        (the caller queues it instead): unlike ``send(mode="steer")`` this never starts a turn."""
+        st = self.state(session)
+        if not st.running:
+            return False
+        st.steer.append(msg)
+        return True
+
     async def send(self, session: str, text: str = "", parts: list[ContentPart] | None = None,
-                   mode: str = "send") -> TurnResult | None:
+                   mode: str = "send", meta: dict[str, Any] | None = None) -> TurnResult | None:
         """Run a turn. ``steer`` while a turn runs injects the message between tool
         rounds and returns None; ``queue`` and ``send`` wait for the running turn."""
         if self.store.get_session(session) is None:
@@ -138,6 +147,8 @@ class Loop:
         msg = Message(role="user", content=list(parts or []))
         if text:
             msg.content.insert(0, ContentPart.of_text(text))
+        if meta:
+            msg.meta.update(meta)
         st = self.state(session)
         if mode == "steer" and st.running:
             st.steer.append(msg)
@@ -183,6 +194,10 @@ class Loop:
             result.stop_reason, result.error = "error", str(exc) or type(exc).__name__
             await self._emit(ev.Error(code="turn_failed", message=result.error), session)
             await self._emit(trace.error_body("turn loop", exc), session)
+        if st.steer:  # a message that arrived after the last tool round is context for the next turn, not lost
+            for m in st.steer:
+                await self._add(session, m, turn_id)
+            st.steer.clear()
         wall, approval = int((time.monotonic() - t0) * 1000), self.approval_ms.get(session, 0) - waited
         timing = {"wall_ms": wall, "model_ms": st.stats["model_ms"], "approval_ms": approval,
                   "tool_ms": max(0, st.stats["tool_ms"] - approval), "model_calls": st.stats["model_calls"],
