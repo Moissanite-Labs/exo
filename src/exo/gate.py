@@ -1062,6 +1062,11 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         c.target = c.target or host
         c.signals.append("remote host")
         return [c]
+    if prog == "muse" and any(a in ("login", "auth", "logout") for a in argv[1:]):
+        # Credential commands (browser login, stored API keys, logout). Any position, so `muse --yolo login`
+        # is caught; a prompt that is exactly one of these words over-asks, which is the safe side.
+        return [_make("credentials", summary=f"muse {next(a for a in argv[1:] if a in ('login', 'auth', 'logout'))}",
+                      command=cmd)]
     if prog in ("vercel", "netlify"):
         if "login" in argv:
             return [_make("credentials", summary=f"{prog} login", command=cmd)]
@@ -1323,7 +1328,7 @@ TOOLS: dict[str, str] = {
 # Segment patterns match at any depth; EXO_HOME and EXO_KEYS_FILE overrides are added by
 # is_sensitive_path() because they can sit anywhere.
 _SENSITIVE_PATH = re.compile(
-    r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
+    r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.config/muse|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
     r"credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|"
     r"keys\.env|\.config/exo/keys(\.env)?|\.exo/keys|\.divan/[^/]+\.key|auth\.json|"
     r"client_secret[^/]*\.json|\.unii/[^/]+/token|[^/]*token[^/]*\.(json|txt|pickle|ya?ml)|[^/]+\.token|"

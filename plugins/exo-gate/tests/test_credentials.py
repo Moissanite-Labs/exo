@@ -97,6 +97,20 @@ CREDENTIALS = [
     sh("cat ~/.config/gh/hosts.yml"),
     sh("cat ~/.git-credentials"),
     sh("cat ~/.kube/config"),
+    # The Muse CLI keeps its login in the keychain; its credential commands and auth file are the user's
+    sh("muse login"),
+    sh("muse auth"),
+    sh("muse auth --help"),
+    sh("muse logout"),
+    sh("muse --yolo login"),
+    sh("muse mcp login some-server"),
+    sh("sudo muse logout"),
+    fs("read_file", "~/.config/muse/auth.json"),
+    fs("write_file", "~/.config/muse/auth.json"),
+    sh("cat ~/.config/muse/auth.json"),
+    sh("cat $HOME/.config/muse/auth.json"),
+    sh("cd ~/.config/muse && cat auth.json"),
+    sh("cp ~/.config/muse/auth.json /tmp/x"),
     sh("env"),
     sh("env | sort"),
     sh("printenv"),
@@ -176,3 +190,15 @@ def test_no_policy_lowers_credentials(raw):
 
 def test_credentials_is_not_a_peer_or_auto_category():
     assert gate.CATEGORIES["credentials"][0] != "reversible"
+
+
+@pytest.mark.parametrize("cmd", ["bash -c 'muse login'", "sh -c 'muse logout'", "~/.local/bin/muse login"])
+def test_muse_credential_commands_ask_even_when_wrapped(cmd):
+    """A wrapper or a path hides the program from the credentials rule, but the call still asks (never allow)."""
+    assert decide(classify(sh(cmd))).outcome == "ask"
+
+
+@pytest.mark.parametrize("cmd", ["muse --version", "muse exec --help", "muse exec 'summarize this'"])
+def test_other_muse_commands_are_not_credentials(cmd):
+    """Only login, auth and logout are credential commands. The rest is an unknown program, which asks anyway."""
+    assert classify(sh(cmd)).category != "credentials"
