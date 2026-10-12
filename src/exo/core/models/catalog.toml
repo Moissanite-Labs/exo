@@ -67,6 +67,14 @@ transport = "openai"
 base_url = "https://inference-api.nousresearch.com/v1"
 key_env = "NOUS_API_KEY"
 
+# Claude subscription through the `claude` CLI (OAuth login, no API key; ANTHROPIC_API_KEY is dropped
+# from the subprocess). Available only when `claude` is on PATH. Text-only: calls that carry Exo tools
+# fail and the router falls back. Model refs look like "claude-cli:sonnet".
+[providers.claude-cli]
+transport = "claude-cli"
+command = "claude"
+models = ["sonnet", "opus", "haiku"]
+
 # TypeSafe Jev: a decision model (probabilities, not text), so decision role only.
 # Verified https://docs.typesafe.ai/api.md : POST https://api.typesafe.ai/v1/systemone,
 # Authorization: Bearer. Question shapes verified live 2026-10-11 (see decision.py). Default first
