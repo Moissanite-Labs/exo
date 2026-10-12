@@ -203,7 +203,10 @@ class QuestionAnswer:
 @command("command.run")
 @dataclass
 class CommandRun:
-    """Run a slash command, e.g. name="exo", args="handoff"."""
+    """Run a slash command, e.g. name="exo", args="handoff". The core answers some built-in commands itself
+    (the command cap is full, so new ones go here, not in new command types): ``trace``, ``findings``,
+    ``context`` (what the next model call for ``session`` carries, read-only) and ``compact`` (summarize now
+    what is eligible in the agent's memory; runs in the core that holds the agent lock)."""
 
     name: str
     args: str = ""
