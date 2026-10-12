@@ -88,6 +88,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Web client (command centre) | `plugins/exo-command/README.md`, `docs/ui/WEB.md` | §2 | n/a | WP §24 |
 | Bus (agent to agent relay) | `plugins/exo-bus/README.md`, `docs/PEERS.md` "Bus seats" (D-040) | §7 (bus seats are held, pinned keys) | §9 "Use the bus" | WP §29 (named, not explained) |
 | Upstream tracking (`exo upstream`) | `docs/PINNING.md`, `docs/STANDALONE.md` §3 | n/a | MISSING | WP §25 |
+| Public roadmap page (`site/roadmap/`): the flywheel, now / next / horizon with status per initiative, concept diagrams, screenshots, references | `site/roadmap/index.html`; content drawn from `docs/TASTE-BASELINE.md`, `docs/BRAND.md` and `DECISIONS.md` D-020, D-044, D-049, D-050 | n/a | `docs/DEVELOPER-GUIDE.md` "Deploying the site" (staging first) | n/a (the page links the whitepaper) |
 
 ## Whitepaper gaps
 
