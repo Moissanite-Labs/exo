@@ -283,3 +283,17 @@ def test_waiting_strip_then_text_and_warn_notice(tmp_path):
         assert "working" in str(app.query_one("#activity").render())
 
     run(tmp_path, sc)
+
+
+def test_status_shows_findings_and_event_errors_reach_the_core(tmp_path):
+    async def sc(app, pilot, client, eng):
+        eng.findings.file("sig", "something", severity="bug")
+        await send(app, pilot, "hello")
+        await until(lambda: "1 findings" in app.status_text(), pilot)
+        # an exception in the TUI's own event path becomes a harness.error event (D-025)
+        app.handle = lambda ev: (_ for _ in ()).throw(NameError("boom"))
+        await send(app, pilot, "hello")
+        await until(lambda: any(isinstance(e.body, s.HarnessError) and "tui event" in e.body.where
+                                for e in eng.hub.since(0)), pilot)
+
+    run(tmp_path, sc)

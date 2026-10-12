@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import time
@@ -68,6 +69,7 @@ class ExoApp(App):
         self.window = DEFAULT_WINDOW
         self.ctx_tokens = 0
         self.cost = 0.0
+        self.findings = 0  # open harness findings (D-025), polled after each turn
         self.busy = False
         self.turn_t0 = 0.0  # when the running turn began; 0 once text or reasoning has streamed
         self.expanded = False
@@ -115,7 +117,8 @@ class ExoApp(App):
 
     def status_text(self) -> str:
         pct = min(999, round(100 * self.ctx_tokens / self.window)) if self.window else 0
-        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}% · ${self.cost:.2f}"
+        bug = f" · {self.findings} findings" if self.findings else ""
+        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}% · ${self.cost:.2f}{bug}"
 
     def refresh_status(self) -> None:
         self.query_one("#status", Static).update(self.status_text())
@@ -186,8 +189,28 @@ class ExoApp(App):
                 continue
             try:
                 self.handle(ev)
-            except Exception as exc:  # a bad event must not stop the feed
+            except Exception as exc:  # a bad event must not stop the feed, and the harness is told (D-025)
                 self.note(f"event {ev.type}: {type(exc).__name__}: {exc}", "error")
+                if ev.type != "harness.error":  # never report the report of an error
+                    self.report_error(f"tui event {ev.type}", exc)
+
+    def report_error(self, where: str, exc: Exception) -> None:
+        """Send a caught exception to the core as a harness.error event."""
+        import traceback
+
+        body = {"where": where, "error_type": type(exc).__name__, "message": str(exc),
+                "traceback": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)[-3:])}
+        self.run_worker(self.client.send(s.CommandRun(name="harness_error", args=json.dumps(body),
+                                                      session=self.session)), exit_on_error=False)
+
+    async def refresh_findings(self) -> None:
+        await asyncio.sleep(0.5)  # the core files findings just after the turn ends
+        try:
+            out = (await self.client.call(s.CommandRun(name="findings", args="count"))).get("output")
+            self.findings = int(out.get("open", 0)) if isinstance(out, dict) else 0
+        except Exception:
+            return
+        self.refresh_status()
 
     def handle(self, ev: s.Event) -> None:
         b = ev.body
@@ -202,6 +225,7 @@ class ExoApp(App):
             self.running_tools = 0
             self.flush()
             self.cur = None
+            self.run_worker(self.refresh_findings(), exit_on_error=False)
         elif isinstance(b, s.ReasoningDelta):
             self.turn_t0 = 0.0
         elif isinstance(b, s.MessageDelta):
@@ -259,6 +283,9 @@ class ExoApp(App):
             if b.session_total and b.session_total.cost_usd is not None:
                 self.cost = b.session_total.cost_usd
             self.model = b.model or self.model
+        elif isinstance(b, s.ModelCall):
+            if b.route:
+                self.model = b.route  # the route that served, not the one asked for
         elif isinstance(b, s.TaskUpdated):
             self.agents[b.task_id] = b.status
         elif isinstance(b, s.UiPanel):

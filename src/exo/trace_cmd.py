@@ -1,0 +1,87 @@
+"""`exo trace` and `exo findings` (D-025): read how the harness performed, and the findings it kept.
+
+    exo trace [SESSION] [--last N] [--json]       per-turn table and anomaly flags (default: newest session)
+    exo findings [--status open] [--json]         the findings store
+    exo findings fix ID --in SHA                  mark fixed; later turns re-measure it
+    exo findings export --md                      a digest for the developer session
+"""
+from __future__ import annotations
+
+import json
+import sys
+
+from .store import exo_home
+
+
+def _store():
+    from .core.sessions import SessionStore
+
+    path = exo_home() / 'sessions.sqlite'
+    if not path.exists():
+        sys.exit(f'exo: no sessions at {path}')
+    return SessionStore(path)
+
+
+def _thresholds():
+    from .config import Config
+    from .core.trace import Thresholds
+
+    return Thresholds.of(Config.load().data.get('trace'))
+
+
+def register(sp, common) -> None:
+    p = sp.add_parser('trace', help='how the harness performed in a session: per turn timing, routes, flags')
+    p.add_argument('session', nargs='?', help='session id (default: the newest)')
+    p.add_argument('--last', type=int, metavar='N', help='only the last N turns')
+    p.add_argument('--json', action='store_true')
+    p = sp.add_parser('findings', help='what the harness found wrong with itself')
+    p.add_argument('action', nargs='?', default='list', choices=['list', 'fix', 'export'])
+    p.add_argument('id', nargs='?', help='finding id (for fix)')
+    p.add_argument('--status', choices=['open', 'fixed', 'verified', 'reopened'])
+    p.add_argument('--in', dest='sha', metavar='SHA', help='commit the fix landed in (for fix)')
+    p.add_argument('--md', action='store_true', help='markdown (for export)')
+    p.add_argument('--json', action='store_true')
+
+
+def cmd_trace(a) -> int:
+    from .core import trace
+
+    store = _store()
+    sid = a.session
+    if not sid:
+        rows = store.list_sessions(1)
+        if not rows:
+            sys.exit('exo: no sessions')
+        sid = rows[0].id
+    elif store.get_session(sid) is None:
+        sys.exit(f'exo: no session {sid}')
+    turns = trace.build(store, sid, a.last, _thresholds())
+    if a.json:
+        print(json.dumps(trace.as_dict(sid, turns), indent=2))
+    else:
+        info = store.get_session(sid)
+        print(trace.table(turns, f'session {sid} ({info.seat or "no seat"}, {len(turns)} turns shown)'))
+    return 0
+
+
+def cmd_findings(a) -> int:
+    from .core.findings import Findings
+
+    fnd = Findings(_store(), _thresholds())
+    if a.action == 'fix':
+        if not a.id or not a.sha:
+            sys.exit('usage: exo findings fix ID --in SHA')
+        try:
+            row = fnd.fix(a.id, a.sha)
+        except KeyError:
+            sys.exit(f'exo: no finding {a.id}')
+        print(f"{row['id']} fixed in {row['fixed_in']}")
+        return 0
+    fnd.sweep()
+    if a.action == 'export':
+        print(fnd.export_md(a.status), end='')
+    elif a.json:
+        print(json.dumps(fnd.list(a.status), indent=2))
+    else:
+        print(fnd.text(a.status))
+    return 0

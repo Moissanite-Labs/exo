@@ -351,3 +351,23 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   day and sends notes as he goes; each note is a small cycle (fix and ship, or log a design item). A
   separate session handles that feedback (`~/Work/handoffs/exo-canary-feedback.md`); product design and
   feature building continue in the main session. Promotion of lessons still needs held-out wins (D-022).
+
+## D-025 (2026-10-12) Harness self-observation: trace, findings, re-verification
+- **Why:** A asked the first agent (exo-razi) to evaluate its environment. It missed the biggest problems
+  because it could not see how the harness performed: an 8 min 20 s first turn with no event saying why, no record of
+  which route served a call or of fallbacks, a shown model that disagreed with the served one, a test suite
+  run twice by a subagent, two tool errors, and `cost_usd` always null. A wants a recursively improving
+  feedback loop built into the harness.
+- **Decision:** one loop, record, read, report, verify (docs/TRACE.md). Two new events, `model.call` and
+  `harness.error` (24 of 30), a `timing` summary on `turn.completed`, `is_error` on `tool.completed`.
+  `exo.core.trace` reads a session into per-turn rows (old sessions are derived from timestamps) and applies
+  eight anomaly rules with stable signatures and thresholds in config (`trace` table). Findings live in a
+  `findings` table in sessions.sqlite, not a jsonl file: a dedup is one transaction, the server and the CLI both
+  write, and a copy of the database carries the findings with their sessions. A finding marked fixed in a commit
+  is re-measured: a recurrence on a harness at or after that commit reopens it, and quiet for 20 turns or 3 days
+  verifies it.
+- **Agent surface:** `exo_trace` and `exo_harness_report` (main agent only; subagents are covered by the rules).
+  `/trace` and `/findings` are built-in commands over `command.run`, so no new protocol command was needed.
+  The TUI shows the serving route and an open-findings count.
+- **Not done:** pricing (`cost_usd` stays null for models missing from the catalog) is a separate fix; a
+  provider time to first token is measured at the loop, not inside each provider.
