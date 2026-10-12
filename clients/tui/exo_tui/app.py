@@ -144,7 +144,7 @@ class ExoApp(App):
         Binding("ctrl+g", "compose", "compose", priority=True),
         Binding("escape", "escape", "esc", show=False),
         Binding("ctrl+c", "ctrl_c", "stop", show=False),
-        Binding("ctrl+g", "answer_card", "answer", priority=True, show=False),
+        Binding("ctrl+f", "answer_card", "answer", priority=True, show=False),
         Binding("f6", "load_earlier", "earlier", priority=True, show=False),
     ]
 
@@ -1455,7 +1455,7 @@ class ExoApp(App):
         self.query_one("#left").mount(self.card, before=self.query_one("#activity"))
 
     def action_answer_card(self) -> None:
-        """ctrl+g: put the focus on the approval card from anywhere; the draft in the composer stays as it is."""
+        """ctrl+f: put the focus on the approval card from anywhere; the draft in the composer stays as it is."""
         if self.card is not None and not self.modal_open():
             self.card.focus()
 
