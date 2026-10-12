@@ -89,6 +89,9 @@
     },
     "schedule.edit": {
       "$ref": "#/$defs/ScheduleEdit"
+    },
+    "peers": {
+      "$ref": "#/$defs/Peers"
     }
   },
   "events": {
@@ -151,6 +154,12 @@
     },
     "ui.panel": {
       "$ref": "#/$defs/UiPanel"
+    },
+    "peer.message": {
+      "$ref": "#/$defs/PeerMessage"
+    },
+    "peer.delivery": {
+      "$ref": "#/$defs/PeerDelivery"
     },
     "model.call": {
       "$ref": "#/$defs/ModelCall"
@@ -906,6 +915,134 @@
       "required": [
         "text"
       ]
+    },
+    "PeerDelivery": {
+      "type": "object",
+      "properties": {
+        "msg_id": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "delivered",
+            "held",
+            "released",
+            "denied",
+            "expired"
+          ]
+        },
+        "peer": {
+          "type": "string",
+          "default": ""
+        },
+        "direction": {
+          "enum": [
+            "in",
+            "out"
+          ],
+          "default": "out"
+        },
+        "detail": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "msg_id",
+        "state"
+      ],
+      "description": "Where a peer message stands (D-026). ``direction`` out is the sender's receipt, in is the receiver's own record. held waits for the principal; released, denied and expired close it."
+    },
+    "PeerMessage": {
+      "type": "object",
+      "properties": {
+        "msg_id": {
+          "type": "string"
+        },
+        "sender": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "trust": {
+          "type": "string",
+          "default": "other"
+        },
+        "sender_session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mode": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "msg_id",
+        "sender",
+        "text"
+      ],
+      "description": "A message from another session reached this one (D-026). Clients show it with the sender, never as the user. ``trust`` is principal, same-principal, other, remote or unverified."
+    },
+    "Peers": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "send",
+            "deliver",
+            "receipt"
+          ],
+          "default": "list"
+        },
+        "to": {
+          "type": "string",
+          "default": ""
+        },
+        "text": {
+          "type": "string",
+          "default": ""
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "via": {
+          "enum": [
+            "agent",
+            "human"
+          ],
+          "default": "human"
+        },
+        "local_only": {
+          "type": "boolean",
+          "default": false
+        },
+        "envelope": {
+          "type": "object",
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "description": "Live sessions messaging each other (D-026). One command with an action, because the command cap leaves one slot: ``list`` shows peers, ``send`` posts a message from this daemon (``via`` says whether a person or a model wrote it), ``deliver`` and ``receipt`` are the daemon-to-daemon calls (a signed envelope in, a delivery receipt back)."
     },
     "QuestionAnswer": {
       "type": "object",

@@ -172,6 +172,33 @@ export interface Notice {
   level?: "info" | "warn";
 }
 
+export interface PeerDelivery {
+  msg_id: string;
+  state: "delivered" | "held" | "released" | "denied" | "expired";
+  peer?: string;
+  direction?: "in" | "out";
+  detail?: string;
+}
+
+export interface PeerMessage {
+  msg_id: string;
+  sender: string;
+  text: string;
+  trust?: string;
+  sender_session?: string | null;
+  mode?: string;
+}
+
+export interface Peers {
+  action?: "list" | "send" | "deliver" | "receipt";
+  to?: string;
+  text?: string;
+  session?: string | null;
+  via?: "agent" | "human";
+  local_only?: boolean;
+  envelope?: Record<string, unknown>;
+}
+
 export interface QuestionAnswer {
   question_id: string;
   answer: string;
@@ -415,6 +442,7 @@ export interface CommandBodies {
   "feedback.send": FeedbackSend;
   "ui.respond": UiRespond;
   "schedule.edit": ScheduleEdit;
+  "peers": Peers;
 }
 export type CommandType = keyof CommandBodies;
 
@@ -439,6 +467,8 @@ export interface EventBodies {
   "decision.queued": DecisionQueued;
   "taste.updated": TasteUpdated;
   "ui.panel": UiPanel;
+  "peer.message": PeerMessage;
+  "peer.delivery": PeerDelivery;
   "model.call": ModelCall;
   "harness.error": HarnessError;
   "notice": Notice;

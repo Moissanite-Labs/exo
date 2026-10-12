@@ -541,5 +541,22 @@ def table(turns: list[TurnTrace], title: str = "") -> str:
     return "\n".join(lines)
 
 
+def peer_text(store: Any, session: str, last: int = 20) -> str:
+    """Peer traffic of a session (D-026): who sent what to whom, and where each message stands. '' when none."""
+    rows = [e for e in _events(store, session, deltas=False) if e.type in ("peer.message", "peer.delivery")][-last:]
+    if not rows:
+        return ""
+    lines = ["peers"]
+    for e in rows:
+        b = e.body
+        when = (e.ts or "")[11:19]
+        if e.type == "peer.message":
+            lines.append(f"  {when}  from {b.sender} ({b.trust}) {b.mode or 'delivered'}: {scrub(b.text, 60)}")
+        else:
+            lines.append(f"  {when}  {'to' if b.direction == 'out' else 'from'} {b.peer}: {b.state}  {b.msg_id}"
+                         + (f"  {scrub(b.detail, 80)}" if b.detail else ""))
+    return "\n".join(lines)
+
+
 def as_dict(session: str, turns: list[TurnTrace]) -> dict[str, Any]:
     return {"session": session, "turns": [t.summary() | {"flag_list": [vars(f) for f in t.flags]} for t in turns]}

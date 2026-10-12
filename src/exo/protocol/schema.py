@@ -4,7 +4,7 @@ Commands in, events out. One ordered event stream per server; every event has
 a ``seq`` so a client resumes with ``events.subscribe(since=seq)``.
 
 Wave 1 interface: fixed before the wave. Stdlib only. Rules:
-- Under 30 commands and under 30 event types (tests enforce the cap).
+- At most 30 commands and under 30 event types (tests enforce the cap; D-026 used the last command slot).
 - Additive changes only within a protocol version: new optional fields with
   defaults, or new types. Never rename or remove.
 - Commands are strict: unknown type or unknown field is rejected.
@@ -330,6 +330,23 @@ class ScheduleEdit:
     deliver: str = "notice"  # notice, or a channel id
 
 
+@command("peers")
+@dataclass
+class Peers:
+    """Live sessions messaging each other (D-026). One command with an action, because the command cap leaves
+    one slot: ``list`` shows peers, ``send`` posts a message from this daemon (``via`` says whether a person
+    or a model wrote it), ``deliver`` and ``receipt`` are the daemon-to-daemon calls (a signed envelope in,
+    a delivery receipt back)."""
+
+    action: Literal["list", "send", "deliver", "receipt"] = "list"
+    to: str = ""  # send: a peer name from list, or a bus seat
+    text: str = ""  # send
+    session: str | None = None  # send: the sending session; list: the asking session (left out of the answer)
+    via: Literal["agent", "human"] = "human"  # send: who wrote it. A person typing /send is the principal.
+    local_only: bool = False  # list: this daemon's sessions only (what another daemon asks)
+    envelope: dict[str, Any] = field(default_factory=dict)  # deliver, receipt
+
+
 # ---------------------------------------------------------------- events (22)
 
 
@@ -504,6 +521,33 @@ class UiPanel:
     text: str = ""
     data: dict[str, Any] = field(default_factory=dict)
     reason: str = ""  # why it was opened, one line; feeds the learning loop
+
+
+@event("peer.message")
+@dataclass
+class PeerMessage:
+    """A message from another session reached this one (D-026). Clients show it with the sender, never as the
+    user. ``trust`` is principal, same-principal, other, remote or unverified."""
+
+    msg_id: str
+    sender: str
+    text: str
+    trust: str = "other"
+    sender_session: str | None = None
+    mode: str = ""  # steered (into the running turn), queued (for the next turn) or started (a turn)
+
+
+@event("peer.delivery")
+@dataclass
+class PeerDelivery:
+    """Where a peer message stands (D-026). ``direction`` out is the sender's receipt, in is the receiver's own
+    record. held waits for the principal; released, denied and expired close it."""
+
+    msg_id: str
+    state: Literal["delivered", "held", "released", "denied", "expired"]
+    peer: str = ""  # the other side's name
+    direction: Literal["in", "out"] = "out"
+    detail: str = ""  # plain English
 
 
 @event("model.call")

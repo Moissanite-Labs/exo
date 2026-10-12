@@ -318,6 +318,8 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
         srv = HttpServer(dispatcher)
         await srv.start_unix(socket)
         servers.append(srv)
+        if (start_peers := getattr(engine, "start_peers", None)) is not None:
+            await start_peers(socket)  # D-026: presence file so other daemons find this one
         if ready:
             ready(f"unix:{socket}")
     if tcp:
