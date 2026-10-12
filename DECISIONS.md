@@ -330,3 +330,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   A lesson that changes behaviour (skill patch, high-impact taste) is promoted only if it beats the
   incumbent on held-out cases and passes the regression gates.
 - **Ownership and acceptance:** docs/WAVE-3.md.
+
+## D-023 (2026-10-12) Wave 3 built; live acceptance passed; canary next
+- **Built (6a82c41):** Textual TUI (`exo tui`), the web UI in exo-command, `exo.learn` (signals, fast loop,
+  typed proposals, promotion, revert, nightly climb with held-out gate), scheduler, `ui` panels
+  (docs/PANELS.md; subagents and scheduled jobs get no ui tool), and every D-021 carry-over.
+- **Live acceptance (scripts/accept_wave3.py, OpenCode Go, 88 s, 6 main turns):** diff panel opened by the
+  model; an edit verdict produced 3 proposals through the fast loop; an every-1m job ran and reported;
+  `rm -rf` asked, deny kept the folder, the gate decision is in the signed ledger and verifies; Jev answered
+  3 of 4 gate calls; usage names the route that served.
+- **Linux audit:** saga-minar's fixes merged (#9 to #12, #14 to #16); Hermes is now opt-in in install.sh.
+- **Open:** the canary day (A, seat `canary`, launcher `exo-canary`, a copy of the principal store so the
+  real one is untouched); TUI footprint on charminar (#17, D-022 escape hatch); nightly learning trigger;
+  brief "learned" section; climb candidates beyond add and drop.
