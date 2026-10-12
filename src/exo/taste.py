@@ -155,6 +155,7 @@ class Belief:
     node_id: str | None = None
     guarded: bool = False
     event_id: str | None = None      # the belief_proposed event
+    domain: str = ""                 # lets policy set a half-life per domain ("domain:<name>")
 
     @property
     def active(self) -> bool:
@@ -166,6 +167,8 @@ class Belief:
 
     def half_life(self, half_lives: Mapping[str, float | None] | None = None) -> float | None:
         hl = dict(DEFAULT_HALF_LIFE, **(half_lives or {}))
+        if self.domain and f"domain:{self.domain}" in hl and self.type != "rule":
+            return hl[f"domain:{self.domain}"]
         return hl.get(self.type, hl.get("preference"))
 
     def weight(self, now: str | datetime, half_lives: Mapping[str, float | None] | None = None) -> float:
@@ -212,3 +215,24 @@ def resolve_conflict(older: Belief, rule: str = "newer_wins_unless_guarded") -> 
     if rule == "newer_wins":
         return "newer"
     return "ask" if older.guarded else "newer"
+
+
+# --- taste.md export ----------------------------------------------------------
+
+def export_taste_md(rules: Iterable[tuple[str, str, float]], title: str = "Taste",
+                    min_label: str = "medium") -> str:
+    """Command Code's interop format: `- rule. confidence: 0.82`, grouped under domain headings.
+
+    `rules` are (domain, text, weight). Rules below `min_label` are left out (low is not shown).
+    Order is by domain, then by weight, highest first."""
+    floor = {"high": HIGH, "medium": MEDIUM, "low": 0.0}[min_label]
+    by: dict[str, list[tuple[float, str]]] = {}
+    for domain, text, weight in rules:
+        if weight >= floor and (text or "").strip():
+            by.setdefault(domain or "general", []).append((weight, " ".join(text.split()).rstrip(".")))
+    lines = [f"# {title}", ""]
+    for domain in sorted(by):
+        lines.append(f"## {domain}")
+        lines += [f"- {text}. confidence: {w:.2f}" for w, text in sorted(by[domain], key=lambda x: (-x[0], x[1]))]
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"

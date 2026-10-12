@@ -38,8 +38,8 @@ ROLES = ("builder", "scout", "verifier", "critic")
 READ_ONLY = {"scout", "critic"}  # low-risk tools only
 ROLE_TIERS = {"scout": "fast", "verifier": "standard", "builder": "standard", "critic": "deep"}
 # Hermes DELEGATE_BLOCKED_TOOLS, renamed for Exo: no recursion (unless depth allows), no user
-# interaction, no shared memory writes, no outward messages, no scheduling in the parent's name.
-BLOCKED_TOOLS = frozenset({"delegate", "clarify", "ask", "memory", "send_message", "bus_post", "cronjob_manage"})
+# interaction (no ui panels), no shared memory writes, no outward messages, no scheduling in the parent's name.
+BLOCKED_TOOLS = frozenset({"delegate", "clarify", "ask", "memory", "send_message", "bus_post", "cronjob_manage", "ui"})
 BLOCKED_TOOLSETS = frozenset({"memory", "bus", "delegation", "kanban", "skills"})  # children get no skills index
 WRITE_TOOLS = {"write_file", "edit_file"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
@@ -67,6 +67,9 @@ _ITEM = {
                                                                    "verifier may edit files and run commands."},
     "tools": {"type": "array", "items": {"type": "string"}, "description": "Optional: narrow the child's tools."},
     "accept": {"type": "string", "description": "Optional: how the child knows it is done."},
+    "seat": {"type": "string", "description": "Optional: send the task to another seat over the bus instead of "
+                                              "running it here. It is queued; the receipt arrives later as a bus "
+                                              "message."},
     "tier": {"type": "string", "enum": list(TIERS),
              "description": "Optional model tier, a cost choice. fast: retrieval, search, reading and summarizing, "
                             "running known commands, simple specified edits. standard: implementing a clear spec, "
@@ -122,8 +125,10 @@ class _Bus:
 
 
 class Delegator:
-    def __init__(self, engine: Any, config: dict[str, Any] | None = None, signer: Any = None) -> None:
+    def __init__(self, engine: Any, config: dict[str, Any] | None = None, signer: Any = None,
+                 bus: Any = None) -> None:
         self.engine, self.limits, self.signer = engine, Limits.of(config), signer
+        self.bus = bus  # a bus Client (post_sym2p) or a callable returning one; None builds one from the env
         cfg = config or {}
         self.role_tiers = {**ROLE_TIERS, **{k: v for k, v in (cfg.get("role_tiers") or {}).items()
                                             if k in ROLES and v in TIERS}}
@@ -136,7 +141,8 @@ class Delegator:
         self.sems: dict[int, asyncio.Semaphore] = {}
         db = engine.store
         db._q(TABLE)
-        db._q("UPDATE tasks SET status='failed', updated=? WHERE status IN ('queued','running')", (s.now_ts(),))
+        db._q("UPDATE tasks SET status='failed', updated=? WHERE status IN ('queued','running') "
+              "AND (child IS NULL OR child NOT LIKE 'bus:%')", (s.now_ts(),))
 
     def install(self) -> None:
         self.engine.registry.register(SPEC, self.tool, replace=True)
@@ -150,7 +156,8 @@ class Delegator:
     def list(self, session: str | None = None) -> list[dict[str, Any]]:
         sql = "SELECT * FROM tasks" + (" WHERE parent=? OR child=?" if session else "") + " ORDER BY created, id"
         rows = self.engine.store._q(sql, (session, session) if session else ())
-        return [{"task_id": r["id"], "parent": r["parent"], "child_session": r["child"], "depth": r["depth"],
+        return [{"task_id": r["id"], "parent": r["parent"],
+                 "child_session": None if str(r["child"] or "").startswith("bus:") else r["child"], "depth": r["depth"],
                  "title": r["title"], "status": r["status"], "detail": render(r["receipt"] or r["brief"]),
                  "brief": r["brief"], "receipt": r["receipt"], "sig": json.loads(r["sig"]) if r["sig"] else None}
                 for r in rows]
@@ -173,7 +180,8 @@ class Delegator:
         if len(items) > lim.max_children:
             raise ToolError(f"At most {lim.max_children} tasks per call; got {len(items)}.")
         briefs = [self._brief(parent, depth, it, ctx.cwd) for it in items]
-        runs = [asyncio.ensure_future(self._attempts(parent, b)) for b in briefs]
+        runs = [asyncio.ensure_future(self._remote(parent, b, str(it["seat"])) if it.get("seat")
+                                      else self._attempts(parent, b)) for b, it in zip(briefs, items)]
         try:
             receipts = await asyncio.gather(*runs)
         except asyncio.CancelledError:
@@ -184,6 +192,30 @@ class Delegator:
         n = len(briefs)
         return "\n\n".join((f"Task {i + 1} of {n}: {b.goal[:100]}\n" if n > 1 else "") + render(r)
                            for i, (b, r) in enumerate(zip(briefs, receipts)))
+
+    async def _remote(self, parent: str, b: Brief, seat: str) -> Receipt:
+        """Send the brief to another seat as a signed bus message and record the task as queued. The remote
+        seat's receipt comes back as a bus message later (docs/AGENT-WIRE.md, cross-seat delegation)."""
+        db, line = self.engine.store, encode(b)
+        cli = self.bus() if callable(self.bus) else self.bus
+        if cli is None:
+            from exo.bus import Client
+            cli = Client.from_env()
+        db._q("INSERT INTO tasks (id, parent, child, depth, title, status, brief, created, updated) VALUES "
+              "(?,?,?,?,?,?,?,?,?)", (b.id, parent or None, f"bus:{seat}", b.depth, b.goal[:80], "queued", line,
+                                      s.now_ts(), s.now_ts()))
+        try:
+            res = await asyncio.to_thread(cli.post_sym2p, [seat], line, "task", b.id)
+        except Exception as exc:
+            r = Receipt(id="r" + b.id[1:], thread=b.thread, brief=b.id, status="failed", role=b.role,
+                        error_code="error", error=f"could not send to seat {seat}: {exc}", tier=b.tier)
+            db._q("UPDATE tasks SET status='failed', receipt=?, updated=? WHERE id=?", (encode(r), s.now_ts(), b.id))
+            self._emit(parent, b, "failed", None, encode(r))
+            return r
+        self._emit(parent, b, "queued", None, line)
+        return Receipt(id="r" + b.id[1:], thread=b.thread, brief=b.id, status="queued", role=b.role, tier=b.tier,
+                       summary=f"Sent to seat {seat} on the bus (message {res.get('seq', '?')}); queued. "
+                               "The receipt arrives later as a bus message.")
 
     def _ceiling(self, parent: str) -> str:
         """The parent's tier: its own if it is a child, else the main model's tier (deep when unknown)."""
@@ -321,10 +353,26 @@ class Delegator:
             db._q("UPDATE tasks SET status=?, receipt=?, sig=?, updated=? WHERE id=?",
                   (r.status, rl, sig, s.now_ts(), b.id))
             self._emit(parent, b, r.status, sid or None, rl)
+            if sid:
+                db.lock(sid, r.status)  # a finished child takes no new turns
+                await self._roll_up(parent, sid, loop, model)
             self.loops.pop(sid, None)
             self.tiers.pop(sid, None)
             self.over.discard(sid)
         return r
+
+    async def _roll_up(self, parent: str, sid: str, loop: Loop | None, model: str) -> None:
+        """Add the child's usage to the parent session's running total and tell clients."""
+        if loop is None or not parent:
+            return
+        used = loop.state(sid).total
+        ploop = self.loops.get(parent) or self.engine.loop
+        st = ploop.state(parent)
+        st.total = st.total + used
+        try:
+            await ploop.bus.emit(s.UsageUpdated(usage=used, session_total=st.total, model=model), parent)
+        except Exception:
+            pass
 
     def _receipt(self, b: Brief, sid: str, loop: Loop | None, result: Any, code: str, why: str,
                  t0: float) -> Receipt:

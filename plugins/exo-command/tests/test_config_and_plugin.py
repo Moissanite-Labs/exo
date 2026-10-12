@@ -75,9 +75,17 @@ def test_plugin_yaml_declares_settings():
 
 
 def test_static_page_has_no_bundler():
-    js = (PLUGIN_DIR / "exo_command" / "static" / "app.js").read_text()
-    assert "import " not in js and "require(" not in js and "__HERMES" not in js
-    assert "/api/snapshot" in js and "/api/stream" in js
+    """No build step: native ES modules served as they are, local imports only, no require, no node_modules."""
+    import re
+    static = PLUGIN_DIR / "exo_command" / "static"
+    for f in static.glob("*.js"):
+        js = f.read_text()
+        assert "require(" not in js and "__HERMES" not in js and "node_modules" not in js, f.name
+        for m in re.finditer(r"""^\s*import\s.*?from\s+["']([^"']+)["']""", js, re.M):
+            assert m.group(1).startswith("./"), (f.name, m.group(1))
+    command = (static / "command.js").read_text()
+    assert "/api/snapshot" in command and "/api/stream" in command
+    assert not list(PLUGIN_DIR.glob("package.json")) and not list(PLUGIN_DIR.glob("**/package.json"))
 
 
 def test_asgi_app_is_optional():
