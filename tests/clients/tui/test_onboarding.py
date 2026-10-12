@@ -59,7 +59,7 @@ def test_intro_and_tutorial_are_in_help(tmp_path):
 
 def test_every_hint_has_text_and_a_real_command():
     cat = load_catalog()
-    assert len(cat) == 11
+    assert len(cat) == 12
     for key, h in cat.items():
         assert h["text"] and h["then"].lstrip("/") in set(COMMANDS) | {"trace", "findings", "context"}, key
 

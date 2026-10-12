@@ -9,7 +9,9 @@ open-source library. Nothing is captured from a real home directory or account.
 | `exo-banner.svg` | Animated banner: a rotating shell of nodes around an orange core, packets travelling in. | `python3 scripts/make_media_banner.py` (stdlib only, deterministic) |
 | `exo-session.svg` | Animated terminal session, 16 s loop: prompt, tools, approval, signed answer, status strip. | `python3 scripts/make_media_session.py` (stdlib only) |
 | `tui-01-start.png` to `tui-05-job.png` | Terminal client: start, a turn, approval, `/context`, a background job. | `.venv/bin/python scripts/promo_shots.py` |
+| `tui-06-slash.png` to `tui-09-guidance.png` | Completion (D-037): the `/co` menu with ghost text, `/model ` arguments, `@s` files, the guidance line. | `.venv/bin/python scripts/promo_shots.py` |
 | `web-01-start.png` to `web-04-memory.png` | Web client: start, a turn, approval, memory column. | `.venv/bin/python scripts/promo_shots_web.py` |
+| `web-05-guidance.png` to `web-07-files.png` | Web completion: the guidance line, the `/` menu, `@` files. The script types into a copy of the page, so the product has no screenshot hook. | same |
 
 Both SVGs use only SMIL and CSS animation, no script and no external font, so GitHub shows them inside an
 `<img>` tag. The CSS parts stop under `prefers-reduced-motion`.

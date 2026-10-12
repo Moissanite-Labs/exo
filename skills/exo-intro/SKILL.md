@@ -53,6 +53,9 @@ with `[session] cwd` in its seat.toml), `/restart` reopens in a new terminal tab
 - Press Esc to interrupt the turn.
 - `@path` attaches a file, `!command` runs a shell command through the agent, ctrl+p opens a palette of
   commands, ctrl+o expands tool output.
+- Typing `/` opens a menu of every command with its arguments; Tab completes. `/model `, `/resume ` and `@` list
+  models, threads and files. A mistyped command gets "did you mean". Up arrow recalls earlier lines, right arrow
+  takes the dim suggestion. `/tutorial off` also silences the one-line next-step suggestion.
 - `ctrl+y`, `ctrl+e`, `ctrl+r` accept, edit or reject the last answer, which Exo learns from.
 
 ## The approval gate

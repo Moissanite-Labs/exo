@@ -69,7 +69,7 @@ The technical reference, with arguments and where each command is implemented, i
 |---|---|
 | `/new` | Start a new thread: a fresh focus, the same memory. |
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
-| `/sessions`, `/resume` | Pick one of this agent's threads to switch to. |
+| `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |
 | `/undo` | Undo the last turn. |
 | `/clear` | Clear the transcript view. History is kept. |
@@ -97,6 +97,19 @@ The technical reference, with arguments and where each command is implemented, i
 Plugins add commands. They show in `/help` under `other`. `/exo` (the dispatcher) and `/orchestra` are examples when
 those plugins load. The core answers `/context`, `/compact`, `/trace` and `/findings` itself. `/grants` comes from
 the `exo-gate` plugin. The web client runs `/context`, `/findings` and `/trace` from its composer.
+
+### Typing help
+
+You do not need to remember any of the above. Type `/` and a menu opens under the composer with every command, what
+it takes and what it does. Keep typing to narrow it (`/cmp` finds `/compact`), press Tab or Enter to complete, the
+arrows to move, Esc to close. After a command the menu offers its arguments: `/model ` lists your models, `/resume `
+your recent threads by title, `/tutorial ` the words `on`, `off` and `reset`, `/grants revoke ` the grant ids.
+`@` lists files in your working folder (directories first, secrets left out); `!` shows a one-line note about
+running a shell command. A mistyped `/comand` is not sent: Exo says "did you mean /compact?" and leaves the fixed
+line in the box. Up arrow brings back earlier lines, and as you type, the rest of an earlier line shows dim; press
+right arrow to take it. With the box empty, a dim line sometimes suggests a next step (`/providers` after a failed
+call, `/context` in a long thread). `/tutorial off` silences it. The web page has the same help. Inspired by the
+Hermes CLI; the details are in `docs/COMMANDS.md` "Completion and guidance".
 
 ## 4. Memory
 

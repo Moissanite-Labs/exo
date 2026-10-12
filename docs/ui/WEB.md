@@ -80,6 +80,20 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   The plugin exposes this as `POST /api/chat/sessions/<id>/command` (names limited to those three, sent as the
   existing `command.run`): a plugin route, not a protocol change.
 
+## The composer (D-037)
+
+Typing `/` opens a dropdown under the composer with the commands the page runs (`/context`, `/findings`, `/trace`,
+`/new`), each with its argument shape and a line of description. Same ranking, Tab, Enter, arrows and Esc as the
+terminal client. After a command it offers the argument words (`/trace ` offers 5, 10, 25). `@` lists files from the
+open thread's working folder through `GET /api/complete/files?session=&q=`: read-only, names only, inside the folder,
+secret stores left out with `gate.is_sensitive_path`, and guarded like the key routes (loopback peer, Host, page
+token). Ghost text from this page's history (right arrow takes it), up and down walk it; nothing is stored in the
+browser. A mistyped `/command` is not sent: the box shows the fix. One dim guidance line above the box (a failed call,
+a finished job, open findings, a slow turn, a long thread), one new line per 25 seconds at most, off when the core
+config key `guidance.enabled` is `false` (`GET /api/complete/commands` says so), no timer under reduced motion.
+The logic is `static/complete.js` (pure, tested in node against the Python engine); the drawing is `static/composer.js`.
+Screenshots: `docs/media/web-05-guidance.png`, `web-06-slash.png`, `web-07-files.png`.
+
 ## Cost and jobs (D-032)
 
 Cost in the strip is the session total from `usage.updated`; each row of last calls shows that call's

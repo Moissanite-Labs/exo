@@ -13,14 +13,19 @@ centre's source. A core that does not handle a command yet answers 501.
   GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
   POST /api/feedback                       feedback.send         {session, verdict, message_id, text}
   POST /api/ui/respond                     ui.respond            {panel_id, action, value}
+  GET  /api/complete/commands             the slash commands this page runs, with argument shapes and choices
+  GET  /api/complete/files?q=&session=     files under the session's folder for @ (D-037); the server guards it
   GET  /api/tasks                          tasks.list
   GET  /api/schedule                       schedule.edit list
   POST /api/schedule                       schedule.edit         {action, job_id, when, prompt, title, ...}
 """
 from __future__ import annotations
 
+import asyncio
+import os
 from typing import Any, Dict, Optional, Tuple
 
+from exo import complete as cm
 from exo.protocol import schema as s
 
 from .source import SourceError, core_message
@@ -95,6 +100,8 @@ def _route(method: str, p: list, key: str):
         "chat/panels": (_panels, None),
         "feedback": (None, _feedback),
         "ui/respond": (None, _ui_respond),
+        "complete/commands": (_complete_commands, None),
+        "complete/files": (_complete_files, None),
         "tasks": (_tasks, None),
         "schedule": (_schedule_list, _schedule_edit),
     }
@@ -190,3 +197,45 @@ async def _schedule_edit(c, p, q, body):
         action=action, job_id=job, when=_str(body, "when", limit=100), prompt=_str(body, "prompt", limit=MAX_TEXT),
         title=_str(body, "title", limit=200), seat=_opt(body, "seat"), tier=_choice(body, "tier", TIERS, "fast"),
         deliver=_str(body, "deliver", limit=100) or "notice"))
+
+
+# ---------------------------------------------------------------- completion (D-037)
+WEB_COMMANDS = {"context": "what the next model call carries, part by part",
+                "findings": "open harness findings", "trace": "how the harness performed this session",
+                "new": "start a new thread"}
+_INDEXES: Dict[str, cm.FileIndex] = {}
+
+
+async def _complete_commands(c, p, q, body):
+    """Static: the commands the web composer runs itself. Also says whether the guidance line is on."""
+    rows = []
+    for name, desc in WEB_COMMANDS.items():
+        slot = cm.plan(name, [])
+        rows.append({"name": name, "description": desc, "args": cm.ARG_HINTS.get(name, ""),
+                     "choices": [{"value": v, "meta": m} for v, m in (slot.choices if slot else ())]})
+    guidance = True
+    try:
+        got = await c.source.call(s.ConfigGet(key="guidance.enabled"))
+        guidance = got.get("value") is not False
+    except Exception:
+        pass   # an older core: leave the line on
+    return {"commands": rows, "guidance": guidance}
+
+
+async def _complete_files(c, p, q, body):
+    """Read-only file names for ``@``: only under the session's folder, secrets left out, nothing is read."""
+    sid = (q.get("session") or [""])[0]
+    if not sid or len(sid) > 120:
+        return {"files": []}
+    res = await c.source.call(s.SessionGet(session=sid))
+    cwd = ((res.get("session") or {}).get("cwd")) or ""
+    if not cwd or not os.path.isdir(cwd):
+        return {"files": []}
+    query = (q.get("q") or [""])[0][:200]
+    ix = _INDEXES.get(cwd)
+    if ix is None:
+        while len(_INDEXES) >= 4:
+            _INDEXES.pop(next(iter(_INDEXES)))
+        ix = _INDEXES[cwd] = cm.FileIndex(cwd)
+    items = await asyncio.to_thread(ix.query, query, 30)
+    return {"files": [{"value": i.value, "label": i.label, "meta": i.meta} for i in items]}
