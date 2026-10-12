@@ -86,6 +86,8 @@ class SessionInfo:
     updated: str = ""
     message_count: int = 0
     status: str = ""  # set by session.list: "live" while a turn runs, else "idle"
+    agent: str | None = None  # the agent (seat) whose one memory this thread belongs to (D-028)
+    kind: str = ""  # thread, private, scheduled or subagent; empty for a session outside any agent
 
 
 @dataclass
@@ -112,10 +114,14 @@ class Hello:
 @command("session.create")
 @dataclass
 class SessionCreate:
+    """Start a thread of the agent: a new focus in the same memory (D-028). ``kind="private"`` makes a thread
+    whose entries are logged but never enter the agent's tree, other threads or search."""
+
     title: str = ""
     seat: str | None = None
     model: str | None = None
     cwd: str | None = None
+    kind: str = ""
 
 
 @command("session.list")
@@ -457,6 +463,21 @@ class ContextCompacted:
     before_tokens: int
     after_tokens: int
     summary_message_id: str | None = None
+
+
+@event("memory.summarized")
+@dataclass
+class MemorySummarized:
+    """One node of a summary tree finished (D-028): a leaf over log entries ``start``-``end`` or a merge of two
+    nodes. Upkeep of memory, not a compaction of the live context (that is ``context.compacted``)."""
+
+    node_id: str
+    level: int
+    start: int
+    end: int
+    before_tokens: int
+    after_tokens: int
+    tree: str = ""  # agent:<id> for an agent's tree, else the session id
 
 
 @event("handoff.written")

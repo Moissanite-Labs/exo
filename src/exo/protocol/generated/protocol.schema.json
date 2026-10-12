@@ -137,6 +137,9 @@
     "context.compacted": {
       "$ref": "#/$defs/ContextCompacted"
     },
+    "memory.summarized": {
+      "$ref": "#/$defs/MemorySummarized"
+    },
     "handoff.written": {
       "$ref": "#/$defs/HandoffWritten"
     },
@@ -715,6 +718,43 @@
       "additionalProperties": false,
       "description": "Handshake. Server replies with its protocol version and capabilities."
     },
+    "MemorySummarized": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string"
+        },
+        "level": {
+          "type": "integer"
+        },
+        "start": {
+          "type": "integer"
+        },
+        "end": {
+          "type": "integer"
+        },
+        "before_tokens": {
+          "type": "integer"
+        },
+        "after_tokens": {
+          "type": "integer"
+        },
+        "tree": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "level",
+        "start",
+        "end",
+        "before_tokens",
+        "after_tokens"
+      ],
+      "description": "One node of a summary tree finished (D-028): a leaf over log entries ``start``-``end`` or a merge of two nodes. Upkeep of memory, not a compaction of the live context (that is ``context.compacted``)."
+    },
     "Message": {
       "type": "object",
       "properties": {
@@ -1265,9 +1305,14 @@
             }
           ],
           "default": null
+        },
+        "kind": {
+          "type": "string",
+          "default": ""
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Start a thread of the agent: a new focus in the same memory (D-028). ``kind=\"private\"`` makes a thread whose entries are logged but never enter the agent's tree, other threads or search."
     },
     "SessionCreated": {
       "type": "object",
@@ -1387,6 +1432,21 @@
           "default": 0
         },
         "status": {
+          "type": "string",
+          "default": ""
+        },
+        "agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
           "type": "string",
           "default": ""
         }
