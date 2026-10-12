@@ -51,7 +51,8 @@ class Dispatcher:
 
     def __init__(self, engine: Engine, hub: Hub | None = None):
         self.engine = engine
-        self.hub = hub or Hub()
+        # An engine with its own durable hub (the real core) keeps it; tests get a memory hub.
+        self.hub = hub or getattr(engine, "hub", None) or Hub()
 
     async def dispatch(self, raw: str | bytes) -> tuple[s.Command | None, s.Response]:
         try:
@@ -115,8 +116,11 @@ class HttpServer:
 
     async def serve_forever(self) -> None:
         assert self._server is not None
-        async with self._server:
-            await self._server.serve_forever()
+        await self._server.start_serving()
+        try:  # not Server.serve_forever: on cancel it waits for open SSE streams to end
+            await asyncio.get_running_loop().create_future()
+        finally:
+            await self.close()
 
     async def close(self) -> None:
         if self._server is not None:
@@ -274,7 +278,10 @@ async def serve_stdio(dispatcher: Dispatcher) -> None:
 # ---------------------------------------------------------------- entry
 
 
-def load_engine(spec: str = "echo") -> Engine:
+DEFAULT_ENGINE = "exo.core.engine:create"
+
+
+def load_engine(spec: str = DEFAULT_ENGINE) -> Engine:
     """``echo`` or ``package.module:factory`` (a zero-argument callable returning an Engine)."""
     if spec == "echo":
         from exo.server.echo import EchoEngine

@@ -71,3 +71,43 @@ class FakeProvider:
         usage = Usage(input_tokens=sum(len(m.text()) for m in messages) // 4, output_tokens=len(msg.text()) // 4)
         yield ProviderEvent(kind="usage", usage=usage)
         yield ProviderEvent(kind="done", stop_reason="tool_use" if msg.tool_calls else "end", message=msg, usage=usage)
+
+
+class RuleFake:
+    """Restart-safe scripted provider, configured as data (``models.fake`` in config.json).
+
+    ``rules`` is a list of ``{"match": "substring", "steps": [...]}``. The latest user message
+    picks the first rule whose ``match`` it contains; the number of assistant replies since
+    that message picks the step, so a restarted server continues where it was. A step is a
+    string (text reply) or ``{"tool": name, "args": {...}, "text": ""}``. ``reply`` is the
+    answer when no rule matches.
+    """
+
+    name = "fake"
+    DEFAULT = ("Exo is running on the offline fake model. Set ANTHROPIC_API_KEY, or models "
+               "in config.json, to use a real model.")
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        config = config or {}
+        self.rules = list(config.get("rules") or [])
+        self.reply = config.get("reply") or self.DEFAULT
+
+    def _turn(self, messages: list[Message]) -> Turn:
+        users = [i for i, m in enumerate(messages) if m.role == "user"]
+        if not users:
+            return self.reply
+        last = users[-1]
+        step = sum(1 for m in messages[last + 1:] if m.role == "assistant")
+        text = messages[last].text()
+        for rule in self.rules:
+            if rule.get("match", "") in text:
+                steps = rule.get("steps") or [self.reply]
+                spec = steps[min(step, len(steps) - 1)]
+                if isinstance(spec, dict):
+                    call_id = f"call_{len(messages)}_{step}"
+                    return tool_turn(spec["tool"], spec.get("args"), call_id, spec.get("text", ""))
+                return str(spec)
+        return self.reply
+
+    def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
+        return FakeProvider([self._turn(messages)]).stream(messages, tools, **opts)

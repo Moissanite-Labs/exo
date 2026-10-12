@@ -45,13 +45,11 @@ def parse_retry_after(value: str | None, now: float | None = None) -> float | No
 
 def error_event(text: str, status: int | None = None, retryable: bool | None = None,
                 retry_after: float | None = None) -> ProviderEvent:
-    """Build the terminal error event. ``retry_after`` rides in ``message.meta``
-    (meta is never sent to a provider) so the router can honor provider resets."""
+    """Build the terminal error event; ``retry_after`` lets the router honor provider resets."""
     if retryable is None:
         retryable = status is None or status in RETRYABLE_STATUS
-    meta = {"retry_after": retry_after} if retry_after else {}
     return ProviderEvent(kind="error", error=text, status=status, retryable=retryable,
-                         message=Message(role="assistant", meta=meta) if meta else None)
+                         retry_after=retry_after or None)
 
 
 def iter_sse(lines: Iterator[str] | list[str]) -> Iterator[tuple[str, str]]:

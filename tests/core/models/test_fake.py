@@ -15,7 +15,7 @@ def test_fake_streams_scripted_turns_and_records_calls():
     ev = collect(fake.stream([], []))
     assert ev[-1].stop_reason == "tool_use" and ev[0].tool_call.name == "ls"
     ev = collect(fake.stream([], []))
-    assert ev[0].status == 429 and ev[0].message.meta["retry_after"] == 5
+    assert ev[0].status == 429 and ev[0].retry_after == 5
     assert collect(fake.stream([], []))[0].error.endswith("exhausted")
     assert fake.calls[0]["opts"] == {"model": "x"}
 

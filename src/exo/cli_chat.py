@@ -37,8 +37,8 @@ def register(sp: Any, common: Any) -> None:
     p.add_argument("--tcp", metavar="HOST:PORT", help="also listen on TCP (bearer token required)")
     p.add_argument("--token-file", help="token for TCP (default: $EXO_HOME/run/exod.token, created 0600)")
     p.add_argument("--stdio", action="store_true", help="JSON lines on stdin/stdout instead of HTTP")
-    p.add_argument("--engine", default=os.environ.get("EXO_ENGINE", "echo"),
-                   help="echo, or module:factory returning an Engine")
+    p.add_argument("--engine", default=os.environ.get("EXO_ENGINE", "exo.core.engine:create"),
+                   help="module:factory returning an Engine (default the real core), or echo")
     p.set_defaults(func=cmd_serve)
 
     p = sp.add_parser("chat", parents=[common], help="chat with exod from the terminal")
