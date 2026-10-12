@@ -52,6 +52,8 @@ CHILD_PROMPT = (
     "Keep your final summary tight: lead with outcomes, prefer bullet points over paragraphs, and don't replay your "
     "whole process. Your response is returned to the parent agent as a summary, and overlong summaries crowd out the "
     "parent's context window.")
+CODE_FIND_NOTE = ("\n\nScouts and verifiers: use `code_find` to learn unfamiliar code or answer a behavior question across "
+                  "files; use grep or read_file when you already know the symbol or path.")
 ORCHESTRATOR_NOTE = (
     "\n\nYou may use the `delegate` tool to run independent subtasks in parallel. Do not re-delegate your whole "
     "task to one worker. Coordinate your workers' results; you are responsible for the final summary.")
@@ -298,6 +300,8 @@ class Delegator:
             return await e.run_tool(call, lctx)
 
         prompt = CHILD_PROMPT + (ORCHESTRATOR_NOTE if "delegate" in names else "")
+        if "code_find" in names:
+            prompt += CODE_FIND_NOTE
         if b.cwd:
             prompt += f"\n\nWorking directory: {b.cwd}"
         child = Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
