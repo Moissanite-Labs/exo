@@ -50,7 +50,7 @@ class ConfigError(ValueError):
 
 # Secrets never go through the file API: names that look like one (`api_key`, `token`, ...), unless
 # the name ends in `_env` (the NAME of an environment variable). Under `env` and `headers` any
-# literal is refused; use "${VAR}" so the secret stays in the environment or Keychain.
+# literal is refused; use "${VAR}" so the secret stays in the environment, the macOS Keychain or keys.env.
 SECRET_NAME = re.compile(r'(^|[_-])(key|token|secret|password|passwd|credentials?|authorization|bearer)s?($|[_-])'
                          r'|api_?key', re.I)
 _SECRET_VALUE = re.compile(r'(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{10,}|'
@@ -250,7 +250,7 @@ class Config:
         First hit wins: explicit `models.roles`; a scripted `models.fake`; a local
         OpenAI-compatible server in `models.local` ({"base_url", "model"}); the catalog
         (Anthropic) when ANTHROPIC_API_KEY is set; else the offline fake model.
-        Keys: environment, then Keychain, then ~/.config/exo/keys.env (core/models/keys.py).
+        Keys: environment, then the macOS Keychain (macOS only), then ~/.config/exo/keys.env (core/models/keys.py).
         """
         env = os.environ if env is None else env
         m = copy.deepcopy(self.data.get('models') or {})

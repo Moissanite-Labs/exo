@@ -33,4 +33,10 @@ Phase 1 (inventory) and phase 2 (research) in progress. Read along:
 | `research/` | Guardian-angel reading notes, principles, base evaluation |
 | `docs/ARCHITECTURE.md` | Components, memory and context model, migration path (phase 3) |
 
+## Model keys
+
+Exo reads a provider key from the environment, then (macOS only) the Keychain, then
+`~/.config/exo/keys.env` (mode 600). On Linux use the environment or `keys.env`. Steps are in
+`docs/PROVIDERS.md`.
+
 Private repository of Aska Digital.
