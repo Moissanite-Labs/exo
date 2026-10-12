@@ -50,7 +50,11 @@ the middle dot as separator come straight from the site.
 5. Composer: block caret in the signal colour, placeholder hint, `steer ›` while busy, `answer ›` for a question.
 6. Status strip: `MODEL` (the route that served, in orange with `← requested` when it fell back), `MEM` gauge,
    `CACHE` share of the last call, `COST`, open findings.
-7. Start: a boot sequence (under a second, any key skips it) that marks `core`, `agent`, `memory`, `model` as
+7. Start: the site's hero motif in braille (`exo_tui/hero.py`): a shell of linked nodes around an orange core,
+   turning once every 16 s. Frames are precomputed, played at 3 fps, 10 rows (7 below 38 terminal rows, hidden below
+   30), one still frame under reduced motion or `NO_COLOR`, gone with the first message. Idle cost measured with
+   `scripts/idle_cpu.py`: about 1.3% of one core (0.5% without it). A plain startup prints no `new thread` line; `/new` does.
+   Before that, a boot sequence (under a second, any key skips it) that marks `core`, `agent`, `memory`, `model` as
    each real step finishes, then an empty-start card with the keys.
 
 Where the numbers come from, all from events the core already sends: `model.call` (`requested`, `route`,

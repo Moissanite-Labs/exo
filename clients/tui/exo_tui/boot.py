@@ -16,6 +16,7 @@ from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from exo_tui.hero import Hero, hero_rows
 from exo_tui.theme import DOT, rich_style
 
 STEPS = [("core", "connect"), ("agent", "open thread"), ("memory", "summary tree"), ("model", "route")]
@@ -31,6 +32,9 @@ class BootScreen(ModalScreen):
         self.closed = False
 
     def compose(self) -> ComposeResult:
+        rows = hero_rows(self.app.size.height)
+        if rows:
+            yield Hero(rows, id="boot-hero")
         yield Static("", id="boot-art")
 
     def on_mount(self) -> None:

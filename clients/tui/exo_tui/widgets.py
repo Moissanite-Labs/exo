@@ -140,6 +140,7 @@ class ToolBlock(Static):
         self.t0 = time.monotonic()
         self.elapsed: float | None = None  # seconds, set when the call finishes; None for replayed history
         self.frame = 0
+        self.shown: Any = None  # last thing drawn, for tests and snapshots
 
     def _summary(self) -> str:
         a = self.args
@@ -171,25 +172,26 @@ class ToolBlock(Static):
         summ = self._summary()
         if summ:
             left.append("  " + summ, style=rich_style("fg3"))
-        right = Text(no_wrap=True, style=rich_style("fg3"))
+        hint = Text(no_wrap=True, style=rich_style("fg3", "italic"))
         if self.output and not self.expanded:
             n = len(self.output.splitlines())
-            right.append(f"{n} line{'s' if n != 1 else ''} {DOT} ctrl+o", style=rich_style("fg3", "italic"))
-            right.append("  ")
-        right.append(self.clock())
-        row = Table.grid(expand=True)
+            hint.append(f"{n} line{'s' if n != 1 else ''} {DOT} ctrl+o")
+        clock = Text(self.clock(), no_wrap=True, style=rich_style("fg3"))
+        row = Table.grid(expand=True, padding=(0, 0, 0, 2))  # fixed columns: the clock lines up with or without a hint
         row.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
-        row.add_column(justify="right", no_wrap=True)
-        row.add_row(left, right)
+        row.add_column(justify="right", no_wrap=True, width=18)
+        row.add_column(justify="right", no_wrap=True, width=6)
+        row.add_row(left, hint, clock)
         if self.expanded and self.output:
             body = Text()
             for ln in self.output.rstrip().splitlines():
                 body.append("│ ", style=rich_style("line2"))
                 body.append(ln + "\n", style=rich_style("fg2"))
             body.rstrip()
-            self.update(Group(row, Padding(body, (0, 0, 0, 2))))
+            self.shown = Group(row, Padding(body, (0, 0, 0, 2)))
         else:
-            self.update(row)
+            self.shown = row
+        self.update(self.shown)
 
     def finish(self, status: str, secs: float | None = None) -> None:
         self.status = status
