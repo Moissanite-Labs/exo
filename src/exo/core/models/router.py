@@ -149,6 +149,10 @@ class Router:
                 raise ValueError(f"provider {route.provider!r} cannot serve role {role!r}")
         self.roles[role] = list(refs)
 
+    def prefer(self, role: str, ref: str) -> None:
+        """Put ``ref`` first for ``role`` and keep the old routes behind it as fallbacks."""
+        self.set_role(role, [ref, *[r for r in self.roles.get(role, []) if r != ref]])
+
     def credentials(self, provider: str) -> list[Credential]:
         if provider in self._creds:
             return self._creds[provider]
@@ -163,7 +167,8 @@ class Router:
             for i, key in enumerate(keys):
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
-                                 headers=spec.get("headers"), session_header=spec.get("session_header"))
+                                 headers=spec.get("headers"), session_header=spec.get("session_header"),
+                                 **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
                 creds.append(Credential(cid, key, prov))
         self._creds[provider] = creds
         return creds

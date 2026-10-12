@@ -492,11 +492,16 @@ class CoreEngine:
         return {"results": self.store.search(b.query, b.limit)}
 
     async def _models_list(self, b: s.ModelsList) -> dict[str, Any]:
-        return {"models": self.router.status()}
+        from exo.models_cmd import available_models  # network on a cold cache, so off the event loop
+        try:
+            avail = await asyncio.wait_for(asyncio.to_thread(available_models, self.router, self.home), 25)
+        except Exception:
+            avail = []
+        return {"models": self.router.status(), "available": avail}
 
     async def _models_set(self, b: s.ModelsSet) -> dict[str, Any]:
         try:
-            self.router.set_role(b.role, [b.model])
+            self.router.prefer(b.role, b.model)  # the old routes stay as fallbacks
         except ValueError as exc:
             raise CommandFailed("bad_model", str(exc)) from None
         if b.role == "main":

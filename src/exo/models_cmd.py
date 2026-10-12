@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import sys
 from typing import Any, Callable
 
@@ -52,6 +54,43 @@ def remote_models(router: Router, provider: str, *, get: Callable[..., Any] | No
         raise ValueError(f'{provider}: could not list models ({type(e).__name__})') from None
     items = data.get('data') if isinstance(data, dict) else data
     return sorted(str(m.get('id', m)) if isinstance(m, dict) else str(m) for m in items or [])
+
+
+CACHE_TTL = 6 * 3600.0
+
+
+def available_models(router: Router, home: Path, *, get: Callable[..., Any] | None = None,
+                     now: float | None = None) -> list[dict[str, Any]]:
+    """Every model the user can pick: each keyed provider's /models list, cached for six hours in
+    ``home/cache/models``. A provider that fails to answer is skipped (its stale cache is used if any).
+    Models a provider lists but Exo cannot call yet (``hide_models`` substrings) are left out."""
+    import json, time
+    now = time.time() if now is None else now
+    out: list[dict[str, Any]] = []
+    cache_dir = Path(home) / 'cache' / 'models'
+    for st in router.providers_status():
+        name, spec = st['provider'], router.providers.get(st['provider'], {})
+        if (spec.get('transport', 'openai') != 'openai' or spec.get('local') or st.get('key') != 'yes'
+                or (st.get('roles') and 'main' not in st['roles'])):  # e.g. decision-only providers
+            continue
+        f = cache_dir / f'{name}.json'
+        ids: list[str] | None = None
+        try:
+            cached = json.loads(f.read_text())
+            if now - cached['at'] < CACHE_TTL:
+                ids = cached['ids']
+        except (OSError, ValueError, KeyError):
+            cached = None
+        if ids is None:
+            try:
+                ids = remote_models(router, name, get=get)
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                f.write_text(json.dumps({'at': now, 'ids': ids}))
+            except ValueError:
+                ids = cached['ids'] if cached else []
+        hide = [h.lower() for h in spec.get('hide_models') or []]
+        out += [{'route': f'{name}:{i}', 'provider': name} for i in ids if not any(h in i.lower() for h in hide)]
+    return out
 
 
 def register(sp, common) -> None:

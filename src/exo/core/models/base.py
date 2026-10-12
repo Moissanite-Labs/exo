@@ -129,14 +129,16 @@ class HttpTransport:
     def __init__(self, base_url: str, api_key: str | None = None, *, name: str | None = None,
                  model: str | None = None, client: httpx.AsyncClient | None = None,
                  timeout: float = 600.0, headers: dict[str, str] | None = None,
-                 session_header: str | None = None) -> None:
+                 session_header: str | None = None, read_timeout: float | None = 60.0) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.extra_headers = dict(headers or {})
         self.session_header = session_header
         self._client = client
-        self._timeout = timeout
+        # A provider that accepts the request but never sends a byte must fail fast, so the router can fall
+        # back (seen live: a provider hanging every chat call while its model list answered in 0.2 s).
+        self._timeout = httpx.Timeout(timeout, connect=15.0, read=read_timeout or timeout)
         if name:
             self.name = name
 
@@ -172,7 +174,7 @@ class HttpTransport:
         client = self._client or httpx.AsyncClient(timeout=self._timeout)
         st = StreamState()
         try:
-            async with client.stream("POST", url, json=body, headers=sent) as resp:
+            async with client.stream("POST", url, json=body, headers=sent, timeout=self._timeout) as resp:
                 if resp.status_code >= 400:
                     raw = (await resp.aread()).decode("utf-8", "replace")
                     yield error_event(f"HTTP {resp.status_code}: {self.error_text(raw)}", resp.status_code,
