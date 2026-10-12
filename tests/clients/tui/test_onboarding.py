@@ -85,7 +85,7 @@ def test_first_run_intro_marks_only_after_the_turn_starts(tmp_path):
         await until(lambda: "Welcome to Exo." in app.transcript_text() and not app.busy, pilot)
         assert Probe.onboarded_at_send == [False]  # not written before the turn began
         assert Onboarding(home).onboarded
-        assert "/intro" in app.transcript_text().splitlines()[1] or "> /intro" in app.transcript_text()
+        assert "/intro" in app.transcript_text().splitlines()[0]  # first line: a plain startup prints no "new thread" line
         assert INTRO_PROMPT.split("\n")[2][:30] not in app.transcript_text()  # the user sees "/intro", not the brief
         await until(lambda: app.tutorial, pilot)
         assert Config.load(eng.home).get("tutorial.enabled") is True

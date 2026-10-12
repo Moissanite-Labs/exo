@@ -337,3 +337,75 @@ def test_screenshots_of_key_states_render(tmp_path):
         assert all(x.startswith("<svg") for x in shots) and "APPROVAL" in shots[1].replace("&#160;", " ")
 
     run(tmp_path, sc)
+
+
+# ---------------------------------------------------------------- hero motif, startup line, tool columns
+def test_hero_frames_are_braille_cheap_and_loop():
+    from exo_tui.hero import FRAMES, hero_rows, render_frame
+
+    f0, f1 = render_frame(0, 24, 10), render_frame(1, 24, 10)
+    assert len(f0.plain.splitlines()) == 10 and all(len(ln) == 24 for ln in f0.plain.splitlines())
+    assert all(ch in " \n" or 0x2800 <= ord(ch) <= 0x28FF for ch in f0.plain)
+    assert f0.plain != f1.plain  # it turns
+    assert render_frame(FRAMES, 24, 10).plain == f0.plain  # and loops
+    assert any(sp.style and th.ACCENT in str(sp.style) for sp in f0.spans)  # the orange core
+    assert (hero_rows(45), hero_rows(32), hero_rows(29)) == (10, 7, 0)  # scales down, hidden below 30 rows
+
+
+def test_empty_start_has_hero_no_new_thread_line_and_it_goes_on_first_message(tmp_path):
+    async def sc(app, pilot, client, eng):
+        await pilot.pause(0.1)
+        assert "new thread" not in app.transcript_text()
+        assert app.size.height >= 30 and app.query("#hero")  # 120x40 in the shared harness
+        assert len(app.query_one("#hero").frames) > 1
+        await send(app, pilot, "hello")
+        await until(lambda: not app.query("#hero") and not app.query("#welcome"), pilot)
+        await send(app, pilot, "/new")
+        await until(lambda: "new thread" in app.transcript_text(), pilot)
+
+    run(tmp_path, sc)
+
+
+def test_hero_is_still_under_reduced_motion_and_no_color(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXO_REDUCED_MOTION", "1")
+
+    async def sc(app, pilot, client, eng):
+        await pilot.pause(0.1)
+        assert len(app.query_one("#hero").frames) == 1
+
+    run(tmp_path, sc)
+
+
+def test_hero_hidden_on_a_short_terminal(tmp_path):
+    eng = make_engine(tmp_path)
+
+    async def main():
+        app = ExoApp(FakeServerClient(eng), seat="tester")
+        async with app.run_test(size=(100, 24)) as pilot:
+            await asyncio.wait_for(app.ready.wait(), 5)
+            assert not app.query("#hero") and app.query("#welcome")
+
+    asyncio.run(main())
+
+
+def test_tool_columns_align_with_and_without_the_hint():
+    a = ToolBlock("1", "read_file", {"path": "a"})
+    a.output = "x\ny\n"
+    a.finish("done", 0.4)
+    b = ToolBlock("2", "bash", {"command": "ls"})
+    b.finish("done", 12.5)
+    for blk in (a, b):
+        blk.flush()
+        out = plain(blk.shown, 60)
+        line = out.splitlines()[0]
+        assert len(line.rstrip()) == 60, line  # the clock ends at the right edge either way
+
+
+def test_approval_leaves_a_blank_row_above_the_wire(tmp_path):
+    async def sc(app, pilot, client, eng):
+        eng.hub.publish(s.ApprovalRequested(request_id="r", summary="x", risk="low"), app.session)
+        await until(lambda: app.card is not None, pilot)
+        await pilot.pause(0.2)
+        assert app.card.region.bottom < app.query_one("#activity").region.y  # a gap, not touching
+
+    run(tmp_path, sc)

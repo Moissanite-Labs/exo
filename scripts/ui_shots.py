@@ -19,7 +19,7 @@ from exo_tui.conn import LocalClient
 from exo_tui.widgets import Composer
 
 FAKE = {"rules": [{"match": "hello", "steps": ["Draft ready. Short sentences, result first, no long dashes."]}]}
-SIZE = (112, 34)
+SIZE = (112, 42)
 
 
 async def settle(pilot, secs: float = 0.3) -> None:

@@ -22,6 +22,7 @@ from exo.core.types import ContentPart
 from exo.protocol import schema as s
 from exo_tui.onboarding import INTRO_PROMPT, Onboarding, load_catalog
 from exo_tui import theme as th
+from exo_tui.hero import Hero, hero_rows
 from exo_tui.boot import STEPS as BOOT_STEPS
 from exo_tui.boot import BootScreen
 from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, EditScreen, Palette,
@@ -90,7 +91,8 @@ class ExoApp(App):
     #composer .text-area--cursor-line { background: $background; }
     #composer .text-area--placeholder { color: $fg-3; }
     #status { height: 2; padding: 0 2; border-top: solid $line; background: $surface; }
-    #approval { height: auto; border-left: outer $accent; background: $surface; padding: 0 1; margin: 0 2; }
+    #approval { height: auto; border-left: outer $accent; background: $surface; padding: 0 1; margin: 0 2 1 2; }
+    #hero { margin: 0; }
     #approval Input { border: none; background: $panel; height: 1; padding: 0 1; }
     #approval Input:focus { border: none; }
     #panel { width: 45%; border-left: outer $cold; background: $surface; padding: 0 1; }
@@ -279,7 +281,7 @@ class ExoApp(App):
         self.query_one("#activity", Static).update(line)
 
     def add(self, widget: Block | ToolBlock) -> None:
-        for w in self.query("#welcome"):
+        for w in self.query("#welcome, #hero"):
             w.remove()
         self.transcript.mount(widget)
         self.transcript.scroll_end(animate=False)
@@ -327,7 +329,7 @@ class ExoApp(App):
             if self.session:
                 await self.load_session(self.session)
             else:
-                await self.new_session()
+                await self.new_session(announce=False)
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", "ready")
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
@@ -559,7 +561,7 @@ class ExoApp(App):
         self.note(f"resumed {what} {title + ' ' if title else ''}({sid}, {n} messages)", "note")
         self.refresh_status()
 
-    async def new_session(self, kind: str = "") -> None:
+    async def new_session(self, kind: str = "", announce: bool = True) -> None:
         """A new thread of the same agent: a fresh focus with the same memory (D-028)."""
         got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat, kind=kind))
         self.session = got["session"]["id"]
@@ -568,8 +570,12 @@ class ExoApp(App):
         self.clear_transcript()
         if kind == "private":
             self.note(f"private thread {self.session}: logged here, never added to shared memory")
-        else:
+        elif announce:
             self.note(f"new thread {self.session} (same memory)")
+        else:  # a plain startup: no log line, the empty-start card says it all
+            rows = hero_rows(self.size.height)
+            if rows:
+                self.transcript.mount(Hero(rows))
             self.transcript.mount(Welcome(self.seat or "main", self.model))
         self.refresh_status()
 
