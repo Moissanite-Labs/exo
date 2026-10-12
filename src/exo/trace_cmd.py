@@ -3,11 +3,13 @@
     exo trace [SESSION] [--last N] [--json]       per-turn table and anomaly flags (default: newest session)
     exo findings [--status open] [--json]         the findings store
     exo findings fix ID --in SHA                  mark fixed; later turns re-measure it
+    exo findings add TITLE [--severity bug|papercut] [--signature S] [--detail TEXT]  file one by hand
     exo findings export --md                      a digest for the developer session
 """
 from __future__ import annotations
 
 import json
+import re
 import sys
 
 from .store import exo_home
@@ -35,11 +37,14 @@ def register(sp, common) -> None:
     p.add_argument('--last', type=int, metavar='N', help='only the last N turns')
     p.add_argument('--json', action='store_true')
     p = sp.add_parser('findings', help='what the harness found wrong with itself')
-    p.add_argument('action', nargs='?', default='list', choices=['list', 'fix', 'export'])
-    p.add_argument('id', nargs='?', help='finding id (for fix)')
+    p.add_argument('action', nargs='?', default='list', choices=['list', 'fix', 'export', 'add'])
+    p.add_argument('id', nargs='?', help='finding id (for fix) or title (for add)')
     p.add_argument('--status', choices=['open', 'fixed', 'verified', 'reopened'])
     p.add_argument('--in', dest='sha', metavar='SHA', help='commit the fix landed in (for fix)')
     p.add_argument('--md', action='store_true', help='markdown (for export)')
+    p.add_argument('--severity', choices=['bug', 'papercut'], default='papercut', help='for add')
+    p.add_argument('--signature', help='for add: dedup key (default: made from the title)')
+    p.add_argument('--detail', default='', help='for add: what happened, how to see it')
     p.add_argument('--json', action='store_true')
 
 
@@ -78,6 +83,13 @@ def cmd_findings(a) -> int:
         except KeyError:
             sys.exit(f'exo: no finding {a.id}')
         print(f"{row['id']} fixed in {row['fixed_in']}")
+        return 0
+    if a.action == 'add':
+        if not a.id:
+            sys.exit('usage: exo findings add TITLE [--severity bug|papercut] [--signature S] [--detail TEXT]')
+        sig = a.signature or 'manual:' + re.sub(r'[^a-z0-9]+', '-', a.id.lower()).strip('-')[:60]
+        row = fnd.file(sig, a.id, source='principal', severity=a.severity, detail=a.detail)
+        print(f"{row['id']} {row['status']} x{row['count']} {row['severity']}  {row['title']}")
         return 0
     fnd.sweep()
     if a.action == 'export':

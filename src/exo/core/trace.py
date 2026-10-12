@@ -265,7 +265,9 @@ def _ms(ts: str) -> float:
 def _canon_cmd(cmd: str) -> str:
     """A shell command reduced to what it runs: no leading cd, timeout wrapper, pipes, redirects, echo tail or
     common flags, so a test suite run twice with different wrappers still counts as the same call."""
-    cmd = re.sub(r"^\s*cd\s+\S+\s*(&&|;)\s*", "", cmd)
+    prefix = r"^\s*(?:cd\s+\S+|ulimit(?:\s+-\S+)*(?:\s+\S+)?|(?:export\s+)?[A-Za-z_]\w*=\S*|set\s+-\S+)\s*(?:&&|;)\s*"
+    while (stripped := re.sub(prefix, "", cmd, count=1)) != cmd:  # setup steps before the real command
+        cmd = stripped
     cmd = re.split(r"\s*(?:\||;|&&)\s*", cmd, maxsplit=1)[0]
     cmd = re.sub(r"^timeout\s+\d+\s+", "", cmd)
     cmd = re.sub(r"\s2>&1|\s-p\s+\S+|\s-r[a-zA-Z]+|\s-q+\b", "", cmd)

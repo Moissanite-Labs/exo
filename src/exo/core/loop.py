@@ -269,8 +269,11 @@ class Loop:
         st.stats["model_calls"] += 1
         st.stats["model_ms"] += s.total_ms
         st.stats["fallbacks"] += sum(1 for a in s.attempts if a.get("outcome") not in ("ok", None))
+        served = ""
+        if s.error is None:  # the route the router stamped, else the attempt that succeeded (D-025)
+            served = s.route or next((a.get("route", "") for a in reversed(s.attempts) if a.get("outcome") == "ok"), "")
         await self._emit(ev.ModelCall(
-            iteration=iteration + 1, role=role, requested=self.model or "", route=s.route if s.error is None else "",
+            iteration=iteration + 1, role=role, requested=self.model or "", route=served,
             attempts=s.attempts, ttft_ms=s.first_ms, total_ms=s.total_ms, usage=s.usage,
             stop_reason=(s.done.stop_reason or "") if s.done is not None else "",
             error=trace.scrub(s.error.error, 300) if s.error is not None else "", retries=s.retries), session)

@@ -69,8 +69,10 @@ def _server_token(path: Path) -> str:
 
 
 def cmd_serve(a: Any, store: Any = None) -> int:
+    from exo.core.tools.builtin.shell import raise_nofile_limit
     from exo.server.app import load_engine, serve
 
+    raise_nofile_limit()  # tools inherit this; macOS defaults to 256 open files
     if a.seat:
         os.environ["EXO_SEAT"] = a.seat
     engine = load_engine(a.engine)

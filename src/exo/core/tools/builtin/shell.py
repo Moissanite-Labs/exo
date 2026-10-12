@@ -109,6 +109,35 @@ def kill_process_group(proc: subprocess.Popen, grace: float = TERM_GRACE) -> Non
         proc.wait(timeout=0.5)
 
 
+_SECRET_SUFFIXES = ("_KEY", "_KEYS", "_KEYS_DIR", "_KEYS_FILE", "_TOKEN", "_SECRET", "_PASSWORD")
+
+
+def tool_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment a tool subprocess gets: the process env without the launcher's bus identity (EXO_BUS_*)
+    and without EXO_* variables that point at keys or hold secrets. Other EXO_* settings pass through."""
+    src = os.environ if base is None else base
+    out = {k: v for k, v in src.items()
+           if not (k.startswith("EXO_") and (k.startswith("EXO_BUS_") or k.endswith(_SECRET_SUFFIXES)))}
+    out.update({"PAGER": "cat", "GIT_PAGER": "cat", "TERM": "dumb"})
+    return out
+
+
+def raise_nofile_limit(cap: int = 10240) -> int | None:
+    """Raise the soft open-files limit toward the hard limit (at most ``cap``) so child tools inherit it.
+    macOS starts at 256. Returns the new soft limit, or None when nothing changed or it is not possible."""
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = cap if hard == resource.RLIM_INFINITY else min(hard, cap)
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+            return want
+    except (ImportError, ValueError, OSError):
+        pass
+    return None
+
+
 def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: int = OUTPUT_CAP,
                 cancel: threading.Event | None = None,
                 emit: Callable[[str], None] | None = None) -> tuple[int, str, str]:
@@ -121,7 +150,7 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
     proc = subprocess.Popen(
         [shell, "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
-        env={**os.environ, "PAGER": "cat", "GIT_PAGER": "cat", "TERM": "dumb"})
+        env=tool_env())
     if sys.platform != "win32":
         with contextlib.suppress(ProcessLookupError):
             proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]

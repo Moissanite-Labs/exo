@@ -456,3 +456,32 @@ def test_protocol_has_the_new_events_and_they_roundtrip():
     assert s.Event.from_json(e.to_json()) == e
     e = s.Event.of(s.TurnCompleted(turn_id="t", timing={"wall_ms": 5}), seq=2)
     assert s.Event.from_json(e.to_json()).body.timing == {"wall_ms": 5}
+
+
+def test_repeat_counts_suite_runs_through_ulimit_tail_and_grep_wrappers():
+    cmds = ["pytest -q tests", "ulimit -n 4096 && pytest -q tests | tail -5", "cd /x && pytest -q tests 2>&1 | grep -E 'passed|failed'",
+            "ulimit -n 8192; timeout 300 pytest -q tests"]
+    keys = [trace._args_key({"command": c}) for c in cmds]
+    assert len(set(keys)) == 1
+    tools = [ToolRow("bash", str(i), k, 5) for i, k in enumerate(keys)]
+    (f,) = [f for f in trace.detect(tt(tools=tools), TH) if f.signature == "tool.repeat:bash"]
+    assert "4 times" in f.title
+
+
+def test_cli_findings_add_files_and_dedups(tmp_path, monkeypatch, capsys):
+    from exo import cli
+
+    monkeypatch.setenv("EXO_HOME", str(tmp_path))
+    SessionStore(tmp_path / "sessions.sqlite")
+    assert cli.main(["findings", "add", "Tool X hangs", "--severity", "bug", "--detail", "run it twice"]) == 0
+    assert "open x1 bug" in capsys.readouterr().out
+    assert cli.main(["findings", "add", "Tool X hangs", "--severity", "bug"]) == 0  # same title: a recurrence
+    assert "x2" in capsys.readouterr().out
+    assert cli.main(["findings", "add", "Other", "--signature", "my.sig"]) == 0
+    capsys.readouterr()
+    cli.main(["findings", "--json"])
+    rows = {r["signature"]: r for r in json.loads(capsys.readouterr().out)}
+    assert rows["manual:tool-x-hangs"]["detail"] == "run it twice" and rows["manual:tool-x-hangs"]["source"] == "principal"
+    assert rows["my.sig"]["severity"] == "papercut"
+    with pytest.raises(SystemExit):
+        cli.main(["findings", "add"])
