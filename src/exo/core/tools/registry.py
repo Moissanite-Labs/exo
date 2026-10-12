@@ -50,6 +50,21 @@ def _redact_result(result: ToolResult) -> ToolResult:
     return result
 
 
+def _cap_result(result: ToolResult) -> ToolResult:
+    """The same character cap a plain string result gets, over all the text parts of a ``ToolResult``."""
+    room = MAX_RESULT_CHARS
+    for part in result.content:
+        if part.type != "text" or not part.text:
+            continue
+        if len(part.text) > room:
+            cut = len(part.text) - room
+            part.text = part.text[:room] + f"\n[truncated {cut} chars]"
+            room = 0
+        else:
+            room -= len(part.text)
+    return result
+
+
 @dataclass
 class ToolContext:
     """Per-call environment handed to handlers and hooks."""
@@ -253,7 +268,7 @@ class Registry:
                                       is_error=True)
         if isinstance(out, ToolResult):
             out.call_id = call.id
-            return out
+            return _cap_result(out)
         text = out if isinstance(out, str) else str(out)
         if len(text) > MAX_RESULT_CHARS:
             text = text[:MAX_RESULT_CHARS] + f"\n[truncated {len(text) - MAX_RESULT_CHARS} chars]"
