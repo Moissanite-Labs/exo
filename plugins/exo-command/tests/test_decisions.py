@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -52,6 +53,6 @@ def test_append_event_roundtrip(tmp_path):
 
 
 def test_schema_file_matches_ops():
-    from conftest import PLUGIN_DIR
+    PLUGIN_DIR = Path(__file__).resolve().parents[1]  # not `from conftest`: another plugin's conftest may be cached
     schema = json.loads((PLUGIN_DIR / "schemas" / "decision-event.schema.json").read_text())
     assert set(schema["properties"]["op"]["enum"]) == decisions.OPS
