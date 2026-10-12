@@ -7,13 +7,13 @@ timeout and returns text, never raising.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from datetime import date
 from pathlib import Path
 from typing import Any
 
-HANDOFF_DIR = "~/Work/handoffs"
 _CD = re.compile(r"^\s*cd\s+(?:\"([^\"]+)\"|'([^']+)'|(\S+))\s*(?:&&|;)")
 
 
@@ -68,12 +68,28 @@ def git_facts(cwd: str | Path, max_status: int = 30) -> dict[str, Any]:
             "recent": _git(r, "log", "-5", "--format=%h %s").splitlines()}
 
 
+def handoff_dir() -> Path:
+    """The default folder for handoff files: ``$EXO_HANDOFF_DIR``, else ``handoff_dir`` in the config file,
+    else ``$EXO_HOME/handoffs``. Nothing here assumes one person's folder layout."""
+    from ..config import Config, ConfigError
+    from ..store import exo_home
+
+    env = os.environ.get("EXO_HANDOFF_DIR")
+    if env:
+        return Path(env).expanduser()
+    try:
+        configured = Config.load().get("handoff_dir")
+    except (ConfigError, OSError):
+        configured = None
+    return Path(configured).expanduser() if configured else exo_home() / "handoffs"
+
+
 def handoff_path(seat: str, arg: str = "", today: date | None = None) -> Path:
-    """Where a handoff goes: ``arg`` if given (a folder gets ``<seat>-<date>.md`` inside it), else the default
-    ``~/Work/handoffs/<seat>-<date>.md``."""
+    """Where a handoff goes: ``arg`` if given (a folder gets ``<seat>-<date>.md`` inside it), else
+    ``<handoff_dir()>/<seat>-<date>.md`` (``$EXO_HOME/handoffs`` unless configured)."""
     name = f"{seat}-{(today or date.today()).isoformat()}.md"
     arg = (arg or "").strip()
     if not arg:
-        return Path(HANDOFF_DIR).expanduser() / name
+        return handoff_dir() / name
     p = Path(arg).expanduser()
     return p / name if arg.endswith("/") or p.is_dir() else p

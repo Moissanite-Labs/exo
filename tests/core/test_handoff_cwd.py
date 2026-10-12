@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import subprocess
 from datetime import date
 from pathlib import Path
@@ -83,9 +85,15 @@ def test_git_facts(tmp_path):
     assert workspace.git_facts(tmp_path / "nowhere") == {"repo": None}
 
 
-def test_handoff_path(tmp_path):
+def test_handoff_path(tmp_path, monkeypatch):
     d = date(2026, 10, 12)
-    assert workspace.handoff_path("razi", "", d) == Path("~/Work/handoffs").expanduser() / "razi-2026-10-12.md"
+    home = Path(os.environ["EXO_HOME"])
+    assert workspace.handoff_path("razi", "", d) == home / "handoffs" / "razi-2026-10-12.md"   # the default
+    (home).mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"handoff_dir": str(tmp_path / "cfg")}))
+    assert workspace.handoff_path("razi", "", d) == tmp_path / "cfg" / "razi-2026-10-12.md"   # the config key
+    monkeypatch.setenv("EXO_HANDOFF_DIR", str(tmp_path / "env"))
+    assert workspace.handoff_path("razi", "", d) == tmp_path / "env" / "razi-2026-10-12.md"   # the env wins
     assert workspace.handoff_path("razi", str(tmp_path) + "/", d) == tmp_path / "razi-2026-10-12.md"
     assert workspace.handoff_path("razi", str(tmp_path), d) == tmp_path / "razi-2026-10-12.md"  # an existing folder
     assert workspace.handoff_path("razi", str(tmp_path / "x.md"), d) == tmp_path / "x.md"
