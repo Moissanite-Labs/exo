@@ -36,6 +36,20 @@ HOOK_POINTS = (PRE_TOOL_CALL, POST_TOOL_CALL)
 MAX_RESULT_CHARS = 100_000
 
 
+def _redact_result(result: ToolResult) -> ToolResult:
+    """Cut known key values out of a tool result before it reaches the model, the transcript or a client."""
+    try:
+        from exo.core.models.keys import known_secret_values, redact_secrets
+        vals = known_secret_values()
+        if vals:
+            for part in result.content:
+                if part.type == "text" and part.text:
+                    part.text = redact_secrets(part.text, vals)
+    except Exception:  # redaction must never lose a result
+        pass
+    return result
+
+
 @dataclass
 class ToolContext:
     """Per-call environment handed to handlers and hooks."""
@@ -253,7 +267,7 @@ class Registry:
                 continue  # post hooks observe; a failure must not lose the result
             if isinstance(replaced, ToolResult):
                 result = replaced
-        return result
+        return _redact_result(result)
 
     def call_sync(self, call: ToolCall, ctx: ToolContext | None = None) -> ToolResult:
         """Blocking wrapper for scripts and tests (not for use inside a running loop)."""

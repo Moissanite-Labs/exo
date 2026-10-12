@@ -269,3 +269,29 @@ def test_handoff_uses_real_capture_api():
             {"role": "assistant", "content": "ok"}]
     rulings, corrections = handoff.extract_rulings_and_corrections(msgs)
     assert rulings and rulings[0].index == 0
+
+
+def test_once_verdict_is_never_a_standing_allow(tmp_path):
+    from exo.core.tools.registry import ToolContext
+    from exo.core.types import ToolCall, ToolSpec
+
+    def register(ctx):
+        ctx.register_hook("pre_tool_call", lambda tool_name="", **kw: {
+            "action": "approve", "message": "ok?", "rule_key": "k", "once": tool_name == "once"})
+
+    eng = _eng(tmp_path, register=register)
+    asked = []
+
+    async def fake_ask(session, summary, call=None, risk="medium", decided_by=None, options=None, opened=None):
+        asked.append(options)
+        return "allow_always"
+
+    eng.ask = fake_ask
+
+    async def main():
+        spec = ToolSpec(name="x", description="", parameters={})
+        for name in ("once", "once", "plain", "plain"):
+            await eng._pre_hook(ToolCall(id="1", name=name, arguments={}), spec, ToolContext())
+
+    asyncio.run(main())
+    assert asked == [["allow", "deny"], ["allow", "deny"], None]

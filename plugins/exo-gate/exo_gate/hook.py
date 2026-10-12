@@ -208,7 +208,7 @@ class Gate:
     def _rule_key(self, tool: str, args: Mapping, c: gate.Classification, d: gate.Decision) -> str:
         # An "always" answer must not cover a different public or irreversible act, so those
         # keys are bound to the exact arguments. Others are bound to category and target.
-        if c.reversibility == "irreversible" or d.exposure == "public" or d.violations:
+        if c.category == "credentials" or c.reversibility == "irreversible" or d.exposure == "public" or d.violations:
             digest = hashlib.sha256(json.dumps({"t": tool, "a": args}, sort_keys=True, default=str)
                                     .encode("utf-8")).hexdigest()[:16]
             return f"exo-gate:{c.category}:{digest}"
@@ -278,7 +278,12 @@ class Gate:
                                        _verdict)
         except Exception as exc:
             logger.exception("exo-gate: internal error on %s", tool_name)
-            if tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe":
+            secret = False
+            try:
+                secret = bool(gate.args_sensitive(args))
+            except Exception:
+                secret = True
+            if (tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe") and not secret:
                 return None
             return {"action": "approve", "message": f"exo-gate could not classify {tool_name} ({exc}). "
                                                     "Approve only if you expected this action. Default if no reply: skip.",
@@ -323,8 +328,10 @@ class Gate:
                 msg += " Fix: " + "; ".join(d.violations) + "."
             key = self._rule_key(tool, args, c, d)
             result = {"action": "approve", "message": msg, "rule_key": key}
+            if c.category == "credentials":
+                result["once"] = True      # the core never stores an "always" for this (no standing allow)
             body["rule_key"] = key
-        if self.settings.mode == "observe":
+        if self.settings.mode == "observe" and c.category != "credentials":  # credentials are enforced in every mode
             body["would"] = result["action"] if result else "run"
             result = None
         if d.outcome in ("allow", "log") and c.cost:
