@@ -229,6 +229,11 @@ class PluginContext:
         d = self.manifest.config_default(key)
         return default if d is None else d
 
+    def get_explicit_config(self, key: str) -> Any:
+        """The value set in config for this plugin, or None. No manifest default: a plugin that also reads
+        environment variables uses this so an env var can beat the default but not an explicit setting."""
+        return (self.manager.config.get(self.plugin) or {}).get(key)
+
     # ---- registrations
 
     def register_tool(self, name: str, toolset: str, schema: dict | None = None,
