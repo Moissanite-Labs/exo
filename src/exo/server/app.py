@@ -98,6 +98,9 @@ class HttpServer:
 
     async def start_unix(self, path: str | os.PathLike) -> None:
         path = Path(path)
+        if len(os.fsencode(str(path))) >= 104:  # macOS limit is 104 bytes, Linux 108; stay under both
+            raise ValueError(f"socket path too long ({len(os.fsencode(str(path)))} bytes, max 103): {path}. "
+                             "Use a shorter EXO_HOME.")
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if path.exists():
             path.unlink()
