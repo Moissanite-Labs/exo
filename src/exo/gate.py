@@ -678,16 +678,19 @@ TOOLS: dict[str, str] = {
 # is_sensitive_path() because they can sit anywhere.
 _SENSITIVE_PATH = re.compile(
     r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
-    r"credentials(\.json)?|id_rsa|id_ed25519|[^/]+\.pem|[^/]+\.key|"
+    r"credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|"
     r"keys\.env|\.config/exo/keys(\.env)?|\.exo/keys|\.divan/[^/]+\.key|auth\.json|"
     r"client_secret[^/]*\.json|\.unii/[^/]+/token|[^/]*token[^/]*\.(json|txt|pickle|ya?ml)|[^/]+\.token|"
+    r"\.config/gh/hosts\.yml|\.git-credentials|\.docker/config\.json|\.kube/config|"
+    r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
     r"proc/[^/]+/environ)(/|$)")
 
 # Concrete examples a shell glob is tested against ("could this glob match a secret store?").
 _SENSITIVE_SAMPLES = ("keys.env", ".exo/keys", ".config/exo/keys.env", ".divan/seat.key", "auth.json",
                       "google_token.json", ".unii/acct/token", "client_secret_1.json", ".hermes/p/.env",
                       ".netrc", ".env", ".npmrc", ".pypirc", ".ssh/id_rsa", ".ssh/id_ed25519", ".aws/credentials",
-                      ".gnupg/pubring.kbx", "credentials.json", "server.pem")
+                      ".gnupg/pubring.kbx", "credentials.json", "server.pem",
+                      ".config/gh/hosts.yml", ".git-credentials", ".docker/config.json", ".kube/config")
 
 
 def _home() -> str:
@@ -719,6 +722,8 @@ def is_sensitive_path(path: str) -> bool:
     path = _expand_text(str(path or "")).strip()
     if not path:
         return False
+    if path.endswith(".pub"):
+        return False  # public keys are meant to be shared
     if _SENSITIVE_PATH.search(path.replace("\\", "/")):
         return True
     try:
