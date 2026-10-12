@@ -198,3 +198,21 @@ def test_cd_guard_warns_once_per_folder_on_a_shell_call(tmp_path):
     got = notices(eng, sid)
     assert len(got) == 1 and str(plain.resolve()) in got[0] or str(plain) in got[0]
     assert not any(n for n in notices(eng, sid) if str(r) in n)
+
+
+def test_handoff_lists_open_background_jobs(tmp_path):
+    import time
+
+    eng = engine(tmp_path)
+
+    async def go():
+        info = await eng.loop.create_session(title="w")
+        now = time.time()
+        for jid, state in (("j_run", "running"), ("j_done", "exited")):
+            eng.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, started, log) VALUES (?,?,?,?,?,?,?,?)",
+                         (jid, eng.agent, info.id, "make test", str(tmp_path), state, now - 90, f"/x/{jid}.log"))
+        return await eng.handoff_facts(info.id)
+
+    f = run(go())
+    assert [j["id"] for j in f["jobs"]] == ["j_run"] and f["jobs"][0]["command"] == "make test"
+    assert f["jobs"][0]["state"] == "running" and f["jobs"][0]["elapsed"]
