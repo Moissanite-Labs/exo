@@ -213,7 +213,8 @@ class HttpTransport:
         finally:
             if self._client is None:
                 await client.aclose()
-        if not st.meta.pop("_finished", False) and not st.parts and not st.tool_calls:
+        finished = st.meta.pop("_finished", False) or st.stop_reason is not None
+        if not finished:  # closed cleanly but cut short: no finish event and no stop reason; never a normal end
             yield error_event("stream ended without a response", None, retryable=True)
             return
         if st.usage != Usage():

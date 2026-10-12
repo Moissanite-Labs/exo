@@ -112,3 +112,18 @@ def test_upstream_400_falls_back_and_cools_down_only_that_model():
                instances={"p": p, "b": b}, env={})
     events = collect(r.stream("main", [Message.user("hi")], []))
     assert events[-1].message.text() == "ok" and "p|free" in r.cooldowns and "p" not in r.cooldowns
+
+
+def test_clean_close_without_finish_is_an_error_even_after_text():
+    from exo.core.models.openai_chat import OpenAIChatProvider as P
+
+    cut = b'data: {"choices":[{"delta":{"content":"half an ans"}}]}\n\n'
+    rec = Recorder((200, cut, {}))
+    events = collect(P("http://h/v1", client=rec.client()).stream([Message.user("x")], []))
+    assert "".join(e.text for e in events if e.kind == "text") == "half an ans"  # shown text is still streamed
+    assert events[-1].kind == "error" and "without a response" in events[-1].error and events[-1].retryable
+    assert not any(e.kind == "done" for e in events)
+
+    ok = b'data: {"choices":[{"delta":{"content":"fine"},"finish_reason":"stop"}]}\n\n'  # no [DONE], but a stop reason
+    events = collect(P("http://h/v1", client=Recorder((200, ok, {})).client()).stream([Message.user("x")], []))
+    assert events[-1].kind == "done" and events[-1].stop_reason == "end"
