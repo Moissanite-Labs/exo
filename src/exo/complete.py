@@ -334,7 +334,7 @@ def args_hint(name: str, core: Sequence[dict[str, Any]] = ()) -> str:
 def short_desc(desc: str) -> str:
     """The first clause of a description, for one dropdown row."""
     d = re.split(r"[:;]\s|\.\s", desc, maxsplit=1)[0].strip()
-    return d[:70]
+    return d if len(d) <= 64 else d[:63].rsplit(" ", 1)[0] + "\u2026"
 
 
 def ghost(text: str, sug: Suggestion, hist: "History | None") -> tuple[str, bool]:

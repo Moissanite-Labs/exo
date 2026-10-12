@@ -390,7 +390,6 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   review.
 - **Not done:** web client view, receipts for bus sends, held messages across restarts, live gateway test.
 
-
 ## D-028 (2026-10-12) One agent, one continuous memory
 - **Why (A, verbatim):** "well if the harness is built according to my vision for the implemenation of the optchat
   memory system all sessions should technically be the same agent with continuous memory". Exo had taken the turn
@@ -441,7 +440,6 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   model also miscounted line numbers inside excerpts. Two questions is a weak sample.
 - **Next:** a native port (Python, Exo's own decision route, no Node) only if more measurement shows a win on
   larger or less tidy repos. **Not done:** per-call spend accounting, a jg result cache owned by Exo.
-
 
 ## D-030 (2026-10-12) Onboarding: an agent-led /intro, and a tutorial mode of client-side tips
 - **Why (A, verbatim):** "want to add a tutorial mode that users can toggle, like the one many games have ... so
@@ -495,7 +493,6 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   diff `+` and `-` keep the terminal's own green and red; the web client is a separate change.
 - **Not done:** a `[?] explain` key on approvals (it would be new behaviour); a visual check of `NO_COLOR` in a
   real terminal (the SVG export cannot show the terminal's default colours).
-
 
 ## D-032 (2026-10-12) What exo-razi asked for: background jobs and principal capture (Part A); tools, trace and commands (Part B)
 - **Why (A asked exo-razi, the canary Exo agent, what it would want; the brief is ~/Work/handoffs/exo-razi-asks-brief.md):**
@@ -691,6 +688,35 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   tools and approvals stay tied to its window). Web with `--socket`/`--url` never starts anything. Page errors are
   sentences (`core_message`), not exception text. No protocol change.
 - **Not done:** `--in-process` flag (the client already falls back in process); Windows.
+
+## D-037 (2026-10-12) Completion and guidance in the composer
+- **Why:** the principal asked for command autofill, suggestion and guidance, "a better version of what Hermes CLI
+  has". The reference is the Hermes CLI (`hermes_cli/commands_completion.py`): a prompt_toolkit completer with a `/`
+  menu, subcommand lists, ghost text from history and `@` file search. We studied it and built our own.
+- **Decision:** one engine, `src/exo/complete.py`, pure Python with no UI: fuzzy ranking (exact, prefix, word start,
+  contains, letters in order, then a word of the description), argument slots per command (`plan`), a `FileIndex` for
+  `@`, `closest` for typos, `History`, `ghost`, and a `Guide` with the tip rules. The terminal client draws it
+  (`Composer.key_hook`, `CompletionMenu`, ghost text drawn after the caret). The web client has the same logic in
+  `static/complete.js` (checked against the Python in a test that runs node) and draws it in `composer.js`.
+- **Sources of truth:** the command list is the client's own table plus the core's `commands.list`, asked once at
+  start. Models come from `models.list` (the picker's source, so unsupported models are already left out), threads
+  from `session.list`, grant ids from `command.run grants`, the default handoff path from `handoff_facts`, provider
+  names from `providers_setup.rows`. Each is fetched on first use and cached 30 seconds.
+- **Safety:** `@` lists names only, never reads a file, stays inside the working folder (no `/`, `~` or `..`), and
+  drops anything `gate.is_sensitive_path` names. On the web it is a server route that needs the same loopback, Host
+  and page-token guard as the key routes. History is per seat, mode 0600, 500 lines, and never keeps a line that
+  looks like a key or password.
+- **Guidance:** one dim line in the empty composer (the placeholder), from local rules over state the client already
+  has: first run, a failed model call, a finished job, open findings, a slow turn, a long thread. At most one new tip
+  per 25 seconds, each rule twice a session, none while a turn runs, a rule retires once you run its command, Tab
+  fills it in. No model call. Off with `/tutorial off` (which also sets `guidance.enabled` false) or that config key.
+  Under reduced motion there is no timer: it only updates on events.
+- **Typo help:** an unknown `/comand` is not sent. The note says "did you mean /compact?" and the corrected line waits
+  in the composer. With nothing close, the line goes to the core as before. The web does the same for its commands.
+- **Rejected:** a model call to suggest commands (cost, latency, and the rules are enough); a second ranking in each
+  client (they would drift); storing history in the browser (the web client keeps none across page loads, on purpose).
+- **Not done:** file completion for bare paths (`./x`, `~/x`) outside `@`; `/findings <id>` (the core takes only
+  `count`); the web client does not run the other slash commands, so its menu lists only what it runs.
 
 ## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
 - **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,

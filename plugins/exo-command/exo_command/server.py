@@ -217,6 +217,11 @@ class WebServer:
             return await self._events(writer, since, (q.get("session") or [None])[0])
         if path == "/api/providers" or path.startswith("/api/providers/"):
             return await self._providers(reader, writer, headers, method, path)
+        if path == "/api/complete/files":   # file names: same guard as the key routes (loopback, Host, token)
+            peer = writer.get_extra_info("peername")
+            refused = prov.guard(headers, peer[0] if isinstance(peer, (tuple, list)) and peer else None, self.token)
+            if refused is not None:
+                return await self._json(writer, *refused)
         if path.startswith("/api/"):
             body: Dict[str, Any] = {}
             if method == "POST":

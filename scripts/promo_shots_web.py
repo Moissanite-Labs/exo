@@ -84,8 +84,8 @@ SCRIPT["memory"] = [
 class DemoSource:
     """Answers the chat routes from a table; replays the scripted events once the page has opened the thread."""
 
-    def __init__(self, state: str):
-        self.state, self.centre = state, None
+    def __init__(self, state: str, cwd: str = ""):
+        self.state, self.centre, self.cwd = state, None, cwd
         self.fed = False
 
     async def call(self, body):
@@ -107,13 +107,13 @@ class DemoSource:
             if not self.fed:
                 self.fed = True
                 asyncio.get_running_loop().call_later(0.6, self.feed)
-            return {"session": {"id": SID, "model": MODEL, "agent": "atlas"}, "messages": msgs}
+            return {"session": {"id": SID, "model": MODEL, "agent": "atlas", "cwd": self.cwd}, "messages": msgs}
         if t == "command.run":
             return {"output": CONTEXT} if body.name == "context" else {"open": 0}
         return {}
 
     def feed(self):
-        for i, (typ, b) in enumerate(SCRIPT.get(self.state, SCRIPT["memory"]), 1):
+        for i, (typ, b) in enumerate(SCRIPT.get(self.state, SCRIPT["memory"]), 1):  # 0.6 s after the thread opens
             self.centre.record({"seq": i, "type": typ, "body": b, "session": SID, "ts": now_iso()})
 
     async def stream(self, since=0):
@@ -124,7 +124,17 @@ class DemoSource:
         return None
 
 
-SHOTS = [("web-01-start", "start"), ("web-02-turn", "turn"), ("web-03-approval", "approval"), ("web-04-memory", "memory")]
+SCRIPT["done"] = SCRIPT["memory"] + [
+    ("job.updated", {"job_id": "j1", "state": "done", "command": "pytest -q", "exit_code": 0, "elapsed_ms": 12400})]
+TOKEN = "demo-token"
+DEMO_FILES = ("README.md", "pyproject.toml", "src/slugify/__init__.py", "src/slugify/core.py", "tests/test_slugify.py",
+              "docs/usage.md", "docs/changelog.md")
+# What a person would type, applied by a script injected into the copied page (D-037). The product has no such hook.
+TYPED = {"guidance": "", "slash": "/", "files": "read @sl"}
+# state, typed text; the three completion shots start from a finished turn with a job that just ended
+SHOTS = [("web-01-start", "start", None), ("web-02-turn", "turn", None), ("web-03-approval", "approval", None),
+         ("web-04-memory", "memory", None), ("web-05-guidance", "done", "guidance"), ("web-06-slash", "done", "slash"),
+         ("web-07-files", "done", "files")]
 
 
 async def capture(url: str, out: Path) -> None:
@@ -142,36 +152,53 @@ async def capture(url: str, out: Path) -> None:
 HOLD = 3.0
 
 
-def hold_load() -> None:
+STATIC0, REAL_DISPATCH = server.STATIC, api.dispatch
+
+
+async def dispatch0(c, method, path, q, body):
+    if path == "/api/hold":
+        await asyncio.sleep(HOLD)
+        return 200, {}
+    return await REAL_DISPATCH(c, method, path, q, body)
+
+
+def type_script(kind: str) -> str:
+    """A snippet that types into the composer once the scripted events have landed (it sits in the copied page)."""
+    if not kind or not TYPED[kind]:
+        return ""
+    return ('<script>addEventListener("DOMContentLoaded", () => setTimeout(() => { const i = document.querySelector(".xc-input");'
+            f' i.focus(); i.value = {TYPED[kind]!r}; i.setSelectionRange(i.value.length, i.value.length);'
+            ' i.dispatchEvent(new Event("input")); }, 2000));</script>')
+
+
+def hold_load(kind: str = "") -> None:
     """Chrome shoots at the load event. Serve a copy of the client with one slow image so the load event waits for
     the scripted events and the fade animations to finish. The repo's static files are not touched."""
     import shutil
     dest = Path(tempfile.mkdtemp(prefix="exo-static")).resolve() / "static"
-    shutil.copytree(server.STATIC, dest)
+    shutil.copytree(STATIC0, dest)
     index = dest / "index.html"
-    index.write_text(index.read_text().replace("</body>", '<img src="/api/hold" alt="" hidden></body>'))
+    index.write_text(index.read_text().replace("</body>", '<img src="/api/hold" alt="" hidden>' + type_script(kind) + "</body>"))
     server.STATIC = dest
-    real = api.dispatch
-
-    async def dispatch(c, method, path, q, body):
-        if path == "/api/hold":
-            await asyncio.sleep(HOLD)
-            return 200, {}
-        return await real(c, method, path, q, body)
-    api.dispatch = dispatch
+    api.dispatch = dispatch0
 
 
 async def main(outdir: Path) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
-    hold_load()
-    for name, state in SHOTS:
-        src = DemoSource(state)
+    demo = Path(tempfile.mkdtemp(prefix="slugify"))
+    subprocess.run(["git", "init", "-q", str(demo)], check=True)
+    for rel in DEMO_FILES:
+        (demo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (demo / rel).write_text("demo\n")
+    for name, state, kind in SHOTS:
+        hold_load(kind or "")
+        src = DemoSource(state, str(demo))
         centre = CommandCentre(load_settings({}), src)
         centre.connected = True
         src.centre = centre
-        web = WebServer(centre)
+        web = WebServer(centre, token=TOKEN)
         port = await web.start("127.0.0.1", 0)
-        await capture(f"http://127.0.0.1:{port}/?boot=0#chat", outdir / f"{name}.png")
+        await capture(f"http://127.0.0.1:{port}/?boot=0#token={TOKEN}&chat", outdir / f"{name}.png")
         await web.close()
         print("wrote", outdir / f"{name}.png")
 
