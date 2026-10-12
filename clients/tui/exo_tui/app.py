@@ -298,7 +298,8 @@ class ExoApp(App):
         if bits:
             line.append_text(self.wire())
             line.append("  " + f" {th.DOT} ".join(bits), style=th.rich_style("fg3"))
-        self.query_one("#activity", Static).update(line)
+        for bar in self.query("#activity"):  # absent before the screen mounts or after it closes
+            bar.update(line)
 
     def add(self, widget: Block | ToolBlock) -> None:
         self.add_many([widget])
