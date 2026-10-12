@@ -314,3 +314,19 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Open, carried to wave 3:** capture misses corrections phrased as "Important correction ... NOT X";
   the gate has no signing key so decisions are logged, not ledgered; confirm Jev answers gate calls
   live; usage.updated.model reports the configured route, not the one that served after fallback.
+
+## D-022 (2026-10-12) Wave 3 plan: Textual TUI, three protocol adds, learn package
+- **TUI stack:** Textual (Python), not a spike first. Reasons: one language and one install with the core,
+  stdio boundary, `textual serve` gives a browser mode for free, and the device horizon favours no Node
+  runtime (research/UI.md 4.7). The protocol is the boundary, so a TS client can join later. Escape hatch:
+  if on charminar (low-power Linux) cold start is over 1.5 s or streaming a 2,000-message transcript
+  stutters, spike Ink before wave 4.
+- **Protocol adds (29 of 30 commands, 22 of 30 events):** `feedback.send` (accept, edit, reject,
+  should_have_been: the main learning signal), `ui.respond` (opened, dismissed, acted, ignored), `schedule.edit`
+  (cron jobs; a run is a fresh session reported through task.updated), and the `ui.panel` event (D-014;
+  every panel carries a plain-text fallback). One command slot is left; new needs add fields, not types.
+- **Learning:** a new `exo.learn` package carries the fused loop (research/LEARNING-LOOP.md section 5 and 6):
+  capture, typed proposals, promotion policy, revert, and the eval additions. Eval judge = main route (D-018).
+  A lesson that changes behaviour (skill patch, high-impact taste) is promoted only if it beats the
+  incumbent on held-out cases and passes the regression gates.
+- **Ownership and acceptance:** docs/WAVE-3.md.
