@@ -8,7 +8,7 @@ import { createHero } from "./hero.js";
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
-  let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [];   // instruments from model.call and usage.updated
+  let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
 
   const listEl = h("div", { class: "xc-sessions" });
@@ -87,7 +87,7 @@ export function mount(root) {
       case "turn.started": busy = true; if (b.model) { model = b.model; requested = b.model; } drawStatus(); break;
       case "turn.completed": busy = false; drawStatus(); loadContext(); break;
       case "usage.updated": {
-        if (b.session_total && b.session_total.cost_usd != null) cost = b.session_total.cost_usd;
+        if (b.session_total) { costSeen = true; cost = b.session_total.cost_usd == null ? null : b.session_total.cost_usd; }   // null = unpriced, never $0
         if (b.model && !model) model = b.model;
         instruments(b.usage); drawStatus(); break;
       }
@@ -95,9 +95,16 @@ export function mount(root) {
         if (b.route) model = b.route;
         if (b.requested) requested = b.requested;
         if (b.usage) instruments(b.usage);
-        calls.unshift({ route: b.route || "", requested: b.requested || "", ttft: b.ttft_ms, ms: b.total_ms, cache: b.usage ? cacheOf(b.usage) : null, error: b.error });
+        calls.unshift({ route: b.route || "", requested: b.requested || "", ttft: b.ttft_ms, ms: b.total_ms, cache: b.usage ? cacheOf(b.usage) : null, cost: b.usage ? b.usage.cost_usd : undefined, error: b.error });
         calls = calls.slice(0, 6);
         drawStatus(); drawSide(true); break;
+      case "job.updated": {
+        const bits = [b.state || "running"];
+        if (b.exit_code != null && b.exit_code !== 0) bits.push("exit " + b.exit_code);
+        if (b.elapsed_ms) bits.push(b.elapsed_ms >= 1000 ? (b.elapsed_ms / 1000).toFixed(1) + "s" : b.elapsed_ms + "ms");
+        sys("job", short(b.command || b.job_id, 60) + " \u00B7 " + bits.join(" \u00B7 ") + (b.detail ? " \u00B7 " + short(b.detail, 80) : ""), "mem");
+        break;
+      }
       case "memory.summarized":
         loadContext();
         sys("memory", "log " + b.start + "-" + b.end + " folded \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
@@ -287,7 +294,7 @@ export function mount(root) {
     }
     if (cacheShare != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "cache"), h("span", { class: "xc-v" }, Math.round(cacheShare * 100) + "%")));
     if (findings != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "findings"), h("span", { class: "xc-v" + (findings ? " xc-via" : "") }, String(findings))));
-    if (cost != null) out.push(cell("cost", "$" + cost.toFixed(cost < 1 ? 3 : 2)));
+    if (cost != null || costSeen) out.push(cell("cost", cost != null ? money(cost) : "unknown"));
     out.push(busy ? h("span", { class: "xc-wire", "aria-hidden": "true" }) : h("span", { class: "xc-spacer" }));
     if (notice) out.push(h("span", { class: "xc-flash" }, notice));
     statusEl.replaceChildren(...out);
@@ -297,6 +304,7 @@ export function mount(root) {
     const live = document.getElementById("xc-live");
     if (live) live.classList.toggle("on", busy);
   }
+  function money(v) { return "$" + v.toFixed(v < 1 ? 3 : 2); }
   function fmtTok(n) { return n >= 10000 ? Math.round(n / 1000) + "k" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n); }
   function drawWhere() {
     const el = document.getElementById("xc-where");
@@ -359,7 +367,7 @@ export function mount(root) {
     const cl = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Last calls"));
     if (calls.length) calls.forEach((k) => cl.append(h("div", { class: "xc-call" + (k.error ? " xc-bad" : "") },
       h("span", { class: "xc-v" }, short((k.route || k.requested || "no route").split(":").pop(), 22)),
-      h("span", { class: "xc-pm" }, [k.ttft != null ? "ttft " + k.ttft + "ms" : "", k.cache != null ? "cache " + Math.round(k.cache * 100) + "%" : ""].filter(Boolean).join(" \u00B7 ")),
+      h("span", { class: "xc-pm" }, [k.ttft != null ? "ttft " + k.ttft + "ms" : "", k.cache != null ? "cache " + Math.round(k.cache * 100) + "%" : "", k.cost === undefined ? "" : k.cost === null ? "cost unknown" : money(k.cost)].filter(Boolean).join(" \u00B7 ")),
       k.requested && k.route && k.requested !== k.route ? h("span", { class: "xc-via" }, "\u2190 fallback") : null)));
     else cl.append(h("div", { class: "xc-pm" }, "no calls yet in this thread"));
     return [mem, cl];
@@ -379,7 +387,7 @@ export function mount(root) {
   }
 
   async function open(id) {
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; flash("");
+    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));

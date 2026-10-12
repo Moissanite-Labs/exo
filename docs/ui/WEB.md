@@ -58,6 +58,13 @@ or file from outside.
   The plugin exposes this as `POST /api/chat/sessions/<id>/command` (names limited to those three, sent as the
   existing `command.run`): a plugin route, not a protocol change.
 
+## Cost and jobs (D-032)
+
+Cost in the strip is the session total from `usage.updated`; each row of last calls shows that call's
+`usage.cost_usd` from `model.call`. A call or session the core could not price reads `unknown`, never `$0`.
+`job.updated` shows as one dim line with a cold label: `job · pytest -q · done · 12.4s`, with the exit code
+when it is not zero.
+
 ## Motion and accessibility
 
 Every animation (pulse, packet, caret blink, reveal, boot) sits behind `prefers-reduced-motion: reduce`, which
