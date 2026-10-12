@@ -40,6 +40,7 @@ def register(sp: Any, common: Any) -> None:
     p.add_argument("--engine", default=os.environ.get("EXO_ENGINE", "exo.core.engine:create"),
                    help="module:factory returning an Engine (default the real core), or echo")
     p.add_argument("--seat", help="seat name: loads $EXO_HOME/seats/<name>.toml (see docs/SEATS.md)")
+    p.add_argument("--stop", action="store_true", help="stop the background exod that exo web started, then exit")
     p.set_defaults(func=cmd_serve)
 
     p = sp.add_parser("chat", parents=[common], help="chat with exod from the terminal")
@@ -69,6 +70,10 @@ def _server_token(path: Path) -> str:
 
 
 def cmd_serve(a: Any, store: Any = None) -> int:
+    if getattr(a, "stop", False):
+        from exo.ensure_core import stop_core
+        print(stop_core())
+        return 0
     from exo.core.tools.builtin.shell import raise_nofile_limit
     from exo.server.app import load_engine, serve
 
@@ -103,7 +108,15 @@ def cmd_serve(a: Any, store: Any = None) -> int:
         except asyncio.CancelledError:
             pass
 
-    asyncio.run(main())
+    from exo.ensure_core import pid_path
+    pidfile = pid_path(socket.parent.parent) if socket == default_socket() else None
+    if pidfile is not None:
+        pidfile.write_text(f"{os.getpid()}\n")
+    try:
+        asyncio.run(main())
+    finally:
+        if pidfile is not None:
+            pidfile.unlink(missing_ok=True)
     return 0
 
 

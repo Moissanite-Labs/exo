@@ -98,15 +98,18 @@ def _open(home: Path, agent: str, wait: float = 5.0) -> Any:
     from exo.server.app import load_engine
 
     path = socket_path(home, agent)
-    if _alive(path):
-        return Client(socket=str(path))
+    exod = home / "run" / "exod.sock"
+    for p in (exod, path):
+        if _alive(p):
+            return Client(socket=str(p))
     try:
         return LocalClient(load_engine("exo.core.engine:create"), serve=path)
     except WriterBusy:  # another window is starting it: wait for its socket
         end = time.monotonic() + wait
         while time.monotonic() < end:
-            if _alive(path):
-                return Client(socket=str(path))
+            for p in (exod, path):
+                if _alive(p):
+                    return Client(socket=str(p))
             time.sleep(0.05)
         raise
 
@@ -184,7 +187,7 @@ def connect(socket: str | None = None, url: str | None = None, token_file: str |
             token = p.read_text().strip() if p.exists() else None
         return Client(url=url, token=token)
     path = Path(socket).expanduser() if socket else default_socket()
-    if path.exists() or socket:
+    if socket or _alive(path):  # a stale exod.sock left by a crash is not a server: fall through to in-process
         from exo.protocol.client import Client
 
         return Client(socket=str(path))

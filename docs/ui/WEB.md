@@ -6,6 +6,16 @@ labels, `·` as the separator, orange only for the one thing that matters, cold 
 Presentation only: no protocol change, the JS behaviour is the same, no build step, no new dependency, no font
 or file from outside.
 
+## Connecting to the core (D-036)
+
+`exo web` needs one core for the agent. It looks for `$EXO_HOME/run/exod.sock` (`exo serve`), then
+`run/agent-<seat>.sock` (a terminal window running the core in process, D-028), and joins whichever answers. If
+neither does it starts `exo serve` detached (log `$EXO_HOME/logs/exod.log`, pid `run/exod.pid`), under a start lock so
+two clients never start two. While it starts, the page shows "Exo core is not running, starting it...". If it cannot
+start, the page shows the reason and the log path. If the agent is held by a window that is not sharing it, the page
+says to close that window or run `exo stop`. The background core stays up after the page closes (`exo stop` ends it).
+With `--socket` or `--url` nothing is started; the page says the core is not reachable.
+
 ## Screens
 
 The public set is in `docs/media/`: `web-01-start.png` (empty start: the site's hero behind the brand block,

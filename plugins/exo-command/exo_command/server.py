@@ -33,7 +33,7 @@ from urllib.parse import parse_qs, urlsplit
 from . import api
 from . import providers as prov
 from .service import SECTIONS, CommandCentre
-from .source import SourceError
+from .source import SourceError, core_message
 
 STATIC = Path(__file__).resolve().parent / "static"
 MAX_BODY = 64 * 1024
@@ -91,12 +91,14 @@ class WebServer:
         c = self.centre
         while True:
             try:
+                if c.auto_core:
+                    await c.ensure_core()
                 await c.bootstrap()
                 await c.follow()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # core down or restarting: show it, retry
-                c.connected, c.last_error = False, "{}: {}".format(type(exc).__name__, exc)
+                c.connected, c.last_error = False, core_message(exc)
                 c._notify()
             await asyncio.sleep(2.0)
 
@@ -278,7 +280,7 @@ class WebServer:
             return await self._json(writer, 404 if exc.code == "not_found" else 502,
                                     {"error": exc.message, "code": exc.code})
         except Exception as exc:
-            return await self._json(writer, 502, {"error": "{}: {}".format(type(exc).__name__, exc)})
+            return await self._json(writer, 502, {"error": core_message(exc)})
         return await self._json(writer, 200, {"ok": True})
 
     async def _send(self, writer, status: int, body: bytes, ctype: str) -> None:

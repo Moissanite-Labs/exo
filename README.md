@@ -76,7 +76,7 @@ with `exo update`. `exo --version` shows the version and, for a checkout install
 through to the client: `exo --resume` (or `exo resume`), `exo --seat NAME`, `exo --no-intro`. Other commands keep working:
 `exo models`, `exo providers`, `exo -h` lists all.
 
-For the web client, run `exo serve` in one terminal and `exo web` in another, then open
+For the web client, run `exo web` (it starts the shared core if none runs; `exo stop` ends it), then open
 `http://127.0.0.1:7342`. Options, what each install step does, safety rules and re-runs are in
 [`docs/INSTALL.md`](docs/INSTALL.md). To add a model key, see [`docs/PROVIDERS.md`](docs/PROVIDERS.md).
 

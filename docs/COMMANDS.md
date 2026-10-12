@@ -158,14 +158,15 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
-| `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.core.engine:create`, or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. | `cmd_serve` in `src/exo/cli_chat.py` |
+| `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.core.engine:create`, or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). | `cmd_serve` in `src/exo/cli_chat.py` |
 | `exo chat` | A line client for `exod`. Sends `/name args` lines as `command.run`. `/quit` and `/exit` leave. | `--socket PATH`, `--url URL`, `--token-file PATH`, `--session ID`, `--resume`, `--title T` | `cmd_chat` in `src/exo/cli_chat.py` |
 | `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `main` and `cmd_tui` in `src/exo/cli.py` |
 | `exo resume` | Reopens the last session in the terminal client: `exo --resume`. Other flags pass through (`exo resume --seat X`). | same as `exo` | `main` in `src/exo/cli.py` |
 | `exo --version` | Package version, plus the git sha for a checkout install. | none | `version_string` in `src/exo/update_cmd.py` |
 | `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`), prints `old -> new`, then a quick self-check (import, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing | `cmd_update` in `src/exo/update_cmd.py` |
 | `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
-| `exo web` | The command centre web client. Needs a running `exo serve`. | `--socket`, `--url`, `--token-file`, `--host` (default 127.0.0.1), `--port` (default 7342) | `cmd_web` in `src/exo/cli.py`, `plugins/exo-command/exo_command/__main__.py` |
+| `exo stop` | Stops the background core (exod) that `exo web` or `exo serve` started. Reads `$EXO_HOME/run/exod.pid`. | none | `stop_core` in `src/exo/ensure_core.py` |
+| `exo web` | The command centre web client. Joins a running core (exod, or a terminal window's) or starts `exo serve` in the background (D-036). | `--socket`, `--url`, `--token-file`, `--host` (default 127.0.0.1), `--port` (default 7342) | `cmd_web` in `src/exo/cli.py`, `plugins/exo-command/exo_command/__main__.py` |
 
 ### Config, models and decisions
 

@@ -11,6 +11,17 @@ from typing import Any, AsyncIterator, Dict, Optional, Protocol
 from exo.protocol import schema as s
 
 
+def core_message(exc: BaseException) -> str:
+    """A sentence for the page; never a raw ConnectError."""
+    name = type(exc).__name__
+    if isinstance(exc, (ConnectionError, FileNotFoundError)) or name in ("ConnectError", "ReadError", "RemoteProtocolError"):
+        return ("Exo core is not reachable. `exo web` starts it for you; if this stays, run `exo serve` in a "
+                "terminal or check $EXO_HOME/logs/exod.log.")
+    if isinstance(exc, RuntimeError):
+        return str(exc)
+    return "{}: {}".format(name, exc)
+
+
 class SourceError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__("{}: {}".format(code, message))
@@ -30,6 +41,7 @@ class ClientSource:
 
     def __init__(self, socket: Optional[str] = None, url: Optional[str] = None, token: Optional[str] = None):
         from exo.protocol.client import Client
+        self.socket = socket
         self.client = Client(socket=socket, url=url, token=token)
 
     async def call(self, body: Any) -> Dict[str, Any]:
@@ -40,7 +52,7 @@ class ClientSource:
         return resp.result
 
     async def stream(self, since: int = 0) -> AsyncIterator[Dict[str, Any]]:
-        async for ev in self.client.events(since=since, reconnect=True):
+        async for ev in self.client.events(since=since, reconnect=False):
             yield ev.to_dict()
 
     async def aclose(self) -> None:
