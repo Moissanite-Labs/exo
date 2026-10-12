@@ -235,3 +235,87 @@ def test_small_recent_spans_stay_out_of_the_cached_prefix():
     assert systems == {"SYS"}  # never moved, though leaves were cut
     last = "\n".join(m.text() for m in prov.calls[-1])
     assert "fact a0" in last and "fact a3" in last  # B still sees all of A's recent work
+
+
+# ---- /context and /compact (the report is read-only; compact folds what is eligible now)
+
+
+def _talk(loop, n=6, agent="razi"):
+    async def go():
+        a = await loop.create_session(agent=agent, title="A")
+        for i in range(n):
+            await loop.send(a.id, f"fact number {i} " + "word " * 40)
+        return a
+    return run(go())
+
+
+def test_report_lists_each_part_and_changes_nothing():
+    store, ctx, prov, loop, _ = setup(leaf_size=2, tail_messages=4)
+    a = _talk(loop)
+    other = run(loop.create_session(agent="razi", title="B"))
+    run(loop.send(other.id, "news from B"))
+    before = (store.last_seq(a.id), store.last_pos("razi"), store.get_meta(a.id), len(store.summaries("agent:razi")))
+    r = ctx.report(a.id, "SYS")
+    assert before == (store.last_seq(a.id), store.last_pos("razi"), store.get_meta(a.id), len(store.summaries("agent:razi")))
+    t = r["tokens"]
+    assert t["system"] == 1 and t["tree"] > 0 and t["tail"] > 0
+    assert t["total"] == t["system"] + t["tree"] + t["notes"] + t["tail"]
+    assert r["tree"]["summaries"] >= 1 and r["tree"]["levels"] and r["nodes"]["done"] >= 1
+    assert r["notes"]["unseen"] and t["notes"] > 0  # B's news is counted before it is stored
+    assert r["eligible"]["leaves"] >= r["eligible"]["leaves_after_tail_wait"]
+    assert ctx.report(a.id, "SYS") == r  # same answer twice
+
+
+def test_report_refuses_a_plain_session():
+    store, ctx, prov, loop, _ = setup()
+    plain = run(loop.create_session())
+    try:
+        ctx.report(plain.id)
+    except ValueError as exc:
+        assert "agent" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_compact_folds_leaves_inside_the_tail_and_shrinks_the_thread_tail():
+    store, ctx, prov, loop, summ = setup(leaf_size=2, tail_messages=4)
+    a = _talk(loop)
+    before = ctx.report(a.id, "SYS")
+    assert before["eligible"]["leaves"] > before["eligible"]["leaves_after_tail_wait"]
+    res = run(ctx.compact(a.id, "SYS"))
+    after = res["after"]
+    assert res["complete"] and res["folded"]
+    assert after["frontier"] > before["frontier"] and after["frontier"] == store.last_pos("razi")
+    assert after["eligible"]["leaves"] == 0
+    assert after["tail"]["messages"] < before["tail"]["messages"]
+    assert after["tokens"]["total"] < before["tokens"]["total"]
+    assert all(n["after_tokens"] < n["before_tokens"] for n in res["folded"])
+    assert ctx.report(a.id, "SYS")["eligible"]["leaves"] == 0
+    run(loop.send(a.id, "and after"))  # the next turn still works and the tail regrows
+    assert "and after" in prov.calls[-1][-2].text() + prov.calls[-1][-1].text()
+
+
+def test_compact_keeps_the_size_rules():
+    # spans under min_compact_tokens stay verbatim
+    store, ctx, prov, loop, summ = setup(leaf_size=2, tail_messages=4, min_compact_tokens=10**6)
+    a = _talk(loop)
+    res = run(ctx.compact(a.id, "SYS"))
+    assert res["folded"] == [] and summ.prompts == []
+    assert res["skipped"] >= 1
+    # a summary that is not shorter than its source is dropped
+    store, ctx, prov, loop, summ = setup(leaf_size=2, tail_messages=4)
+
+    async def long(content, previous=None, **kw):
+        return "x" * 10_000
+    ctx.compressor.summarize = long
+    a = _talk(loop)
+    res = run(ctx.compact(a.id, "SYS"))
+    assert res["folded"] == [] and res["skipped"] >= 1
+    assert not any(n.status == "done" for n in store.summaries("agent:razi"))
+
+
+def test_compact_with_nothing_to_do_is_quiet():
+    store, ctx, prov, loop, summ = setup(leaf_size=8, tail_messages=12)
+    a = _talk(loop, n=1)
+    res = run(ctx.compact(a.id, "SYS"))
+    assert res["folded"] == [] and res["skipped"] == 0 and res["failed"] == []

@@ -58,6 +58,28 @@ get one id per agent, not per thread, so every window reuses the same cached pre
 Tree upkeep reports each finished node as `memory.summarized` (level, start, end, tokens before and after).
 It is not a compaction of the live context, so it no longer shows as `context.compacted`.
 
+## Looking at it and compacting by hand
+
+Two TUI commands. Both are built-in `command.run` commands (`name="context"`, `name="compact"`), because
+the protocol is full at 30 commands. No new command type and no new event.
+
+- `/context` shows what the next model call for this thread will carry: system (prompt and memory block),
+  the summary tree (summaries, nodes, levels, log range), the note of other threads' news (stored, plus
+  news not yet stored), and this thread's recent tail. Each part has a token estimate, and the total
+  follows. It also counts tree nodes by state (done, pending, skipped, failed) and says how many leaf
+  chunks `/compact` would fold. It reads only: it stores no note and starts no summary.
+- `/compact` summarizes now whatever is eligible for this agent. Every full leaf chunk is eligible, even
+  inside the tail (the 12-message wait is skipped), then finished neighbours are merged even if the view
+  is under budget. The size rules stay: a span under `min_compact_tokens`, or a summary that is not shorter
+  than its source, stays verbatim. The thread's tail then starts at the new summaries instead of keeping
+  the last `tail_messages` (`compact_seq` in the thread meta; it fades as the thread grows again). It
+  reports each folded node and the context tokens before and after. It runs in the core that holds the
+  agent lock, so a window that joined another window's core asks that core to do it. It refuses while a
+  turn runs in the thread.
+
+A merge left as is (its two children summaries, under the size floor) shows its children's summaries in
+the view, not the raw messages of its span.
+
 ## Concurrency
 
 - One process writes an agent's log and tree: it holds `$EXO_HOME/run/agent-<id>.lock` (an OS file lock,
@@ -93,4 +115,4 @@ before. Belief recall and the signed ledger are unchanged.
 - TUI: `/new` starts a new thread, `/sessions` and `/resume` list this agent's threads (subagent
   threads hidden), `/new private` starts a private thread. Context notes are not shown in the
   transcript.
-- Commands stay at 30. No new events.
+- `/context` and `/compact` (above). Commands stay at 30. No new events.

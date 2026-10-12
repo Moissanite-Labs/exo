@@ -236,10 +236,14 @@ class Loop:
             return False
         return "recall" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
+    async def base_system(self) -> str:
+        """The stable part of the system text: system prompt and the memory provider's block (no recall)."""
+        return "\n\n".join(p for p in (self.system_prompt, await self._memory("system_prompt_block") or "") if p)
+
     async def _system(self, session: str, query: str) -> tuple[str, str]:
         """(system text, recall). Recall is folded into the system text unless the context engine takes it."""
-        parts = [self.system_prompt]
-        parts.append(await self._memory("system_prompt_block") or "")
+        base = await self.base_system()
+        parts = [base]
         recall = await self._memory("prefetch", query, session_id=session) or ""
         if recall and not self._takes_recall():
             parts.append("# Recalled memory\n" + recall)

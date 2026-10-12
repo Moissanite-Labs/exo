@@ -88,6 +88,41 @@ def _usage_dict(u: Usage | None) -> dict[str, int]:
             "total_tokens": u.input_tokens + u.output_tokens}
 
 
+def _tok(n: int) -> str:
+    return str(n)
+
+
+def render_context(r: dict[str, Any], tree: AgentContext) -> str:
+    t, tr, nodes = r["tokens"], r["tree"], r["nodes"]
+    levels = ", ".join(f"L{n}" for n in tr["levels"]) or "none"
+    note = f"{r['notes']['stored']} stored" + (", news from other threads waiting" if r["notes"]["unseen"] else "")
+    lines = [f"Next call for thread {r['thread'][-8:]} of agent {r['agent']} (estimates, about 4 characters per token):",
+             f"  system        {_tok(t['system']):>7}   prompt and memory block",
+             f"  summary tree  {_tok(t['tree']):>7}   {tr['summaries']} summaries over {tr['nodes']} nodes, levels {levels}"
+             + (f", log 1-{tr['covers'][1]}" if tr["covers"] else ""),
+             f"  other threads {_tok(t['notes']):>7}   {note}",
+             f"  recent tail   {_tok(t['tail']):>7}   {r['tail']['messages']} messages of this thread",
+             f"  total         {_tok(t['total']):>7}",
+             f"Tree nodes: {nodes['done']} done, {nodes['pending']} pending ({nodes['running']} running), "
+             f"{nodes['skipped']} skipped (kept verbatim: too small or not shorter), {nodes['failed']} failed.",
+             f"Log: {r['log_entries']} entries; summarized up to {r['frontier']}. /compact would fold "
+             f"{r['eligible']['leaves']} leaf chunk(s) now ({r['eligible']['leaves_after_tail_wait']} are due anyway; "
+             f"a chunk is {tree.leaf_size} entries, the tail wait is {tree.tail_messages})."]
+    return "\n".join(lines)
+
+
+def render_compact(res: dict[str, Any]) -> str:
+    b, a, f = res["before"]["tokens"]["total"], res["after"]["tokens"]["total"], res["folded"]
+    lines = [f"Compacted: {len(f)} node(s) folded, {res['skipped']} left verbatim; context {b} to {a} tokens."]
+    lines += [f"  L{n['level']} log {n['start']}-{n['end']}: {n['before_tokens']} to {n['after_tokens']} tokens" for n in f]
+    if not f and not res["skipped"] and not res["failed"]:
+        lines.append("  nothing eligible: every full chunk is already summarized, or too small to be worth it")
+    lines += [f"  failed: {e}" for e in res["failed"]]
+    if not res["complete"]:
+        lines.append("  some summaries are still running; /context shows progress")
+    return "\n".join(lines)
+
+
 class ContextAdapter:
     """TreeContext for the loop, plus a plugin ContextEngine when one fills the slot."""
 
@@ -641,7 +676,9 @@ class CoreEngine:
         return {"tools": self.registry.schemas()}
 
     async def _commands_list(self, b: s.CommandsList) -> dict[str, Any]:
-        own = [{"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
+        own = [{"name": "context", "description": "what the next model call carries: parts and token estimates", "args": ""},
+               {"name": "compact", "description": "summarize now what is eligible in this agent's memory", "args": ""},
+               {"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
                {"name": "findings", "description": "open harness findings", "args": ""}]
         return {"commands": own + [{"name": c.name, "description": c.description, "args": c.args_hint}
                                    for c in sorted(self.plugins.commands.values(), key=lambda c: c.name)]}
@@ -682,7 +719,35 @@ class CoreEngine:
         return "\n".join(head + ["", trace.table(trace.build(self.store, session, last, self.thresholds))]
                          + (["", peers] if peers else []))
 
+    def _agent_ctx(self, session: str | None) -> AgentContext:
+        tree = getattr(self.loop.context, "tree", self.loop.context)
+        if not session or self.store.get_session(session) is None:
+            raise CommandFailed("bad_request", "no thread to look at")
+        if not isinstance(tree, AgentContext) or tree._agent_key(session) is None:
+            raise CommandFailed("bad_request", "this thread has no shared memory (a subagent or plain session)")
+        return tree
+
+    async def context_text(self, session: str | None) -> str:
+        """``/context``: what the next model call for this thread carries. Read-only."""
+        tree = self._agent_ctx(session)
+        r = tree.report(session, await self.loop.base_system())
+        return render_context(r, tree)
+
+    async def compact_text(self, session: str | None) -> str:
+        """``/compact``: summarize now what is eligible for this agent. Runs here, in the process that holds the
+        agent lock, so a joining window never writes the tree itself."""
+        tree = self._agent_ctx(session)
+        st = self.loop._state.get(session)
+        if st is not None and st.running:
+            raise CommandFailed("busy", "a turn is running in this thread; try again when it ends")
+        res = await tree.compact(session, await self.loop.base_system())
+        return render_compact(res)
+
     async def _builtin_command(self, b: s.CommandRun) -> Any:
+        if b.name == "context":
+            return await self.context_text(b.session)
+        if b.name == "compact":
+            return await self.compact_text(b.session)
         if b.name == "trace":
             return self.trace_text(b.session, int(b.args) if b.args.strip().isdigit() else 10)
         if b.name == "findings":

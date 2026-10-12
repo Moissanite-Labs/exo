@@ -66,7 +66,7 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `turn.interrupt` TurnInterrupt: session
 - `approval.respond` ApprovalRespond: request_id, decision `allow/deny/allow_always`, note = ""
 - `question.answer` QuestionAnswer: question_id, answer
-- `command.run` CommandRun: name, args = "", session?
+- `command.run` CommandRun: name, args = "", session?. Built-ins: trace, findings, context, compact (the cap is full; new commands go here)
 - `commands.list` CommandsList: session?
 - `events.subscribe` EventsSubscribe: since = 0 (events with seq > since), session? (None = all)
 - `search` Search: query, scope `sessions/store/all` = all, limit = 20
