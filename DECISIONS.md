@@ -565,3 +565,39 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   every model).
 - **Not done:** prices for subscription routes; cost in the TUI status line; a git check that runs `git`
   (the guard walks up looking for `.git`, so a bare or broken repo counts as a repo).
+
+## D-033 (2026-10-12) Approvals bound to the exact text, who may approve, and an outbound scrub
+- **Why:** orda's review (P0-4, P0-5). An "always" answer covered any later text under the same rule, was lost
+  on restart, and any local client could answer any approval. A public repo once shipped with task ids, profile
+  names, model strings and a home path in it (lrn-042); the gate's posting checks were empty by default.
+- **Binding:** for an outward act (post, message, email, social, payment, account, or anything public or
+  irreversible) the gate hashes the exact text, title, target, tool and arguments. The hash is the approval's
+  `binding`; an edit gives a new hash and a new ask. A client may echo the binding in `approval.respond`; a
+  mismatch is refused as `stale`. Binding to the full arguments, not only text and target, means nothing else
+  can change under an approval either.
+- **Who may approve:** `policies/approvals.yaml` maps category to `principal`, `seat:<name>` or `role:<name>`.
+  Default is principal only, so single-user installs behave as before. The principal can always answer: their
+  consent is the root. Peers still cannot (D-026). The list rides on `approval.requested` as `approvers`; the
+  engine refuses other answerers as `forbidden`. Identity is the `client` string a local client declares, so it is
+  as strong as the socket's permissions. A real setup where a lead seat approves public posts is expressible as
+  `github_post: ["role:public-reviewer"]` with `roles: {public-reviewer: ["seat:<lead>"]}`; it is not configured
+  live.
+- **Grants:** "always" becomes a grant with a scope (category plus exact target; outward also the text hash), an
+  expiry (30 days, outward 7) and a ledger row, kept in the principal store (`state/approval-grants.json`, 0600),
+  else in exod's home. The store, not exod state, because a grant is the principal's consent and belongs with
+  their policies and ledger, and it then holds for every seat of that principal. The gate checks grants itself
+  and tells the core (`persist`) not to keep its own unscoped in-memory allow. Credentials never get a grant.
+- **Scrub:** posts to public targets are swept for seat names (seat files, bus registry, store agents), home
+  paths, model ids from the catalog and internal ids, plus the user's own list. A hit holds the post with each
+  violation listed. Plain-word names match only as whole tokens; distinctive names (hyphen, underscore or digit)
+  also match inside words and with any separator. The footer stays empty in code; the oversight line is an
+  example in the template. `footer_exposures` can limit the footer to public targets.
+- **Protocol:** no new command or event. Optional fields: `ApprovalRequested.approvers`, `.binding`;
+  `ApprovalRespond.binding`.
+- **Rejected:** an unscoped "always" for outward acts (one approval would cover any later text); keeping grants
+  in the core's memory (lost on restart, no expiry, no audit); a hard-coded footer (that is one principal's
+  branding); substring matching for every name (a seat called "canary" would hold every post that says canary
+  release).
+- **Not done:** signed answers from seats (a seat key over request id, decision and binding) to make seat identity
+  stronger than a declared string; escalation along an org graph (P1-2); TUI and web do not yet show
+  `approvers` or echo `binding`; a command to list or revoke grants (delete the file or the row for now).

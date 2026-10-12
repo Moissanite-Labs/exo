@@ -215,6 +215,17 @@
             "deny",
             "allow_always"
           ]
+        },
+        "approvers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "binding": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,
@@ -262,6 +273,10 @@
           "default": ""
         },
         "client": {
+          "type": "string",
+          "default": ""
+        },
+        "binding": {
           "type": "string",
           "default": ""
         }

@@ -26,11 +26,15 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _dt
+import fnmatch
+import glob as _glob
 import hashlib
 import json
 import logging
 import os
+import secrets
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
@@ -62,6 +66,7 @@ class Settings:
     mode: str = "enforce"
     read_body_files: bool = True
     decision_model: bool = True
+    grants_path: Optional[Path] = None
 
 
 def _truthy(v: Any) -> bool:
@@ -97,6 +102,10 @@ def resolve_settings(overrides: Mapping[str, Any] | None = None,
     seat = env.get("EXO_SEAT") or author  # the seat's own signing key, the same file the bus client uses
     key_path = get("key_path") or str(exo_home / "keys" / f"{seat}.key")
     mode = str(get("mode")).strip().lower()
+    # Standing "always" grants are the principal's consent, so they live in the principal store
+    # beside the policies and ledger. Without a store they live in exod's home.
+    grants = (Path(store).expanduser() / "state" / "approval-grants.json" if store
+              else exo_home / "state" / "gate-grants.json")
     return Settings(
         principal_store=Path(store).expanduser() if store else None,
         author=author,
@@ -104,7 +113,70 @@ def resolve_settings(overrides: Mapping[str, Any] | None = None,
         mode=mode if mode in ("enforce", "observe") else "enforce",
         read_body_files=bool(get("read_body_files")),
         decision_model=_truthy(get("decision_model")),
+        grants_path=grants,
     )
+
+
+class GrantStore:
+    """Standing "always" grants on disk (D-033). One JSON list, mode 0600, written atomically.
+
+    A grant has a scope (``rule`` = category, ``target`` = glob), an expiry and, for an outward act,
+    the ``binding`` hash of the exact text it covers. Credentials never get a grant. An outward
+    grant without a binding never matches, so no outward category has an unscoped always."""
+
+    def __init__(self, path: Optional[Path], clock: Callable[[], float] = time.time):
+        self.path = path
+        self.clock = clock
+        self._lock = threading.Lock()
+
+    def _read(self) -> list:
+        if not self.path or not self.path.is_file():
+            return []
+        try:
+            rows = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning("exo-gate: unreadable grants file %s; ignoring it", self.path)
+            return []
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+    def _write(self, rows: list) -> None:
+        assert self.path is not None
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = self.path.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(rows, f, indent=1, sort_keys=True)
+        os.replace(tmp, self.path)
+
+    def match(self, category: str, target: str, binding: str, outward: bool) -> Optional[dict]:
+        if category == "credentials":
+            return None
+        now = self.clock()
+        with self._lock:
+            rows = self._read()
+        for g in rows:
+            if g.get("rule") != category or float(g.get("expires") or 0) <= now:
+                continue
+            if outward and not g.get("binding"):
+                continue
+            if g.get("binding") and g.get("binding") != binding:
+                continue
+            if not fnmatch.fnmatchcase((target or "").lower(), str(g.get("target") or "").lower()):
+                continue
+            return g
+        return None
+
+    def add(self, category: str, target: str, binding: str, days: float, by: str, tool: str = "") -> Optional[dict]:
+        if not self.path or category == "credentials" or days <= 0:
+            return None
+        now = self.clock()
+        g = {"id": "g_" + secrets.token_hex(6), "rule": category, "target": _glob.escape(target or ""),
+             "binding": binding or "", "tool": tool, "by": by, "created": now, "expires": now + days * 86400}
+        with self._lock:
+            rows = [r for r in self._read() if float(r.get("expires") or 0) > now]  # drop expired ones
+            rows.append(g)
+            self._write(rows)
+        return g
 
 
 class LedgerSink:
@@ -164,9 +236,10 @@ class Gate:
         self._policies: Optional[dict] = None
         self._policy_stamp: tuple = ()
         self._policy_error = ""
-        self._pending: Dict[str, tuple[Optional[str], Optional[str]]] = {}
+        self._pending: Dict[str, tuple[Optional[str], Optional[str], dict]] = {}
         self._spent: Dict[str, float] = {}
         self._lock = threading.Lock()
+        self.grants = GrantStore(settings.grants_path)
 
     # --- policies ---------------------------------------------------------------------
 
@@ -177,8 +250,13 @@ class Gate:
         paths = gate.policy_files(root) + [root / "agents"]
         return tuple((str(p), p.stat().st_mtime_ns if p.exists() else 0) for p in paths)
 
+    def _scrub_stamp(self) -> tuple:
+        """Seat files and the bus registry feed the scrub names; reload when they change."""
+        paths = gate.scrub_sources(self.settings.principal_store)
+        return tuple((str(p), p.stat().st_mtime_ns if p.exists() else 0) for p in paths)
+
     def policies(self) -> dict:
-        stamp = self._stamp()
+        stamp = self._stamp() + self._scrub_stamp()
         if self._policies is None or stamp != self._policy_stamp:
             try:
                 self._policies = gate.load_policies(self.settings.principal_store)
@@ -208,10 +286,8 @@ class Gate:
     def _rule_key(self, tool: str, args: Mapping, c: gate.Classification, d: gate.Decision) -> str:
         # An "always" answer must not cover a different public or irreversible act, so those
         # keys are bound to the exact arguments. Others are bound to category and target.
-        if c.category == "credentials" or c.reversibility == "irreversible" or d.exposure == "public" or d.violations:
-            digest = hashlib.sha256(json.dumps({"t": tool, "a": args}, sort_keys=True, default=str)
-                                    .encode("utf-8")).hexdigest()[:16]
-            return f"exo-gate:{c.category}:{digest}"
+        if c.category == "credentials" or gate.is_outward(c, d) or d.violations:
+            return f"exo-gate:{c.category}:{gate.approval_binding(c, args)[:16]}"  # D-033: text-bound
         return f"exo-gate:{c.category}:{c.target or tool}"
 
     def _risk(self, tool: str, given: Any) -> str:
@@ -310,6 +386,12 @@ class Gate:
         today = _dt.date.today().isoformat()
         if d.outcome != "deny":
             self._tighten(d, verdict)
+        outward = gate.is_outward(c, d)
+        binding = gate.approval_binding(c, args) if outward else ""
+        grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" else None
+        if grant:
+            d.outcome, d.rule = "allow", "grant"
+            d.reason += f"; standing grant {grant['id']} (until {_iso(grant['expires'])})"
         default = str(pol["gates"].get("ask_default") or "skip")
         body = {
             "gate": PLUGIN_ID, "phase": "decision", "tool": tool, "outcome": d.outcome,
@@ -319,6 +401,10 @@ class Gate:
         }
         if verdict:
             body["decision_model"] = {"verdict": verdict, **(via or {})}
+        if grant:
+            body["grant"] = grant["id"]
+        if binding:
+            body["binding"] = binding
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}
@@ -327,10 +413,17 @@ class Gate:
             if d.violations:
                 msg += " Fix: " + "; ".join(d.violations) + "."
             key = self._rule_key(tool, args, c, d)
-            result = {"action": "approve", "message": msg, "rule_key": key}
+            approvers = gate.approvers_for(c.category, pol.get("approvals"))
+            # persist: this gate keeps "always" grants itself (scoped, expiring, in the store), so the
+            # core must not also keep an unscoped one in memory.
+            result = {"action": "approve", "message": msg, "rule_key": key, "approvers": approvers,
+                      "persist": True}
+            if binding:
+                result["binding"] = binding
             if c.category == "credentials":
                 result["once"] = True      # the core never stores an "always" for this (no standing allow)
             body["rule_key"] = key
+            body["approvers"] = approvers
         if self.settings.mode == "observe" and c.category != "credentials":  # credentials are enforced in every mode
             body["would"] = result["action"] if result else "run"
             result = None
@@ -340,7 +433,9 @@ class Gate:
         eid = self.sink.append(body, session=session_id)
         if result and result["action"] == "approve":
             with self._lock:
-                self._pending["plugin_rule:" + result["rule_key"]] = (eid, session_id or None)
+                scope = {"rule": c.category, "target": c.target or tool, "binding": binding, "outward": outward,
+                         "tool": tool}
+                self._pending["plugin_rule:" + result["rule_key"]] = (eid, session_id or None, scope)
                 if len(self._pending) > 500:
                     self._pending.pop(next(iter(self._pending)))
         return result
@@ -351,12 +446,44 @@ class Gate:
             pending = self._pending.pop(pattern_key, None)
         if pending is None:
             return None
-        eid, session = pending
+        eid, session, scope = pending
         body = {"gate": PLUGIN_ID, "phase": "approval", "choice": str(choice),
                 "approved": str(choice) in ("once", "session", "always"), "decided_by": str(decided_by or ""),
                 "rule_key": pattern_key.split(":", 1)[-1]}
-        self.sink.append(body, session=session, refs=(eid,) if eid else ())
+        aid = self.sink.append(body, session=session, refs=(eid,) if eid else ())
+        if str(choice) == "always":
+            self._add_grant(scope, str(decided_by or ""), session, aid or eid)
         return None
+
+    # --- standing grants (D-033) --------------------------------------------------------
+
+    def _grant_for(self, c: gate.Classification, d: gate.Decision, binding: str, outward: bool) -> Optional[dict]:
+        if c.category == "credentials" or (d.violations and not binding):
+            return None
+        try:
+            return self.grants.match(c.category, c.target or c.tool, binding, outward)
+        except Exception:
+            logger.warning("exo-gate: grant lookup failed; asking instead", exc_info=True)
+            return None
+
+    def _add_grant(self, scope: Mapping, by: str, session: Optional[str], ref: Optional[str]) -> None:
+        approvals = self.policies().get("approvals") or {}
+        days = float(approvals.get("outward_always_days" if scope.get("outward") else "always_days") or 0)
+        try:
+            g = self.grants.add(str(scope.get("rule") or ""), str(scope.get("target") or ""),
+                                str(scope.get("binding") or ""), days, by, str(scope.get("tool") or ""))
+        except Exception:
+            logger.warning("exo-gate: could not save the standing grant", exc_info=True)
+            return
+        if g is None:
+            return
+        body = {"gate": PLUGIN_ID, "phase": "grant", "grant": g["id"], "rule": g["rule"], "target": g["target"],
+                "binding": g["binding"] or None, "by": by, "expires": _iso(g["expires"])}
+        self.sink.append(body, session=session, refs=(ref,) if ref else ())
+
+
+def _iso(ts: float) -> str:
+    return _dt.datetime.fromtimestamp(float(ts), _dt.timezone.utc).isoformat(timespec="seconds")
 
 
 def _risk_lookup_for(ctx) -> Callable[[str], Optional[str]]:

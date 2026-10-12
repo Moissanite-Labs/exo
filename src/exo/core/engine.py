@@ -39,6 +39,7 @@ from exo.core.peers import PeerConfig
 from exo.core.plugins import PluginManager
 from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
+from exo.gate import approver_allowed, approver_identity
 from exo.core.seats import Seat, SeatError, list_seats
 from exo.core.seats import load as load_seat
 from exo.core.sessions import SessionLocked, SessionStore
@@ -291,6 +292,7 @@ class CoreEngine:
         self._approvals: dict[str, tuple[asyncio.Future, str | None]] = {}
         self._open_approvals: dict[str, s.ApprovalRequested] = {}  # what approvals.list shows
         self._always: set[str] = set()
+        self._approval_rules: dict[str, tuple[list[str], str]] = {}  # rid -> (approvers, binding), D-033
         self._deciders: dict[str, str] = {}
         self._channels: dict[str, Any] = {}
         self._channel_cfg: dict[str, dict[str, Any]] = {**(channels or {}), **(seat.channels if seat else {})}
@@ -461,13 +463,16 @@ class CoreEngine:
                 if key in self._always and not once:
                     continue
                 who: list[str] = []
+                bound = {k: v for k, v in (("approvers", [str(a) for a in verdict.get("approvers") or []]),
+                                           ("binding", str(verdict.get("binding") or ""))) if v}  # D-033
                 decision = await self.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
-                                          options=["allow", "deny"] if once else None)
+                                          options=["allow", "deny"] if once else None, **bound)
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
                 await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
                                                decided_by=who[0] if who else "client", session_id=ctx.session or "")
                 if decision == "allow_always" and not once:
-                    self._always.add(key)
+                    if not verdict.get("persist"):  # a plugin that sets persist keeps its own scoped grants (D-033)
+                        self._always.add(key)
                 elif decision != "allow":
                     return Block("the user denied this call")
         return None
@@ -534,16 +539,23 @@ class CoreEngine:
 
     async def ask(self, session: str | None, summary: str, call: ToolCall | None = None,
                   risk: str = "medium", decided_by: list[str] | None = None, options: list[str] | None = None,
-                  opened: list[str] | None = None) -> str:
+                  opened: list[str] | None = None, approvers: list[str] | None = None, binding: str = "") -> str:
         """Publish an approval request and wait for ``approval.respond``.
 
-        ``decided_by`` (optional out list) receives the id of the client that answered."""
+        ``decided_by`` (optional out list) receives the id of the client that answered. ``approvers`` limits who
+        may answer (``principal``, ``seat:<name>``; empty = any local client that is not a peer). ``binding`` is the
+        hash of the exact outbound text; an answer that names a different hash is refused (D-033)."""
         rid, t0 = s.new_id("a"), time.monotonic()
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._approvals[rid] = (fut, session)
         req = s.ApprovalRequested(request_id=rid, summary=summary, risk=risk, call=call)
         if options:
             req.options = list(options)
+        if approvers:
+            req.approvers = list(approvers)
+        if binding:
+            req.binding = binding
+        self._approval_rules[rid] = (list(approvers or []), binding)
         if opened is not None:
             opened.append(rid)
         self._open_approvals[rid] = req
@@ -559,6 +571,7 @@ class CoreEngine:
             self._approvals.pop(rid, None)
             self._open_approvals.pop(rid, None)
             self._deciders.pop(rid, None)
+            self._approval_rules.pop(rid, None)
 
     # ------------------------------------------------------------ dispatch
 
@@ -733,6 +746,12 @@ class CoreEngine:
         fut, sid = self._approvals.get(b.request_id, (None, None))
         if fut is None or fut.done():
             raise CommandFailed("not_found", f"no open approval {b.request_id}")
+        approvers, binding = self._approval_rules.get(b.request_id, ([], ""))
+        if not approver_allowed(b.client, approvers):  # D-033: who may answer, by category
+            raise CommandFailed("forbidden", f"{approver_identity(b.client)} may not answer this approval; "
+                                             f"it needs {' or '.join(approvers)}")
+        if b.binding and binding and b.binding != binding:
+            raise CommandFailed("stale", "the text changed after it was shown; read the new request and answer that")
         self._deciders[b.request_id] = b.client or "client"
         fut.set_result(b.decision)
         self.hub.publish(s.ApprovalResolved(request_id=b.request_id, decision=b.decision,
