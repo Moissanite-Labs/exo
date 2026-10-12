@@ -138,3 +138,21 @@ def test_migration_imports_sessions_in_time_order(tmp_path):
     st.close()
     again = SessionStore(path)  # once only
     assert again.last_pos("canary") == 3 and again.migrate_agents() == 0
+
+
+def test_undo_drops_agent_tree_summaries_that_cover_the_undone_entries():
+    from exo.core.context import SummaryNode
+
+    st = SessionStore()
+    a = st.create_session(agent="razi")
+    for i in range(4):
+        st.append_message(a.id, Message.user(f"q{i}"))
+        st.append_message(a.id, Message.assistant(f"a{i}"))
+    old = SummaryNode(id="s_old", session="agent:razi", level=0, index=0, start=1, end=4, text="old", status="done")
+    new = SummaryNode(id="s_new", session="agent:razi", level=0, index=1, start=5, end=8, text="has q3", status="done")
+    top = SummaryNode(id="s_top", session="agent:razi", level=1, index=0, start=1, end=8, text="both", status="done")
+    for n in (old, new, top):
+        st.save_summary(n)
+    assert st.undo(a.id) == 2
+    assert [n.id for n in st.summaries("agent:razi")] == ["s_old"]
+    assert not st.has_summary("s_new")
