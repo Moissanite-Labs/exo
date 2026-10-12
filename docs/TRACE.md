@@ -49,7 +49,7 @@ rest fall back to config.json (`exo trace` reads the seat of the session it show
 | `tool.error:<tool>:<kind>` | a tool returned an error | any |
 | `harness.error:<where>:<type>` | a caught exception | any |
 | `shell.masked_exit` | a bash result carried `note: pipeline stage N exited C`: an earlier stage failed but the last one succeeded, so the reported exit was 0 | any |
-| `tool.repeat:<tool>` | the same call (a shell command ignoring cd, timeout, pipes) twice in one turn | 2 |
+| `tool.repeat:<tool>` | the same call (a shell command ignoring cd, timeout, pipes) twice in one turn with no file change between. A `write_file`, `edit_file`, `patch` or a shell command that writes (`sed -i`, a redirect, `tee`, `git apply`, `mv`) starts a new count, so rerunning tests after an edit is not a repeat | 2 |
 | `subagent.slow` | a subagent task over the limit | 90 s (`subagent_s`) |
 | `model.mismatch` | the shown model is not the one that served, with no fallback to explain it | any |
 

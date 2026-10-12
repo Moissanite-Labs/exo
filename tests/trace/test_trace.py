@@ -610,3 +610,32 @@ def test_masked_pipeline_exit_is_flagged_from_the_stored_result():
     (t,) = trace.build(store, "m")
     (f,) = [f for f in t.flags if f.signature == "shell.masked_exit"]
     assert "stage 1 exited 1" in f.detail
+
+
+def _turn_with_calls(calls):
+    store = SessionStore()
+    store.create_session(id="r")
+    store.append_event(s.TurnStarted(turn_id="t", model="m:a"), "r")
+    for i, (name, args) in enumerate(calls):
+        store.append_event(s.ToolStarted(call=ToolCall(f"c{i}", name, args)), "r")
+        store.append_event(s.ToolCompleted(result=s.ToolResult.of_text(f"c{i}", "ok"), duration_ms=5), "r")
+    store.append_event(s.TurnCompleted(turn_id="t"), "r")
+    (t,) = trace.build(store, "r")
+    return {f.signature for f in t.flags}
+
+
+def test_rerunning_tests_after_an_edit_is_not_a_repeat():
+    """f_3c19fb4f: the same command with a file change between is a retest."""
+    run_tests = ("bash", {"command": "pytest -q tests"})
+    for edit in (("edit_file", {"path": "a.py", "old_string": "x", "new_string": "y"}),
+                 ("write_file", {"path": "a.py", "content": "y"}),
+                 ("patch", {"patch": "*** Begin Patch"}),
+                 ("bash", {"command": "sed -i 's/x/y/' a.py"}),
+                 ("bash", {"command": "echo y > a.py"})):
+        assert "tool.repeat:bash" not in _turn_with_calls([run_tests, edit, run_tests]), edit
+    # still a repeat: nothing changed between, a read between, or a redirect to /dev/null
+    assert "tool.repeat:bash" in _turn_with_calls([run_tests, run_tests])
+    assert "tool.repeat:bash" in _turn_with_calls([run_tests, ("read_file", {"path": "a.py"}), run_tests])
+    assert "tool.repeat:bash" in _turn_with_calls([run_tests, ("bash", {"command": "ls 2>/dev/null"}), run_tests])
+    # three runs with one edit between: the first two are one epoch, so they still count
+    assert "tool.repeat:bash" in _turn_with_calls([run_tests, run_tests, ("edit_file", {"path": "a"}), run_tests])
