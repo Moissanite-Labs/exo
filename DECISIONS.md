@@ -196,3 +196,19 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Licence:** the shipped UniiChat code's licence is not verified, so Exo reimplements ideas and copies no
   code or prompt text from it until the licence is known.
 - **Rejected:** recall as an add-on to a growing transcript (the Hermes model; it degrades on long sessions).
+
+## D-014 (2026-10-12) One surface: terminal feel, app power summoned by the model
+- **A's idea (verbatim in `~/hafiz/nodes/work/exo.md`):** "the core typing and chat area feels just like a
+  terminal but all the extra ui elements can be intelligently pulled up by the model when
+  appropriate/relevant."
+- **Decision:** Exo ships one surface, not a CLI and a separate app. The base is a terminal-like prompt and
+  transcript (opencode / Command Code simplicity: `/` `@` `!`, one palette). Richer elements (diff viewer,
+  task board, approval card, taste card, session tree, charts, file preview) are panels the model opens
+  with a `ui` tool, which emits a `ui.panel` protocol event; every client renders what it can (the web and
+  desktop clients render full panels; the terminal renders a compact form or a link; a device renders a
+  card or voice). The user can always open or dismiss a panel by hand, and panel choices feed the learning
+  loop (an ignored panel teaches as much as an opened one). Deciding when to show a panel is a
+  decision-model job (D-015).
+- **Build:** the `ui.panel` event and `ui` tool land in wave 3 with the clients. Wave 1's protocol stays as is.
+- **Rejected:** separate CLI and app products (two UIs to learn, the norm we want to beat); an app that shows
+  every panel at all times (Hermes-style clutter).
