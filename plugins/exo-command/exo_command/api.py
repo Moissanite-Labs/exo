@@ -9,6 +9,7 @@ centre's source. A core that does not handle a command yet answers 501.
   GET  /api/chat/sessions/<id>             session.get           the transcript so far
   POST /api/chat/sessions/<id>/send        turn.send             {text, mode}
   POST /api/chat/sessions/<id>/interrupt   turn.interrupt
+  POST /api/chat/sessions/<id>/command     command.run           {name, args}; read-only names only
   GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
   POST /api/feedback                       feedback.send         {session, verdict, message_id, text}
   POST /api/ui/respond                     ui.respond            {panel_id, action, value}
@@ -27,6 +28,7 @@ from .source import SourceError
 MAX_TEXT = 50_000
 MODES = ("send", "queue", "steer")
 VERDICTS = ("accept", "edit", "reject", "should_have_been")
+READ_COMMANDS = ("context", "findings", "trace")   # read-only reports the core answers itself
 PANEL_ACTIONS = ("opened", "dismissed", "acted", "ignored")
 SCHEDULE_ACTIONS = ("list", "add", "remove", "pause", "resume", "run_now")
 TIERS = ("fast", "standard", "deep")
@@ -101,8 +103,8 @@ def _route(method: str, p: list, key: str):
         return (g if get else po if post else None) or False
     if len(p) == 3 and p[:2] == ["chat", "sessions"]:
         return _transcript if get else False
-    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt"):
-        return (_send if p[3] == "send" else _interrupt) if post else False
+    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command"):
+        return ({"send": _send, "interrupt": _interrupt, "command": _command}[p[3]]) if post else False
     return None
 
 
@@ -130,6 +132,11 @@ async def _send(c, p, q, body):
     text = _str(body, "text", required=True, limit=MAX_TEXT)
     mode = _choice(body, "mode", MODES, "send")
     return await c.source.call(s.TurnSend(session=p[2], text=text, mode=mode))
+
+
+async def _command(c, p, q, body):
+    name = _choice(body, "name", READ_COMMANDS)
+    return await c.source.call(s.CommandRun(name=name, args=_str(body, "args", limit=40), session=p[2]))
 
 
 async def _interrupt(c, p, q, body):

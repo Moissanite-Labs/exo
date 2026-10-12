@@ -55,6 +55,9 @@ base_url = "https://opencode.ai/zen/go/v1"
 key_env = "OPENCODE_GO_API_KEY"
 # Go asks for a stable per-conversation id (routing, prompt caching) and a named user agent.
 session_header = "x-opencode-session"
+# Go also lists models served only over /responses (GPT, Grok) or /messages (Claude, MiniMax, Qwen).
+# Exo speaks chat/completions to Go today, so pickers hide those until their transports land.
+hide_models = ["gpt", "grok", "claude", "minimax", "qwen"]
 
 # Nous Portal. Verified 2026-10-12 with a live key: a plain Bearer API key works and /models lists
 # OpenAI-compatible routes (Anthropic, OpenAI, GLM, Qwen and others). Model refs look like
@@ -63,6 +66,14 @@ session_header = "x-opencode-session"
 transport = "openai"
 base_url = "https://inference-api.nousresearch.com/v1"
 key_env = "NOUS_API_KEY"
+
+# Claude subscription through the `claude` CLI (OAuth login, no API key; ANTHROPIC_API_KEY is dropped
+# from the subprocess). Available only when `claude` is on PATH. Text-only: calls that carry Exo tools
+# fail and the router falls back. Model refs look like "claude-cli:sonnet".
+[providers.claude-cli]
+transport = "claude-cli"
+command = "claude"
+models = ["sonnet", "opus", "haiku"]
 
 # TypeSafe Jev: a decision model (probabilities, not text), so decision role only.
 # Verified https://docs.typesafe.ai/api.md : POST https://api.typesafe.ai/v1/systemone,

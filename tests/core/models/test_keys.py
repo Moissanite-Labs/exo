@@ -108,7 +108,8 @@ def test_key_never_in_error_text(monkeypatch):
 
 
 def test_eval_defaults_to_main():
-    r = Router(env={}, roles={"main": ["a:big"]}, catalog={"providers": {}, "models": {}, "roles": {}})
+    r = Router(env={}, roles={"main": ["a:big"]}, catalog={"providers": {}, "models": {}, "roles": {}},
+               providers={"a": {"transport": "openai", "base_url": "http://h/v1"}})
     assert [x.ref for x in r.chain("eval")] == ["a:big"]
     r.set_role("main", ["a:other"])
     assert [x.ref for x in r.chain("eval")] == ["a:other"]

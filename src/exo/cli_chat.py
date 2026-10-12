@@ -69,11 +69,18 @@ def _server_token(path: Path) -> str:
 
 
 def cmd_serve(a: Any, store: Any = None) -> int:
+    from exo.core.tools.builtin.shell import raise_nofile_limit
     from exo.server.app import load_engine, serve
 
+    raise_nofile_limit()  # tools inherit this; macOS defaults to 256 open files
     if a.seat:
         os.environ["EXO_SEAT"] = a.seat
-    engine = load_engine(a.engine)
+    from exo.core.agentlog import WriterBusy
+    try:
+        engine = load_engine(a.engine)
+    except WriterBusy as exc:  # one writer per agent (D-028)
+        print(f"exod: {exc}", file=sys.stderr)
+        return 1
     if a.stdio:
         asyncio.run(serve(engine, stdio=True))
         return 0

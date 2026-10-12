@@ -12,14 +12,16 @@ PID-reuse fingerprint guard, snapshots and the Windows path.
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 import shutil
 import signal
 import subprocess
 import sys
 import threading
+import tempfile
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from exo.core.tools.registry import Registry, ToolContext, ToolError
 
@@ -109,19 +111,131 @@ def kill_process_group(proc: subprocess.Popen, grace: float = TERM_GRACE) -> Non
         proc.wait(timeout=0.5)
 
 
+_SECRET_SUFFIXES = ("_KEY", "_KEYS", "_KEYS_DIR", "_KEYS_FILE", "_TOKEN", "_SECRET", "_PASSWORD")
+# Names that never reach a tool subprocess, beyond the model catalog's key_env names.
+_TOOL_SECRET_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
+_TOOL_SECRET_NAMES = frozenset({"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"})
+
+
+@functools.lru_cache(maxsize=1)
+def _catalog_key_envs() -> frozenset[str]:
+    """Every provider key variable the model catalog names (``key_env`` may be a string or a list)."""
+    try:
+        from exo.core.models.router import load_catalog
+
+        names: set[str] = set()
+        for spec in (load_catalog().get("providers") or {}).values():
+            v = spec.get("key_env") if isinstance(spec, dict) else None
+            names.update([v] if isinstance(v, str) else [str(x) for x in v or []])
+        return frozenset(n for n in names if n)
+    except Exception:
+        return frozenset()
+
+
+def tool_env(base: dict[str, str] | None = None, allow: Iterable[str] = ()) -> dict[str, str]:
+    """The environment a tool subprocess gets (bash and background jobs). Removed: the launcher's bus identity
+    (EXO_BUS_*), EXO_* variables that point at keys or hold secrets, every provider key named in the model
+    catalog, and any name ending in _API_KEY, _TOKEN, _SECRET or _PASSWORD (plus AWS_SECRET_ACCESS_KEY and
+    AWS_SESSION_TOKEN). ``allow`` names variables a seat lets through (``[tools] env_allow``). Only a copy is
+    filtered: model providers read the real environment and keep their keys."""
+    src = os.environ if base is None else base
+    allowed = {str(a) for a in allow}
+    catalog = _catalog_key_envs()
+
+    def drop(k: str) -> bool:
+        if k in allowed:
+            return False
+        u = k.upper()
+        return (k.startswith("EXO_") and (k.startswith("EXO_BUS_") or k.endswith(_SECRET_SUFFIXES))) or \
+            k in catalog or u in _TOOL_SECRET_NAMES or u.endswith(_TOOL_SECRET_SUFFIXES)
+
+    out = {k: v for k, v in src.items() if not drop(k)}
+    out.update({"PAGER": "cat", "GIT_PAGER": "cat", "TERM": "dumb"})
+    return out
+
+
+# Exit codes of a pipeline. bash reports only the last stage, so `false | head -1` looks like success. We do not
+# turn on pipefail (it would make `grep | head` fail on SIGPIPE). Instead an EXIT trap writes the final pipeline's
+# PIPESTATUS to a side file, and the tool result gets one note line when an earlier stage failed while the
+# last one succeeded. Only the command's final pipeline is seen: a DEBUG trap would see more but resets
+# PIPESTATUS for the user's own commands.
+MASKED_PREFIX = "note: pipeline stage"
+_TRAP = ('case ${#PIPESTATUS[@]} in 1) ;; *) printf "%s\\n" "${PIPESTATUS[*]}" 2>/dev/null >&FD ;; esac')
+
+
+def wrap_pipestatus(command: str, fd: int, env: dict[str, str]) -> list[str]:
+    """The argv that runs ``command`` under bash with an EXIT trap writing PIPESTATUS to ``fd`` (pass it in
+    pass_fds). The trap text travels in ``env`` (EXO_PIPE_TRAP) so the prefix stays short in bash's own syntax-error
+    messages. (An ``eval`` wrapper would hide the command's PIPESTATUS from the trap.)"""
+    env["EXO_PIPE_TRAP"] = _TRAP.replace("FD", str(fd))
+    return [shutil.which("bash") or "/bin/sh", "-c", 'trap "$EXO_PIPE_TRAP" EXIT; ' + command]
+
+
+def open_side() -> tuple[int, str]:
+    """A private temp file for the trap to append to; returns (fd, path). The caller closes the fd."""
+    return tempfile.mkstemp(prefix="exo-pipe-")
+
+
+def masked_note(path: str) -> str:
+    """One note line when the recorded pipeline had a failed earlier stage (not 141, SIGPIPE) and a successful
+    last stage; otherwise an empty string. Removes the side file."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(4096).decode("ascii", "replace")
+    except OSError:
+        return ""
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+    for line in raw.splitlines():
+        try:
+            codes = [int(x) for x in line.split()]
+        except ValueError:
+            continue
+        if len(codes) > 1 and codes[-1] == 0:
+            for i, c in enumerate(codes[:-1], 1):
+                if c not in (0, 141):
+                    return (f"{MASKED_PREFIX} {i} exited {c} (only the last stage's code is reported as the "
+                            "result)")
+    return ""
+
+
+def raise_nofile_limit(cap: int = 10240) -> int | None:
+    """Raise the soft open-files limit toward the hard limit (at most ``cap``) so child tools inherit it.
+    macOS starts at 256. Returns the new soft limit, or None when nothing changed or it is not possible."""
+    try:
+        import resource
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = cap if hard == resource.RLIM_INFINITY else min(hard, cap)
+        if soft != resource.RLIM_INFINITY and soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+            return want
+    except (ImportError, ValueError, OSError):
+        pass
+    return None
+
+
 def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: int = OUTPUT_CAP,
                 cancel: threading.Event | None = None,
-                emit: Callable[[str], None] | None = None) -> tuple[int, str, str]:
+                emit: Callable[[str], None] | None = None, env_allow: Iterable[str] = ()) -> tuple[int, str, str]:
     """Run ``command`` under bash. Returns ``(exit_code, output, status)``.
 
     status is ``ok``, ``timeout`` (exit 124) or ``interrupted`` (exit 130).
     stdout and stderr are merged in arrival order.
     """
-    shell = shutil.which("bash") or "/bin/sh"
-    proc = subprocess.Popen(
-        [shell, "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
-        env={**os.environ, "PAGER": "cat", "GIT_PAGER": "cat", "TERM": "dumb"})
+    side_fd, side_path = open_side()
+    try:
+        env = tool_env(allow=env_allow)
+        proc = subprocess.Popen(
+            wrap_pipestatus(command, side_fd, env), cwd=cwd, stdin=subprocess.DEVNULL, pass_fds=(side_fd,),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    except BaseException:
+        os.close(side_fd)
+        with contextlib.suppress(OSError):
+            os.unlink(side_path)
+        raise
+    os.close(side_fd)
     if sys.platform != "win32":
         with contextlib.suppress(ProcessLookupError):
             proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
@@ -155,18 +269,38 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
     with contextlib.suppress(Exception):
         proc.stdout.close()  # type: ignore[union-attr]
     code = {"timeout": 124, "interrupted": 130}.get(status, proc.returncode or 0)
+    note = masked_note(side_path)
+    if note and status == "ok":
+        out.add("\n" + note)
     return code, out.render(), status
 
 
+def _start_job(args: dict[str, Any], ctx: ToolContext, cwd: Any) -> str:
+    """``background: true`` (D-032): hand the command to the job manager and return at once. The gate has already
+    classified the command exactly as a foreground call; only how it runs differs."""
+    jobs = ctx.meta.get("jobs")
+    if jobs is None:
+        raise ToolError("background jobs are not available in this session; run the command in the foreground")
+    job = jobs.start(str(args["command"]), str(cwd), ctx.session, float(args["timeout"]) if args.get("timeout") else None)
+    return (f"Started background job {job['id']} (pid {job['pid']}). Output goes to {job['log']}. It keeps running if "
+            "this turn ends or is interrupted, and is stopped only by `job_kill`; the wall limit is "
+            f"{int(job['wall_s'])}s. You will get a job notice here when it ends, so do not poll or wait: carry on "
+            "with other work. `jobs` lists jobs, `job_output` reads output.")
+
+
 def bash(args: dict[str, Any], ctx: ToolContext) -> str:
+    background = args.get("background") is True
     timeout = float(args.get("timeout") or DEFAULT_TIMEOUT)
-    if not 0 < timeout <= MAX_TIMEOUT:
+    if not background and not 0 < timeout <= MAX_TIMEOUT:
         raise ToolError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
     cwd = ctx.resolve(args.get("cwd") or ".")
     if not cwd.is_dir():
         raise ToolError(f"cwd is not a folder: {cwd}")
+    if background:
+        return _start_job(args, ctx, cwd)
     code, output, status = run_command(args["command"], str(cwd), timeout,
-                                       cancel=ctx.cancel, emit=ctx.emit)
+                                       cancel=ctx.cancel, emit=ctx.emit,
+                                       env_allow=ctx.meta.get("env_allow") or ())
     output = output.rstrip("\n")
     if status == "timeout":
         output += f"\n[Command timed out after {timeout:g}s; process group killed]"
@@ -177,10 +311,17 @@ def bash(args: dict[str, Any], ctx: ToolContext) -> str:
 
 def register(reg: Registry) -> None:
     reg.tool("bash", "Run a shell command with bash -c. stdout and stderr are merged; long output "
-             f"keeps the head and tail. Default timeout {DEFAULT_TIMEOUT}s (max {MAX_TIMEOUT}); on "
-             "timeout the whole process group is killed. Not interactive: stdin is closed.",
+             f"keeps the head and tail. Default timeout {DEFAULT_TIMEOUT}s (max {MAX_TIMEOUT}; larger "
+             "values are rejected); on timeout the whole process group is killed. Not interactive: "
+             "stdin is closed. macOS has no `timeout` command, so use the timeout parameter. For a command that "
+             "takes longer than a couple of minutes (a build, a server, a long test run) pass `background: true`: "
+             "it returns a job id at once, keeps running if the turn ends, and you get a notice when it exits "
+             "(see the jobs, job_output and job_kill tools).",
              {"type": "object", "properties": {
                  "command": {"type": "string"},
-                 "timeout": {"type": "number", "description": "Seconds before the command is killed"},
-                 "cwd": {"type": "string", "description": "Working folder (default session cwd)"}},
+                 "timeout": {"type": "number", "description": f"Seconds before the command is killed (max {MAX_TIMEOUT}; larger values are rejected)"},
+                 "cwd": {"type": "string", "description": "Working folder (default session cwd)"},
+                 "background": {"type": "boolean", "description": "Run as a background job and return a job id at "
+                                "once. `timeout` then means the job's wall limit (default and maximum set by the "
+                                "seat, 2 h)."}},
               "required": ["command"]}, risk="high", toolset="shell")(bash)

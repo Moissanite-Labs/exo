@@ -1,0 +1,55 @@
+# The learning loop (D-012, D-022)
+
+Exo learns from what you do, and only keeps a lesson when the evidence is good. Code: `src/exo/learn/`. The design
+notes are in `research/LEARNING-LOOP.md`. This page is the short reference.
+
+## Where learning needs a store
+
+Learning writes to your principal store and its signed ledger. The store comes from config `learn.store`, else the
+`exo-memory` plugin's store. With neither, learning is off and says so once as a notice.
+
+## Signals in
+
+| Signal | How it arrives |
+|---|---|
+| A verdict on an answer: accept, edit, reject, should_have_been | protocol command `feedback.send` (TUI: ctrl+y accept, ctrl+e edit, ctrl+r reject) |
+| What you did with a panel: opened, dismissed, acted, ignored | protocol command `ui.respond` (see PANELS.md) |
+| A correction or ruling in chat | principal capture (MEMORY-MODEL.md) |
+
+Each signal becomes a ledger event. An edit also stores a preference pair: the answer, and your better version.
+
+## The fast loop
+
+After a turn, a cheap reviewer on the `aux` route reads new signals and writes typed proposals. It only proposes.
+A live turn cancels it. Each proposal goes to one place: taste (style and values), skill (how to do a class of task),
+fact, or question (when the signal is unclear). Limits live in `learn.fast_loop` in config.json: `every_turns` (10),
+`deadline` (90 s), `daily_cap` (20 reviews a day).
+
+## Promotion
+
+`exo.learn.promote.apply_policy` decides each open proposal, in this order:
+
+1. You said it (a ruling or an answer is in the evidence): promote now.
+2. Guarded (irreversible, public, financial, third party): never promoted on its own. It becomes a question once.
+3. It conflicts with an existing belief: it stays held and a question is raised. Never silent.
+4. Taste or fact, not guarded, high weight, evidence from at least `min_sessions` (2) sessions, no critic objection:
+   promoted automatically and logged for the brief.
+5. A skill patch is promoted only if it passes the held-out eval gate. With no held-out cases it waits.
+6. Anything else stays a proposal. After `stale_days` (14) it becomes a question or decays.
+
+A promotion can be reverted (`exo.learn.revert`), and the revert is a ledger row too.
+
+## The slow loop
+
+`exo.learn.nightly(engine)` runs the climb. A candidate is the current rules and skills with one change: add a held
+lesson, or drop an auto-promoted one. It replaces the incumbent only if it scores better on the dev cases by a margin,
+is not worse on held-out cases, and passes the gate. The night is capped by `climb.candidates` (10) and
+`climb.judge_samples` (3). The judge is the `eval` role, which defaults to the main route (D-018).
+
+Nothing calls `nightly` on a timer yet. D-023 lists the trigger as open.
+
+## Where to look
+
+- Config: the `learn` table in `config.json` (defaults in `src/exo/learn/runtime.py`).
+- Tests: `tests/learn/`.
+- What was learned since a date: `exo.learn.learned_since`, used by the brief.

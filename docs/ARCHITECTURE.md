@@ -56,7 +56,7 @@ A contract test suite runs against every new tag before the pin moves.
 
 | Plugin | Hermes surface | What it does |
 |---|---|---|
-| `exo-memory` | `MemoryProvider` | `system_prompt_block` = principal pack (cached). `prefetch` = `exo.retrieve` for the turn. `sync_turn`, `on_memory_write`, `on_delegation` → ledger events. `on_session_end` → consolidation queue. `on_pre_compress` → captures corrections and rulings so compaction cannot drop them. Tools: `exo_recall`, `exo_note`, `exo_should_have_been`. |
+| `exo-memory` | `MemoryProvider` | `system_prompt_block` = principal pack (cached). `prefetch` = `exo.retrieve` for the turn. `sync_turn`, `on_memory_write`, `on_delegation` → ledger events. `on_session_end` → consolidation queue. `on_pre_compress` → captures corrections and rulings so compaction cannot drop them. Tools: `exo_recall`, `exo_get`, `exo_note`, `exo_should_have_been`. |
 | `exo-context` | `ContextEngine` + commands | Compaction that keeps principal signals (rulings, corrections, open decisions) verbatim and writes a handoff file. Commands: `/exo branch`, `/exo handoff`, `/exo resume`. |
 | `exo-gate` | hooks `pre_tool_call`, approval transport | Classifies each action; reversible and private runs, irreversible or public waits for the principal's channel with a link and a default. Applies posting rules from the principal store. |
 | `exo-bus` | platform plugin | Divan Bus as a Hermes platform: signed, hash-chained seat-to-seat messages; SYM-2P packets as an optional body format. |

@@ -4,7 +4,7 @@ Order, first hit wins:
   1. the environment variable named by the provider's ``key_env``;
   2. the macOS Keychain, service ``exo``, account = the variable name;
   3. ``~/.config/exo/keys.env`` (``NAME=value`` lines), refused with a warning
-     if its mode is looser than 0600.
+     if its mode is looser than 0600. ``EXO_KEYS_FILE`` overrides the path.
 
 Key values are never logged, printed or put in error text.
 """
@@ -69,15 +69,56 @@ def file_get(name: str, path: Path | None = None) -> str | None:
     return None
 
 
+_loaded: set[str] = set()   # values this process has looked up (Keychain ones included); never logged
+_SECRET_NAME = ("_KEY", "_KEYS", "_TOKEN", "_SECRET", "_PASSWORD", "_PASSWD", "_API_KEY")
+MIN_SECRET_LEN = 8
+
+
 def lookup_key(name: str, env: Mapping[str, str] | None = None, *, sources: bool = True) -> str | None:
     """The key for variable ``name``, or None. ``sources=False`` reads ``env`` only
     (tests and sandboxes)."""
     env = os.environ if env is None else env
-    if env.get(name):
-        return env[name]
-    if not sources:
-        return None
-    return keychain_get(name) or file_get(name)
+    value = env.get(name) or (keychain_get(name) or file_get(name) if sources else None)
+    if value and len(value) >= MIN_SECRET_LEN:
+        _loaded.add(value)
+    return value or None
+
+
+def _keys_file_values(path: Path | None = None) -> list[str]:
+    """Every value in the keys file, whatever its mode (this only feeds redaction)."""
+    try:
+        text = (path or keys_file_path()).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        v = line.partition("=")[2].strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        out.append(v)
+    return [v for v in out if len(v) >= MIN_SECRET_LEN]
+
+
+def known_secret_values(env: Mapping[str, str] | None = None) -> list[str]:
+    """Key values this process holds: looked up before, in secret-named environment variables, or in the
+    keys file. Longest first so a long value is cut out before a shorter one inside it."""
+    env = os.environ if env is None else env
+    vals = set(_loaded) | set(_keys_file_values())
+    vals |= {v for k, v in env.items() if v and len(v) >= MIN_SECRET_LEN and k.upper().endswith(_SECRET_NAME)}
+    return sorted(vals, key=len, reverse=True)
+
+
+def redact_secrets(text: str, values: list[str] | None = None) -> str:
+    """``text`` with every known key value replaced by ``[redacted]``. Values are never logged."""
+    if not text:
+        return text
+    for v in (known_secret_values() if values is None else values):
+        if v in text:
+            text = text.replace(v, "[redacted]")
+    return text
 
 
 def key_found(name: str, env: Mapping[str, str] | None = None, *, sources: bool = True) -> bool:

@@ -7,6 +7,8 @@ export interface ApprovalRequested {
   risk?: string;
   call?: ToolCall | null;
   options?: string[];
+  approvers?: string[];
+  binding?: string;
 }
 
 export interface ApprovalResolved {
@@ -20,6 +22,8 @@ export interface ApprovalRespond {
   decision: "allow" | "deny" | "allow_always";
   note?: string;
   client?: string;
+  binding?: string;
+  sig?: string;
 }
 
 export interface ApprovalsList {
@@ -112,11 +116,38 @@ export interface HandoffWritten {
   summary?: string;
 }
 
+export interface HarnessError {
+  where: string;
+  error_type?: string;
+  message?: string;
+  traceback?: string;
+}
+
 export interface Hello {
   protocol?: number;
   client?: string;
   capabilities?: string[];
   screen_cols?: number | null;
+}
+
+export interface JobUpdated {
+  job_id: string;
+  state?: string;
+  command?: string;
+  exit_code?: number | null;
+  elapsed_ms?: number;
+  log?: string;
+  detail?: string;
+}
+
+export interface MemorySummarized {
+  node_id: string;
+  level: number;
+  start: number;
+  end: number;
+  before_tokens: number;
+  after_tokens: number;
+  tree?: string;
 }
 
 export interface Message {
@@ -137,6 +168,20 @@ export interface MessageDelta {
   text: string;
 }
 
+export interface ModelCall {
+  iteration?: number;
+  role?: string;
+  requested?: string;
+  route?: string;
+  attempts?: Record<string, unknown>[];
+  ttft_ms?: number | null;
+  total_ms?: number;
+  usage?: Usage | null;
+  stop_reason?: string;
+  error?: string;
+  retries?: number;
+}
+
 export interface ModelsList {
 }
 
@@ -149,6 +194,33 @@ export interface ModelsSet {
 export interface Notice {
   text: string;
   level?: "info" | "warn";
+}
+
+export interface PeerDelivery {
+  msg_id: string;
+  state: "delivered" | "held" | "released" | "denied" | "expired";
+  peer?: string;
+  direction?: "in" | "out";
+  detail?: string;
+}
+
+export interface PeerMessage {
+  msg_id: string;
+  sender: string;
+  text: string;
+  trust?: string;
+  sender_session?: string | null;
+  mode?: string;
+}
+
+export interface Peers {
+  action?: "list" | "send" | "deliver" | "receipt";
+  to?: string;
+  text?: string;
+  session?: string | null;
+  via?: "agent" | "human";
+  local_only?: boolean;
+  envelope?: Record<string, unknown>;
 }
 
 export interface QuestionAnswer {
@@ -199,6 +271,7 @@ export interface SessionCreate {
   seat?: string | null;
   model?: string | null;
   cwd?: string | null;
+  kind?: string;
 }
 
 export interface SessionCreated {
@@ -226,6 +299,8 @@ export interface SessionInfo {
   updated?: string;
   message_count?: number;
   status?: string;
+  agent?: string | null;
+  kind?: string;
 }
 
 export interface SessionList {
@@ -287,6 +362,7 @@ export interface ToolCall {
 export interface ToolCompleted {
   result: ToolResult;
   duration_ms?: number;
+  is_error?: boolean;
 }
 
 export interface ToolOutput {
@@ -313,6 +389,7 @@ export interface TurnCompleted {
   turn_id: string;
   stop_reason?: string;
   usage?: Usage | null;
+  timing?: Record<string, unknown>;
 }
 
 export interface TurnInterrupt {
@@ -392,6 +469,7 @@ export interface CommandBodies {
   "feedback.send": FeedbackSend;
   "ui.respond": UiRespond;
   "schedule.edit": ScheduleEdit;
+  "peers": Peers;
 }
 export type CommandType = keyof CommandBodies;
 
@@ -410,12 +488,18 @@ export interface EventBodies {
   "approval.resolved": ApprovalResolved;
   "question.asked": QuestionAsked;
   "context.compacted": ContextCompacted;
+  "memory.summarized": MemorySummarized;
+  "job.updated": JobUpdated;
   "handoff.written": HandoffWritten;
   "task.updated": TaskUpdated;
   "usage.updated": UsageUpdated;
   "decision.queued": DecisionQueued;
   "taste.updated": TasteUpdated;
   "ui.panel": UiPanel;
+  "peer.message": PeerMessage;
+  "peer.delivery": PeerDelivery;
+  "model.call": ModelCall;
+  "harness.error": HarnessError;
   "notice": Notice;
   "error": Error;
 }

@@ -5,6 +5,10 @@ import { renderMarkdown } from "./markdown.js";
 
 export const KINDS = ["markdown", "diff", "table", "tasks", "approval", "taste", "choice", "file", "chart"];
 
+function chip(k, label, onclick, go) {
+  return h("button", { class: "xc-key" + (go ? " xc-key-go" : ""), onclick }, h("b", null, k), label);
+}
+
 function fallback(p) { return h("pre", { class: "xc-pre-body" }, p.text || p.title || ""); }
 
 function diff(p) {
@@ -63,25 +67,25 @@ function choice(p, act) {
   if (!opts.length) return fallback(p);
   const q = (p.data || {}).prompt;
   return h("div", { class: "xc-stack" }, q ? h("div", null, q) : null,
-    h("div", { class: "xc-btnrow" }, opts.map((o) => h("button", { class: "xc-btn", onclick: () => act({ choice: o.key }) }, o.label))));
+    h("div", { class: "xc-keys" }, opts.map((o, i) => chip(String(i + 1), o.label, () => act({ choice: o.key })))));
 }
 
 function approval(p, act) {
   const opts = optionList(p);
   const labels = opts.length ? opts : [{ key: "allow", label: "allow" }, { key: "deny", label: "deny" }];
   return h("div", { class: "xc-stack" }, fallback(p),
-    h("div", { class: "xc-btnrow" }, labels.map((o) => h("button", { class: "xc-btn", onclick: () => act({ decision: o.key }) }, o.label))));
+    h("div", { class: "xc-keys" }, labels.map((o) => chip(o.label[0] || "?", o.label, () => act({ decision: o.key }), o.key === "allow"))));
 }
 
 function taste(p, act) {
   const d = p.data || {};
   const rules = Array.isArray(d.rules) ? d.rules : d.rule ? [typeof d.rule === "object" ? d.rule : { text: String(d.rule) }] : [];
   if (!rules.length) return fallback(p);
-  return h("div", { class: "xc-stack" }, rules.map((r, i) => h("div", { class: "xc-card" },
+  return h("div", { class: "xc-stack" }, rules.map((r, i) => h("div", { class: "xc-pb" },
     h("div", null, r.text || r.rule || ""),
-    h("div", { class: "xc-btnrow" },
-      h("button", { class: "xc-btn", onclick: () => act({ rule_id: r.rule_id || r.id || String(i), verdict: "accept" }) }, "keep"),
-      h("button", { class: "xc-btn", onclick: () => act({ rule_id: r.rule_id || r.id || String(i), verdict: "reject" }) }, "drop")))));
+    h("div", { class: "xc-keys" },
+      chip("k", "keep", () => act({ rule_id: r.rule_id || r.id || String(i), verdict: "accept" }), true),
+      chip("d", "drop", () => act({ rule_id: r.rule_id || r.id || String(i), verdict: "reject" }))))));
 }
 
 function file(p) {
@@ -142,8 +146,8 @@ export function renderPanel(p, handlers) {
   const act = (value) => handlers.act(p, value);
   return h("section", { class: "xc-sidepanel", "data-panel": p.panel_id, "data-kind": p.kind },
     h("header", { class: "xc-sidehead" },
-      h("h3", null, p.title || p.kind),
-      h("button", { class: "xc-btn xc-x", title: "Dismiss", onclick: () => handlers.dismiss(p) }, "x")),
-    p.reason ? h("div", { class: "xc-dim" }, p.reason) : null,
+      h("h3", null, p.kind === "approval" ? "Approval \u00B7 " + (p.title || "") : (p.kind === "taste" ? "Taste \u00B7 " : "") + (p.title || p.kind)),
+      h("button", { class: "xc-btn xc-x", title: "Dismiss", "aria-label": "Dismiss", onclick: () => handlers.dismiss(p) }, "\u00D7")),
+    p.reason ? h("div", { class: "xc-pm" }, p.reason) : null,
     renderBody(p, act));
 }

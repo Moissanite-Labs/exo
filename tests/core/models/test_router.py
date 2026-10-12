@@ -114,6 +114,7 @@ def test_missing_key_skips_route_and_reports():
 def test_decision_role_falls_back_to_aux_then_main():
     r = make({"main": ["m:big"], "aux": ["a:small"], "decision": []}, m=FakeProvider(), a=FakeProvider())
     assert [x.ref for x in r.chain("decision")] == ["a:small", "m:big"]
+    r.instances["d"] = FakeProvider()
     r.set_role("decision", ["d:tiny"])
     assert [x.ref for x in r.chain("decision")] == ["d:tiny", "a:small", "m:big"]
     assert [x.ref for x in r.chain("aux")] == ["a:small", "m:big"]
@@ -165,3 +166,15 @@ def test_from_config_overrides():
     r = Router.from_config({"roles": {"main": ["llamacpp:qwen3"]}}, env={})
     assert r.chain("main")[0].ref == "llamacpp:qwen3"
     assert r.credentials("llamacpp")[0].key is None
+
+
+def test_set_role_rejects_flag_text_and_unknown_provider():
+    r = make({"main": ["a:m"]}, a=object())
+    for bad in ["--default", "-x:y", "opencode-go:glm 5", "nope:model", "a:", "a:m --default"]:
+        with pytest.raises(ValueError):
+            r.set_role("main", [bad])
+        with pytest.raises(ValueError):
+            r.prefer("main", bad)
+    assert r.roles["main"] == ["a:m"]
+    r.prefer("main", "a:other")
+    assert r.roles["main"] == ["a:other", "a:m"]

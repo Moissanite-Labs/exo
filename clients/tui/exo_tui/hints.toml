@@ -1,0 +1,46 @@
+# Tutorial hints (D-030). Shown by the TUI, never sent to the model, each once, at most one per turn.
+# Key = the moment (see ExoApp.hint calls). `then` is the command or place that goes deeper.
+
+[first_message]
+text = "You can keep typing while I work: a new message steers me at my next tool round. Esc stops the turn."
+then = "/intro"
+
+[memory_summarized]
+text = "Older messages were just folded into memory. Nothing to manage: there is no context limit to watch."
+then = "/context"
+
+[approval]
+text = "This is the approval gate: I asked before running something that can change things. Allow, deny, or allow always."
+then = "/intro"
+
+[steer]
+text = "That message steers the running turn: it lands at the next tool round and I change course."
+then = "/intro"
+
+[interrupt]
+text = "Esc interrupted the turn. What was done so far is kept, and your next message continues from there."
+then = "/undo"
+
+[route_change]
+text = "The model that answered is not the one asked for: a route failed and the call fell back to the next one."
+then = "/model"
+
+[peer_message]
+text = "That came from another agent session, not from you. Peers cannot approve things on your behalf."
+then = "/peers"
+
+[new_thread]
+text = "A new thread is a fresh focus with the same memory: the agent still knows everything from the other threads."
+then = "/sessions"
+
+[finding]
+text = "The harness noticed something odd and filed a finding: slow turns, fallbacks and errors are recorded."
+then = "/findings"
+
+[long_turn]
+text = "That turn was slow. The trace shows where the time went: model, tools or approvals."
+then = "/trace"
+
+[code_find]
+text = "code_find asks a decision model which files answer a question, so I read fewer files to find things."
+then = "/intro"

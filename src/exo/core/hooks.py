@@ -13,6 +13,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from exo.core import trace
+
 logger = logging.getLogger(__name__)
 
 VALID_HOOKS: frozenset[str] = frozenset({
@@ -80,8 +82,9 @@ class HookRegistry:
         for e in self.entries(name):
             try:
                 r = e.callback(**kwargs)
-            except Exception:
+            except Exception as exc:
                 logger.warning("hook %s from %s failed", name, e.plugin or "?", exc_info=True)
+                trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)
                 continue
             if inspect.isawaitable(r):
                 if hasattr(r, "close"):
@@ -100,8 +103,9 @@ class HookRegistry:
                 r = e.callback(**kwargs)
                 if inspect.isawaitable(r):
                     r = await r
-            except Exception:
+            except Exception as exc:
                 logger.warning("hook %s from %s failed", name, e.plugin or "?", exc_info=True)
+                trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)
                 continue
             if r is not None:
                 out.append(r)

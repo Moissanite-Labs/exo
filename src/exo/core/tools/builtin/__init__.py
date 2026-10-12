@@ -6,8 +6,9 @@ from exo.core.tools.registry import Registry
 
 
 def register_builtins(reg: Registry) -> None:
-    from exo.core.tools.builtin import fs, search, shell
+    from exo.core.tools.builtin import codefind, fs, search, shell
 
     fs.register(reg)
     search.register(reg)
     shell.register(reg)
+    codefind.register(reg)

@@ -89,6 +89,9 @@
     },
     "schedule.edit": {
       "$ref": "#/$defs/ScheduleEdit"
+    },
+    "peers": {
+      "$ref": "#/$defs/Peers"
     }
   },
   "events": {
@@ -134,6 +137,12 @@
     "context.compacted": {
       "$ref": "#/$defs/ContextCompacted"
     },
+    "memory.summarized": {
+      "$ref": "#/$defs/MemorySummarized"
+    },
+    "job.updated": {
+      "$ref": "#/$defs/JobUpdated"
+    },
     "handoff.written": {
       "$ref": "#/$defs/HandoffWritten"
     },
@@ -151,6 +160,18 @@
     },
     "ui.panel": {
       "$ref": "#/$defs/UiPanel"
+    },
+    "peer.message": {
+      "$ref": "#/$defs/PeerMessage"
+    },
+    "peer.delivery": {
+      "$ref": "#/$defs/PeerDelivery"
+    },
+    "model.call": {
+      "$ref": "#/$defs/ModelCall"
+    },
+    "harness.error": {
+      "$ref": "#/$defs/HarnessError"
     },
     "notice": {
       "$ref": "#/$defs/Notice"
@@ -194,6 +215,17 @@
             "deny",
             "allow_always"
           ]
+        },
+        "approvers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "binding": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,
@@ -241,6 +273,14 @@
           "default": ""
         },
         "client": {
+          "type": "string",
+          "default": ""
+        },
+        "binding": {
+          "type": "string",
+          "default": ""
+        },
+        "sig": {
           "type": "string",
           "default": ""
         }
@@ -313,7 +353,7 @@
       "required": [
         "name"
       ],
-      "description": "Run a slash command, e.g. name=\"exo\", args=\"handoff\"."
+      "description": "Run a slash command, e.g. name=\"exo\", args=\"handoff\". The core answers some built-in commands itself (the command cap is full, so new ones go here, not in new command types): ``trace``, ``findings``, ``context`` (what the next model call for ``session`` carries, read-only) and ``compact`` (summarize now what is eligible in the agent's memory; runs in the core that holds the agent lock)."
     },
     "CommandsList": {
       "type": "object",
@@ -642,6 +682,31 @@
         "path"
       ]
     },
+    "HarnessError": {
+      "type": "object",
+      "properties": {
+        "where": {
+          "type": "string"
+        },
+        "error_type": {
+          "type": "string",
+          "default": ""
+        },
+        "message": {
+          "type": "string",
+          "default": ""
+        },
+        "traceback": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "where"
+      ],
+      "description": "An exception the harness caught in a hook, handler, plugin or client event path (D-025). Never holds keys, headers or environment values (scrubbed before it is written)."
+    },
     "Hello": {
       "type": "object",
       "properties": {
@@ -674,6 +739,87 @@
       },
       "additionalProperties": false,
       "description": "Handshake. Server replies with its protocol version and capabilities."
+    },
+    "JobUpdated": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "default": "running"
+        },
+        "command": {
+          "type": "string",
+          "default": ""
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "default": 0
+        },
+        "log": {
+          "type": "string",
+          "default": ""
+        },
+        "detail": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "job_id"
+      ],
+      "description": "A background shell job changed state (D-032, docs/JOBS.md): ``running`` when it starts, then one of ``done`` (exit 0), ``failed`` (non-zero exit), ``killed``, ``timeout`` or ``lost`` (exod restarted). One type with a state, as ``task.updated`` does, because the protocol has few event slots left."
+    },
+    "MemorySummarized": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string"
+        },
+        "level": {
+          "type": "integer"
+        },
+        "start": {
+          "type": "integer"
+        },
+        "end": {
+          "type": "integer"
+        },
+        "before_tokens": {
+          "type": "integer"
+        },
+        "after_tokens": {
+          "type": "integer"
+        },
+        "tree": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "node_id",
+        "level",
+        "start",
+        "end",
+        "before_tokens",
+        "after_tokens"
+      ],
+      "description": "One node of a summary tree finished (D-028): a leaf over log entries ``start``-``end`` or a merge of two nodes. Upkeep of memory, not a compaction of the live context (that is ``context.compacted``)."
     },
     "Message": {
       "type": "object",
@@ -757,6 +903,74 @@
         "text"
       ]
     },
+    "ModelCall": {
+      "type": "object",
+      "properties": {
+        "iteration": {
+          "type": "integer",
+          "default": 0
+        },
+        "role": {
+          "type": "string",
+          "default": ""
+        },
+        "requested": {
+          "type": "string",
+          "default": ""
+        },
+        "route": {
+          "type": "string",
+          "default": ""
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "default": []
+        },
+        "ttft_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "total_ms": {
+          "type": "integer",
+          "default": 0
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "stop_reason": {
+          "type": "string",
+          "default": ""
+        },
+        "error": {
+          "type": "string",
+          "default": ""
+        },
+        "retries": {
+          "type": "integer",
+          "default": 0
+        }
+      },
+      "additionalProperties": false,
+      "description": "One model call as the harness saw it (D-025): what was asked, which route served it, every attempt. attempts: [{route, outcome: ok|timeout|error|fallback, error, ms}]. ttft_ms is None when nothing streamed."
+    },
     "ModelsList": {
       "type": "object",
       "properties": {},
@@ -807,6 +1021,134 @@
       "required": [
         "text"
       ]
+    },
+    "PeerDelivery": {
+      "type": "object",
+      "properties": {
+        "msg_id": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "delivered",
+            "held",
+            "released",
+            "denied",
+            "expired"
+          ]
+        },
+        "peer": {
+          "type": "string",
+          "default": ""
+        },
+        "direction": {
+          "enum": [
+            "in",
+            "out"
+          ],
+          "default": "out"
+        },
+        "detail": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "msg_id",
+        "state"
+      ],
+      "description": "Where a peer message stands (D-026). ``direction`` out is the sender's receipt, in is the receiver's own record. held waits for the principal; released, denied and expired close it."
+    },
+    "PeerMessage": {
+      "type": "object",
+      "properties": {
+        "msg_id": {
+          "type": "string"
+        },
+        "sender": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "trust": {
+          "type": "string",
+          "default": "other"
+        },
+        "sender_session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mode": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "msg_id",
+        "sender",
+        "text"
+      ],
+      "description": "A message from another session reached this one (D-026). Clients show it with the sender, never as the user. ``trust`` is principal, same-principal, other, remote or unverified."
+    },
+    "Peers": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "send",
+            "deliver",
+            "receipt"
+          ],
+          "default": "list"
+        },
+        "to": {
+          "type": "string",
+          "default": ""
+        },
+        "text": {
+          "type": "string",
+          "default": ""
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "via": {
+          "enum": [
+            "agent",
+            "human"
+          ],
+          "default": "human"
+        },
+        "local_only": {
+          "type": "boolean",
+          "default": false
+        },
+        "envelope": {
+          "type": "object",
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "description": "Live sessions messaging each other (D-026). One command with an action, because the command cap leaves one slot: ``list`` shows peers, ``send`` posts a message from this daemon (``via`` says whether a person or a model wrote it), ``deliver`` and ``receipt`` are the daemon-to-daemon calls (a signed envelope in, a delivery receipt back)."
     },
     "QuestionAnswer": {
       "type": "object",
@@ -1029,9 +1371,14 @@
             }
           ],
           "default": null
+        },
+        "kind": {
+          "type": "string",
+          "default": ""
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Start a thread of the agent: a new focus in the same memory (D-028). ``kind=\"private\"`` makes a thread whose entries are logged but never enter the agent's tree, other threads or search."
     },
     "SessionCreated": {
       "type": "object",
@@ -1151,6 +1498,21 @@
           "default": 0
         },
         "status": {
+          "type": "string",
+          "default": ""
+        },
+        "agent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
           "type": "string",
           "default": ""
         }
@@ -1378,6 +1740,10 @@
         "duration_ms": {
           "type": "integer",
           "default": 0
+        },
+        "is_error": {
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false,
@@ -1479,6 +1845,10 @@
             }
           ],
           "default": null
+        },
+        "timing": {
+          "type": "object",
+          "default": {}
         }
       },
       "additionalProperties": false,

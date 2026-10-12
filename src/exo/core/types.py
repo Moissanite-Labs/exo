@@ -17,7 +17,7 @@ Role = Literal["system", "user", "assistant", "tool"]
 PartType = Literal["text", "image", "reasoning"]
 Risk = Literal["low", "medium", "high"]
 StopReason = Literal["end", "tool_use", "max_tokens", "interrupted", "error"]
-ProviderEventKind = Literal["text", "reasoning", "tool_call", "usage", "done", "error"]
+ProviderEventKind = Literal["text", "reasoning", "tool_call", "usage", "done", "error", "notice"]
 
 
 @dataclass
@@ -150,6 +150,8 @@ class ProviderEvent:
     usage      ``usage`` for the call (may arrive more than once; last one wins).
     done       last event. ``stop_reason`` set; ``message`` is the assembled
                assistant Message (with reasoning signatures intact).
+    notice     ``text`` is a plain-words warning (the router abandoned a route); the loop shows it.
+    done, error also carry ``route`` and ``attempts`` from the router (D-025); bare providers leave them empty.
     error      ``error`` text; ``retryable``, ``status`` (HTTP code if any) and
                ``retry_after`` (seconds, if the provider said) drive router fallback.
     """
@@ -164,6 +166,8 @@ class ProviderEvent:
     retryable: bool = False
     status: int | None = None
     retry_after: float | None = None  # seconds until the provider says to retry (error only)
+    route: str = ""  # done, usage, error: the provider:model that served (or last failed) the call; set by the router
+    attempts: list[dict[str, Any]] = field(default_factory=list)  # done, error: [{route, outcome, error, ms}]
 
 
 @runtime_checkable
