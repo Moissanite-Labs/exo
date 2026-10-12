@@ -56,14 +56,13 @@ key_env = "OPENCODE_GO_API_KEY"
 # Go asks for a stable per-conversation id (routing, prompt caching) and a named user agent.
 session_header = "x-opencode-session"
 
-# Nous Portal. TODO(D-018): left commented out. The base URL below is in Nous's Hermes docs
-# (https://hermes-agent.nousresearch.com/docs/integrations/nous-portal) but those docs describe
-# OAuth-minted JWTs only, and reports disagree on whether a plain API key (Bearer) is accepted.
-# Verify against portal.nousresearch.com/api-docs (rate limited when checked), then uncomment.
-# [providers.nous]
-# transport = "openai"
-# base_url = "https://inference-api.nousresearch.com/v1"
-# key_env = "NOUS_API_KEY"
+# Nous Portal. Verified 2026-10-12 with a live key: a plain Bearer API key works and /models lists
+# OpenAI-compatible routes (Anthropic, OpenAI, GLM, Qwen and others). Model refs look like
+# "nous:anthropic/claude-sonnet-5.5".
+[providers.nous]
+transport = "openai"
+base_url = "https://inference-api.nousresearch.com/v1"
+key_env = "NOUS_API_KEY"
 
 # TypeSafe Jev: a decision model (probabilities, not text), so decision role only.
 # Verified https://docs.typesafe.ai/api.md : POST https://api.typesafe.ai/v1/systemone,
