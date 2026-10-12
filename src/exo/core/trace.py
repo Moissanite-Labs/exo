@@ -140,10 +140,8 @@ class Thresholds:
     """Anomaly and verification limits. Config: the ``trace`` table of config.json; a seat's ``[trace]`` table
     in seat.toml overrides it key by key (D-032).
 
-    ``turn_wall_s`` limits what the harness owns: wall time minus tool time, approval waits and model-call time
-    (the overhead). ``model_call_s`` limits one model call's total time (``model.slow``, a route's problem, not the
-    harness's); ``model_call_routes`` maps a ``provider:model`` to its own limit in seconds. ``turn_total_wall_s``
-    is the separate, high cap on the whole turn, work included."""
+    ``turn_wall_s`` limits harness overhead (wall minus tool, approval and model-call time); ``model_call_s`` one
+    model call (``model.slow``), ``model_call_routes`` per route; ``turn_total_wall_s`` the whole turn."""
 
     turn_wall_s: float = 30.0
     model_call_s: float = 60.0
@@ -256,9 +254,8 @@ class TurnTrace:
 
     @property
     def harness_ms(self) -> int:
-        """Wall time the harness owns: overhead only, without tool time, approval waits or model-call time (D-032,
-        amended 2026-10-12). Uses the turn's timing summary when it has one; old sessions use the recorded tool
-        durations (which already include approval waits) and the recorded call durations."""
+        """Harness overhead: wall minus tool, approval and model-call time (D-032, amended 2026-10-12). Old sessions
+        without a timing summary use the recorded tool and call durations."""
         if "tool_ms" in self.timing:
             return int(max(0, self.wall_ms - self.timing["tool_ms"] - self.approval_ms - self.timing.get("model_ms", 0)))
         return int(max(0, self.wall_ms - sum(t.ms for t in self.tools) - sum(c.total_ms for c in self.calls)))

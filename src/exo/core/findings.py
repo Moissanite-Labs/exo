@@ -116,32 +116,27 @@ class Findings:
         return self._row(rows[0]) if len(rows) == 1 else None
 
     def list(self, status: str | None = None) -> list[dict[str, Any]]:
-        """Findings newest first. ``status`` None or "all": every state (fixed ones are never dropped)."""
         status = None if status == "all" else status
         rows = self.store._q("SELECT * FROM findings" + (" WHERE status=?" if status else "") +
                              " ORDER BY last_seen DESC", (status,) if status else ())
         return [self._row(r) for r in rows]
 
     def open_count(self) -> int:
-        """Findings that still need work: open and reopened."""
         return self.store._q("SELECT COUNT(*) FROM findings WHERE status IN ('open','reopened')")[0][0]
 
     def counts(self) -> dict[str, int]:
         """Findings per state (every state present, zero included) and the total."""
-        out = {s: 0 for s in STATUSES}
-        for r in self.store._q("SELECT status, COUNT(*) AS n FROM findings GROUP BY status"):
-            out[r["status"]] = r["n"]
+        out = {s: 0 for s in STATUSES} | {r[0]: r[1] for r in self.store._q("SELECT status, COUNT(*) FROM findings GROUP BY status")}
         return {**out, "total": sum(out.values())}
 
     def summary(self) -> str:
-        """One line that reconciles: ``findings 7: 3 open, 2 fixed (awaiting re-verification), 1 verified, 1 reopened``."""
+        """``findings 7: 3 open, 2 fixed (awaiting re-verification), 1 verified, 1 reopened``"""
         c = self.counts()
         return (f"findings {c['total']}: {c['open']} open, {c['fixed']} fixed (awaiting re-verification), "
                 f"{c['verified']} verified, {c['reopened']} reopened")
 
     def changes(self, viewer: str, save: bool = False) -> list[str]:
-        """What moved since ``viewer`` last looked: new findings and state changes, as plain lines. The first view
-        has nothing to compare with and returns []. ``save`` records the current states as the new baseline."""
+        """New findings and state changes since ``viewer`` last looked ([] on the first view); ``save`` sets the baseline."""
         rows = {r["id"]: r for r in self.store._q("SELECT id, status, title FROM findings")}
         snap = self.store._q("SELECT snapshot FROM finding_views WHERE viewer=?", (viewer,))
         out: list[str] = []
@@ -184,16 +179,13 @@ class Findings:
         return "\n".join(out).rstrip() + "\n"
 
     def text(self, status: str | None = None, viewer: str | None = None) -> str:
-        """The listing with the per-state summary on top. ``status`` None or "all" lists every state; fixed and
-        verified rows show the commit they were fixed in. With ``viewer``, also what changed since that viewer
-        last looked, and this view becomes the baseline."""
+        """Summary line, then the rows (None or "all": every state; fixed ones show their commit). With ``viewer``:
+        what changed since it last looked."""
         rows = self.list(status)
         head = [self.summary()]
         if viewer:
             moved = self.changes(viewer, save=True)
             head.append("since last view: " + ("; ".join(moved) if moved else "no changes"))
-        if not rows:
-            return "\n".join(head + [f"no findings{'' if status in (None, 'all') else ' with status ' + status}"])
-        return "\n".join(head + [
-            f"{r['id']}  {r['status']:<8} {r['severity']:<8} x{r['count']:<3} {r['title'][:70]}"
-            f"  ({r['signature'][:40]})" + (f"  fixed in {r['fixed_in']}" if r["fixed_in"] else "") for r in rows])
+        rows_text = [f"{r['id']}  {r['status']:<8} {r['severity']:<8} x{r['count']:<3} {r['title'][:70]}  ({r['signature'][:40]})"
+                     + (f"  fixed in {r['fixed_in']}" if r["fixed_in"] else "") for r in rows]
+        return "\n".join(head + (rows_text or ["no findings"]))
