@@ -212,3 +212,21 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Build:** the `ui.panel` event and `ui` tool land in wave 3 with the clients. Wave 1's protocol stays as is.
 - **Rejected:** separate CLI and app products (two UIs to learn, the norm we want to beat); an app that shows
   every panel at all times (Hermes-style clutter).
+
+## D-015 (2026-10-12) Decision models: a `decision` role, local Laya by default, a custom exo-decide later
+- **Decision:** adopt `research/DECISION-MODELS.md`. Picking a tool, panel, model or label, gating, and
+  the learning loop's classifications go to a `decision` role in the router. Users choose the provider:
+  local Laya (default, free, private), TypeSafe Jev, Perplexity pplx-decider, or OpenAI Decisions.
+  Decision models return probabilities, not text, so a generative model still writes tool arguments.
+  Every decision is logged to the ledger so the learning loop and eval can score it. A decision model may
+  make a gate stricter, never looser. Exo will ship a fine-tuned Laya ("exo-decide", Apache 2.0 allows it),
+  trained on users' own verdicts, rules and open-weight teachers. Never on Jev or OpenAI outputs: their
+  terms forbid training other models on them.
+- **Calls made by the lead (reversible):** local Laya is the default for every user; no rented GPU and no
+  Claude-written training data until a terms check and a free-path measurement; exo-decide weights stay
+  private until they beat base Laya and Jev on the generic held-out set.
+- **Waiting on A (spend, model choice, publishing):** the decision provider for his own seats; a monthly
+  cap for decision API keys (at current prices 10k decisions a day cost under $1); later, whether to
+  publish exo-decide on Hugging Face under aska-digital.
+- **Rejected:** a frontier model for every small decision (cost, latency); Jev as exo-decide's teacher
+  (terms); Perplexity's 27B open model as the shipped default (needs about 49 GB of GPU memory, no device path).
