@@ -6,7 +6,9 @@ import pytest
 from exo import config as xc
 
 
-def test_roundtrip(tmp_path):
+def test_roundtrip(tmp_path, monkeypatch):
+    for var in xc.ENV.values():
+        monkeypatch.delenv(var, raising=False)
     home = tmp_path / "exo-home"
     cfg = xc.Config.load(home)
     assert cfg.principal is None
