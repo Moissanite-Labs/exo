@@ -48,6 +48,7 @@ It shows approvals, decisions waiting on you, live sessions, tasks, projects and
 ## 3. Slash commands
 
 Type `/help` in the terminal client for the live list. This table is the same list.
+The technical reference, with arguments and where each command is implemented, is `docs/COMMANDS.md`.
 
 | Command | Does |
 |---|---|
@@ -179,3 +180,55 @@ Details and the cost rules: `docs/TRACE.md`.
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
 | The warning about "not inside a git repo" | The thread's folder is not a repo. Set `[session] cwd` in the seat, or `/cwd` to see where you are. |
 | Keys must stay private | Exo never writes secrets through `config.set`, and removes known key values from tool output. See `docs/SEATS.md`. |
+
+## 11. Your store and the ledger
+
+Everything Exo knows about you sits in a **principal store**: a folder of small notes (nodes) and a signed ledger, a
+log nobody can edit without it showing. These commands work on them from a shell. You rarely need them. The agent
+reads and writes the store for you. They help when you want to look, check, or move things.
+
+Pick the store with `--principal ID` or `--root DIR`, or set `EXO_PRINCIPAL` once. Stores live in
+`~/.exo/principals/<id>` unless `EXO_HOME` says otherwise.
+
+**Make or adopt a store**
+
+| Command | What you get |
+|---|---|
+| `exo init <id>` | A new, empty store with its ledger. It becomes your active principal if you have none. Add `--interview` to answer the onboarding questions straight away. |
+| `exo interview` | The onboarding questions for an existing store. It asks a few, saves each answer as a low-confidence "you said" note, and queues more for later. `--plan` shows the questions first. `--answers FILE` fills them from a file. Press Enter to skip, `q` to stop. Do not type passwords. |
+| `exo import-store <path>` | Copies a store you already have into a new principal. The source is never touched. Private files and keys are left out unless you add `--include-private`. |
+
+**Look things up**
+
+| Command | What you get |
+|---|---|
+| `exo find <words>` | The best matching notes, one per line, with a score. `-n 20` for more. |
+| `exo get <id>` | One note in full. `--body-only` skips the header. |
+| `exo ctx <words>` | The best notes packed into a size limit (`--budget`, default 1500 tokens). This is what the agent sees. |
+| `exo links <id>` | What a note points to, and what points to it. |
+
+**Keep it healthy**
+
+| Command | What you get |
+|---|---|
+| `exo lint` | A check for broken fields, links to notes that do not exist, orphans, and text that looks like a key or a phone number. It exits with 1 if it finds errors. |
+| `exo graph` | Writes `graph/graph.json`, the notes and their links, for other tools. |
+| `exo index` | Refreshes the note table in `INDEX.md`. |
+
+**The ledger**
+
+| Command | What you get |
+|---|---|
+| `exo keygen <name>` | A signing key in `~/.exo/keys/<name>.key`, readable by you only. It will not overwrite an existing key. Keep it private. |
+| `exo log append <kind> --author NAME --text "..."` | Adds one signed event. Kinds include `note`, `ruling`, `utterance`, `question`, `answer`. Needs the author's key. |
+| `exo log verify` | Re-checks every event, link and signature. Prints `{"ok": true, ...}` or fails. Run it when something feels off. |
+| `exo log tail` | The last events. `-n 20` for more, `--kind ruling` to filter. |
+
+Example: make a key, write a note, check the chain.
+
+    exo keygen me
+    exo log append note --author me --text "Prefer short answers."
+    exo log verify
+
+Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
+what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.

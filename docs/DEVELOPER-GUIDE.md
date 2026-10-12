@@ -1,7 +1,7 @@
 # Exo developer guide
 
 This guide shows you how to extend Exo: add a tool, a plugin, a seat, a skill, a built-in command, and how to test
-and land the change. It says where to look and what rule to follow. It does not repeat the reference pages. The map
+and land the change. Section 9 has short recipes: panels from a tool, decision models, the bus and the learning loop. It says where to look and what rule to follow. It does not repeat the reference pages. The map
 of all docs is `docs/DOCS-MAP.md`. Users read `docs/USER-GUIDE.md`.
 
 ## The docs rule
@@ -245,3 +245,156 @@ heading, and the map says so.
    rights.
 
 Private data and secrets never go in the repo. The principal store is separate from this repository.
+
+## 9. Recipes
+
+Short, working patterns for four things people ask about. Each one names the file to read next.
+
+### Open a panel from a tool
+
+A panel is a `ui.panel` event (`docs/PANELS.md`). The model normally opens one with the built-in `ui` tool, so the
+easiest way for your tool to cause a panel is to return the data and let the model call `ui` with it.
+
+If your tool must open the panel itself, it has to be a core tool that holds a way to publish events. The `ui` tool
+does it by taking a `publish(body, session)` function when it is registered
+(`src/exo/core/tools/builtin/ui.py`, wired in `CoreEngine.__init__` in `src/exo/core/engine.py`). A tool handler's
+`ToolContext` has no publish function, and a plugin tool has no handle on the hub today, so use the same shape:
+
+```python
+from exo.core.sessions import new_id
+from exo.protocol import schema as s
+
+def register(reg, publish):                      # publish(body, session) puts an event on the hub
+    def handler(args, ctx):
+        panel_id = new_id("p")
+        publish(s.UiPanel(panel_id=panel_id, action="open", kind="table",
+                          title="Open items", reason="the user asked for the list",
+                          text="Three items are open: a, b, c.",           # required fallback for any client
+                          data={"columns": ["item"], "rows": [["a"], ["b"], ["c"]]}), ctx.session)
+        return f"Panel {panel_id} opened."
+    reg.register(SPEC, handler)                  # SPEC is the ToolSpec, as in builtin/ui.py
+```
+
+Rules that matter:
+
+- `text` is required and must say the same thing in plain words. A client that cannot draw the panel shows only that.
+- `kind` is one of `markdown`, `diff`, `table`, `tasks`, `approval`, `taste`, `choice`, `file`, `chart`. The `data`
+  shape for each is the table in `docs/PANELS.md`.
+- To change or close a panel, publish again with the same `panel_id` and `action="update"` or `"close"`.
+- `reason` is one line. It feeds the learning loop.
+- What the user did comes back as the protocol command `ui.respond` (`opened`, `dismissed`, `acted`, `ignored`, with a
+  `value`). The core records it as a `note` event of type `ui_signal` in the ledger
+  (`handle_ui_respond` in `src/exo/learn/signals.py`).
+
+Test it the way `tests/core/tools/test_ui_tool.py` does: register with a list-appending publish function, call the
+tool, and assert on the `UiPanel` bodies.
+
+### Call a decision model
+
+A decision model returns probabilities, not prose (`docs/PROVIDERS.md`). The calls are in
+`src/exo/core/models/decision.py` and are all async. They go through the router's `decision` role and fall back to
+`aux`, then `main`.
+
+```python
+from exo.core.models.decision import ask_choice_result, ask_score, tighten_only, DecisionError
+
+res = await ask_choice_result(router, state, "How strictly should this call be gated?",
+                              ["allow", "log", "ask", "deny"])
+res.choice, res.probabilities, res.source, res.route, res.confidence
+#   source is "decision" (a probability model) or "generative" (a chat model fallback, probability 1.0 on its pick)
+
+sc = await ask_score(router, state, "How risky is this?", ["harmless", "minor", "serious"])
+sc.score         # a level index counted from 0; it can fall between levels, such as 1.43. Use 2 to 10 levels.
+
+probs = await ask_choice(router, state, "Which fits?", ["a", "b"])   # just {option: probability}
+```
+
+- `state` is the context the question is about. It can be a string or JSON. `router` comes from the plugin context
+  (`ctx.router`, read lazily as `exo-gate` does) or, in a script, from `exo.models_cmd.build_router()`.
+- Wrap the call. It raises `DecisionError` when every route fails. `error.retryable` says whether trying later can
+  help. Keep a safe default, as `exo-gate` does: on failure or after a timeout it keeps the rule outcome.
+- **A decision model may only tighten a gate (D-015).** `tighten_only(current, proposed)` returns the stricter of two
+  outcomes in the order `allow`, `log`, `ask`, `deny`. An unknown `proposed` value is ignored. An unknown `current`
+  raises `ValueError`. Never let a model's answer loosen a rule. See `Gate._verdict` and `Gate._tighten` in
+  `plugins/exo-gate/exo_gate/hook.py`.
+- To try one from a shell: `exo decide "Is this safe?" --options safe,risky --state "rm -rf build/"`.
+
+Tests use a fake router. Do not call a real provider in tests (section 7). `tests/core/models/` has examples.
+
+### Use the bus
+
+The bus carries signed, hash-chained messages between seats. Reference: `plugins/exo-bus/README.md` and
+`src/exo/bus/`. Three words:
+
+- A **seat** is one agent identity: an id, a team, a platform and a public key, all listed in a signed registry. Its
+  private key is a file, `$EXO_BUS_KEYS_DIR/<seat>.key` (default `$EXO_HOME/keys`).
+- A **recipient** (`to`) is a seat id, `team:<name>`, or `group`. A seat's inbox holds messages to it, to its team and
+  to the group.
+- A **thread** is a string id you reuse to keep a conversation together. Read it back with `thread(id)`.
+
+Settings come from `EXO_BUS_URL` (the relay) and `EXO_BUS_SEAT`. Legacy `DIVAN_*` names work too.
+
+From Python, with `exo.bus` (the client needs only the base install, and the relay needs `pip install 'exo[bus]'`):
+
+```python
+from exo.bus import Client
+
+cli = Client.from_env()                       # reads EXO_BUS_URL, EXO_BUS_SEAT, EXO_BUS_KEYS_DIR
+cli.post(["team:builders"], "Build is green.", kind="report", thread="build-42")
+for env in cli.inbox(since=0):                # envelopes; cli.text(env) gives plain text, decrypted if sealed to you
+    print(env["from"], cli.text(env))
+cli.thread("build-42")                        # one conversation, in order
+cli.verify()                                  # re-check every id, signature and chain link
+```
+
+Message `kind` is one of `msg`, `ack`, `claim`, `notice`, `directive`, `report`, `file`. `enc_to="<seat>"` seals the
+body so only that seat reads it. `post_sym2p(to, line)` sends a structured agent-wire packet (`docs/AGENT-WIRE.md`).
+
+From an agent, the `exo-bus` plugin gives four tools: `bus_post`, `bus_inbox`, `bus_thread`, `bus_verify`. They stay
+hidden until `EXO_BUS_URL` and `EXO_BUS_SEAT` are set. The plugin's channel turns a message from another seat into
+a turn and posts the reply back in the same thread. A bus message is peer input, never consent: the core refuses to
+treat input from a peer as an approval (`docs/GATE.md`, `docs/PEERS.md`).
+
+From a shell: `python -m exo.bus keygen|post|inbox|tail|thread|verify|relay|registry|checkpoint` (flags in
+`src/exo/bus/cli.py`). Tests: `tests/bus/` runs a relay in a temp folder. Use a bus address that goes nowhere for
+plugin tests, as section 7 says.
+
+### Work on the learning loop
+
+How it behaves is in `docs/LEARNING.md`. This is where to put a change. Code is in `src/exo/learn/` and
+`src/exo/consolidate.py`.
+
+**The pieces.** A signal is a ledger event. The fast loop (`learn/review.py`) reads new `verdict`, `ruling` and
+`answer` events (`SIGNAL_KINDS`), asks the `aux` model to write typed proposals, and writes them with
+`propose_typed` (`consolidate.py`). Promotion (`learn/promote.py`, `apply_policy`) then decides each open proposal.
+Accepting a proposal edits a node or a skill, and every step is a ledger event, so a revert is more events.
+
+**Add a proposal type.** Today the types are `taste`, `skill`, `fact`, `question` (`PTYPES` in `consolidate.py`).
+
+1. Add the name to `PTYPES`. The reviewer's output filter (`_clean` in `learn/review.py`) accepts only these.
+2. Teach the reviewer: add the type to the routing list and the JSON template in `PROMPT` in `learn/review.py`.
+3. Handle it in `propose_typed`. `skill` and `question` have their own branches. `taste` and `fact` share the
+   signal path.
+4. Make it acceptable and reversible: `proposal_accept` and `proposal_revert` in `consolidate.py` must apply and
+   undo what your type changes. A skill goes through `_accept_skill`. Others write a node.
+5. Decide when it promotes: see below. If it must pass the held-out eval first, add it to `promote.eval_gate_for` in
+   the defaults.
+6. Add tests in `tests/learn/`. `tests/learn/helpers.py` has builders for utterances, corrections, rulings and typed
+   proposals, and the test fixtures give a scripted model.
+
+**Add a promotion rule.** The rules are numbered and tried in order in `_decide` in `learn/promote.py`. The first one
+that returns a `Decision` wins, so position is meaning. A `Decision` carries an `action` and the `rule` number.
+`apply_policy` acts on three actions only: `promoted` and `auto_promoted` accept the proposal, and `question` asks the
+principal once. Any other action leaves the proposal as it is. Keep the order in the module docstring and in the list
+in `docs/LEARNING.md` in step with the code. The ruling that a guarded change (irreversible, public, financial, third
+party) never promotes on its own must stay above any new rule that could promote.
+
+**Add a setting.** Put the key and its default in `DEFAULTS` in `learn/runtime.py`. A key not listed there is dropped
+when the config is merged, so a setting you forget to add does nothing.
+
+**Add a signal.** Write a ledger event of a kind in `SIGNAL_KINDS`, with `refs` pointing at the output it judges, so
+the reviewer finds it. Panel responses are recorded as `note` events of type `ui_signal` and are not in that list.
+The protocol commands `feedback.send` and `ui.respond` reach the loop through `handle_feedback` and
+`handle_ui_respond` in `learn/signals.py`.
+
+Run `tests/learn` after any change, and read `docs/LEARNING.md` rule list again to be sure the page still matches.

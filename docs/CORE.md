@@ -1,8 +1,12 @@
-# exo core (v0.1.0)
+# The exo package: ledger, store and CLI
 
 The `exo` package is the generic mechanism (L1 in `ARCHITECTURE.md`). It holds no data about any
-person. Everything about a principal lives in their store. Python 3.11 or newer. The only
-dependency is PyNaCl.
+person. Everything about a principal lives in their store. Python 3.11 or newer. The base
+dependencies are PyNaCl and httpx (`pyproject.toml`). The terminal client, MCP and the bus relay are extras.
+
+This page covers the signed ledger, the principal store and the store commands. Other parts have their own pages:
+the protocol and the running core in `docs/CORE-V2-INTERFACES.md`, the command list in `docs/COMMANDS.md`, tools in
+`docs/TOOLS.md`.
 
 ## Modules
 
@@ -12,7 +16,18 @@ dependency is PyNaCl.
 | `exo.ledger` | Append-only event log in SQLite. Signed, hash-chained, no updates or deletes. |
 | `exo.store` | `PrincipalStore(root)`: create from template, load nodes, BM25 find, get, budgeted ctx, links, lint, graph, index. |
 | `exo.retrieve` | `assemble(store, query, budget)` returns text and node ids. `Ranker` is the seam for embeddings and graph expansion. |
-| `exo.cli` | The `exo` command. |
+| `exo.cli` | The `exo` command. Every subcommand is in `docs/COMMANDS.md`. |
+
+The package holds much more than these four. `exo.core` is the loop, engine, tools and plugin loader.
+`exo.protocol` and `exo.server` carry the wire. `exo.learn`, `exo.consolidate`, `exo.ask`, `exo.eval` and
+`exo.brief` are the learning side (`docs/LEARNING.md`, `docs/TOOLS-CLI.md`). `exo.bus` is the signed relay between
+seats. `exo.gate` is the action gate (`docs/GATE.md`). `exo.ingest` imports past conversations.
+
+## The protocol in numbers
+
+`src/exo/protocol/schema.py` is the source of truth. It holds 30 commands (the cap, all used) and 28 event types (the
+tests require fewer than 30). `tests/docs/test_docs_map.py` checks these two numbers against the schema, so this paragraph cannot go
+stale without a failing test. After a schema change, run `python -m exo.protocol.export --check`.
 
 ## Where things live
 
@@ -35,7 +50,7 @@ Each event is one canonical JSON document (sorted keys, no whitespace, UTF-8).
 | `body` | JSON object |
 | `session` | session id, or null |
 | `refs` | ids of earlier events in the same ledger |
-| `prev` | chain hash of the previous event; 64 zeros for the first |
+| `prev` | chain hash of the previous event, or 64 zeros for the first |
 | `pub` | base64 Ed25519 public key of the signer |
 | `sig` | Ed25519 signature over sha256 of the canonical event without `sig` |
 
@@ -89,12 +104,16 @@ node whose body does not fit is listed by its summary line if that fits.
 
 ## CLI
 
+The store and ledger commands, in short. Arguments, exit codes and the rest of the CLI are in `docs/COMMANDS.md`.
+The task-first version is in `docs/USER-GUIDE.md` section 11.
+
 ```
-exo init <id> [--from-template [PATH]] [--root DIR]
+exo init <id> [--from-template [PATH]] [--root DIR] [--interview]
 exo find|get|ctx|links|lint|graph|index ...   [--principal ID | --root DIR]
 exo log append <kind> --author NAME (--text T | --body JSON) [--session S] [--ref ID ...]
 exo log verify | exo log tail [-n 10] [--kind K]
 exo keygen <name> [--out PATH]
+exo import-store <path> [--id ID] | exo interview | exo ingest <kind> <path>
 ```
 
 The active principal comes from `--principal`, else `$EXO_PRINCIPAL`.
