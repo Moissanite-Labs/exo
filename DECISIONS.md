@@ -812,6 +812,29 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** terminal event-loop blocking and approval focus (another branch); gate, approvals, capture and
   ledger items (other branches).
 
+## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
+- **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
+  or lint ran, that the wheel left out a licence, that some imports were undeclared, that the plugin tests could
+  not be collected together, and that the site and docs claimed things the code does not do.
+- **Decision (privacy):** the early inventory and the project brief moved out of the repo into the handoffs folder.
+  `docs/STORE-V2.md` lost its machine detail and says "Design, not built". Tests no longer hold a deny-list of
+  names: they load one from an untracked file (`$EXO_PRIVACY_DENYLIST` or `~/.config/exo/privacy-denylist.txt`) and
+  skip without it, and a generic check (home paths, email addresses) always runs (`exo.privacy`,
+  `tests/test_privacy.py`). `scripts/deploy-site.sh` reads the Vercel team and token file from the environment or an
+  untracked config. `.gitignore` covers env files, keys and `auth.json`.
+- **Decision (packaging):** the wheel ships `LICENSE` and `LICENSES/*` (`license-files`); a notice covers the embedded
+  github-markdown-css; `httpx2`, `starlette` and `rich` are declared in the extras that import them; the terminal
+  client no longer depends on the PyPI project named `exo`; `uv.lock` is committed.
+- **Decision (hygiene):** GitHub Actions runs the root suite and each plugin suite separately, on macOS and Ubuntu,
+  Python 3.11 and 3.13, plus ruff with the F rules. Ruff runs with `--exit-zero` until the existing unused imports
+  are cleaned up. Duplicate plugin test names were renamed so `pytest plugins` collects. The default handoff folder
+  is `$EXO_HOME/handoffs` (or `handoff_dir` in the config), not one person's layout.
+- **Decision (site):** planned clients are marked planned; the explain key and the session tree panel were removed
+  from the copy because the clients do not have them; "the whole learning curve" now says "get you started"; the
+  whitepaper and site no longer pin a test count.
+- **Not done:** git history still holds the removed files and the earlier constants. It must be rewritten before the
+  repo goes public. The F401 baseline is not fixed yet.
+
 ## D-043 (2026-10-12) Esc never stops a turn; the approval card keeps out of your typing
 - **Why:** the principal ruled that Esc interrupting a turn is bad UI. It is too easy to hit by habit. Esc should be soft.
 - **Esc:** closes the completion menu or dismisses ghost text, then clears a guidance line, then leaves a panel,
