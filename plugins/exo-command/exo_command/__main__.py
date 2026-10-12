@@ -24,11 +24,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--token-file", help="bearer token file for --url")
     p.add_argument("--host", help="bind address (default 127.0.0.1)")
     p.add_argument("--port", type=int, help="port (default 7342)")
+    p.add_argument("--no-open", action="store_true", help="do not open the page in a browser")
     a = p.parse_args(argv)
     st = load_settings({"socket": a.socket, "url": a.url, "token_file": a.token_file, "host": a.host,
                         "port": a.port})
     try:
-        asyncio.run(WebServer(CommandCentre(st)).run(st.host, st.port))
+        web = WebServer(CommandCentre(st))
+        web.open_browser = not a.no_open and sys.stdout.isatty()  # the URL carries the page token (D-034)
+        asyncio.run(web.run(st.host, st.port))
     except KeyboardInterrupt:
         return 130
     except OSError as exc:

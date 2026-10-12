@@ -26,6 +26,7 @@ from exo_tui import theme as th
 from exo_tui.hero import Hero, hero_rows
 from exo_tui.boot import STEPS as BOOT_STEPS
 from exo_tui.boot import BootScreen
+from exo_tui.providers import ProvidersScreen, refuse_key_in_composer
 from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, EditScreen, Palette,
                              PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
@@ -53,6 +54,7 @@ COMMANDS = {
     "quit": ("session", "same as /exit"),
     "model": ("model", "pick the model for this session; /model <ref> sets it"),
     "default": ("model", "set the default model for new sessions: /default <ref>, or /default alone to pick (same as /model default)"),
+    "providers": ("model", "set up model providers: add or replace a key, test it, remove it, pick the default"),
     "usage": ("model", "show context size, cost and the model in use"),
     "panel": ("tools", "reopen the last panel"),
     "peers": ("tools", "list the other live sessions (Exo and Hermes) you can message"),
@@ -369,6 +371,7 @@ class ExoApp(App):
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", "ready")
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
+            self.run_worker(self.first_run_providers(), exit_on_error=False)
             if self.auto_intro and not self.resume and not self.onb.onboarded:
                 await self.intro("first")
         except Exception as exc:
@@ -691,6 +694,11 @@ class ExoApp(App):
 
     def on_composer_submitted(self, msg: Composer.Submitted) -> None:
         text = msg.text.strip()
+        if refuse_key_in_composer(text):  # a key pasted in the composer: drop it here, before any worker or echo
+            text = ""
+            self.note("Keys do not go in the composer. Type /providers, pick the provider and press a: "
+                      "the key field is hidden.", "warn")
+            return
         if text:
             self.run_worker(self.submit(text), exit_on_error=False)
 
@@ -761,6 +769,16 @@ class ExoApp(App):
             self.note(f"model {self.model or '-'}  context {self.ctx_tokens} tokens  cost {self.cost_label()}")
         elif name == "default":
             await self.set_default(args)
+        elif name == "providers":
+            word, _, rest = args.partition(" ")
+            if word == "add" and rest.strip():
+                if " " in rest.strip():  # never echo what came after the provider name
+                    self.note("Keys do not go in the composer. Use /providers add <name>, then the hidden field.",
+                              "warn")
+                    return
+                self.open_providers(rest.strip(), add=True)
+            else:
+                self.open_providers()
         elif name == "new":
             await self.new_session("private" if args.strip() == "private" else "")
             self.hint("new_thread")
@@ -949,6 +967,49 @@ class ExoApp(App):
         saved = await self.post(s.ConfigSet(key="models.roles.main", value=routes))
         if saved.ok:
             self.note(f"default model: {ref} (saved to config.json, fallbacks kept)")
+
+    # ------------------------------------------------------------ providers (D-034)
+    def open_providers(self, initial: str = "", add: bool = False) -> None:
+        if self.modal_open():
+            return
+        self.push_screen(ProvidersScreen(initial, add), self.providers_done)
+
+    def providers_done(self, result: Any) -> None:
+        self.composer.focus()
+        if isinstance(result, tuple) and result[0] == "default":
+            self.run_worker(self.pick_provider_default(result[1]), exit_on_error=False)
+
+    async def pick_provider_default(self, provider: str) -> None:
+        """Choose the default model among one provider's routes, then the same flow as /default."""
+        try:
+            res = await self.client.call(s.ModelsList())
+        except Exception as exc:
+            self.note(f"could not list models: {type(exc).__name__}", "error")
+            return
+        seen, items = set(), []
+        for r in [*res.get("models", []), *res.get("available", [])]:
+            ref = r["route"]
+            if ref not in seen and ref.split(":", 1)[0] == provider:
+                seen.add(ref)
+                items.append((ref, ref))
+        if not items:
+            self.note(f"no models listed for {provider} yet (try /providers, then t to test it)", "warn")
+            return
+        self.push_screen(Palette(items, f"default model: {provider}"),
+                         lambda v: v and self.run_worker(self.set_default(v), exit_on_error=False))
+
+    async def first_run_providers(self) -> None:
+        """No provider ready: one note says where to start. Silent on any failure."""
+        try:
+            from exo import providers_setup
+            ready = await asyncio.to_thread(providers_setup.any_ready)
+        except Exception:
+            return
+        if not ready:
+            try:
+                self.note("No model provider is set up yet. Type /providers to add a key.")
+            except Exception:  # the app closed while the check ran
+                pass
 
     async def pick_session(self) -> None:
         rows = (await self.client.call(s.SessionList(limit=50)))["sessions"]

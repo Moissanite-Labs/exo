@@ -61,6 +61,17 @@ Where the numbers come from, all from events the core already sends: `model.call
 `usage.cache_read_tokens`), `usage.updated` (context tokens, session cost), `memory.summarized`,
 `peer.message`, `taste.updated`, `tool.completed` (`duration_ms`), and the findings count the client polls.
 
+## The /providers panel
+
+`/providers` opens a modal in the same language: a cold `PROVIDERS` header rule, then one row per provider with a
+status chip (green `verified` with latency, grey `key found`, dim `no key`, orange `failed: <class>`, cold `running`
+for a local server), where the key comes from (env, keychain, secret-service or file, never a value), the model count
+and an orange default mark. Key chips: `[a]` add or replace a key, `[t]` test, `[r]` remove (asks y or n), `[d]` pick
+the default model, `[esc]` close. `[a]` opens a small modal with one masked field; the key never goes through the
+composer, the transcript or any log, and a key typed after `/providers add <name>` in the composer is refused and
+not echoed. After a change the client tells a running core to read keys again. At start, if no provider is ready,
+one note says to type `/providers`.
+
 ## Switches
 
 - `EXO_REDUCED_MOTION=1`: no boot sequence, no spinner, packet, pulse, fade or caret blink. The state is still
@@ -77,6 +88,8 @@ approval panel, the `/context` report and a background job. They come from `scri
 drives the app with Textual's pilot over an in-process core and a scripted model, with neutral demo data.
 `docs/media/README.md` has the commands. The older shots in `docs/ui/` were removed because they used internal
 names. `scripts/ui_shots.py` still renders the full set (boot, narrow 80x24) for local checks.
+The `/providers` panel shots (`docs/ui/07-providers.png`, `docs/ui/07b-providers-key.png`, demo data, no
+real status or keys) come from `scripts/ui_shots.py`.
 
 ## Credit
 

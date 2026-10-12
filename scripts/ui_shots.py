@@ -105,7 +105,45 @@ async def context(app, pilot, eng):
     await settle(pilot, 1.0)
 
 
+def demo_rows() -> list[dict]:
+    """Neutral demo statuses. No real key, store or network is read."""
+    def row(name, status, **kw):
+        base = {"provider": name, "status": status, "needs": "key", "key": "missing", "source": None,
+                "key_env": [name.upper() + "_API_KEY"], "local": False, "reachable": None, "verified": False,
+                "last_test": None, "models": None, "roles": [], "serves": [], "default": False, "ready": False}
+        return {**base, **kw}
+    return [
+        row("anthropic", "verified", key="found", source="keychain", verified=True, ready=True, models=12,
+            default=True, last_test={"ok": True, "latency_ms": 412}),
+        row("openai", "key found", key="found", source="env", ready=True, models=40),
+        row("openrouter", "no key"),
+        row("groq", "failed: auth", key="found", source="file", ready=True,
+            last_test={"ok": False, "error_class": "auth"}),
+        row("ollama", "running", needs="server", key="n/a", key_env=[], local=True, reachable=True, ready=True,
+            models=3),
+        row("lmstudio", "not running", needs="server", key="n/a", key_env=[], local=True, reachable=False),
+    ]
+
+
+async def providers(app, pilot, eng):
+    app.query_one(Composer).text = "/providers"
+    await pilot.press("enter")
+    await settle(pilot, 0.8)
+    await pilot.press("down", "down")
+    await settle(pilot, 0.2)
+
+
+async def providers_key(app, pilot, eng):
+    await providers(app, pilot, eng)
+    await pilot.press("a")
+    await settle(pilot, 0.4)
+    app.screen.query_one("Input").value = "demo-key-not-real-0123456789"  # shown masked
+
+
 async def main(out: Path) -> None:
+    from exo import providers_setup
+    providers_setup.rows = lambda *a, **k: demo_rows()  # demo data only; any_ready too, so no first-run note
+    providers_setup.any_ready = lambda *a, **k: True
     out.mkdir(parents=True, exist_ok=True)
     await shoot(out, "01-empty", empty)
     await shoot(out, "01b-boot", boot, boot=True)
@@ -113,6 +151,8 @@ async def main(out: Path) -> None:
     await shoot(out, "03-approval", approval)
     await shoot(out, "04-answer", answer)
     await shoot(out, "05-context", context)
+    await shoot(out, "07-providers", providers)
+    await shoot(out, "07b-providers-key", providers_key)
 
 
 if __name__ == "__main__":

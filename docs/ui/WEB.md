@@ -11,6 +11,7 @@ or file from outside.
 The public set is in `docs/media/`: `web-01-start.png` (empty start: the site's hero behind the brand block,
 instrument column on the right), `web-02-turn.png` (a turn with tools running), `web-03-approval.png` (an
 approval panel) and `web-04-memory.png` (the memory column filled in). `scripts/promo_shots_web.py` makes them.
+The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `web-providers-narrow.png`.
 
 ## What is where
 
@@ -58,6 +59,19 @@ Cost in the strip is the session total from `usage.updated`; each row of last ca
 `job.updated` shows as one dim line with a cold label: `job · pytest -q · done · 12.4s`, with the exit code
 when it is not zero.
 
+## Providers (D-034)
+
+The Providers tab (`providers.js`) shows where keys are stored, one row per provider with a status chip
+(verified with latency, key found, no key, failed with the error class, local running, cli installed), the
+source of the key (never a value), the model count and a default mark. A provider that needs a key has a
+password field with Save, Test and Remove. After Save the field is cleared at once, also on error; the key is
+read once to build the request body and is never logged, shown again, put in a URL or kept in browser storage.
+A select lists the configured routes, then the available ones, with Save default. The routes need the page
+token: `exo web` prints a link with `#token=...`; the page moves it to `sessionStorage` (this tab only),
+removes it from the address bar and sends it as `X-Exo-Token` on `/api/providers` calls only. Without a token
+the tab only asks you to open that link. When no provider is ready, the Chat view shows one quiet line with a
+link to this tab.
+
 ## Motion and accessibility
 
 Every animation (pulse, packet, caret blink, reveal, boot) sits behind `prefers-reduced-motion: reduce`, which
@@ -74,5 +88,7 @@ keeps the old node first.
 `python scripts/promo_shots_web.py` serves the static client over a stand-in source that replays protocol
 events for a scripted turn, and captures each state with headless Chrome. Nothing is captured from a live
 `~/.exo`. See `docs/media/README.md`.
+The Providers shots use a stub `/api/providers` table with demo names (no real status, no keys), captured with
+`Google Chrome --headless=old --screenshot` against a `WebServer` over a fake source at `/?boot=0#providers&token=demo`.
 
 Source of the language: the Exo site, `site/`.

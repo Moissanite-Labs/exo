@@ -6,8 +6,22 @@ import * as chat from "./chat.js";
 import * as tasks from "./tasks.js";
 import * as schedule from "./schedule.js";
 import * as command from "./command.js";
+import * as providers from "./providers.js";
 
-const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command]];
+const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command], ["providers", "Providers", providers]];
+
+// The page token for provider routes arrives in the URL fragment (`exo web` prints it). Keep it in this tab's
+// sessionStorage only, then take it out of the address bar and history.
+function takeToken() {
+  const parts = (location.hash || "").slice(1).split("&").filter(Boolean);
+  const t = parts.find((x) => x.startsWith("token="));
+  if (!t) return;
+  const value = decodeURIComponent(t.slice(6));
+  if (value) sessionStorage.setItem("xc-token", value);
+  const view = parts.find((x) => !x.startsWith("token=")) || "chat";
+  history.replaceState(null, "", location.pathname + location.search + "#" + view);
+}
+takeToken();
 const app = document.getElementById("app");
 const main = h("div", { class: "xc-main" });
 const nav = h("nav", { class: "xc-nav", role: "tablist" });
@@ -71,3 +85,4 @@ boot([
 ]);
 await bus.start();   // loads open panels, then follows the event stream
 show((location.hash || "").slice(1));
+window.addEventListener("hashchange", () => { const id = (location.hash || "").slice(1); if (id !== current) show(id); });

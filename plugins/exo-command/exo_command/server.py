@@ -14,6 +14,8 @@ Routes:
                               or the Last-Event-ID header); the chat page streams text from here
   ...                         chat, feedback, ui.respond, tasks and schedule routes: see ``api.py``
   POST /api/approvals/<id>    body ``{"decision": "allow|deny|allow_always", "note": ""}``
+  *    /api/providers...       provider setup (D-034): see ``providers.py``; loopback peer, loopback Host,
+                              same Origin and the per-launch token, or refused
 
 The server binds to loopback by default. Writes are limited to the routes in ``api.py`` and answering an
 approval, and a POST from another origin is refused, so a web page elsewhere cannot answer your approvals.
@@ -23,11 +25,13 @@ from __future__ import annotations
 import asyncio
 import json
 import mimetypes
+import secrets
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlsplit
 
 from . import api
+from . import providers as prov
 from .service import SECTIONS, CommandCentre
 from .source import SourceError
 
@@ -40,8 +44,12 @@ DECISIONS = ("allow", "deny", "allow_always")
 
 
 class WebServer:
-    def __init__(self, centre: CommandCentre):
+    def __init__(self, centre: CommandCentre, token: Optional[str] = None):
         self.centre = centre
+        # Per launch, held in memory only. `exo web` prints it in the URL fragment (never sent to a server);
+        # the page keeps it in sessionStorage and sends it as X-Exo-Token on provider routes (D-034).
+        self.token = token or secrets.token_urlsafe(32)
+        self.router_factory = prov.ps.build_router
         self._server: Optional[asyncio.AbstractServer] = None
         self._conns: set = set()
         self._feeds: list = []
@@ -58,7 +66,20 @@ class WebServer:
         if c.source is None:
             c.connect()
         bound = await self.start(host, port)
-        print("exo-command: http://{}:{}".format(host, bound), flush=True)
+        url = self.page_url(host, bound)
+        print("exo-command: {}".format(url), flush=True)
+        try:
+            if not await asyncio.to_thread(prov.ps.any_ready):
+                print("exo-command: no model provider is set up yet. Open Providers in the page, "
+                      "or run: exo providers add <provider>", flush=True)
+        except Exception:
+            pass
+        if self.open_browser:
+            try:
+                import webbrowser
+                webbrowser.open(url)
+            except Exception:
+                pass
         feed = asyncio.create_task(self._feed())
         try:
             await asyncio.get_running_loop().create_future()
@@ -78,6 +99,15 @@ class WebServer:
                 c.connected, c.last_error = False, "{}: {}".format(type(exc).__name__, exc)
                 c._notify()
             await asyncio.sleep(2.0)
+
+    open_browser = False
+
+    def page_url(self, host: str, port: int) -> str:
+        """The page address with the token in the fragment, so it never reaches a server or a log line."""
+        shown = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+        if ":" in shown and not shown.startswith("["):
+            shown = "[{}]".format(shown)
+        return "http://{}:{}/#token={}".format(shown, port, self.token)
 
     async def close(self) -> None:
         if self._server is not None:
@@ -147,6 +177,8 @@ class WebServer:
             raw = (q.get("since") or [headers.get("last-event-id") or "0"])[0]
             since = int(raw) if raw.isdigit() else 0
             return await self._events(writer, since, (q.get("session") or [None])[0])
+        if path == "/api/providers" or path.startswith("/api/providers/"):
+            return await self._providers(reader, writer, headers, method, path)
         if path.startswith("/api/"):
             body: Dict[str, Any] = {}
             if method == "POST":
@@ -158,6 +190,23 @@ class WebServer:
             if reply is not None:
                 return await self._json(writer, reply[0], reply[1])
         return await self._json(writer, 404, {"error": "not found"})
+
+    async def _providers(self, reader, writer, headers: Dict[str, str], method: str, path: str) -> None:
+        """Provider setup (D-034). The guard runs before the body is read; the body (which may hold a key) is
+        never logged, echoed or kept."""
+        peer = writer.get_extra_info("peername")
+        refused = prov.guard(headers, peer[0] if isinstance(peer, (tuple, list)) and peer else None, self.token)
+        if refused is not None:
+            return await self._json(writer, *refused)
+        body: Dict[str, Any] = {}
+        if method == "POST":
+            got = await self._body(reader, writer, headers)
+            if got is None:
+                return
+            body = got
+        status, data = await prov.handle(self.centre, method, path, body, self.router_factory)
+        body.clear()
+        return await self._json(writer, status, data)
 
     async def _body(self, reader, writer, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
         """Read a JSON object body from a same-origin POST; answer the error and return None otherwise."""

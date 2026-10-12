@@ -606,3 +606,34 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   grants are the principal's alone; list and revoke as a `command.run` command.
 - **Not done:** escalation along an org graph (P1-2); the TUI and web clients do not yet show `approvers`, echo
   `binding`, or sign as a seat (left for the UI work); no client helper beyond `sign_approval` for a seat to answer.
+
+## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Why:** a new user had no clean way to add a model key. Keys went in by hand (env, `security`, or a 0600
+  file), `exo models` only reported, and the web client had no provider settings at all.
+- **Engine:** `exo/providers_setup.py`. `rows` gives every catalog provider with status (key found and where,
+  local server reachable, last live test, model count, default), never a value. `set_key` and `remove_key` write
+  the Keychain on macOS, the Secret Service via `secret-tool` on Linux when present, else `keys.env` (0600, temp
+  file, fsync, rename). `test_provider` makes one tiny call and returns latency and an error class. `set_default`
+  does what `/default` does. Keys are write-only: only `set_key` takes one and nothing returns one. A new key is
+  taught to redaction (`keys.remember_secret`) before it is stored, so even a failed store cannot leak it.
+- **Surfaces:** `exo providers [add|test|remove|default]` (getpass, needs a terminal, its own parser that never
+  repeats argv, so a pasted key is not echoed); the TUI `/providers` panel (client side, masked input, never the
+  composer); the web Providers tab. No new protocol command: the protocol is full at 30. The core gets one
+  `command.run` built-in, `providers` (status) and `providers reload <name>` (forget cached credentials), and only
+  a provider name crosses the protocol.
+- **Where keys are written:** in the client process (the CLI, the TUI, the web server), not in the core. The key
+  then never enters a protocol message, an event, a session log or the core's memory; the core reads it from the
+  store on reload like any other key.
+- **Web security:** routes under `/api/providers` need a loopback peer, a loopback `Host` (DNS rebinding), a
+  same-host `Origin` when sent (and `Sec-Fetch-Site` same-origin or none), and a per-launch token. `exo web`
+  prints the token in the URL fragment; the page keeps it in `sessionStorage` and sends `X-Exo-Token`. Threat model
+  in `docs/PROVIDERS.md`.
+- **Agent:** no tool exposes this. The gate classes `exo providers add|remove|test|default`, `secret-tool`, and
+  shell or code naming `/api/providers` or `providers_setup` as `credentials` (always ask, no grant).
+- **Rejected:** a protocol command to set a key (the key would ride the protocol and could reach event logs);
+  accepting a key as an argument (shell history, `ps`); `security add-generic-password -w VALUE` (the value is in
+  argv; `security -i` reads the command from stdin instead); storing the token in `localStorage` or a cookie
+  (outlives the launch, a cookie rides cross-site requests); returning a masked key or its last four characters
+  (nothing about the value comes back).
+- **Not done:** a remote core (`--url` on another machine) still needs keys on that machine; the TUI and web store
+  on the machine they run on. Rotating several keys per provider (`key_env` lists) writes the first name only.

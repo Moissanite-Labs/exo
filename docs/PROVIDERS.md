@@ -2,7 +2,65 @@
 
 Exo works with any model provider. You choose which model serves each role.
 
-## Add a key
+## Set up with the app or the TUI
+
+Pick one of three places. They share one engine (`exo/providers_setup.py`, D-034), so they show the same
+status and store keys the same way.
+
+- **Terminal:** `exo providers` lists every provider: status, where its key is (env, keychain,
+  secret-service or file, never the value), model count and the default. Then:
+
+      exo providers add openai        # prompts for the key, no echo; runs one test call after
+      exo providers test openai       # one tiny live call: latency, or an error class
+      exo providers remove openai     # deletes it from the Keychain, Secret Service and keys.env
+      exo providers default openai:gpt-5   # default model; old routes stay as fallbacks
+
+  `add` never takes the key as an argument (it would land in shell history and in `ps`) and needs a terminal.
+- **TUI:** `/providers` opens a panel with the same list. `a` adds or replaces a key in a masked field, `t`
+  tests, `r` removes, `d` sets the default model. The key never enters the transcript, history or session log.
+- **Web client:** `exo web` opens the page with a one-time token in the address. The Providers tab has the same
+  list, a masked key field, Test, Remove and a default model picker.
+
+Where a new key goes: the macOS Keychain (service `exo`) on a Mac; on Linux the Secret Service through
+`secret-tool` when it is installed, else `~/.config/exo/keys.env` (written mode 0600, atomically). Choose another
+with `exo providers add NAME --store file`. If an environment variable of the same name is set, it wins, and Exo
+says so.
+
+What the test call is: OpenAI-style and local providers list their models (`GET /models`), Anthropic lists one
+model, a decision provider answers one yes or no question, and `claude-cli` only checks the binary is on PATH.
+Errors come back as a class: `no_key`, `auth`, `billing`, `not_found`, `rate_limited`, `server`, `timeout`,
+`network`, `not_running`, `not_installed`, `bad_response`, `http`, `error`. The last result is kept in
+`$EXO_HOME/state/providers.json` (no secrets) and shows as `verified` or `failed: <class>`; a new key clears it.
+
+If no provider can serve the main role, `exo tui` and `exo web` say so and point here.
+
+### Security of the web route
+
+`exo web` binds to loopback, but any web page you visit can still make your browser send requests to
+`127.0.0.1`, and DNS rebinding can make a hostile name resolve to it. So every `/api/providers` route needs all
+of these, or it answers 403:
+
+1. the client is on loopback;
+2. the `Host` header is `127.0.0.1`, `localhost` or `[::1]` (a rebinding name fails here);
+3. when the browser sends `Origin`, it is `http://` and the same host and port, and `Sec-Fetch-Site`, when sent,
+   is `same-origin` or `none`;
+4. the header `X-Exo-Token` holds the per-launch token. `exo web` makes a new one each start, keeps it in memory,
+   and prints it in the URL fragment (`#token=...`), which browsers never send to a server. The page moves it to
+   `sessionStorage` (gone when the tab closes) and strips it from the address bar. A custom header also forces a
+   CORS preflight, which the server never answers, so a cross-site page cannot send it.
+
+The key travels once, in a POST body over loopback. The server does not log requests, never echoes the key and
+never returns a stored value; the page clears the field and keeps the key in no storage. What this does not stop:
+a program running as you can read the printed URL or the Keychain anyway. If a supervisor captures `exo web`'s
+output, the token is in that log until the next start.
+
+### The agent cannot use this
+
+No tool gives the model these functions. The gate classes `exo providers add|remove|test|default`, `secret-tool`,
+any shell or code that names `/api/providers` or `providers_setup`, and every Keychain read as `credentials`,
+which always asks you and never gets a standing grant (D-033). Keys are write-only: no code path returns one.
+
+## Add a key by hand
 
 Exo looks for a key by its variable name (for example `OPENCODE_GO_API_KEY`). It checks, in order:
 
@@ -12,20 +70,24 @@ Exo looks for a key by its variable name (for example `OPENCODE_GO_API_KEY`). It
        security add-generic-password -U -s exo -a OPENCODE_GO_API_KEY -w
 
    It prompts for the value and does not echo it. On Linux this step is skipped.
-3. The file `~/.config/exo/keys.env` (macOS and Linux), one `NAME=value` per line. It must be mode 0600
+3. Linux only: the Secret Service, when `secret-tool` is installed. Add one with
+   `secret-tool store --label="exo NAME" service exo account NAME`, which reads the value from stdin without echo.
+4. The file `~/.config/exo/keys.env` (macOS and Linux), one `NAME=value` per line. It must be mode 0600
    (`chmod 600 ~/.config/exo/keys.env`). If it is looser, Exo refuses to read it and warns.
 
-On Linux, create the keys file once:
+On Linux without `secret-tool`, create the keys file once:
 
     mkdir -p ~/.config/exo
     touch ~/.config/exo/keys.env
     chmod 600 ~/.config/exo/keys.env
-    read -rs KEY; printf 'OPENCODE_GO_API_KEY=%s\n' "$KEY" >> ~/.config/exo/keys.env
+    read -rs KEY; printf 'OPENCODE_GO_API_KEY=%s
+' "$KEY" >> ~/.config/exo/keys.env
 
 `read -s` does not echo the value. Check the mode with `ls -l ~/.config/exo/keys.env`; it should show `-rw-------`.
-Set `EXO_KEYS_FILE` to use another path.
+Set `EXO_KEYS_FILE` to use another path. (`exo providers add NAME` does all of this for you.)
 
-Keys are never printed or logged. Never paste one into chat.
+Keys are never printed or logged. Never paste one into chat. `EXO_NO_KEYCHAIN=1` and `EXO_NO_SECRET_SERVICE=1`
+turn those stores off (tests and sandboxes use them).
 
 ## Providers
 
@@ -56,7 +118,7 @@ a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:
 
     exo decide "Is this safe to run?" --options safe,risky --state "rm -rf build/"
 
-Jev: set `TYPESAFE_API_KEY` (env, macOS Keychain service `exo`, or keys.env). It is the first default route of the
+Jev: set `TYPESAFE_API_KEY` (`exo providers add jev`, env, macOS Keychain service `exo`, Linux Secret Service, or keys.env). It is the first default route of the
 `decision` role (`["jev:jev-latest", "laya:laya"]`, owner ruling: base Laya was poor in a live check, Jev
 answered sensibly). Without a key Jev is skipped and the role falls through to Laya, then aux, then main.
 Shapes were checked live on 2026-10-11 (7 calls). Score levels count from 0; a score can fall between
@@ -95,9 +157,10 @@ Override any role in `[models.roles]` in your config.
 
 ## See what is set
 
+    exo providers                 providers: status, where the key is, models, default
     exo models                    providers, key found (yes or no), route per role
     exo models --remote NAME      list the provider's models (network, only when you ask)
     exo config roles              the route per role only
 
-No command prints a key value. A key from the environment, the Keychain (macOS) or keys.env is read only by the real CLI;
+No command prints a key value. A key from the environment, the Keychain (macOS), the Secret Service (Linux) or keys.env is read only by the real CLI;
 tests build engines with `env={}` so a shell key never causes spend.
