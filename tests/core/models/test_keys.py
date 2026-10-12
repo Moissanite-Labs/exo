@@ -198,3 +198,20 @@ def test_cli_models_and_config_roles(monkeypatch, tmp_path, capsys):
     assert main(["config", "roles"]) == 0
     out = capsys.readouterr().out
     assert "eval" in out and "decision" in out and KEY not in out
+
+
+def test_loose_keys_file_warns_once_per_file(tmp_path, caplog, monkeypatch):
+    monkeypatch.setattr(keys, "_warned_loose", set())
+    f = tmp_path / "keys.env"
+    f.write_text("DUMMY_API_KEY=x\n")
+    os.chmod(f, 0o644)
+    with caplog.at_level(logging.WARNING, logger="exo.keys"):
+        for name in ("A", "B", "C", "A", "B", "C"):
+            assert keys.file_get(name, f) is None
+    assert len([r for r in caplog.records if "refusing to read" in r.getMessage()]) == 1
+    g = tmp_path / "other.env"
+    g.write_text("DUMMY_API_KEY=x\n")
+    os.chmod(g, 0o644)
+    with caplog.at_level(logging.WARNING, logger="exo.keys"):
+        keys.file_get("A", g)
+    assert len([r for r in caplog.records if "refusing to read" in r.getMessage()]) == 2
