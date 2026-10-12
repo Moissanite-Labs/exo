@@ -5,6 +5,7 @@ import * as bus from "./bus.js";
 import { renderPanel } from "./panels.js";
 import { createHero } from "./hero.js";
 import { attachComposer } from "./composer.js";
+import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOUTS } from "./layout.js";
 
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
@@ -12,6 +13,7 @@ export function mount(root) {
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
   const landed = new Set();   // user messages the core has added to a conversation
+  let layout = getLayout();   // "inverse" (box on top, newest first) or "classic"; D-046
 
   const listEl = h("div", { class: "xc-sessions" });
   const logEl = h("div", { class: "xc-log", role: "log", "aria-live": "polite" });
@@ -32,6 +34,7 @@ export function mount(root) {
     if (e.key === "ArrowUp" && !input.value && lastSteer() && !e.defaultPrevented) { e.preventDefault(); e.stopImmediatePropagation(); unsteer(lastSteer()); }
   }, true);
   const newBtn = h("button", { class: "xc-btn xc-primary", onclick: () => create() }, "New thread");
+  const layoutBtn = h("button", { class: "xc-btn xc-layout", onclick: () => switchLayout(layout === "inverse" ? "classic" : "inverse") });
   const heroCanvas = h("canvas", { class: "xc-hero-canvas", "aria-hidden": "true" });
   const heroText = h("div", { class: "xc-hero-text" });
   const heroEl = h("div", { class: "xc-hero", "aria-hidden": "false" }, h("div", { class: "xc-hero-grid" }), heroCanvas, heroText);
@@ -40,9 +43,23 @@ export function mount(root) {
   const stage = h("div", { class: "xc-stage" }, heroEl, logEl);
   const setupBanner = h("div", { class: "xc-setup", hidden: true }, h("span", null, "No model provider is set up yet."),
     h("a", { href: "#providers" }, "Set up providers"));
+  const mainEl = h("main", { class: "xc-chat-main" });
+  const parts = { banner: setupBanner, stage, approvals: apprEl, status: statusEl, steer: steerEl, guide: help.guideEl, composer, menu: help.menuEl };
+  function arrange() {   // the real DOM order, so the tab order matches what is on screen
+    mainEl.replaceChildren(...columnOrder(layout).map((k) => parts[k]));
+    mainEl.classList.toggle("xc-inverse", layout === "inverse");
+    layoutBtn.textContent = layout === "inverse" ? "Layout: newest on top" : "Layout: classic";
+    layoutBtn.title = "Switch the chat layout (also /layout inverse|classic). Saved in this browser.";
+    layoutBtn.setAttribute("aria-pressed", layout === "inverse" ? "true" : "false");
+  }
+  function switchLayout(v) {
+    if (!LAYOUTS.includes(v)) return;
+    layout = v; setLayout(v); arrange(); drawLog();
+  }
+  arrange();
   root.replaceChildren(h("div", { class: "xc-chat" },
-    h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl),
-    h("main", { class: "xc-chat-main" }, setupBanner, stage, apprEl, statusEl, steerEl, help.guideEl, composer, help.menuEl),
+    h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl, layoutBtn),
+    mainEl,
     sideEl));
 
   if (sessionStorage.getItem("xc-token")) {   // quiet check: skipped on any error
@@ -217,12 +234,14 @@ export function mount(root) {
 
   // ---------------------------------------------------------------- drawing
 
-  function stick() { if (logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 120) logEl.scrollTop = logEl.scrollHeight; }
+  function home() { logEl.scrollTop = homeScroll(layout, logEl.scrollHeight, logEl.clientHeight); }
+  function stick() { if (nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight)) home(); }
   function push(it) {
     it.fresh = true;
     items.push(it);
     if (items.length === 1) { drawLog(); return; }
-    logEl.appendChild(itemEl(it)); stick();
+    if (layout === "inverse") logEl.prepend(itemEl(it)); else logEl.appendChild(itemEl(it));   // newest first, or last
+    stick();
   }
   function drawHero() {
     const want = items.length === 0;
@@ -248,9 +267,10 @@ export function mount(root) {
   }
   function redraw(it) { const old = it.el; if (old && old.isConnected) { old.replaceWith(itemEl(it)); } else drawLog(); }   // keep the old node: itemEl points it.el at the new one
   function drawLog() {
-    logEl.replaceChildren(...items.map(itemEl));
+    logEl.replaceChildren(...ordered(items, layout).map(itemEl));
     drawHero();
-    logEl.scrollTop = logEl.scrollHeight;
+    home();
+    requestAnimationFrame(home);   // once the new rows have a height: a thread opens on its newest item
   }
 
   function itemEl(it) {
@@ -461,6 +481,14 @@ export function mount(root) {
     if (typo) {   // D-037: a mistyped command gets a suggestion, not a message to the agent
       flash("unknown command " + text.split(/\s/)[0] + ". did you mean /" + typo.guess + "? It is in the box: Enter runs it.");
       input.value = typo.line; input.setSelectionRange(input.value.length, input.value.length); input.dispatchEvent(new Event("input"));
+      return;
+    }
+    const lay = /^\/layout\b\s*(\S*)\s*$/.exec(text);
+    if (lay) {
+      input.value = ""; help.sent(text);
+      if (!lay[1]) flash("layout: " + layout + ". /layout inverse puts the box on top with the newest message under it; /layout classic is the usual order.");
+      else if (LAYOUTS.includes(lay[1].toLowerCase())) { switchLayout(lay[1].toLowerCase()); flash("layout: " + layout + " (saved)"); }
+      else flash("usage: /layout inverse|classic");
       return;
     }
     if (/^\/new\s*$/.test(text)) { input.value = ""; help.sent(text); create(); return; }

@@ -141,6 +141,7 @@ async def capture(url: str, out: Path) -> None:
     prof = tempfile.mkdtemp(prefix="exo-chrome")
     cmd = [CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
            "--window-size=1440,900", f"--user-data-dir={prof}",
+           "--use-mock-keychain", "--password-store=basic", "--no-first-run", "--no-default-browser-check",
            f"--screenshot={out}", url]
     proc = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -178,7 +179,8 @@ def hold_load(kind: str = "") -> None:
     dest = Path(tempfile.mkdtemp(prefix="exo-static")).resolve() / "static"
     shutil.copytree(STATIC0, dest)
     index = dest / "index.html"
-    index.write_text(index.read_text().replace("</body>", '<img src="/api/hold" alt="" hidden>' + type_script(kind) + "</body>"))
+    pin = '<script>localStorage.setItem("xc-layout", "classic");</script>'  # the older shots show the classic order (D-046)
+    index.write_text(index.read_text().replace("</body>", pin + '<img src="/api/hold" alt="" hidden>' + type_script(kind) + "</body>"))
     server.STATIC = dest
     api.dispatch = dispatch0
 
@@ -203,5 +205,40 @@ async def main(outdir: Path) -> None:
         print("wrote", outdir / f"{name}.png")
 
 
+class LongDemo(DemoSource):
+    """A thread with many finished turns, to show where a chat opens."""
+
+    async def call(self, body):
+        if type(body).TYPE == "session.get":
+            msgs = []
+            for i in range(1, 15):
+                msgs.append({"id": f"u{i}", "role": "user", "content": text(f"step {i}: what changed in slugify?")})
+                msgs.append({"id": f"a{i}", "role": "assistant", "content": text(f"Step {i} is done. The tests still pass.")})
+            return {"session": {"id": SID, "model": MODEL, "agent": "atlas", "cwd": self.cwd}, "messages": msgs, "seq": 0}
+        return await super().call(body)
+
+
+def layout_shots(outdir: Path) -> None:
+    """D-046: the inverse layout, and a classic chat that opens at its newest message. Driven over DevTools."""
+    import time
+    sys.path.insert(0, str(ROOT / "plugins" / "exo-command" / "tests"))
+    from browser import Browser, Served
+    demo = Path(tempfile.mkdtemp(prefix="slugify"))
+    for name, state, layout, cls in (("web-08-inverse", "turn", "inverse", DemoSource), ("web-09-classic-bottom", "memory", "classic", LongDemo)):
+        srv = Served(cls(state, str(demo)), token=TOKEN)
+        with Browser() as b:
+            b.goto(srv.url())
+            b.eval(f'localStorage.setItem("xc-layout", "{layout}")')
+            b.goto(srv.url())
+            b.wait("document.querySelectorAll('.xc-msg').length > 3", 20)
+            time.sleep(2.5)
+            b.shot(outdir / f"{name}.png")
+        srv.close()
+        print("wrote", outdir / f"{name}.png")
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["layout"]:
+        layout_shots(Path(sys.argv[2] if len(sys.argv) > 2 else ROOT / "docs" / "media"))
+        sys.exit(0)
     asyncio.run(main(Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "docs" / "media")))

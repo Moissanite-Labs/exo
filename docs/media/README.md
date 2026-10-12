@@ -12,6 +12,8 @@ open-source library. Nothing is captured from a real home directory or account.
 | `tui-06-slash.png` to `tui-09-guidance.png` | Completion (D-037): the `/co` menu with ghost text, `/model ` arguments, `@s` files, the guidance line. | `.venv/bin/python scripts/promo_shots.py` |
 | `web-01-start.png` to `web-04-memory.png` | Web client: start, a turn, approval, memory column. | `.venv/bin/python scripts/promo_shots_web.py` |
 | `web-05-guidance.png` to `web-07-files.png` | Web completion: the guidance line, the `/` menu, `@` files. The script types into a copy of the page, so the product has no screenshot hook. | same |
+| `tui-10-composer.png` to `tui-12-classic-bottom.png` | D-046: the big composer pane, the inverse layout, a classic thread opening at the bottom. | `.venv/bin/python scripts/promo_shots.py <dir> [names]` |
+| `web-08-inverse.png`, `web-09-classic-bottom.png` | D-046: the web inverse layout and a classic thread opening at the bottom. | `.venv/bin/python scripts/promo_shots_web.py layout` |
 
 Both SVGs use only SMIL and CSS animation, no script and no external font, so GitHub shows them inside an
 `<img>` tag. The CSS parts stop under `prefers-reduced-motion`.
@@ -22,7 +24,7 @@ Both SVGs use only SMIL and CSS animation, no script and no external font, so Gi
 python3 -m venv .venv && .venv/bin/pip install -e ".[tui]" -e clients/tui
 .venv/bin/python scripts/make_media_banner.py
 .venv/bin/python scripts/make_media_session.py
-.venv/bin/python scripts/promo_shots.py        # needs rsvg-convert, or headless Chrome (scripts/svg_to_png.sh)
+.venv/bin/python scripts/promo_shots.py        # needs rsvg-convert, or headless Chrome (scripts/svg_to_png.sh; every Chrome launch here passes --use-mock-keychain --password-store=basic)
 .venv/bin/python scripts/promo_shots_web.py    # needs headless Chrome; set CHROME to its path if not on macOS
 ```
 

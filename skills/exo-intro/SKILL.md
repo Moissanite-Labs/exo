@@ -117,6 +117,8 @@ Every command `/help` lists, in one line each, so you can answer "what does /x d
   and the window, above.
 - `/context`, `/compact`, `/usage`: memory and cost, above.
 - `/copy` puts the last answer on the clipboard; `/copy error` the last error; `/copy all` the transcript.
+- `/compose` opens a big editor for a long prompt (ctrl+g too; ctrl+s sends, Esc closes and keeps the draft); `/compose task` adds Goal, Context, Constraints, Done when headings; `/compose edit` uses $EDITOR.
+- `/layout inverse` puts the input on top with the newest message under it; `/layout classic` is the usual order.
 - `/model`, `/default`: models, above.
 - `/providers` sets up a model key: add or replace it (typed in a hidden field), test it, remove it, pick the default.
 - `/panel` reopens the last panel (an approval or a choice the agent showed you).

@@ -231,7 +231,8 @@ body { margin: 0; background: #08090a; }
 .xc-conn { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font: 500 11px var(--xc-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--fg-3); }
 
 /* ---------- chat ---------- */
-.xc-chat { flex: 1; display: grid; grid-template-columns: 224px minmax(0, 1fr) 340px; gap: 1px; background: var(--line);
+.xc-chat { flex: 0 0 auto; display: grid; grid-template-columns: 224px minmax(0, 1fr) 340px; gap: 1px; background: var(--line);
+  grid-template-rows: minmax(0, 1fr);   /* one row exactly as tall as the box: the log scrolls inside it, the page does not (D-046) */
   border: 1px solid var(--line); height: calc(100vh - 46px - 32px); min-height: 440px; }
 .xc-chat-left, .xc-side, .xc-chat-main { background: var(--bg-2); min-height: 0; min-width: 0; }
 .xc-chat-main { background: var(--deep); display: flex; flex-direction: column; box-shadow: 0 40px 80px -50px rgba(255, 91, 20, .22); }
@@ -417,7 +418,7 @@ body { margin: 0; background: #08090a; }
 
 /* ---------- narrow screens ---------- */
 @media (max-width: 1100px) {
-  .xc-chat { grid-template-columns: 190px minmax(0, 1fr); height: auto; }
+  .xc-chat { grid-template-columns: 190px minmax(0, 1fr); grid-template-rows: none; height: auto; }
   .xc-chat-main { min-height: 70vh; }
   .xc-side.xc-has { grid-column: 1 / -1; }
   .xc-side:not(.xc-has) { display: none; }
@@ -498,3 +499,12 @@ body { margin: 0; background: #08090a; }
 .xc-steer-chip { display: flex; align-items: center; gap: 10px; font: 400 12.5px var(--xc-mono); color: var(--fg-2); border-left: 2px solid var(--line-2); padding: 2px 0 2px 10px; }
 .xc-steer-chip .xc-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xc-x { padding: 0 8px; line-height: 20px; }
+
+/* ---------- layout experiment (D-046): the box on top, the newest item under it ---------- */
+.xc-chat-main.xc-inverse .xc-composer { border-top: 0; border-bottom: 1px solid var(--line); }
+.xc-chat-main.xc-inverse .xc-menu { border-top: 0; border-bottom: 1px solid var(--line); }
+.xc-chat-main.xc-inverse .xc-guide { padding-top: 8px; }
+.xc-chat-main.xc-inverse .xc-approvals { padding-top: 10px; }
+.xc-chat-main.xc-inverse .xc-strip { border-top: 1px solid var(--line); }
+.xc-layout { margin: auto 12px 0 12px; font-size: 10px; padding: 8px 10px; text-align: left; }
+.xc-chat-left > .xc-sessions { flex: 0 1 auto; }

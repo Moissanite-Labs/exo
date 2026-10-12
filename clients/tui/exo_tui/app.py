@@ -14,7 +14,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Static
+from textual.widgets import Input, OptionList, Static, TextArea
 from rich.theme import Theme as RichTheme
 
 from exo.config import exo_home
@@ -23,13 +23,14 @@ from exo.core.trace import money
 from exo import complete as cm
 from exo.protocol import schema as s
 from exo_tui.onboarding import INTRO_PROMPT, Onboarding, load_catalog
+from exo_tui.prefs import LAYOUTS, Prefs
 from exo_tui import theme as th
 from exo_tui.hero import Hero, hero_rows
 from exo_tui.boot import STEPS as BOOT_STEPS
 from exo_tui.boot import BootScreen
 from exo_tui.providers import ProvidersScreen, refuse_key_in_composer
-from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, CompletionMenu, EditScreen, Palette,
-                             PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
+from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, ComposeHeader, CompletionMenu,
+                             EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
 CLIENT_ID = "exo-tui"
 DEFAULT_WINDOW = 200_000
@@ -66,10 +67,13 @@ COMMANDS = {
     "intro": ("other", "an orientation from the agent: what Exo is, what it can do, how to use it"),
     "tutorial": ("other", "tips the first time something comes up: /tutorial on, off or reset (bare shows state)"),
     "copy": ("other", "copy to the clipboard: /copy (last answer), /copy error, /copy all"),
+    "compose": ("other", "open the big editor for a long prompt: /compose, /compose task (scaffold), /compose edit ($EDITOR)"),
+    "layout": ("other", "inverse puts the input on top and the newest message under it; classic is the usual order: /layout inverse|classic"),
     "help": ("other", "list every command"),
 }
 LOCAL_COMMANDS = {n: d for n, (_, d) in COMMANDS.items()}
 GROUPS = ("session", "model", "tools", "other")
+SCAFFOLD = "## Goal\n\n## Context\n\n## Constraints\n\n## Done when\n"  # /compose task
 
 
 PROMPT_IDLE = th.PROMPT  # the mark left of the composer; PromptMark redraws it with steer state
@@ -100,6 +104,14 @@ class ExoApp(App):
     #composer .text-area--cursor { background: $accent; color: #0a0a0a; text-style: none; }
     #composer .text-area--cursor-line { background: $background; }
     #composer .text-area--placeholder { color: $fg-3; }
+    #cheader { display: none; height: 2; padding: 0 2; background: $background; }
+    #left.composing #cheader { display: block; }
+    #left.composing #transcript { display: none; }
+    #left.composing #compose { height: 1fr; }
+    #left.composing #composer { height: 1fr; max-height: 100%; }
+    #left.composing #composer .text-area--cursor-line { background: $surface; }
+    #left.inverse #compose { border-top: none; border-bottom: solid $line; }
+    #left.inverse #cmenu { border-top: none; border-bottom: solid $line; }
     #cmenu { height: auto; max-height: 10; background: $background; border-top: solid $line; padding: 0 2; }
     #status { height: 2; padding: 0 2; border-top: solid $line; background: $surface; }
     #approval { height: auto; border-left: outer $accent; background: $surface; padding: 0 1; margin: 0 2 1 2; }
@@ -129,6 +141,7 @@ class ExoApp(App):
         Binding("ctrl+y", "verdict('accept')", "accept", priority=True),
         Binding("ctrl+e", "edit_answer", "edit", priority=True),
         Binding("ctrl+r", "verdict('reject')", "reject", priority=True),
+        Binding("ctrl+g", "compose", "compose", priority=True),
         Binding("escape", "escape", "esc", show=False),
         Binding("ctrl+c", "ctrl_c", "stop", show=False),
         Binding("ctrl+g", "answer_card", "answer", priority=True, show=False),
@@ -218,6 +231,10 @@ class ExoApp(App):
         self.guide = cm.Guide()
         self.tip: cm.Tip | None = None
         self.gstate = cm.State()
+        self.prefs = Prefs(home or exo_home())  # saved layout (D-046)
+        self.layout = self.prefs.layout()  # "inverse" (input on top, newest first) or "classic"
+        self.composing = False  # the big editor pane (D-046)
+        self.numbers = False  # line numbers in the pane
         self.older: list[tuple] = []  # history entries not mounted yet, oldest first
         self.earlier_row: Static | None = None
         self._loading = False
@@ -229,6 +246,7 @@ class ExoApp(App):
             with Vertical(id="left"):
                 yield VerticalScroll(id="transcript")
                 yield Static("", id="activity")
+                yield ComposeHeader()
                 with Horizontal(id="compose"):
                     yield PromptMark(PROMPT_IDLE, id="prompt")
                     yield Composer()
@@ -241,6 +259,8 @@ class ExoApp(App):
         self.composer = self.query_one(Composer)  # cached: a modal screen on top hides them from query_one
         self.menu = self.query_one(CompletionMenu)
         self.composer.key_hook = self.composer_key
+        self.cheader = self.query_one(ComposeHeader)
+        self.apply_layout(self.layout, save=False)
         self.composer.focus()
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
         self.set_interval(1.0, self.reconcile_approvals)
@@ -279,10 +299,24 @@ class ExoApp(App):
     def transcript(self) -> VerticalScroll:
         return self.query_one("#transcript", VerticalScroll)
 
+    @property
+    def inverse(self) -> bool:
+        return self.layout == "inverse"
+
+    def chrono(self) -> list[Any]:
+        """Transcript widgets oldest first, whichever way the layout stacks them."""
+        kids = list(self.transcript.children)
+        return kids[::-1] if self.inverse else kids
+
+    def to_latest(self) -> None:
+        """Show the newest content: the bottom in classic, the top in inverse. After layout, so a fresh mount counts."""
+        tr = self.transcript
+        tr.call_after_refresh(tr.scroll_home if self.inverse else tr.scroll_end, animate=False)
+
     def transcript_text(self) -> str:
         old = [e[2] if e[0] == "block" else f"{e[2]} {e[5]}" for e in self.older]  # history not mounted yet
         return "\n".join(old + [w.text if isinstance(w, Block) else f"{w.tool_name} {w.output}"
-                                for w in self.transcript.children if isinstance(w, (Block, ToolBlock))])
+                                for w in self.chrono() if isinstance(w, (Block, ToolBlock))])
 
     def status_text(self) -> str:
         """The status strip as plain text (the strip itself draws instruments from the same numbers)."""
@@ -342,8 +376,14 @@ class ExoApp(App):
         if any(not (isinstance(w, Block) and w.kind in ("note", "warn", "job", "memory")) for w in widgets):
             for w in self.query("#welcome, #hero"):  # a system line does not end the empty start; a message does
                 w.remove()
-        self.transcript.mount(*widgets)
-        self.transcript.scroll_end(animate=False)
+        tr = self.transcript
+        if self.inverse and tr.children:  # newest first: the batch goes in above everything, last of it on top
+            tr.mount(*widgets[::-1], before=0)
+        elif self.inverse:
+            tr.mount(*widgets[::-1])
+        else:
+            tr.mount(*widgets)
+        self.to_latest()
 
     def close_cur(self) -> None:
         """End the streaming block: paint it as Markdown once, and stop appending to it."""
@@ -366,7 +406,7 @@ class ExoApp(App):
         self._dirty = False
         if self.cur is not None and self.cur.is_mounted:
             self.cur.flush()
-            self.transcript.scroll_end(animate=False)
+            self.to_latest()
 
     # ------------------------------------------------------------ boot and events
     async def boot(self) -> None:
@@ -513,7 +553,7 @@ class ExoApp(App):
                     self.cur.streaming = False
                     if self.cur.is_mounted:
                         self.cur.flush()
-                        self.transcript.scroll_end(animate=False)
+                        self.to_latest()
                     self.last_answer = (m.id, text)
                 self.close_cur()
         elif isinstance(b, s.ToolStarted):
@@ -670,11 +710,15 @@ class ExoApp(App):
         n = len(self.older)
         if n and self.earlier_row is None:
             self.earlier_row = Static("", id="earlier", classes="block note")
-            self.transcript.mount(self.earlier_row, before=0)
+            if self.inverse:  # the oldest end is the bottom
+                self.transcript.mount(self.earlier_row)
+            else:
+                self.transcript.mount(self.earlier_row, before=0)
         if self.earlier_row is not None:
             if n:
+                where = "bottom" if self.inverse else "top"
                 self.earlier_row.update(Text(f"{n} earlier message{'s' if n != 1 else ''}. "
-                                             "Press F6 or scroll to the top to load more.", style="dim italic"))
+                                             f"Press F6 or scroll to the {where} to load more.", style="dim italic"))
             else:
                 self.earlier_row.remove()
                 self.earlier_row = None
@@ -690,6 +734,11 @@ class ExoApp(App):
             tr = self.transcript
             page, self.older = self.older[-PAGE:], self.older[:-PAGE]
             widgets = self.widgets_for(page)
+            if self.inverse:  # older goes below, newest of the page first; the reader's place does not move
+                await tr.mount(*widgets[::-1], before=self.earlier_row) if self.earlier_row is not None \
+                    else await tr.mount(*widgets[::-1])
+                self.update_earlier_row()
+                return
             anchor = next((w for w in tr.children if w is not self.earlier_row), None)
             await tr.mount(*widgets, before=anchor if anchor is not None else 0)
             self.update_earlier_row()
@@ -699,7 +748,13 @@ class ExoApp(App):
             self._loading = False
 
     def watch_transcript_scroll(self, old: float, new: float) -> None:
-        if new <= 0 < old and self.older:
+        if not self.older:
+            return
+        if self.inverse:  # the oldest end is the bottom
+            end = self.transcript.max_scroll_y
+            if end > 0 and old < end - 1 <= new:
+                self.action_load_earlier()
+        elif new <= 0 < old:
             self.action_load_earlier()
 
     @staticmethod
@@ -759,6 +814,8 @@ class ExoApp(App):
             self.hist.add(text)
             self.sent_line(text)
             self.run_worker(self.submit(text), exit_on_error=False)
+            if self.composing:
+                self.close_compose()
 
     # ------------------------------------------------------------ completion and guidance (D-037)
     def composer_key(self, key: str) -> bool:
@@ -791,6 +848,11 @@ class ExoApp(App):
             if key == "escape":
                 self.menu_off = c.text
                 self.draw_menu()
+                return True
+            return False
+        if self.composing:  # in the big editor up and down only move the caret; history would eat the draft
+            if key == "escape":  # after the menu and ghost text: close the pane, the draft stays in the composer
+                self.close_compose()
                 return True
             return False
         row, last = c.cursor_location[0], c.document.line_count - 1
@@ -833,6 +895,8 @@ class ExoApp(App):
         if self.composer.text != self._expect:
             self.hist.reset()  # the user edited a recalled line: it is a draft now
         self.refresh_suggest()
+        if self.composing:
+            self.cheader.show(self.composer, self.numbers)
 
     def expire_ctx(self) -> None:
         now = time.monotonic()
@@ -1090,6 +1154,10 @@ class ExoApp(App):
             await self.handoff(args)
         elif name == "tutorial":
             await self.tutorial_command(args)
+        elif name == "layout":
+            self.layout_command(args)
+        elif name == "compose":
+            self.compose_command(args)
         elif name in ("sessions", "resume"):
             await self.pick_session(args.strip())
         elif name == "model":
@@ -1218,7 +1286,7 @@ class ExoApp(App):
         return next((e[2] for e in reversed(self.older) if e[0] == "block" and e[1] == kind), "")
 
     def copy_command(self, what: str) -> None:
-        blocks = [w for w in self.transcript.children if isinstance(w, Block)]
+        blocks = [w for w in self.chrono() if isinstance(w, Block)]
         if what in ("", "last"):
             text, label = self.last_block("assistant", blocks), "last answer"
         elif what in ("error", "last-error"):
@@ -1474,6 +1542,167 @@ class ExoApp(App):
         self.respond_panel(msg.panel_id, "acted", {"choice": msg.choice})
         self.query_one(Composer).focus()
 
+    # ------------------------------------------------------------ layout (D-046)
+    def arrange(self) -> None:
+        """Put the input, menu, activity line and transcript in the order the layout wants."""
+        left = self.query_one("#left")
+        order = [self.cheader, self.query_one("#compose"), self.menu, self.query_one("#activity"), self.transcript]
+        if not self.inverse:
+            order = [self.transcript, self.query_one("#activity"), self.cheader, self.query_one("#compose"), self.menu]
+        prev = None
+        for w in order:
+            if prev is None:
+                left.move_child(w, before=0)
+            else:
+                left.move_child(w, after=prev)
+            prev = w
+        if self.card is not None:  # the approval card stays right above the activity line (its own code mounts it so)
+            left.move_child(self.card, before=self.query_one("#activity"))
+        left.set_class(self.inverse, "inverse")
+
+    def apply_layout(self, name: str, save: bool = True) -> None:
+        if name not in LAYOUTS:
+            return
+        flip = name != self.layout
+        self.layout = name
+        if save:
+            try:
+                self.prefs.set_layout(name)
+            except OSError:
+                pass
+        if flip:  # the same widgets, the other way round
+            for w in list(self.transcript.children):  # each one to the front in turn: the order reverses
+                self.transcript.move_child(w, before=0)
+        self.arrange()
+        self.to_latest()
+
+    def layout_command(self, args: str) -> None:
+        word = args.strip().lower()
+        if not word:
+            self.note(f"layout: {self.layout}. /layout inverse puts the input on top with the newest message under it; "
+                      "/layout classic is the usual order.")
+        elif word in LAYOUTS:
+            self.apply_layout(word)
+            self.note(f"layout: {word} (saved)")
+        else:
+            self.note("usage: /layout inverse|classic", "warn")
+
+    # ------------------------------------------------------------ the big editor (D-046)
+    def action_compose(self) -> None:
+        if self.modal_open():
+            return
+        self.close_compose() if self.composing else self.open_compose()
+
+    def open_compose(self, scaffold: str = "") -> None:
+        c = self.composer
+        if scaffold:
+            have = c.text.rstrip("\n")
+            c.text = (have + "\n\n" if have else "") + scaffold
+            row = len(c.text.split("\n")) - len(scaffold.split("\n"))  # the first heading
+            self.composing = True
+            c.pane = True
+            c.move_cursor((row + 1, 0))  # on the blank line under it
+        else:
+            self.composing = True
+            c.pane = True
+            c.move_cursor(c.document.end)
+        c.show_line_numbers = self.numbers
+        c.tab_behavior = "indent"
+        c.indent_width = 2
+        self.query_one("#left").add_class("composing")
+        c.placeholder = "write the whole prompt here. Enter adds a line, ctrl+s sends."
+        self.cheader.show(c, self.numbers)
+        c.focus()
+        c.refresh()
+
+    def close_compose(self) -> None:
+        if not self.composing:
+            return
+        self.composing = False
+        c = self.composer
+        c.pane = False
+        c.show_line_numbers = False
+        c.tab_behavior = "focus"
+        self.query_one("#left").remove_class("composing")
+        self.refresh_status()
+        c.focus()
+        c.refresh()
+
+    def toggle_numbers(self) -> None:
+        if self.composing:
+            self.numbers = not self.numbers
+            self.composer.show_line_numbers = self.numbers
+            self.cheader.show(self.composer, self.numbers)
+
+    def compose_command(self, args: str) -> None:
+        word = args.strip().lower()
+        if word in ("", "open"):
+            self.open_compose()
+        elif word == "task":
+            self.open_compose(SCAFFOLD)
+        elif word in ("close", "off"):
+            self.close_compose()
+        elif word == "edit":
+            self.edit_in_editor()
+        else:
+            self.note("usage: /compose [task|edit|close]", "warn")
+
+    def edit_in_editor(self) -> None:
+        """Hand the draft to $VISUAL or $EDITOR and take the result back. The terminal is given to the editor."""
+        from exo_tui.editor import run_editor
+        c = self.composer
+
+        def go() -> str | None:
+            try:
+                with self.suspend():
+                    return run_editor(c.text)
+            except Exception:  # a driver that cannot suspend (tests, some embeds): run it directly
+                return run_editor(c.text)
+
+        try:
+            out = go()
+        except FileNotFoundError:
+            self.note("no editor found: set $VISUAL or $EDITOR", "warn")
+            return
+        if out is None:
+            self.note("the editor did not save a draft", "warn")
+            return
+        self.put(out)
+        if self.composing:
+            self.cheader.show(c, self.numbers)
+
+    # ------------------------------------------------------------ focus follows the user
+    FOCUS_KEEP = (ApprovalCard, PanelView, Input, TextArea, OptionList)
+
+    def on_key(self, event: Any) -> None:
+        """A printable key that reached the app with nothing to take it (focus on the transcript, or nowhere) goes into
+        the composer. A panel, the completion menu or the approval card that holds focus keeps its own keys."""
+        if self.modal_open() or not event.is_printable or event.character is None:
+            return
+        f = self.focused
+        if f is not None and f is not self.transcript:
+            return
+        c = self.composer
+        c.focus()
+        c.last_typed = time.monotonic()
+        c.insert(event.character)
+        event.stop()
+        event.prevent_default()
+
+    def on_click(self, event: Any) -> None:
+        """A click on the transcript or any plain surface returns focus to the composer."""
+        if self.modal_open():
+            return
+        try:
+            w = self.screen.get_widget_at(event.screen_x, event.screen_y)[0]
+        except Exception:
+            return
+        while w is not None:
+            if isinstance(w, self.FOCUS_KEEP):
+                return
+            w = w.parent
+        self.composer.focus()
+
     # ------------------------------------------------------------ actions
     def modal_open(self) -> bool:
         return len(self.screen_stack) > 1
@@ -1481,7 +1710,9 @@ class ExoApp(App):
     def action_escape(self) -> None:
         """Esc is soft (D-043): a guidance line, then a panel, then nothing. It never stops a turn."""
         view = self.query_one(PanelView)
-        if self.tip is not None:
+        if self.composing:  # the pane closes first; the draft stays in the composer
+            self.close_compose()
+        elif self.tip is not None:
             self.tip = None
             self.refresh_status()
         elif view.display and view.panel_id:

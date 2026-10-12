@@ -213,8 +213,16 @@ class ToolBlock(Static):
         self.flush()
 
 
+FENCE = re.compile(r"^\s*(```|~~~)")
+HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
+LISTMARK = re.compile(r"^(\s*)([-*+]|\d+[.)])(\s)")
+INLINE = ((re.compile(r"`[^`\n]+`"), ("accent2", "")), (re.compile(r"\*\*[^*\n]+\*\*"), ("fg", "bold")),
+          (re.compile(r"(?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])"), ("fg2", "italic")))
+
+
 class Composer(TextArea):
-    """Enter sends, shift+enter (or ctrl+j) adds a newline. The caret is a block in the signal colour (CSS).
+    """Enter sends, shift+enter (or ctrl+j) adds a newline. In the big editor pane (``pane``, D-046) Enter adds a
+    newline and ctrl+s or ctrl+enter sends. The caret is a block in the signal colour (CSS).
     ``key_hook`` (set by the app) sees a key first and returns True when it used it: the completion menu, history
     and ghost text live there. ``ghost`` is dim text drawn after the caret on a one-line input."""
 
@@ -223,11 +231,21 @@ class Composer(TextArea):
             super().__init__()
             self.text = text
 
+    BINDINGS = [Binding("ctrl+l", "numbers", "line numbers", show=False), Binding("ctrl+t", "editor", "$EDITOR", show=False)]
+
+    def action_numbers(self) -> None:
+        self.app.toggle_numbers()
+
+    def action_editor(self) -> None:
+        if self.pane:
+            self.app.edit_in_editor()
+
     def __init__(self) -> None:
         super().__init__("", id="composer", soft_wrap=True, show_line_numbers=False, tab_behavior="focus",
                          placeholder=IDLE_HINT)
         self.cursor_blink = not reduced_motion()
         self.key_hook: Any = None
+        self.pane = False  # the big editor is open: Enter is a newline, ctrl+s sends, markdown is lightly coloured
         self.ghost = ""
         self.last_typed = float("-inf")  # monotonic time of the last printable key; the approval card waits on it
 
@@ -248,10 +266,12 @@ class Composer(TextArea):
             event.stop()
             event.prevent_default()
             return
-        if event.key == "enter":
+        if (event.key == "enter" and not self.pane) or (self.pane and event.key in ("ctrl+s", "ctrl+enter")):
             event.stop()
             event.prevent_default()
             text = self.text
+            if self.pane and not text.strip():
+                return  # nothing to send: keep the pane open
             self.text = ""
             self.last_typed = float("-inf")
             self.post_message(self.Submitted(text))
@@ -259,6 +279,41 @@ class Composer(TextArea):
             event.stop()
             event.prevent_default()
             self.insert("\n")
+
+    def get_line(self, line_index: int) -> Text:
+        line = super().get_line(line_index)
+        if self.pane:
+            self.markdown(line, line_index)
+        return line
+
+    def in_fence(self, upto: int) -> bool:
+        """Is line ``upto`` inside a ``` block (a fence line itself counts as outside)?"""
+        inside = False
+        for i in range(upto):
+            if FENCE.match(self.document.get_line(i)):
+                inside = not inside
+        return inside
+
+    def markdown(self, line: Text, index: int) -> None:
+        """Light markdown colour for the pane: headings, list marks, quotes, fences, code, bold and italic."""
+        s = line.plain
+        if FENCE.match(s):
+            line.stylize(rich_style("fg3"))
+            return
+        if self.in_fence(index):
+            line.stylize(rich_style("accent2"))
+            return
+        if HEADING.match(s):
+            line.stylize(rich_style("cold", "bold"))
+            return
+        if s.lstrip().startswith(">"):
+            line.stylize(rich_style("fg3", "italic"))
+            return
+        if m := LISTMARK.match(s):
+            line.stylize(rich_style("accent", "bold"), len(m[1]), len(m[1]) + len(m[2]))
+        for rx, (role, extra) in INLINE:
+            for m in rx.finditer(s):
+                line.stylize(rich_style(role, extra), m.start(), m.end())
 
     def render_line(self, y: int) -> Strip:
         strip = super().render_line(y)
@@ -313,6 +368,29 @@ class CompletionMenu(Static):
             out.append("  tab completes " + DOT + " \u2191\u2193 move " + DOT + " esc closes", style=rich_style("fg3"))
         self.update(out)
         self.display = True
+
+
+class ComposeHeader(Static):
+    """The one-line head of the big editor: word and line count, then the keys. Hidden unless the pane is open."""
+
+    def __init__(self) -> None:
+        super().__init__("", id="cheader")
+        self.shown: Any = None
+        self.args: tuple[Any, bool] | None = None
+
+    def show(self, composer: "Composer", numbers: bool = False) -> None:
+        self.args = (composer, numbers)
+        text = composer.text
+        words, lines = len(text.split()), composer.document.line_count
+        stats = f"{words} word{'s' if words != 1 else ''} {DOT} {lines} line{'s' if lines != 1 else ''}"
+        keys = chips([("ctrl+s", "send"), ("enter", "new line"), ("esc", "close, draft stays"),
+                      ("ctrl+l", "numbers " + ("on" if numbers else "off")), ("ctrl+t", "$EDITOR")])
+        self.shown = Group(header_rule("compose", "cold", self.size.width or 80, stats), keys)
+        self.update(self.shown)
+
+    def on_resize(self) -> None:
+        if self.args:
+            self.show(*self.args)
 
 
 class PromptMark(Static):
