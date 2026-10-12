@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from exo.core import trace
+from exo.core import trace, workspace
 from exo.core.agents import Delegator
 from exo.core import agentlog
 from exo.core.context import AgentContext, DefaultCompressor, TreeContext, _maybe_await
@@ -272,7 +272,10 @@ class CoreEngine:
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
                  jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None, **loop_kw: Any) -> None:
         self.home = Path(home)
-        self.cwd = cwd or os.getcwd()
+        self.cwd_note = ""  # why the default cwd is not the one asked for (shown at session start)
+        self.cwd = self._seat_cwd(seat) or cwd or os.getcwd()  # the seat's own folder beats the shared default
+        self._cwd_seen: dict[str, set[str]] = {}  # session -> folders already warned about (D-032)
+        self.handoff_sources: dict[str, Any] = {"jobs": lambda session: []}  # D-032: facts for /handoff; key -> fn(session)
         self.store = SessionStore(self.home / "sessions.sqlite")
         self.hub = Hub(SqliteLog(self.store))
         self.seat = seat
@@ -291,9 +294,10 @@ class CoreEngine:
         self._channels: dict[str, Any] = {}
         self._channel_cfg: dict[str, dict[str, Any]] = {**(channels or {}), **(seat.channels if seat else {})}
         self._tasks: set[asyncio.Task] = set()
+        trace_cfg = {**(trace_cfg or {}), **(seat.trace if seat else {})}  # the seat's [trace] wins (D-032)
         self.thresholds = trace.Thresholds.of(trace_cfg)
         self.findings = Findings(self.store, self.thresholds)
-        self._trace_on = (trace_cfg or {}).get("enabled", True) is not False
+        self._trace_on = trace_cfg.get("enabled", True) is not False
         trace.add_sink(self._on_harness_error)
         self.peer_cfg = PeerConfig.of({**(peers or {}), **(seat.peers if seat else {})})  # D-026
         self.peer_cfg_dir = peers_dir
@@ -489,9 +493,35 @@ class CoreEngine:
             loop.call_soon_threadsafe(self.hub.publish, s.ToolOutput(call_id=call.id, text=text), sid)
 
         self.jobs.loop = loop
+        if call.name == "bash" and sid:
+            self._guard_cwd(sid, call, info.cwd if info and info.cwd else self.cwd)
         ctx = ToolContext(cwd=(info.cwd if info and info.cwd else self.cwd), session=sid, call_id=call.id,
                           emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "jobs": self.jobs})
         return await self.registry.call(call, ctx)
+
+    def _seat_cwd(self, seat: Seat | None) -> str | None:
+        """The seat's default cwd (``[session] cwd``). A folder that does not exist is ignored, and said so."""
+        if not seat or not seat.cwd:
+            return None
+        p = Path(seat.cwd).expanduser()
+        if p.is_dir():
+            return str(p)
+        self.cwd_note = f"the seat's default cwd {seat.cwd} is not a folder"
+        return None
+
+    def _guard_cwd(self, session: str, call: ToolCall, cwd: str) -> None:
+        """D-032: a one-line notice when a shell call works outside any git repo (its cwd argument, or a leading
+        ``cd``). Once per folder per session. Only the user sees it; the model's tool result is untouched."""
+        args = call.arguments if isinstance(call.arguments, dict) else {}
+        where = Path(cwd).expanduser() / str(args.get("cwd") or ".")
+        where = workspace.leading_cd(str(args.get("command") or ""), where) or where
+        key = str(where)
+        seen = self._cwd_seen.setdefault(session, set())
+        if key in seen:
+            return
+        seen.add(key)
+        if (note := workspace.cwd_notice(where, "bash")) and where.is_dir():
+            self.hub.publish(s.Notice(text=note, level="warn"), session)
 
     async def ask(self, session: str | None, summary: str, call: ToolCall | None = None,
                   risk: str = "medium", decided_by: list[str] | None = None, options: list[str] | None = None,
@@ -542,6 +572,10 @@ class CoreEngine:
             raise CommandFailed("bad_request", f"a client can start a thread or a private thread, not {b.kind!r}")
         info = await self.loop.create_session(title=b.title, seat=b.seat, model=b.model or self._main_ref(),
                                               cwd=b.cwd or self.cwd, agent=self.agent, kind=b.kind or "thread")
+        why = self.cwd_note if not b.cwd else ""
+        if note := workspace.cwd_notice(info.cwd or self.cwd, why):  # D-032: at session start
+            self._cwd_seen.setdefault(info.id, set()).add(str(Path(info.cwd or self.cwd).resolve()))
+            self.hub.publish(s.Notice(text=note, level="warn"), info.id)
         return {"session": to_dict(info)}
 
     async def _session_list(self, b: s.SessionList) -> dict[str, Any]:
@@ -750,7 +784,7 @@ class CoreEngine:
             self.findings.file_flag(f)
         self.findings.sweep()
 
-    def trace_text(self, session: str | None, last: int = 10) -> str:
+    def trace_text(self, session: str | None, last: int = 10, calls: bool = False) -> str:
         """What ``exo_trace`` and ``/trace`` show: the model this session runs on, then the per-turn table."""
         info = self.store.get_session(session) if session else None
         calls = self.store._q("SELECT body FROM events WHERE session=? AND type='model.call' ORDER BY seq DESC LIMIT 1",
@@ -763,7 +797,7 @@ class CoreEngine:
             return "\n".join(head)
         peers = trace.peer_text(self.store, session)
         jobs = jobs_mod.job_text(self.store, session)
-        return "\n".join(head + ["", trace.table(trace.build(self.store, session, last, self.thresholds))]
+        return "\n".join(head + ["", trace.table(trace.build(self.store, session, last, self.thresholds), calls=calls)]
                          + (["", peers] if peers else []) + (["", jobs] if jobs else []))
 
     def _agent_ctx(self, session: str | None) -> AgentContext:
@@ -790,6 +824,47 @@ class CoreEngine:
         res = await tree.compact(session, await self.loop.base_system())
         return render_compact(res)
 
+    async def handoff_facts(self, session: str | None, path_arg: str = "") -> dict[str, Any]:
+        """What the agent needs to write a handoff (D-032, ``/handoff``): the thread, git state of its cwd, open
+        findings and tasks, recent summaries from the tree, the last turns of the trace, and one key per entry of
+        ``self.handoff_sources`` (``jobs`` today is empty; background jobs register themselves there).
+        Reads only; the agent writes the file through its normal write tool and the gate."""
+        info = self._info(session) if session else None
+        if info is None:
+            raise CommandFailed("bad_request", "no thread to hand off")
+        cwd = info.cwd or self.cwd
+        facts: dict[str, Any] = {
+            "date": time.strftime("%Y-%m-%d"), "seat": self.agent,
+            "path": str(workspace.handoff_path(self.agent, path_arg)),
+            "thread": {"id": info.id, "title": info.title, "model": info.model, "kind": info.kind,
+                       "cwd": cwd, "created": info.created,
+                       "user_turns": sum(1 for m in self.store.messages(info.id) if m.role == "user"
+                                         and not m.meta.get("note"))},
+            "git": workspace.git_facts(cwd),
+            "findings": [{"id": r["id"], "severity": r["severity"], "title": r["title"][:100]}
+                         for r in self.findings.list("open")[:10]],
+        }
+        latest: dict[str, dict[str, Any]] = {}
+        for e in self.store.events_since(0, info.id, limit=1 << 30):
+            if isinstance(e.body, s.TaskUpdated):
+                latest[e.body.task_id] = {"id": e.body.task_id, "title": e.body.title[:100], "status": e.body.status}
+        facts["tasks"] = [t for t in latest.values() if t["status"] in ("queued", "running")]
+        try:
+            tree = self._agent_ctx(info.id)
+            _, frontier, parts = tree._view(tree._agent_key(info.id))
+            facts["decisions"] = [p[:1500] for p in parts[-2:]]
+            facts["context"] = {"log_entries": tree._last(tree._agent_key(info.id)), "summarized_to": frontier}
+        except CommandFailed:
+            facts["decisions"] = []
+        facts["trace"] = self.trace_text(info.id, 3)
+        for key, fn in self.handoff_sources.items():
+            try:
+                facts[key] = await _maybe_await(fn(info.id))
+            except Exception as exc:  # a broken source must not block the handoff
+                trace.report(f"handoff source {key}", exc, info.id)
+                facts[key] = []
+        return facts
+
     async def _builtin_command(self, b: s.CommandRun) -> Any:
         if b.name == "context":
             return await self.context_text(b.session)
@@ -801,6 +876,8 @@ class CoreEngine:
             if b.args.strip() == "count":
                 return {"open": self.findings.open_count()}
             return self.findings.text("open")
+        if b.name == "handoff_facts":  # D-032: the facts /handoff gives the agent; the client sends the turn
+            return await self.handoff_facts(b.session, b.args)
         if b.name == "harness_error":  # a client (the TUI) reporting an exception it caught
             try:
                 d = json.loads(b.args)

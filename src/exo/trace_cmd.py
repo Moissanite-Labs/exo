@@ -24,17 +24,27 @@ def _store():
     return SessionStore(path)
 
 
-def _thresholds():
+def _thresholds(seat: str | None = None):
+    """config.json's [trace], with the session's seat.toml [trace] over it (D-032)."""
     from .config import Config
     from .core.trace import Thresholds
 
-    return Thresholds.of(Config.load().data.get('trace'))
+    cfg = dict(Config.load().data.get('trace') or {})
+    if seat:
+        from .core import seats
+
+        try:
+            cfg.update(seats.load(exo_home(), seat).trace)
+        except seats.SeatError:
+            pass
+    return Thresholds.of(cfg)
 
 
 def register(sp, common) -> None:
     p = sp.add_parser('trace', help='how the harness performed in a session: per turn timing, routes, flags')
     p.add_argument('session', nargs='?', help='session id (default: the newest)')
     p.add_argument('--last', type=int, metavar='N', help='only the last N turns')
+    p.add_argument('--calls', action='store_true', help='list every model call with its cost (default: last turn)')
     p.add_argument('--json', action='store_true')
     p = sp.add_parser('findings', help='what the harness found wrong with itself')
     p.add_argument('action', nargs='?', default='list', choices=['list', 'fix', 'export', 'add'])
@@ -60,12 +70,12 @@ def cmd_trace(a) -> int:
         sid = rows[0].id
     elif store.get_session(sid) is None:
         sys.exit(f'exo: no session {sid}')
-    turns = trace.build(store, sid, a.last, _thresholds())
+    info = store.get_session(sid)
+    turns = trace.build(store, sid, a.last, _thresholds(info.seat if info else None))
     if a.json:
         print(json.dumps(trace.as_dict(sid, turns), indent=2))
     else:
-        info = store.get_session(sid)
-        print(trace.table(turns, f'session {sid} ({info.seat or "no seat"}, {len(turns)} turns shown)'))
+        print(trace.table(turns, f'session {sid} ({info.seat or "no seat"}, {len(turns)} turns shown)', a.calls))
         if peers := trace.peer_text(store, sid):
             print("\n" + peers)
     return 0

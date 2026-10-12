@@ -69,6 +69,7 @@ class OpenAIChatProvider(HttpTransport):
     """``POST {base_url}/chat/completions`` with ``stream: true``. ``base_url`` includes ``/v1``."""
 
     name = "openai"
+    input_includes_cache = True  # prompt_tokens counts the cached tokens too; pricing must not charge them twice
     path = "/chat/completions"
 
     def headers(self) -> dict[str, str]:
