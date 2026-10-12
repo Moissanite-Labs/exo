@@ -1053,6 +1053,28 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Revisit if:** the site gains a build step or more than one maintainer deploys, when CI should own promotion.
 - **Docs:** `docs/DEVELOPER-GUIDE.md` "Deploying the site".
 
+## D-048 (2026-10-12) Exopet: Exo as a living lattice, hatched by the community
+- **Status:** Proposed 2026-10-12. Design in docs/EXOPET.md. Nothing built. D-047 is left for a parallel branch.
+- **Why (principal, 2026-10-12):** bring the earlier pet experiments (EvoPet, TamaHermes) into Exo in its own look and
+  make them more: the first evolution unlocks only when the community together has earned enough XP, then Exo
+  hatches from its digital egg (the site orb); later users get personal evolution; a pet gallery; a skill to make a
+  pet from the user's direction with animations mapped to activity; the egg and forms grow out of the incentre
+  lattice, "an alive evolving pulsing matrix of information".
+- **Proposal:** the pet is Exo, drawn as the incentre lattice. Ten forms on EvoPet's 99-level ladder: egg, cell,
+  tile, cube, frame, then one per dimension from 4 to 8. XP is a versioned pure function of the verified ledger
+  (principal-authored, pinned keys, anchored), weighted toward teaching (verdicts, rulings, promoted lessons) over
+  volume, with a daily curve capped at 1,000 and one form per day. No care stats, needs, decay or notifications.
+  Community hatch at 2^20 XP from at least 256 installs with 3 reporting days each, a 24 hour crack phase, opt-in
+  daily reports carrying only a dedicated key, date, rounded XP and a signature, a three-route counter service, and
+  Merkle receipts. Learned items light cold-blue dots, house taste shows grey (D-044). No new protocol event: the
+  state comes from existing events, status from a `pet` built-in. A data-only `exopet.json` format, a gallery run as
+  an index repository with CI and signed packages, and an `exopet-create` skill.
+- **Rejected:** XP per token (rewards long, wasteful turns); a stored XP number (editable); care stats and
+  hibernation (guilt and nags in a work tool); a face (off the instrument look); a new protocol event (29 of 30 used);
+  pets as code (a gallery would run strangers' code); a server that sees ledgers (breaks local-first).
+- **Open:** six questions for the principal at the end of docs/EXOPET.md (hatch target, a slow community, the site
+  creature after the hatch, the counter's platform, default on or off, the founders' mark).
+
 ## D-049 (2026-10-12) Brand: the lattice egg and the X/V mark
 - **Status:** Accepted 2026-10-13 (the principal: "a work of beauty"). Proposed 2026-10-12, previewed on staging
   only. On acceptance the lattice egg became the front-page default on every host (`?egg=off` keeps the old orb as an
