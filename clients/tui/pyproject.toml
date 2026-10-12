@@ -7,7 +7,9 @@ name = "exo-tui"
 version = "0.1.0"
 description = "Terminal client for Exo (Textual)"
 requires-python = ">=3.11"
-dependencies = ["textual>=0.80", "exo"]
+# The core is the Exo repo root (distribution name "exo" is taken on PyPI by another project), so the
+# client does not depend on it by name: install the repo root first (pip install -e ../..), then this.
+dependencies = ["textual>=0.80"]
 
 [project.scripts]
 exo-tui = "exo_tui:main"
