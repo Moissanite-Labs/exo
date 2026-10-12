@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 from typing import Any, Callable, Iterable
 
@@ -153,6 +154,52 @@ def tool_env(base: dict[str, str] | None = None, allow: Iterable[str] = ()) -> d
     return out
 
 
+# Exit codes of a pipeline. bash reports only the last stage, so `false | head -1` looks like success. We do not
+# turn on pipefail (it would make `grep | head` fail on SIGPIPE). Instead an EXIT trap writes the final pipeline's
+# PIPESTATUS to a side file, and the tool result gets one note line when an earlier stage failed while the
+# last one succeeded. Only the command's final pipeline is seen: a DEBUG trap would see more but resets
+# PIPESTATUS for the user's own commands.
+MASKED_PREFIX = "note: pipeline stage"
+_TRAP = ('case ${#PIPESTATUS[@]} in 1) ;; *) printf "%s\\n" "${PIPESTATUS[*]}" 2>/dev/null >&FD ;; esac')
+
+
+def wrap_pipestatus(command: str, fd: int, env: dict[str, str]) -> list[str]:
+    """The argv that runs ``command`` under bash with an EXIT trap writing PIPESTATUS to ``fd`` (pass it in
+    pass_fds). The trap text travels in ``env`` (EXO_PIPE_TRAP) so the prefix stays short in bash's own syntax-error
+    messages. (An ``eval`` wrapper would hide the command's PIPESTATUS from the trap.)"""
+    env["EXO_PIPE_TRAP"] = _TRAP.replace("FD", str(fd))
+    return [shutil.which("bash") or "/bin/sh", "-c", 'trap "$EXO_PIPE_TRAP" EXIT; ' + command]
+
+
+def open_side() -> tuple[int, str]:
+    """A private temp file for the trap to append to; returns (fd, path). The caller closes the fd."""
+    return tempfile.mkstemp(prefix="exo-pipe-")
+
+
+def masked_note(path: str) -> str:
+    """One note line when the recorded pipeline had a failed earlier stage (not 141, SIGPIPE) and a successful
+    last stage; otherwise an empty string. Removes the side file."""
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(4096).decode("ascii", "replace")
+    except OSError:
+        return ""
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+    for line in raw.splitlines():
+        try:
+            codes = [int(x) for x in line.split()]
+        except ValueError:
+            continue
+        if len(codes) > 1 and codes[-1] == 0:
+            for i, c in enumerate(codes[:-1], 1):
+                if c not in (0, 141):
+                    return (f"{MASKED_PREFIX} {i} exited {c} (only the last stage's code is reported as the "
+                            "result)")
+    return ""
+
+
 def raise_nofile_limit(cap: int = 10240) -> int | None:
     """Raise the soft open-files limit toward the hard limit (at most ``cap``) so child tools inherit it.
     macOS starts at 256. Returns the new soft limit, or None when nothing changed or it is not possible."""
@@ -177,11 +224,18 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
     status is ``ok``, ``timeout`` (exit 124) or ``interrupted`` (exit 130).
     stdout and stderr are merged in arrival order.
     """
-    shell = shutil.which("bash") or "/bin/sh"
-    proc = subprocess.Popen(
-        [shell, "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
-        env=tool_env(allow=env_allow))
+    side_fd, side_path = open_side()
+    try:
+        env = tool_env(allow=env_allow)
+        proc = subprocess.Popen(
+            wrap_pipestatus(command, side_fd, env), cwd=cwd, stdin=subprocess.DEVNULL, pass_fds=(side_fd,),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    except BaseException:
+        os.close(side_fd)
+        with contextlib.suppress(OSError):
+            os.unlink(side_path)
+        raise
+    os.close(side_fd)
     if sys.platform != "win32":
         with contextlib.suppress(ProcessLookupError):
             proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
@@ -215,6 +269,9 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
     with contextlib.suppress(Exception):
         proc.stdout.close()  # type: ignore[union-attr]
     code = {"timeout": 124, "interrupted": 130}.get(status, proc.returncode or 0)
+    note = masked_note(side_path)
+    if note and status == "ok":
+        out.add("\n" + note)
     return code, out.render(), status
 
 

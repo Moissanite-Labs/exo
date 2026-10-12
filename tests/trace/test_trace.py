@@ -595,3 +595,18 @@ def test_cli_findings_add_files_and_dedups(tmp_path, monkeypatch, capsys):
     assert rows["my.sig"]["severity"] == "papercut"
     with pytest.raises(SystemExit):
         cli.main(["findings", "add"])
+
+
+def test_masked_pipeline_exit_is_flagged_from_the_stored_result():
+    store = SessionStore()
+    store.create_session(id="m")
+    store.append_event(s.TurnStarted(turn_id="t", model="m:a"), "m")
+    for cid, cmd, text in [("c1", "renew | head -1", "ok\nnote: pipeline stage 1 exited 1 (only the last stage's code "
+                                                      "is reported as the result)\n[exit 0]"),
+                           ("c2", "yes | head -1", "y\n[exit 0]")]:
+        store.append_event(s.ToolStarted(call=ToolCall(cid, "bash", {"command": cmd})), "m")
+        store.append_event(s.ToolCompleted(result=s.ToolResult.of_text(cid, text), duration_ms=5), "m")
+    store.append_event(s.TurnCompleted(turn_id="t"), "m")
+    (t,) = trace.build(store, "m")
+    (f,) = [f for f in t.flags if f.signature == "shell.masked_exit"]
+    assert "stage 1 exited 1" in f.detail

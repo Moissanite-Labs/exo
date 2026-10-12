@@ -149,3 +149,29 @@ def test_seat_parses_tools_env_allow():
 
     assert seats.parse({"name": "a", "tools": {"env_allow": ["GH_TOKEN"]}}).env_allow == ["GH_TOKEN"]
     assert seats.parse({"name": "a"}).env_allow == []
+
+
+def test_masked_pipeline_stage_is_noted(run):
+    t = run("bash", command="false | head -1").text()
+    assert "note: pipeline stage 1 exited 1" in t and t.endswith("[exit 0]")
+    t = run("bash", command="echo data; (exit 3) | cat").text()
+    assert t.startswith("data") and "stage 1 exited 3" in t
+    t = run("bash", command="true | false | cat").text()
+    assert "stage 2 exited 1" in t
+
+
+def test_pipeline_notes_are_quiet_when_nothing_is_masked(run):
+    for cmd in ("yes | head -1", "echo a | cat", "false", "true | true", "echo hi", "false | false"):
+        assert "note: pipeline" not in run("bash", command=cmd).text(), cmd
+    t = run("bash", command="yes | head -1").text()
+    assert t == "y\n[exit 0]"
+
+
+def test_pipeline_wrapper_keeps_command_semantics(run):
+    assert run("bash", command="false | true; echo ${PIPESTATUS[@]}").text().startswith("1 0")
+    t = run("bash", command="echo a | exit 4").text()
+    assert t.endswith("[exit 4]") and "note:" not in t
+    t = run("bash", command="exit 7").text()
+    assert t.endswith("[exit 7]")
+    assert "syntax error" in run("bash", command="echo (").text()
+    assert "[exit 0]" in run("bash", command="trap 'echo bye' EXIT; true | true").text()
