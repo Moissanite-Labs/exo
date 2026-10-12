@@ -7,6 +7,7 @@
   exo models [--remote PROVIDER]           providers, keys found (yes/no), route per role
   exo decide QUESTION --options a,b,c      ask the decision model; probabilities and route
   exo serve | exo chat [--resume ID]       run the exod server; chat with it
+  exo web [--port N ...]                   the command centre web client (needs a running `exo serve`)
   exo upstream report|mark|check|merge     track lifted Hermes modules
   exo find <words...> [-n 8]               ranked nodes
   exo get <id> [--body-only]               print one node
@@ -244,13 +245,33 @@ def build_parser() -> argparse.ArgumentParser:
     register_chat(sp, common)
     register_models(sp, common)
     register_decide(sp, common)
+    p = sp.add_parser('web', add_help=False, help='serve the command centre web client (exo-command)')
+    p.add_argument('rest', nargs=argparse.REMAINDER, help='passed to exo-command: --socket, --url, --port ...')
     p = sp.add_parser('wire', help='read agent wire packets (SYM-2P briefs and receipts) in plain English')
     p.add_argument('action', choices=['render', 'check'])
     p.add_argument('text', nargs='?', help='one packet line or JSON form; stdin (one per line) if absent')
     return ap
 
 
+def cmd_web(a) -> int:
+    """Run exo-command's main(). Its package lives in the plugins folder, which is not on sys.path."""
+    dirs = [Path(d) for d in os.environ.get('EXO_PLUGIN_DIRS', '').split(os.pathsep) if d]
+    dirs += [exo_home() / 'plugins', Path(__file__).resolve().parents[2] / 'plugins']
+    for d in dirs:
+        if (d / 'exo-command' / 'exo_command' / '__init__.py').is_file():
+            sys.path.insert(0, str(d / 'exo-command'))
+            break
+    try:
+        from exo_command.__main__ import main as web_main
+    except ImportError:
+        sys.exit('exo web: the exo-command plugin was not found (set EXO_PLUGIN_DIRS to its parent folder)')
+    return web_main(a.rest)
+
+
 def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if args and args[0] == 'web':  # argparse's REMAINDER drops a leading option such as --help
+        return cmd_web(argparse.Namespace(rest=args[1:]))
     a = build_parser().parse_args(argv)
     if a.cmd == 'init':
         return onboard_init(a)

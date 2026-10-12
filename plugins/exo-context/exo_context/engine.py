@@ -7,7 +7,8 @@ On the Exo core loop (``select_context`` on every turn):
    it sees, per session, on disk;
 2. when a pinned item is no longer verbatim in the prompt (the core's summary tree folded it away),
    adds a ``<exo-pinned>`` block with it, word for word, to the system message;
-3. writes a handoff file whenever the summary tree has grown since the last turn.
+3. writes a handoff file whenever the core reports a new summary node (``on_compacted``).
+The session id comes with every core hook (``session_id=``), so nothing is tracked by hand.
 
 On a flat message list (``compress``, used by hosts and tools):
 1. extracts the signals, 2. calls the inner compressor (the core's default summarizer by default),
@@ -18,6 +19,7 @@ to the inner compressor.
 """
 from __future__ import annotations
 
+import dataclasses
 import inspect
 import json
 import logging
@@ -30,7 +32,6 @@ from typing import Any, Callable, Optional
 from exo import handoff as hf
 from exo.store import exo_home
 
-from exo.core.context import VIEW_HEADER
 from exo.core.slots import ContextEngine
 
 from . import signals as sg
@@ -131,7 +132,7 @@ class ExoContextEngine(ContextEngine):
         d['_x_last_handoff'] = None
         d['_x_last_pinned'] = ''
         d['_x_pins'] = {}
-        d['_x_seen_ranges'] = {}
+        d['_x_nodes'] = {}
 
     # --- attribute routing ---------------------------------------------------------
 
@@ -267,13 +268,20 @@ class ExoContextEngine(ContextEngine):
 
     def on_turn_complete(self, messages: list[dict[str, Any]], usage: dict[str, Any] | None = None,
                          **kwargs: Any) -> None:
-        if messages:  # the core passes none; its snapshot is taken in select_context
+        self._bind(kwargs.get('session_id'))
+        if messages:  # the core passes the real recent transcript
             self._x_messages = list(messages)
         _set_live(self)
         if self.inner is not None and hasattr(self.inner, 'on_turn_complete'):
             self.inner.on_turn_complete(messages, usage, **kwargs)
 
+    def _bind(self, session_id: Any) -> None:
+        if session_id:
+            self._x_session_id = str(session_id)
+            _set_live(self)
+
     def select_context(self, request_messages: list[dict[str, Any]], **kwargs: Any):
+        self._bind(kwargs.get('session_id'))
         selected = None
         if self.inner is not None and hasattr(self.inner, 'select_context'):
             selected = self.inner.select_context(request_messages, **kwargs)
@@ -282,7 +290,6 @@ class ExoContextEngine(ContextEngine):
         hidden = self._hidden(msgs, pins)
         full = self._block_for(pins)
         self._x_messages = list(msgs) + ([{'role': 'system', 'content': full}] if full else [])
-        self._maybe_handoff(msgs)
         parts = [self._block_for(hidden, self._x_last_handoff) if hidden else '', self._x_resume_block]
         extra = '\n\n'.join(p for p in parts if p)
         if not extra:
@@ -351,23 +358,25 @@ class ExoContextEngine(ContextEngine):
                          corrections=[hf.Signal('correction', t) for t in pins.get('correction', [])])
         return hf.render_pinned_block(sig, path, self._x_pin_budget)
 
-    def _maybe_handoff(self, msgs: list[dict[str, Any]]) -> None:
-        """Write a handoff when the core's summary tree has grown since the last turn."""
-        if not self._x_write_handoffs or not msgs or msgs[0].get('role') != 'system':
+    def on_compacted(self, session: str, node: Any, **kwargs: Any) -> None:
+        """The core wrote a summary node: write a handoff that carries it and the pinned signals."""
+        self._bind(session)
+        if not self._x_write_handoffs:
             return
-        text = hf.message_text(msgs[0])
-        if VIEW_HEADER not in text:
-            return
-        ranges = tuple(re.findall(r'^## Messages (\d+-\d+)\s*$', text, flags=re.M))
         sid = self._x_session_id
-        if not ranges or ranges == self._x_seen_ranges.get(sid):
-            return
-        self._x_seen_ranges[sid] = ranges
+        nodes = self._x_nodes.setdefault(sid, {})
+        nodes[getattr(node, 'id', len(nodes))] = (getattr(node, 'start', 0), str(getattr(node, 'text', '') or ''))
+        summary = '\n\n'.join(t for _, t in sorted(nodes.values(), key=lambda x: x[0]) if t)[-6000:]
         try:
-            summary = text.split(VIEW_HEADER, 1)[1].strip()[:6000]
+            signals = sg.extract(self._x_messages)
+            pins = self._load_pins()
+            signals = dataclasses.replace(
+                signals,
+                rulings=sg.merge(signals.rulings, [hf.Signal('ruling', t) for t in pins['ruling']]),
+                corrections=sg.merge(signals.corrections, [hf.Signal('correction', t) for t in pins['correction']]))
             path = hf.write_handoff(self.topic, self._x_messages, self._x_store, self.handoff_dir,
                                     session=sid or None, principal=self._x_principal, summary=summary,
-                                    signals=sg.extract(self._x_messages))
+                                    signals=signals)
             self._x_last_handoff = path
         except Exception as e:
             logger.warning('exo-context: handoff write failed: %s', e)

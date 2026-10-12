@@ -339,3 +339,15 @@ def test_with_copy_of_example_store(make_provider, tmp_path):
     assert "## Principal beliefs" in out and len(out) // 4 <= 1500
     p.sync_turn("post the release note", "drafted, waiting on approval", session_id="s1")
     assert p._state().rt.ledger.verify()["ok"]
+
+
+def test_checkpoint_turn_captures_once_and_dedupes_with_pre_compress(provider):
+    provider.sync_turn(CONVO[1]["content"], CONVO[2]["content"], session_id="s1")
+    assert evs(provider, "ruling") == []  # sync_turn no longer scans; the checkpoint hook does
+    provider.checkpoint(session_id="s1", messages=CONVO[1:], reason="turn")
+    texts = [r["body"]["text"] for r in evs(provider, "ruling")]
+    assert texts == ["Never push to main without a green CI run.", "Ask me before any public post."]
+    n = len(evs(provider))
+    provider.checkpoint(session_id="s1", messages=CONVO[1:], reason="pre_compress")
+    provider.on_pre_compress(CONVO)
+    assert len(evs(provider)) == n

@@ -8,12 +8,13 @@ Config comes from the ``compression`` table of ``$EXO_HOME/config.json`` (``exo.
 """
 from __future__ import annotations
 
+import uuid
 from typing import Any, Optional
 
-from exo.core.context import DefaultCompressor, render_message
+from exo.core.context import render_message, summary_prompt
+from exo.core.models.router import aux_sync
 from exo.core.slots import ContextEngine
 from exo.core.types import ContentPart, Message
-from exo.ext import compat
 
 SUMMARY_PREFIX = '[CONTEXT COMPACTION] Earlier turns were compacted into the notes below.\n\n'
 END_MARKER = '--- END OF CONTEXT SUMMARY'
@@ -54,8 +55,10 @@ class CoreInner(ContextEngine):
     """Threshold bookkeeping plus a one-summary ``compress`` on the core's DefaultCompressor."""
 
     def __init__(self, *, model: str = '', context_length: int = 0, router: Any = None,
-                 budget_tokens: int = 600, **kwargs: Any) -> None:
+                 router_getter: Any = None, budget_tokens: int = 600, **kwargs: Any) -> None:
         self._router = router
+        self._conversation = 'exo-context-' + uuid.uuid4().hex[:12]  # session header some providers require
+        self._router_getter = router_getter  # callable: the engine owns the router only after register()
         self._budget = budget_tokens
         self.model = model
         for k, v in {**compression_kwargs(), **kwargs}.items():
@@ -82,9 +85,10 @@ class CoreInner(ContextEngine):
         return len(messages) > self.protect_first_n + self.protect_last_n
 
     def _summarize(self, text: str, previous: str | None, extra: str) -> str:
-        router = self._router or compat.get_router()
-        comp = DefaultCompressor(router.provider('aux'), budget_tokens=self._budget)
-        return compat.run_sync(comp.summarize(text, previous, extra))
+        router = self._router or (self._router_getter() if self._router_getter else None)
+        if router is None:
+            raise RuntimeError('exo-context: no model router (the engine has not attached one)')
+        return aux_sync(router, summary_prompt(text, self._budget, previous, extra), role='aux', session_id=self._conversation).strip()
 
     def compress(self, messages: list[dict[str, Any]], current_tokens: Optional[int] = None,
                  focus_topic: Optional[str] = None, force: bool = False,
@@ -109,5 +113,5 @@ class CoreInner(ContextEngine):
 
 def default_inner_factory(*, model: str = '', context_length: int = 0, **kwargs: Any) -> CoreInner:
     """Engine's default inner compressor. Host-specific kwargs (base_url, api_key, ...) are ignored."""
-    own = {k: v for k, v in kwargs.items() if k in _CFG_KEYS or k in ('router', 'budget_tokens')}
+    own = {k: v for k, v in kwargs.items() if k in _CFG_KEYS or k in ('router', 'router_getter', 'budget_tokens')}
     return CoreInner(model=model, context_length=context_length, **own)

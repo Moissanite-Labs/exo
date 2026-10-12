@@ -22,6 +22,10 @@ export interface ApprovalRespond {
   client?: string;
 }
 
+export interface ApprovalsList {
+  session?: string | null;
+}
+
 export interface Command {
   type: string;
   body: unknown;
@@ -203,6 +207,7 @@ export interface SessionInfo {
   created?: string;
   updated?: string;
   message_count?: number;
+  status?: string;
 }
 
 export interface SessionList {
@@ -320,12 +325,14 @@ export interface Usage {
 export interface UsageUpdated {
   usage: Usage;
   session_total?: Usage | null;
+  model?: string;
 }
 
 export interface CommandBodies {
   "hello": Hello;
   "session.create": SessionCreate;
   "session.list": SessionList;
+  "approvals.list": ApprovalsList;
   "session.get": SessionGet;
   "session.fork": SessionFork;
   "session.resume": SessionResume;

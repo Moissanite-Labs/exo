@@ -12,6 +12,9 @@
     "session.list": {
       "$ref": "#/$defs/SessionList"
     },
+    "approvals.list": {
+      "$ref": "#/$defs/ApprovalsList"
+    },
     "session.get": {
       "$ref": "#/$defs/SessionGet"
     },
@@ -235,6 +238,24 @@
         "request_id",
         "decision"
       ]
+    },
+    "ApprovalsList": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "description": "Approvals still waiting for an answer (a client that connects late can show and answer them)."
     },
     "Command": {
       "type": "object",
@@ -1013,6 +1034,10 @@
         "message_count": {
           "type": "integer",
           "default": 0
+        },
+        "status": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,
@@ -1460,6 +1485,10 @@
             }
           ],
           "default": null
+        },
+        "model": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,

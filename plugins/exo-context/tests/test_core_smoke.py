@@ -9,7 +9,6 @@ from exo.core.models.fake import RuleFake
 from exo.core.models.router import Router
 from exo.core.plugins import PluginManager
 from exo.core.slots import ContextEngine
-from exo.ext import compat
 from exo_context import signals as sg
 from exo_context.engine import ExoContextEngine
 from exo_context.inner import END_MARKER, SUMMARY_FLAG, CoreInner
@@ -62,11 +61,23 @@ def test_core_inner_compresses_with_the_aux_role():
 
 def test_engine_compress_default_inner_pins_rulings(tmp_path, convo):
     router = Router({"aux": ["fake:scripted"]}, instances={"fake": RuleFake({"reply": "short notes"})}, env={})
-    compat.set_router(router)
-    try:
-        eng = ExoContextEngine(handoff_dir=tmp_path / "h", compressor_kwargs={"protect_first_n": 1, "protect_last_n": 2})
-        out = eng.compress(convo)
-        summary = out[1]["content"]
-        assert "short notes" in summary and convo[3]["content"] in summary and convo[7]["content"] in summary
-    finally:
-        compat.set_router(None)
+    eng = ExoContextEngine(handoff_dir=tmp_path / "h",
+                           compressor_kwargs={"protect_first_n": 1, "protect_last_n": 2,
+                                              "router_getter": lambda: router})
+    out = eng.compress(convo)
+    summary = out[1]["content"]
+    assert "short notes" in summary and convo[3]["content"] in summary and convo[7]["content"] in summary
+
+
+def test_session_id_comes_from_the_hooks_and_on_compacted_writes_a_handoff(tmp_path, convo):
+    from types import SimpleNamespace
+    eng = ExoContextEngine(handoff_dir=tmp_path / "h")
+    eng.select_context(convo, session_id="s9")          # no on_session_start call at all
+    assert eng._x_session_id == "s9"
+    eng.on_turn_complete(convo, usage={}, session_id="s9")
+    assert eng.messages == convo                         # the real transcript
+    eng.on_compacted("s9", SimpleNamespace(id="n1", start=0, end=5, text="NODE NOTES"))
+    path = eng.last_handoff
+    assert path is not None and path.parent == tmp_path / "h"
+    text = path.read_text()
+    assert "NODE NOTES" in text and convo[3]["content"] in text and convo[7]["content"] in text

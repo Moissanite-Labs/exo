@@ -55,7 +55,16 @@ class EchoEngine:
     async def _session_list(self, b: s.SessionList, hub: Hub) -> dict[str, Any]:
         rows = [i for i in self.sessions.values() if b.seat is None or i.seat == b.seat]
         rows.sort(key=lambda i: i.updated, reverse=True)
-        return {"sessions": [to_dict(i) for i in rows[: b.limit]]}
+        out = []
+        for i in rows[: b.limit]:
+            task = self._running.get(i.id)
+            i.status = "live" if task is not None and not task.done() else "idle"
+            out.append(to_dict(i))
+        return {"sessions": out}
+
+    async def _approvals_list(self, b: s.ApprovalsList, hub: Hub) -> dict[str, Any]:
+        return {"approvals": [{"request_id": rid, "session": sid} for rid, (fut, sid) in self._approvals.items()
+                              if not fut.done() and (not b.session or sid == b.session)]}
 
     async def _session_get(self, b: s.SessionGet, hub: Hub) -> dict[str, Any]:
         info = self._session(b.session)

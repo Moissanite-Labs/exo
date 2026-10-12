@@ -6,7 +6,8 @@ __all__ = ["ExoMemoryProvider", "PROVIDER_NAME", "register"]
 
 def register(ctx) -> None:
     """Plugin entry point: register the Exo memory provider."""
-    ctx.register_memory_provider(ExoMemoryProvider())
+    from .episodic.compact import router_summarizer
+    ctx.register_memory_provider(ExoMemoryProvider(summarizer=router_summarizer(lambda: ctx.router)))
     if hasattr(ctx, 'register_command'):
-        from exo.ext.compat import ensure_root_command
-        ensure_root_command(ctx)  # one shared /exo for all Exo plugins
+        from exo.dispatcher import register_root
+        register_root(ctx)  # idempotent per plugin manager: one shared /exo for all Exo plugins

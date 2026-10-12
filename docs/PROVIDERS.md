@@ -26,7 +26,7 @@ Keys are never printed or logged. Never paste one into chat.
 | openai | OPENAI_API_KEY | https://api.openai.com/v1 | works |
 | opencode-go | OPENCODE_GO_API_KEY | https://opencode.ai/zen/go/v1 | chat models only (see below) |
 | nous | NOUS_API_KEY | https://inference-api.nousresearch.com/v1 | off: not verified |
-| jev | TYPESAFE_API_KEY | https://api.typesafe.ai/v1 | decision role only; works (opt-in) |
+| jev | TYPESAFE_API_KEY | https://api.typesafe.ai/v1 | decision role only; works; first decision route by default |
 | laya | none | http://127.0.0.1:8000/v1 | decision role only; local; needs `laya-serve` (see below) |
 | llamacpp, ollama, lmstudio, vllm | none | http://127.0.0.1 (ports 8080, 11434, 1234, 8000) | local |
 
@@ -46,13 +46,14 @@ a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:
 
     exo decide "Is this safe to run?" --options safe,risky --state "rm -rf build/"
 
-Jev: set `TYPESAFE_API_KEY` (env, Keychain service `exo`, or keys.env). Opt in with
-`decision = ["laya:laya", "jev:jev-latest"]` or `["jev:jev-latest"]` in `[models.roles]`.
+Jev: set `TYPESAFE_API_KEY` (env, Keychain service `exo`, or keys.env). It is the first default route of the
+`decision` role (`["jev:jev-latest", "laya:laya"]`, owner ruling: base Laya was poor in a live check, Jev
+answered sensibly). Without a key Jev is skipped and the role falls through to Laya, then aux, then main.
 Shapes were checked live on 2026-10-11 (7 calls). Score levels count from 0; a score can fall between
 levels (1.43). Errors: 401 and 422 are not retryable; 429, 529, 5xx and network errors are.
 
 Laya (local, Apache 2.0, https://github.com/NandhaKishorM/laya): the catalog entry is on by default as
-the `decision` route, but Laya is not installed on this Mac today, so the route fails fast and the
+the second `decision` route, after Jev, but Laya is not installed on this Mac today, so the route fails fast and the
 role falls back to aux, then main. It is an encoder model, so llama.cpp and Ollama cannot serve it (no
 GGUF); it needs its own server. To turn it on:
 
@@ -78,7 +79,7 @@ Override any role in `[models.roles]` in your config.
 |---|---|---|
 | main | Anthropic Opus 5.5, then OpenRouter | none |
 | aux | Haiku 5.5 | main |
-| decision | local Laya (`laya:laya`); Jev is opt-in | aux, then main |
+| decision | Jev (`jev:jev-latest`), then local Laya (`laya:laya`) | aux, then main |
 | eval | empty, which means the `main` route | main |
 | fast, standard, deep | Haiku, Sonnet, Opus | standard, then main |
 
