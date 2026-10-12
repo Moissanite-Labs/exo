@@ -192,6 +192,7 @@ class ExoApp(App):
         self.tutorial = False  # mirrors config tutorial.enabled
         self.hints = load_catalog()
         self.hint_budget = 1  # one tip per turn
+        self.intro_after_providers = False  # a first run is waiting for a provider before it sends /intro
         self.intro_pending = ""  # "first" or "manual" from sending /intro until its turn starts
         self.sent: list[Any] = []  # every command body this client sent, for tests and debugging
         self._dirty = False
@@ -372,9 +373,13 @@ class ExoApp(App):
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", "ready")
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
-            if self.provider_check:
-                self.run_worker(self.first_run_providers(), exit_on_error=False)
-            if self.auto_intro and not self.resume and not self.onb.onboarded:
+            want_intro = self.auto_intro and not self.resume and not self.onb.onboarded
+            # A first run with no working provider goes to /providers first; the intro waits for a key,
+            # because the orientation is an agent turn and would only fail without one.
+            ready = await self.first_run_providers() if self.provider_check else True
+            if want_intro and ready is False:
+                self.intro_after_providers = True
+            elif want_intro:
                 await self.intro("first")
         except Exception as exc:
             self.note(f"cannot start: {type(exc).__name__}: {exc}", "error")
@@ -980,6 +985,8 @@ class ExoApp(App):
         self.composer.focus()
         if isinstance(result, tuple) and result[0] == "default":
             self.run_worker(self.pick_provider_default(result[1]), exit_on_error=False)
+        if self.intro_after_providers:
+            self.run_worker(self.intro_when_ready(), exit_on_error=False)
 
     async def pick_provider_default(self, provider: str) -> None:
         """Choose the default model among one provider's routes, then the same flow as /default."""
@@ -1000,18 +1007,35 @@ class ExoApp(App):
         self.push_screen(Palette(items, f"default model: {provider}"),
                          lambda v: v and self.run_worker(self.set_default(v), exit_on_error=False))
 
-    async def first_run_providers(self) -> None:
-        """No provider ready: one note says where to start. Silent on any failure."""
+    async def first_run_providers(self) -> bool | None:
+        """No provider ready: one note says where to start, and the providers panel opens. Returns False when
+        none is ready, True when one is, None when the check failed (silent, then treated as ready)."""
         try:
             from exo import providers_setup
             ready = await asyncio.to_thread(providers_setup.any_ready)
         except Exception:
-            return
+            return None
         if not ready:
             try:
                 self.note("No model provider is set up yet. Type /providers to add a key.")
+                self.open_providers()
             except Exception:  # the app closed while the check ran
                 pass
+            return False
+        return True
+
+    async def intro_when_ready(self) -> None:
+        """The panel closed on a first run: send the waiting /intro once a provider works."""
+        try:
+            from exo import providers_setup
+            ready = await asyncio.to_thread(providers_setup.any_ready)
+        except Exception:
+            ready = True
+        if ready:
+            self.intro_after_providers = False
+            await self.intro("first")
+        else:
+            self.note("Still no provider. /providers adds one; /intro then gives the orientation.")
 
     async def pick_session(self) -> None:
         rows = (await self.client.call(s.SessionList(limit=50)))["sessions"]

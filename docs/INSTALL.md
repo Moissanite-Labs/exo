@@ -6,12 +6,34 @@ One script installs Exo for any user on macOS or Linux (D-004). It never touches
 `~/.hermes` unless you name it.
 
 ```sh
-git clone <exo repo> && cd exo
+git clone https://github.com/aska-digital/exo && cd exo
 scripts/install.sh --dry-run      # print the plan, change nothing
-scripts/install.sh                # install Exo (no Hermes)
-. ~/.exo/env.sh && exo models     # check providers and routes
+scripts/install.sh                # install Exo (no Hermes); `exo` lands on your PATH
+exo                               # open the terminal client (a new terminal if PATH just changed)
 scripts/install.sh --with-hermes  # optional: also pin Hermes and its patches
 ```
+
+To install from the repository URL without cloning first, give the installer a source and it clones into
+`~/.exo/src/exo`: `bash scripts/install.sh --exo-source https://github.com/aska-digital/exo`. A re-run pulls and
+reinstalls (an upgrade). `exo update` does the same from anywhere.
+
+## The `exo` command
+
+The installer links `~/.local/bin/exo` to the venv's `exo` (`--bin-dir` or `$EXO_BIN_DIR` to change the folder).
+If that folder is not on your PATH, it prints the line for your shell and does not touch your rc files:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"   # zsh: ~/.zshrc, bash: ~/.bashrc, fish: fish_add_path ~/.local/bin
+```
+
+`--modify-path` appends that line to the rc file once (a second run sees it and adds nothing). A file already at
+`~/.local/bin/exo` that is not this installer's link is left alone, with a warning. The installer never reads or
+writes model keys; the first `exo` run with no working provider opens the providers panel (`/providers`).
+
+`exo update` upgrades in place and prints `old -> new`, then checks that `import exo` works, the protocol export
+is current and `exo models` answers. It reads `install` in `config.json` (written by the installer): it pulls the
+checkout and re-runs `install.sh`. For a `pip install -e` checkout it pulls and reinstalls; for a `uv tool install`
+it runs `uv tool upgrade exo`. `exo update --dry-run` prints the steps and changes nothing.
 
 ## What it does
 
@@ -20,7 +42,7 @@ scripts/install.sh --with-hermes  # optional: also pin Hermes and its patches
 | 1 | Checks the OS (macOS or Linux), `git`, and Python 3.11 or newer. It picks the newest of `python3.14` to `python3.11`, or `--python`. Hermes supports Python below 3.15. |
 | 2 | Creates `$EXO_HOME` (default `~/.exo`, mode 700) with `keys/`, `principals/` and `bin/`. |
 | 3 | Only with `--with-hermes`. Pins Hermes with `scripts/pin-hermes.sh` into `$EXO_HOME/hermes`: the latest stable tag, or `--tag`. If a patch does not apply to that tag, the installer skips it, warns, and retries. `PINNED` and `config.json` (`hermes_patch_skip`) record the skip. `--strict-patches` fails instead. At the end it prints a warning list of every patch that did not apply and exits 1. |
-| 4 | Creates a venv at `$EXO_HOME/venv` and pip installs the `exo` package. With `--with-hermes` it also installs the pinned Hermes checkout (editable). |
+| 4 | Creates a venv at `$EXO_HOME/venv` and pip installs the `exo` package with the terminal client (`exo[tui]`), then links `exo` into `~/.local/bin`. With `--with-hermes` it also installs the pinned Hermes checkout (editable). |
 | 5 | Copies the Exo plugins (every `plugins/*/plugin.yaml`, or `--plugins`) into `<HERMES_HOME>/plugins/`, without tests. Each copy carries a `.exo-managed` marker. A plugin folder without the marker is never overwritten. |
 | 6 | Only with `--with-hermes`. Writes `<HERMES_HOME>/config.yaml` only if it does not exist: `plugins.enabled`, `memory.provider: exo-memory`, `context.engine: exo-context`. An existing file is left alone and the lines to add are printed. |
 | 7 | Writes `$EXO_HOME/env.sh` and `$EXO_HOME/config.json`. With `--with-hermes` it also writes `$EXO_HOME/bin/exo-hermes` (runs the pinned Hermes with Exo's `HERMES_HOME`). |
@@ -59,6 +81,8 @@ pinned checkout. Hermes exact-pins its dependencies, so the result matches upstr
 | `--no-pin`, `--no-pip`, `--no-interview` | skip a step |
 | `--strict-patches` | fail when a patch does not apply (needs `--with-hermes`) |
 | `--editable` | install exo editable (development) |
+| `--bin-dir DIR` | where the `exo` link goes (default `$EXO_BIN_DIR`, else `~/.local/bin`) |
+| `--modify-path` | add `DIR` to your shell rc file when it is not on PATH (default: print the line only) |
 | `-y` | never prompt |
 
 `HERMES_HOME` in your environment is ignored on purpose; it usually points at a live install.

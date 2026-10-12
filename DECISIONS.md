@@ -637,3 +637,30 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (nothing about the value comes back).
 - **Not done:** a remote core (`--url` on another machine) still needs keys on that machine; the TUI and web store
   on the machine they run on. Rotating several keys per provider (`key_env` lists) writes the first name only.
+
+## D-035 (2026-10-12) Typing `exo` opens Exo: bare command, installer on PATH, `exo update`
+- **Why:** the principal wants a live Exo to start the way `hermes` does: type the name. Before, `exo` with no
+  arguments was an argparse error, the client was `exo tui`, and the installer left `exo` inside a venv.
+- **Routing:** `main` sends no arguments, or a first argument that starts with `-` and is not `-h`, `--help` or
+  `--version`, to the terminal client with every argument passed through (`exo --resume`, `exo --seat X`,
+  `exo --no-intro`). `exo resume` is a real subcommand for `exo --resume`, extra flags passing through. Everything else is the old subcommand parser, so `exo models` and the rest are unchanged and
+  `exo -h` lists both. No flag lives on the top-level parser, so nothing can clash with the client's flags.
+  `exo --version` prints the package version, plus the git sha when Exo runs from, or was installed from, a checkout.
+- **First run:** the client already noted a missing provider (D-034) and sent `/intro` (D-030). Those two now
+  compose. With no working provider the providers panel opens and the intro waits, because the orientation is an
+  agent turn and fails without a model. Closing the panel with a provider ready sends the one intro. With a
+  provider ready, behaviour is as before.
+- **Installer:** keeps the dedicated venv at `$EXO_HOME/venv` (the plugins and the optional Hermes need it), now
+  installs `exo[tui]`, and links `~/.local/bin/exo` to it (`--bin-dir`). If that folder is not on PATH it prints
+  the line for the user's shell and does not edit rc files unless `--modify-path` is given, and then only once. A
+  foreign file at the link path is left alone. It writes `install` (mode, source, checkout, venv, python) to
+  `config.json`. It never reads or writes keys. Re-running pulls a URL source and reinstalls, which is the upgrade.
+- **`exo update`:** reads `install`; pulls the checkout and re-runs `install.sh` (which refreshes the venv and the
+  plugins); or pull and `pip install -e` for a development checkout; or `uv tool upgrade exo`. Prints old -> new and
+  runs a self-check: import, `exo.protocol.export --check`, `exo models`. `--dry-run` prints the steps. No protocol
+  command (the protocol stays at 30).
+- **Rejected:** `uv tool install` as the installer's only path (the plugin copy and the optional Hermes need the
+  fixed venv; it stays an accepted layout for `exo update`); editing rc files by default (a silent change to
+  the user's shell); a top-level `--seat` or `--resume` on the main parser (clashes with subcommand flags).
+- **Not done:** Windows; a published package on PyPI (the git URL is the source until then); an
+  `exo uninstall`.

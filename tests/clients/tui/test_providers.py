@@ -269,3 +269,35 @@ def test_first_run_check_is_off_unless_the_entry_point_asks(tmp_path, monkeypatc
         assert "No model provider" not in app.transcript_text()
 
     run(tmp_path, sc)
+
+
+def test_first_run_without_provider_opens_panel_and_holds_the_intro(tmp_path, monkeypatch):
+    state = {"ready": False}
+    monkeypatch.setattr(ps, "rows", lambda *a, **k: demo_rows())
+    monkeypatch.setattr(ps, "any_ready", lambda *a, **k: state["ready"])
+
+    async def sc(app, pilot, client, eng):
+        await until(lambda: isinstance(app.screen, ProvidersScreen), pilot)
+        assert not [b for b in app.sent if isinstance(b, s.TurnSend)]  # no intro without a provider
+        await pilot.press("escape")                                     # closed, still none: still no intro
+        await until(lambda: not isinstance(app.screen, ProvidersScreen), pilot)
+        await pilot.pause(0.2)
+        assert not [b for b in app.sent if isinstance(b, s.TurnSend)]
+        state["ready"] = True                                           # a key was added; panel closes again
+        app.open_providers()
+        await until(lambda: isinstance(app.screen, ProvidersScreen), pilot)
+        await pilot.press("escape")
+        await until(lambda: any(isinstance(b, s.TurnSend) for b in app.sent), pilot)
+        assert sum(isinstance(b, s.TurnSend) for b in app.sent) == 1    # one intro, not two
+
+    run(tmp_path, sc, provider_check=True, auto_intro=True)
+
+
+def test_first_run_with_provider_goes_straight_to_the_intro(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "any_ready", lambda *a, **k: True)
+
+    async def sc(app, pilot, client, eng):
+        await until(lambda: any(isinstance(b, s.TurnSend) for b in app.sent), pilot)
+        assert not isinstance(app.screen, ProvidersScreen)
+
+    run(tmp_path, sc, provider_check=True, auto_intro=True)

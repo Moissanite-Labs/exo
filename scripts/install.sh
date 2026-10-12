@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install.sh: install Exo for any user on macOS or Linux.
 #
-#   one venv + exo + the Exo plugins + an `exo models` check + `exo init --interview`
+#   one venv + exo (with the terminal client) + the `exo` command on PATH + the Exo plugins + an `exo models` check + `exo init --interview`
 #   Hermes is NOT installed by default. Exo runs on its own core. `--with-hermes` adds the
 #   pinned Hermes Agent and its patch queue (kept until the wave 4 cutover).
 #
@@ -25,10 +25,15 @@
 #   --no-interview       do not offer the interview
 #   --strict-patches     with --with-hermes: fail at once when a patch does not apply
 #   --editable           pip install exo in editable mode (for development)
+#   --bin-dir DIR        where the `exo` command is linked (default $EXO_BIN_DIR, else ~/.local/bin)
+#   --modify-path        append the PATH line to your shell rc file when BIN_DIR is not on PATH
+#                        (default: print the line and leave your rc files alone)
 #   -y, --yes            do not prompt
 #
 # Environment: EXO_HOME, EXO_HERMES_DIR, EXO_HERMES_HOME, EXO_PYTHON, EXO_PATCH_SKIP, and the
 # pin-hermes.sh variables. HERMES_HOME is ignored on purpose: it usually points at a live install.
+#
+# After it: type `exo`. Re-run it (or `exo update`) to upgrade. Keys are never read or written here.
 #
 # Idempotent: a second run with the same inputs only re-checks. Never touches ~/.hermes unless
 # --hermes-home names it.
@@ -37,6 +42,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+MODIFY_PATH=0 BIN_DIR_ARG=""
 DRY=0 WITH_HERMES=0 PIN=1 PIP=1 INTERVIEW=1 STRICT=0 EDITABLE=0 YES=0
 EXO_HOME_ARG="" HERMES_HOME_ARG="" HERMES_HOME_EXPLICIT=0
 TAG="${EXO_HERMES_TAG:-}" EXO_SOURCE="" PY="${EXO_PYTHON:-}" PLUGINS="" PRINCIPAL="" ANSWERS=""
@@ -63,8 +69,10 @@ while [ $# -gt 0 ]; do
     --no-interview) INTERVIEW=0 ;;
     --strict-patches) STRICT=1 ;;
     --editable) EDITABLE=1 ;;
+    --bin-dir) need_arg "$@"; BIN_DIR_ARG="$2"; shift ;;
+    --modify-path) MODIFY_PATH=1 ;;
     -y|--yes) YES=1 ;;
-    -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option $1 (see --help)" ;;
   esac
   shift
@@ -134,6 +142,7 @@ else
   TARGET_HOME="$(abspath "${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}")"
 fi
 VENV="$(abspath "${EXO_VENV:-$EXO_HOME/venv}")"
+BIN_DIR="$(abspath "${BIN_DIR_ARG:-${EXO_BIN_DIR:-$HOME/.local/bin}}")"
 LIVE_HERMES="$(abspath "$HOME/.hermes")"
 
 if [ "$HERMES_HOME_EXPLICIT" -eq 0 ] && { inside "$TARGET_HOME" "$LIVE_HERMES" || inside "$LIVE_HERMES" "$TARGET_HOME"; }; then
@@ -163,6 +172,7 @@ cat <<EOF
   exo source    ${EXO_URL:-$EXO_SRC}
   hermes        $([ "$WITH_HERMES" -eq 1 ] && echo "$EXO_HERMES_DIR  (pin: $([ "$PIN" -eq 1 ] && echo "${TAG:-latest stable tag}" || echo skipped))" || echo "not installed (pass --with-hermes to add it)")
   venv          $VENV  ($([ "$PIP" -eq 1 ] && echo "$([ "$WITH_HERMES" -eq 1 ] && echo 'Hermes + ')exo" || echo skipped))
+  command       $BIN_DIR/exo  (link to $VENV/bin/exo)
   plugin home   $TARGET_HOME$([ "$HERMES_HOME_EXPLICIT" -eq 1 ] && echo '  (explicit)' || echo '  (new, Exo-owned)')
 EOF
 
@@ -229,7 +239,7 @@ if [ "$PIP" -eq 1 ]; then
   fi
   STAMP="$VENV/.exo-install-stamp"
   want="hermes=$(sed -n 's/^patched_tree: //p' "$EXO_HERMES_DIR/PINNED" 2>/dev/null || echo none);"
-  want="${want}exo=$(git -C "$EXO_SRC" rev-parse HEAD 2>/dev/null || echo local)-$EDITABLE"
+  want="${want}exo=$(git -C "$EXO_SRC" rev-parse HEAD 2>/dev/null || echo local)-$EDITABLE-tui"
   if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$want" ] && [ "$EDITABLE" -eq 0 ] && [ -z "$(git -C "$EXO_SRC" status --porcelain 2>/dev/null || echo dirty)" ]; then
     say "Hermes and exo already installed at these versions"
   else
@@ -240,9 +250,9 @@ if [ "$PIP" -eq 1 ]; then
       warn "no Hermes checkout at $EXO_HERMES_DIR; installing exo only"
     fi
     if [ "$EDITABLE" -eq 1 ]; then
-      run "$VPY" -m pip install -q -e "$EXO_SRC"
+      run "$VPY" -m pip install -q -e "$EXO_SRC[tui]"
     else
-      run "$VPY" -m pip install -q "$EXO_SRC"
+      run "$VPY" -m pip install -q "$EXO_SRC[tui]"
     fi
     if [ "$DRY" -eq 0 ]; then echo "$want" > "$STAMP"; else echo "+ write $STAMP"; fi
   fi
@@ -339,6 +349,51 @@ else
 fi
 if [ -x "$VENV/bin/exo" ] && [ ! -e "$EXO_HOME/bin/exo" ]; then run ln -s "$VENV/bin/exo" "$EXO_HOME/bin/exo"; fi
 
+# The `exo` command: ~/.local/bin/exo -> the venv's exo, so typing `exo` works from anywhere.
+LINKED=0
+if [ "$PIP" -eq 1 ]; then
+  [ -d "$BIN_DIR" ] || run mkdir -p "$BIN_DIR"
+  if [ -L "$BIN_DIR/exo" ] || [ ! -e "$BIN_DIR/exo" ]; then
+    if [ -L "$BIN_DIR/exo" ] && [ "$(readlink "$BIN_DIR/exo")" = "$VENV/bin/exo" ]; then
+      say "command exists: $BIN_DIR/exo"
+    else
+      run ln -sfn "$VENV/bin/exo" "$BIN_DIR/exo"
+    fi
+    LINKED=1
+  else
+    warn "$BIN_DIR/exo exists and is not a link made by this installer; left alone. Remove it, then re-run."
+  fi
+fi
+NEED_PATH=0
+if [ "$LINKED" -eq 1 ]; then
+  case ":$PATH:" in *":$BIN_DIR:"*) ;; *) NEED_PATH=1 ;; esac
+fi
+if [ "$NEED_PATH" -eq 1 ]; then
+  case "$(basename "${SHELL:-sh}")" in
+    zsh)  RC="$HOME/.zshrc";  LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+    bash) RC="$HOME/.bashrc"; [ "$(uname -s)" = Darwin ] && [ ! -f "$RC" ] && RC="$HOME/.bash_profile"
+          LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+    fish) RC="$HOME/.config/fish/config.fish"; LINE="fish_add_path $BIN_DIR" ;;
+    *)    RC="$HOME/.profile"; LINE="export PATH=\"$BIN_DIR:\$PATH\"" ;;
+  esac
+  if [ "$MODIFY_PATH" -eq 1 ]; then
+    if [ -f "$RC" ] && grep -qF "$LINE" "$RC"; then
+      say "$RC already has the PATH line"
+    elif [ "$DRY" -eq 1 ]; then
+      echo "+ append to $RC: $LINE"
+    else
+      mkdir -p "$(dirname "$RC")"
+      printf '\n# added by exo scripts/install.sh\n%s\n' "$LINE" >> "$RC"
+      say "added the PATH line to $RC"
+    fi
+    PATH_NOTE="open a new terminal (or: . $RC), then type: exo"
+  else
+    say "$BIN_DIR is not on your PATH. Add this line to $RC (or re-run with --modify-path):"
+    echo "    $LINE"
+    PATH_NOTE="after adding that line and opening a new terminal, type: exo   (until then: $BIN_DIR/exo)"
+  fi
+fi
+
 CFG_PY="$VPY"
 [ -x "$CFG_PY" ] && "$CFG_PY" -c 'import exo.config' 2>/dev/null || CFG_PY=""
 plugins_json="[$(printf '"%s",' "${SELECTED[@]}" | sed 's/,$//')]"
@@ -355,6 +410,9 @@ if [ "$WITH_HERMES" -eq 1 ]; then
   set_cfg hermes_home "\"$TARGET_HOME\""
 fi
 set_cfg venv "\"$VENV\""
+if [ "$PIP" -eq 1 ]; then  # `exo update` reads this to know how to upgrade
+  set_cfg install "{\"mode\": \"venv\", \"source\": \"${EXO_URL:-$EXO_SRC}\", \"checkout\": \"$EXO_SRC\", \"venv\": \"$VENV\", \"python\": \"$VPY\"}"
+fi
 set_cfg plugins "$plugins_json"
 if [ -n "$PIN_SKIP" ]; then set_cfg hermes_patch_skip "\"$PIN_SKIP\""; fi
 
@@ -404,6 +462,6 @@ fi
 if [ "$WITH_HERMES" -eq 1 ]; then
   say "done$([ "$DRY" -eq 1 ] && echo ' (dry run)'). Start with:  . $ENVSH && exo-hermes"
 else
-  say "done$([ "$DRY" -eq 1 ] && echo ' (dry run)'). Start with:  . $ENVSH && exo --help   (Hermes not installed; add it with --with-hermes)"
+  say "done$([ "$DRY" -eq 1 ] && echo ' (dry run)'). ${PATH_NOTE:-Start with:  exo}   (Hermes not installed; add it with --with-hermes)"
 fi
 [ "${#FAILED_PATCHES[@]}" -eq 0 ] || exit 1

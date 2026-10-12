@@ -49,7 +49,7 @@
   <div class="wrap hero__in">
     <p class="crumb"><a href="../">Project Exo</a> · Terminal client</p>
     <h1 id="hero-title" class="hero__title">A prompt.<br>A transcript.<br>Instruments.</h1>
-    <p class="hero__lede"><code>exo-tui</code> is the terminal client for Exo. It looks like a quiet shell, and it reports what the system is doing: which model served the call, how full memory is, how much came from the cache, what it cost.</p>
+    <p class="hero__lede"><code>exo</code> opens the terminal client for Exo. It looks like a quiet shell, and it reports what the system is doing: which model served the call, how full memory is, how much came from the cache, what it cost.</p>
     <div class="hero__cta"><a class="btn btn--primary" href="#install">Install <span aria-hidden="true">→</span></a><a class="btn" href="#screens">Screenshots</a><a class="btn" href="../app/">Web app</a></div>
   </div>
 </section>
@@ -147,13 +147,13 @@
     <header class="sec-head">
       <p class="sec-num">04 / Install</p>
       <h2 id="install-t">Python 3.11 or newer, on macOS or Linux.</h2>
-      <p class="sec-lede">The installer prints its plan first, and <code>--dry-run</code> changes nothing. Add a model key (the providers guide is in the repository), then start the client.</p>
+      <p class="sec-lede">The installer prints its plan first, and <code>--dry-run</code> changes nothing. The installer puts <code>exo</code> on your PATH. Type <code>exo</code> to start the client; the first run walks you to a model key. <code>exo update</code> upgrades.</p>
     </header>
     <div class="cmd"><span class="c"># the repository is private during the early build, access on request</span>
 <span class="t-p">$</span> git clone https://github.com/aska-digital/exo &amp;&amp; cd exo
 <span class="t-p">$</span> scripts/install.sh --dry-run
 <span class="t-p">$</span> scripts/install.sh
-<span class="t-p">$</span> . ~/.exo/env.sh &amp;&amp; exo-tui</div>
+<span class="t-p">$</span> exo</div>
     <p class="note reveal" style="margin-top:28px">Prefer a browser? <a href="../app/">The web app</a> runs on the same core and the same memory.</p>
   </div>
 </section>
