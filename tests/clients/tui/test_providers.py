@@ -61,12 +61,12 @@ def fakes(monkeypatch):
     return calls
 
 
-def run(tmp_path, scenario):
+def run(tmp_path, scenario, **kw):
     eng = make_engine(tmp_path)
     client = FakeServerClient(eng)
 
     async def main():
-        app = ExoApp(client, seat="tester", home=str(tmp_path / "exo-state"))
+        app = ExoApp(client, seat="tester", home=str(tmp_path / "exo-state"), **kw)
         async with app.run_test(size=(120, 40)) as pilot:
             await asyncio.wait_for(app.ready.wait(), 5)
             await scenario(app, pilot, client, eng)
@@ -245,7 +245,7 @@ def test_first_run_note(tmp_path, monkeypatch, ready, shown):
         await pilot.pause(0.3)
         assert ("No model provider is set up yet. Type /providers to add a key." in app.transcript_text()) is shown
 
-    run(tmp_path, sc)
+    run(tmp_path, sc, provider_check=True)
 
 
 def test_first_run_check_failure_is_silent(tmp_path, monkeypatch):
@@ -257,5 +257,15 @@ def test_first_run_check_failure_is_silent(tmp_path, monkeypatch):
     async def sc(app, pilot, client, eng):
         await pilot.pause(0.3)
         assert "provider" not in app.transcript_text()
+
+    run(tmp_path, sc, provider_check=True)
+
+
+def test_first_run_check_is_off_unless_the_entry_point_asks(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "any_ready", lambda *a, **k: False)
+
+    async def sc(app, pilot, client, eng):
+        await pilot.pause(0.3)
+        assert "No model provider" not in app.transcript_text()
 
     run(tmp_path, sc)
