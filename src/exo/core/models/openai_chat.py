@@ -78,6 +78,18 @@ class OpenAIChatProvider(HttpTransport):
             h["authorization"] = f"Bearer {self.api_key}"
         return h
 
+    def explain_error(self, status: int, text: str) -> str:
+        if not self.name.startswith("opencode-go"):
+            return text
+        low, model = text.lower(), self.model or "this model"
+        if "does not support this protocol" in low or "requires a credential" in low:
+            return (f"model {model} is not served by Exo's OpenCode Go adapter yet "
+                    f"(it needs /responses or /messages, Exo speaks /chat/completions): {text}")
+        if status in (400, 429, 502, 503) and ("missing tags" in low or "endpoint is unavailable" in low):
+            return (f"OpenCode Go's upstream for {model} is unavailable right now (common for free or preview "
+                    f"routes); retry later or pick another model: {text}")
+        return text
+
     def build_body(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> dict[str, Any]:
         body: dict[str, Any] = {"model": opts.get("model") or self.model or "", "messages": convert_messages(messages),
                                 "stream": True, "stream_options": {"include_usage": True}}

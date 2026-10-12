@@ -55,9 +55,9 @@ base_url = "https://opencode.ai/zen/go/v1"
 key_env = "OPENCODE_GO_API_KEY"
 # Go asks for a stable per-conversation id (routing, prompt caching) and a named user agent.
 session_header = "x-opencode-session"
-# Go also lists models served only over /responses (GPT, Grok) or /messages (Claude, MiniMax, Qwen).
+# Go also lists models served only over /responses (GPT, Grok, Muse) or /messages (Claude, MiniMax, Qwen).
 # Exo speaks chat/completions to Go today, so pickers hide those until their transports land.
-hide_models = ["gpt", "grok", "claude", "minimax", "qwen"]
+hide_models = ["gpt", "grok", "claude", "minimax", "qwen", "muse"]
 
 # Nous Portal. Verified 2026-10-12 with a live key: a plain Bearer API key works and /models lists
 # OpenAI-compatible routes (Anthropic, OpenAI, GLM, Qwen and others). Model refs look like

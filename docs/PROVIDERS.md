@@ -104,7 +104,13 @@ turn those stores off (tests and sandboxes use them).
 
 OpenCode Go: Exo uses its OpenAI-compatible endpoint (`/chat/completions`): GLM, Kimi, DeepSeek,
 MiMo and others. Its other models use `/responses` or `/messages` and are not served yet. Refs look
-like `opencode-go:kimi-k3`.
+like `opencode-go:kimi-k3`. Pickers hide the `/responses` and `/messages` families (gpt, grok, muse,
+claude, minimax, qwen); a hand-typed ref to one gets "not served by Exo's OpenCode Go adapter yet".
+Free and preview routes (`step-5-preview-free`, `longcat-2.5-preview-free`) are served over
+`/chat/completions`, but their upstream is flaky: seen 2026-10-12, the same request returned 429
+"Endpoint is unavailable", 400 "missing tags" (an upstream routing error, not our request), and then 200.
+Exo reports these as "upstream is unavailable right now"; retry or pick another model. Go also needs the
+`x-opencode-session` header (Exo sends it).
 
 Nous Portal: the base URL is in Nous's Hermes docs, but they describe OAuth-minted tokens, and it is
 unclear whether a plain API key works. The entry is commented out in `catalog.toml` until checked.
