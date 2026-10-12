@@ -1026,3 +1026,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a branch-based flow (the site is deployed from a git-free copy on purpose).
 - **Revisit if:** the site gains a build step or more than one maintainer deploys, when CI should own promotion.
 - **Docs:** `docs/DEVELOPER-GUIDE.md` "Deploying the site".
+
+## D-050 (2026-10-12) Consumer path: local first, desktop apps after the build settles
+- **Why:** the 2026-10-12 audit (item 10) asked for the consumer path to be decided before building toward it.
+  The principal ruled on four options for how Exo reaches a new user and where their keys live.
+- **Local first (standard):** Exo runs on the user's machine; the web client is served by that machine on a
+  loopback address; keys go from the page or terminal straight into the OS keychain and never cross the network
+  except to their provider (D-034, D-039). Signed downloadable desktop apps come after the build settles, so the
+  package is not rebuilt for every change.
+- **Remote access (architecture option):** a hosted page that pairs with the user's own core over an end-to-end
+  encrypted relay, so keys and memory stay at home. Kept as a valid design, not scheduled.
+- **Hosted cores (roadmap only):** running user cores on our servers would make us the custodian of keys and
+  memory. Considered only through cryptographic or decentralized compute that keeps the operator blind.
+- **Own inference (later):** a keyless path where users never handle API keys, once funded.
+- **Rejected for now:** a hosted service that stores user keys on our servers.
