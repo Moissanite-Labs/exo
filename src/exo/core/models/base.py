@@ -163,6 +163,10 @@ class HttpTransport:
             return str(err.get("message") or err.get("type") or err)[:500]
         return str(err or body)[:500]
 
+    def explain_error(self, status: int, text: str) -> str:
+        """Hook: rewrite a provider's raw HTTP error into something a user can act on."""
+        return text
+
     # --- stream ------------------------------------------------------------
     async def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
         session_id = opts.pop("session_id", None)
@@ -177,7 +181,7 @@ class HttpTransport:
             async with client.stream("POST", url, json=body, headers=sent, timeout=self._timeout) as resp:
                 if resp.status_code >= 400:
                     raw = (await resp.aread()).decode("utf-8", "replace")
-                    yield error_event(f"HTTP {resp.status_code}: {self.error_text(raw)}", resp.status_code,
+                    yield error_event(f"HTTP {resp.status_code}: {self.explain_error(resp.status_code, self.error_text(raw))}", resp.status_code,
                                       retry_after=parse_retry_after(resp.headers.get("retry-after")))
                     return
                 buf: list[str] = []

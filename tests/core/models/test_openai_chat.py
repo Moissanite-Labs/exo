@@ -57,3 +57,37 @@ def test_convert_messages_splits_tool_results_and_serializes_args():
     assert out[1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
     assert out[2]["content"] is None and json.loads(out[2]["tool_calls"][0]["function"]["arguments"]) == {"k": 1}
     assert [m["tool_call_id"] for m in out[3:]] == ["c1", "c2"]
+
+
+def _opencode_error(status, body, model):
+    rec = Recorder((status, body, {}))
+    prov = OpenAIChatProvider("https://opencode.ai/zen/go/v1", "k", name="opencode-go", model=model,
+                              session_header="x-opencode-session", client=rec.client())
+    events = collect(prov.stream([Message.user("hi")], [], session_id="s1", max_tokens=8))
+    return rec, events[-1]
+
+
+def test_opencode_go_request_shape_and_flaky_upstream_message():
+    body = b'{"status":400,"message":"This request is not valid. Additional info: missing tags"}'
+    rec, err = _opencode_error(400, body, "step-5-preview-free")
+    assert rec.requests[0].url.path == "/zen/go/v1/chat/completions"
+    assert rec.requests[0].headers["x-opencode-session"] == "s1"
+    assert rec.body()["model"] == "step-5-preview-free" and rec.body()["stream"] is True
+    assert err.kind == "error" and "upstream for step-5-preview-free is unavailable right now" in err.error
+    _, err = _opencode_error(429, b'{"error":{"message":"Upstream request failed: Endpoint is unavailable."}}',
+                             "step-5-preview-free")
+    assert "unavailable right now" in err.error and err.retryable
+
+
+def test_opencode_go_wrong_protocol_model_gets_plain_message():
+    _, err = _opencode_error(400, b'{"type":"error","error":{"message":"Model does not support this protocol."}}',
+                             "gpt-6-luna")
+    assert "model gpt-6-luna is not served by Exo's OpenCode Go adapter yet" in err.error
+
+
+def test_opencode_go_catalog_hides_responses_and_messages_models():
+    from exo.core.models.router import Router
+    hide = Router(env={}).providers["opencode-go"]["hide_models"]
+    for m in ("gpt-6-luna", "grok-4.7", "muse-spark-1.3-contributor", "claude-haiku-5-5", "minimax-m3", "qwen3.8-max"):
+        assert any(h in m for h in hide), m
+    assert not any(h in "step-5-preview-free" for h in hide)
