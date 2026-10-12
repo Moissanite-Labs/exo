@@ -46,6 +46,7 @@ COMMANDS = {
     "panel": ("tools", "reopen the last panel"),
     "peers": ("tools", "list the other live sessions (Exo and Hermes) you can message"),
     "send": ("tools", "message another session yourself: /send <peer> <text>"),
+    "handoff": ("other", "have the agent write a handoff note for the next session: /handoff [path]"),
     "intro": ("other", "an orientation from the agent: what Exo is, what it can do, how to use it"),
     "tutorial": ("other", "tips the first time something comes up: /tutorial on, off or reset (bare shows state)"),
     "help": ("other", "list every command"),
@@ -513,6 +514,8 @@ class ExoApp(App):
             self.hint("new_thread")
         elif name == "intro":
             await self.intro("manual")
+        elif name == "handoff":
+            await self.handoff(args)
         elif name == "tutorial":
             await self.tutorial_command(args)
         elif name in ("sessions", "resume"):
@@ -562,6 +565,21 @@ class ExoApp(App):
         self.onb.mark_onboarded()
         if kind == "first":
             self.run_worker(self.set_tutorial(True, quiet=True), exit_on_error=False)
+
+    async def handoff(self, args: str) -> None:
+        """/handoff [path] (D-032): the core gathers the facts, the agent writes the note (skill exo-handoff)."""
+        from exo_tui.handoff import handoff_prompt
+        resp = await self.post(s.CommandRun(name="handoff_facts", args=args.strip(), session=self.session))
+        if not resp.ok:
+            return
+        facts = (resp.result or {}).get("output")
+        if not isinstance(facts, dict):
+            self.note("the core returned no handoff facts", "error")
+            return
+        self.add(Block("/handoff" + (f" {args.strip()}" if args.strip() else ""), "user"))
+        self.cur = None
+        await self.post(s.TurnSend(session=self.session, text=handoff_prompt(facts),
+                                   mode="steer" if self.busy else "send"))
 
     async def set_tutorial(self, on: bool, quiet: bool = False) -> None:
         resp = await self.post(s.ConfigSet(key="tutorial.enabled", value=on))

@@ -12,7 +12,7 @@ tools teach them, both in the terminal client (`exo-tui`) and neither adds a pro
 Sends a normal user turn (it shows as `/intro`). The agent loads the `exo-intro` skill
 (`skills/exo-intro/SKILL.md`, the facts it teaches from) and gives a short, staged orientation: an overview,
 a question about what you are used to (Claude Code, ChatGPT, Hermes), then topics you pick. It ends by
-mentioning `/tutorial`. It is a conversation, so ask anything. A test checks every slash command in `/help`
+mentioning `/tutorial`. It is a conversation, so ask anything. (`/handoff` also uses its own skill, `exo-handoff`, for the note's template.) A test checks every slash command in `/help`
 appears in the skill, so the two cannot drift.
 
 ### First run

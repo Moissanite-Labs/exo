@@ -508,3 +508,41 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   runs after `on_pre_compress` so the ledger gets correction targets from the full span before the strict pass.
 - **Not done (Part A):** the web client has no job view; Hermes has no job tools; `capture_principal` exists only in
   exo-memory (a seat without a principal store shows its uncaptured count as never captured, which is true).
+- **Part B (items 2, 3, 5, 6, 7).** No new protocol command (the cap of 30 stays).
+- **2. `exo_get(id, body_only)` in exo-memory, not an `expand` flag on `exo_recall`.** Recall prints
+  `summary only; exo get <id>`; the agent now has the tool that line names. A separate tool because recall is a
+  search under a token budget and `expand` would turn it into two verbs with two result shapes; a read by id needs
+  no query and no budget; the name matches `exo get` so what the agent reads in recall is what it types. Same
+  store and same access as recall (the seat's principal store, nothing else); a missing id returns near matches
+  and rereads the store once; output cut at 40k characters.
+- **3. `/handoff [path]`, agent-led like `/intro`.** The core answers `command.run` name `handoff_facts` (an
+  unlisted built-in, so no protocol command): thread, git state of the cwd, open findings, running tasks,
+  the latest tree summaries (the decisions), the last three trace rows, the default path, and one key per entry of
+  `CoreEngine.handoff_sources`. `jobs` is the pre-seeded hook (empty list): Part A registers
+  `eng.handoff_sources["jobs"] = fn(session)` and `/handoff` lists open background jobs with no other change; a
+  source that raises is reported and skipped. The TUI sends one user turn (shown as "/handoff") with the facts and
+  the path; the agent loads the `exo-handoff` skill (template: goal, state, done, decisions, next, blockers, open
+  jobs and tasks, paths) and writes the file with its normal write tool, so the gate sees it. Default path
+  `~/Work/handoffs/<seat>-<date>.md`; a folder argument gets that file name inside it.
+  The client needs only a row in its command table and `exo_tui/handoff.py`.
+- **5. Trace thresholds measure the harness.** `turn.slow` now fires on wall time minus tool time and approval
+  waits (model plus overhead), 60 s by default, bug at 5 times; a new `turn.wall` (papercut) caps total wall at
+  30 min (`turn_total_wall_s`). A seat's `[trace]` table overrides config.json key by key (engine and
+  `exo trace` both read it). Old sessions without a timing summary subtract the recorded tool durations. Existing
+  `turn.slow` findings keep their signature, so they count and verify as before.
+- **6. Cost in the trace.** Per call and per turn (subagents included), in `exo trace`, `/trace` and `exo_trace`
+  (`--calls`, `calls`). The figure is the usage the router priced from the catalog entry of the serving route,
+  or the provider's own. `unknown` when unpriced, never `$0`; a mixed turn shows `$x+`. Two fixes it needed: the
+  router charged cached tokens twice for OpenAI-style providers (their `prompt_tokens` includes the cached part),
+  and config could not set a price at all, so `models.models."provider:model"` now overrides the catalog. The
+  catalog has no price for the subscription routes (opencode-go); they read `unknown` until a price is set.
+- **7. Cwd guard and default cwd.** One warning line (a `notice`, user only, not in the model's context) when a
+  thread starts in a folder that is not inside a git repo, and again, once per folder per thread, when a shell
+  call works in one (its `cwd` argument or a leading `cd X &&`). A seat sets `[session] cwd`; it beats
+  config.json's `cwd`, and a missing folder is ignored and said so. A persistent `cd` does not exist (each shell
+  call is its own process), so the guard watches the folder a call runs in.
+- **Rejected:** `expand` on recall; a protocol command for handoff; writing the handoff file from the core
+  (it would bypass the gate); appending the cwd notice to bash results (changes tool output for every test and
+  every model).
+- **Not done:** prices for subscription routes; cost in the TUI status line; a git check that runs `git`
+  (the guard walks up looking for `.git`, so a bare or broken repo counts as a repo).

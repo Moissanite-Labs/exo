@@ -44,7 +44,8 @@ the agent forgets things when it overflows. Exo works differently.
 `/new` starts a new thread: a fresh focus, same memory. `/new private` starts one that is logged but never
 shared into memory. `/sessions` (or `/resume`) lists this agent's threads. `/fork` copies the current
 thread, `/undo` takes back the last turn (hidden, not deleted), `/clear` clears only the screen, `/cwd`
-shows the working folder, `/restart` reopens in a new terminal tab, `/exit` and `/quit` leave.
+shows the working folder (Exo warns once when it is not inside a git repo; a seat can set a default folder
+with `[session] cwd` in its seat.toml), `/restart` reopens in a new terminal tab, `/exit` and `/quit` leave.
 
 ## While the agent works
 - Type while it is running and your message steers it: it lands at the next tool round, and the agent
@@ -83,13 +84,17 @@ The bus is a signed relay that lets seats on different machines do the same.
 
 ## Trace and findings
 Exo records how it performed: per turn, wall time, which model served, fallbacks, tool errors. `/trace`
-shows the table for this session and `exo trace` shows it from the shell. Slow turns, fallbacks and errors
-become findings, saved with a count. `/findings` lists the open ones and `exo findings` does too from the
+shows the table for this session and `exo trace` shows it from the shell, with the estimated dollar cost of
+each turn and call (from the catalog price of the route that served; `unknown` when a route has no price,
+never zero). Slow turns, fallbacks and errors become findings, saved with a count. "Slow" means the harness's
+own time (model plus overhead, not tool time or approval waits); a seat can set its own limits in
+`seat.toml` under `[trace]`. `/findings` lists the open ones and `exo findings` does too from the
 shell. The agent can file one itself when it sees something wrong. The status line shows how many are open.
 
 ## Recall
 The agent can look back through its own memory: search it, and zoom into a summary to read the original
-messages under it. You can simply ask "what did we decide about X last week". Facts the agent should always
+messages under it. When recall lists a belief as "summary only", the agent reads the whole node with
+`exo_get(id)`. You can simply ask "what did we decide about X last week". Facts the agent should always
 know belong in its SOUL.md or the principal store, not in a message.
 
 ## code_find
@@ -111,5 +116,8 @@ Every command `/help` lists, in one line each, so you can answer "what does /x d
 - `/panel` reopens the last panel (an approval or a choice the agent showed you).
 - `/peers`, `/send`: peers, above.
 - `/trace`, `/findings`: trace and findings, above.
+- `/handoff [path]` has the agent write a structured handoff note (goal, state, done, next, blockers,
+  paths) to `~/Work/handoffs/<seat>-<date>.md`, or to the path you give. It uses the exo-handoff skill and the
+  normal write tool, so the approval gate sees it.
 - `/intro` runs this orientation again. `/tutorial` turns contextual tips on or off.
 - `/help` lists every command.
