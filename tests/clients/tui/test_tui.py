@@ -504,3 +504,114 @@ def test_new_is_a_thread_of_the_same_memory(tmp_path):
         assert eng.store.get_session(app.session).kind == "private"
 
     run(tmp_path, sc)
+
+
+# ---------------------------------------------------------------- long transcripts
+def long_history(n):
+    msgs = []
+    for i in range(n):
+        if i % 2 == 0:
+            msgs.append({"id": f"u{i}", "role": "user", "content": [{"type": "text", "text": f"question {i}"}]})
+        else:
+            msgs.append({"id": f"a{i}", "role": "assistant", "content": [{"type": "text", "text": f"answer {i}\n```py\nx = {i}\n```"}]})
+    return msgs
+
+
+def test_resume_long_history_mounts_only_a_window(tmp_path):
+    from exo_tui import app as appmod
+
+    async def sc(app, pilot, client, eng):
+        app.clear_transcript()
+        app.render_history(long_history(2000))
+        await pilot.pause(0.3)
+        blocks = [w for w in app.transcript.children if isinstance(w, Block) and w.kind in ("user", "assistant")]
+        assert len(blocks) == appmod.WINDOW
+        assert len(app.older) == 2000 - appmod.WINDOW
+        assert len(app.transcript.children) <= appmod.WINDOW + 4
+        assert "1940 earlier" in str(app.earlier_row.render())
+        assert "question 0" in app.transcript_text()  # older text still counts as transcript
+        assert app.last_answer[0] == "a1999"
+
+    run(tmp_path, sc)
+
+
+def test_load_earlier_adds_a_page_and_drops_the_row_at_the_end(tmp_path):
+    from exo_tui import app as appmod
+
+    async def sc(app, pilot, client, eng):
+        total = appmod.WINDOW + appmod.PAGE + 10
+        app.clear_transcript()
+        app.render_history(long_history(total))
+        await pilot.pause(0.2)
+        app.action_load_earlier()
+        await until(lambda: len(app.older) == 10, pilot)
+        await pilot.pause(0.2)
+        assert len([w for w in app.transcript.children if isinstance(w, Block) and w.kind in ("user", "assistant")]) == appmod.WINDOW + appmod.PAGE
+        assert app.earlier_row is not None
+        await pilot.press("f6")
+        await until(lambda: not app.older and app.earlier_row is None, pilot)
+        await pilot.pause(0.2)
+        texts = [w.text for w in app.transcript.children if isinstance(w, Block) and w.kind in ("user", "assistant")]
+        assert len(texts) == total and texts[0] == "question 0" and texts[-1] == f"answer {total - 1}\n```py\nx = {total - 1}\n```"
+
+    run(tmp_path, sc)
+
+
+def test_streaming_block_is_throttled_and_ends_as_markdown(tmp_path):
+    from rich.padding import Padding
+    from rich.markdown import Markdown
+    from exo_tui import app as appmod
+
+    async def sc(app, pilot, client, eng):
+        await pilot.pause(0.5)  # let boot finish: its system lines would end a streaming block
+        calls = []
+        orig = Block.update
+
+        def spy(self, content="", *a, **k):
+            if self.kind != "assistant":  # a stray system line may repaint meanwhile
+                return orig(self, content, *a, **k)
+            inner = content.renderable if isinstance(content, Padding) else content
+            calls.append(type(inner).__name__)
+            return orig(self, content, *a, **k)
+
+        Block.update = spy
+        try:
+            for i in range(300):
+                app.handle(s.Event(seq=i, type="message.delta", body=s.MessageDelta(message_id="m1", text=f"word{i} ")))
+                if i % 10 == 0:
+                    await pilot.pause(0.01)
+            await pilot.pause(0.3)
+            assert "Markdown" not in calls  # plain text while it streams
+            assert len(calls) < 100  # a generous bound: still far fewer repaints than the 300 deltas
+            assert app.cur is not None and app.cur.streaming
+            app.close_cur()
+            await pilot.pause(0.1)
+            assert app.cur is None and calls[-1] == "Markdown"
+            assert app.transcript_text().endswith("word299 ")
+        finally:
+            Block.update = orig
+        assert appmod.FLUSH_EVERY >= 0.1
+
+    run(tmp_path, sc)
+
+
+def test_copy_all_and_last_include_unmounted_history(tmp_path):
+    from exo_tui import app as appmod
+
+    async def sc(app, pilot, client, eng):
+        got = []
+        app.copy_to_clipboard = got.append
+        msgs = long_history(2)  # one question, one answer: both end up older than the window
+        msgs += [{"id": f"u{i}", "role": "user", "content": [{"type": "text", "text": f"later {i}"}]}
+                 for i in range(appmod.WINDOW + 5)]
+        app.clear_transcript()
+        app.render_history(msgs)
+        await pilot.pause(0.2)
+        assert len(app.older) == 7
+        assert not any(isinstance(w, Block) and w.kind == "assistant" for w in app.transcript.children)
+        app.copy_command("all")
+        assert "question 0" in got[-1] and "answer 1" in got[-1] and "later 64" in got[-1]
+        app.copy_command("last")
+        assert got[-1].startswith("answer 1")
+
+    run(tmp_path, sc)
