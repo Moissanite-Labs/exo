@@ -15,13 +15,16 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Static
 
+from exo.config import exo_home
 from exo.core.types import ContentPart
 from exo.protocol import schema as s
+from exo_tui.onboarding import INTRO_PROMPT, Onboarding, load_catalog
 from exo_tui.widgets import (ApprovalCard, Block, Composer, EditScreen, Palette, PanelView, ToolBlock)
 
 CLIENT_ID = "exo-tui"
 DEFAULT_WINDOW = 200_000
 MAX_FILE = 64 * 1024
+LONG_TURN_MS = 60_000  # the same line as the turn.slow trace rule
 AT_RE = re.compile(r"(?<!\S)@(\S+)")
 # name -> (group, description). /help is generated from this table, so every command shows up there.
 COMMANDS = {
@@ -43,6 +46,8 @@ COMMANDS = {
     "panel": ("tools", "reopen the last panel"),
     "peers": ("tools", "list the other live sessions (Exo and Hermes) you can message"),
     "send": ("tools", "message another session yourself: /send <peer> <text>"),
+    "intro": ("other", "an orientation from the agent: what Exo is, what it can do, how to use it"),
+    "tutorial": ("other", "tips the first time something comes up: /tutorial on, off or reset (bare shows state)"),
     "help": ("other", "list every command"),
 }
 LOCAL_COMMANDS = {n: d for n, (_, d) in COMMANDS.items()}
@@ -79,7 +84,8 @@ class ExoApp(App):
     ]
 
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
-                 seat: str | None = None, title: str = "") -> None:
+                 seat: str | None = None, title: str = "", home: str | None = None,
+                 auto_intro: bool = False) -> None:
         super().__init__()
         self.client = client
         self.session = session
@@ -108,6 +114,12 @@ class ExoApp(App):
         self.panel_order: list[str] = []
         self.panel_touched: set[str] = set()
         self.commands: list[dict[str, Any]] = []
+        self.onb = Onboarding(home or exo_home())  # first run and seen hints (D-030)
+        self.auto_intro = auto_intro  # only the real entry point turns this on; tests and daemons never do
+        self.tutorial = False  # mirrors config tutorial.enabled
+        self.hints = load_catalog()
+        self.hint_budget = 1  # one tip per turn
+        self.intro_pending = ""  # "first" or "manual" from sending /intro until its turn starts
         self.sent: list[Any] = []  # every command body this client sent, for tests and debugging
         self._dirty = False
 
@@ -191,6 +203,10 @@ class ExoApp(App):
                 self.commands = (await self.client.call(s.CommandsList())).get("commands", [])
             except Exception:
                 pass
+            try:
+                self.tutorial = (await self.client.call(s.ConfigGet(key="tutorial.enabled"))).get("value") is True
+            except Exception:
+                self.tutorial = False  # not set yet
             if self.resume and not self.session:
                 rows = (await self.client.call(s.SessionList(limit=20, seat=self.seat)))["sessions"]
                 rows = [r for r in rows if r.get("kind") != "subagent"]  # resume a thread, not a child's log
@@ -200,6 +216,8 @@ class ExoApp(App):
             else:
                 await self.new_session()
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
+            if self.auto_intro and not self.resume and not self.onb.onboarded:
+                await self.intro("first")
         except Exception as exc:
             self.note(f"cannot start: {type(exc).__name__}: {exc}", "error")
         self.refresh_status()
@@ -229,15 +247,19 @@ class ExoApp(App):
         await asyncio.sleep(0.5)  # the core files findings just after the turn ends
         try:
             out = (await self.client.call(s.CommandRun(name="findings", args="count"))).get("output")
-            self.findings = int(out.get("open", 0)) if isinstance(out, dict) else 0
+            before, self.findings = self.findings, int(out.get("open", 0)) if isinstance(out, dict) else 0
         except Exception:
             return
+        if self.findings > before:
+            self.hint("finding")
         self.refresh_status()
 
     def handle(self, ev: s.Event) -> None:
         b = ev.body
         if isinstance(b, s.TurnStarted):
             self.busy = True
+            if self.intro_pending:
+                self.intro_started()
             self.turn_t0 = time.monotonic()
             self.model = b.model or self.model
             self.cur = None
@@ -247,6 +269,9 @@ class ExoApp(App):
             self.running_tools = 0
             self.flush()
             self.cur = None
+            self.hint_budget = 1
+            if (b.timing.get("wall_ms", 0) - b.timing.get("approval_ms", 0)) >= LONG_TURN_MS:
+                self.hint("long_turn")
             self.run_worker(self.refresh_findings(), exit_on_error=False)
         elif isinstance(b, s.ReasoningDelta):
             self.turn_t0 = 0.0
@@ -274,6 +299,8 @@ class ExoApp(App):
         elif isinstance(b, s.ToolStarted):
             tb = ToolBlock(b.call.id, b.call.name, b.call.arguments)
             tb.expanded = self.expanded
+            if b.call.name == "code_find":
+                self.hint("code_find")
             self.tools[b.call.id] = tb
             self.running_tools += 1
             self.cur = None
@@ -291,6 +318,7 @@ class ExoApp(App):
         elif isinstance(b, s.ApprovalRequested):
             self.approvals.append(b)
             self.show_approval()
+            self.hint("approval")
         elif isinstance(b, s.ApprovalResolved):
             self.approvals = [a for a in self.approvals if a.request_id != b.request_id]
             if self.card is not None and self.card.req.request_id == b.request_id:
@@ -308,10 +336,14 @@ class ExoApp(App):
         elif isinstance(b, s.ModelCall):
             if b.route:
                 self.model = b.route  # the route that served, not the one asked for
+            if (b.requested and b.route and b.requested != b.route) or any(
+                    a.get("outcome") == "fallback" for a in b.attempts):
+                self.hint("route_change")
         elif isinstance(b, s.TaskUpdated):
             self.agents[b.task_id] = b.status
         elif isinstance(b, s.PeerMessage):  # D-026: a peer is not the user, so it gets its own block
             self.add(Block(f"peer message from {b.sender} ({b.trust})\n{b.text}", "peer"))
+            self.hint("peer_message")
         elif isinstance(b, s.PeerDelivery):
             if b.direction == "out" or b.state in ("denied", "expired"):
                 self.note(f"peer {b.peer}: {b.state}" + (f" ({b.detail})" if b.detail else ""),
@@ -320,6 +352,8 @@ class ExoApp(App):
             self.on_ui_panel(b)
         elif isinstance(b, s.TasteUpdated):
             self.note(f"taste {b.action}: {b.text} {b.path}")
+        elif isinstance(b, s.MemorySummarized):
+            self.hint("memory_summarized")
         elif isinstance(b, s.ContextCompacted):
             self.note(f"context compacted: {b.before_tokens} to {b.after_tokens} tokens")
         elif isinstance(b, s.SessionUpdated):
@@ -435,11 +469,14 @@ class ExoApp(App):
             cmd = text[1:].strip()
             send = f"Run this shell command with your shell tool and show me the output:\n{cmd}"
         self.add(Block(shown, "user"))
+        self.hint("steer" if self.busy else "first_message")
         self.cur = None
         await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
                                    mode="steer" if self.busy else "send"))
 
     async def slash(self, name: str, args: str) -> None:
+        if not self.busy:
+            self.hint_budget = 1
         if name in ("exit", "quit"):
             self.exit()
         elif name == "restart":
@@ -469,6 +506,11 @@ class ExoApp(App):
             await self.set_default(args)
         elif name == "new":
             await self.new_session("private" if args.strip() == "private" else "")
+            self.hint("new_thread")
+        elif name == "intro":
+            await self.intro("manual")
+        elif name == "tutorial":
+            await self.tutorial_command(args)
         elif name in ("sessions", "resume"):
             await self.pick_session()
         elif name == "model":
@@ -498,6 +540,58 @@ class ExoApp(App):
                 out = resp.result.get("output")
                 if out:
                     self.note(out if isinstance(out, str) else str(out))
+
+    # ------------------------------------------------------------ onboarding (D-030)
+    async def intro(self, kind: str) -> None:
+        """Send the orientation as a normal user turn. It shows as "/intro"; the agent gets the longer prompt."""
+        self.add(Block("/intro", "user"))
+        self.cur = None
+        self.intro_pending = kind
+        resp = await self.post(s.TurnSend(session=self.session, text=INTRO_PROMPT,
+                                          mode="steer" if self.busy else "send"))
+        if not resp.ok:
+            self.intro_pending = ""  # the turn never started, so a first run stays un-onboarded
+
+    def intro_started(self) -> None:
+        """The intro turn began: only now is the home onboarded. A first run also turns tutorial mode on."""
+        kind, self.intro_pending = self.intro_pending, ""
+        self.onb.mark_onboarded()
+        if kind == "first":
+            self.run_worker(self.set_tutorial(True, quiet=True), exit_on_error=False)
+
+    async def set_tutorial(self, on: bool, quiet: bool = False) -> None:
+        resp = await self.post(s.ConfigSet(key="tutorial.enabled", value=on))
+        if not resp.ok:
+            return
+        self.tutorial = on
+        if not quiet:
+            self.note("tutorial mode on: short tips appear the first time something comes up" if on
+                      else "tutorial mode off")
+
+    async def tutorial_command(self, args: str) -> None:
+        word = args.strip().lower()
+        if word in ("on", "off"):
+            await self.set_tutorial(word == "on")
+        elif word == "reset":
+            self.onb.reset_hints()
+            self.note("tips will show again")
+        elif not word:
+            left = len(self.hints) - len(self.onb.seen() & set(self.hints))
+            self.note(f"tutorial mode is {'on' if self.tutorial else 'off'} ({left} of {len(self.hints)} tips "
+                      "not yet shown). /tutorial on, /tutorial off, /tutorial reset")
+        else:
+            self.note("usage: /tutorial [on|off|reset]", "warn")
+
+    def hint(self, key: str) -> None:
+        """Show a tip for this moment: tutorial mode on, never shown before, at most one per turn. Client side
+        only; the model never sees it."""
+        h = self.hints.get(key)
+        if not self.tutorial or not h or self.hint_budget < 1 or key in self.onb.seen():
+            return
+        self.hint_budget -= 1
+        self.onb.mark_seen(key)
+        more = f" ({h['then']})" if h.get("then") else ""
+        self.note(f"tip: {h['text']}{more}", "hint")
 
     def help_text(self) -> str:
         lines: list[str] = []
@@ -650,6 +744,7 @@ class ExoApp(App):
             self.respond_panel(pid, "dismissed")
             self.drop_panel(pid)
         elif self.busy and self.session:
+            self.hint("interrupt")
             self.run_worker(self.post(s.TurnInterrupt(session=self.session)), exit_on_error=False)
 
     def action_toggle_tools(self) -> None:

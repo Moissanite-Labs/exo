@@ -96,6 +96,7 @@ class Loop:
         self.provider_opts = dict(provider_opts or {})
         self.approval_ms: dict[str, int] = {}  # session -> time spent waiting on approvals; the engine adds to it
         self.on_turn_end: Callable[[str, str], Awaitable[None]] | None = None  # (session, turn_id), after the turn
+        self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
         self._state: dict[str, _SessionState] = {}
 
     # ---------------------------------------------------------------- public
@@ -238,7 +239,8 @@ class Loop:
 
     async def base_system(self) -> str:
         """The stable part of the system text: system prompt and the memory provider's block (no recall)."""
-        return "\n\n".join(p for p in (self.system_prompt, await self._memory("system_prompt_block") or "") if p)
+        extra = self.system_extra() if self.system_extra else ""  # last: never moves what comes before it (D-030)
+        return "\n\n".join(p for p in (self.system_prompt, await self._memory("system_prompt_block") or "", extra) if p)
 
     async def _system(self, session: str, query: str) -> tuple[str, str]:
         """(system text, recall). Recall is folded into the system text unless the context engine takes it."""
