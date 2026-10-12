@@ -32,6 +32,7 @@ from urllib.parse import urlsplit
 
 from .config import Config, exo_home
 from .core.models import keys as keys_mod
+from .core.models import muse_cli
 from .core.models.keys import KEYCHAIN_SERVICE, keys_file_path, redact_secrets, remember_secret
 from .core.models.router import Router
 
@@ -43,6 +44,8 @@ KEY_RE = re.compile(r"[!#-&(-\[\]-~]+")
 SUBPROCESS_TIMEOUT = 5.0
 PROBE_TIMEOUT = 0.3
 TEST_TIMEOUT = 15.0
+CLI_TRANSPORTS = ("claude-cli", "muse-cli")  # keyless: the CLI's own login is the credential
+MUSE_TEST_TIMEOUT = 90.0  # a `muse exec` process start plus one model turn
 ERROR_CLASSES = ("no_key", "auth", "billing", "not_found", "rate_limited", "server", "timeout", "network",
                  "not_running", "not_installed", "bad_response", "http", "error")
 
@@ -317,13 +320,15 @@ def rows(router: Router | None = None, home: str | os.PathLike | None = None, *,
         transport = spec.get("transport", "openai")
         local = bool(spec.get("local"))
         reachable = prober(spec.get("base_url", "")) if local and probe_local else None
-        installed = bool(shutil.which(spec.get("command", "claude"), path=router.env.get("PATH", ""))) \
-            if transport == "claude-cli" else None
+        cli = transport in CLI_TRANSPORTS
+        installed = bool(shutil.which(spec.get("command", transport.removesuffix("-cli")), path=router.env.get("PATH", ""))) \
+            if cli else None
+        logged_in = muse_cli.login_state(router.env)["logged_in"] if transport == "muse-cli" and installed else None
         last = state.get(name) if isinstance(state.get(name), dict) else None
         if names:
             needs, has = "key", bool(where)
-        elif transport == "claude-cli":
-            needs, has = "cli", bool(installed)
+        elif cli:
+            needs, has = "cli", bool(installed) and logged_in is not False
         else:
             needs, has = "server", bool(reachable)
         if last and not last.get("ok") and has:
@@ -333,7 +338,7 @@ def rows(router: Router | None = None, home: str | os.PathLike | None = None, *,
         elif needs == "key":
             status = "key found" if has else "no key"
         elif needs == "cli":
-            status = "installed" if has else "not installed"
+            status = "installed" if has else ("not logged in" if installed else "not installed")
         else:
             status = "running" if has else ("not running" if reachable is False else "local")
         out.append({
@@ -451,6 +456,18 @@ def test_provider(provider: str, *, router: Router | None = None, home: str | os
         res.update(ok=bool(exe), error_class="" if exe else "not_installed",
                    detail="the claude CLI is on PATH (its own login is the credential)" if exe
                    else "the claude CLI is not on PATH")
+    elif transport == "muse-cli":
+        exe = shutil.which(spec.get("command", "muse"), path=router.env.get("PATH", ""))
+        if not exe:
+            res.update(error_class="not_installed", detail="the muse CLI is not on PATH")
+        elif not muse_cli.login_state(router.env)["logged_in"]:
+            res.update(error_class="no_key", detail="not logged in; run: muse login")
+        elif muse_cli.login_state(router.env)["subs_active"] is False:
+            res.update(error_class="billing", detail="the Muse subscription is not active")
+        else:
+            t0 = time.monotonic()
+            out = muse_cli.probe(exe, router.env, max(timeout, MUSE_TEST_TIMEOUT))
+            res.update(latency_ms=int((time.monotonic() - t0) * 1000), ok=not out["error_class"], **out)
     else:
         names = key_vars(spec)
         key = next((k for n in names if (k := router._key(n))), None) if names else None
