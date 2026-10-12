@@ -570,6 +570,16 @@ class AgentContext(TreeContext):
         agent, kind = self.store.thread(session)
         return self.key(agent) if agent and kind != "subagent" else None
 
+    def cache_key(self, session: str) -> str:
+        """The conversation id providers see (their routing and prompt-cache key): one per agent, so every thread
+        reuses the same cached prefix. Stable per sessions file and agent; a plain session keeps its own id."""
+        import hashlib
+
+        key = self._agent_key(session)
+        if key is None:
+            return session
+        return "a_" + hashlib.sha256(f"{self.store.path}\n{key}".encode()).hexdigest()[:16]
+
     def thread_label(self, session: str) -> str:
         if session not in self._titles:
             info = self.store.get_session(session)
@@ -670,6 +680,11 @@ class AgentContext(TreeContext):
         if settle:
             await self.settle(key)
         top = self._top(key)
+        # The system message ends at the last summarized node. Small spans after it (skipped, or a live summary
+        # still pending) stay in the recent part, so the cached prefix changes only when a real summary lands.
+        last = max((i for i, n in enumerate(top) if n.status == "done" or (n.lane == "import" and n.status == "pending")),
+                   default=-1)
+        top = top[:last + 1]
         frontier = top[-1].end if top else 0
         parts = self._view_parts(top, "Log")
         text = system
