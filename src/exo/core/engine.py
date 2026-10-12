@@ -279,6 +279,7 @@ class CoreEngine:
         self.store = SessionStore(self.home / "sessions.sqlite")
         self.hub = Hub(SqliteLog(self.store))
         self.seat = seat
+        self.env_allow = tuple(seat.env_allow) if seat else ()  # [tools] env_allow, see tool_env
         self.agent = seat.name if seat else "default"  # one agent, one memory: every thread of this seat (D-028)
         self.log_view = agentlog.AgentLogView(self.store, self.agent)
         self._writer: Any = None  # the agent's writer lock, taken by claim_writer() (create() does)
@@ -497,7 +498,7 @@ class CoreEngine:
         if call.name == "bash" and sid:
             self._guard_cwd(sid, call, info.cwd if info and info.cwd else self.cwd)
         ctx = ToolContext(cwd=(info.cwd if info and info.cwd else self.cwd), session=sid, call_id=call.id,
-                          emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "jobs": self.jobs})
+                          emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "jobs": self.jobs, "env_allow": self.env_allow})
         return await self.registry.call(call, ctx)
 
     def _open_jobs(self, session: str | None = None) -> list[dict[str, Any]]:

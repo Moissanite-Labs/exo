@@ -12,6 +12,15 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 | `bash` | shell | high | Shell with timeout and output cap; `background: true` starts a job (docs/JOBS.md) |
 | `jobs`, `job_output`, `job_kill` | shell | low, low, medium | List, read and stop background jobs (D-032) |
 
+## Environment of bash and jobs
+
+`bash` and background jobs run with a filtered copy of the environment. Removed: the bus identity (`EXO_BUS_*`),
+`EXO_*` key variables, every provider key named by `key_env` in the model catalog, and any name ending `_API_KEY`,
+`_TOKEN`, `_SECRET` or `_PASSWORD`, plus `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`. A seat can let named
+variables through with `[tools] env_allow = ["GH_TOKEN"]`. Only tool subprocesses are filtered: model providers and
+the claude-cli child read the real environment. MCP servers get the environment their own `env` table asks for
+(`${VAR}` expansion), not this filter.
+
 ## code_find (D-029)
 
 `code_find(question, path=".", page=1, timeout=120)` runs [jevgrep](https://github.com/dzhng/jevgrep) (`jg`, MIT)

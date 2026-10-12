@@ -117,3 +117,35 @@ def test_raise_nofile_limit_raises_soft_toward_hard_and_is_safe(monkeypatch):
     monkeypatch.setattr(resource, "getrlimit", lambda r: (256, 4096))
     monkeypatch.setattr(resource, "setrlimit", boom)
     assert shell.raise_nofile_limit() is None
+
+
+def test_bash_tool_env_has_no_provider_keys_but_seat_allowlist_passes(reg, tmp_path, monkeypatch):
+    from exo.core.tools import ToolContext
+    from exo.core.types import ToolCall
+
+    fake = {"OPENROUTER_API_KEY": "fake-or", "ANTHROPIC_API_KEY": "fake-an", "OPENCODE_GO_API_KEY": "fake-oc",
+            "MY_SERVICE_TOKEN": "fake-t", "DB_PASSWORD": "fake-p", "APP_SECRET": "fake-s",
+            "AWS_SECRET_ACCESS_KEY": "fake-aws", "AWS_SESSION_TOKEN": "fake-aws2", "GH_TOKEN": "fake-gh"}
+    for k, v in fake.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("KEEP_ME", "visible")
+
+    def call(meta):
+        res = reg.call_sync(ToolCall(id="c1", name="bash", arguments={"command": "env"}),
+                            ToolContext(cwd=str(tmp_path), meta=meta))
+        return res.text()
+
+    out = call({})
+    assert "KEEP_ME=visible" in out
+    assert not [k for k in fake if k in out] and "fake-" not in out
+    out = call({"env_allow": ["GH_TOKEN"]})
+    assert "GH_TOKEN=fake-gh" in out and "OPENROUTER_API_KEY" not in out and "AWS_SESSION_TOKEN" not in out
+    import os
+    assert os.environ["OPENROUTER_API_KEY"] == "fake-or"  # the process itself keeps its keys
+
+
+def test_seat_parses_tools_env_allow():
+    from exo.core import seats
+
+    assert seats.parse({"name": "a", "tools": {"env_allow": ["GH_TOKEN"]}}).env_allow == ["GH_TOKEN"]
+    assert seats.parse({"name": "a"}).env_allow == []
