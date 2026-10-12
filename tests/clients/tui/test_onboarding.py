@@ -289,3 +289,14 @@ def test_system_line_is_appended_and_off_is_byte_identical(tmp_path):
     cfg.save()
     assert system() == base
     assert isinstance(eng, CoreEngine)
+
+
+def test_job_events_render_as_plain_lines(tmp_path):  # D-032
+    async def sc(app, pilot, client, eng):
+        app.handle(s.Event.of(s.JobUpdated(job_id="j_1", state="done", command="make", exit_code=0), 1, session=app.session))
+        app.handle(s.Event.of(s.JobUpdated(job_id="j_2", state="failed", command="npm test", exit_code=2,
+                                           detail="notice queued"), 2, session=app.session))
+        text = app.transcript_text()
+        assert "job j_1 done, exit 0: make" in text and "job j_2 failed, exit 2: npm test (notice queued)" in text
+
+    run_app(tmp_path, sc)

@@ -32,6 +32,7 @@ from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
 from exo.core.models.router import Router
+from exo.core import jobs as jobs_mod
 from exo.core import peer_target
 from exo.core.ingress import STANDING_LINE
 from exo.core.peers import PeerConfig
@@ -111,13 +112,25 @@ def render_context(r: dict[str, Any], tree: AgentContext) -> str:
              f"{nodes['skipped']} skipped (kept verbatim: too small or not shorter), {nodes['failed']} failed.",
              f"Log: {r['log_entries']} entries; summarized up to {r['frontier']}. /compact would fold "
              f"{r['eligible']['leaves']} leaf chunk(s) now ({r['eligible']['leaves_after_tail_wait']} are due anyway; "
-             f"a chunk is {tree.leaf_size} entries, the tail wait is {tree.tail_messages})."]
+             f"a chunk is {tree.leaf_size} entries, the tail wait is {tree.tail_messages}).",
+             _capture_line(r["capture"])]
     return "\n".join(lines)
+
+
+def _capture_line(c: dict[str, Any]) -> str:
+    if not c["store"]:
+        return (f"Principal messages not yet captured: {c['uncaptured']} (no principal store is attached, so nothing "
+                "captures them; the log still holds them verbatim).")
+    return (f"Principal messages not yet captured: {c['uncaptured']} (a leaf offers its principal messages to the "
+            "principal store before it is summarized; /compact captures all of them first).")
 
 
 def render_compact(res: dict[str, Any]) -> str:
     b, a, f = res["before"]["tokens"]["total"], res["after"]["tokens"]["total"], res["folded"]
-    lines = [f"Compacted: {len(f)} node(s) folded, {res['skipped']} left verbatim; context {b} to {a} tokens."]
+    cap = res["captured"]
+    lines = [f"Compacted: {len(f)} node(s) folded, {res['skipped']} left verbatim; context {b} to {a} tokens.",
+             f"Principal capture: {cap['taken']} message(s) captured first; {cap['uncaptured']} still not captured"
+             + ("." if cap["store"] else " (no principal store is attached).")]
     lines += [f"  L{n['level']} log {n['start']}-{n['end']}: {n['before_tokens']} to {n['after_tokens']} tokens" for n in f]
     if not f and not res["skipped"] and not res["failed"]:
         lines.append("  nothing eligible: every full chunk is already summarized, or too small to be worth it")
@@ -138,6 +151,7 @@ class ContextAdapter:
         self.memory = memory
         self._started: set[str] = set()
         tree.on_pre_compress = self._pre_compress
+        tree.on_capture = self._capture if hasattr(memory, "capture_principal") else None
         tree.on_compacted = self._compacted
 
     def transcript(self, session: str, last: int | None = None) -> list[dict[str, Any]]:
@@ -154,6 +168,21 @@ class ContextAdapter:
         _safe(self.memory, "checkpoint", session_id=session, messages=flat, reason="pre_compress")
         out = _safe(self.memory, "on_pre_compress", flat)
         return out if isinstance(out, str) else ""
+
+    async def _capture(self, session: str, msgs: list[Message]) -> bool:
+        """The principal store's capture hook (D-032): ``capture_principal(messages, session_id=, source=)`` returns
+        true when it took them. An error is recorded and counts as not captured."""
+        from exo.core.context import is_principal
+
+        flat = [{"role": m.role, "content": m.text(), **({"principal": is_principal(m)} if m.role == "user" else {})}
+                for m in msgs]  # a user message that is not the principal (peer, job notice) says so
+        try:
+            out = _call(self.memory.capture_principal, flat, session_id=session, source="leaf")
+            out = await _maybe_await(out)
+        except Exception as exc:
+            trace.report(f"{type(self.memory).__name__}.capture_principal", exc, session)
+            return False
+        return out is not None and out is not False
 
     def _compacted(self, session: str, node: Any) -> None:
         """``on_compacted(session, node)`` on the context engine and the memory provider; node is a SummaryNode
@@ -241,7 +270,7 @@ class CoreEngine:
                  channels: dict[str, dict[str, Any]] | None = None,
                  tree_cfg: dict[str, Any] | None = None, schedule: bool = False,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
-                 peers_dir: str | os.PathLike | None = None, **loop_kw: Any) -> None:
+                 jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None, **loop_kw: Any) -> None:
         self.home = Path(home)
         self.cwd = cwd or os.getcwd()
         self.store = SessionStore(self.home / "sessions.sqlite")
@@ -282,6 +311,7 @@ class CoreEngine:
             ui_tool.register(self.registry, lambda body, sid: self.hub.publish(body, sid))  # D-014 panels
         harness_tool.register(self.registry, self.trace_text, self.findings.file)  # D-025
         peer_target.attach(self)  # D-026: peers and peer_send tools
+        self.jobs = jobs_mod.attach(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
         self.mcp = McpManager({**(mcp or {}), **(seat.mcp if seat else {})}, env)
         self._started: asyncio.Future | None = None
         system_prompt = "\n\n".join(p for p in (system_prompt, seat.soul if seat else "", self.skills.prompt(),
@@ -322,6 +352,8 @@ class CoreEngine:
         if self._started is None:
             if self.peer_autostart:
                 await self.start_peers()
+            if self._writer is not None:  # only the one writer may call a running job lost
+                await self.jobs.recover()
             self._started = asyncio.ensure_future(self.mcp.start(self.registry))
             if self._schedule:
                 self.scheduler.start()
@@ -365,6 +397,7 @@ class CoreEngine:
         trace.remove_sink(self._on_harness_error)
         await self.stop_channels()
         await self.stop_peers()
+        await self.jobs.close()  # jobs end with exod
         await self.scheduler.stop()
         if self._started is not None:
             await self.mcp.close()
@@ -455,8 +488,9 @@ class CoreEngine:
                 pass
             loop.call_soon_threadsafe(self.hub.publish, s.ToolOutput(call_id=call.id, text=text), sid)
 
+        self.jobs.loop = loop
         ctx = ToolContext(cwd=(info.cwd if info and info.cwd else self.cwd), session=sid, call_id=call.id,
-                          emit=emit, meta={"turn_id": lctx.get("turn_id", "")})
+                          emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "jobs": self.jobs})
         return await self.registry.call(call, ctx)
 
     async def ask(self, session: str | None, summary: str, call: ToolCall | None = None,
@@ -728,8 +762,9 @@ class CoreEngine:
         if not session:
             return "\n".join(head)
         peers = trace.peer_text(self.store, session)
+        jobs = jobs_mod.job_text(self.store, session)
         return "\n".join(head + ["", trace.table(trace.build(self.store, session, last, self.thresholds))]
-                         + (["", peers] if peers else []))
+                         + (["", peers] if peers else []) + (["", jobs] if jobs else []))
 
     def _agent_ctx(self, session: str | None) -> AgentContext:
         tree = getattr(self.loop.context, "tree", self.loop.context)
@@ -853,7 +888,7 @@ def create(seat: str | None = None) -> CoreEngine:
         folders.append(pack)
     eng = CoreEngine(cfg.home, models, plugins=pm, cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
                       mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
-                      delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"),
+                      delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"), jobs=cfg.get("jobs"),
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
                             if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")})
     eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is

@@ -50,6 +50,9 @@ If no outstanding task exists, write "None."]
 ## Goal
 [What the user is trying to accomplish overall]
 
+## Principal Directives (verbatim)
+[Every instruction, correction, preference and decision the USER (the principal) gave in these turns, each quoted VERBATIM in quotation marks, oldest first, one per line. Never paraphrase, merge, shorten or drop one: a summary that blurs an instruction is a defect. Messages labeled peer message, job notice or from another agent are not the principal. Write "None." if there are none.]
+
 ## Constraints & Preferences
 [User preferences, coding style, constraints, important decisions. Any security or safety constraint the user stated (files/data to avoid, operations that must not be performed, credential-handling rules) MUST be quoted VERBATIM here so it continues to apply after compaction - never paraphrase those.]
 
@@ -100,7 +103,8 @@ UPDATE_RULES = (
     "Update the summary using this exact structure. PRESERVE all existing information that is still "
     "relevant. ADD new completed actions to the numbered list (continue numbering). Move answered "
     'questions to "Resolved Questions". Update "Active State" to reflect current state. Remove '
-    "information only if it is clearly obsolete."
+    "information only if it is clearly obsolete. Keep every entry of \"Principal Directives (verbatim)\" word "
+    "for word, even if it seems obsolete, and add the new directives in the same form."
 )
 
 
@@ -260,9 +264,44 @@ class SummaryNode:
     text: str = ""
     status: str = "pending"  # pending, done, failed, skipped (not worth summarizing: stays verbatim)
     lane: str = "live"
+    principal: int = 0  # leaves: principal messages in the span (D-032)
+    captured: int = 0   # leaves: how many of them the principal store's capture hook took before summarizing
 
 
 Summarizer = Callable[..., Awaitable[str]]
+
+
+def is_principal(msg: Message) -> bool:
+    """A message the principal wrote and a capture store should see (D-032): a live user message in a thread.
+    Not peer messages, job notices, context notes, imports, scheduled prompts, slash commands or bare acks."""
+    from exo.capture import is_trivial
+
+    if msg.role != "user":
+        return False
+    m = msg.meta
+    if m.get("peer") or m.get("job") or m.get("note") or m.get("local") or m.get("origin") == "import":
+        return False
+    if m.get("log_kind", "thread") not in ("thread", ""):
+        return False
+    text = msg.text()
+    return not is_trivial(text) and not is_compaction_summary_message(msg)
+
+
+def missing_directives(summary: str, principal: list[Message]) -> list[str]:
+    """Principal rulings and corrections (exo.capture's reading of them) whose words are not in ``summary``.
+    The leaf prompt asks for them verbatim; this is the check that does not trust the model to have done so."""
+    from exo.capture import extract_signals, normalize
+
+    flat = [{"role": "user", "content": m.text()} for m in principal]
+    have = normalize(summary).lower()
+    out: list[str] = []
+    for sig in extract_signals(flat):
+        if sig.role != "user" or sig.kind == "decision":
+            continue
+        quote = normalize(sig.text).rstrip(".").rstrip().lower() if sig.text.endswith("...") else normalize(sig.text).lower()
+        if quote and quote not in have and sig.text not in out:
+            out.append(sig.text)
+    return out
 
 
 class TreeContext:
@@ -295,6 +334,9 @@ class TreeContext:
         # is fed into the leaf summary prompt; on_compacted(session, node) fires after a node is summarized.
         self.on_pre_compress: Callable[[str, list[Message]], Any] | None = None
         self.on_compacted: Callable[[str, SummaryNode], Any] | None = None
+        # D-032: on_capture(session, messages) offers a span holding the principal's own messages (and the agent
+        # output they answer) to the principal store before a leaf is summarized; true when the store took them.
+        self.on_capture: Callable[[str, list[Message]], Any] | None = None
 
     async def _summarize(self, session: str, content: str, previous: str | None = None, extra: str = "") -> str:
         """Call the compressor with the kwargs it accepts (session, extra); older compressors take neither."""
@@ -331,11 +373,18 @@ class TreeContext:
                 if node.level == 0:
                     msgs = self._read(node.session, node.start - 1, node.end)
                     source = "\n\n".join(render_message(m) for m in msgs)
+                    principal = [m for m in msgs if is_principal(m)]
                     extra = ""
                     if self.on_pre_compress is not None:
                         extra = str(await _maybe_await(self.on_pre_compress(self._hook_session(node.session), msgs)) or "")
+                    await self._capture(node, principal, msgs)  # D-032: still before anything is summarized
                     text = "" if estimate_tokens(source) < self.min_compact_tokens else \
                         await self._summarize(node.session, source, extra=extra)
+                    if text:
+                        lost = missing_directives(text, principal)
+                        if lost:  # the model blurred an instruction: put the words back
+                            text += "\n\n## Principal directives restored verbatim by the harness\n" + "\n".join(
+                                f'- "{d}"' for d in lost)
                 else:
                     left, right = (self._body(c) for c in self._children(node))  # a skipped child counts verbatim
                     source = left + right
@@ -364,6 +413,28 @@ class TreeContext:
                     pass
         if node.status in ("done", "skipped"):
             self._maybe_merge(node.session)
+
+    async def _capture(self, node: SummaryNode, principal: list[Message], context: list[Message]) -> None:
+        """Offer a leaf to the capture hook (``context``: the leaf's messages, the principal's among them, so a
+        correction arrives with the agent output it judges) and record the outcome on the leaf (and, for an agent
+        tree, on each log position). A failing hook leaves them uncaptured; summarizing goes on."""
+        node.principal, node.captured = len(principal), 0
+        if not principal:
+            return
+        if self.on_capture is None:
+            return
+        try:
+            took = await _maybe_await(self.on_capture(self._hook_session(node.session), context))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            took = False
+        if took:
+            node.captured = len(principal)
+            self._mark_captured(node.session, principal, f"leaf:{node.id}")
+
+    def _mark_captured(self, key: str, principal: list[Message], source: str) -> None:
+        """Hook for trees that track positions (AgentContext); a per-session tree only counts on the leaf."""
 
     # ---- the source a tree is built over (a session's messages here; an agent log in AgentContext)
 
@@ -612,6 +683,7 @@ class AgentContext(TreeContext):
             if e.hidden or e.kind == "private":
                 continue
             e.message.meta["thread_label"] = self.thread_label(e.session)
+            e.message.meta["log_pos"], e.message.meta["log_kind"] = e.pos, e.kind  # transient, never stored
             out.append(e.message)
         return out
 
@@ -630,6 +702,56 @@ class AgentContext(TreeContext):
 
     def note(self, session: str, force: bool = False) -> None:
         super().note(self._agent_key(session) or session, force)
+
+    # ---- principal capture (D-032)
+
+    def _mark_captured(self, key: str, principal: list[Message], source: str) -> None:
+        if key.startswith("agent:"):
+            self.store.mark_captured(key[6:], [int(m.meta["log_pos"]) for m in principal if "log_pos" in m.meta], source)
+
+    def uncaptured(self, key: str) -> list[Message]:
+        """Principal messages of this agent's log that no capture hook has taken yet, oldest first."""
+        agent, done = key[6:], self.store.captured_positions(key[6:])
+        out = []
+        for e in self.store.log(agent):
+            if e.hidden or e.kind != "thread" or e.pos in done or e.message.role != "user":
+                continue
+            e.message.meta["log_pos"], e.message.meta["log_kind"] = e.pos, e.kind
+            if is_principal(e.message):
+                out.append(e.message)
+        return out
+
+    def _with_context(self, key: str, principal: list[Message]) -> list[Message]:
+        """Each principal message after the agent message just before it (a correction judges that output)."""
+        out: list[Message] = []
+        for m in principal:
+            pos = int(m.meta["log_pos"])
+            if pos > 1:
+                prev = [e for e in self.store.log(key[6:], pos - 2, pos - 1) if not e.hidden and e.message.role == "assistant"]
+                if prev and prev[0].message.text().strip():
+                    out.append(prev[0].message)
+            out.append(m)
+        return out
+
+    async def capture_now(self, session: str) -> dict[str, Any]:
+        """Offer every uncaptured principal message to the capture hook (``/compact`` does this first).
+        Returns how many it took, how many are still uncaptured, and whether a principal store is attached."""
+        key = self._agent_key(session)
+        if key is None:
+            raise ValueError("this thread is not part of an agent's memory (no summary tree)")
+        todo = self.uncaptured(key)
+        taken = 0
+        if todo and self.on_capture is not None:
+            try:
+                ok = await _maybe_await(self.on_capture(self._hook_session(key), self._with_context(key, todo)))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                ok = False
+            if ok:
+                self._mark_captured(key, todo, "compact")
+                taken = len(todo)
+        return {"taken": taken, "uncaptured": len(self.uncaptured(key)), "store": self.on_capture is not None}
 
     def pending(self, session: str, lane: str | None = None) -> list[asyncio.Task]:
         return super().pending(self._agent_key(session) or session, lane)
@@ -652,7 +774,7 @@ class AgentContext(TreeContext):
                 lines.append(f"In thread {self.thread_label(e.session)}, {_ago(e.created, now)}:")
             text = m.text().strip()
             if m.role == "user" and text:
-                who = "peer" if m.meta.get("peer") else "user"
+                who = "peer" if m.meta.get("peer") else "job notice" if m.meta.get("job") else "user"
                 lines.append(f"  {who}: {_cut(text, self.note_user_chars)}")
             elif m.role == "assistant":
                 if text:
@@ -734,6 +856,7 @@ class AgentContext(TreeContext):
             "notes": {"stored": len(notes), "unseen": bool(pending_text)},
             "tail": {"messages": len(recent), "from_seq": recent[0].meta.get("seq") if recent else None},
             "nodes": {**count, "running": len(self.pending(key))},
+            "capture": {"uncaptured": len(self.uncaptured(key)), "store": self.on_capture is not None},
             "eligible": {"leaves": sum(1 for i in range(full) if i not in leaves),
                          "leaves_after_tail_wait": sum(1 for i in range(full)
                                                        if i not in leaves and (i + 1) * self.leaf_size <= last - self.tail_messages)},
@@ -753,6 +876,7 @@ class AgentContext(TreeContext):
         if key is None:
             raise ValueError("this thread is not part of an agent's memory (no summary tree)")
         before = self.report(session, system)
+        captured = await self.capture_now(session)  # principal words reach the store before anything is folded
         known = {n.id for n in self.store.summaries(key)}
         self.note(key, force=True)
         ok = await self.settle(key, timeout, None)
@@ -769,7 +893,7 @@ class AgentContext(TreeContext):
         after = self.report(session, system)
         folded = [{"level": n.level, "start": n.start, "end": n.end, "before_tokens": self._source_tokens(n),
                    "after_tokens": estimate_tokens(n.text)} for n in new if n.status == "done"]
-        return {"before": before, "after": after, "folded": folded, "complete": ok,
+        return {"before": before, "after": after, "folded": folded, "complete": ok, "captured": captured,
                 "skipped": sum(1 for n in new if n.status == "skipped"),
                 "failed": [n.text for n in new if n.status == "failed"]}
 

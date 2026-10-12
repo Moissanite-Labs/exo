@@ -348,6 +348,10 @@ class ExoApp(App):
             if b.direction == "out" or b.state in ("denied", "expired"):
                 self.note(f"peer {b.peer}: {b.state}" + (f" ({b.detail})" if b.detail else ""),
                           "warn" if b.state != "delivered" and b.state != "released" else "note")
+        elif isinstance(b, s.JobUpdated):  # D-032: plain lines, no styling
+            code = "" if b.exit_code is None else f", exit {b.exit_code}"
+            self.note(f"job {b.job_id} {b.state}{code}: {b.command[:80]}" + (f" ({b.detail})" if b.detail and b.state != "running" else ""),
+                      "warn" if b.state in ("failed", "timeout", "lost") else "note")
         elif isinstance(b, s.UiPanel):
             self.on_ui_panel(b)
         elif isinstance(b, s.TasteUpdated):
@@ -380,7 +384,7 @@ class ExoApp(App):
                 continue
             text = "".join(p.get("text", "") for p in m.get("content", []) if p.get("type") == "text")
             if m["role"] == "user" and text:
-                peer = (m.get("meta") or {}).get("peer")
+                peer = (m.get("meta") or {}).get("peer") or (m.get("meta") or {}).get("job")
                 self.add(Block(text, "peer") if peer else Block(text, "user"))
             elif m["role"] == "assistant":
                 if text:

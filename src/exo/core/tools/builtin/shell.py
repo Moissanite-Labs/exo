@@ -187,13 +187,29 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
     return code, out.render(), status
 
 
+def _start_job(args: dict[str, Any], ctx: ToolContext, cwd: Any) -> str:
+    """``background: true`` (D-032): hand the command to the job manager and return at once. The gate has already
+    classified the command exactly as a foreground call; only how it runs differs."""
+    jobs = ctx.meta.get("jobs")
+    if jobs is None:
+        raise ToolError("background jobs are not available in this session; run the command in the foreground")
+    job = jobs.start(str(args["command"]), str(cwd), ctx.session, float(args["timeout"]) if args.get("timeout") else None)
+    return (f"Started background job {job['id']} (pid {job['pid']}). Output goes to {job['log']}. It keeps running if "
+            "this turn ends or is interrupted, and is stopped only by `job_kill`; the wall limit is "
+            f"{int(job['wall_s'])}s. You will get a job notice here when it ends, so do not poll or wait: carry on "
+            "with other work. `jobs` lists jobs, `job_output` reads output.")
+
+
 def bash(args: dict[str, Any], ctx: ToolContext) -> str:
+    background = args.get("background") is True
     timeout = float(args.get("timeout") or DEFAULT_TIMEOUT)
-    if not 0 < timeout <= MAX_TIMEOUT:
+    if not background and not 0 < timeout <= MAX_TIMEOUT:
         raise ToolError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
     cwd = ctx.resolve(args.get("cwd") or ".")
     if not cwd.is_dir():
         raise ToolError(f"cwd is not a folder: {cwd}")
+    if background:
+        return _start_job(args, ctx, cwd)
     code, output, status = run_command(args["command"], str(cwd), timeout,
                                        cancel=ctx.cancel, emit=ctx.emit)
     output = output.rstrip("\n")
@@ -208,9 +224,15 @@ def register(reg: Registry) -> None:
     reg.tool("bash", "Run a shell command with bash -c. stdout and stderr are merged; long output "
              f"keeps the head and tail. Default timeout {DEFAULT_TIMEOUT}s (max {MAX_TIMEOUT}; larger "
              "values are rejected); on timeout the whole process group is killed. Not interactive: "
-             "stdin is closed. macOS has no `timeout` command, so use the timeout parameter.",
+             "stdin is closed. macOS has no `timeout` command, so use the timeout parameter. For a command that "
+             "takes longer than a couple of minutes (a build, a server, a long test run) pass `background: true`: "
+             "it returns a job id at once, keeps running if the turn ends, and you get a notice when it exits "
+             "(see the jobs, job_output and job_kill tools).",
              {"type": "object", "properties": {
                  "command": {"type": "string"},
                  "timeout": {"type": "number", "description": f"Seconds before the command is killed (max {MAX_TIMEOUT}; larger values are rejected)"},
-                 "cwd": {"type": "string", "description": "Working folder (default session cwd)"}},
+                 "cwd": {"type": "string", "description": "Working folder (default session cwd)"},
+                 "background": {"type": "boolean", "description": "Run as a background job and return a job id at "
+                                "once. `timeout` then means the job's wall limit (default and maximum set by the "
+                                "seat, 2 h)."}},
               "required": ["command"]}, risk="high", toolset="shell")(bash)

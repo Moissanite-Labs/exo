@@ -53,12 +53,21 @@ CREATE TABLE IF NOT EXISTS summaries (
     start_seq INTEGER NOT NULL, end_seq INTEGER NOT NULL, text TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL, lane TEXT NOT NULL DEFAULT 'live', UNIQUE (session, level, idx)
 );
+CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY, agent TEXT NOT NULL, session TEXT, command TEXT NOT NULL, cwd TEXT, state TEXT NOT NULL,
+    exit_code INTEGER, pid INTEGER, started REAL NOT NULL, ended REAL, log TEXT NOT NULL, detail TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS captures (
+    agent TEXT NOT NULL, pos INTEGER NOT NULL, ts TEXT NOT NULL, source TEXT NOT NULL, PRIMARY KEY (agent, pos)
+);
 """
 
 # Columns added by D-028; older files get them on open.
 UPGRADES = (("sessions", "agent", "TEXT"), ("sessions", "kind", "TEXT NOT NULL DEFAULT ''"),
             ("messages", "agent", "TEXT"), ("messages", "pos", "INTEGER"), ("messages", "hash", "TEXT"),
-            ("messages", "hidden", "INTEGER NOT NULL DEFAULT 0"))
+            ("messages", "hidden", "INTEGER NOT NULL DEFAULT 0"),
+            ("summaries", "principal", "INTEGER NOT NULL DEFAULT 0"),  # D-032: principal messages in a leaf
+            ("summaries", "captured", "INTEGER NOT NULL DEFAULT 0"))   # ... and how many the capture hook took
 LOGGED_KINDS = ("thread", "scheduled", "private")  # thread kinds whose messages enter the agent log
 SCHEMA_VERSION = 2
 
@@ -445,11 +454,21 @@ class SessionStore:
     # ---------------------------------------------------------------- summaries (tree nodes)
 
     def save_summary(self, node: Any) -> None:
-        self._q("INSERT INTO summaries (id, session, level, idx, start_seq, end_seq, text, status, lane)"
-                " VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET text=excluded.text,"
-                " status=excluded.status",
+        self._q("INSERT INTO summaries (id, session, level, idx, start_seq, end_seq, text, status, lane,"
+                " principal, captured) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET"
+                " text=excluded.text, status=excluded.status, principal=excluded.principal,"
+                " captured=excluded.captured",
                 (node.id, node.session, node.level, node.index, node.start, node.end, node.text,
-                 node.status, node.lane))
+                 node.status, node.lane, node.principal, node.captured))
+
+    def mark_captured(self, agent: str, positions: list[int], source: str) -> None:
+        """Record that the principal store took these log positions (D-032). The log itself is never touched."""
+        ts = now_ts()
+        for pos in positions:
+            self._q("INSERT OR IGNORE INTO captures (agent, pos, ts, source) VALUES (?,?,?,?)", (agent, pos, ts, source))
+
+    def captured_positions(self, agent: str) -> set[int]:
+        return {r[0] for r in self._q("SELECT pos FROM captures WHERE agent=?", (agent,))}
 
     def summaries(self, sid: str) -> list[Any]:
         from exo.core.context import SummaryNode
@@ -457,7 +476,7 @@ class SessionStore:
         rows = self._q("SELECT * FROM summaries WHERE session=? ORDER BY level, idx", (sid,))
         return [SummaryNode(id=r["id"], session=r["session"], level=r["level"], index=r["idx"],
                             start=r["start_seq"], end=r["end_seq"], text=r["text"], status=r["status"],
-                            lane=r["lane"]) for r in rows]
+                            lane=r["lane"], principal=r["principal"], captured=r["captured"]) for r in rows]
 
     # ---------------------------------------------------------------- events
 

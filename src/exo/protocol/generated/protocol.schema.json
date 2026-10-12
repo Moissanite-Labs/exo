@@ -140,6 +140,9 @@
     "memory.summarized": {
       "$ref": "#/$defs/MemorySummarized"
     },
+    "job.updated": {
+      "$ref": "#/$defs/JobUpdated"
+    },
     "handoff.written": {
       "$ref": "#/$defs/HandoffWritten"
     },
@@ -717,6 +720,50 @@
       },
       "additionalProperties": false,
       "description": "Handshake. Server replies with its protocol version and capabilities."
+    },
+    "JobUpdated": {
+      "type": "object",
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string",
+          "default": "running"
+        },
+        "command": {
+          "type": "string",
+          "default": ""
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "default": 0
+        },
+        "log": {
+          "type": "string",
+          "default": ""
+        },
+        "detail": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "job_id"
+      ],
+      "description": "A background shell job changed state (D-032, docs/JOBS.md): ``running`` when it starts, then one of ``done`` (exit 0), ``failed`` (non-zero exit), ``killed``, ``timeout`` or ``lost`` (exod restarted). One type with a state, as ``task.updated`` does, because the protocol has few event slots left."
     },
     "MemorySummarized": {
       "type": "object",

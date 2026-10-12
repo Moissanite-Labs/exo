@@ -126,6 +126,16 @@ export interface Hello {
   screen_cols?: number | null;
 }
 
+export interface JobUpdated {
+  job_id: string;
+  state?: string;
+  command?: string;
+  exit_code?: number | null;
+  elapsed_ms?: number;
+  log?: string;
+  detail?: string;
+}
+
 export interface MemorySummarized {
   node_id: string;
   level: number;
@@ -475,6 +485,7 @@ export interface EventBodies {
   "question.asked": QuestionAsked;
   "context.compacted": ContextCompacted;
   "memory.summarized": MemorySummarized;
+  "job.updated": JobUpdated;
   "handoff.written": HandoffWritten;
   "task.updated": TaskUpdated;
   "usage.updated": UsageUpdated;
