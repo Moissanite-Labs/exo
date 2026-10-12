@@ -893,6 +893,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 
 ## D-044 (2026-10-12) Taste baseline: ship a house taste, then fit the new user
 - **Status:** Accepted 2026-10-12, not built. Design in docs/TASTE-BASELINE.md.
+- **Contested questions (principal, verbatim, 2026-10-12):** "C ship the implications behind the world view and the
+  kind of thinking behind it rather than specifics like religious prescriptions and border-based politics". Value
+  items on contested questions ship as reasoning style and its implications only; no faith, nation, party or
+  territory, no prescribed practice.
 - **Ruling (principal, verbatim, 2026-10-12):** "the project should ship with my taste as a baseline because its a
   good starting point and its been finely tuned with a lot of hard work. then over time it should mould and readapt
   to the new user that it works with. perhaps an innate decay mechanism for older memories/learnings, perhaps
