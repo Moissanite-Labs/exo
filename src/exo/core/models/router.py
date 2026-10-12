@@ -24,6 +24,7 @@ from exo.core.models.base import error_event
 from exo.core.models.decision import DecisionProvider
 from exo.core.models.keys import lookup_key
 from exo.core.models.openai_chat import OpenAIChatProvider
+from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
 
 CATALOG_PATH = Path(__file__).with_name("catalog.toml")
@@ -224,6 +225,7 @@ class Router:
         then falling back to later routes until output has started. Ends with exactly one
         ``done`` or ``error``."""
         tried: list[str] = []
+        attempts: list[dict[str, Any]] = []  # every try, for the model.call record (D-025)
         last: ProviderEvent | None = None
         chain = self.chain(role)
         for i, route in enumerate(chain):
@@ -231,24 +233,36 @@ class Router:
                 cred, sole = picked
                 tried.append(route.ref)
                 failed: list[ProviderEvent] = []
-                async for ev in self._attempt(route, cred, sole, messages, tools, opts, failed):
+                async for ev in self._attempt(route, cred, sole, messages, tools, opts, failed, attempts):
                     yield ev
                 if not failed:
                     return
                 last = failed[0]
                 nxt = next((r for r in chain[i:] if self._pick(r, self.clock())), None)
+                if nxt is None:
+                    if attempts[-1]["outcome"] == "fallback":
+                        attempts[-1]["outcome"] = "error"  # nothing left to fall back to
                 if nxt is not None:  # tell the user why the wait ended and where the call goes next
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
                     yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}")
-        yield self._exhausted(role, tried, last)
+        end = self._exhausted(role, tried, last)
+        end.attempts = attempts
+        yield end
 
     async def _attempt(self, route: Route, cred: Credential, sole: bool, messages: list[Message],
-                       tools: list[ToolSpec], opts: dict[str, Any],
-                       failed: list[ProviderEvent]) -> AsyncIterator[ProviderEvent]:
+                       tools: list[ToolSpec], opts: dict[str, Any], failed: list[ProviderEvent],
+                       attempts: list[dict[str, Any]] | None = None) -> AsyncIterator[ProviderEvent]:
         """One call on one credential. A failure that may fall back is swallowed and
-        appended to ``failed``; anything else (including a terminal error) is yielded."""
-        started = False
+        appended to ``failed``; anything else (including a terminal error) is yielded.
+        Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``)."""
+        started, t0 = False, time.monotonic()
+        attempts = [] if attempts is None else attempts
+
+        def note(outcome: str, err: str = "") -> None:
+            attempts.append({"route": route.ref, "outcome": outcome, "error": scrub(err, 160),
+                             "ms": int((time.monotonic() - t0) * 1000)})
+
         async for ev in cred.provider.stream(messages, tools, **{**opts, "model": route.model}):
             if ev.kind == "error":
                 retry_after = ev.retry_after
@@ -256,8 +270,12 @@ class Router:
                 if fallback:
                     self.record_failure(cred.id, route.model, ev.status, retry_after, sole)
                 if started or not fallback:
+                    note("error", ev.error or "")
+                    ev.route, ev.attempts = route.ref, attempts
                     yield ev
                 else:
+                    note("timeout" if (ev.error or "").startswith("ReadTimeout") or "timed out" in (ev.error or "")
+                         else "fallback", ev.error or "")
                     failed.append(ev)
                 return
             if ev.kind in ("text", "reasoning", "tool_call"):
@@ -266,6 +284,8 @@ class Router:
                 ev.usage = self.price(route, ev.usage)
                 ev.route = route.ref  # the route that served this call, after any fallback
                 if ev.kind == "done":
+                    note("ok")
+                    ev.attempts = attempts
                     self.record_success(cred.id, route.model)
                     if ev.message is not None:
                         ev.message.meta.setdefault("model", route.ref)

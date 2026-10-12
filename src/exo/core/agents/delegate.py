@@ -39,7 +39,8 @@ READ_ONLY = {"scout", "critic"}  # low-risk tools only
 ROLE_TIERS = {"scout": "fast", "verifier": "standard", "builder": "standard", "critic": "deep"}
 # Hermes DELEGATE_BLOCKED_TOOLS, renamed for Exo: no recursion (unless depth allows), no user
 # interaction (no ui panels), no shared memory writes, no outward messages, no scheduling in the parent's name.
-BLOCKED_TOOLS = frozenset({"delegate", "clarify", "ask", "memory", "send_message", "bus_post", "cronjob_manage", "ui"})
+BLOCKED_TOOLS = frozenset({"delegate", "clarify", "ask", "memory", "send_message", "bus_post", "cronjob_manage", "ui",
+                           "exo_harness_report", "exo_trace"})  # self-observation is the main agent's job (D-025)
 BLOCKED_TOOLSETS = frozenset({"memory", "bus", "delegation", "kanban", "skills"})  # children get no skills index
 WRITE_TOOLS = {"write_file", "edit_file"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
@@ -299,10 +300,12 @@ class Delegator:
         prompt = CHILD_PROMPT + (ORCHESTRATOR_NOTE if "delegate" in names else "")
         if b.cwd:
             prompt += f"\n\nWorking directory: {b.cwd}"
-        return Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
-                    e.router.provider("aux"))), tool_specs=lambda: e.registry.specs(names=sorted(names)),
-                    run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
-                    max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
+        child = Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
+                     e.router.provider("aux"))), tool_specs=lambda: e.registry.specs(names=sorted(names)),
+                     run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
+                     max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
+        child.approval_ms = e.loop.approval_ms  # engine.ask adds to one table; the parent turn reads it
+        return child
 
     def _emit(self, parent: str, b: Brief, status: str, child: str | None, packet: str) -> None:
         self.engine.hub.publish(s.TaskUpdated(task_id=b.id, title=b.goal[:80], status=status, child_session=child,

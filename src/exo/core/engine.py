@@ -17,12 +17,16 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Iterable
 
+from exo.core import trace
 from exo.core.agents import Delegator
 from exo.core.context import DefaultCompressor, TreeContext, _maybe_await
+from exo.core.findings import Findings
 from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
@@ -34,6 +38,7 @@ from exo.core.seats import Seat, SeatError, list_seats
 from exo.core.seats import load as load_seat
 from exo.core.sessions import SessionLocked, SessionStore
 from exo.core.skills import SkillIndex, pack_dir, register_skill_tool
+from exo.core.tools.builtin import harness as harness_tool
 from exo.core.tools.builtin import ui as ui_tool
 from exo.core.tools.registry import Block, Registry, ToolContext, default_registry
 from exo.core.types import ContentPart, Message, ToolCall, ToolResult, ToolSpec, Usage, to_dict
@@ -135,7 +140,8 @@ class ContextAdapter:
         try:
             out = await _maybe_await(_call(pick, flat, conversation_messages=flat, budget_tokens=0,
                                            session_id=session))
-        except Exception:
+        except Exception as exc:
+            trace.report("context engine select_context", exc, session)
             return msgs
         if not out:
             return msgs
@@ -164,7 +170,8 @@ def _safe(obj: Any, method: str, *args: Any, **kw: Any) -> Any:
     fn = getattr(obj, method, None)
     try:
         return _call(fn, *args, **kw) if fn else None
-    except Exception:  # a plugin failure never breaks a turn
+    except Exception as exc:  # a plugin failure never breaks a turn, but it is recorded
+        trace.report(f"{type(obj).__name__}.{method}", exc, kw.get("session_id"))
         return None
 
 
@@ -178,7 +185,8 @@ class CoreEngine:
                  seat: Seat | None = None, skill_folders: Iterable[str | os.PathLike] | None = None,
                  mcp: dict[str, dict[str, Any]] | None = None,
                  channels: dict[str, dict[str, Any]] | None = None,
-                 tree_cfg: dict[str, Any] | None = None, schedule: bool = False, **loop_kw: Any) -> None:
+                 tree_cfg: dict[str, Any] | None = None, schedule: bool = False,
+                 trace_cfg: dict[str, Any] | None = None, **loop_kw: Any) -> None:
         self.home = Path(home)
         self.cwd = cwd or os.getcwd()
         self.store = SessionStore(self.home / "sessions.sqlite")
@@ -196,6 +204,10 @@ class CoreEngine:
         self._channels: dict[str, Any] = {}
         self._channel_cfg: dict[str, dict[str, Any]] = {**(channels or {}), **(seat.channels if seat else {})}
         self._tasks: set[asyncio.Task] = set()
+        self.thresholds = trace.Thresholds.of(trace_cfg)
+        self.findings = Findings(self.store, self.thresholds)
+        self._trace_on = (trace_cfg or {}).get("enabled", True) is not False
+        trace.add_sink(self._on_harness_error)
         self._bridge_plugins()
         if seat and seat.tier and self.router.roles.get(seat.tier):
             self.router.set_role("main", list(self.router.roles[seat.tier]))
@@ -205,6 +217,7 @@ class CoreEngine:
         register_skill_tool(self.registry, self.skills)
         if self.registry.get("ui") is None:
             ui_tool.register(self.registry, lambda body, sid: self.hub.publish(body, sid))  # D-014 panels
+        harness_tool.register(self.registry, self.trace_text, self.findings.file)  # D-025
         self.mcp = McpManager({**(mcp or {}), **(seat.mcp if seat else {})}, env)
         self._started: asyncio.Future | None = None
         system_prompt = "\n\n".join(p for p in (system_prompt, seat.soul if seat else "", self.skills.prompt()) if p)
@@ -214,6 +227,7 @@ class CoreEngine:
                          context=ContextAdapter(tree, slots.context, slots.memory), memory=slots.memory,
                          tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
+        self.loop.on_turn_end = self.observe_turn
         signer = None
         if seat:  # receipts are signed with the seat key (made on first use, mode 0600)
             from exo import crypto
@@ -233,7 +247,7 @@ class CoreEngine:
         if allow is None:
             return self.registry.specs()
         return [sp for sp in self.registry.specs() if sp.toolset in allow or sp.toolset.split(":")[0] in allow
-                or sp.toolset == "skills"]
+                or sp.toolset in ("skills", "harness")]
 
     async def start(self) -> None:
         """Connect MCP servers once (idempotent; the first command triggers it)."""
@@ -259,17 +273,19 @@ class CoreEngine:
                 out[name] = None
             except Exception as exc:  # one bad channel never stops the server
                 out[name] = f"{type(exc).__name__}: {exc}"
+                trace.report(f"channel {name} start", exc)
         return out
 
     async def stop_channels(self) -> None:
         for name, chan in list(self._channels.items()):
             try:
                 await _maybe_await(chan.stop())
-            except Exception:
-                pass
+            except Exception as exc:
+                trace.report(f"channel {name} stop", exc)
             self._channels.pop(name, None)
 
     async def close(self) -> None:
+        trace.remove_sink(self._on_harness_error)
         await self.stop_channels()
         await self.scheduler.stop()
         if self._started is not None:
@@ -362,7 +378,7 @@ class CoreEngine:
         """Publish an approval request and wait for ``approval.respond``.
 
         ``decided_by`` (optional out list) receives the id of the client that answered."""
-        rid = s.new_id("a")
+        rid, t0 = s.new_id("a"), time.monotonic()
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._approvals[rid] = (fut, session)
         req = s.ApprovalRequested(request_id=rid, summary=summary, risk=risk, call=call)
@@ -374,6 +390,8 @@ class CoreEngine:
                 decided_by.append(self._deciders.pop(rid, "client"))
             return decision
         finally:
+            if session:  # the turn summary reports this apart from tool time
+                self.loop.approval_ms[session] = self.loop.approval_ms.get(session, 0) + int((time.monotonic() - t0) * 1000)
             self._approvals.pop(rid, None)
             self._open_approvals.pop(rid, None)
             self._deciders.pop(rid, None)
@@ -465,7 +483,14 @@ class CoreEngine:
 
     async def _feedback_send(self, b: s.FeedbackSend) -> dict[str, Any]:
         from exo import learn  # outside the core; learning off just records nothing
-        return learn.handle_feedback(self, b)
+        out = learn.handle_feedback(self, b)
+        if b.verdict in ("reject", "should_have_been"):  # the principal's own finding (D-025)
+            note = (b.text or "").strip()
+            self.findings.file(f"principal:{b.verdict}:{b.session}:{b.message_id or 'last'}",
+                               f"Answer {'rejected' if b.verdict == 'reject' else 'should have been different'}"
+                               + (f": {note[:80]}" if note else ""), source="principal", severity="papercut",
+                               detail=note or "no note", session=b.session, model=self.loop.model)
+        return out
 
     async def _ui_respond(self, b: s.UiRespond) -> dict[str, Any]:
         from exo import learn
@@ -514,10 +539,66 @@ class CoreEngine:
         return {"tools": self.registry.schemas()}
 
     async def _commands_list(self, b: s.CommandsList) -> dict[str, Any]:
-        return {"commands": [{"name": c.name, "description": c.description, "args": c.args_hint}
-                             for c in sorted(self.plugins.commands.values(), key=lambda c: c.name)]}
+        own = [{"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
+               {"name": "findings", "description": "open harness findings", "args": ""}]
+        return {"commands": own + [{"name": c.name, "description": c.description, "args": c.args_hint}
+                                   for c in sorted(self.plugins.commands.values(), key=lambda c: c.name)]}
+
+    # ------------------------------------------------------------ self-observation (D-025)
+
+    def _on_harness_error(self, body: s.HarnessError, session: str | None) -> None:
+        """Sink for ``trace.report``: publish the error. Outside a running turn (no turn-end check is coming)
+        it also becomes a finding right away."""
+        if session and self.store.get_session(session) is None:
+            return  # another engine's session
+        self.hub.publish(body, session)
+        st = self.loop._state.get(session) if session else None
+        if self._trace_on and (st is None or not st.running):
+            self.findings.file(f"harness.error:{body.where}:{body.error_type}", f"Harness error in {body.where}",
+                               severity="bug", detail=f"{body.error_type}: {body.message}", session=session)
+
+    async def observe_turn(self, session: str, turn_id: str) -> None:
+        """After a turn: apply the anomaly rules (no model call), file findings, verify fixed ones."""
+        if not self._trace_on:
+            return
+        for f in trace.turn_flags(self.store, session, self.thresholds):
+            self.findings.file_flag(f)
+        self.findings.sweep()
+
+    def trace_text(self, session: str | None, last: int = 10) -> str:
+        """What ``exo_trace`` and ``/trace`` show: the model this session runs on, then the per-turn table."""
+        info = self.store.get_session(session) if session else None
+        calls = self.store._q("SELECT body FROM events WHERE session=? AND type='model.call' ORDER BY seq DESC LIMIT 1",
+                              (session,)) if session else []
+        served = (json.loads(calls[0]["body"]).get("route") if calls else "") or "no model call recorded yet"
+        head = [f"running on: {self.loop.model or '-'} (session model {info.model if info else '-'}, last call served "
+                f"by {served}); chain: {', '.join(r.ref for r in self.router.chain('main')) or '-'}",
+                f"harness {self.findings.version}; open findings {self.findings.open_count()}"]
+        if not session:
+            return "\n".join(head)
+        return "\n".join(head + ["", trace.table(trace.build(self.store, session, last, self.thresholds))])
+
+    async def _builtin_command(self, b: s.CommandRun) -> Any:
+        if b.name == "trace":
+            return self.trace_text(b.session, int(b.args) if b.args.strip().isdigit() else 10)
+        if b.name == "findings":
+            if b.args.strip() == "count":
+                return {"open": self.findings.open_count()}
+            return self.findings.text("open")
+        if b.name == "harness_error":  # a client (the TUI) reporting an exception it caught
+            try:
+                d = json.loads(b.args)
+            except ValueError:
+                d = {"where": "client", "message": b.args}
+            trace.report(str(d.get("where") or "client"), str(d.get("message") or ""), b.session,
+                         error_type=str(d.get("error_type") or ""), tb=str(d.get("traceback") or ""))
+            return None
+        return _MISSING
 
     async def _command_run(self, b: s.CommandRun) -> dict[str, Any]:
+        out = await self._builtin_command(b)
+        if out is not _MISSING:
+            return {"output": out}
         cmd = self.plugins.commands.get(b.name)
         if cmd is None:
             raise CommandFailed("not_found", f"no command /{b.name}")
@@ -583,7 +664,7 @@ def create(seat: str | None = None) -> CoreEngine:
         folders.append(pack)
     eng = CoreEngine(cfg.home, models, plugins=pm, cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
                       mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
-                      delegation=cfg.get("delegation"), schedule=cfg.get("schedule", True) is not False,
+                      delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False,
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
                             if k in ("leaf_size", "tail_messages", "view_budget")})
     if cfg.get("learn", {}).get("enabled", True) is not False:
