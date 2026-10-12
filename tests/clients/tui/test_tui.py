@@ -406,3 +406,27 @@ def test_peers_command_send_and_inline_peer_message(tmp_path):
         asyncio.run(main())
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_new_is_a_thread_of_the_same_memory(tmp_path):
+    from exo.core.context import NOTE_HEAD
+
+    async def sc(app, pilot, client, eng):
+        first = app.session
+        await send(app, pilot, "hello from the first window")
+        await until(lambda: not app.busy and app.last_answer[1], pilot)
+        await send(app, pilot, "/new")
+        await until(lambda: app.session != first, pilot)
+        assert "same memory" in app.transcript_text()
+        second = app.session
+        await send(app, pilot, "hello again")
+        await until(lambda: not app.busy and "Hello" in app.last_answer[1], pilot)
+        stored = eng.store.messages(second)
+        assert any(m.meta.get("note") and "first window" in m.text() for m in stored)  # it knows the other thread
+        await app.load_session(second)
+        assert NOTE_HEAD not in app.transcript_text() and "resumed thread" in app.transcript_text()
+        await send(app, pilot, "/new private")
+        await until(lambda: app.session not in (first, second), pilot)
+        assert eng.store.get_session(app.session).kind == "private"
+
+    run(tmp_path, sc)
