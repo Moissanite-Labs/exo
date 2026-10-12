@@ -40,7 +40,7 @@ ROLE_TIERS = {"scout": "fast", "verifier": "standard", "builder": "standard", "c
 # Hermes DELEGATE_BLOCKED_TOOLS, renamed for Exo: no recursion (unless depth allows), no user
 # interaction, no shared memory writes, no outward messages, no scheduling in the parent's name.
 BLOCKED_TOOLS = frozenset({"delegate", "clarify", "ask", "memory", "send_message", "bus_post", "cronjob_manage"})
-BLOCKED_TOOLSETS = frozenset({"memory", "bus", "delegation", "kanban"})
+BLOCKED_TOOLSETS = frozenset({"memory", "bus", "delegation", "kanban", "skills"})  # children get no skills index
 WRITE_TOOLS = {"write_file", "edit_file"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
 

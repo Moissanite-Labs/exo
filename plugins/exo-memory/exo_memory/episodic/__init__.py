@@ -3,10 +3,10 @@
 Vendored from aska-digital/optchat-memory v1.0.0 (MIT, Copyright (c) 2026 aska-digital; see
 LICENSE-optchat). store.py, tree.py, view.py and compact.py are the optchat modules with small
 changes marked "exo:". This file holds what was the optchat provider glue, reshaped as a
-plain class so exo-memory can own the one Hermes memory-provider slot (D-007).
+plain class so exo-memory can own the one memory-provider slot (D-007).
 
-The log lives under the principal store (``<store>/episodic/``), never under HERMES_HOME, so
-memory follows the principal across profiles and engines.
+The log lives under the principal store (``<store>/episodic/``), never under the Exo home, so
+memory follows the principal across seats and engines.
 """
 from __future__ import annotations
 

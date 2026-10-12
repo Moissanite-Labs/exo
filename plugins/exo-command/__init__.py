@@ -1,27 +1,24 @@
-"""exo-command: Exo's command centre as a Hermes plugin.
+"""exo-command: Exo's command centre, a web client of the Exo protocol.
 
-Two halves, one directory:
-
-* ``dashboard/``: the Hermes web dashboard plugin (manifest, ``plugin_api.py`` router, vanilla
-  JS bundle). Hermes discovers it from ``<home>/plugins/exo-command/dashboard/manifest.json``
-  and mounts the router at ``/api/plugins/exo-command/`` once the plugin is in
-  ``plugins.enabled``.
+* ``exo_command/``: the client. ``service.CommandCentre`` folds protocol queries and the event
+  stream into panels; ``server.WebServer`` serves them (standard library only);
+  ``python -m exo_command`` runs it. Hermes readers live in ``exo.ingest.hermes_dashboard``.
 * this module: ``register(ctx)`` adds one slash command, ``/exo-command``, which prints a short
-  digest from the same read-only service.
+  digest of the same panels by asking the running core over its socket.
 
-Nothing here writes to a Hermes database.
+Nothing here reads another program's database.
 """
 from __future__ import annotations
 
 import os
 import sys
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 def _service():
     try:
-        from .exo_command import service  # loaded as a package by the Hermes plugin loader
+        from .exo_command import service  # loaded as a package by the plugin loader
     except ImportError:
         here = os.path.dirname(os.path.abspath(__file__))
         if here not in sys.path:
@@ -30,13 +27,23 @@ def _service():
     return service
 
 
-def _command(raw_args: str = "") -> str:
-    return _service().default_centre().summary()
+async def _command(raw_args: str = "") -> str:
+    service = _service()
+    centre = service.CommandCentre()
+    try:
+        centre.connect()
+        await centre.bootstrap()
+        return centre.summary()
+    except Exception as exc:  # no daemon, bad token: say so, do not trace
+        return ("Cannot reach the Exo core ({}: {}). Start it with `exo serve`, or run the web client with "
+                "`python -m exo_command`.".format(type(exc).__name__, exc))
+    finally:
+        await centre.aclose()
 
 
 def register(ctx) -> None:
     ctx.register_command(
         "exo-command",
         _command,
-        description="Command centre digest: decisions waiting, live agents, kanban, projects (read-only).",
+        description="Command centre digest: approvals, decisions, live sessions, tasks, projects.",
     )

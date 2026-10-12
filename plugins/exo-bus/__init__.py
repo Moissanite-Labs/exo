@@ -1,8 +1,8 @@
-"""exo-bus Hermes plugin entry point.
+"""exo-bus plugin entry point (Exo core).
 
 Needs the `exo` package. In a source checkout it is found at ../../src when not installed.
-Tools register always (gated by config through check_fn). The platform adapter registers when the
-Hermes gateway modules are importable.
+Tools register always (gated by config through check_fn). The Channel registers when the core's
+plugin context offers ``register_channel``.
 """
 from __future__ import annotations
 
@@ -31,15 +31,15 @@ def register(ctx) -> None:
         _tools.register_tools(ctx)
     except Exception:
         logger.warning("exo-bus: failed to register tools", exc_info=True)
-    if not hasattr(ctx, "register_platform"):
+    if not hasattr(ctx, "register_channel"):
         return
     try:
         if __package__:
-            from .exo_bus_hermes.adapter import register_platform
+            from .exo_bus_hermes.adapter import register_channel
         else:
-            from exo_bus_hermes.adapter import register_platform
-        register_platform(ctx)
+            from exo_bus_hermes.adapter import register_channel
+        register_channel(ctx)
     except ImportError:
-        logger.info("exo-bus: Hermes gateway not importable; platform adapter not registered")
+        logger.info("exo-bus: protocol client not importable; channel not registered")
     except Exception:
-        logger.warning("exo-bus: failed to register platform adapter", exc_info=True)
+        logger.warning("exo-bus: failed to register channel", exc_info=True)

@@ -19,6 +19,7 @@ export interface ApprovalRespond {
   request_id: string;
   decision: "allow" | "deny" | "allow_always";
   note?: string;
+  client?: string;
 }
 
 export interface Command {

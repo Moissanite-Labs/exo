@@ -1,28 +1,34 @@
-"""Hermes platform adapter: the bus as a gateway platform.
+"""The bus as an Exo Channel: a protocol client between a signed bus seat and the core.
 
-Inbound: polls the seat's inbox (cursor kept on disk) and hands each message from another seat to
-the gateway as a MessageEvent. A message addressed to this seat directly opens a DM with the sender;
-a message to team:<name> or group lands in that shared chat. Outbound: `send(chat_id, text)` posts a
-signed envelope to chat_id (a seat, team:<name> or group), in the thread the message came from.
+Inbound: polls the seat's inbox (cursor kept on disk) and turns each message from another seat
+into ``turn.send`` on a session bound to the chat it came from. A message addressed to this seat
+opens a chat with the sender; a message to team:<name> or group lands in that shared chat.
+Outbound: the channel follows the core's event stream and, when a turn on a bus session completes,
+posts the final assistant text back as a signed envelope in the same thread.
+
+The channel needs only a ``link``: an object with ``async call(body) -> dict`` (a protocol command,
+as ``exo.protocol.client.Client.call``) and ``events(since, session)`` (an async iterator of
+protocol events). A real deployment passes an ``exo.protocol.client.Client``; ``InProcessLink``
+wraps a running engine for tests and for an embedded core.
+
+Peer input is not the principal: bus text is framed as coming from another seat, and a bus peer
+cannot answer ``approval.requested`` (only the principal's own clients can).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
-from gateway.config import Platform, PlatformConfig
-from gateway.platforms.base import BasePlatformAdapter, SendResult
-from gateway.platforms.event import MessageEvent, MessageType
-from gateway.platforms.helpers import MessageDeduplicator
-
 from exo.bus import BusError
+from exo.protocol import schema as s
 
 from .settings import Cursor, configured, make_client, setting
 
 logger = logging.getLogger(__name__)
-PLATFORM = "exo_bus"
+CHANNEL = "exo_bus"
 MAX_MESSAGE_LENGTH = 60000
 BACKOFF = (2, 5, 10, 30, 60)
 
@@ -34,23 +40,6 @@ PLATFORM_HINT = (
 )
 
 
-def check_requirements() -> bool:
-    try:
-        import exo.bus  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
-def validate_config(config) -> bool:
-    return configured(getattr(config, "extra", None) or {})
-
-
-def is_connected(config) -> bool:
-    extra = getattr(config, "extra", None) or {}
-    return bool(extra.get("enabled")) or configured(extra)
-
-
 def route(env: dict, seat: str) -> tuple[str, str]:
     """(chat_id, chat_type) for an inbound envelope as seen by `seat`."""
     if seat in env["to"]:
@@ -59,52 +48,119 @@ def route(env: dict, seat: str) -> tuple[str, str]:
     return shared, "group"
 
 
-class ExoBusAdapter(BasePlatformAdapter):
-    MAX_MESSAGE_LENGTH = MAX_MESSAGE_LENGTH
+def frame(env: dict, text: str, chat_type: str) -> str:
+    where = "direct message" if chat_type == "dm" else f"message to {','.join(env['to'])}"
+    return f"[Exo Bus {where} from seat {env['from']}, thread {env['thread'] or env['id']}]\n{text}"
 
-    def __init__(self, config: PlatformConfig):
-        super().__init__(config=config, platform=Platform(PLATFORM))
-        self._extra = dict(config.extra or {})
-        self._client = None
-        self._cursor: Optional[Cursor] = None
-        self._task: Optional[asyncio.Task] = None
-        self._poll = float(setting("POLL_SECONDS", self._extra, "5") or 5)
-        self._dedup = MessageDeduplicator(max_size=2000, ttl_seconds=3600)
-        self._threads: dict[str, str] = {}  # chat_id -> last thread seen, so replies stay in thread
 
-    async def connect(self, *, is_reconnect: bool = False) -> bool:
-        if not configured(self._extra):
-            logger.warning("[%s] EXO_BUS_URL and EXO_BUS_SEAT are required", self.name)
-            return False
+class InProcessLink:
+    """Link to an engine in the same process (``CoreEngine`` or any exod Engine)."""
+
+    def __init__(self, engine: Any):
+        from exo.server.app import Dispatcher
+        self.engine = engine
+        self.dispatcher = Dispatcher(engine)
+
+    async def call(self, body: Any) -> dict[str, Any]:
+        resp = await self.dispatcher.run(s.Command.of(body))
+        if not resp.ok:
+            raise RuntimeError(f"{resp.error.code}: {resp.error.message}" if resp.error else "command failed")
+        return resp.result
+
+    async def events(self, since: int = 0, session: Optional[str] = None):
+        sub = self.dispatcher.hub.subscribe(since, session)
         try:
+            async for ev in sub:
+                yield ev
+        except Exception:  # Closed: the hub is shutting down
+            return
+        finally:
+            sub.close()
+
+
+class BusChannel:
+    def __init__(self, link: Any, extra: Optional[dict] = None, client: Any = None, seat_name: Optional[str] = None):
+        self.link = link
+        self._extra = dict(extra or {})
+        self._seat_name = seat_name
+        self._client = client
+        self._cursor: Optional[Cursor] = None
+        self._tasks: list[asyncio.Task] = []
+        self._poll = float(setting("POLL_SECONDS", self._extra, "5") or 5)
+        self._seen: dict[str, None] = {}              # recent envelope ids, oldest first
+        self._by_chat: dict[str, str] = {}            # chat_id -> session id
+        self._by_session: dict[str, str] = {}         # session id -> chat_id
+        self._thread: dict[str, str] = {}             # chat_id -> thread of the last inbound message
+        self._reply: dict[str, str] = {}              # session id -> last assistant text this turn
+        self._map_path: Optional[Path] = None
+        self.running = False
+
+    # ---- lifecycle
+
+    async def start(self) -> bool:
+        if self._client is None:
+            if not configured(self._extra):
+                logger.warning("[exo-bus] EXO_BUS_URL and EXO_BUS_SEAT are required")
+                return False
             self._client = make_client(self._extra)
+        try:
             await asyncio.to_thread(lambda: self._client.key)  # fail early if the seat key is missing
             await asyncio.to_thread(self._client.head)
         except BusError as e:
-            logger.error("[%s] cannot reach the bus: %s", self.name, e)
+            logger.error("[exo-bus] cannot reach the bus: %s", e)
             return False
         self._cursor = Cursor(self._client.seat, self._extra)
-        self._task = asyncio.create_task(self._run())
-        self._mark_connected()
-        self._wire_plugin_handlers(None)
-        logger.info("[%s] connected as seat %s to %s", self.name, self._client.seat, self._client.url)
+        self._map_path = self._cursor.path.with_name(f"sessions-{self._client.seat}.json")
+        self._load_map()
+        self.running = True
+        self._tasks = [asyncio.create_task(self._poll_loop()), asyncio.create_task(self._event_loop())]
+        logger.info("[exo-bus] channel up as seat %s on %s", self._client.seat, self._client.url)
         return True
 
-    async def disconnect(self) -> None:
-        self._running = False
-        self._mark_disconnected()
-        if self._task:
-            self._task.cancel()
+    async def stop(self) -> None:
+        self.running = False
+        for t in self._tasks:
+            t.cancel()
+        for t in self._tasks:
             try:
-                await self._task
-            except asyncio.CancelledError:
+                await t
+            except (asyncio.CancelledError, Exception):
                 pass
-            self._task = None
-        self._dedup.clear()
+        self._tasks = []
 
-    async def _run(self) -> None:
+    # ---- chat to session map (kept on disk so a restart keeps the conversation)
+
+    def _load_map(self) -> None:
+        try:
+            self._by_chat = dict(json.loads(self._map_path.read_text()))
+        except (OSError, ValueError, TypeError):
+            self._by_chat = {}
+        self._by_session = {v: k for k, v in self._by_chat.items()}
+
+    def _save_map(self) -> None:
+        try:
+            self._map_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self._map_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._by_chat))
+            tmp.replace(self._map_path)
+        except OSError:
+            logger.warning("[exo-bus] cannot save the session map", exc_info=True)
+
+    async def _session_for(self, chat_id: str) -> str:
+        sid = self._by_chat.get(chat_id)
+        if sid:
+            return sid
+        res = await self.link.call(s.SessionCreate(title=f"bus:{chat_id}", seat=self._seat_name))
+        sid = res["session"]["id"]
+        self._by_chat[chat_id], self._by_session[sid] = sid, chat_id
+        self._save_map()
+        return sid
+
+    # ---- inbound
+
+    async def _poll_loop(self) -> None:
         failures = 0
-        while self._running:
+        while self.running:
             try:
                 await self.poll_once()
                 failures = 0
@@ -112,90 +168,91 @@ class ExoBusAdapter(BasePlatformAdapter):
             except asyncio.CancelledError:
                 return
             except Exception as e:
-                logger.warning("[%s] poll failed: %s", self.name, e)
+                logger.warning("[exo-bus] poll failed: %s", e)
                 await asyncio.sleep(BACKOFF[min(failures, len(BACKOFF) - 1)])
                 failures += 1
 
     async def poll_once(self) -> int:
-        """Fetch new inbox messages and dispatch them. Returns how many were dispatched."""
+        """Fetch new inbox messages and turn them into turns. Returns how many were dispatched."""
         cli, seat = self._client, self._client.seat
         envs = await asyncio.to_thread(cli.inbox, self._cursor.get(), 200)
         n = 0
         for env in envs:
-            try:
-                if env["from"] != seat and not self._dedup.is_duplicate(env["id"]):
-                    await self._dispatch(env)
-                    n += 1
-            finally:
-                self._cursor.set(env["seq"])
+            if env["from"] != seat and env["id"] not in self._seen:
+                await self._dispatch(env)
+                self._seen[env["id"]] = None
+                if len(self._seen) > 2000:
+                    self._seen.pop(next(iter(self._seen)))
+                n += 1
+            self._cursor.set(env["seq"])
         return n
 
     async def _dispatch(self, env: dict) -> None:
-        seat = self._client.seat
+        # inbox() has already checked the relay's chain; text() verifies the signer and decrypts.
         text = await asyncio.to_thread(self._client.text, env)
-        chat_id, chat_type = route(env, seat)
-        thread = env["thread"] or env["id"]
-        self._threads[chat_id] = thread
-        source = self.build_source(chat_id=chat_id, chat_name=chat_id, chat_type=chat_type, user_id=env["from"],
-                                   user_name=env["from"], thread_id=thread, message_id=env["id"], is_bot=True)
-        try:
-            ts = datetime.fromisoformat(env["ts"].replace("Z", "+00:00"))
-        except ValueError:
-            ts = datetime.now(timezone.utc)
-        await self.handle_message(MessageEvent(text=text, message_type=MessageType.TEXT, source=source,
-                                               message_id=env["id"], raw_message=env, timestamp=ts))
+        chat_id, chat_type = route(env, self._client.seat)
+        self._thread[chat_id] = env["thread"] or env["id"]
+        sid = await self._session_for(chat_id)
+        await self.link.call(s.TurnSend(session=sid, text=frame(env, text, chat_type), mode="queue"))
 
-    async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
-                   metadata: Optional[dict[str, Any]] = None) -> SendResult:
-        if not self._client:
-            return SendResult(success=False, error="not connected")
-        meta = metadata or {}
-        thread = meta.get("thread_id") or self._threads.get(chat_id)
+    # ---- outbound
+
+    async def _event_loop(self) -> None:
+        since = 0
+        while self.running:
+            try:
+                async for ev in self.link.events(since):
+                    since = ev.seq
+                    await self._on_event(ev)
+                if not self.running:
+                    return
+                await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.warning("[exo-bus] event stream failed: %s", e)
+                await asyncio.sleep(2)
+
+    async def _on_event(self, ev: Any) -> None:
+        sid = ev.session
+        if sid not in self._by_session:
+            return
+        body = ev.body
+        if isinstance(body, s.MessageCompleted):
+            m = body.message
+            if m.role == "assistant" and m.text().strip():
+                self._reply[sid] = m.text()
+        elif isinstance(body, s.TurnCompleted):
+            text = self._reply.pop(sid, "")
+            if text and body.stop_reason != "interrupted":
+                await self.send(self._by_session[sid], text)
+
+    async def send(self, chat_id: str, content: str, thread: Optional[str] = None) -> Optional[dict]:
+        """Post a signed envelope to chat_id (a seat, team:<name> or group), in thread."""
+        thread = thread or self._thread.get(chat_id)
         try:
-            res = await asyncio.to_thread(self._client.post, chat_id, content[:MAX_MESSAGE_LENGTH], "msg", thread)
-            return SendResult(success=True, message_id=res["id"])
+            return await asyncio.to_thread(self._client.post, chat_id, content[:MAX_MESSAGE_LENGTH], "msg", thread)
         except BusError as e:
-            return SendResult(success=False, error=str(e))
-
-    async def send_typing(self, chat_id: str, metadata=None) -> None:
-        return None
-
-    async def get_chat_info(self, chat_id: str) -> dict[str, Any]:
-        return {"name": chat_id, "type": "dm" if not (chat_id == "group" or chat_id.startswith("team:")) else "group",
-                "chat_id": chat_id}
+            logger.warning("[exo-bus] send to %s failed: %s", chat_id, e)
+            return None
 
 
-def _env_enablement() -> dict | None:
-    if not configured():
-        return None
-    extra = {k.lower(): setting(k) for k in ("URL", "SEAT", "KEYS_DIR", "STATE_DIR", "POLL_SECONDS") if setting(k)}
-    home = setting("HOME_CHANNEL")
-    if home:
-        extra["home_channel"] = {"chat_id": home, "name": home}
-    return extra
+def register_channel(ctx) -> None:
+    """Register the channel with the Exo core. ``factory(link, **extra)`` returns an unstarted channel."""
+    ctx.register_channel(CHANNEL, lambda link, **extra: BusChannel(link, extra),
+                         description="Exo Bus: signed seat-to-seat messages as turns",
+                         platform_hint=PLATFORM_HINT, max_message_length=MAX_MESSAGE_LENGTH)
 
 
-async def _standalone_send(pconfig, chat_id: str, message: str, *, thread_id: Optional[str] = None,
-                           media_files=None, force_document: bool = False) -> dict[str, Any]:
-    """Out-of-process send for cron and send_message when no gateway adapter is live."""
-    extra = getattr(pconfig, "extra", None) or {}
+async def _standalone_send(chat_id: str, message: str, *, thread_id: Optional[str] = None,
+                           extra: Optional[dict] = None) -> dict[str, Any]:
+    """Out-of-process send (cron and similar) when no channel is running."""
+    extra = extra or {}
     target = chat_id or setting("HOME_CHANNEL", extra)
     if not (configured(extra) and target):
         return {"success": False, "error": "exo-bus: EXO_BUS_URL, EXO_BUS_SEAT and a recipient are required"}
     try:
         res = await asyncio.to_thread(make_client(extra).post, target, message, "msg", thread_id)
-        return {"success": True, "platform": PLATFORM, "chat_id": target, "message_id": res["id"]}
+        return {"success": True, "channel": CHANNEL, "chat_id": target, "message_id": res["id"]}
     except BusError as e:
         return {"success": False, "error": f"exo-bus send failed: {e}"}
-
-
-def register_platform(ctx) -> None:
-    ctx.register_platform(
-        name=PLATFORM, label="Exo Bus", adapter_factory=lambda cfg: ExoBusAdapter(cfg),
-        check_fn=check_requirements, validate_config=validate_config, is_connected=is_connected,
-        required_env=["EXO_BUS_URL", "EXO_BUS_SEAT"], install_hint="pip install exo  # the exo package",
-        env_enablement_fn=_env_enablement, cron_deliver_env_var="EXO_BUS_HOME_CHANNEL",
-        standalone_sender_fn=_standalone_send, allowed_users_env="EXO_BUS_ALLOWED_USERS",
-        allow_all_env="EXO_BUS_ALLOW_ALL_USERS", max_message_length=MAX_MESSAGE_LENGTH, emoji="\U0001f4ec",
-        pii_safe=True, allow_update_command=False, platform_hint=PLATFORM_HINT,
-    )

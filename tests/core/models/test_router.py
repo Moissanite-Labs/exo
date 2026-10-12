@@ -150,7 +150,9 @@ def test_role_provider_satisfies_protocol_and_drives_tool_turns():
 def test_catalog_loads_and_prices_usage():
     r = Router(env={"ANTHROPIC_API_KEY": "k"}, clock=Clock())
     assert r.chain("main")[0] == Route("anthropic", "claude-opus-5-5")
-    assert r.roles["decision"] == [] and r.chain("decision")[0].ref == "anthropic:claude-haiku-5-5"
+    assert r.roles["decision"] == ["laya:laya"]
+    assert [x.ref for x in r.chain("decision")] == ["laya:laya", "anthropic:claude-haiku-5-5", "anthropic:claude-opus-5-5",
+                                                  "openrouter:anthropic/claude-opus-5.5"]
     from exo.core.types import Usage
     u = r.price(Route("anthropic", "claude-opus-5-5"), Usage(input_tokens=1_000_000, output_tokens=100_000))
     assert u.cost_usd == pytest.approx(6.0)

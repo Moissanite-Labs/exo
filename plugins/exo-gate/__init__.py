@@ -1,4 +1,4 @@
-"""exo-gate Hermes plugin entry point.
+"""exo-gate plugin entry point (Exo core; Hermes can still load it).
 
 Needs the `exo` package. In a source checkout it is found at ../../src when it is not
 installed, so the plugin can run straight from the repo.

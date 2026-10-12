@@ -46,27 +46,29 @@ def test_manifest_lists_every_skill_and_each_entry_exists():
             assert (SKILLS / s["path"] / script).is_file()
 
 
-def test_profiles_complete_and_model_free():
+def test_seats_complete_and_model_free():
     for role in orchestra.ROLES:
-        d = PLUGIN / "profiles" / role
+        d = PLUGIN / "seats" / role
         soul = (d / "SOUL.md").read_text()
-        cfg = (d / "config.yaml").read_text()
         for heading in ("## Owns", "## Does not own", "## Routing", "## Safety"):
             assert heading in soul, (role, heading)
-        assert "model: {}" in cfg and "provider:" not in cfg, role
-        assert "exo-orchestra" in cfg and "external_dirs" in cfg
-        listed = re.findall(r"^\s+- ([\w-]+)$", cfg.split("default_skills:")[1], re.M)
-        assert listed and all((SKILLS / s / "SKILL.md").is_file() for s in listed), role
+        seat = orchestra.parse_seat(orchestra.render_seat_text(role))
+        assert set(seat["models"]) == {"tier"}, role  # no model or provider named (D-018)
+        assert orchestra.validate_seat(seat, SKILLS) == [], role
+        assert seat["models"]["tier"] in orchestra.TIERS and seat["skills"]["load"], role
 
 
-def test_render_profile_fills_placeholders(tmp_path):
-    files = orchestra.render_profile("builder", tmp_path / "p", {"seat_name": "forge", "principal_store": "/s"})
+def test_render_seat_fills_placeholders(tmp_path):
+    files = orchestra.render_seat("builder", tmp_path / "p", {"seat_name": "forge", "principal_store": "/s"})
     text = "".join(f.read_text() for f in files)
     assert "forge" in text and "/s" in text and "{{" not in text
+    assert orchestra.load_seat(tmp_path / "p")["seat"]["name"] == "forge"
     with pytest.raises(FileExistsError):
-        orchestra.render_profile("builder", tmp_path / "p")
+        orchestra.render_seat("builder", tmp_path / "p")
     with pytest.raises(ValueError):
-        orchestra.render_profile("intern", tmp_path / "q")
+        orchestra.render_seat("intern", tmp_path / "q")
+    with pytest.raises(ValueError):
+        orchestra.render_seat("builder", tmp_path / "r", {"seat_name": 'x"\n[bad]'})
 
 
 def test_plugin_register_and_command(tmp_path):
@@ -86,14 +88,16 @@ def test_plugin_register_and_command(tmp_path):
             assert Path(path).is_file()
             calls["skills"].append(name)
 
-    orchestra.register(Ctx({}))
+    orchestra.register(Ctx({"register_skills": False}))
     handle = calls["commands"]["orchestra"]
-    assert "reviewer" in handle("roles")
+    assert "reviewer: tier deep" in handle("seats")
     assert "clean-writing" in handle("skills")
-    out = handle(f"profile reviewer {tmp_path / 'r'} --seat qa-one")
-    assert out.startswith("Wrote") and "qa-one" in (tmp_path / "r" / "SOUL.md").read_text()
+    out = handle(f"seat reviewer --seat qa-one --out {tmp_path / 'r'}")
+    assert out.startswith("Wrote") and "qa-one" in (tmp_path / "r" / "seat.toml").read_text()
+    assert "qa-one" in (tmp_path / "r" / "SOUL.md").read_text()
+    assert handle(f"check {tmp_path / 'r'}") == "Seat is valid."
     assert calls["skills"] == []
-    orchestra.register(Ctx({"register_skills": True}))
+    orchestra.register(Ctx({}))  # native skills are the default
     assert sorted(calls["skills"]) == sorted(s["name"] for s in manifest()["skills"])
 
 

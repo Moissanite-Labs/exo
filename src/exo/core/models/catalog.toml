@@ -66,8 +66,8 @@ key_env = "NOUS_API_KEY"
 
 # TypeSafe Jev: a decision model (probabilities, not text), so decision role only.
 # Verified https://docs.typesafe.ai/api.md : POST https://api.typesafe.ai/v1/systemone,
-# Authorization: Bearer. The adapter is a stub (exo/core/models/decision.py) until the
-# question request shapes are verified; the router falls through to the next route.
+# Authorization: Bearer. Question shapes verified live 2026-10-11 (see decision.py). Opt-in:
+# add "jev:jev-latest" to [roles] decision.
 [providers.jev]
 transport = "decision"
 base_url = "https://api.typesafe.ai/v1"
@@ -110,7 +110,7 @@ cache_read = 0.25
 [roles]
 main = ["anthropic:claude-opus-5-5", "openrouter:anthropic/claude-opus-5.5"]
 aux = ["anthropic:claude-haiku-5-5"]
-decision = []
+decision = ["laya:laya"]
 # "eval" is the judge for scoring and the learning loop. Empty means the main route (D-018).
 eval = []
 # Cost tiers for subagents (delegate tool). Resolution: fast -> standard -> main;
@@ -120,11 +120,13 @@ fast = ["anthropic:claude-haiku-5-5"]
 standard = ["anthropic:claude-sonnet-5-5"]
 deep = ["anthropic:claude-opus-5-5"]
 
-# Decision default (D-018) is local Laya. TODO: `decision` stays empty (falls back to aux, then
-# main) until the Laya adapter lands. Laya's server speaks /v1/systemone, not chat completions:
-# [providers.laya]
-# transport = "decision"
-# base_url = "http://127.0.0.1:8081/v1"
-# local = true
-# roles = ["decision"]
-# Then: [roles] decision = ["laya:laya", "jev:jev-latest"]
+# Decision default (D-018) is local Laya, served by `laya-serve` (pip install "laya[serve]"), which
+# speaks the same /v1/systemone as Jev. Its default port is 8000 (LAYA_PORT changes it); model ids are
+# laya, laya-multilingual and laya-typed-decisions. Setup and size: docs/PROVIDERS.md. If the server is
+# not running the route fails fast and the role falls back to aux, then main (generative JSON answers).
+# Opt in to Jev as a second route: decision = ["laya:laya", "jev:jev-latest"].
+[providers.laya]
+transport = "decision"
+base_url = "http://127.0.0.1:8000/v1"
+local = true
+roles = ["decision"]

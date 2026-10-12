@@ -1,12 +1,11 @@
-import re
+"""The Hermes importer stays read-only. These tests cover ``exo.ingest.hermes_dashboard``."""
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from conftest import PLUGIN_DIR, digest_tree
-from exo_command import ro
-from exo_command.service import CommandCentre
+from exo.ingest import hermes_dashboard as ro
 
 
 def test_uri_is_read_only(tmp_path):
@@ -28,27 +27,19 @@ def test_missing_db_is_not_created(tmp_path):
     assert not (tmp_path / "nope.db").exists()
 
 
-def test_full_snapshot_leaves_every_source_byte_identical(world, settings, now):
+def test_every_importer_reader_leaves_sources_byte_identical(world, now):
     before = digest_tree(world["home"])
-    q_before = world["queue"].read_bytes()
-    snap = CommandCentre(settings).snapshot(now=now)
-    assert all(snap[s]["ok"] for s in ("projects", "agents", "kanban", "decisions", "costs"))
+    profs = ro.discover_profiles(world["home"])
+    ro.live_agents(profs, now=now)
+    ro.kanban_tasks(world["home"])
+    ro.cost_per_session(profs, now=now)
     assert digest_tree(world["home"]) == before
-    assert world["queue"].read_bytes() == q_before
 
 
-def test_only_ro_module_opens_sqlite():
-    offenders = []
-    for path in (PLUGIN_DIR / "exo_command").glob("*.py"):
-        if path.name == "ro.py":
-            continue
-        if re.search(r"sqlite3\.connect\(", path.read_text()):
-            offenders.append(path.name)
+def test_plugin_never_opens_sqlite():
+    """The command centre reads the protocol. Only the importer opens a database, and only read-only."""
+    offenders = [p.name for p in PLUGIN_DIR.rglob("*.py") if "tests" not in p.parts
+                 and "sqlite3.connect" in p.read_text()]
     assert offenders == []
-    for path in [PLUGIN_DIR / "dashboard" / "plugin_api.py", PLUGIN_DIR / "__init__.py"]:
-        assert "sqlite3.connect" not in path.read_text()
-
-
-def test_no_write_routes():
-    text = (PLUGIN_DIR / "dashboard" / "plugin_api.py").read_text()
-    assert not re.search(r"@router\.(post|put|patch|delete)", text)
+    importer = Path(ro.__file__).read_text()
+    assert importer.count("sqlite3.connect(") == 1 and "mode=ro" in importer

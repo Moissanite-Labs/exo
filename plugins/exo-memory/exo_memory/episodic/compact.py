@@ -22,11 +22,9 @@ model copies id formats into its output when it sees them). The SCALE
 line gives the model a sense of the byte budget, since models can't
 count bytes.
 
-Summarization goes through ``agent.auxiliary_client.call_llm`` with
-``task="optchat_compact"``, so operators can pin a cheap model for it
-under ``auxiliary:`` in config.yaml (the same seam
-``plugins/memory/query_rewrite.py`` uses). The summarizer is injectable
-for tests.
+Summarization goes through the Exo router's ``aux`` role (exo.ext.compat), so
+operators can pin a cheap model for it under ``models.roles.aux`` in config.json.
+The summarizer is injectable for tests.
 """
 
 from __future__ import annotations
@@ -54,12 +52,12 @@ SCALE_LINE = (
     "talk: deployed, 200 on all routes, preview verified; tool: vercel.create_deployment x3 "
     "(ok, ok, rate-limited once then ok); echo: build 41s, 212 files, sitemap regenerated; "
     "user: pin the catalog SHA before opening the PR; talk: pinned 40-hex sha, PR #42 opened, CI green; "
-    "note: Friday reminder set to review the Hermes catalog policy thread with the team. OK"
+    "note: Friday reminder set to review the Stripe catalog policy thread with the team. OK"
     " echo: 14 replies, undecided; user: file under project-files"
 )
 
 
-def compact_prompt(agent_name: str = "Hermes") -> str:
+def compact_prompt(agent_name: str = "the agent") -> str:
     """The COMPACT system prompt (spec section 4.4), with the agent name swapped in."""
     return f"""You write the memory of {agent_name}, an AI agent that works for one user across many sessions, through tools and subagents. Each message has a kind: user (the user's words), talk ({agent_name}'s replies), tool ({agent_name}'s tool calls), echo (tool results), work (a subagent's report), note (memories from before this log).
 
@@ -155,16 +153,11 @@ def _extract_text(response) -> str:
 
 
 def default_summarizer(messages: list) -> str:
-    """Summarize through the auxiliary LLM (task ``optchat_compact``).
+    """Summarize through the aux model role of the Exo router (blocking; runs on the
+    compactor thread)."""
+    from exo.ext.compat import aux_summarize
 
-    Imported lazily so the package imports without a Hermes checkout
-    (tests inject a stub instead).
-    """
-    from agent.auxiliary_client import call_llm
-
-    return _extract_text(
-        call_llm(task=COMPACT_TASK, messages=messages, temperature=0, max_tokens=1024)
-    )
+    return aux_summarize(messages)
 
 
 def build_node(
@@ -290,11 +283,7 @@ class Compactor:
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
-        try:
-            from agent.memory_provider import spawn_context_thread
-        except ImportError:  # exo: run outside Hermes (tests, exo CLI)
-            def spawn_context_thread(target, *, name, daemon=True):
-                return threading.Thread(target=target, name=name, daemon=daemon)
+        from exo.core.slots import spawn_context_thread
 
         self._thread = spawn_context_thread(self._run, name="exo-memory-compactor")
         self._thread.start()

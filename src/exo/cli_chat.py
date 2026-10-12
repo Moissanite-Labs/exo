@@ -39,6 +39,7 @@ def register(sp: Any, common: Any) -> None:
     p.add_argument("--stdio", action="store_true", help="JSON lines on stdin/stdout instead of HTTP")
     p.add_argument("--engine", default=os.environ.get("EXO_ENGINE", "exo.core.engine:create"),
                    help="module:factory returning an Engine (default the real core), or echo")
+    p.add_argument("--seat", help="seat name: loads $EXO_HOME/seats/<name>.toml (see docs/SEATS.md)")
     p.set_defaults(func=cmd_serve)
 
     p = sp.add_parser("chat", parents=[common], help="chat with exod from the terminal")
@@ -70,6 +71,8 @@ def _server_token(path: Path) -> str:
 def cmd_serve(a: Any, store: Any = None) -> int:
     from exo.server.app import load_engine, serve
 
+    if a.seat:
+        os.environ["EXO_SEAT"] = a.seat
     engine = load_engine(a.engine)
     if a.stdio:
         asyncio.run(serve(engine, stdio=True))

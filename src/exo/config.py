@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -45,6 +46,48 @@ _MISSING = object()
 
 class ConfigError(ValueError):
     pass
+
+
+# Secrets never go through the file API: names that look like one (`api_key`, `token`, ...), unless
+# the name ends in `_env` (the NAME of an environment variable). Under `env` and `headers` any
+# literal is refused; use "${VAR}" so the secret stays in the environment or Keychain.
+SECRET_NAME = re.compile(r'(^|[_-])(key|token|secret|password|passwd|credentials?|authorization|bearer)s?($|[_-])'
+                         r'|api_?key', re.I)
+_SECRET_VALUE = re.compile(r'(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{10,}|'
+                           r'-----BEGIN [A-Z ]*PRIVATE KEY)')
+_VAR_REF = re.compile(r'\$\{\w+\}')
+
+
+def _is_secret_name(name: str) -> bool:
+    return bool(SECRET_NAME.search(name)) and not name.endswith('_env')
+
+
+def check_not_secret(key: str, value: Any) -> None:
+    """Raise ConfigError when (key, value) would put a secret into config.json."""
+    def walk(path: list[str], v: Any) -> None:
+        if isinstance(v, dict):
+            for k, x in v.items():
+                walk([*path, str(k)], x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(path, x)
+        elif isinstance(v, str) and v:
+            guarded = any(p in ('env', 'headers') for p in path) or _is_secret_name(path[-1])
+            if _SECRET_VALUE.search(v) or (guarded and not _VAR_REF.search(v)):
+                raise ConfigError(f'{".".join(path)}: refusing to store a secret in config.json; '
+                                  f'use "${{VAR}}" or a *_env key naming an environment variable')
+    walk(key.split('.'), value)
+
+
+def redact(data: Any, name: str = '') -> Any:
+    """A copy of config data with secret-looking values masked (for config.get)."""
+    if isinstance(data, dict):
+        return {k: redact(v, str(k)) for k, v in data.items()}
+    if isinstance(data, list):
+        return [redact(v, name) for v in data]
+    if isinstance(data, str) and data and not _VAR_REF.search(data) and (_is_secret_name(name) or _SECRET_VALUE.search(data)):
+        return '***'
+    return data
 
 
 def config_path(home: str | os.PathLike | None = None) -> Path:
@@ -146,6 +189,7 @@ class Config:
             raise ConfigError('plugins must be a list of names')
         if key == 'version':
             raise ConfigError('version is managed by exo')
+        check_not_secret(key, value)
         d, last = _walk(self.data, key, create=True)
         d[last] = value
 

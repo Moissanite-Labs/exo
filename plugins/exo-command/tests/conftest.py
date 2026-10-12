@@ -37,8 +37,7 @@ def world(tmp_path, now):
 @pytest.fixture
 def settings(world):
     from exo_command.config import load_settings
-    return load_settings({"hermes_home": str(world["home"]), "principal_store": str(world["store"]),
-                          "generic_paths": [GENERIC_HOME]}, use_hermes_config=False)
+    return load_settings({"principal_store": str(world["store"]), "generic_paths": [GENERIC_HOME]})
 
 
 def digest_tree(root: Path) -> dict:

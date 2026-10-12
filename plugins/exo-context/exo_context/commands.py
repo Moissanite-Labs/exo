@@ -1,6 +1,6 @@
 """`/exo branch|handoff|resume` slash commands.
 
-Hermes calls a plugin command as `handler(raw_args) -> str`. The handlers act on the engine that
+The Exo core calls a plugin command as `handler(raw_args) -> str`. The handlers act on the engine that
 saw the latest turn (`engine.live_engine()`), which holds the transcript snapshot and the
 handoff location. Every handler returns the text to show; nothing here prints.
 """
@@ -14,6 +14,7 @@ from typing import Any, Optional
 from exo import handoff as hf
 
 from . import engine as eng
+from . import signals as sg
 
 USAGE = """Usage:
   /exo branch <topic>     write a handoff and print the line that starts a fresh session on it
@@ -44,7 +45,7 @@ def _out_dir(engine: Any = None):
 
 def _write(topic: str, engine: Any) -> tuple[Path, hf.Signals]:
     messages = engine.messages if engine is not None else []
-    signals = hf.extract_signals(messages)
+    signals = sg.extract(messages)
     store = getattr(engine, '_x_store', None) if engine is not None else None
     path = hf.write_handoff(topic, messages, store, _out_dir(engine),
                             session=getattr(engine, '_x_session_id', None) or None,

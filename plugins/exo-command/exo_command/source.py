@@ -1,0 +1,72 @@
+"""Where protocol data comes from: a running ``exod`` (socket or TCP) or an in-process dispatcher.
+
+Both give the command centre the same two things: ``call(body)`` runs one command and returns its
+result dict, ``stream(since)`` yields events (as plain dicts) with ``seq > since``. Importing this
+module needs only the Exo core; ``httpx`` is pulled in only when a ``ClientSource`` is built.
+"""
+from __future__ import annotations
+
+from typing import Any, AsyncIterator, Dict, Optional, Protocol
+
+from exo.protocol import schema as s
+
+
+class SourceError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__("{}: {}".format(code, message))
+        self.code, self.message = code, message
+
+
+class Source(Protocol):
+    async def call(self, body: Any) -> Dict[str, Any]: ...
+
+    def stream(self, since: int = 0) -> AsyncIterator[Dict[str, Any]]: ...
+
+    async def aclose(self) -> None: ...
+
+
+class ClientSource:
+    """Over HTTP + SSE, through ``exo.protocol.client.Client``."""
+
+    def __init__(self, socket: Optional[str] = None, url: Optional[str] = None, token: Optional[str] = None):
+        from exo.protocol.client import Client
+        self.client = Client(socket=socket, url=url, token=token)
+
+    async def call(self, body: Any) -> Dict[str, Any]:
+        resp = await self.client.send(body)
+        if not resp.ok:
+            err = resp.error
+            raise SourceError(err.code if err else "unknown", err.message if err else "")
+        return resp.result
+
+    async def stream(self, since: int = 0) -> AsyncIterator[Dict[str, Any]]:
+        async for ev in self.client.events(since=since, reconnect=True):
+            yield ev.to_dict()
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
+
+
+class DispatcherSource:
+    """In process: a ``exo.server.app.Dispatcher`` in the same event loop (tests, embedded use)."""
+
+    def __init__(self, dispatcher: Any):
+        self.dispatcher = dispatcher
+
+    async def call(self, body: Any) -> Dict[str, Any]:
+        resp = await self.dispatcher.run(s.Command.of(body))
+        if not resp.ok:
+            err = resp.error
+            raise SourceError(err.code if err else "unknown", err.message if err else "")
+        return resp.result
+
+    async def stream(self, since: int = 0) -> AsyncIterator[Dict[str, Any]]:
+        sub = self.dispatcher.hub.subscribe(since)
+        try:
+            async for ev in sub:
+                yield ev.to_dict()
+        finally:
+            sub.close()
+
+    async def aclose(self) -> None:
+        return None

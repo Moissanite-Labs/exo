@@ -31,3 +31,10 @@ Agent names, personal paths, the owner's GitHub handle and email domain, dated o
 ledger row ids, the owner-only decision list, and the hard-coded internal-name list in the prose
 gate. These are principal data and now load from the principal store. Per-skill details are in
 `skills/MANIFEST.json` (`generalized` field).
+
+## Wave 2 change
+
+The role profile skeletons (`profiles/<role>/config.yaml` plus `SOUL.md`) became seat templates
+(`seats/<role>/seat.toml` plus `SOUL.md`). The `SOUL.md` files moved unchanged. The yaml settings
+(`pipeline_stage`, `default_skills`) became `seat.stage` and `skills.load`; model tier and toolsets are new
+(D-017). Skills now register natively with the core instead of through `skills.external_dirs`.

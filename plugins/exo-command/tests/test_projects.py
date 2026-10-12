@@ -1,5 +1,5 @@
 from exo_command import projects
-from exo_command.ro import discover_profiles
+from exo.ingest.hermes_dashboard import discover_profiles
 
 
 def _board(world, now):

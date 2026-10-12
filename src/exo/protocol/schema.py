@@ -175,6 +175,7 @@ class ApprovalRespond:
     request_id: str
     decision: Literal["allow", "deny", "allow_always"]
     note: str = ""
+    client: str = ""  # who answered (a client or channel id); reaches post_approval_response
 
 
 @command("question.answer")

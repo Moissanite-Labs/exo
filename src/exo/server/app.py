@@ -304,7 +304,11 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
     """Run exod until cancelled (or until stdin closes in stdio mode)."""
     dispatcher = Dispatcher(engine, hub)
     if stdio:
-        return await serve_stdio(dispatcher)
+        try:
+            return await serve_stdio(dispatcher)
+        finally:
+            if (close := getattr(engine, "close", None)) is not None:
+                await close()
     servers: list[HttpServer] = []
     if socket:
         # The socket file is 0600, so only this user reaches it; the token guards TCP only.
@@ -321,10 +325,21 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
             ready(f"http://{tcp[0]}:{port}")
     if not servers:
         raise ValueError("nothing to serve: give a socket, tcp or stdio")
+    link = None
     try:
+        if getattr(engine, "_channel_cfg", None):  # channels talk to the server over a real protocol Client
+            from exo.protocol.client import Client
+            link = Client(socket=str(socket)) if socket else Client(url=f"http://{tcp[0]}:{port}", token=token)
+            for name, err in (await engine.start_channels(link)).items():
+                if err:
+                    print(f"exod: channel {name}: {err}", file=sys.stderr)
         await asyncio.gather(*(srv.serve_forever() for srv in servers))
     finally:
         dispatcher.hub.close()
+        if (close := getattr(engine, "close", None)) is not None:
+            await close()
+        if link is not None:
+            await link.aclose()
         for srv in servers:
             await srv.close()
         if socket:

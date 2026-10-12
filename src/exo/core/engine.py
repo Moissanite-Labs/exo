@@ -24,15 +24,21 @@ from typing import Any, Iterable
 from exo.core.agents import Delegator
 from exo.core.context import DefaultCompressor, TreeContext, _maybe_await
 from exo.core.loop import Loop
+from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
 from exo.core.models.router import Router
 from exo.core.plugins import PluginManager
+from exo.config import Config, ConfigError, check_not_secret, redact
+from exo.core.seats import Seat, SeatError, list_seats
+from exo.core.seats import load as load_seat
 from exo.core.sessions import SessionStore
+from exo.core.skills import SkillIndex, pack_dir, register_skill_tool
 from exo.core.tools.registry import Block, Registry, ToolContext, default_registry
 from exo.core.types import ContentPart, Message, ToolCall, ToolResult, ToolSpec, Usage, to_dict
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed, Hub
 
+_MISSING = object()
 SYSTEM_PROMPT = ("You are Exo, a careful coding agent. Use the tools to read, edit and run "
                  "things in the working directory, then answer briefly.")
 
@@ -72,10 +78,37 @@ def _usage_dict(u: Usage | None) -> dict[str, int]:
 class ContextAdapter:
     """TreeContext for the loop, plus a plugin ContextEngine when one fills the slot."""
 
-    def __init__(self, tree: TreeContext, plugin: Any = None) -> None:
+    RECENT = 40  # messages of transcript handed to hooks that take one
+
+    def __init__(self, tree: TreeContext, plugin: Any = None, memory: Any = None) -> None:
         self.tree = tree
         self.plugin = plugin
+        self.memory = memory
         self._started: set[str] = set()
+        tree.on_pre_compress = self._pre_compress
+        tree.on_compacted = self._compacted
+
+    def transcript(self, session: str, last: int | None = None) -> list[dict[str, Any]]:
+        """Recent messages as OpenAI-style dicts, for plugin hooks."""
+        msgs = self.tree.store.messages(session)[-(last or self.RECENT):]
+        return [{"role": m.role, "content": m.text()} for m in msgs]
+
+    async def _pre_compress(self, session: str, msgs: list[Message]) -> str:
+        """Memory providers get the messages about to be compacted: ``on_pre_compress(messages)`` may return
+        insights for the summary prompt, and ``checkpoint(session_id=, messages=, reason="pre_compress")`` runs."""
+        flat = [{"role": m.role, "content": m.text()} for m in msgs]
+        if self.memory is None:
+            return ""
+        _safe(self.memory, "checkpoint", session_id=session, messages=flat, reason="pre_compress")
+        out = _safe(self.memory, "on_pre_compress", flat)
+        return out if isinstance(out, str) else ""
+
+    def _compacted(self, session: str, node: Any) -> None:
+        """``on_compacted(session, node)`` on the context engine and the memory provider; node is a SummaryNode
+        (id, level, start, end, text, status)."""
+        for obj in (self.plugin, self.memory):
+            if obj is not None:
+                _safe(obj, "on_compacted", session, node, session_id=session)
 
     @property
     def on_event(self) -> Any:
@@ -98,7 +131,8 @@ class ContextAdapter:
             return msgs
         flat = [{"role": m.role, "content": m.text()} for m in msgs]
         try:
-            out = await _maybe_await(pick(flat, conversation_messages=flat, budget_tokens=0))
+            out = await _maybe_await(_call(pick, flat, conversation_messages=flat, budget_tokens=0,
+                                           session_id=session))
         except Exception:
             return msgs
         if not out:
@@ -109,13 +143,25 @@ class ContextAdapter:
     def on_turn_complete(self, session: str, usage: Usage) -> None:
         if self.plugin is not None:
             _safe(self.plugin, "update_from_response", _usage_dict(usage))
-            _safe(self.plugin, "on_turn_complete", [], usage=_usage_dict(usage))
+            _safe(self.plugin, "on_turn_complete", self.transcript(session), usage=_usage_dict(usage),
+                  session_id=session)
+
+
+def _call(fn: Any, *args: Any, **kw: Any) -> Any:
+    """Call a plugin hook with the keyword arguments it accepts (all of them when it takes **kwargs)."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return fn(*args, **kw)
+    if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        kw = {k: v for k, v in kw.items() if k in params}
+    return fn(*args, **kw)
 
 
 def _safe(obj: Any, method: str, *args: Any, **kw: Any) -> Any:
     fn = getattr(obj, method, None)
     try:
-        return fn(*args, **kw) if fn else None
+        return _call(fn, *args, **kw) if fn else None
     except Exception:  # a plugin failure never breaks a turn
         return None
 
@@ -127,27 +173,89 @@ class CoreEngine:
                  registry: Registry | None = None, plugins: PluginManager | None = None,
                  cwd: str | None = None, system_prompt: str = SYSTEM_PROMPT,
                  env: dict[str, str] | None = None, delegation: dict[str, Any] | None = None,
-                 **loop_kw: Any) -> None:
+                 seat: Seat | None = None, skill_folders: Iterable[str | os.PathLike] | None = None,
+                 mcp: dict[str, dict[str, Any]] | None = None,
+                 channels: dict[str, dict[str, Any]] | None = None, **loop_kw: Any) -> None:
         self.home = Path(home)
         self.cwd = cwd or os.getcwd()
         self.store = SessionStore(self.home / "sessions.sqlite")
         self.hub = Hub(SqliteLog(self.store))
-        models = models or {}
+        self.seat = seat
+        models = {**(models or {}), **(seat.models if seat else {})}
         self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env)
         self.registry = registry or default_registry()
         self.plugins = plugins or PluginManager()
+        self.plugins.router = self.router  # plugins reach it as ctx.router
         self._approvals: dict[str, tuple[asyncio.Future, str | None]] = {}
         self._always: set[str] = set()
+        self._deciders: dict[str, str] = {}
+        self._channels: dict[str, Any] = {}
+        self._channel_cfg: dict[str, dict[str, Any]] = {**(channels or {}), **(seat.channels if seat else {})}
         self._tasks: set[asyncio.Task] = set()
         self._bridge_plugins()
+        if seat and seat.tier and self.router.roles.get(seat.tier):
+            self.router.set_role("main", list(self.router.roles[seat.tier]))
+        self.skills = SkillIndex.discover([*(seat.skill_folders if seat else []), self.home / "skills"]
+                                          if skill_folders is None else skill_folders, self.plugins.skills.values(),
+                                          only=seat.skill_load if seat else None)
+        register_skill_tool(self.registry, self.skills)
+        self.mcp = McpManager({**(mcp or {}), **(seat.mcp if seat else {})}, env)
+        self._started: asyncio.Future | None = None
+        system_prompt = "\n\n".join(p for p in (system_prompt, seat.soul if seat else "", self.skills.prompt()) if p)
         slots = self.plugins.slots
         tree = TreeContext(self.store, DefaultCompressor(self.router.provider("aux")))
         self.loop = Loop(self.store, self.router.provider("main"), bus=HubBus(self),  # type: ignore[arg-type]
-                         context=ContextAdapter(tree, slots.context), memory=slots.memory,
-                         tool_specs=self.registry.specs, run_tool=self.run_tool,
+                         context=ContextAdapter(tree, slots.context, slots.memory), memory=slots.memory,
+                         tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
         self.agents = Delegator(self, delegation)  # the delegate tool and the tasks table
         self.agents.install()
+
+    def _specs(self) -> list[ToolSpec]:
+        """Specs the model sees: every toolset, or the seat's (``mcp`` matches every ``mcp:<server>``)."""
+        allow = self.seat.toolsets if self.seat else None
+        if allow is None:
+            return self.registry.specs()
+        return [sp for sp in self.registry.specs() if sp.toolset in allow or sp.toolset.split(":")[0] in allow
+                or sp.toolset == "skills"]
+
+    async def start(self) -> None:
+        """Connect MCP servers once (idempotent; the first command triggers it)."""
+        if self._started is None:
+            self._started = asyncio.ensure_future(self.mcp.start(self.registry))
+        await asyncio.shield(self._started)
+
+    async def start_channels(self, link: Any) -> dict[str, str | None]:
+        """Run ``factory(link, **config)`` for each channel the seat enables; ``link`` is a protocol Client
+        (or any object with ``call`` and ``events``). Returns name -> error (None when running)."""
+        out: dict[str, str | None] = {}
+        for name, cfg in self._channel_cfg.items():
+            entry = self.plugins.channels.get(name)
+            if entry is None or name in self._channels:
+                out[name] = None if entry else "no plugin registered this channel"
+                continue
+            try:
+                chan = await _maybe_await(entry.factory(link, **(cfg or {})))
+                await _maybe_await(chan.start())
+                self._channels[name] = chan
+                out[name] = None
+            except Exception as exc:  # one bad channel never stops the server
+                out[name] = f"{type(exc).__name__}: {exc}"
+        return out
+
+    async def stop_channels(self) -> None:
+        for name, chan in list(self._channels.items()):
+            try:
+                await _maybe_await(chan.stop())
+            except Exception:
+                pass
+            self._channels.pop(name, None)
+
+    async def close(self) -> None:
+        await self.stop_channels()
+        if self._started is not None:
+            await self.mcp.close()
+            self._started = None
 
     def _main_ref(self) -> str:
         chain = self.router.chain("main")
@@ -185,7 +293,8 @@ class CoreEngine:
 
     def _hook_kw(self, call: ToolCall, ctx: ToolContext) -> dict[str, Any]:
         return {"tool_name": call.name, "args": call.arguments, "session_id": ctx.session or "",
-                "task_id": ctx.session or "", "tool_call_id": call.id, "turn_id": ctx.meta.get("turn_id", "")}
+                "task_id": ctx.session or "", "tool_call_id": call.id, "turn_id": ctx.meta.get("turn_id", ""),
+                "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low"}
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
         for verdict in await self.plugins.hooks.afire("pre_tool_call", **self._hook_kw(call, ctx)):
@@ -197,10 +306,11 @@ class CoreEngine:
                 key = "plugin_rule:" + str(verdict.get("rule_key") or call.name)
                 if key in self._always:
                     continue
-                decision = await self.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk)
+                who: list[str] = []
+                decision = await self.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who)
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
                 await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
-                                               decided_by="client", session_id=ctx.session or "")
+                                               decided_by=who[0] if who else "client", session_id=ctx.session or "")
                 if decision == "allow_always":
                     self._always.add(key)
                 elif decision != "allow":
@@ -229,21 +339,28 @@ class CoreEngine:
         return await self.registry.call(call, ctx)
 
     async def ask(self, session: str | None, summary: str, call: ToolCall | None = None,
-                  risk: str = "medium") -> str:
-        """Publish an approval request and wait for ``approval.respond``."""
+                  risk: str = "medium", decided_by: list[str] | None = None) -> str:
+        """Publish an approval request and wait for ``approval.respond``.
+
+        ``decided_by`` (optional out list) receives the id of the client that answered."""
         rid = s.new_id("a")
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._approvals[rid] = (fut, session)
         self.hub.publish(s.ApprovalRequested(request_id=rid, summary=summary, risk=risk, call=call), session)
         try:
-            return await fut
+            decision = await fut
+            if decided_by is not None:
+                decided_by.append(self._deciders.pop(rid, "client"))
+            return decision
         finally:
             self._approvals.pop(rid, None)
+            self._deciders.pop(rid, None)
 
     # ------------------------------------------------------------ dispatch
 
     async def handle(self, command: s.Command, hub: Hub) -> dict[str, Any]:
         self.hub = hub
+        await self.start()
         method = getattr(self, "_" + command.type.replace(".", "_"), None)
         if method is None:
             raise CommandFailed("unsupported", f"{command.type} is not supported yet")
@@ -308,8 +425,10 @@ class CoreEngine:
         fut, sid = self._approvals.get(b.request_id, (None, None))
         if fut is None or fut.done():
             raise CommandFailed("not_found", f"no open approval {b.request_id}")
+        self._deciders[b.request_id] = b.client or "client"
         fut.set_result(b.decision)
-        self.hub.publish(s.ApprovalResolved(request_id=b.request_id, decision=b.decision, by="client"), sid)
+        self.hub.publish(s.ApprovalResolved(request_id=b.request_id, decision=b.decision,
+                                            by=b.client or "client"), sid)
         return {}
 
     async def _search(self, b: s.Search) -> dict[str, Any]:
@@ -344,20 +463,59 @@ class CoreEngine:
         return {"output": out if isinstance(out, (str, dict, list)) or out is None else str(out)}
 
     async def _skills_list(self, b: s.SkillsList) -> dict[str, Any]:
-        return {"skills": [{"name": k.name, "description": k.description, "path": str(k.path)}
-                           for k in self.plugins.skills.values()]}
+        return {"skills": self.skills.listing()}
+
+    async def _seat_list(self, b: s.SeatList) -> dict[str, Any]:
+        return {"active": self.seat.name if self.seat else None, "seats": list_seats(self.home),
+                "mcp": self.mcp.status(),
+                "channels": {n: n in self._channels for n in self._channel_cfg}}
+
+    async def _config_get(self, b: s.ConfigGet) -> dict[str, Any]:
+        cfg = Config.load(self.home)
+        if b.key is None:
+            return {"config": redact(cfg.resolved())}
+        value = cfg.get(b.key, _MISSING)
+        if value is _MISSING:
+            raise CommandFailed("not_found", f"{b.key} is not set")
+        return {"key": b.key, "value": redact(value, b.key.split(".")[-1])}
+
+    async def _config_set(self, b: s.ConfigSet) -> dict[str, Any]:
+        cfg = Config.load(self.home)
+        try:
+            if b.value is None:
+                check_not_secret(b.key, "")
+                cfg.unset(b.key)
+            else:
+                cfg.set(b.key, b.value)
+            cfg.save()
+        except ConfigError as exc:
+            raise CommandFailed("bad_config", str(exc)) from None
+        return {"key": b.key, "saved": True, "applies": "next start"}
 
 
-def create() -> CoreEngine:
-    """Factory for ``exo serve --engine exo.core.engine:create``: reads ``$EXO_HOME/config.json``."""
-    from exo.config import Config
+def create(seat: str | None = None) -> CoreEngine:
+    """Factory for ``exo serve --engine exo.core.engine:create``: reads ``$EXO_HOME/config.json``.
 
+    ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
     cfg = Config.load()
+    st = None
+    if seat or os.environ.get("EXO_SEAT"):
+        try:
+            st = load_seat(cfg.home, seat or os.environ["EXO_SEAT"])
+        except SeatError as exc:
+            raise SystemExit(f"exo: {exc}") from None
+        if st.principal and not os.environ.get("EXO_PRINCIPAL"):
+            os.environ["EXO_PRINCIPAL"] = st.principal
     pm = PluginManager(config=cfg.data.get("plugin_config") or {},
                        memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
-    pm.load_all(enabled=cfg.data.get("core_plugins"))
-    return CoreEngine(cfg.home, cfg.models(), plugins=pm, cwd=cfg.get("cwd"),
-                      system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT, delegation=cfg.get("delegation"))
+    pm.load_all(enabled=st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins"))
+    models = cfg.models()
+    folders = [*(st.skill_folders if st else []), cfg.home / "skills"]
+    if pack := pack_dir():
+        folders.append(pack)
+    return CoreEngine(cfg.home, models, plugins=pm, cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
+                      mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
+                      delegation=cfg.get("delegation"))
 
 
 __all__ = ["ContextAdapter", "CoreEngine", "HubBus", "SqliteLog", "create"]

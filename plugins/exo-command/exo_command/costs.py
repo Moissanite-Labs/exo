@@ -1,128 +1,71 @@
-"""Cost per session, read-only, from what Hermes already records in ``state.db``.
+"""Cost per session, from ``usage.updated`` events.
 
-Sources, used when present:
-* ``sessions``: ``estimated_cost_usd``, ``actual_cost_usd``, ``cost_status`` and token columns.
-* ``session_model_usage``: per session, per model, per task rows with the same cost fields.
+The core prices every model call and publishes it as ``usage.updated`` (the call's ``usage`` plus the
+running ``session_total``). ``state.State`` folds those per session; this module aggregates them into
+the panel: total, top sessions, by seat and by model. A session counts as priced when the provider
+reported a cost above zero. A session the core could not price (a local model, an unknown rate)
+still shows its tokens, so the panel is never silently empty.
 
-A session's cost is ``actual_cost_usd`` when it is above zero, else ``estimated_cost_usd``.
-The panel is marked unavailable when neither source exists, so older Hermes builds degrade
-cleanly.
+The Hermes version of this panel, which read ``state.db``, lives in
+``exo.ingest.hermes_dashboard.cost_per_session`` for migration.
 """
 from __future__ import annotations
 
-import sqlite3
 import time
 from collections import defaultdict
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional
 
-from .ro import ProfileDb, columns, ro, select_cols
+from .state import USAGE_KEYS, epoch
 
 DAY = 86400.0
-_S_COLS = ("id", "title", "source", "model", "parent_session_id", "started_at", "last_activity_at",
-           "message_count", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
-           "reasoning_tokens", "estimated_cost_usd", "actual_cost_usd", "cost_status", "billing_provider")
-_TOKENS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
 
 
-def _cost(row: dict) -> float:
-    actual = row.get("actual_cost_usd") or 0
-    return float(actual) if actual and actual > 0 else float(row.get("estimated_cost_usd") or 0)
-
-
-def per_session(profiles: Sequence[ProfileDb], *, window_days: int = 7, top: int = 25,
+def per_session(sessions: Iterable[Dict[str, Any]], *, window_days: int = 7, top: int = 25,
                 now: Optional[float] = None) -> dict:
+    """``sessions`` are ``State.sessions`` values."""
     now = now if now is not None else time.time()
     since = now - window_days * DAY
-    sessions: List[dict] = []
-    by_profile: Dict[str, dict] = {}
-    by_model: Dict[str, dict] = defaultdict(lambda: {"cost_usd": 0.0, "sessions": 0, "api_calls": 0,
-                                                    **{t: 0 for t in _TOKENS}})
-    sources: List[dict] = []
-    available = False
-    for p in profiles:
-        st = {"profile": p.name, "status": "ok", "has_session_costs": False, "has_model_usage": False}
-        try:
-            with ro(p.path) as c:
-                have = columns(c, "sessions")
-                st["has_session_costs"] = "estimated_cost_usd" in have
-                usage_cols = columns(c, "session_model_usage")
-                st["has_model_usage"] = bool(usage_cols)
-                if not (st["has_session_costs"] or usage_cols):
-                    sources.append(st)
-                    continue
-                available = True
-                cols = select_cols(_S_COLS, have)
-                act = "COALESCE(last_activity_at, started_at)" if "last_activity_at" in have else "started_at"
-                rows = [dict(r) for r in c.execute(
-                    "SELECT {} FROM sessions WHERE {} >= ?".format(", ".join(cols), act), (since,))]
-                usage: Dict[str, List[dict]] = defaultdict(list)
-                if usage_cols:
-                    ucols = select_cols(("session_id", "model", "task", "api_call_count", *_TOKENS,
-                                         "estimated_cost_usd", "actual_cost_usd", "cost_status"), usage_cols)
-                    ids = [r["id"] for r in rows]
-                    for i in range(0, len(ids), 500):
-                        chunk = ids[i:i + 500]
-                        q = "SELECT {} FROM session_model_usage WHERE session_id IN ({})".format(
-                            ", ".join(ucols), ",".join("?" * len(chunk)))
-                        for u in c.execute(q, chunk):
-                            usage[u["session_id"]].append(dict(u))
-                prof = by_profile.setdefault(p.name, {"profile": p.name, "cost_usd": 0.0, "sessions": 0,
-                                                      "priced_sessions": 0, **{t: 0 for t in _TOKENS}})
-                for r in rows:
-                    u_rows = usage.get(r["id"], [])
-                    cost = _cost(r)
-                    if not cost and u_rows:
-                        cost = sum(_cost(u) for u in u_rows)
-                    models = sorted({u["model"] for u in u_rows if u.get("model")}) or (
-                        [r["model"]] if r.get("model") else [])
-                    toks = {t: int(r.get(t) or 0) for t in _TOKENS}
-                    prof["sessions"] += 1
-                    prof["cost_usd"] += cost
-                    prof["priced_sessions"] += 1 if cost else 0
-                    for t in _TOKENS:
-                        prof[t] += toks[t]
-                    for u in u_rows:
-                        m = by_model[u.get("model") or "unknown"]
-                        m["cost_usd"] += _cost(u)
-                        m["sessions"] += 1
-                        m["api_calls"] += int(u.get("api_call_count") or 0)
-                        for t in _TOKENS:
-                            m[t] += int(u.get(t) or 0)
-                    if not u_rows and r.get("model"):
-                        m = by_model[r["model"]]
-                        m["cost_usd"] += cost
-                        m["sessions"] += 1
-                        for t in _TOKENS:
-                            m[t] += toks[t]
-                    sessions.append({
-                        "profile": p.name, "session_id": r["id"], "title": r.get("title"),
-                        "source": r.get("source"), "models": models,
-                        "subagent": bool(r.get("parent_session_id")),
-                        "last_activity": r.get("last_activity_at") or r.get("started_at"),
-                        "messages": int(r.get("message_count") or 0),
-                        "cost_usd": round(cost, 6), "cost_status": r.get("cost_status"),
-                        "estimated": not ((r.get("actual_cost_usd") or 0) > 0),
-                        **toks,
-                    })
-        except (OSError, sqlite3.Error) as exc:
-            st["status"] = "error: {}".format(exc)
-        sources.append(st)
-    total = sum(s["cost_usd"] for s in sessions)
-    priced = [s for s in sessions if s["cost_usd"] > 0]
-    sessions.sort(key=lambda s: -s["cost_usd"])
-    for pr in by_profile.values():
-        pr["cost_usd"] = round(pr["cost_usd"], 4)
-    models = sorted(({"model": k, **{kk: (round(vv, 4) if kk == "cost_usd" else vv) for kk, vv in v.items()}}
-                     for k, v in by_model.items()), key=lambda m: -m["cost_usd"])
+    rows: List[dict] = []
+    by_seat: Dict[str, dict] = {}
+    by_model: Dict[str, dict] = defaultdict(lambda: {"cost_usd": 0.0, "sessions": 0, **{k: 0 for k in USAGE_KEYS}})
+    for s in sessions:
+        last = s.get("last_activity_at") or s.get("started_at") or 0
+        usage = s.get("usage") or {}
+        if last < since or not (s.get("cost_usd") or any(usage.get(k) for k in USAGE_KEYS)):
+            continue
+        cost = float(s.get("cost_usd") or 0)
+        model = s.get("turn_model") or s.get("model") or "unknown"
+        seat = s.get("seat") or "main"
+        sb = by_seat.setdefault(seat, {"seat": seat, "cost_usd": 0.0, "sessions": 0, "priced_sessions": 0,
+                                       **{k: 0 for k in USAGE_KEYS}})
+        sb["sessions"] += 1
+        sb["cost_usd"] += cost
+        sb["priced_sessions"] += 1 if cost > 0 else 0
+        mb = by_model[model]
+        mb["sessions"] += 1
+        mb["cost_usd"] += cost
+        for k in USAGE_KEYS:
+            sb[k] += int(usage.get(k) or 0)
+            mb[k] += int(usage.get(k) or 0)
+        rows.append({"session_id": s["id"], "title": s.get("title") or None, "seat": seat, "models": [model],
+                     "subagent": bool(s.get("task_id") or s.get("parent")), "last_activity": last,
+                     "messages": int(s.get("message_count") or 0), "cost_usd": round(cost, 6),
+                     "priced": cost > 0, **{k: int(usage.get(k) or 0) for k in USAGE_KEYS}})
+    total = sum(r["cost_usd"] for r in rows)
+    priced = [r for r in rows if r["priced"]]
+    rows.sort(key=lambda r: (-r["cost_usd"], -(r["input_tokens"] + r["output_tokens"])))
+    for b in by_seat.values():
+        b["cost_usd"] = round(b["cost_usd"], 4)
+    models = sorted(({"model": k, **{kk: (round(v, 4) if kk == "cost_usd" else v) for kk, v in d.items()}}
+                     for k, d in by_model.items()), key=lambda m: -m["cost_usd"])
     return {
-        "available": available,
+        "available": True,
         "window_days": window_days,
         "total_usd": round(total, 4),
-        "sessions": len(sessions),
+        "sessions": len(rows),
         "priced_sessions": len(priced),
         "mean_per_priced_session_usd": round(total / len(priced), 4) if priced else 0.0,
-        "top": sessions[:top],
-        "by_profile": sorted(by_profile.values(), key=lambda x: -x["cost_usd"]),
+        "top": rows[:top],
+        "by_seat": sorted(by_seat.values(), key=lambda x: -x["cost_usd"]),
         "by_model": models[:15],
-        "sources": sources,
     }

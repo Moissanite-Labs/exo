@@ -1,7 +1,7 @@
 """exo-memory configuration.
 
 Resolution order, lowest first: defaults, environment, the profile file
-``<hermes_home>/exo-memory/config.json`` (written by ``hermes memory setup``), then values
+``<exo_home>/exo-memory/config.json`` (written by ``save_config``), then values
 passed to the provider constructor. Nothing here names a person, a machine or a path of one.
 """
 from __future__ import annotations
@@ -16,7 +16,7 @@ DEFAULTS: dict[str, Any] = {
     "exo_home": "",            # default $EXO_HOME, else ~/.exo
     "principal": "",           # principal id; default $EXO_PRINCIPAL
     "store_root": "",          # explicit store dir; default $EXO_STORE, else <exo_home>/principals/<principal>
-    "agent_id": "",            # ledger author for agent turns; default the Hermes agent identity
+    "agent_id": "",            # ledger author for agent turns; default the seat identity
     "key_path": "",            # Ed25519 key; default <exo_home>/keys/<agent_id>.key
     "auto_keygen": True,       # create the agent key on first use if missing
     "pack_budget": 1500,       # tokens of PRINCIPAL.md in the system prompt
@@ -26,33 +26,34 @@ DEFAULTS: dict[str, Any] = {
     "recent_skip": 20,         # newest log messages left out of keyword hits (still in context)
     "view_chars": 6000,        # merge target of the episodic summary view
     "capture_chars": 2000,     # max chars of the block on_pre_compress returns
+    "capture_turns": True,     # capture rulings and corrections as each turn ends (the core has no pre-compress call)
     "compact_enabled": True,   # background summary-tree compactor (needs an auxiliary model)
     "principal_user_ids": "",  # comma list of platform user ids that are the principal; empty = any human
 }
 
 ENV = {"exo_home": "EXO_HOME", "principal": "EXO_PRINCIPAL", "store_root": "EXO_STORE"}
 INTS = ("pack_budget", "prefetch_budget", "episodic_hits", "recent_skip", "view_chars", "capture_chars")
-BOOLS = ("auto_keygen", "compact_enabled")
+BOOLS = ("auto_keygen", "compact_enabled", "capture_turns")
 SAFE_ID = re.compile(r"[^a-z0-9_-]+")
 PID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
-def config_path(hermes_home: str | os.PathLike) -> Path:
-    return Path(hermes_home) / "exo-memory" / "config.json"
+def config_path(home: str | os.PathLike) -> Path:
+    return Path(home) / "exo-memory" / "config.json"
 
 
 def _bool(v: Any) -> bool:
     return v if isinstance(v, bool) else str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
-def load(hermes_home: str | os.PathLike | None, overrides: dict | None = None) -> dict:
+def load(home: str | os.PathLike | None, overrides: dict | None = None) -> dict:
     cfg = dict(DEFAULTS)
     for key, var in ENV.items():
         if os.environ.get(var):
             cfg[key] = os.environ[var]
-    if hermes_home:
+    if home:
         try:
-            cfg.update({k: v for k, v in json.loads(config_path(hermes_home).read_text("utf-8")).items()
+            cfg.update({k: v for k, v in json.loads(config_path(home).read_text("utf-8")).items()
                         if k in DEFAULTS})
         except (OSError, ValueError):
             pass
@@ -65,8 +66,8 @@ def load(hermes_home: str | os.PathLike | None, overrides: dict | None = None) -
     return cfg
 
 
-def save(values: dict, hermes_home: str | os.PathLike) -> Path:
-    path = config_path(hermes_home)
+def save(values: dict, home: str | os.PathLike) -> Path:
+    path = config_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         current = json.loads(path.read_text("utf-8"))

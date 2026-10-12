@@ -211,6 +211,12 @@ def register_root(ctx: Any, force: bool = False) -> bool:
     Returns True when this call registered it."""
     global _root_registered
     with _lock:
+        commands = getattr(getattr(ctx, 'manager', None), 'commands', None)
+        if commands is not None:  # an Exo PluginManager: once per manager, not once per process
+            if ROOT in commands and not force:
+                return False
+            ctx.register_command(ROOT, dispatch, description=ROOT_DESCRIPTION, args_hint='<subcommand> [args]')
+            return True
         if _root_registered and not force:
             return False
         ctx.register_command(ROOT, dispatch, description=ROOT_DESCRIPTION, args_hint='<subcommand> [args]')
