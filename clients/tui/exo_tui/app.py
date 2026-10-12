@@ -25,8 +25,8 @@ MAX_FILE = 64 * 1024
 AT_RE = re.compile(r"(?<!\S)@(\S+)")
 # name -> (group, description). /help is generated from this table, so every command shows up there.
 COMMANDS = {
-    "new": ("session", "start a new session"),
-    "sessions": ("session", "pick a session to switch to"),
+    "new": ("session", "start a new thread: a fresh focus, same memory; /new private is not remembered"),
+    "sessions": ("session", "pick one of this agent's threads to switch to"),
     "resume": ("session", "same as /sessions"),
     "fork": ("session", "fork this session"),
     "undo": ("session", "undo the last turn"),
@@ -190,7 +190,8 @@ class ExoApp(App):
             except Exception:
                 pass
             if self.resume and not self.session:
-                rows = (await self.client.call(s.SessionList(limit=1, seat=self.seat)))["sessions"]
+                rows = (await self.client.call(s.SessionList(limit=20, seat=self.seat)))["sessions"]
+                rows = [r for r in rows if r.get("kind") != "subagent"]  # resume a thread, not a child's log
                 self.session = rows[0]["id"] if rows else None
             if self.session:
                 await self.load_session(self.session)
@@ -339,6 +340,8 @@ class ExoApp(App):
 
     def render_history(self, messages: list[dict[str, Any]]) -> None:
         for m in messages:
+            if (m.get("meta") or {}).get("note"):  # context notes from other threads are for the model (D-028)
+                continue
             text = "".join(p.get("text", "") for p in m.get("content", []) if p.get("type") == "text")
             if m["role"] == "user" and text:
                 peer = (m.get("meta") or {}).get("peer")
@@ -367,17 +370,22 @@ class ExoApp(App):
         self.model = info.get("model") or self.model
         self.clear_transcript()
         self.render_history(got.get("messages", []))
-        n = len(got.get("messages", []))
+        n = sum(1 for m in got.get("messages", []) if not (m.get("meta") or {}).get("note"))
         title = info.get("title") or ""
-        self.note(f"resumed {title + ' ' if title else ''}({sid}, {n} messages)", "note")
+        what = "private thread" if info.get("kind") == "private" else "thread"
+        self.note(f"resumed {what} {title + ' ' if title else ''}({sid}, {n} messages)", "note")
         self.refresh_status()
 
-    async def new_session(self) -> None:
-        got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat))
+    async def new_session(self, kind: str = "") -> None:
+        """A new thread of the same agent: a fresh focus with the same memory (D-028)."""
+        got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat, kind=kind))
         self.session = got["session"]["id"]
         self.model = got["session"].get("model") or self.model
         self.clear_transcript()
-        self.note(f"session {self.session}")
+        if kind == "private":
+            self.note(f"private thread {self.session}: logged here, never added to shared memory")
+        else:
+            self.note(f"new thread {self.session} (same memory)")
         self.refresh_status()
 
     # ------------------------------------------------------------ sending
@@ -458,7 +466,7 @@ class ExoApp(App):
         elif name == "default":
             await self.set_default(args)
         elif name == "new":
-            await self.new_session()
+            await self.new_session("private" if args.strip() == "private" else "")
         elif name in ("sessions", "resume"):
             await self.pick_session()
         elif name == "model":
@@ -528,9 +536,11 @@ class ExoApp(App):
 
     async def pick_session(self) -> None:
         rows = (await self.client.call(s.SessionList(limit=50)))["sessions"]
-        items = [(f"{r.get('title') or r['id']}  ({r.get('message_count', 0)} msgs, {r.get('status', '')})", r["id"])
-                 for r in rows]
-        self.push_screen(Palette(items, "sessions"), lambda v: v and self.run_worker(
+        rows = [r for r in rows if r.get("kind") != "subagent"]  # subagent logs open with memory_zoom, not here
+        tag = {"private": "private, ", "scheduled": "scheduled, "}
+        items = [(f"{r.get('title') or r['id']}  ({tag.get(r.get('kind') or '', '')}{r.get('message_count', 0)} msgs,"
+                  f" {r.get('status', '')})", r["id"]) for r in rows]
+        self.push_screen(Palette(items, "threads"), lambda v: v and self.run_worker(
             self.load_session(v), exit_on_error=False))
 
     async def set_model(self, ref: str) -> None:
