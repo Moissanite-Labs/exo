@@ -1348,7 +1348,8 @@ Limits live in config, and a seat can override any of them.
 
 | Signature | Fires when |
 |---|---|
-| `turn.slow` | the harness's own share of a turn (wall time minus tool time and approval waits) is over 60 s |
+| `turn.slow` | the harness's own overhead in a turn (wall time minus tool time, approval waits and model-call time) is over 30 s |
+| `model.slow:<route>` | one model call took more than 60 s in total |
 | `turn.wall` | the whole turn, work included, is over 30 minutes |
 | `model.wait:<route>` | the first token took more than 30 s |
 | `model.fallback:<route>`, `model.timeout:<route>` | a try failed and the call moved on |
@@ -1360,8 +1361,8 @@ Limits live in config, and a seat can override any of them.
 | `model.mismatch` | the model shown is not the one that served, and no fallback explains it |
 
 The first rule shows why the rules must measure the right thing. Wall time alone would blame the harness for
-a ten-minute build or a person who took a while to approve. So `turn.slow` subtracts tool time and approval
-waits, and counts only what the harness and the model spent. A separate, much higher cap catches turns that
+a ten-minute build or a person who took a while to approve. So `turn.slow` subtracts tool time, approval
+waits and model time, and counts only what the harness itself spent; a slow provider is flagged on its route by `model.slow`. A separate, much higher cap catches turns that
 are long for any reason.
 
 Findings come from three sources. The rules file them. The agent files them with `exo_harness_report` when it

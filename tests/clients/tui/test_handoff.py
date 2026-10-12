@@ -86,7 +86,7 @@ def test_handoff_default_path_is_the_handoffs_folder(tmp_path):
 
 
 def test_long_turn_hint_ignores_tool_time(tmp_path):
-    """D-032: the tip uses the harness's share (wall minus tool time and approvals), like turn.slow."""
+    """D-032: the tip uses the harness's share (wall minus tool time, approvals and model time), like turn.slow."""
     async def sc(app, pilot, client, eng):
         app.tutorial = True
 
@@ -96,7 +96,9 @@ def test_long_turn_hint_ignores_tool_time(tmp_path):
 
         fire({"wall_ms": 400_000, "tool_ms": 380_000, "approval_ms": 0})  # a long build
         assert "long_turn" not in app.onb.seen()
-        fire({"wall_ms": 90_000, "tool_ms": 10_000, "approval_ms": 0})
+        fire({"wall_ms": 170_000, "tool_ms": 10_000, "approval_ms": 0, "model_ms": 150_000})  # a slow provider
+        assert "long_turn" not in app.onb.seen()
+        fire({"wall_ms": 90_000, "tool_ms": 10_000, "approval_ms": 0, "model_ms": 20_000})
         assert "long_turn" in app.onb.seen()
 
     run_app(tmp_path, sc)

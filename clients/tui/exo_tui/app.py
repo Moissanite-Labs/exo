@@ -36,7 +36,7 @@ MAX_FILE = 64 * 1024
 WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
 PAGE = 60  # entries added per "load earlier"
 FLUSH_EVERY = 0.1  # streaming repaint interval in seconds (at most 10 a second)
-LONG_TURN_MS = 60_000  # the same line as the turn.slow trace rule: wall minus tool time and approval waits
+LONG_TURN_MS = 30_000  # the same line as the turn.slow trace rule: wall minus tool time, approval waits and model time
 AT_RE = re.compile(r"(?<!\S)@(\S+)")
 # name -> (group, description). /help is generated from this table, so every command shows up there.
 COMMANDS = {
@@ -445,7 +445,8 @@ class ExoApp(App):
             self.running_tools = 0
             self.close_cur()
             self.hint_budget = 1
-            if (b.timing.get("wall_ms", 0) - b.timing.get("tool_ms", 0) - b.timing.get("approval_ms", 0)) >= LONG_TURN_MS:
+            if (b.timing.get("wall_ms", 0) - b.timing.get("tool_ms", 0) - b.timing.get("approval_ms", 0)
+                    - b.timing.get("model_ms", 0)) >= LONG_TURN_MS:
                 self.hint("long_turn")
             self.run_worker(self.refresh_findings(), exit_on_error=False)
         elif isinstance(b, s.ReasoningDelta):

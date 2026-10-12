@@ -549,6 +549,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   30 min (`turn_total_wall_s`). A seat's `[trace]` table overrides config.json key by key (engine and
   `exo trace` both read it). Old sessions without a timing summary subtract the recorded tool durations. Existing
   `turn.slow` findings keep their signature, so they count and verify as before.
+  *Amendment 2026-10-12:* with slow routes a 6-call turn spends 150 s or more in the model, so a rule that counted
+  model time fired on normal turns. `turn.slow` now means harness overhead only (wall minus tool, approval and
+  model-call time), 30 s by default (`turn_wall_s`, same key and seat override). Slow providers get their own
+  rule, `model.slow:<route>`, per call and per route, 60 s by default (`model_call_s`, with `model_call_routes`
+  for a per-route limit). The TUI long-turn tip uses the same line. Existing `turn.slow` findings keep their
+  signature.
 - **6. Cost in the trace.** Per call and per turn (subagents included), in `exo trace`, `/trace` and `exo_trace`
   (`--calls`, `calls`). The figure is the usage the router priced from the catalog entry of the serving route,
   or the provider's own. `unknown` when unpriced, never `$0`; a mixed turn shows `$x+`. Two fixes it needed: the

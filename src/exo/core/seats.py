@@ -13,7 +13,7 @@ hand-written files both load::
     [skills]  folders = ["~/notes/skills"]   # also `pack`; `load = [names]` limits the index to those skills
     [mcp.files]  command = "uvx"  args = ["server"]      # see core/mcp_client.py
     [channels.bus]  seat = "scout"     # channels to run with the server, each with factory(link, **config)
-    [trace]   turn_wall_s = 90      # per-seat anomaly thresholds over config.json's [trace] (D-032)
+    [trace]   turn_wall_s = 90      # (harness overhead; model_call_s is the per-call limit) per-seat anomaly thresholds over config.json's [trace] (D-032)
     [session] cwd = "~/Work/exo-live"   # where this seat's threads start (D-032)
     [peers]   wake = true  policy = {other = "hold"}   # peer messages (docs/PEERS.md)
     [jobs]    max_concurrent = 4  max_wall_s = 7200  wake = false   # background shell jobs (docs/JOBS.md)
