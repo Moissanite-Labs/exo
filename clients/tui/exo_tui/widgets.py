@@ -8,7 +8,10 @@ from typing import Any
 
 from rich.console import Group
 from rich.markdown import Markdown
+from rich.cells import cell_len
 from rich.padding import Padding
+from rich.segment import Segment
+from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from textual import events
@@ -17,6 +20,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
+from textual.strip import Strip
 from textual.widget import Widget
 from textual.widgets import Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
@@ -209,7 +213,9 @@ class ToolBlock(Static):
 
 
 class Composer(TextArea):
-    """Enter sends, shift+enter (or ctrl+j) adds a newline. The caret is a block in the signal colour (CSS)."""
+    """Enter sends, shift+enter (or ctrl+j) adds a newline. The caret is a block in the signal colour (CSS).
+    ``key_hook`` (set by the app) sees a key first and returns True when it used it: the completion menu, history
+    and ghost text live there. ``ghost`` is dim text drawn after the caret on a one-line input."""
 
     class Submitted(Message):
         def __init__(self, text: str) -> None:
@@ -220,8 +226,17 @@ class Composer(TextArea):
         super().__init__("", id="composer", soft_wrap=True, show_line_numbers=False, tab_behavior="focus",
                          placeholder=IDLE_HINT)
         self.cursor_blink = not reduced_motion()
+        self.key_hook: Any = None
+        self.ghost = ""
+
+    def at_end(self) -> bool:
+        return self.cursor_location == self.document.end
 
     async def _on_key(self, event: events.Key) -> None:
+        if self.key_hook is not None and self.key_hook(event.key):
+            event.stop()
+            event.prevent_default()
+            return
         if event.key == "enter":
             event.stop()
             event.prevent_default()
@@ -232,6 +247,60 @@ class Composer(TextArea):
             event.stop()
             event.prevent_default()
             self.insert("\n")
+
+    def render_line(self, y: int) -> Strip:
+        strip = super().render_line(y)
+        if not self.ghost or "\n" in self.text or not self.text or y != 0 or not self.at_end():
+            return strip
+        x = cell_len(self.text)
+        width = strip.cell_length
+        if x >= width - 1 or x + len(self.ghost) >= width:  # soft-wrapped or cramped: skip rather than garble
+            return strip
+        dim = Style.parse(rich_style("fg3"))
+        left = strip.crop(0, x)
+        cursor = strip.crop(x, x + 1)
+        cstyle = cursor._segments[0].style if cursor._segments else None  # noqa: SLF001 (keep the caret colour)
+        first = Segment(self.ghost[0], cstyle if self.has_focus and cstyle else dim)
+        rest = Segment(self.ghost[1:], dim) if len(self.ghost) > 1 else None
+        tail = strip.crop(x + len(self.ghost), width)
+        return Strip([*left, first, *([rest] if rest else []), *tail], width)
+
+
+class CompletionMenu(Static):
+    """The dropdown under the composer: hairline above, mono rows, an orange rule on the selected row. Shows at most
+    ``ROWS`` rows, scrolled to keep the selection in view; with no rows it can still show one dim hint line."""
+
+    ROWS = 8
+
+    def __init__(self) -> None:
+        super().__init__("", id="cmenu")
+        self.display = False
+
+    def show(self, rows: list[tuple[str, str, str]], sel: int, hint: str = "", total: int = 0) -> None:
+        """rows = (label, args, description). Hides itself when there is nothing to draw."""
+        if not rows and not hint:
+            self.display = False
+            return
+        out = Text(no_wrap=True, overflow="ellipsis")
+        top = max(0, min(sel - self.ROWS + 1, len(rows) - self.ROWS)) if len(rows) > self.ROWS else 0
+        width = max((len(r[0]) for r in rows[top:top + self.ROWS]), default=0)
+        for i, (label, args, desc) in enumerate(rows[top:top + self.ROWS], start=top):
+            on = i == sel
+            out.append("\u258c " if on else "  ", style=rich_style("accent"))
+            out.append(label.ljust(width), style=rich_style("fg", "bold") if on else rich_style("fg2"))
+            if args:
+                out.append("  " + args, style=rich_style("accent2") if on else rich_style("fg3"))
+            if desc:
+                out.append("  " + desc, style=rich_style("fg2") if on else rich_style("fg3"))
+            out.append("\n")
+        if hint:
+            out.append("  " + hint, style=rich_style("fg3"))
+        elif len(rows) > self.ROWS:
+            out.append(f"  {len(rows)} matches {DOT} tab completes {DOT} esc closes", style=rich_style("fg3"))
+        else:
+            out.append("  tab completes " + DOT + " \u2191\u2193 move " + DOT + " esc closes", style=rich_style("fg3"))
+        self.update(out)
+        self.display = True
 
 
 class PromptMark(Static):

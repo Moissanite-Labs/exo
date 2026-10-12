@@ -136,7 +136,7 @@ def test_brand_bar_live_dot_and_names(tmp_path):
 
 def test_steer_state_in_prompt_placeholder_and_user_block(tmp_path):
     async def sc(app, pilot, client, eng):
-        assert app.composer.placeholder == IDLE_HINT
+        assert app.composer.placeholder in (IDLE_HINT, app.tip_line())  # a first run shows its one guidance line (D-037)
         eng.hub.publish(s.TurnStarted(turn_id="t", model="fake:x"), app.session)
         await until(lambda: app.busy, pilot)
         assert plain(app.prompt.render()).strip() == "steer ›"
