@@ -50,7 +50,10 @@ and the number of open findings. Screenshots are in `docs/ui/` (for example `doc
 `docs/ui/03-approval.png`, `docs/ui/05-context.png`). The look is described in `docs/UI.md`.
 Set `EXO_REDUCED_MOTION=1` to turn motion off. `NO_COLOR` turns colour off.
 
-**Web (`exo web`).** Run `exo serve` in one terminal and `exo web` in another. Open `http://127.0.0.1:7342`.
+**Web (`exo web`).** Run `exo web` and open `http://127.0.0.1:7342`. Run `exo` and `exo web` in either order: both
+see the same agent and threads. `exo web` joins a terminal window's core, or `exo serve`, if one is running; if
+none is, it starts `exo serve` in the background (log `$EXO_HOME/logs/exod.log`). That background core keeps running
+after you close the web page, so a later `exo` joins it. `exo stop` ends it.
 It shows approvals, decisions waiting on you, live sessions, tasks, projects and cost. Screenshots are
 `docs/ui/web-*.png`. Details are in `docs/ui/WEB.md` and `plugins/exo-command/README.md`.
 

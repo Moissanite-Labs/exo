@@ -22,7 +22,7 @@ from exo.protocol import schema as s
 
 from . import costs, decisions, projects
 from .config import Settings, load_settings
-from .source import Source, SourceError
+from .source import Source, SourceError, core_message
 from .state import TASK_ORDER, TERMINAL_TASK, State
 
 SECTIONS = ("projects", "sessions", "tasks", "approvals", "decisions", "costs")
@@ -41,6 +41,7 @@ class CommandCentre:
         self._waiters: List[asyncio.Queue] = []
         self.connected = False
         self.last_error: Optional[str] = None
+        self.auto_core = False    # True when connect() chose the default socket: find or start the core
         self.ring: "collections.deque[Dict[str, Any]]" = collections.deque(maxlen=EVENT_RING)
         self.panels: Dict[str, Dict[str, Any]] = {}   # open ui.panel panels, by panel_id
         self._ring_seq = 0
@@ -144,9 +145,28 @@ class CommandCentre:
     def connect(self) -> Source:
         from .source import ClientSource
         st = self.settings
+        self.auto_core = not st.url and not st.socket
         self.source = (ClientSource(url=st.url, token=st.resolved_token()) if st.url
                        else ClientSource(socket=st.resolved_socket()))
         return self.source
+
+    async def ensure_core(self) -> None:
+        """Find the shared core, or start it (D-036); keep ``last_error`` a sentence the page can show."""
+        from exo import ensure_core as ensure
+        home = ensure.home_dir()
+        agent = ensure.agent_name()
+        if ensure.find_core(home, agent) is None:
+            self.last_error = "Exo core is not running, starting it..."
+            self._notify()
+        try:
+            sock = await asyncio.to_thread(ensure.ensure_core, home, agent)
+        except ensure.CoreUnavailable as exc:
+            raise RuntimeError(str(exc)) from None
+        if self.source is not None and getattr(self.source, "socket", None) != str(sock):
+            old, self.source = self.source, None
+            await old.aclose()
+            from .source import ClientSource
+            self.source = ClientSource(socket=str(sock))
 
     def subscribe(self) -> asyncio.Queue:
         """A queue that receives the state ``seq`` after each change (for the web SSE feed)."""
@@ -291,7 +311,7 @@ class CommandCentre:
         try:
             data = {"ok": True, **getattr(self, "_" + name)(use_now)}
         except Exception as exc:  # isolate: one bad section never blanks the page
-            data = {"ok": False, "error": "{}: {}".format(type(exc).__name__, exc),
+            data = {"ok": False, "error": core_message(exc),
                     "trace": traceback.format_exc(limit=3)}
         data["generated_at"] = time.time()
         data["took_ms"] = int((time.time() - started) * 1000)

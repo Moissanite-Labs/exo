@@ -664,3 +664,24 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the user's shell); a top-level `--seat` or `--resume` on the main parser (clashes with subcommand flags).
 - **Not done:** Windows; a published package on PyPI (the git URL is the source until then); an
   `exo uninstall`.
+
+## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
+- **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
+  `ConnectError: [Errno 2] No such file or directory`. The terminal client had already started the core in process
+  and held the agent's writer lock (D-028), so the two clients only shared an agent if the user ran `exo serve` first.
+- **Found:** the in-process core already serves `run/agent-<seat>.sock` (the same HTTP protocol) so other windows
+  join it. The web client never looked there. A second core does not forward: it fails on the lock (`WriterBusy`).
+- **Decision:** `exo.ensure_core.ensure_core`: use `exod.sock` if it answers, else `agent-<seat>.sock`, else start
+  `exo serve` detached (new session, same env, log `logs/exod.log`, pid `run/exod.pid`) under a file lock
+  (`run/exod-start.lock`), remove a stale socket file first, wait up to 40 s for it to answer, and fail with the log
+  tail. If the writer lock is held by a process that serves no socket, say so and name the way out, never start a
+  second core. `exo web` runs this in its feed loop, so it also re-resolves when the core goes away (a terminal window
+  that held it closed): it re-joins or starts exod. The terminal client's `_open` now prefers a live exod, and a stale
+  `exod.sock` no longer counts as a server.
+- **Lifetime:** exod stays running until `exo stop` (or `exo serve --stop`). Simplest to explain and safe for the
+  work a core does with no window open (background tasks, channels, schedules). Idle exit rejected: it can end a
+  core between a client's check and its connect, and quietly kill long jobs.
+- **Not changed:** the terminal client still runs the core in process when none exists (it does not spawn a daemon:
+  tools and approvals stay tied to its window). Web with `--socket`/`--url` never starts anything. Page errors are
+  sentences (`core_message`), not exception text. No protocol change.
+- **Not done:** `--in-process` flag (the client already falls back in process); Windows.

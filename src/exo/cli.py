@@ -7,7 +7,7 @@
   exo models [--remote PROVIDER]           providers, keys found (yes/no), route per role
   exo decide QUESTION --options a,b,c      ask the decision model; probabilities and route
   exo serve | exo chat [--resume ID]       run the exod server; chat with it
-  exo web [--port N ...]                   the command centre web client (needs a running `exo serve`)
+  exo web [--port N ...]                   the command centre web client (starts the shared core if none is running)
   exo   (no command)                       the terminal client in this directory, same as `exo tui`;
                                            flags pass through: exo --resume, exo --seat NAME, exo --no-intro
   exo resume [flags]                       reopen the last session; same as `exo --resume`
@@ -262,6 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_memory(sp, common)
     p = sp.add_parser('web', add_help=False, help='serve the command centre web client (exo-command)')
     p.add_argument('rest', nargs=argparse.REMAINDER, help='passed to exo-command: --socket, --url, --port ...')
+    sp.add_parser('stop', add_help=False, help='stop the background core that exo web / exo serve started')
     sp.add_parser('resume', add_help=False, help='reopen the last session in the terminal client (exo --resume)')
     p = sp.add_parser('tui', add_help=False, help='the terminal client (Textual); runs the core in-process if no exod')
     p.add_argument('rest', nargs=argparse.REMAINDER, help='passed to exo_tui: --resume, --session, --seat ...')
@@ -316,6 +317,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_tui(args)
     if args[0] == 'tui':
         return cmd_tui(args[1:])
+    if args[0] == 'stop':
+        from .ensure_core import stop_core
+        print(stop_core())
+        return 0
     if args[0] == 'resume':  # `exo resume [flags]` = `exo --resume [flags]`
         return cmd_tui(['--resume', *args[1:]])
     if args[0] == 'update':

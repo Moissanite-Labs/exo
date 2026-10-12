@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from exo.protocol import schema as s
 
-from .source import SourceError
+from .source import SourceError, core_message
 
 MAX_TEXT = 50_000
 MODES = ("send", "queue", "steer")
@@ -70,7 +70,7 @@ def error_reply(exc: Exception) -> Reply:
     if isinstance(exc, SourceError):
         status = 404 if exc.code == "not_found" else 501 if exc.code in ("unsupported", "unknown_command") else 502
         return status, {"error": exc.message, "code": exc.code}
-    return 502, {"error": "{}: {}".format(type(exc).__name__, exc)}
+    return 502, {"error": core_message(exc)}
 
 
 async def dispatch(centre, method: str, path: str, q: Dict[str, Any], body: Dict[str, Any]) -> Optional[Reply]:
