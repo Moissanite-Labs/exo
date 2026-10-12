@@ -51,7 +51,7 @@ VISUAL_GATE = CHARTS_SCRIPTS / "visual-value-gate.py"
 MERMAID_CHECK = CHARTS_SCRIPTS / "check-mermaid.py"
 DEFAULT_DRAFTS_ROOT = Path(os.environ.get("EXO_DRAFTS_ROOT", "drafts"))
 DEFAULT_IDENTS = {
-    "abs-path": r"/Users/",
+    "abs-path": r"/Users/|/home/[A-Za-z]|/root/",
     "tmp-path": r"/var/folders|/private/tmp",
     "localhost": r"127\.0\.0\.1|localhost",
     "email": r"[\w.+-]+@[\w-]+\.[a-z]{2,}",
