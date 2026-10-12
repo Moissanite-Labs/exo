@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # install.sh: install Exo for any user on macOS or Linux.
 #
-#   pinned Hermes Agent (scripts/pin-hermes.sh) + one venv for Hermes and Exo
-#   + Exo plugins in a Hermes home of their own + `exo init --interview`
+#   one venv + exo + the Exo plugins + an `exo models` check + `exo init --interview`
+#   Hermes is NOT installed by default. Exo runs on its own core. `--with-hermes` adds the
+#   pinned Hermes Agent and its patch queue (kept until the wave 4 cutover).
 #
 # Usage: scripts/install.sh [options]
 #
@@ -10,16 +11,19 @@
 #   --exo-home DIR       Exo's home (default $EXO_HOME, else ~/.exo)
 #   --hermes-home DIR    HERMES_HOME to install plugins into. Default: a NEW $EXO_HOME/hermes-home.
 #                        An existing ~/.hermes is used only when passed here explicitly.
-#   --tag TAG            Hermes release tag (default: latest stable)
+#   --with-hermes        also pin Hermes (scripts/pin-hermes.sh), install it in the venv, write the
+#                        exo-hermes launcher. Prints a warning summary of every patch that did not
+#                        apply and exits non-zero if any failed.
+#   --tag TAG            Hermes release tag (default: latest stable). Needs --with-hermes.
 #   --exo-source SRC     a local exo checkout or a git URL (default: the repo holding this script)
 #   --python PY          interpreter for the venv (default: newest python3.11+ on PATH)
 #   --plugins LIST       comma list of plugins to install (default: every plugins/*/plugin.yaml)
 #   --principal ID       principal id for the interview
 #   --answers FILE       answers YAML for a non-interactive interview
-#   --no-pin             do not pin Hermes (use an existing checkout, or skip Hermes entirely)
+#   --no-pin             with --with-hermes: do not pin (use an existing checkout, or skip Hermes)
 #   --no-pip             do not create the venv or pip install anything
 #   --no-interview       do not offer the interview
-#   --strict-patches     fail when a patch does not apply, instead of skipping it
+#   --strict-patches     with --with-hermes: fail at once when a patch does not apply
 #   --editable           pip install exo in editable mode (for development)
 #   -y, --yes            do not prompt
 #
@@ -33,7 +37,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-DRY=0 PIN=1 PIP=1 INTERVIEW=1 STRICT=0 EDITABLE=0 YES=0
+DRY=0 WITH_HERMES=0 PIN=1 PIP=1 INTERVIEW=1 STRICT=0 EDITABLE=0 YES=0
 EXO_HOME_ARG="" HERMES_HOME_ARG="" HERMES_HOME_EXPLICIT=0
 TAG="${EXO_HERMES_TAG:-}" EXO_SOURCE="" PY="${EXO_PYTHON:-}" PLUGINS="" PRINCIPAL="" ANSWERS=""
 
@@ -47,6 +51,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --exo-home) need_arg "$@"; EXO_HOME_ARG="$2"; shift ;;
     --hermes-home) need_arg "$@"; HERMES_HOME_ARG="$2"; HERMES_HOME_EXPLICIT=1; shift ;;
+    --with-hermes) WITH_HERMES=1 ;;
     --tag) need_arg "$@"; TAG="$2"; shift ;;
     --exo-source) need_arg "$@"; EXO_SOURCE="$2"; shift ;;
     --python) need_arg "$@"; PY="$2"; shift ;;
@@ -59,11 +64,17 @@ while [ $# -gt 0 ]; do
     --strict-patches) STRICT=1 ;;
     --editable) EDITABLE=1 ;;
     -y|--yes) YES=1 ;;
-    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option $1 (see --help)" ;;
   esac
   shift
 done
+
+FAILED_PATCHES=()
+[ "$WITH_HERMES" -eq 1 ] || PIN=0
+if [ "$WITH_HERMES" -eq 0 ] && { [ -n "$TAG" ] || [ "$STRICT" -eq 1 ]; }; then
+  die "--tag and --strict-patches only apply with --with-hermes"
+fi
 
 # --- helpers ------------------------------------------------------------------
 q() { printf '%q ' "$@"; }
@@ -150,9 +161,9 @@ cat <<EOF
   python        $PY ($PYVER)
   EXO_HOME      $EXO_HOME
   exo source    ${EXO_URL:-$EXO_SRC}
-  hermes        $EXO_HERMES_DIR  (pin: $([ "$PIN" -eq 1 ] && echo "${TAG:-latest stable tag}" || echo skipped))
-  venv          $VENV  ($([ "$PIP" -eq 1 ] && echo "Hermes + exo" || echo skipped))
-  HERMES_HOME   $TARGET_HOME$([ "$HERMES_HOME_EXPLICIT" -eq 1 ] && echo '  (explicit)' || echo '  (new, Exo-owned)')
+  hermes        $([ "$WITH_HERMES" -eq 1 ] && echo "$EXO_HERMES_DIR  (pin: $([ "$PIN" -eq 1 ] && echo "${TAG:-latest stable tag}" || echo skipped))" || echo "not installed (pass --with-hermes to add it)")
+  venv          $VENV  ($([ "$PIP" -eq 1 ] && echo "$([ "$WITH_HERMES" -eq 1 ] && echo 'Hermes + ')exo" || echo skipped))
+  plugin home   $TARGET_HOME$([ "$HERMES_HOME_EXPLICIT" -eq 1 ] && echo '  (explicit)' || echo '  (new, Exo-owned)')
 EOF
 
 # --- 3. EXO_HOME ------------------------------------------------------------
@@ -189,6 +200,7 @@ pin_hermes() {
     fi
     warn "patch $failed does not apply to this tag; skipping it. PINNED records the skip."
     case ",$PIN_SKIP," in *",$failed,"*) rm -f "$log"; die "patch $failed still fails after skipping it" ;; esac
+    FAILED_PATCHES+=("$failed")
     PIN_SKIP="${PIN_SKIP:+$PIN_SKIP,}$failed"   # full file name: pin-hermes.sh matches it exactly
   done
 }
@@ -201,8 +213,8 @@ if [ "$PIN" -eq 1 ]; then
   fi
 fi
 HAVE_HERMES=0
-[ -f "$EXO_HERMES_DIR/pyproject.toml" ] && HAVE_HERMES=1
-[ "$DRY" -eq 1 ] && [ "$PIN" -eq 1 ] && HAVE_HERMES=1
+[ "$WITH_HERMES" -eq 1 ] && [ -f "$EXO_HERMES_DIR/pyproject.toml" ] && HAVE_HERMES=1
+[ "$DRY" -eq 1 ] && [ "$PIN" -eq 1 ] && HAVE_HERMES=1 || true
 
 # --- 5. venv: Hermes + exo ------------------------------------------------------
 # Upstream's own setup (setup-hermes.sh / install.sh) is a pm/uv-managed environment that
@@ -224,7 +236,7 @@ if [ "$PIP" -eq 1 ]; then
     run "$VPY" -m pip install -q --upgrade pip
     if [ "$HAVE_HERMES" -eq 1 ]; then
       run "$VPY" -m pip install -q -e "$EXO_HERMES_DIR"
-    else
+    elif [ "$WITH_HERMES" -eq 1 ]; then
       warn "no Hermes checkout at $EXO_HERMES_DIR; installing exo only"
     fi
     if [ "$EDITABLE" -eq 1 ]; then
@@ -277,10 +289,13 @@ for name in "${SELECTED[@]}"; do
 done
 
 # Hermes plugins are opt-in. A config.yaml Exo creates enables them; an existing one is not edited.
+# Only written with --with-hermes: the default install has nothing that reads it.
 HCFG="$TARGET_HOME/config.yaml"
 enabled="$(IFS=,; echo "${SELECTED[*]}" | sed 's/,/, /g')"
 has() { case " ${SELECTED[*]} " in *" $1 "*) return 0 ;; esac; return 1; }
-if [ ! -f "$HCFG" ]; then
+if [ "$WITH_HERMES" -eq 0 ]; then
+  :
+elif [ ! -f "$HCFG" ]; then
   if [ "$DRY" -eq 1 ]; then
     echo "+ write $HCFG (plugins.enabled: [$enabled])"
   else
@@ -306,15 +321,17 @@ fi
 LAUNCH="$EXO_HOME/bin/exo-hermes"
 ENVSH="$EXO_HOME/env.sh"
 if [ "$DRY" -eq 1 ]; then
-  echo "+ write $LAUNCH (runs $VENV/bin/hermes with HERMES_HOME=$TARGET_HOME)"
+  [ "$WITH_HERMES" -eq 1 ] && echo "+ write $LAUNCH (runs $VENV/bin/hermes with HERMES_HOME=$TARGET_HOME)"
   echo "+ write $ENVSH"
 else
-  write_if_changed "$LAUNCH" "$(printf '%s\n' '#!/usr/bin/env bash' \
+  if [ "$WITH_HERMES" -eq 1 ]; then
+    write_if_changed "$LAUNCH" "$(printf '%s\n' '#!/usr/bin/env bash' \
     '# Written by exo scripts/install.sh. Runs the pinned Hermes with the Exo home.' \
     "export EXO_HOME=\"$EXO_HOME\"" \
     "export HERMES_HOME=\"$TARGET_HOME\"" \
     "exec \"$VENV/bin/hermes\" \"\$@\"")"
-  chmod 755 "$LAUNCH"
+    chmod 755 "$LAUNCH"
+  fi
   write_if_changed "$ENVSH" "$(printf '%s\n' \
     "# Written by exo scripts/install.sh. Source it to use Exo in this shell:  . \"$ENVSH\"" \
     "export EXO_HOME=\"$EXO_HOME\"" \
@@ -333,8 +350,10 @@ set_cfg() {  # key json-value
     EXO_HOME="$EXO_HOME" PYTHONPATH="$EXO_SRC/src" "$PY" -m exo.config set "$1" "$2"
   fi
 }
-set_cfg hermes_dir "\"$EXO_HERMES_DIR\""
-set_cfg hermes_home "\"$TARGET_HOME\""
+if [ "$WITH_HERMES" -eq 1 ]; then
+  set_cfg hermes_dir "\"$EXO_HERMES_DIR\""
+  set_cfg hermes_home "\"$TARGET_HOME\""
+fi
 set_cfg venv "\"$VENV\""
 set_cfg plugins "$plugins_json"
 if [ -n "$PIN_SKIP" ]; then set_cfg hermes_patch_skip "\"$PIN_SKIP\""; fi
@@ -365,4 +384,26 @@ elif [ "$INTERVIEW" -eq 1 ]; then
   say "next: exo init <id> --interview   (or: exo import-store <path> --id <id>)"
 fi
 
-say "done$([ "$DRY" -eq 1 ] && echo ' (dry run)'). Start with:  . $ENVSH && exo-hermes"
+# --- 9. exo models check, summary -------------------------------------------------
+if [ "$DRY" -eq 1 ]; then
+  echo "+ EXO_HOME=$EXO_HOME $VENV/bin/exo models   (check providers, keys and routes)"
+elif [ "$PIP" -eq 1 ] && [ -x "$VPY" ]; then
+  echo "+ $VENV/bin/exo models"
+  EXO_HOME="$EXO_HOME" "$VPY" -m exo.cli models || warn "exo models check failed (see above)"
+fi
+
+if [ "${#FAILED_PATCHES[@]}" -gt 0 ]; then
+  {
+    echo "install: ================ WARNING: Hermes patches that did not apply ================"
+    for f in "${FAILED_PATCHES[@]}"; do echo "install:   - $f (skipped)"; done
+    echo "install: ${#FAILED_PATCHES[@]} patch(es) skipped. Hermes runs without them. PINNED and config.json record the skip."
+    echo "install: ============================================================================"
+  } >&2
+fi
+
+if [ "$WITH_HERMES" -eq 1 ]; then
+  say "done$([ "$DRY" -eq 1 ] && echo ' (dry run)'). Start with:  . $ENVSH && exo-hermes"
+else
+  say "done$([ "$DRY" -eq 1 ] && echo ' (dry run)'). Start with:  . $ENVSH && exo --help   (Hermes not installed; add it with --with-hermes)"
+fi
+[ "${#FAILED_PATCHES[@]}" -eq 0 ] || exit 1

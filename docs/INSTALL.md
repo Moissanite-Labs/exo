@@ -6,8 +6,9 @@ One script installs Exo for any user on macOS or Linux (D-004). It never touches
 ```sh
 git clone <exo repo> && cd exo
 scripts/install.sh --dry-run      # print the plan, change nothing
-scripts/install.sh                # install
-. ~/.exo/env.sh && exo-hermes     # start Hermes with Exo
+scripts/install.sh                # install Exo (no Hermes)
+. ~/.exo/env.sh && exo models     # check providers and routes
+scripts/install.sh --with-hermes  # optional: also pin Hermes and its patches
 ```
 
 ## What it does
@@ -16,11 +17,11 @@ scripts/install.sh                # install
 |---|---|
 | 1 | Checks the OS (macOS or Linux), `git`, and Python 3.11 or newer. It picks the newest of `python3.14` to `python3.11`, or `--python`. Hermes supports Python below 3.15. |
 | 2 | Creates `$EXO_HOME` (default `~/.exo`, mode 700) with `keys/`, `principals/` and `bin/`. |
-| 3 | Pins Hermes with `scripts/pin-hermes.sh` into `$EXO_HOME/hermes`: the latest stable tag, or `--tag`. If a patch does not apply to that tag, the installer skips it, warns, and retries. `PINNED` and `config.json` (`hermes_patch_skip`) record the skip. `--strict-patches` fails instead. |
-| 4 | Creates a venv at `$EXO_HOME/venv` and pip installs the pinned Hermes checkout (editable) and the `exo` package. |
+| 3 | Only with `--with-hermes`. Pins Hermes with `scripts/pin-hermes.sh` into `$EXO_HOME/hermes`: the latest stable tag, or `--tag`. If a patch does not apply to that tag, the installer skips it, warns, and retries. `PINNED` and `config.json` (`hermes_patch_skip`) record the skip. `--strict-patches` fails instead. At the end it prints a warning list of every patch that did not apply and exits 1. |
+| 4 | Creates a venv at `$EXO_HOME/venv` and pip installs the `exo` package. With `--with-hermes` it also installs the pinned Hermes checkout (editable). |
 | 5 | Copies the Exo plugins (every `plugins/*/plugin.yaml`, or `--plugins`) into `<HERMES_HOME>/plugins/`, without tests. Each copy carries a `.exo-managed` marker. A plugin folder without the marker is never overwritten. |
-| 6 | Writes `<HERMES_HOME>/config.yaml` only if it does not exist: `plugins.enabled`, `memory.provider: exo-memory`, `context.engine: exo-context`. An existing file is left alone and the lines to add are printed. |
-| 7 | Writes `$EXO_HOME/bin/exo-hermes` (runs the pinned Hermes with Exo's `HERMES_HOME`), `$EXO_HOME/env.sh`, and `$EXO_HOME/config.json`. |
+| 6 | Only with `--with-hermes`. Writes `<HERMES_HOME>/config.yaml` only if it does not exist: `plugins.enabled`, `memory.provider: exo-memory`, `context.engine: exo-context`. An existing file is left alone and the lines to add are printed. |
+| 7 | Writes `$EXO_HOME/env.sh` and `$EXO_HOME/config.json`. With `--with-hermes` it also writes `$EXO_HOME/bin/exo-hermes` (runs the pinned Hermes with Exo's `HERMES_HOME`). |
 | 8 | Offers `exo init <id> --interview`. With `--principal ID` it runs without asking; add `--answers FILE` for a scripted interview. |
 
 ## Where things go
@@ -47,13 +48,14 @@ pinned checkout. Hermes exact-pins its dependencies, so the result matches upstr
 | `--dry-run` | print every action; write nothing anywhere |
 | `--exo-home DIR` | Exo's home (default `$EXO_HOME`, else `~/.exo`) |
 | `--hermes-home DIR` | install plugins into this `HERMES_HOME`. The only way to use `~/.hermes`. |
-| `--tag TAG` | Hermes release tag |
+| `--with-hermes` | also install Hermes and its patch queue (kept until the wave 4 cutover). Off by default. |
+| `--tag TAG` | Hermes release tag (needs `--with-hermes`) |
 | `--exo-source SRC` | a local exo checkout or a git URL (cloned into `$EXO_HOME/src/exo`) |
 | `--python PY` | interpreter for the venv |
 | `--plugins LIST` | comma list, for example `exo-memory,exo-context` |
 | `--principal ID`, `--answers FILE` | run the interview without prompts |
 | `--no-pin`, `--no-pip`, `--no-interview` | skip a step |
-| `--strict-patches` | fail when a patch does not apply |
+| `--strict-patches` | fail when a patch does not apply (needs `--with-hermes`) |
 | `--editable` | install exo editable (development) |
 | `-y` | never prompt |
 
