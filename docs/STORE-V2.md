@@ -1,28 +1,13 @@
 # Store v2: hafiz merged with Arif and Eldunari
 
-Status: draft for review, 2026-10-11. Ruling: D-009 ("hafiz's design becomes the store design, merged with
+Status: **Design, not built.** Draft for review, 2026-10-11. Ruling: D-009 ("hafiz's design becomes the store design, merged with
 Arif and Eldunari"). Also bound by D-003 (hafiz is the seed), D-004 (mechanism vs principal), D-007
 (Eldunari and Arif are data to migrate). Nothing in this document has been applied. All sources were read
 only.
 
-## 0. Facts checked on disk (they correct the inventory)
-
-| Claim in `inventory/` | What is on disk today |
-|---|---|
-| Arif holds about 919 items | 4,835 items in Postgres `arif_kb`, 4,834 embeddings (1,024 dims). 919 is the August figure in `IDEA.md`. |
-| Arif has no git | `arif/wrk/gc1` is a git repo: 5 commits, no remote, 59 dirty files. |
-| Arif ingests mail | Mail was ingested and later removed (`delete_mail.py`). No `google_mail` rows remain. The mbox is still in `mats/Google/`. |
-| Eldunari has 429 docs | 429 is the commit count. Git tracks 456 files, 422 of them Markdown. 2,084 files sit on disk, most of them ignored Orda rehearsal state under `nexus/state/orda2*`. |
-| Eldunari semantic index | `.semantic-index.sqlite3` holds 406 documents, built 2026-10-07 with a remote model. |
-
-Arif items by source today: chrome_bookmark 2,941; discord 580; x_bookmarks 489; apple_notes 318;
-grok_conversations 193; x_bookmarks_quote 107; feed 85; github_starred 44; manual 35; google_drive 26;
-google_chat 11; github_repo 5; external_report 1. Edges: shared_channel 158,519; similarity 18,870;
-quote_of 109; co_occurrence 12.
-
 ## 1. What each system does well and badly
 
-### hafiz (`~/hafiz`, mirrored in `src/exo/store.py`)
+### hafiz (a personal knowledge base, mirrored in `src/exo/store.py`)
 
 Good:
 - One node per cluster of claims, with a strict frontmatter: type, confidence, stability, validity
@@ -40,7 +25,7 @@ Bad:
 - Summaries and `load_when` are hand-written. That does not scale to 400 migrated documents.
 - `tools/kb.py` and `store.py` are two copies of the same code.
 
-### Arif (`~/Documents/team6/arif/wrk/gc1`)
+### Arif (an item store on Postgres)
 
 Good:
 - Metadata first, deep extraction later (`IDEA.md` principle 1).
@@ -65,7 +50,7 @@ Bad:
 - Items never connect to beliefs. Nothing learns from them.
 - Grok chats are stored as 500-character summaries, not the person's own words.
 
-### Eldunari (`~/.hermes/eldunari`, design archive `~/Documents/team6/Eldunari`)
+### Eldunari (an agent and group memory repo)
 
 Good:
 - Router first, one module per task, never load all (`ROUTER.md`). This is the same idea as the hafiz
@@ -82,10 +67,10 @@ Good:
   the best piece of engineering in the three systems.
 - Git as the audit trail: 429 commits since 2026-08-19.
 - Archives are kept but never routed (`domains/archive/`, `nexus/zero-context-archive/`).
-- The Raptora review (`Eldunari/wrk/mats/ELDUNARI_RECOMMENDATIONS.md`, R1 to R8) names real failure modes.
+- The Raptora review (R1 to R8) names real failure modes.
 
 Bad:
-- Absolute paths inside documents (`/Users/kethuda/.hermes/...`).
+- Absolute home paths inside documents.
 - Frontmatter is loose: 119 of 422 tracked Markdown files have no `type`; no confidence, validity or
   per-claim source.
 - Agent names from Generation A remain in content (an `anima/leo` experience is signed `agent: azaraki`).
@@ -286,8 +271,7 @@ Must run on a laptop today and on a small ARM board with 2 to 4 GB of RAM later.
 
 Choices:
 - Store vectors truncated to **256 dims**, normalized, as int8. 100k items is about 25 MB.
-- Runtime: `llama-server --embedding` with a GGUF file (llama.cpp is already installed on A's Mac and runs
-  on ARM boards), or ONNX Runtime. Both behind one `Embedder` protocol.
+- Runtime: `llama-server --embedding` with a GGUF file (llama.cpp runs on laptops and on ARM boards), or ONNX Runtime. Both behind one `Embedder` protocol.
 - Every vector row records `model`, `dims`, `content_hash`. Changing the model means `exo index rebuild`.
   Unchanged text is never re-embedded.
 - Model choice is A's (his standing rule). The default above ships unless he picks otherwise. Decision
@@ -296,31 +280,31 @@ Choices:
 ## 4. Migration plan (copies only)
 
 Ground rules:
-- Sources are opened read-only. No commit, checkout, write or delete in `~/.hermes/eldunari`,
-  `~/Documents/team6/arif`, the Arif Postgres database, or `~/hafiz`.
+- Sources are opened read-only. No commit, checkout, write or delete in the Eldunari repo,
+  the Arif directory, the Arif Postgres database, or the hafiz directory.
 - The migrator refuses to run if the destination is inside a source path.
-- First target is a staging store: `~/.exo/staging/a/`. It becomes `~/.exo/principals/a/` only after lint
+- First target is a staging store: `<staging>/`. It becomes `$EXO_HOME/principals/<pid>/` only after lint
   and eval pass (stage M1 in `docs/ARCHITECTURE.md`).
 - Orda is live. Take the Eldunari copy at a quiet moment, then run Orda's `verify` on the copy. If the copy
   is mid-write, take it again.
 
 ### 4.1 Freeze copies
 
-1. `git -C ~/.hermes/eldunari bundle create ~/Work/exo-salvage-20261011/eldunari-<date>.bundle --all`
+1. `git -C <eldunari> bundle create <salvage>/eldunari-<date>.bundle --all`
    (reads the repo, writes only the bundle).
-2. `rsync -a --exclude .git ~/.hermes/eldunari/ ~/Work/exo-salvage-20261011/eldunari-worktree-<date>/`
+2. `rsync -a --exclude .git <eldunari>/ <salvage>/eldunari-worktree-<date>/`
    (captures the 8 uncommitted Orda files and the ignored rehearsal state as files).
-3. `git -C ~/Documents/team6/arif/wrk/gc1 bundle create .../arif-gc1-<date>.bundle --all`, plus an rsync of
+3. `git -C <arif> bundle create .../arif-<date>.bundle --all`, plus an rsync of
    the work tree without `chroma/`, `*.jsonl` and mail exports.
 4. Arif database: open a `SET TRANSACTION READ ONLY` session and export `items`, `item_edges`,
-   `cluster_snapshots`, `cluster_memberships` to a private dump under `~/.exo/staging/a/corpus/private/arif/`
+   `cluster_snapshots`, `cluster_memberships` to a private dump under `<staging>/corpus/private/arif/`
    (mode 600). Skip `item_embeddings` and `item_embeddings_backup_minilm`.
 5. Chroma: read `chroma/chroma.sqlite3` read-only, export documents and metadata only (no vectors) from
    `arif_knowledge_pplx_0_6b`, dedupe against the Postgres export by content hash.
 
 ### 4.2 Keep Eldunari's git history
 
-1. `git clone --no-local <bundle> ~/.exo/work/eldunari-import`.
+1. `git clone --no-local <bundle> <work>/eldunari-import`.
 2. In the clone only, commit the uncommitted Orda files from step 4.1.2 as
    "snapshot of uncommitted state, <date>".
 3. Scan the full history for secrets (`gitleaks detect` or exo's `LEAKS` and `redact()` patterns). If
@@ -370,7 +354,7 @@ Conversion rules for each node:
 - `confidence` from the body's "Confidence:" line, else `medium`. `stability`: `volatile` for episodes,
   `durable` for patterns and rules.
 - Markdown links in the body become `see-also` links (pattern-to-experience links become `evidence-for`).
-  Absolute `/Users/...` paths are rewritten to store ids or flagged.
+  Absolute home paths are rewritten to store ids or flagged.
 - `agent:` and `recognized-by:` map to `owner`. Gen A names map to current roles through
   `domains/archive/zero-context-map.md`; the old name goes in `author_alias`.
 - The 119 files with no `type` get one from their folder. Anything still ambiguous goes to
@@ -387,7 +371,7 @@ Conversion rules for each node:
 4. Keep `quote_of` and `co_occurrence` edges. Drop the rest.
 5. Keep the 2026-09-08 cluster snapshot as a `snapshots` row for history only.
 6. Skip `grok_conversations` items. Run `exo ingest grok` on the original export instead (verbatim).
-7. Do not re-ingest mail. The mbox stays in `mats/Google/`, untouched (decision in section 6).
+7. Do not re-ingest mail. The mbox stays where it is, untouched (decision in section 6).
 8. Embed everything locally with the chosen model, then build `similarity` edges (cosine at or above 0.80,
    at most 10 per item).
 9. Check: row counts per source match the dump; every item has a vector; `exo lint` clean.
@@ -404,8 +388,7 @@ Git-ignored in every store and never committed:
 Committed to the local store repo: packs, `INDEX.md`, `nodes/`, `timeline/`, `policies/`, `method/`,
 agent and group nodes, `corpus/sources/` digests that pass the leak lint.
 
-Never copied at all: `.env`, `auth.json`, any token or credential file, `My Drive/backup/`,
-`control/wrk/mct6/BRIEFS/`, `~/Documents/Ahraz-Wedding/`, third-party message text outside
+Never copied at all: `.env`, `auth.json`, any token or credential file, any private backup folder, third-party message text outside
 `corpus/private/`.
 
 The Exo package repo (`aska-digital/exo`) never contains store data. Templates only.
@@ -428,7 +411,7 @@ Ownership: `src/exo/store.py`, `retrieve.py`, new `items.py`, `index.py`, `embed
    `exo lint --health` runs all of these.
 5. Templates: `templates/agent-store/` and `templates/group-store/` with packs, INDEX and empty domains.
    `Store.create(kind=...)`.
-6. Fold `~/hafiz/tools/kb.py` behaviour into `exo` CLI so there is one copy of the code.
+6. Fold the hafiz `tools/kb.py` behaviour into `exo` CLI so there is one copy of the code.
 
 **Index and embeddings**
 7. `exo/index.py`: build `index/fts.sqlite` (FTS5, one table for nodes, one for items, column weights) and
@@ -465,7 +448,7 @@ Ownership: `src/exo/store.py`, `retrieve.py`, new `items.py`, `index.py`, `embed
 16. `exo migrate eldunari --src <clone> --dest <store>`: the mapping and conversion rules in 4.3, writes
     `migrate-review.jsonl`, never touches `--src` beyond reads. Refuses if dest is inside src.
 17. `exo migrate arif --dump <file> --dest <store>`: 4.4 steps 1 to 5.
-18. `exo migrate hafiz --src ~/hafiz --dest <store>`: copy nodes, pack, timeline, training, corpus
+18. `exo migrate hafiz --src <hafiz> --dest <store>`: copy nodes, pack, timeline, training, corpus
     (private keeps mode 700), add `STORE.toml`.
 
 **Tests**

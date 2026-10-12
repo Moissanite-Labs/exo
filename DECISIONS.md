@@ -12,7 +12,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 ## D-002 (2026-10-11) Research and inventory run as parallel subagents writing to files
 - **Decision:** Five subagents: guardian-angel crawl, GitHub inventory, local ~/.hermes inventory,
   local documents and exports inventory, base evaluation. Each writes one file in `research/` or
-  `inventory/` and returns a short summary.
+  an inventory folder (kept outside the repo, see D-042) and returns a short summary.
 - **Why:** A asked to keep the lead session lean; the four tasks are independent.
 - **Rejected:** One long crawl in the lead session (context cost); protean lanes for the crawl
   (their small models handle one mechanical task well, not open-ended judgment-heavy reading).
@@ -72,7 +72,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   data source (low information per byte).
 
 ## D-007 (2026-10-11) Inventory ratified: 137 items, verdicts and open questions
-- **Decision:** `inventory/INVENTORY.md` verdicts stand (core 18, plugin 13, skill 18, patch 5, upstream 9,
+- **Decision:** The inventory verdicts (kept outside the repo, see D-042) stand (core 18, plugin 13, skill 18, patch 5, upstream 9,
   data 28, reference 11, retire 10, drop 25), with these rulings on its open questions:
   - **Memory:** Hermes runs one active memory provider, so **optchat-memory becomes the episodic base of
     `exo-memory`** (its verbatim daily log and summary tree), not a separate plugin. exo-memory adds the
