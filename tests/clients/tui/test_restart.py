@@ -40,3 +40,11 @@ def test_linux_openers_and_manual_fallback():
     line = open_tab(["exo", "--session", "s 1"], {}, "linux", got.append, lambda n: None)
     assert line.endswith("exo --session 's 1'") and "cd " in line
     assert not has_opener({}, "linux", lambda n: None) and has_opener({}, "darwin")
+
+
+def test_fallback_carries_exo_env_but_not_secrets():
+    out = restart_command("s3", {"EXO_HOME": "/h", "EXO_BUS_KEYS_DIR": "/k", "EXO_API_KEY": "x", "PATH": "/bin"},
+                          ["exo", "tui", "--seat", "c"])
+    assert out[0] == "env" and "EXO_HOME=/h" in out and "EXO_BUS_KEYS_DIR=/k" in out
+    assert not any(a.startswith(("EXO_API_KEY", "PATH=")) for a in out)
+    assert out[-2:] == ["--session", "s3"]

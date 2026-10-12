@@ -26,6 +26,10 @@ def restart_command(session: str | None, env: dict[str, str] | None = None,
     base = shlex.split(env.get("EXO_RESTART_CMD", ""))
     if not base:
         base = [sys.executable, *(sys.argv if argv is None else argv)]
+        # A fresh tab has none of this process's env (EXO_HOME, plugins, bus): carry the EXO_* vars,
+        # except secrets, or the new tab opens a different store and starts a fresh session.
+        carry = [f"{k}={v}" for k, v in sorted(env.items())
+                 if k.startswith("EXO_") and not k.endswith(("_KEY", "_TOKEN", "_SECRET", "_PASSWORD"))]
         # drop any old --session/--resume so the new one wins
         out, skip = [], False
         for a in base:
@@ -37,7 +41,7 @@ def restart_command(session: str | None, env: dict[str, str] | None = None,
                 continue
             else:
                 out.append(a)
-        base = out
+        base = ["env", *carry, *out] if carry else out
     return [*base, "--session", session] if session else [*base, "--resume"]
 
 
