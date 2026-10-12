@@ -9,6 +9,8 @@
   exo serve | exo chat [--resume ID]       run the exod server; chat with it
   exo web [--port N ...]                   the command centre web client (needs a running `exo serve`)
   exo tui [--resume] [--session ID] ...     the terminal client (pip install 'exo[tui]')
+  exo trace [SESSION] [--last N] [--json]  how the harness performed; anomaly flags (D-025)
+  exo findings [fix ID --in SHA|export --md]  the harness's findings about itself
   exo upstream report|mark|check|merge     track lifted Hermes modules
   exo find <words...> [-n 8]               ranked nodes
   exo get <id> [--body-only]               print one node
@@ -47,6 +49,7 @@ from .upstream import register as register_upstream, cmd_upstream  # noqa: F401
 from .cli_chat import register as register_chat
 from .models_cmd import register as register_models, cmd_models
 from .decide_cmd import register as register_decide, cmd_decide
+from .trace_cmd import register as register_trace, cmd_trace, cmd_findings
 
 
 def key_path(name: str) -> Path:
@@ -246,6 +249,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_chat(sp, common)
     register_models(sp, common)
     register_decide(sp, common)
+    register_trace(sp, common)
     p = sp.add_parser('web', add_help=False, help='serve the command centre web client (exo-command)')
     p.add_argument('rest', nargs=argparse.REMAINDER, help='passed to exo-command: --socket, --url, --port ...')
     p = sp.add_parser('tui', add_help=False, help='the terminal client (Textual); runs the core in-process if no exod')
@@ -304,6 +308,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_models(a)
     if a.cmd == 'decide':
         return cmd_decide(a)
+    if a.cmd == 'trace':
+        return cmd_trace(a)
+    if a.cmd == 'findings':
+        return cmd_findings(a)
     if a.cmd == 'upstream':
         return cmd_upstream(a)
     if a.cmd in ('serve', 'chat'):
