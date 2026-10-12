@@ -45,6 +45,9 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 TOOLS_LINE = ("Memory tools: exo_recall(query, budget) for beliefs and past sessions; exo_note(text, kind) to log; "
               "exo_should_have_been(target, wanted, reason) when the principal corrects you; "
               "exo_zoom(id, n) and exo_date(id) open episodic lines.")
+CORE_TOOLS_LINE = ("Memory tools: exo_recall(query, budget) for beliefs and older details of your log; exo_note(text, "
+                   "kind) to log; exo_should_have_been(target, wanted, reason) when the principal corrects you; "
+                   "memory_zoom(start, n) opens your log.")
 
 RECALL_SCHEMA = {
     "name": "exo_recall",
@@ -128,7 +131,7 @@ class _Runtime:
     """Store, ledger and episodic layer for one principal store, shared by every profile of
     this process that points at it (the episodic log allows one writer per process)."""
 
-    def __init__(self, root: Path, cfg: dict, agent: str, summarizer=None):
+    def __init__(self, root: Path, cfg: dict, agent: str, summarizer=None, episodic: bool = True):
         self.root = root
         self.store = PrincipalStore(root)
         kp = C.key_path(cfg, agent)
@@ -142,10 +145,14 @@ class _Runtime:
         self.episodic = None
         self.episodic_error = ""
         try:
+            if not episodic:  # the host keeps the agent's one log (Exo core, D-028): no second log
+                raise LookupError
             from .episodic import EpisodicLayer
             self.episodic = EpisodicLayer(root / "episodic", view_chars=cfg["view_chars"],
                                           compact=cfg["compact_enabled"], summarizer=summarizer,
                                           agent_name=agent)
+        except LookupError:
+            self.episodic_error = "the host keeps the agent log"
         except Exception as exc:  # e.g. LogLocked: another process holds the log
             self.episodic_error = str(exc)
             logger.warning("exo-memory: episodic layer disabled: %s", exc)
@@ -183,6 +190,11 @@ class _State:
         self.utterances: OrderedDict[str, str] = OrderedDict()  # text hash -> event id
         self.pack = ""
         self.last_recall = 0
+        self.core_log: Any = None  # the host's agent log (D-028); when set, it is the episodic log
+
+    @property
+    def epi(self) -> Any:
+        return self.core_log if self.core_log is not None else self.rt.episodic
 
     def remember(self, text: str, eid: str) -> None:
         self.utterances[_h(text)] = eid
@@ -295,12 +307,15 @@ class ExoMemoryProvider(MemoryProvider):
                     raise RuntimeError(self.unavailable_reason() or "exo-memory: no principal store configured")
                 agent = C.agent_id(cfg, kwargs.get("agent_identity"))
                 rkey = str(root.expanduser().resolve())
+                core_log = kwargs.get("agent_log")
                 with _RUNTIMES_LOCK:
                     rt = _RUNTIMES.get(rkey)
                     if rt is None:
-                        rt = _RUNTIMES[rkey] = _Runtime(Path(rkey), cfg, agent, self._summarizer)
+                        rt = _RUNTIMES[rkey] = _Runtime(Path(rkey), cfg, agent, self._summarizer,
+                                                        episodic=core_log is None)
                     rt.refs += 1
                 st = self._states[key] = _State(cfg, rt, agent)
+                st.core_log = core_log
                 st.pack = self._build_pack(st)
         sid = session_id or "default"
         st.session = sid
@@ -341,7 +356,7 @@ class ExoMemoryProvider(MemoryProvider):
             raw = ""
         pack = trim_pack(raw, st.cfg["pack_budget"]) if raw.strip() else ""
         head = "# Principal pack (exo-memory)\n\n" + pack if pack else "# Principal pack (exo-memory)\n\n(empty store)"
-        return head + "\n\n" + TOOLS_LINE
+        return head + "\n\n" + (CORE_TOOLS_LINE if st.core_log is not None else TOOLS_LINE)
 
     def system_prompt_block(self) -> str:
         st = self._state()
@@ -351,7 +366,7 @@ class ExoMemoryProvider(MemoryProvider):
 
     def _assemble(self, st: _State, query: str, budget: int) -> dict:
         limit = max(budget, 50) * 4
-        epi = st.rt.episodic
+        epi = st.epi
         has_epi = epi is not None and len(epi) > 0
         belief_tokens = int(budget * (1 - st.cfg["episodic_share"])) if has_epi else budget
         sections, node_ids, hit_ids = [], [], []
@@ -363,7 +378,8 @@ class ExoMemoryProvider(MemoryProvider):
         used = sum(len(s) + 2 for s in sections)
         if has_epi and limit - used > 200:
             room = limit - used - 80
-            head = "## Episodic memory (past sessions; exo_zoom(id, n) opens a line)"
+            head = ("## Your log (memory_zoom(start) opens an entry)" if st.core_log is not None else
+                    "## Episodic memory (past sessions; exo_zoom(id, n) opens a line)")
             lines = []
             hits = epi.search(query, n=st.cfg["episodic_hits"], skip_recent=st.cfg["recent_skip"])
             for hit in hits:
@@ -372,7 +388,8 @@ class ExoMemoryProvider(MemoryProvider):
                     break
                 lines.append(line)
                 hit_ids.append(hit["id"])
-            view = epi.render(room - sum(len(x) + 1 for x in lines) - 20)
+            # the host's tree is already in the system message, so no second view of the same log
+            view = "" if st.core_log is not None else epi.render(room - sum(len(x) + 1 for x in lines) - 20)
             if view:
                 lines.append("Summary view, oldest first (id+n|text):\n" + view)
             if lines:
@@ -412,14 +429,15 @@ class ExoMemoryProvider(MemoryProvider):
         st = self._state()
         if st is None or not (message or "").strip():
             return
-        sess = self._sess(st)
+        sid = kwargs.get("session_id") or ""  # the Exo core passes it; sync_turn looks the turn up under it
+        sess = self._sess(st, sid)
         if not sess["primary"]:
             return
         author = self._user_author(st, kwargs.get("author_id"), bool(kwargs.get("author_is_bot")))
         body = {"text": message, "role": "user", "turn": turn_number}
         if kwargs.get("author_name"):
             body["author_name"] = kwargs["author_name"]
-        ev = self._safe(lambda: self._append(st, "utterance", body, author))
+        ev = self._safe(lambda: self._append(st, "utterance", body, author, sid))
         if ev:
             sess["last_user"] = (_h(message), ev["id"])
             st.remember(message, ev["id"])
@@ -477,7 +495,7 @@ class ExoMemoryProvider(MemoryProvider):
     def _log_episodic(self, st: _State, sess: dict, sid: str, user: str, assistant: str,
                       messages: Optional[list[dict]]) -> None:
         epi = st.rt.episodic
-        if epi is None:
+        if epi is None or st.core_log is not None:  # the host's agent log already holds the turn: one log
             return
         from .episodic import entries_from_messages
         try:
@@ -554,7 +572,7 @@ class ExoMemoryProvider(MemoryProvider):
         if child_session_id:
             body["child_session"] = child_session_id
         self._safe(lambda: self._append(st, "action", body, st.agent))
-        if st.rt.episodic is not None and (result or "").strip():
+        if st.rt.episodic is not None and st.core_log is None and (result or "").strip():
             try:
                 st.rt.episodic.append_many([("work", f"task: {task}\nresult: {result}")], session=st.session)
             except Exception as exc:
@@ -609,6 +627,8 @@ class ExoMemoryProvider(MemoryProvider):
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         tools = [RECALL_SCHEMA, NOTE_SCHEMA, SHB_SCHEMA]
         st = self._state()
+        if st is not None and st.core_log is not None:
+            return tools  # the host's memory_zoom opens the one log
         if st is None or st.rt.episodic is not None:
             from .episodic import DATE_SCHEMA, ZOOM_SCHEMA
             tools += [ZOOM_SCHEMA, DATE_SCHEMA]
@@ -640,7 +660,7 @@ class ExoMemoryProvider(MemoryProvider):
             if tool_name == "exo_should_have_been":
                 return self._should_have_been(st, args)
             if tool_name in ("exo_zoom", "exo_date"):
-                epi = st.rt.episodic
+                epi = st.epi
                 if epi is None:
                     return json.dumps({"error": f"episodic memory unavailable: {st.rt.episodic_error}"})
                 if tool_name == "exo_zoom":

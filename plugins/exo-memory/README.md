@@ -21,6 +21,14 @@ Tools: `exo_recall(query, budget)`, `exo_note(text, kind)`, `exo_should_have_bee
 A correction becomes a `verdict` event that points at the agent output it judges. If that output is not
 in the ledger yet, it is logged first.
 
+## One log on the Exo core (D-028)
+
+The Exo core keeps each agent's one log and summary tree in `sessions.sqlite` and passes a read view of it to
+`initialize(..., agent_log=view)`. Then exo-memory keeps no episodic log of its own: it writes nothing to
+`<store>/episodic/`, its recall searches the agent log (the summary view is skipped, since the tree is already in
+the system message), and `exo_zoom` / `exo_date` give way to the core's `memory_zoom`. The ledger and belief
+recall are unchanged. On any other host it keeps its own episodic layer as below.
+
 ## Where data lives
 
 Everything lives in the principal store. Nothing is written to the Exo home except the plugin config and the signing key.
