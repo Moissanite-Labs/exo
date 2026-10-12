@@ -108,6 +108,14 @@
       "scripts": []
     },
     {
+      "name": "jevgrep",
+      "path": "jevgrep",
+      "description": "Use for questions about how, why or where behavior works in a codebase when you do not yet know which files matter. Calls code_find, which returns relevant files and verbatim excerpts.",
+      "source": "dzhng/jevgrep skills/jevgrep/SKILL.md (MIT)",
+      "generalized": "Rewritten for the Exo code_find tool: no CLI setup or auth steps, backend line, paging and privacy notes added. Credit and link kept.",
+      "scripts": []
+    },
+    {
       "name": "operating-doctrine",
       "path": "operating-doctrine",
       "description": "Use when running any project with the Protean pipeline. Default stages, delegation map, handoff protocol, and QA gates.",
