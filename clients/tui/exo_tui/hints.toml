@@ -2,7 +2,7 @@
 # Key = the moment (see ExoApp.hint calls). `then` is the command or place that goes deeper.
 
 [first_message]
-text = "You can keep typing while I work: a new message steers me at my next tool round. Esc stops the turn."
+text = "You can keep typing while I work: a new message steers me at my next tool round. ctrl+c stops the turn."
 then = "/intro"
 
 [memory_summarized]
@@ -18,7 +18,7 @@ text = "That message steers the running turn: it lands at the next tool round an
 then = "/intro"
 
 [interrupt]
-text = "Esc interrupted the turn. What was done so far is kept, and your next message continues from there."
+text = "You stopped the turn. What was done so far is kept, and your next message continues from there."
 then = "/undo"
 
 [route_change]

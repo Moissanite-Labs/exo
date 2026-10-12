@@ -43,6 +43,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/clear` | Clear the transcript view. History is kept. | none | `ExoApp.clear_transcript` |
 | `/cwd` | Show this session's working folder. | none | `session.get` |
 | `/restart` | Reopen this session in a new terminal tab and quit this one. | none | `ExoApp.restart`, `clients/tui/exo_tui/restart.py` |
+| `/stop` | Stop the running turn (same as ctrl+c). | none | `ExoApp.stop_turn` |
 | `/exit` | Quit. | none | `ExoApp.slash` |
 | `/quit` | Same as `/exit`. | none | same |
 | `/model` | Pick the model for this session, or set it. | `<ref>` sets it. `default <ref>` sets the default. | `ExoApp.set_model` (`models.list`, `models.set`) |
@@ -80,7 +81,7 @@ client and by the web client. The idea of a `/` menu and ghost text from history
 | `/comand` | Not sent. "unknown command /comand. did you mean /compact?" and the corrected line waits in the composer. With nothing close, the line goes to the core as before. |
 
 Keys. Up and down move in the menu, Tab or Enter completes (Enter on an already complete line sends it), Esc closes
-the menu and keeps the text. With no menu: up and down walk this seat's history, and right arrow or Tab takes the
+the menu and keeps the text (then ghost text, then a tip, then a panel; Esc never stops a turn, `/stop` or ctrl+c does). With no menu: up and down walk this seat's history, and right arrow or Tab takes the
 ghost text from history (the newest earlier line that starts with what you typed, like a shell autosuggestion).
 History is per seat in `$EXO_HOME/history/<seat>.jsonl`, mode 0600, the newest 500 lines; a line that looks like a
 key or password is never kept.

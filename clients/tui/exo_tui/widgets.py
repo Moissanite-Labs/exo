@@ -30,7 +30,7 @@ from exo_tui.theme import (DOT, PROMPT, SPINNER, chips, gauge, header_rule, huma
                            rich_style)
 
 IDLE_HINT = "ask anything " + DOT + " /help"
-BUSY_HINT = "lands at the next tool round " + DOT + " esc stops the turn"
+BUSY_HINT = "lands at the next tool round " + DOT + " ctrl+c stops the turn"
 
 
 def reveal(widget: Widget) -> None:
@@ -228,11 +228,21 @@ class Composer(TextArea):
         self.cursor_blink = not reduced_motion()
         self.key_hook: Any = None
         self.ghost = ""
+        self.last_typed = float("-inf")  # monotonic time of the last printable key; the approval card waits on it
 
     def at_end(self) -> bool:
         return self.cursor_location == self.document.end
 
+    def action_copy(self) -> None:
+        """ctrl+c copies a selection; with nothing selected it is the stop key (D-043)."""
+        if self.selected_text:
+            super().action_copy()
+        else:
+            self.app.action_ctrl_c()
+
     async def _on_key(self, event: events.Key) -> None:
+        if event.is_printable:
+            self.last_typed = time.monotonic()
         if self.key_hook is not None and self.key_hook(event.key):
             event.stop()
             event.prevent_default()
@@ -242,6 +252,7 @@ class Composer(TextArea):
             event.prevent_default()
             text = self.text
             self.text = ""
+            self.last_typed = float("-inf")
             self.post_message(self.Submitted(text))
         elif event.key in ("shift+enter", "ctrl+j"):
             event.stop()
@@ -422,6 +433,7 @@ class ApprovalCard(Vertical, can_focus=True):
         super().__init__(id="approval")
         self.req = req
         self.noting = False
+        self.confirming = False  # "a" was pressed: allow-always waits for Enter
 
     def body(self) -> Group:
         r = self.req
@@ -437,8 +449,12 @@ class ApprovalCard(Vertical, can_focus=True):
         pairs.append(("d", "deny"))
         if self.noting:
             out.append(Text("why deny? enter sends, empty is fine", style=rich_style("fg3")))
+        elif self.confirming:
+            out.append(Text("allow always? enter confirms, any other key cancels", style=rich_style("accent2")))
         else:
             out.append(chips(pairs))
+            if not self.has_focus:
+                out.append(Text("tab or click here to answer; your typing is safe", style=rich_style("fg3")))
         return Group(*out)
 
     def compose(self) -> ComposeResult:
@@ -450,20 +466,49 @@ class ApprovalCard(Vertical, can_focus=True):
 
     def on_mount(self) -> None:
         self.query_one("#deny-note").display = False
-        self.focus()
+        if not self.app.composer_typed_recently():  # never steal focus from a message being typed (D-043)
+            self.focus()
+        self.set_interval(0.3, self._claim_focus)
         reveal(self)
+
+    def _claim_focus(self) -> None:
+        """Take focus once the composer is empty and quiet, so a plain o answers when nobody is typing."""
+        if not self.has_focus and not self.noting and self.app.focused is not None \
+                and isinstance(self.app.focused, Composer) and not self.app.composer_typed_recently():
+            self.focus()
+
+    def _redraw(self) -> None:
+        self.query_one("#approval-body", Static).update(self.body())
+
+    def on_focus(self) -> None:
+        self._redraw()
+
+    def on_blur(self) -> None:
+        self.confirming = False
+        if not self.noting:
+            self._redraw()
 
     def _answer(self, decision: str, note: str = "") -> None:
         self.post_message(self.Answered(self.req.request_id, decision, note))
 
     def on_key(self, event: events.Key) -> None:
-        if self.noting:
+        if self.noting or not self.has_focus:  # single keys only act when the card has focus
             return
         k = event.key
         opts = self.req.options
+        if self.confirming:
+            self.confirming = False
+            self._redraw()
+            if k == "enter":
+                self._answer("allow_always")
+            event.stop()
+            return
         if k == "o" and "allow" in opts:
             self._answer("allow")
         elif k == "a" and "allow_always" in opts:
+            self.confirming = True
+            self._redraw()
+        elif k in ("A", "shift+a") and "allow_always" in opts:
             self._answer("allow_always")
         elif k == "d":
             self.noting = True
@@ -471,10 +516,8 @@ class ApprovalCard(Vertical, can_focus=True):
             box = self.query_one("#deny-note", Input)
             box.display = True
             box.focus()
-        elif k == "escape":
-            self._answer("deny")
         else:
-            return
+            return  # esc included: it never answers for you
         event.stop()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -635,7 +678,7 @@ class Welcome(Static):
         head.append("E X O", style=rich_style("fg", "bold"))
         info = Text(f"{self.agent}  {DOT}  {self.model or '-'}  {DOT}  memory ready", style=rich_style("fg3"))
         keys = chips([("enter", "send"), ("@", "file"), ("!", "shell"), ("/", "commands"), ("ctrl+p", "palette"),
-                      ("esc", "stop")])
+                      ("ctrl+c", "stop")])
         self.shown = Group(head, info, Text(""), keys)
         self.update(self.shown)
         reveal(self)

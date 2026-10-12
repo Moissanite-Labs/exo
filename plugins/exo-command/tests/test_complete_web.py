@@ -223,3 +223,14 @@ const lines = [{providerError:true},{jobDone:"j_1"},{findings:3},{longTurn:true}
 console.log(JSON.stringify({out, lines}));''')
     assert got["out"] == [None, "/findings", None, "context", None, None]
     assert all(got["lines"])
+
+
+def test_escape_never_stops_a_turn_in_the_page():
+    """D-043: the only Escape handler closes the completion menu; Stop is a button."""
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parents[1] / "exo_command" / "static"
+    for js in static.glob("*.js"):
+        for line in js.read_text(encoding="utf-8").splitlines():
+            if "Escape" in line:
+                assert "interrupt" not in line and "stop" not in line.lower(), (js.name, line)

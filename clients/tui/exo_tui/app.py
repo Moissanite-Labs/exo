@@ -51,6 +51,7 @@ COMMANDS = {
     "context": ("session", "show what the next model call carries: each part with its tokens (read-only)"),
     "compact": ("session", "summarize now what is eligible in this agent's memory, then show tokens before and after"),
     "restart": ("session", "reopen this session in a new terminal tab and exit this one"),
+    "stop": ("session", "stop the running turn (what was done is kept)"),
     "exit": ("session", "quit"),
     "quit": ("session", "same as /exit"),
     "model": ("model", "pick the model for this session; /model <ref> sets it"),
@@ -128,6 +129,7 @@ class ExoApp(App):
         Binding("ctrl+e", "edit_answer", "edit", priority=True),
         Binding("ctrl+r", "verdict('reject')", "reject", priority=True),
         Binding("escape", "escape", "esc", show=False),
+        Binding("ctrl+c", "ctrl_c", "stop", show=False),
         Binding("f6", "load_earlier", "earlier", priority=True, show=False),
     ]
 
@@ -757,6 +759,10 @@ class ExoApp(App):
         if key in ("right", "end") and c.ghost and self.ghost_ok and c.at_end():
             self.put(c.text + c.ghost)
             return True
+        if key == "escape" and c.ghost and self.ghost_ok:  # esc dismisses ghost text first
+            c.ghost, self.ghost_ok = "", False
+            c.refresh()
+            return True
         items = self.sug.items
         shown = bool(items) and self.sug.mode in ("command", "arg", "file") and self.menu_off != c.text
         if shown:
@@ -976,6 +982,8 @@ class ExoApp(App):
                 return
         if name in ("exit", "quit"):
             self.exit()
+        elif name == "stop":
+            self.stop_turn()
         elif name == "restart":
             await self.restart()
         elif name == "peers":
@@ -1383,14 +1391,34 @@ class ExoApp(App):
         return len(self.screen_stack) > 1
 
     def action_escape(self) -> None:
+        """Esc is soft (D-043): a guidance line, then a panel, then nothing. It never stops a turn."""
         view = self.query_one(PanelView)
-        if view.display and view.panel_id:
+        if self.tip is not None:
+            self.tip = None
+            self.refresh_status()
+        elif view.display and view.panel_id:
             pid = view.panel_id
             self.respond_panel(pid, "dismissed")
             self.drop_panel(pid)
-        elif self.busy and self.session:
-            self.hint("interrupt")
-            self.run_worker(self.post(s.TurnInterrupt(session=self.session)), exit_on_error=False)
+
+    def stop_turn(self) -> None:
+        """The deliberate stop: ctrl+c while a turn runs, or /stop. The composer text stays as it is."""
+        if not (self.busy and self.session):
+            self.note("nothing is running", "hint")
+            return
+        self.note("stopped", "hint")
+        self.hint("interrupt")
+        self.run_worker(self.post(s.TurnInterrupt(session=self.session)), exit_on_error=False)
+
+    def action_ctrl_c(self) -> None:
+        if self.busy and self.session:
+            self.stop_turn()
+        else:
+            self.action_help_quit()  # idle: Textual's own notice that ctrl+q quits; a single press never quits
+
+    def composer_typed_recently(self, within: float = 1.5) -> bool:
+        c = self.composer
+        return bool(c.text) or time.monotonic() - c.last_typed < within
 
     def action_toggle_tools(self) -> None:
         if self.modal_open():

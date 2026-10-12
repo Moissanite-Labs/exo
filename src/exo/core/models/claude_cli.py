@@ -199,7 +199,7 @@ class ClaudeCliProvider:
             try:
                 async for ev in self._run(proc, frames, names, st):
                     yield ev
-            finally:  # also runs on cancel (Esc) and on a closed generator: leave no claude behind
+            finally:  # also runs on cancel (a stop) and on a closed generator: leave no claude behind
                 if proc.returncode is None:
                     kill_group(proc)
                     await asyncio.shield(proc.wait())

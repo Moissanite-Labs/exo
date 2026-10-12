@@ -50,7 +50,7 @@ with `[session] cwd` in its seat.toml), `/restart` reopens in a new terminal tab
 ## While the agent works
 - Type while it is running and your message steers it: it lands at the next tool round, and the agent
   changes course. Nothing is lost and you do not need to wait.
-- Press Esc to interrupt the turn.
+- Press ctrl+c, or type `/stop`, to stop the turn. Esc never stops it: it only closes a menu, clears a tip or leaves a panel.
 - `@path` attaches a file, `!command` runs a shell command through the agent, ctrl+p opens a palette of
   commands, ctrl+o expands tool output.
 - Typing `/` opens a menu of every command with its arguments; Tab completes. `/model `, `/resume ` and `@` list

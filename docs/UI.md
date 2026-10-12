@@ -43,7 +43,7 @@ the middle dot as separator come straight from the site.
 2. Transcript: `›` and your text for a prompt (`steer ›` when sent mid-turn); agent text in fg-2 as Markdown;
    one line per tool with state glyph, name, short args, line count and elapsed time (ctrl+o expands); system
    lines dim; tips as `tip · ...` in dim italic; `memory · log 1-16 folded · 1781 → 153 tok` as a cold line.
-3. Panels: approval (orange rule, `APPROVAL · <risk>`, key chips `[o] once [a] always [d] deny`), taste,
+3. Panels: approval (orange rule, `APPROVAL · <risk>`, key chips `[o] once [a] always [d] deny`; `a` asks for Enter, `A` is immediate; the card keeps out of a composer being typed in and says "tab or click here to answer"), taste,
    finding and `/context` report (cold rule), peer message (double cold rule, sender and trust in the header,
    never styled as you). The side panel for `ui.panel` uses the same header and rule.
 4. Activity: a wire with a travelling packet and `waiting for <model> 12s`, `running tool`.
@@ -71,7 +71,7 @@ Where the numbers come from, all from events the core already sends: `model.call
 status chip (green `verified` with latency, grey `key found`, dim `no key`, orange `failed: <class>`, cold `running`
 for a local server), where the key comes from (env, keychain, secret-service or file, never a value), the model count
 and an orange default mark. Key chips: `[a]` add or replace a key, `[t]` test, `[r]` remove (asks y or n), `[d]` pick
-the default model, `[esc]` close. `[a]` opens a small modal with one masked field; the key never goes through the
+the default model, `[esc]` close (leaving a panel is soft; Esc never stops a turn, ctrl+c or `/stop` does). `[a]` opens a small modal with one masked field; the key never goes through the
 composer, the transcript or any log, and a key typed after `/providers add <name>` in the composer is refused and
 not echoed. After a change the client tells a running core to read keys again. At start, if no provider is ready,
 one note says to type `/providers`.

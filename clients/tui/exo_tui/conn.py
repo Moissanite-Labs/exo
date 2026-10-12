@@ -127,7 +127,8 @@ class SharedClient:
             await self.inner.aclose()
         except Exception:
             pass
-        self.inner = _open(self.home, self.agent)
+        # the socket probe, engine start and the wait for another window all block: keep them off the event loop
+        self.inner = await asyncio.to_thread(_open, self.home, self.agent)
 
     async def send(self, body: Any) -> s.Response:
         import httpx

@@ -83,8 +83,8 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 ## The composer (D-037)
 
 Typing `/` opens a dropdown under the composer with the commands the page runs (`/context`, `/findings`, `/trace`,
-`/new`), each with its argument shape and a line of description. Same ranking, Tab, Enter, arrows and Esc as the
-terminal client. After a command it offers the argument words (`/trace ` offers 5, 10, 25). `@` lists files from the
+`/new`), each with its argument shape and a line of description. Same ranking, Tab, Enter, arrows and Esc (close the menu only) as the
+terminal client. Esc never stops a turn on this page either; the Stop button does. Approval hotkeys are ignored while a field has focus. After a command it offers the argument words (`/trace ` offers 5, 10, 25). `@` lists files from the
 open thread's working folder through `GET /api/complete/files?session=&q=`: read-only, names only, inside the folder,
 secret stores left out with `gate.is_sensitive_path`, and guarded like the key routes (loopback peer, Host, page
 token). Ghost text from this page's history (right arrow takes it), up and down walk it; nothing is stored in the

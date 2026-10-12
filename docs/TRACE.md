@@ -11,7 +11,7 @@ The loop: record, read, report, verify.
   shows which instructions a turn used after an edit.
 - `tool.completed`: `duration_ms` and `is_error` on every call.
 - `turn.completed.timing`: `wall_ms`, `model_ms`, `tool_ms` (without approval waits), `approval_ms`,
-  `model_calls`, `fallbacks`, `tool_errors`. When Esc cuts a tool short, its time up to the interrupt counts in
+  `model_calls`, `fallbacks`, `tool_errors`. When a stop (ctrl+c or `/stop`) cuts a tool short, its time up to the interrupt counts in
   `tool_ms`, and `interrupted_tool` names it, so an interrupted test run does not read as harness time.
 - `harness.error` (event): an exception caught in a hook, handler, plugin, memory call, channel or the TUI
   event path: `where`, `error_type`, `message`, a short `traceback`. Never silent.
