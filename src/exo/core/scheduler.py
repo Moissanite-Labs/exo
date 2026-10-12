@@ -182,15 +182,20 @@ class Scheduler:
         try:
             provider, model = e.agents._route(job["tier"])
             names = sorted(n for n in e.registry.names() if n not in BLOCKED_TOOLS)
-            loop = Loop(e.store, provider, bus=_Bus(e), tool_specs=lambda: e.registry.specs(names=names),
-                        run_tool=e.run_tool, system_prompt=PROMPT, model=model, max_retries=e.loop.max_retries,
-                        retry_delay=e.loop.retry_delay)
+            # same turn path as every other turn (audit 2026-10-12): the engine's context tree and memory,
+            # its soul refresh and system extras, and the turn hooks (through ``e._turn``). Only the model,
+            # the narrowed toolset and the unattended-job prompt differ.
+            loop = Loop(e.store, provider, bus=_Bus(e), context=e.loop.context, memory=e.loop.memory,
+                        tool_specs=lambda: e.registry.specs(names=names), run_tool=e.run_tool,
+                        system_prompt="\n\n".join(p for p in (e.loop.system_prompt, PROMPT) if p), model=model,
+                        max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
             loop.approval_ms, loop.on_turn_end = e.loop.approval_ms, e.observe_turn
+            loop.before_turn, loop.system_extra = e.loop.before_turn, e.loop.system_extra
             info = await loop.create_session(title=f"scheduled: {job['title'][:60]}", model=model, cwd=e.cwd,
                                              agent=getattr(e, "agent", None), kind="scheduled")
             sid = info.id
             self._emit(job, task_id, "running", f"Running {job['title']!r}.", sid)
-            res = await loop.send(sid, job["prompt"])
+            res = await e._turn(s.TurnSend(session=sid, text=job["prompt"]), loop=loop)
             answer = res.message.text() if res is not None and res.message is not None else ""
             stop = getattr(res, "stop_reason", "error")
             if stop == "end":
