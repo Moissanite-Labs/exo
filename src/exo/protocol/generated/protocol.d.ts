@@ -231,6 +231,7 @@ export interface TaskUpdated {
   status?: string;
   child_session?: string | null;
   detail?: string;
+  packet?: string;
 }
 
 export interface TasksList {

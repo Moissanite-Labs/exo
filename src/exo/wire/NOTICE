@@ -1,0 +1,12 @@
+exo.wire
+
+Builds on SYM-2P/2.0 (draft) from https://github.com/aska-digital/protean-sym2p
+at commit 2d93ed603e94ddd3e4ddcab4b1d5fc4227832a1b (MIT, Copyright (c) 2026 ASKA Digital).
+The line shape, registries, opcode grammar for codes under 100 and the -rcp checksum come
+from that spec through the vendored copy in src/exo/protocols/sym2p (see its NOTICE for the
+full licence text). No upstream code is copied into this package.
+
+Exo additions, documented in docs/AGENT-WIRE.md section 4: string atoms in BODY, the
+extension opcodes 100 to 115 (marker (100 1)), task states 100 failed and 101 cancelled,
+typed Brief and Receipt packets, strict decode with safe repair, a JSON fallback form,
+format negotiation, detached Ed25519 signatures and a deterministic English renderer.

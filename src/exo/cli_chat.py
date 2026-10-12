@@ -115,6 +115,8 @@ def render(ev: s.Event, write: Callable[[str], None]) -> None:
         write(f"approve? {b.summary} ({b.risk}) [{'/'.join(b.options)}]\n")
     elif isinstance(b, s.QuestionAsked):
         write(f"question: {b.text}\n")
+    elif isinstance(b, s.TaskUpdated) and b.status in ("running", "done", "failed", "cancelled"):
+        write(f"[task {b.status}] {(b.detail or b.title).splitlines()[0]}\n")
     elif isinstance(b, s.Notice):
         write(f"{b.level}: {b.text}\n")
     elif isinstance(b, s.Error):

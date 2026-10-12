@@ -166,6 +166,29 @@ def cmd_log(a, store) -> int:
 
 # --- parser -------------------------------------------------------------------
 
+def cmd_wire(a) -> int:
+    """Agent wire packets (docs/AGENT-WIRE.md): `render` prints plain English, `check` prints diagnostics."""
+    from .wire import WireError, check_line, decode_any, render
+
+    lines = [a.text] if a.text else sys.stdin.read().splitlines()
+    bad = 0
+    for line in (ln.strip() for ln in lines):
+        if not line:
+            continue
+        try:
+            packet, how = decode_any(line)
+        except WireError as exc:
+            bad += 1
+            print('invalid: ' + '; '.join(exc.errors))
+            continue
+        if a.action == 'render':
+            print(render(packet) + ('' if how == 'line' else f'\n(read as {how})') + '\n')
+        else:
+            errs = check_line(line) if how == 'line' or not line.startswith('{') else []
+            print('ok' if how == 'line' else f'ok after {how}: {"; ".join(errs) or "JSON fallback form"}')
+    return 1 if bad else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument('--principal', help='principal id (default: $EXO_PRINCIPAL)')
@@ -215,6 +238,9 @@ def build_parser() -> argparse.ArgumentParser:
     register_onboard(sp, common)
     register_upstream(sp, common)
     register_chat(sp, common)
+    p = sp.add_parser('wire', help='read agent wire packets (SYM-2P briefs and receipts) in plain English')
+    p.add_argument('action', choices=['render', 'check'])
+    p.add_argument('text', nargs='?', help='one packet line or JSON form; stdin (one per line) if absent')
     return ap
 
 
@@ -230,6 +256,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_upstream(a)
     if a.cmd in ('serve', 'chat'):
         return a.func(a)
+    if a.cmd == 'wire':
+        return cmd_wire(a)
     if a.cmd == 'keygen':
         return cmd_keygen(a)
     store = resolve_store(a)

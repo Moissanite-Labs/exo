@@ -230,3 +230,26 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   publish exo-decide on Hugging Face under aska-digital.
 - **Rejected:** a frontier model for every small decision (cost, latency); Jev as exo-decide's teacher
   (terms); Perplexity's 27B open model as the shipped default (needs about 49 GB of GPU memory, no device path).
+
+## D-016 (2026-10-12) Agent wire: SYM-2P lines for machines, English for models and people
+- **A's ask:** "project exo should integrate this tech, or a better implementation of its concept, in its
+  backend systems for interagent communcation, delegation, and wherever else appropriate/relevant"
+  (aska-digital/protean-sym2p).
+- **Decision:** adopt docs/AGENT-WIRE.md. Agent records and transport use SYM-2P/2 lines with Exo's
+  vocabulary (`exo.wire`): quoted strings, opcodes 100 to 115 under a (100 1) marker, failed and cancelled
+  states, typed Brief and Receipt, strict decode with safe-only repair, JSON fallback, negotiation, Ed25519
+  signatures, one English renderer. Code writes and reads lines; models and people read only English; no
+  model emits a line. First use: the `delegate` tool (`exo.core.agents`) with depth, concurrency, round,
+  token and time limits, cancel down the tree, a tasks table and `task.updated` (English in detail, line in
+  packet). Bus bodies accept Exo lines. Lessons, decision calls, handoffs and summaries are unchanged.
+- **Why:** measured with real tokenizers, lines save bytes (30 to 48% vs JSON) but not model tokens (a
+  receipt is 121 o200k tokens as a line, 83 as English, plus a 193-token key). The value is checkability,
+  signing and replay. The bigger token win is what a receipt carries: Hermes JSON receipts with tool traces
+  cost about 3.5x Exo English.
+- **Lead calls:** core line budget test moved from 8k to 15k per STANDALONE.md section 6 (wave 3 target).
+- **Rejected:** models reading or writing lines; Hermes JSON receipts; upstream v2 unchanged (no text
+  fields); a new format from scratch.
+- **Later:** cross-seat delegation over the bus, signed receipts in the ledger, child usage in parent
+  totals, locking finished child sessions, async delegation and worktrees, upstream model eval (spend,
+  needs A), proposing the additions upstream as v2.2.
+- **Revisit if** upstream's model eval shows models do better reading lines.
