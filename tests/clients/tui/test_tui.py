@@ -331,6 +331,44 @@ def test_context_and_compact_commands(tmp_path):
         assert "compacting..." in app.transcript_text()
         assert not any(isinstance(b, s.Peers) for b in app.sent)  # no new protocol command: command.run only
 
+
+    run(tmp_path, sc)
+
+
+def test_copy_command(tmp_path):
+    async def sc(app, pilot, client, eng):
+        got: list[str] = []
+        app.copy_to_clipboard = got.append
+        await send(app, pilot, "/copy")
+        await until(lambda: "nothing to copy" in app.transcript_text(), pilot)
+        app.add(Block("first answer", "assistant"))
+        app.add(Block("boom: bad thing", "error"))
+        app.add(Block("last answer", "assistant"))
+        await pilot.pause(0.1)
+        await send(app, pilot, "/copy")
+        await until(lambda: got, pilot)
+        assert got[-1] == "last answer"
+        await send(app, pilot, "/copy error")
+        await until(lambda: len(got) == 2, pilot)
+        assert got[-1] == "boom: bad thing"
+        await send(app, pilot, "/copy all")
+        await until(lambda: len(got) == 3, pilot)
+        assert "first answer" in got[-1] and "boom" in got[-1]
+        assert "/copy" in app.help_text() and "ctrl+c" in app.help_text()
+
+    run(tmp_path, sc)
+
+
+def test_copy_to_clipboard_also_uses_pbcopy(tmp_path, monkeypatch):
+    import subprocess
+    calls = []
+    monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/pbcopy")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append((a, k)))
+
+    async def sc(app, pilot, client, eng):
+        app.copy_to_clipboard("héllo")
+        assert calls and calls[0][1]["input"] == "héllo".encode()
+
     run(tmp_path, sc)
 
 
