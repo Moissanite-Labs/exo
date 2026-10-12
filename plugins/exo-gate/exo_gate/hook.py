@@ -18,9 +18,13 @@ two with ``tighten_only(rule_outcome, verdict)``. A model never loosens an outco
 call the rules already deny, and a failure or timeout keeps the rule outcome. The core awaits async hooks,
 so the gate registers ``apre_tool_call``; the sync ``pre_tool_call`` is the rules alone.
 
-Settings resolve in this order, first hit wins: explicit overrides, Hermes plugin settings
-(``plugins.entries.exo-gate.settings.<key>``), ``EXO_GATE_<KEY>`` env vars, defaults. Nothing
-here names a principal: without a store the gate runs on the default policies and only logs.
+Settings resolve in this order, first hit wins: explicit overrides, a value set in config (Exo's
+plugin config, or Hermes ``plugins.entries.exo-gate.settings.<key>``), ``EXO_GATE_<KEY>`` env vars,
+defaults (the same values as the manifest). Under Exo the gate reads config through
+``ctx.get_explicit_config`` so a manifest default never hides an env var (issue #19). Settings are
+read once, when the plugin loads, from exod's own environment. A tool subprocess cannot change that
+environment, so ``EXO_GATE_MODE=observe`` set inside a tool call has no effect on the running gate.
+Nothing here names a principal: without a store the gate runs on the default policies and only logs.
 """
 from __future__ import annotations
 
@@ -609,7 +613,12 @@ def _risk_lookup_for(ctx) -> Callable[[str], Optional[str]]:
 
 def register(ctx) -> Gate:
     """Plugin entry point: build the gate from plugin settings and register the hooks."""
+    # Exo's context has get_explicit_config (no manifest default), so EXO_GATE_* env vars sit between an
+    # explicit setting and the default (issue #19). A host without it keeps its own get_config.
     get_config = getattr(ctx, "get_config", None)
+    explicit = getattr(ctx, "get_explicit_config", None)
+    if callable(explicit):
+        get_config = lambda key, default=None: explicit(key)  # noqa: E731
     g = Gate(resolve_settings(get_config=get_config), risk_lookup=_risk_lookup_for(ctx),
              router_getter=lambda: getattr(ctx, "router", None))
     ctx.register_hook("pre_tool_call", g.apre_tool_call)

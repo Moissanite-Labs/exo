@@ -358,3 +358,37 @@ def test_internal_error_on_a_secret_read_is_not_a_free_pass(keyed_store, monkeyp
     monkeypatch.setattr(g, "_rules", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     assert g.pre_tool_call("read_file", {"path": "~/.exo/keys/seat.key"})["action"] == "approve"
     assert g.pre_tool_call("read_file", {"path": "README.md"}) is None
+
+
+# --- settings precedence under Exo's plugin loader (issue #19) -----------------------------
+
+def _loaded_settings(config=None):
+    from exo.core.plugins import PluginManager
+    pm = PluginManager(config={"exo-gate": config} if config else {})
+    pm.load_all([PLUGIN.parent], enabled=["exo-gate"], entry_points=False)
+    rec = pm.plugins["exo-gate"]
+    assert not rec.error, rec.error
+    [entry] = pm.hooks._hooks["pre_tool_call"]
+    return entry.callback.__self__.settings
+
+
+def test_env_beats_manifest_default_but_not_explicit_config(monkeypatch):
+    monkeypatch.setenv("EXO_GATE_MODE", "observe")
+    monkeypatch.setenv("EXO_GATE_DECISION_MODEL", "0")
+    s = _loaded_settings()
+    assert s.mode == "observe" and s.decision_model is False         # env over the manifest default
+    s = _loaded_settings({"mode": "enforce", "decision_model": True})
+    assert s.mode == "enforce" and s.decision_model is True          # explicit config over env
+    monkeypatch.delenv("EXO_GATE_MODE")
+    monkeypatch.delenv("EXO_GATE_DECISION_MODEL")
+    s = _loaded_settings()
+    assert s.mode == "enforce" and s.decision_model is True          # manifest default
+
+
+def test_mode_is_read_once_at_load(keyed_store, monkeypatch):
+    """A tool subprocess cannot reach exod's environment; even a change in this process after load is ignored."""
+    store, key = keyed_store
+    g, ctx = make_gate(store, key)
+    monkeypatch.setenv("EXO_GATE_MODE", "observe")
+    assert g.settings.mode == "enforce"
+    assert call(ctx, "terminal", {"command": "rm -rf build"})["action"] == "approve"
