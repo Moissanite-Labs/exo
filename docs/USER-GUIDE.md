@@ -8,9 +8,16 @@ technical page that has the detail. The map of all docs is `docs/DOCS-MAP.md`.
 Install steps are in the README (`## Install`) and `docs/INSTALL.md`. Keys and models are in `docs/PROVIDERS.md`.
 Setting up your own store and the first interview are in `docs/ONBOARDING.md`. This guide does not repeat them.
 
-After install, check that a model is reachable:
+After install, set up a model provider. Pick one way; all three store the key the same way and show the same
+status:
 
-    exo models
+    exo providers                 # every provider: status, where its key is, models, default
+    exo providers add anthropic   # paste the key at the prompt (no echo), then a test call runs
+    exo providers test anthropic  # one tiny live call: ok with latency, or why it failed
+
+Or type `/providers` in the terminal client, or open the Providers tab in `exo web`. Never paste a key into chat or
+type it after the command name. If no provider works, `exo tui` and `exo web` tell you. Details and the security of
+the web route: `docs/PROVIDERS.md`.
 
 Then start the terminal client:
 
@@ -66,6 +73,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/model [ref]` | Pick the model for this session, or set it with a reference. `/model default <ref>` sets the default. |
 | `/default [ref]` | Set the default model for new sessions, or pick one. |
 | `/usage` | Show context size, cost and the model in use. |
+| `/providers` | Set up model providers: status, add or replace a key in a masked field, test, remove, default model. `/providers add <name>` opens the key field. |
 | `/trace [N]` | Show timing, route and estimated cost for the last N turns (default 10). |
 | `/findings` | Show what the harness found wrong with itself. |
 | `/grants` | List standing approvals. `/grants revoke <id>` removes one. |
@@ -170,7 +178,7 @@ Details and the cost rules: `docs/TRACE.md`.
 
 | Symptom | Try |
 |---|---|
-| No model answers | Run `exo models`. It shows which providers have keys and the route for each role. Add a key as in `docs/PROVIDERS.md`. |
+| No model answers | Run `exo providers`. It shows which providers have keys and whether a test call worked; `exo providers test <name>` says why one fails. Add a key with `exo providers add <name>` or `/providers`. |
 | A second `exo serve` refuses to start | One process writes an agent's log. Another `exo serve` or `exo tui` for that seat already holds it. Use that one, or stop it. |
 | Cost shows `unknown` | The route has no price. Add one under `models.models` in `config.json` (`docs/TRACE.md`). |
 | `code_find` is missing | It needs Node.js 22 or newer. `exo models` says why on its `code_find:` line (`docs/TOOLS.md`). |

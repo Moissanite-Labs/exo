@@ -47,6 +47,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/quit` | Same as `/exit`. | none | same |
 | `/model` | Pick the model for this session, or set it. | `<ref>` sets it. `default <ref>` sets the default. | `ExoApp.set_model` (`models.list`, `models.set`) |
 | `/default` | Set the default model for new sessions. Saved to `models.roles.main` in `config.json`, old routes kept as fallbacks. | `<ref>`, or none to pick | `ExoApp.set_default` (`models.set`, `config.set`) |
+| `/providers` | Provider setup panel: status, masked key entry, test, remove, default. Client side; the key never reaches the composer, transcript or protocol. Sends `command.run providers reload <name>` after a change. | `add <name>` opens the key field | `ProvidersScreen` in `clients/tui/exo_tui/providers.py`, engine `src/exo/providers_setup.py` |
 | `/usage` | Show context size, cost and the model in use. | none | `ExoApp.slash` (client state, no call) |
 | `/panel` | Reopen the last panel. | none | `ExoApp.show_panel` |
 | `/peers` | List other live sessions you can message. | none | `peers` protocol command, `action="list"` |
@@ -173,6 +174,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 | `exo config set <key> <value>` | Sets a key. The value is read as JSON when it parses, else kept as text. | `<key> <value>` | same |
 | `exo config unset <key>` | Removes a key. | `<key>` | same |
 | `exo models` | Providers, whether a key is found (yes or no, never the value), the route per role, and the `code_find` status. | `--remote PROVIDER` lists that provider's models over the network | `cmd_models` in `src/exo/models_cmd.py` |
+| `exo providers` | Provider setup (D-034): status table; `add NAME` (getpass, needs a terminal, never from argv), `test NAME`, `remove NAME`, `default REF`. | `--store keychain\|secret-service\|file` on add; `--yes` on remove; `--role` on default | `src/exo/providers_cmd.py`, `src/exo/providers_setup.py` |
 | `exo decide <question>` | Asks the decision model one question and prints the probability of each option and the route used. | `--options a,b,c` (required, at least two), `--state TEXT`, `--role ROLE` (default `decision`) | `cmd_decide` in `src/exo/decide_cmd.py` |
 
 ### How the harness is doing
