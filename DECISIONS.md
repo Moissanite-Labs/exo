@@ -891,6 +891,34 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a thread, so the terminal keeps drawing.
 - **Docs:** user guide, UI, COMMANDS, WEB, JOBS, TRACE, ONBOARDING, the site, the whitepaper and the intro skill.
 
+
+## D-044 (2026-10-12) Taste baseline: ship a house taste, then fit the new user (Proposed)
+- **Status:** Proposed. Design in docs/TASTE-BASELINE.md; nothing built.
+- **Ruling (principal, verbatim, 2026-10-12):** "the project should ship with my taste as a baseline because its a
+  good starting point and its been finely tuned with a lot of hard work. then over time it should mould and readapt
+  to the new user that it works with. perhaps an innate decay mechanism for older memories/learnings, perhaps
+  stronger if large delta from new behaviours (but after a repeated reinforcement of new behaviours, not
+  immediately), perhaps the decision model could play a role in this"
+- **Decision (proposed):** a scrubbed, versioned, read-only **house taste** pack (preference, rule, procedure and
+  value items about how work is done, policy defaults, a house soul, the skills pack) is exported from the
+  principal's store by `exo taste export-house`, which is reproducible and fails on any personal or internal name.
+  People, clients, history, quotes and evidence never ship (D-004). Lookups resolve per item: user ruling, pin,
+  learned item, then house item, each shown with its source. House items lose precedence slowly
+  (`max(0.3, 0.7 * 2^(-t/180))`) and never vanish. The delta rule: one signal changes nothing; 3 contradicting
+  signals from the user over 2 days within 30 days arm an item, which then fades by `2^(-(t - t_arm) * d / 7)`
+  with d the size of the gap, and the user's version replaces it once it leads by 0.15. Rulings win at once and
+  are never faded by behaviour. The decision model only classifies (contradict, refine, agree, unrelated) and
+  sizes the gap; it is capped, abstains below 0.6 confidence and never promotes. Only `author == principal`
+  signals count (D-040). Hysteresis: a 14-day cooldown and a question after two flips. `/taste` shows house,
+  learned, pending and overridden items with pin and reset. On the principal's own installs the house layer is
+  off and their store is never decayed by it.
+- **Why:** D-004 asks for both fit and replicability. A new user gets a tuned start instead of an empty one, and
+  the same learning loop that fits the principal then fits them.
+- **Rejected:** shipping the principal's store as is (personal data, D-004); starting every user empty (wastes the
+  tuning); replacing on the first contradiction (noise and injected text would move taste); letting the decision
+  model promote (a classifier error would become a lesson); decaying gate policies (nothing learned may loosen a
+  gate, D-015).
+- **Waiting on the principal:** the three open questions at the end of docs/TASTE-BASELINE.md.
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
 - **Why:** the principal reported an approval card stuck on screen in the terminal and on the web with nothing pending in
   the core, a card the terminal could not answer, a web chat that stopped responding, and wanted to cancel a queued steer.
