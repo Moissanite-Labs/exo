@@ -261,6 +261,30 @@ delegation, signed receipts, restart recovery and client rendering. The core sta
 budget (7,952 lines; 48 lines of headroom left, so the next core addition should raise the budget to the
 wave 3 figure of 15,000 that `docs/STANDALONE.md` sets).
 
+### Model tiers
+
+A child should run on the cheapest model that can do its job. The router has three tier roles, `fast`,
+`standard` and `deep`, ordered cheapest to most capable. Fallback: fast to standard to main; standard to
+main; deep to main. A tier whose provider has no key is skipped, so a local-only setup with no tier
+configured runs every child on main and nothing breaks. Catalog defaults (Anthropic): fast is
+`claude-haiku-5-5`, standard is `claude-sonnet-5-5`, deep is `claude-opus-5-5`. Override them in config
+`[models.roles]`.
+
+- **Default per role** (config `delegation.role_tiers`): scout fast, verifier standard, builder standard,
+  critic deep.
+- **Per task.** The `delegate` task item takes an optional `tier`. Use fast for retrieval, search, reading and
+  summarizing, running known commands and simple specified edits. Use standard to implement a clear spec,
+  write tests and docs, or do contained reviews. Use deep only when judgment errors compound: architecture,
+  open research synthesis, hard cross-file debugging. When unsure, take the cheaper tier.
+- **No upgrade.** A child never runs above its parent's tier, unless `delegation.allow_upgrade = true`
+  (default false). The parent's tier is the main model's tier if the catalog knows it, else deep.
+- **Escalate once.** If a child fails (not cancelled) and `delegation.escalate_on_fail` is true (default),
+  it runs again one tier up, within the cap above. A retry is skipped when the next tier resolves to the same
+  model. Both attempts are separate tasks with their own receipts.
+- **On the wire.** The brief carries `tier` (opcode 108). The receipt carries `route` (opcode 116: tier,
+  resolved model, escalated 0 or 1), and the English form adds a `Model:` line. `task.updated` detail shows
+  it. Packets without these fields still decode, with empty tier and model.
+
 ## 7. Left for later waves
 
 - **Cross-seat delegation over the bus** (wave 4): send a brief as a signed bus body to another seat, run it

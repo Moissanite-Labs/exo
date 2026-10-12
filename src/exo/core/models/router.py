@@ -25,7 +25,9 @@ from exo.core.models.openai_chat import OpenAIChatProvider
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
 
 CATALOG_PATH = Path(__file__).with_name("catalog.toml")
-ROLE_FALLBACK = {"decision": ["aux", "main"], "aux": ["main"]}
+TIERS = ("fast", "standard", "deep")  # cheapest to most capable; the delegate tool picks one per child
+ROLE_FALLBACK = {"decision": ["aux", "main"], "aux": ["main"], "fast": ["standard", "main"],
+                 "standard": ["main"], "deep": ["main"]}
 SOLE_TTL = 60.0
 AUTH_TTL = 300.0
 LONG_TTL = 4 * 3600.0
@@ -121,6 +123,14 @@ class Router:
         for r in [role, *ROLE_FALLBACK.get(role, [] if role == "main" else ["main"])]:
             refs += [x for x in self.roles.get(r) or [] if x not in refs]
         return [Route.parse(x) for x in refs]
+
+    def tier_route(self, tier: str) -> Route | None:
+        """First route of ``tier`` (then its fallbacks) whose provider has credentials, else None."""
+        return next((r for r in self.chain(tier) if self.credentials(r.provider)), None)
+
+    def tier_of(self, ref: str) -> str | None:
+        """The highest tier whose configured routes include ``ref``, or None for an unknown model."""
+        return next((t for t in reversed(TIERS) if ref in (self.roles.get(t) or [])), None)
 
     def set_role(self, role: str, refs: list[str]) -> None:
         for ref in refs:
@@ -254,7 +264,7 @@ class Router:
     def status(self) -> list[dict[str, Any]]:
         """Routes per role with availability, for ``models.list``."""
         now, out = self.clock(), []
-        for role in sorted(set(self.roles) | {"main", "aux", "decision"}):
+        for role in sorted(set(self.roles) | {"main", "aux", "decision", *TIERS}):
             for route in self.chain(role):
                 creds = self.credentials(route.provider)
                 out.append({"role": role, "route": route.ref, "configured": bool(creds),

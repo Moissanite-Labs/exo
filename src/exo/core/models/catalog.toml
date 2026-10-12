@@ -78,6 +78,12 @@ cache_read = 0.25
 main = ["anthropic:claude-opus-5-5", "openrouter:anthropic/claude-opus-5.5"]
 aux = ["anthropic:claude-haiku-5-5"]
 decision = []
+# Cost tiers for subagents (delegate tool). Resolution: fast -> standard -> main;
+# standard -> main; deep -> main. A tier whose provider has no key is skipped, so
+# local-only setups fall back to main. Override any of these in config [models.roles].
+fast = ["anthropic:claude-haiku-5-5"]
+standard = ["anthropic:claude-sonnet-5-5"]
+deep = ["anthropic:claude-opus-5-5"]
 
 # Decision-model placeholders (under research; fill in ids once chosen):
 # [models."openrouter:<typesafe-jev-id>"]      # Typesafe Jev, hosted

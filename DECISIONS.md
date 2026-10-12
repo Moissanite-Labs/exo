@@ -253,3 +253,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   totals, locking finished child sessions, async delegation and worktrees, upstream model eval (spend,
   needs A), proposing the additions upstream as v2.2.
 - **Revisit if** upstream's model eval shows models do better reading lines.
+
+## D-017 (2026-10-12) Subagents run on the cheapest model that can do the job
+- **A's ask:** "you should be putting the subagents on most cost effective models whenever they dont need
+  the full power of the model youre on ... encode this into SOPs and also into the exo harness behaviours".
+- **Decision:** the router has tier roles `fast`, `standard`, `deep` (fast falls back to standard then
+  main; standard and deep fall back to main). The catalog maps them to Haiku 5.5, Sonnet 5.5 and Opus 5.5
+  for Anthropic; users override. `delegate` gives each child a tier: scout fast, builder and verifier
+  standard, critic deep, or the calling model's own `tier`. A child never runs above its parent's tier
+  unless `delegation.allow_upgrade`. A failed child is retried once a tier up unless
+  `delegation.escalate_on_fail` is false. Tier and resolved model go in the receipt and `task.updated`.
+- **Why:** most delegated work is retrieval and simple implementation; a small model does it well at a
+  fraction of the price. Judgment-heavy work keeps its tier; a failure buys one stronger retry.
+- **Consequences:** the learning loop can score cost choices per task. A tier with no key, or one that
+  resolves to the same model, falls back to main, so local setups behave as before. Wire opcodes 108 and
+  116 added; old packets still decode. Tests build engines with `env={}` so a real key in the shell
+  never causes spend.
+- **Later:** tiers for aux side calls; tier auto-selection from past receipts.

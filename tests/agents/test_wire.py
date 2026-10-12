@@ -20,11 +20,12 @@ UPSTREAM_BRIEF = (Path(__file__).parents[1] / "bus" / "sym2p_fixtures" / "v2" / 
 BRIEF = Brief(id="k_3f9a", thread="s_8e7d", goal='Find callers of "load_config" | list file:line', role="scout",
               context="Python repo.\nTwo lines.", tools=["glob", "grep", "read_file"], max_turns=12,
               max_tokens=60000, timeout_s=300, depth=1, max_depth=2, cwd="/tmp/w", accept=["every caller listed"],
-              base="s_8e7d:4", request="ack")
+              base="s_8e7d:4", request="ack", tier="fast")
 RECEIPT = Receipt(id="r_3f9a", thread="s_8e7d", brief="k_3f9a", status="failed", role="scout",
                   summary="Partial: 2 callers.", input_tokens=1200, output_tokens=80, cost_usd=0.0042,
                   duration_ms=3100, rounds=2, tool_calls=3, files=["a.py", "dir/b c.py"], error_code="timeout",
-                  error="no result within 300 s", child_session="s_1b2c", confidence=40)
+                  error="no result within 300 s", child_session="s_1b2c", confidence=40,
+                  tier="standard", model="anthropic:claude-sonnet-5-5", escalated=1)
 
 
 @pytest.mark.parametrize("packet", [BRIEF, RECEIPT, Brief(id="k_1", thread="t", goal="x"),
