@@ -1,10 +1,15 @@
-"""Small widgets: transcript blocks, composer, approval card, palette, edit screen, panel view."""
+"""Small widgets: transcript blocks, composer, brand bar, status strip, approval card, palette, edit screen, panel view."""
 
 from __future__ import annotations
 
+import re
+import time
 from typing import Any
 
+from rich.console import Group
 from rich.markdown import Markdown
+from rich.padding import Padding
+from rich.table import Table
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -12,42 +17,119 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
 from exo_tui.panels import choice_options, render_panel
+from exo_tui.theme import (DOT, PROMPT, SPINNER, chips, gauge, header_rule, human_tokens, reduced_motion,
+                           rich_style)
+
+IDLE_HINT = "ask anything " + DOT + " /help"
+BUSY_HINT = "lands at the next tool round " + DOT + " esc stops the turn"
+
+
+def reveal(widget: Widget) -> None:
+    """Fade a panel in on arrival. Motion reports state (something new came in); off under reduced motion."""
+    if reduced_motion():
+        return
+    widget.styles.opacity = 0.0
+    widget.styles.animate("opacity", 1.0, duration=0.5, easing="out_cubic")
 
 
 class Block(Static):
-    """One transcript entry. ``text`` is the truth; ``flush`` paints it."""
+    """One transcript entry. ``text`` is the truth; ``flush`` paints it.
 
-    def __init__(self, text: str = "", kind: str = "assistant") -> None:
+    Kinds: user, assistant, error, warn, note, hint (a tip), memory (a cold one-liner), peer, taste, finding.
+    peer, taste and finding are panels: a coloured left rule (CSS) and a header line drawn here."""
+
+    PANELS = {"peer": ("cold", "PEER"), "taste": ("cold", "TASTE"), "finding": ("cold", "FINDING"),
+              "report": ("cold", "")}
+    ROW = re.compile(r"^(\s+)(\S.*?)(\s{2,})(\d+)(\s*)(.*)$")  # `  recent tail   29   2 messages`
+
+    def __init__(self, text: str = "", kind: str = "assistant", head: str = "", meta: str = "",
+                 steer: bool = False, body: str = "") -> None:
         super().__init__("", classes=f"block {kind}")
         self.text = text
         self.kind = kind
+        self.body = body  # what a panel shows; ``text`` stays the full line for search and tests
+        self.head = head  # panel header after the kind's label, e.g. "razi . other"
+        self.meta = meta  # panel footer line, dim
+        self.shown: Any = None
+        self.steer = steer  # a user message sent while a turn was running
+
+    def paint(self, renderable: Any) -> None:
+        self.shown = renderable  # kept so tests and snapshots can read what was drawn
+        self.update(renderable)
+
+    def _panel(self) -> Group:
+        role, label = self.PANELS[self.kind]
+        head = f"{label} {DOT} {self.head}" if label and self.head else (self.head or label)
+        lines: list[Text] = [header_rule(head, role, self.size.width or 60)]
+        lines.append(self._report() if self.kind == "report" else Text(self.body or self.text, style=rich_style("fg")))
+        if self.meta:
+            lines.append(Text(self.meta, style=rich_style("fg3")))
+        return Group(*lines)
+
+    def _report(self) -> Text:
+        """A command report (/context): label and note dim, the number bright, the first line plain."""
+        out = Text()
+        for i, ln in enumerate(self.text.splitlines()):
+            m = self.ROW.match(ln)
+            if m:
+                out.append(m[1] + m[2] + m[3], style=rich_style("fg2"))
+                out.append(m[4], style=rich_style("fg", "bold"))
+                out.append(m[5] + m[6], style=rich_style("fg3"))
+            else:
+                out.append(ln, style=rich_style("fg" if i == 0 else "fg3"))
+            out.append("\n")
+        out.rstrip()
+        return out
 
     def flush(self) -> None:
-        if self.kind == "assistant":
-            self.update(Markdown(self.text))
-        elif self.kind == "user":
-            self.update(Text("> " + self.text, style="bold"))
-        elif self.kind == "error":
-            self.update(Text(self.text, style="red"))
-        elif self.kind == "peer":  # a message from another session: its own colour and a bar, never the user's style
-            self.update(Text("| " + self.text.replace("\n", "\n| "), style="cyan"))
-        elif self.kind == "hint":  # tutorial tips: dim italic, clearly not the agent's words
-            self.update(Text(self.text, style="dim italic"))
-        elif self.kind == "warn":
-            self.update(Text(self.text, style="yellow"))
+        k = self.kind
+        if k == "assistant":
+            self.paint(Padding(Markdown(self.text, style=rich_style("fg2")), (0, 0, 0, 2)))
+        elif k == "user":
+            row = Table.grid(padding=(0, 1))
+            lead = Text()
+            if self.steer:
+                lead.append("steer ", style=rich_style("fg3"))
+            lead.append(PROMPT, style=rich_style("accent", "bold"))
+            row.add_column(no_wrap=True)
+            row.add_column(ratio=1)
+            row.add_row(lead, Text(self.text, style=rich_style("fg")))
+            self.paint(row)
+        elif k == "error":
+            self.paint(Text("✕ " + self.text, style=rich_style("err")))
+        elif k in self.PANELS:
+            self.paint(self._panel())
+        elif k == "hint":  # tutorial tips: dim italic, clearly not the agent's words
+            t = Text(style=rich_style("fg3", "italic"))
+            body = self.text[5:] if self.text.startswith("tip: ") else self.text
+            t.append("tip", style=rich_style("cold", "italic"))
+            t.append(f" {DOT} {body}")
+            self.paint(t)
+        elif k == "memory":
+            self.paint(Text(self.text, style=rich_style("cold")))
+        elif k == "warn":
+            self.paint(Text(self.text, style=rich_style("accent2")))
         else:
-            self.update(Text(self.text, style="dim"))
+            self.paint(Text(self.text, style=rich_style("fg3")))
 
     def on_mount(self) -> None:
         self.flush()
+        if self.kind in self.PANELS:
+            reveal(self)
+
+    def on_resize(self) -> None:
+        if self.kind in self.PANELS:
+            self.flush()
 
 
 class ToolBlock(Static):
-    """A tool call. Collapsed to one line; ctrl+o expands the output."""
+    """A tool call: one line with a state glyph, the name, short args and elapsed time.
+    Collapsed to one line; ctrl+o expands the output."""
 
     def __init__(self, call_id: str, name: str, args: Any) -> None:
         super().__init__("", classes="block tool")
@@ -55,6 +137,9 @@ class ToolBlock(Static):
         self.output = ""
         self.status = "running"
         self.expanded = False
+        self.t0 = time.monotonic()
+        self.elapsed: float | None = None  # seconds, set when the call finishes; None for replayed history
+        self.frame = 0
 
     def _summary(self) -> str:
         a = self.args
@@ -62,22 +147,64 @@ class ToolBlock(Static):
             a = a.get("command") or a.get("path") or next(iter(a.values()))
         return str(a or "").splitlines()[0][:80] if a else ""
 
+    def glyph(self) -> Text:
+        if self.status == "done":
+            return Text("✓", style=rich_style("ok"))
+        if self.status == "error":
+            return Text("✕", style=rich_style("err"))
+        ch = SPINNER[self.frame % len(SPINNER)] if not reduced_motion() else "◇"
+        return Text(ch, style=rich_style("accent"))
+
+    def clock(self) -> str:
+        if self.elapsed is not None:
+            secs: float | None = self.elapsed
+        else:
+            secs = time.monotonic() - self.t0 if self.status == "running" else None
+        if secs is None:
+            return ""
+        return f"{secs:.1f}s" if secs < 100 else f"{int(secs // 60)}m{int(secs % 60):02d}s"
+
     def flush(self) -> None:
-        mark = {"running": "~", "done": "ok", "error": "err"}[self.status]
-        head = Text(f"{'v' if self.expanded else '>'} {self.tool_name} {self._summary()}  [{mark}]", style="dim")
-        if self.expanded and self.output:
-            head.append("\n" + self.output.rstrip(), style="")
-        elif self.output:
+        left = Text(no_wrap=True, overflow="ellipsis")
+        left.append_text(self.glyph())
+        left.append(" " + self.tool_name, style=rich_style("fg2", "bold"))
+        summ = self._summary()
+        if summ:
+            left.append("  " + summ, style=rich_style("fg3"))
+        right = Text(no_wrap=True, style=rich_style("fg3"))
+        if self.output and not self.expanded:
             n = len(self.output.splitlines())
-            head.append(f"  ({n} line{'s' if n != 1 else ''}, ctrl+o)", style="dim italic")
-        self.update(head)
+            right.append(f"{n} line{'s' if n != 1 else ''} {DOT} ctrl+o", style=rich_style("fg3", "italic"))
+            right.append("  ")
+        right.append(self.clock())
+        row = Table.grid(expand=True)
+        row.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+        row.add_column(justify="right", no_wrap=True)
+        row.add_row(left, right)
+        if self.expanded and self.output:
+            body = Text()
+            for ln in self.output.rstrip().splitlines():
+                body.append("│ ", style=rich_style("line2"))
+                body.append(ln + "\n", style=rich_style("fg2"))
+            body.rstrip()
+            self.update(Group(row, Padding(body, (0, 0, 0, 2))))
+        else:
+            self.update(row)
+
+    def finish(self, status: str, secs: float | None = None) -> None:
+        self.status = status
+        self.elapsed = secs if secs else time.monotonic() - self.t0
+        self.flush()
 
     def on_mount(self) -> None:
         self.flush()
 
+    def on_resize(self) -> None:
+        self.flush()
+
 
 class Composer(TextArea):
-    """Enter sends, shift+enter (or ctrl+j) adds a newline."""
+    """Enter sends, shift+enter (or ctrl+j) adds a newline. The caret is a block in the signal colour (CSS)."""
 
     class Submitted(Message):
         def __init__(self, text: str) -> None:
@@ -85,7 +212,9 @@ class Composer(TextArea):
             self.text = text
 
     def __init__(self) -> None:
-        super().__init__("", id="composer", soft_wrap=True, show_line_numbers=False, tab_behavior="focus")
+        super().__init__("", id="composer", soft_wrap=True, show_line_numbers=False, tab_behavior="focus",
+                         placeholder=IDLE_HINT)
+        self.cursor_blink = not reduced_motion()
 
     async def _on_key(self, event: events.Key) -> None:
         if event.key == "enter":
@@ -98,6 +227,113 @@ class Composer(TextArea):
             event.stop()
             event.prevent_default()
             self.insert("\n")
+
+
+class PromptMark(Static):
+    """The mark left of the composer: `>`, or `steer >` while a turn runs, `answer >` for a question."""
+
+    def set_state(self, busy: bool, question: bool = False) -> None:
+        t = Text(no_wrap=True)
+        if question:
+            t.append("answer ", style=rich_style("cold"))
+        elif busy:
+            t.append("steer ", style=rich_style("accent2"))
+        t.append(PROMPT, style=rich_style("accent", "bold"))
+        self.update(t)
+
+
+class BrandBar(Widget):
+    """`E X O`, the agent, the thread, and a live dot while a turn runs."""
+
+    def __init__(self) -> None:
+        super().__init__(id="brand")
+        self.agent = ""
+        self.thread = ""
+        self.live = False
+        self.frame = 0
+
+    def set(self, agent: str, thread: str, live: bool) -> None:
+        if (agent, thread, live) != (self.agent, self.thread, self.live):
+            self.agent, self.thread, self.live = agent, thread, live
+            self.refresh()
+
+    def tick(self, frame: int) -> None:
+        self.frame = frame
+        if self.live:
+            self.refresh()
+
+    def render(self) -> Table:
+        left = Text(no_wrap=True, overflow="ellipsis")
+        left.append("◢ ", style=rich_style("accent"))
+        left.append("E X O", style=rich_style("fg", "bold"))
+        if self.agent:
+            left.append(f"  {DOT}  ", style=rich_style("line2"))
+            left.append(self.agent, style=rich_style("fg2"))
+        if self.thread:
+            left.append(f"  {DOT}  ", style=rich_style("line2"))
+            left.append(self.thread, style=rich_style("fg3"))
+        right = Text(no_wrap=True)
+        if self.live:
+            pulse = reduced_motion() or (self.frame // 4) % 2 == 0
+            right.append("● ", style=rich_style("accent" if pulse else "accent2"))
+            right.append("LIVE", style=rich_style("accent", "bold"))
+        else:
+            right.append("○ ", style=rich_style("fg3"))
+            right.append("IDLE", style=rich_style("fg3"))
+        row = Table.grid(expand=True)
+        row.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+        row.add_column(justify="right", no_wrap=True)
+        row.add_row(left, right)
+        return row
+
+
+class StatusStrip(Widget):
+    """Instruments on one line: served model (and the fallback it took), memory gauge, cache share, cost, findings."""
+
+    def __init__(self) -> None:
+        super().__init__(id="status")
+        self.d: dict[str, Any] = {"model": "", "requested": "", "ctx": 0, "window": 0, "cache": None, "cost": 0.0,
+                                  "findings": 0}
+
+    def set(self, **d: Any) -> None:
+        self.d.update(d)
+        self.refresh()
+
+    def render(self) -> Text:
+        d = self.d
+        w = self.size.width or 100
+        t = Text(no_wrap=True, overflow="ellipsis")
+
+        def label(s: str) -> None:
+            t.append(s + " ", style=rich_style("fg3"))
+
+        def sep() -> None:
+            t.append(f"  {DOT}  ", style=rich_style("line2"))
+
+        label("MODEL")
+        fell = bool(d["requested"] and d["model"] and d["requested"] != d["model"])
+        t.append(d["model"] or "-", style=rich_style("accent" if fell else "fg2", "bold" if fell else ""))
+        if fell:
+            t.append(f" ← {d['requested']}", style=rich_style("fg3"))
+        frac = d["ctx"] / d["window"] if d["window"] else 0.0
+        sep()
+        label("MEM")
+        t.append_text(gauge(frac, 10, "accent2" if frac >= 0.85 else "cold"))
+        t.append(f" {min(999, round(100 * frac))}%", style=rich_style("fg2"))
+        if w >= 70 and d["ctx"]:
+            t.append(f" {human_tokens(d['ctx'])}", style=rich_style("fg3"))
+        if w >= 56:
+            sep()
+            label("CACHE")
+            t.append("-" if d["cache"] is None else f"{round(100 * d['cache'])}%", style=rich_style("fg2"))
+        sep()
+        label("COST")
+        t.append(f"${d['cost']:.2f}", style=rich_style("fg2"))
+        if d["findings"]:
+            sep()
+            n = d["findings"]
+            t.append(f"{n} finding{'s' if n != 1 else ''}", style=rich_style("accent", "bold"))
+        return t
 
 
 class ApprovalCard(Vertical, can_focus=True):
@@ -113,20 +349,35 @@ class ApprovalCard(Vertical, can_focus=True):
         self.req = req
         self.noting = False
 
-    def compose(self) -> ComposeResult:
+    def body(self) -> Group:
         r = self.req
-        text = Text()
-        text.append(f"approve ({r.risk})  ", style="bold yellow")
-        text.append(r.summary + "\n")
+        width = self.size.width or 60
+        out: list[Any] = [header_rule(f"APPROVAL {DOT} {r.risk}", "accent", width)]
+        out.append(Text(r.summary, style=rich_style("fg")))
         if r.call is not None:
-            text.append(f"{r.call.name} {r.call.arguments}\n", style="dim")
-        text.append("o once   a always   d deny", style="bold")
-        yield Static(text)
+            call = Text(f"{r.call.name} {r.call.arguments}", style=rich_style("fg3"), no_wrap=True, overflow="ellipsis")
+            out.append(call)
+        pairs = [("o", "once")] if "allow" in r.options else []
+        if "allow_always" in r.options:
+            pairs.append(("a", "always"))
+        pairs.append(("d", "deny"))
+        if self.noting:
+            out.append(Text("why deny? enter sends, empty is fine", style=rich_style("fg3")))
+        else:
+            out.append(chips(pairs))
+        return Group(*out)
+
+    def compose(self) -> ComposeResult:
+        yield Static(self.body(), id="approval-body")
         yield Input(placeholder="why deny? (enter to send, empty is fine)", id="deny-note")
+
+    def on_resize(self) -> None:
+        self.query_one("#approval-body", Static).update(self.body())
 
     def on_mount(self) -> None:
         self.query_one("#deny-note").display = False
         self.focus()
+        reveal(self)
 
     def _answer(self, decision: str, note: str = "") -> None:
         self.post_message(self.Answered(self.req.request_id, decision, note))
@@ -142,6 +393,7 @@ class ApprovalCard(Vertical, can_focus=True):
             self._answer("allow_always")
         elif k == "d":
             self.noting = True
+            self.query_one("#approval-body", Static).update(self.body())
             box = self.query_one("#deny-note", Input)
             box.display = True
             box.focus()
@@ -270,7 +522,10 @@ class PanelView(Vertical):
 
     def show(self, panel_id: str, kind: str, title: str, text: str, data: dict[str, Any]) -> None:
         self.panel_id, self.kind = panel_id, kind
-        self.query_one("#panel-title", Static).update(Text(f"{title or kind}  (esc closes)", style="bold"))
+        role = "accent" if kind == "approval" else "cold"
+        self.query_one("#panel-title", Static).update(
+            header_rule(f"{kind} {DOT} {title}" if title else kind, role, (self.size.width or 40) - 3, "esc closes"))
+        self.set_class(role == "accent", "gate")
         self.query_one("#panel-body", Static).update(render_panel(kind, text, data))
         lst = self.query_one("#panel-choices", OptionList)
         self.options = choice_options(data) if kind == "choice" else []
@@ -280,6 +535,7 @@ class PanelView(Vertical):
             lst.add_options([Option(label) for _, label in self.options])
             lst.highlighted = 0
         self.display = True
+        reveal(self)
 
     def hide(self) -> None:
         self.display = False
@@ -289,3 +545,23 @@ class PanelView(Vertical):
         event.stop()
         if 0 <= event.option_index < len(self.options):
             self.post_message(self.Chose(self.panel_id, self.options[event.option_index][0]))
+
+
+class Welcome(Static):
+    """The empty start: what to type and which keys matter. Gone with the first line of the transcript."""
+
+    def __init__(self, agent: str, model: str) -> None:
+        super().__init__("", id="welcome")
+        self.agent, self.model = agent, model
+        self.shown: Any = None
+
+    def on_mount(self) -> None:
+        head = Text()
+        head.append("\u25e2 ", style=rich_style("accent"))
+        head.append("E X O", style=rich_style("fg", "bold"))
+        info = Text(f"{self.agent}  {DOT}  {self.model or '-'}  {DOT}  memory ready", style=rich_style("fg3"))
+        keys = chips([("enter", "send"), ("@", "file"), ("!", "shell"), ("/", "commands"), ("ctrl+p", "palette"),
+                      ("esc", "stop")])
+        self.shown = Group(head, info, Text(""), keys)
+        self.update(self.shown)
+        reveal(self)

@@ -10,6 +10,8 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
+from exo_tui.theme import rich_style
+
 STATUS_MARK = {"done": "[x]", "completed": "[x]", "running": "[~]", "in_progress": "[~]",
                "failed": "[!]", "cancelled": "[-]", "queued": "[ ]", "pending": "[ ]", "todo": "[ ]"}
 
@@ -18,15 +20,15 @@ def diff_text(diff: str) -> Text:
     out = Text()
     for line in diff.splitlines():
         if line.startswith(("+++", "---")):
-            style = "bold"
+            style = rich_style("fg", "bold")
         elif line.startswith("@@"):
-            style = "cyan"
+            style = rich_style("cold")
         elif line.startswith("+"):
-            style = "green"
+            style = "green"  # the terminal's own green and red: a diff must read the same in every theme
         elif line.startswith("-"):
             style = "red"
         else:
-            style = ""
+            style = rich_style("fg2")
         out.append(line + "\n", style=style)
     return out
 
@@ -43,7 +45,7 @@ def _diff(data: dict[str, Any], text: str) -> RenderableType:
     files = data.get("files")
     if isinstance(files, list) and files:
         for f in files:
-            out.append(f"{f.get('path', '')}\n", style="bold")
+            out.append(f"{f.get('path', '')}\n", style=rich_style("fg", "bold"))
             out.append_text(diff_text(f.get("diff") or _unified(f.get("old", ""), f.get("new", ""), f.get("path", ""))))
         return out
     if data.get("diff"):
@@ -64,7 +66,7 @@ def _table(data: dict[str, Any], text: str) -> RenderableType:
         cols = [""] * len(rows[0])
     if not rows and not cols:
         return Text(text)
-    t = Table(show_header=bool(any(cols)), header_style="bold")
+    t = Table(show_header=bool(any(cols)), header_style=rich_style("fg3", "bold"), box=None, padding=(0, 2, 0, 0))
     for c in cols:
         t.add_column(str(c))
     for r in rows:
@@ -81,9 +83,11 @@ def _tasks(data: dict[str, Any], text: str) -> RenderableType:
         if isinstance(it, str):
             it = {"title": it}
         status = str(it.get("status", "queued"))
-        out.append(f"{STATUS_MARK.get(status, '[ ]')} {it.get('title') or it.get('text') or it.get('id', '')}")
+        role = {"done": "ok", "completed": "ok", "running": "accent", "in_progress": "accent", "failed": "err"}.get(status, "fg3")
+        out.append(f"{STATUS_MARK.get(status, '[ ]')} ", style=rich_style(role))
+        out.append(f"{it.get('title') or it.get('text') or it.get('id', '')}", style=rich_style("fg2"))
         if it.get("detail"):
-            out.append(f"  {it['detail']}", style="dim")
+            out.append(f"  {it['detail']}", style=rich_style("fg3"))
         out.append("\n")
     return out
 
@@ -106,10 +110,10 @@ def _taste(data: dict[str, Any], text: str) -> RenderableType:
         return Text(text)
     out = Text()
     for r in rules:
-        out.append("taste ", style="magenta")
+        out.append("taste ", style=rich_style("cold", "bold"))
         out.append(str(r.get("rule") or r.get("text") or r.get("rule_id") or "") + "\n")
         if r.get("path"):
-            out.append(f"  {r['path']}\n", style="dim")
+            out.append(f"  {r['path']}\n", style=rich_style("fg3"))
     return out
 
 
@@ -139,8 +143,8 @@ def bar_chart(data: dict[str, Any], width: int = 30) -> Text | None:
     lw = max(len(a) for a, _ in pairs)
     out = Text()
     for a, v in pairs:
-        out.append(f"{a:<{lw}} ", style="dim")
-        out.append("█" * max(0, round(abs(v) / top * width)), style="green" if v >= 0 else "red")
+        out.append(f"{a:<{lw}} ", style=rich_style("fg3"))
+        out.append("█" * max(0, round(abs(v) / top * width)), style=rich_style("cold" if v >= 0 else "err"))
         out.append(f" {v:g}\n")
     return out
 
