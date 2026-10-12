@@ -37,12 +37,14 @@ OPS: dict[int, tuple[str, str]] = {
     105: ("depth", "nn"),       # this depth, max depth
     106: ("cwd", "s"),
     107: ("accept", "s"),
+    108: ("tier", "y"),         # model tier asked for: fast, standard or deep
     110: ("summary", "s"),
     111: ("usage", "nnn"),      # input tokens, output tokens, cost in micro-USD
     112: ("work", "nnn"),       # duration ms, tool rounds, tool calls
     113: ("files", "s*"),
     114: ("error", "ys"),       # code symbol, message
     115: ("child", "t"),        # child session id
+    116: ("route", "ysn"),      # tier used, resolved model, escalated (0 or 1)
 }
 CODE = {name: op for op, (name, _) in OPS.items()}
 SYM = re.compile(r"^(?:\*|[A-Za-z][A-Za-z0-9_./-]*)$")

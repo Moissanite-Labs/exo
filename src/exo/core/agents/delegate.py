@@ -21,11 +21,12 @@ import asyncio
 import json
 import re
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from typing import Any
 
 from exo.core.context import DefaultCompressor, TreeContext
 from exo.core.loop import Loop
+from exo.core.models.router import TIERS
 from exo.core.sessions import new_id
 from exo.core.tools.registry import ToolContext, ToolError
 from exo.core.types import ToolCall, ToolResult, ToolSpec, Usage
@@ -35,6 +36,7 @@ from exo.wire.grammar import SYM
 
 ROLES = ("builder", "scout", "verifier", "critic")
 READ_ONLY = {"scout", "critic"}  # low-risk tools only
+ROLE_TIERS = {"scout": "fast", "verifier": "standard", "builder": "standard", "critic": "deep"}
 # Hermes DELEGATE_BLOCKED_TOOLS, renamed for Exo: no recursion (unless depth allows), no user
 # interaction, no shared memory writes, no outward messages, no scheduling in the parent's name.
 BLOCKED_TOOLS = frozenset({"delegate", "clarify", "ask", "memory", "send_message", "bus_post", "cronjob_manage"})
@@ -65,13 +67,22 @@ _ITEM = {
                                                                    "verifier may edit files and run commands."},
     "tools": {"type": "array", "items": {"type": "string"}, "description": "Optional: narrow the child's tools."},
     "accept": {"type": "string", "description": "Optional: how the child knows it is done."},
+    "tier": {"type": "string", "enum": list(TIERS),
+             "description": "Optional model tier, a cost choice. fast: retrieval, search, reading and summarizing, "
+                            "running known commands, simple specified edits. standard: implementing a clear spec, "
+                            "tests, docs, contained reviews. deep: only when judgment errors compound "
+                            "(architecture, open research synthesis, hard cross-file debugging). Prefer the cheaper "
+                            "tier when unsure. Default by role: scout fast, builder and verifier standard, critic "
+                            "deep. A child never runs above your own tier."},
 }
 SPEC = ToolSpec(
     name="delegate", toolset="delegation", risk="low",
     description=("Hand self-contained tasks to subagents. Each runs in its own session with a narrower toolset "
                  "and returns a receipt: status, cost, files changed and a short summary. Give one task with "
                  "`goal`, or several independent ones in `tasks` to run them in parallel. Use it for work that "
-                 "would flood your context or that splits into independent parts, not for one or two tool calls."),
+                 "would flood your context or that splits into independent parts, not for one or two tool calls. "
+                 "Put each child on the cheapest model tier that can do the job (see `tier`); a child that fails "
+                 "is retried once one tier up."),
     parameters={"type": "object", "properties": {
         **_ITEM, "tasks": {"type": "array", "items": {"type": "object", "properties": _ITEM, "required": ["goal"]},
                            "description": "Several independent tasks, run in parallel."}}})
@@ -113,6 +124,12 @@ class _Bus:
 class Delegator:
     def __init__(self, engine: Any, config: dict[str, Any] | None = None, signer: Any = None) -> None:
         self.engine, self.limits, self.signer = engine, Limits.of(config), signer
+        cfg = config or {}
+        self.role_tiers = {**ROLE_TIERS, **{k: v for k, v in (cfg.get("role_tiers") or {}).items()
+                                            if k in ROLES and v in TIERS}}
+        self.allow_upgrade = bool(cfg.get("allow_upgrade", False))
+        self.escalate_on_fail = bool(cfg.get("escalate_on_fail", True))
+        self.tiers: dict[str, str] = {}       # running child session -> the tier it runs at
         self.allow: dict[str, set[str]] = {}  # child session -> tool names it may call
         self.loops: dict[str, Loop] = {}      # running child sessions
         self.over: set[str] = set()           # children stopped for their token budget
@@ -156,7 +173,7 @@ class Delegator:
         if len(items) > lim.max_children:
             raise ToolError(f"At most {lim.max_children} tasks per call; got {len(items)}.")
         briefs = [self._brief(parent, depth, it, ctx.cwd) for it in items]
-        runs = [asyncio.ensure_future(self.run(parent, b)) for b in briefs]
+        runs = [asyncio.ensure_future(self._attempts(parent, b)) for b in briefs]
         try:
             receipts = await asyncio.gather(*runs)
         except asyncio.CancelledError:
@@ -168,10 +185,47 @@ class Delegator:
         return "\n\n".join((f"Task {i + 1} of {n}: {b.goal[:100]}\n" if n > 1 else "") + render(r)
                            for i, (b, r) in enumerate(zip(briefs, receipts)))
 
+    def _ceiling(self, parent: str) -> str:
+        """The parent's tier: its own if it is a child, else the main model's tier (deep when unknown)."""
+        e = self.engine
+        return self.tiers.get(parent) or e.router.tier_of(e.loop.model) or "deep"
+
+    def _cap(self, parent: str, tier: str) -> str:
+        top = self._ceiling(parent)
+        if self.allow_upgrade or TIERS.index(tier) <= TIERS.index(top):
+            return tier
+        return top
+
+    def _route(self, tier: str) -> tuple[Any, str]:
+        """(provider, "provider:model") for a tier. No usable tier route means the parent's own model."""
+        e = self.engine
+        if e.router.roles.get("delegate"):  # an explicit delegate role still wins
+            chain = e.router.chain("delegate")
+            return e.router.provider("delegate"), chain[0].ref if chain else e.loop.model
+        route = e.router.tier_route(tier) if tier else None
+        main = e.router.chain("main")
+        if route is None or (main and route == main[0]):
+            return e.loop.provider, e.loop.model
+        return e.router.provider(tier), route.ref
+
+    async def _attempts(self, parent: str, b: Brief) -> Receipt:
+        """Run a child; if it failed (not cancelled), retry once one tier up when allowed and it changes the model."""
+        r = await self.run(parent, b)
+        if r.status != "failed" or not self.escalate_on_fail or b.tier not in TIERS:
+            return r
+        nxt = self._cap(parent, TIERS[min(TIERS.index(b.tier) + 1, len(TIERS) - 1)])
+        if nxt == b.tier or self._route(nxt)[1] == self._route(b.tier)[1]:
+            return r
+        return await self.run(parent, replace(b, id=new_id("k"), tier=nxt), escalated=True)
+
     def _brief(self, parent: str, depth: int, it: dict[str, Any], cwd: str) -> Brief:
         role = it.get("role") or "builder"
         if role not in ROLES:
             raise ToolError(f"role must be one of {', '.join(ROLES)}")
+        asked = it.get("tier")
+        if asked is not None and asked not in TIERS:
+            raise ToolError(f"tier must be one of {', '.join(TIERS)}")
+        tier = self._cap(parent, asked or self.role_tiers[role])
         want = it.get("tools")
         tools = self._tools(parent, depth + 1, role, want if isinstance(want, list) else None)
         lim = self.limits
@@ -179,7 +233,7 @@ class Delegator:
         b = Brief(id=new_id("k"), thread=parent or "root", goal=str(it["goal"]).strip(),
                   context=str(it.get("context") or "").strip(), role=role, tools=sorted(tools),
                   max_turns=lim.max_turns, max_tokens=lim.max_tokens, timeout_s=lim.timeout_s, depth=depth + 1,
-                  max_depth=lim.max_depth, cwd=str(cwd or ""), accept=accept)
+                  max_depth=lim.max_depth, cwd=str(cwd or ""), accept=accept, tier=tier)
         encode(b)  # the brief must be a valid packet before anything runs
         return b
 
@@ -202,9 +256,8 @@ class Delegator:
 
     # ------------------------------------------------------------ one child
 
-    def _loop(self, b: Brief) -> Loop:
+    def _loop(self, b: Brief, provider: Any, model: str) -> Loop:
         e, names = self.engine, set(b.tools)
-        provider = e.router.provider("delegate") if e.router.roles.get("delegate") else e.loop.provider
 
         async def run_tool(call: ToolCall, lctx: dict[str, Any]) -> ToolResult:
             if call.name not in names:
@@ -216,7 +269,7 @@ class Delegator:
             prompt += f"\n\nWorking directory: {b.cwd}"
         return Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
                     e.router.provider("aux"))), tool_specs=lambda: e.registry.specs(names=sorted(names)),
-                    run_tool=run_tool, system_prompt=prompt, model=e.loop.model, max_iterations=b.max_turns or 24,
+                    run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
                     max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
 
     def _emit(self, parent: str, b: Brief, status: str, child: str | None, packet: str) -> None:
@@ -231,20 +284,22 @@ class Delegator:
             turn.cancel()
             return None
 
-    async def run(self, parent: str, b: Brief) -> Receipt:
+    async def run(self, parent: str, b: Brief, escalated: bool = False) -> Receipt:
         db, line, t0 = self.engine.store, encode(b), time.monotonic()
         db._q("INSERT INTO tasks (id, parent, child, depth, title, status, brief, created, updated) VALUES "
               "(?,?,?,?,?,?,?,?,?)", (b.id, parent or None, None, b.depth, b.goal[:80], "queued", line,
                                       s.now_ts(), s.now_ts()))
         self._emit(parent, b, "queued", None, line)
         sid, code, why, result, loop, turn = "", "", "", None, None, None
+        provider, model = self._route(b.tier)
         try:
             async with self.sems.setdefault(b.depth, asyncio.Semaphore(self.limits.max_concurrent)):
-                loop = self._loop(b)
-                info = await loop.create_session(title=f"{b.role}: {b.goal[:60]}", model=self.engine.loop.model,
+                loop = self._loop(b, provider, model)
+                info = await loop.create_session(title=f"{b.role}: {b.goal[:60]}", model=model,
                                                  cwd=b.cwd or None, parent=parent or None)
                 sid = info.id
                 self.allow[sid], self.loops[sid] = set(b.tools), loop
+                self.tiers[sid] = b.tier
                 db._q("UPDATE tasks SET child=?, status='running', updated=? WHERE id=?", (sid, s.now_ts(), b.id))
                 self._emit(parent, b, "running", sid, line)
                 turn = asyncio.ensure_future(loop.send(sid, render(b)))
@@ -260,12 +315,14 @@ class Delegator:
             raise
         finally:
             r = self._receipt(b, sid, loop, result, code, why, t0)
+            r.model, r.escalated = model, int(escalated)
             rl = encode(r)
             sig = json.dumps(sign(rl, self.signer)) if self.signer is not None else None
             db._q("UPDATE tasks SET status=?, receipt=?, sig=?, updated=? WHERE id=?",
                   (r.status, rl, sig, s.now_ts(), b.id))
             self._emit(parent, b, r.status, sid or None, rl)
             self.loops.pop(sid, None)
+            self.tiers.pop(sid, None)
             self.over.discard(sid)
         return r
 
@@ -300,7 +357,7 @@ class Delegator:
                        input_tokens=total.input_tokens, output_tokens=total.output_tokens,
                        cost_usd=total.cost_usd or 0.0, duration_ms=int((time.monotonic() - t0) * 1000),
                        rounds=sum(1 for m in msgs if m.role == "assistant" and m.tool_calls), tool_calls=len(calls),
-                       files=sorted(files), error_code=code, error=why, child_session=sid)
+                       files=sorted(files), error_code=code, error=why, child_session=sid, tier=b.tier)
 
 
 __all__ = ["BLOCKED_TOOLS", "Delegator", "Limits", "ROLES", "SPEC"]

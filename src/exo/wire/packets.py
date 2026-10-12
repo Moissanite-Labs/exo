@@ -52,6 +52,7 @@ class Brief:
     accept: list[str] = field(default_factory=list)
     base: str = ""
     request: str = "none"
+    tier: str = ""  # fast | standard | deep; empty means the parent's own model
 
 
 @dataclass
@@ -75,6 +76,9 @@ class Receipt:
     error: str = ""
     child_session: str = ""
     confidence: int = 0
+    tier: str = ""       # tier the child ran at
+    model: str = ""      # resolved "provider:model" the child ran on
+    escalated: int = 0  # 1 when this run was the retry one tier up after a failure
 
 
 Packet = Brief | Receipt
@@ -112,6 +116,8 @@ def encode(p: Packet, rcp: bool = False) -> str:
         if p.cwd:
             ex.append(_e("cwd", Str(p.cwd)))
         ex += [_e("accept", Str(a)) for a in p.accept]
+        if p.tier:
+            ex.append(_e("tier", p.tier))
         line = _head(p.id, p.thread, _code(ROLE_CODE, p.sender, "role"), _code(ROLE_CODE, p.role, "role"), 11, 1,
                      0, ex, _code(RQ_CODE, p.request, "request"), p.base, p.timeout_s, rcp)
     else:
@@ -125,6 +131,8 @@ def encode(p: Packet, rcp: bool = False) -> str:
             ex.append(_e("error", p.error_code or "error", Str(p.error)))
         if p.child_session:
             ex.append(_e("child", p.child_session))
+        if p.tier or p.model or p.escalated:
+            ex.append(_e("route", p.tier or "none", Str(p.model), "1" if p.escalated else "0"))
         line = _head(p.id, p.thread, _code(ROLE_CODE, p.role, "role"), 1, 12,
                      _code(STATUS_CODE, p.status, "status"), p.confidence, ex, 0, f"{p.brief}:1", 0, rcp)
     errs = check_line(line)
@@ -149,9 +157,10 @@ def decode(line: str) -> Packet:
         return Brief(id=pid, thread=tk, goal=str(ex.get("goal", [""])[0]), context=str(ex.get("context", [""])[0]),
                      role=ROLES[int(t)], sender=ROLES[int(f)], tools=[str(x) for x in ex.get("tools", [])],
                      max_turns=turns, max_tokens=tokens, timeout_s=secs, depth=depth, max_depth=max_depth,
-                     cwd=str(ex.get("cwd", [""])[0]), accept=accept, base=base,
+                     cwd=str(ex.get("cwd", [""])[0]), accept=accept, base=base, tier=str(ex.get("tier", [""])[0]),
                      request={v: k for k, v in RQ_CODE.items()}[int(rq)])
     if int(a) == 12:
+        route = ex.get("route", ["none", "", "0"])
         tin, tout, micro = ints("usage", 3)
         ms, rounds, calls = ints("work", 3)
         err = ex.get("error", ["", ""])
@@ -159,7 +168,9 @@ def decode(line: str) -> Packet:
                        role=ROLES[int(f)], summary=str(ex.get("summary", [""])[0]), input_tokens=tin,
                        output_tokens=tout, cost_usd=micro / 1e6, duration_ms=ms, rounds=rounds, tool_calls=calls,
                        files=[str(x) for x in ex.get("files", [])], error_code=str(err[0]), error=str(err[1]),
-                       child_session=str(ex.get("child", [""])[0]), confidence=int(cf))
+                       child_session=str(ex.get("child", [""])[0]), confidence=int(cf),
+                       tier="" if route[0] == "none" else str(route[0]), model=str(route[1]),
+                       escalated=int(route[2]))
     raise WireError(f"ERR:CODE act {ACTS.get(int(a), a)} is not a brief or a receipt")
 
 
@@ -264,6 +275,8 @@ def render(p: Packet | str) -> str:
         if p.accept:
             out.append("Done when: " + "; ".join(p.accept) + ".")
         out.append("Tools: " + (", ".join(p.tools) if p.tools else "the role's defaults") + ".")
+        if p.tier:
+            out.append(f"Model tier: {p.tier}.")
         if _limits(p):
             out.append(f"Limits: {_limits(p)}.")
         if p.depth < p.max_depth:
@@ -275,6 +288,9 @@ def render(p: Packet | str) -> str:
             f"over {p.rounds} rounds, {_n(p.input_tokens)} tokens in and {_n(p.output_tokens)} out")
     head += f", ${p.cost_usd:.4f}." if p.cost_usd else "."
     out = [head]
+    if p.tier or p.model:
+        out.append(f"Model: {p.tier or 'default'} tier" + (f", {p.model}" if p.model else "")
+                   + (", retried one tier up after a failure" if p.escalated else "") + ".")
     if p.error_code or p.error:
         out.append(f"Reason: {p.error_code}" + (f": {p.error}" if p.error else "") + ".")
     if p.files:
