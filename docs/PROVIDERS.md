@@ -6,14 +6,23 @@ Exo works with any model provider. You choose which model serves each role.
 
 Exo looks for a key by its variable name (for example `OPENCODE_GO_API_KEY`). It checks, in order:
 
-1. The environment variable of that name.
-2. The macOS Keychain, service `exo`, account = the variable name. Add one with:
+1. The environment variable of that name (macOS and Linux).
+2. macOS only: the Keychain, service `exo`, account = the variable name. Add one with:
 
        security add-generic-password -U -s exo -a OPENCODE_GO_API_KEY -w
 
-   It prompts for the value and does not echo it.
-3. The file `~/.config/exo/keys.env`, one `NAME=value` per line. It must be mode 0600
+   It prompts for the value and does not echo it. On Linux this step is skipped.
+3. The file `~/.config/exo/keys.env` (macOS and Linux), one `NAME=value` per line. It must be mode 0600
    (`chmod 600 ~/.config/exo/keys.env`). If it is looser, Exo refuses to read it and warns.
+
+### On Linux
+
+Linux has no Keychain step, so use the environment or `keys.env`. To create the file and add a key
+without showing it on screen:
+
+    mkdir -p ~/.config/exo && touch ~/.config/exo/keys.env && chmod 600 ~/.config/exo/keys.env
+    printf 'Key: '; read -rs K; echo; printf 'OPENCODE_GO_API_KEY=%s\n' "$K" >> ~/.config/exo/keys.env; unset K
+    ls -l ~/.config/exo/keys.env      # should show -rw-------
 
 Keys are never printed or logged. Never paste one into chat.
 
@@ -46,7 +55,7 @@ a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:
 
     exo decide "Is this safe to run?" --options safe,risky --state "rm -rf build/"
 
-Jev: set `TYPESAFE_API_KEY` (env, Keychain service `exo`, or keys.env). It is the first default route of the
+Jev: set `TYPESAFE_API_KEY` (env, macOS Keychain service `exo`, or keys.env). It is the first default route of the
 `decision` role (`["jev:jev-latest", "laya:laya"]`, owner ruling: base Laya was poor in a live check, Jev
 answered sensibly). Without a key Jev is skipped and the role falls through to Laya, then aux, then main.
 Shapes were checked live on 2026-10-11 (7 calls). Score levels count from 0; a score can fall between
@@ -89,5 +98,5 @@ Override any role in `[models.roles]` in your config.
     exo models --remote NAME      list the provider's models (network, only when you ask)
     exo config roles              the route per role only
 
-No command prints a key value. A key from the environment or Keychain is read only by the real CLI;
+No command prints a key value. A key from the environment, the Keychain (macOS) or keys.env is read only by the real CLI;
 tests build engines with `env={}` so a shell key never causes spend.
