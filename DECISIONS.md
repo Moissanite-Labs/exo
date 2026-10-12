@@ -119,6 +119,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   - **UI:** the simplicity of opencode and Command Code, the robustness and customizability of Hermes.
   - **Learning loop:** fuse Hermes's branch-off review loop (memory and skill learning) with Command
     Code's branch-off taste learning into one feedback loop that aligns the harness to its user.
+  - **Hill-climbing eval (mid-turn addition):** "i also want to bake in some kind of hill-climbing/eval
+    system that strengthens the alignment feedback loop further." The loop climbs against a per-user eval;
+    a lesson is promoted only if it scores better on held-out cases.
   - **Store:** hafiz's design becomes the store design, merged with Arif (external-data ingest) and
     Eldunari (router, anima, nexus). Their useful parts come in; their structures move to the new format.
   - **Horizon:** a portable companion device (mini robot or a Muse-charm-like object) in a few years.
