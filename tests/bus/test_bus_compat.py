@@ -89,9 +89,14 @@ def legacy_src() -> Path | None:
     return None
 
 
-@pytest.mark.skipif(legacy_src() is None, reason="no Divan Bus checkout with a venv to test against")
+# Resolved once at collection, before the hermetic fixture moves HOME: this one test is an opt-in check against
+# a real checkout, and the only place a test is allowed to look outside its temp dir.
+LEGACY_SRC = legacy_src()
+
+
+@pytest.mark.skipif(LEGACY_SRC is None, reason="no Divan Bus checkout with a venv to test against")
 def test_live_round_trip_with_legacy_relay_and_client(tmp_path):
-    src = legacy_src()
+    src = LEGACY_SRC
     py = str(src / ".venv" / "bin" / "python")
     work = tmp_path / "legacy"
     for part in ("relay", "clients"):
