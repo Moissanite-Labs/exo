@@ -189,3 +189,24 @@ def test_idle_timeout_kills_and_reports(tmp_path):
     end = run(r, [Message.user("hi")])[-1]
     assert end.kind == "error" and "ReadTimeout" in end.error
     assert _wait_dead(int((tmp_path / "pid").read_text()))
+
+
+def test_foreign_tool_ids_are_sanitized_and_paired(tmp_path):
+    import re
+    r = router(tmp_path, "tool")
+    bad = "functions.bash:0"
+    other = "functions.bash_0"  # sanitizes to the same prefix but must stay distinct
+    hist = [Message.user("go"),
+            Message.assistant("", [ToolCall(id=bad, name="get_weather", arguments={}),
+                                   ToolCall(id=other, name="get_weather", arguments={}),
+                                   ToolCall(id="ok_1-x", name="get_weather", arguments={})]),
+            Message(role="tool", tool_results=[ToolResult.of_text(bad, "a"), ToolResult.of_text(other, "b"),
+                                               ToolResult.of_text("ok_1-x", "c")])]
+    run(r, hist, [TOOL])
+    fr = seen(tmp_path)["frames"]
+    uses = [b["id"] for b in fr[1]["message"]["content"] if b["type"] == "tool_use"]
+    results = [b["tool_use_id"] for b in fr[2]["message"]["content"] if b["type"] == "tool_result"]
+    assert uses == results
+    assert all(re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", i) for i in uses)
+    assert len(set(uses)) == 3
+    assert uses[2] == "ok_1-x"

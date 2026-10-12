@@ -10,6 +10,7 @@ DeepSeek routes, screenshot eviction, Bedrock ids).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any, Iterator
@@ -42,9 +43,22 @@ def is_legacy(model: str) -> bool:
     return "claude" not in m or any(s in m for s in _LEGACY_THINKING)
 
 
+_TOOL_ID_OK = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
 def sanitize_tool_id(tool_id: str) -> str:
-    """Anthropic requires ids matching [a-zA-Z0-9_-]; replace the rest, never empty."""
-    return (re.sub(r"[^a-zA-Z0-9_-]", "_", tool_id) if tool_id else "") or "tool_0"
+    """Anthropic requires ids matching ^[a-zA-Z0-9_-]+$ (max 64). Valid ids pass through unchanged.
+
+    Others (e.g. Kimi's ``functions.bash:0``) get bad chars replaced and a short sha1 of the original
+    appended, so the mapping is deterministic (tool_use and tool_result pairs still match) and two
+    different originals cannot collapse to the same id. Never empty.
+    """
+    if not tool_id:
+        return "tool_0"
+    if _TOOL_ID_OK.match(tool_id):
+        return tool_id
+    digest = hashlib.sha1(tool_id.encode("utf-8", "replace")).hexdigest()[:8]
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", tool_id)[:55] + "_" + digest
 
 
 def _blank(b: dict) -> bool:
