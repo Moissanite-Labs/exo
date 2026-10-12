@@ -7,6 +7,8 @@ import os
 import time
 from pathlib import Path
 
+from exo import crypto
+from exo.core.approvals import sign_approval
 from exo.core.engine import CoreEngine
 from exo.core.plugins import Manifest, PluginManager
 from exo.protocol import schema as s
@@ -44,6 +46,7 @@ async def _turn(eng, answers):
             if isinstance(ev.body, s.ApprovalRequested) and req is None:
                 req = ev.body
                 for kw in answers:
+                    kw = kw(req) if callable(kw) else kw
                     out.append(await d.run(s.Command.of(s.ApprovalRespond(request_id=req.request_id, **kw))))
         await asyncio.sleep(0.01)
     assert req is not None and not eng._tasks
@@ -62,18 +65,60 @@ def test_default_table_lets_only_the_principal_answer(tmp_path):
     assert sent == ["we shipped"]
 
 
-def test_a_named_seat_may_answer_and_others_may_not(tmp_path):
+def _seat_key(name):
+    key = crypto.keygen()
+    crypto.save_key(key, Path(os.environ["EXO_HOME"]) / "keys" / f"{name}.key")
+    return key
+
+
+def _signed(key, seat, decision, **over):
+    def make(req):
+        sig = sign_approval(key, over.get("request_id", req.request_id), over.get("sign_decision", decision),
+                            req.binding, seat)
+        return {"decision": decision, "client": f"seat:{seat}", "sig": sig}
+    return make
+
+
+def test_a_named_seat_may_answer_signed_and_others_may_not(tmp_path):
     store = tmp_path / "store"
     (store / "policies").mkdir(parents=True)
     (store / "policies" / "approvals.yaml").write_text(APPROVALS)
     sent: list[str] = []
     eng = _engine(tmp_path, sent, store)
-    req, out = asyncio.run(_turn(eng, [{"decision": "allow", "client": "seat:builder"},
-                                       {"decision": "allow", "client": "seat:saga-divan"}]))
+    divan, builder = _seat_key("saga-divan"), _seat_key("builder")
+    req, out = asyncio.run(_turn(eng, [
+        _signed(builder, "builder", "allow"),                           # signed, but not on the list
+        {"decision": "allow", "client": "seat:saga-divan"},              # on the list, unsigned
+        _signed(builder, "saga-divan", "allow"),                         # signed with the wrong key
+        _signed(divan, "saga-divan", "allow", sign_decision="deny"),     # signature over another decision
+        _signed(divan, "saga-divan", "allow", request_id="a_other"),     # signature for another request
+        _signed(divan, "saga-divan", "allow_always"),                    # a seat cannot give a standing grant
+        _signed(divan, "saga-divan", "allow")]))
     assert req.approvers == ["principal", "seat:saga-divan"]
-    assert [r.ok for r in out] == [False, True] and sent == ["we shipped"]
+    assert [r.ok for r in out] == [False, False, False, False, False, False, True], [r.error for r in out]
+    assert "may not answer" in out[0].error.message and "must sign" in out[1].error.message
+    assert "standing grant" in out[5].error.message
+    assert sent == ["we shipped"]
     resolved = [e.body for e in eng.hub.since(0) if isinstance(e.body, s.ApprovalResolved)]
     assert resolved[0].by == "seat:saga-divan"
+
+
+def test_grants_command_lists_and_revokes(tmp_path):
+    sent: list[str] = []
+    eng = _engine(tmp_path, sent)
+    asyncio.run(_turn(eng, [{"decision": "allow_always"}]))
+
+    async def cmd(args):
+        r = await Dispatcher(eng).run(s.Command.of(s.CommandRun(name="grants", args=args)))
+        assert r.ok, r.error
+        return r.result["output"]
+
+    listing = asyncio.run(cmd(""))
+    gid = listing.split()[0]
+    assert gid.startswith("g_") and "message_send on #general" in listing and "by client" in listing
+    assert asyncio.run(cmd(f"revoke {gid}")) == f"revoked {gid}"
+    assert asyncio.run(cmd("list")) == "no standing grants"
+    assert asyncio.run(cmd("revoke g_nope")) == "no grant g_nope"
 
 
 def test_an_answer_for_other_text_is_refused(tmp_path):

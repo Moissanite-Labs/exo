@@ -152,10 +152,10 @@ def test_always_grant_survives_restart_and_expires(keyed_store):
     now = [1_000_000.0]
     _, ctx = make_gate(store, key, clock=lambda: now[0])
     r = call(ctx, *post("Ship it."))
-    answer(ctx, r, "always", by="seat:saga-divan")
+    answer(ctx, r, "always", by="tui")
     grants = json.loads((store / "state" / "approval-grants.json").read_text())
     assert len(grants) == 1 and grants[0]["binding"] == r["binding"] and grants[0]["rule"] == "github_post"
-    assert grants[0]["expires"] == now[0] + 2 * 86400 and grants[0]["by"] == "seat:saga-divan"
+    assert grants[0]["expires"] == now[0] + 2 * 86400 and grants[0]["by"] == "tui"
     assert oct((store / "state" / "approval-grants.json").stat().st_mode & 0o777) == "0o600"
     row = [b for b in events(store) if b.get("phase") == "grant"][0]
     assert row["grant"] == grants[0]["id"] and row["binding"] == r["binding"] and row["expires"]
@@ -185,6 +185,31 @@ def test_non_outward_grant_is_scoped_to_rule_and_target(tmp_path):
     _, ctx2 = make_gate(store, key)                                   # restart
     assert call(ctx2, "mcp_notes_create_page", {"target": "notes:inbox", "title": "other"}) is None
     assert call(ctx2, "mcp_notes_create_page", {"target": "notes:other", "title": "t"})["action"] == "approve"
+
+
+def test_a_seat_never_makes_a_standing_grant(keyed_store):
+    store, key = keyed_store
+    _, ctx = make_gate(store, key)
+    r = call(ctx, *post("Ship it."))
+    answer(ctx, r, "always", by="seat:saga-divan")
+    assert not (store / "state" / "approval-grants.json").exists()
+    assert call(ctx, *post("Ship it."))["action"] == "approve"
+
+
+def test_grants_command_lists_and_revokes_with_a_ledger_row(keyed_store):
+    store, key = keyed_store
+    g, ctx = make_gate(store, key)
+    assert hook.grants_command(g, "") == "no standing grants"
+    r = call(ctx, *post("Ship it."))
+    answer(ctx, r, "always")
+    [row] = g.grants.list()
+    out = hook.grants_command(g, "list")
+    assert out.startswith(row["id"]) and "github_post on other/repo#12" in out and r["binding"][:12] in out
+    assert hook.grants_command(g, f"revoke {row['id']}") == f"revoked {row['id']}"
+    rev = [b for b in events(store) if b.get("phase") == "revoke"]
+    assert rev and rev[0]["grant"] == row["id"]
+    assert call(ctx, *post("Ship it."))["action"] == "approve"
+    assert hook.grants_command(g, "revoke") == "usage: grants revoke <id>"
 
 
 def test_credentials_never_get_a_grant(keyed_store, tmp_path):

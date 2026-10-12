@@ -64,9 +64,10 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `session.undo` SessionUndo: session, turns = 1
 - `turn.send` TurnSend: session, text = "", parts: list[ContentPart] = [], mode `send/queue/steer` = send
 - `turn.interrupt` TurnInterrupt: session
-- `approval.respond` ApprovalRespond: request_id, decision `allow/deny/allow_always`, note = "", client = "", binding = ""
+- `approval.respond` ApprovalRespond: request_id, decision `allow/deny/allow_always`, note = "", client = "", binding = "", sig = ""
   (D-033: a `binding` that differs from the request's is refused as `stale`; a client outside the request's
-  `approvers` is refused as `forbidden`)
+  `approvers` is refused as `forbidden`; a `seat:<name>` client must sign with its seat key, and may not answer
+  `allow_always`)
 - `question.answer` QuestionAnswer: question_id, answer
 - `command.run` CommandRun: name, args = "", session?. Built-ins: trace, findings, context, compact (the cap is full; new commands go here)
 - `commands.list` CommandsList: session?

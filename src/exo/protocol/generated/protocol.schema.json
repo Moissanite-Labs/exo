@@ -279,6 +279,10 @@
         "binding": {
           "type": "string",
           "default": ""
+        },
+        "sig": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,
