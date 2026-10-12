@@ -1400,15 +1400,18 @@ class ExoApp(App):
         if now - self._reconciled < self.reconcile_every:
             return
         self._reconciled = now
+        # Only requests already shown when the list was asked for can be stale: one that arrives while the list is
+        # in flight is newer than the answer and must not be closed by it.
+        before = {a.request_id for a in self.approvals} | ({self.card.req.request_id} if self.card else set())
         try:
             resp = await self.client.send(s.ApprovalsList(session=self.session))
         except Exception:
             return
         if not resp.ok:
             return
-        live = {a.get("request_id") for a in resp.result.get("approvals", [])}
-        self.approvals = [a for a in self.approvals if a.request_id in live]
-        if self.card is not None and self.card.req.request_id not in live:
+        gone = before - {a.get("request_id") for a in resp.result.get("approvals", [])}
+        self.approvals = [a for a in self.approvals if a.request_id not in gone]
+        if self.card is not None and self.card.req.request_id in gone:
             self.close_card()
 
     def close_card(self) -> None:

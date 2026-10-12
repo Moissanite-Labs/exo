@@ -246,6 +246,7 @@ def test_tip_line_keeps_the_tip_prefix_in_the_text(tmp_path):
 # ---------------------------------------------------------------- approval
 def test_approval_card_draws_header_and_key_chips(tmp_path):
     async def sc(app, pilot, client, eng):
+        app.reconcile_every = 1e9  # a card published straight to the hub has no request in the core (D-045)
         eng.hub.publish(s.ApprovalRequested(request_id="r", summary="Post it?", risk="public, irreversible",
                                             call=ToolCall("c", "slack_post", {"text": "hi"})), app.session)
         await until(lambda: app.card is not None, pilot)
@@ -328,6 +329,7 @@ def test_reduced_motion_app_has_still_widgets(tmp_path, monkeypatch):
 # ---------------------------------------------------------------- snapshots
 def test_screenshots_of_key_states_render(tmp_path):
     async def sc(app, pilot, client, eng):
+        app.reconcile_every = 1e9  # a card published straight to the hub has no request in the core (D-045)
         shots = []
         shots.append(app.export_screenshot())
         eng.hub.publish(s.ApprovalRequested(request_id="r", summary="Post it?", risk="public"), app.session)
@@ -403,6 +405,7 @@ def test_tool_columns_align_with_and_without_the_hint():
 
 def test_approval_leaves_a_blank_row_above_the_wire(tmp_path):
     async def sc(app, pilot, client, eng):
+        app.reconcile_every = 1e9  # a card published straight to the hub has no request in the core (D-045)
         eng.hub.publish(s.ApprovalRequested(request_id="r", summary="x", risk="low"), app.session)
         await until(lambda: app.card is not None, pilot)
         await pilot.pause(0.2)
