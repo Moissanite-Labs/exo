@@ -167,7 +167,7 @@ def test_at_token_inside_a_sentence_completes_in_place(repo):
     sug = cm.suggest(text, CAT, files=ix)
     assert sug.mode == "file" and labels(sug) == ["@src/app.py"]
     assert cm.complete_text(text, sug, sug.items[0]) == "read @src/app.py "
-    sug = cm.suggest("mail a@b.com", CAT, files=ix)
+    sug = cm.suggest("mail t@example.invalid", CAT, files=ix)
     assert sug.mode == ""  # an at sign inside a word is not a file
 
 
