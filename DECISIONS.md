@@ -130,3 +130,60 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the standalone core is built and how Hermes improvements are pulled in.
 - **Rejected:** keeping Hermes as a pinned runtime dependency (A's ruling); a full rewrite from zero
   before the research says what to lift (wastes the 2026 work in Hermes).
+
+## D-010 (2026-10-12) Standalone core: lean Python core, lifted Hermes parts, protocol-first UI
+- **Decision:** Exo gets its own core in Python, in this repo. It lifts a small set of Hermes modules
+  (memory and context slot interfaces, provider message types and two transports, selected built-in tool
+  logic, compressor prompts, and later individual platform adapters) and rewrites the loop, routing,
+  tools registry, sessions, plugins, skills, cron and delegation small. It drops the gateway framework,
+  TUI gateway, dashboard and desktop. The core runs as `exod`, a server with one typed, replayable event
+  stream; TUI, web, desktop, chat channels and a future device are clients. Each lifted or ported module
+  is recorded in `PROVENANCE.toml` with its upstream path and commit; `exo upstream` diffs upstream
+  weekly and proposes ports, and `commit` moves only after a port or a recorded refusal. Hermes's MIT
+  notice ships in `LICENSES/`. The six Exo plugins keep the `plugin.yaml` + `register(ctx)` shape and move
+  over with import changes. Build in five waves (`docs/STANDALONE.md` section 6); wave 1 is the core
+  skeleton. A's live Hermes runs untouched until each seat cuts over in wave 4.
+- **Why:** A's ruling (D-009): no runtime dependency, freedom to evolve, improvements pulled in on
+  purpose. Scored 83 against 60 for a hard fork, 60 for a TypeScript core and 47 for the Claude Agent SDK
+  (`docs/STANDALONE.md` section 2). Exo's 12k-line package and 509 tests are Python and keep working.
+  Exo's plugins touch Hermes at only 20 import sites, so re-homing is cheap. The slot interfaces Exo
+  needs are 456 lines with almost no dependencies, while the rest of Hermes is about 926k lines with
+  `agent/` and `tools/` importing the CLI in 259 files. A lean core with a line budget and a small
+  protocol is the only option that can shrink onto a companion device. A protocol-first split gives
+  opencode-style UI simplicity without tying the core to any one client.
+- **Rejected:** detached hard fork (owns 926k lines and a 257-method TUI gateway; merges stop working
+  within weeks; cannot shrink to a device); TypeScript core (rewrites Exo's package and tests; Hermes ports
+  become translations; its UI benefit is available through the protocol anyway); Claude Agent SDK core
+  (Claude only, closed runtime, no small-model path); keeping Hermes pinned as a runtime (A's ruling);
+  a rewrite with no lifting (throws away Hermes's edge-case fixes and A's 2026 work).
+- **Revisit if:** the lean core misses its wave 1 exit test by more than two waves of effort, or Hermes
+  splits out a small, dependency-free core library that Exo could depend on without inheriting the rest.
+
+## D-011 (2026-10-12) Store v2: hafiz format absorbs Arif and Eldunari
+- **Decision:** adopt `docs/STORE-V2.md`. One format, three kinds of store: person (hafiz), agent (Eldunari
+  anima), group (Eldunari nexus); agent and group stores nest inside the person's store so one folder can
+  move to a device. Layers: profile, router, typed nodes, external items (Arif, Postgres to one SQLite
+  file), signed ledger (plus Orda revision checks, seat leases, projections), derived indexes. Retrieval:
+  router pins, BM25 plus embeddings merged, graph expansion, token budget. Migration runs on copies only;
+  Eldunari history kept via `git filter-repo` plus merge.
+- **Calls made by the lead (reversible, within standing approvals):** embeddings run locally with
+  EmbeddingGemma 300M (Qwen3-Embedding 0.6B is the fallback); Arif's remote embedding calls stop. Mail is
+  not re-ingested for now (it was deleted from Arif's DB; the mailbox file stays untouched). Backup is
+  local only until A rules on a private remote.
+- **Rejected:** keeping Arif in Postgres (cannot travel to a device); three separate stores per person
+  (drift); remote embeddings (personal text leaves the machine).
+
+## D-012 (2026-10-12) One learning loop: review, taste and hill-climbing eval
+- **Decision:** adopt `research/LEARNING-LOOP.md` as `exo.learn`. One background reviewer that only
+  proposes. Signals: corrections, edits, accepts, rejections, explicit asks, outcomes. Outputs: beliefs,
+  taste rules, skills, memory, open questions. Every lesson is a typed proposal with confidence and evidence
+  links; reverts append, never delete. A change is promoted only if it beats the current setup on a
+  held-out per-user eval and passes regression gates (builds on `src/exo/eval.py`). Every step has a
+  small-model or rules-only fallback. Learned taste shows inline in the chat with a link to the editable
+  file (Command Code pattern, `research/UI.md`).
+- **Calls made by the lead:** unguarded taste auto-promotes after evidence from two separate sessions,
+  shown in the brief and reversible; taste syncs between A's machines only through the signed store.
+- **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
+  model.
+- **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
+  style save-without-eval (same); keeping taste separate from memory and skills (the gap in PR #126940).
