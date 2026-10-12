@@ -1014,3 +1014,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   height, the log scrolls inside it and opens at its newest item. The terminal already opened at the bottom (a test says so).
 - **Not done:** a composer pane on the web page (the ask named the terminal); keeping tool lines under the live message.
 - **Docs:** `docs/UI.md`, `docs/ui/WEB.md`, `docs/COMMANDS.md`, `docs/USER-GUIDE.md`, the intro skill, `docs/media/README.md`.
+
+## D-047 (2026-10-12) Staging first for the public site
+- **Decision:** `scripts/deploy-site.sh` deploys to `staging.exo.askaconsult.com` by default. Production needs an explicit
+  `--prod`, prints the target and, when run interactively, asks for the word `production` typed back. Staging is its own
+  Vercel project (`exo-site-staging`) with its own domain and a DNS CNAME to `cname.vercel-dns.com`, and it is never indexed
+  (`robots.txt` disallowing all, plus an `X-Robots-Tag: noindex, nofollow` header). Both targets deploy from a git-free copy.
+- **Why:** the site is public and the old script went straight to production, so a bad page was live the moment it was
+  deployed. A separate project means a staging deploy cannot touch production at all.
+- **Rejected:** a preview deployment of the production project (shares settings and domain, easy to promote by mistake);
+  a branch-based flow (the site is deployed from a git-free copy on purpose).
+- **Revisit if:** the site gains a build step or more than one maintainer deploys, when CI should own promotion.
+- **Docs:** `docs/DEVELOPER-GUIDE.md` "Deploying the site".
