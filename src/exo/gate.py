@@ -2407,21 +2407,24 @@ def approvers_for(category: str, approvals: Mapping | None) -> list[str]:
 
 
 def approver_identity(client: str) -> str:
-    """The identity a client answers as. ``seat:<name>`` is a seat; a peer or ingress client is
-    ``peer`` (never consent, D-026); any other local client is the principal."""
+    """The identity an answer counts as. ``seat:<name>`` is a seat; a peer or ingress client is ``peer`` (never
+    consent, D-026); ``principal`` or ``principal:<label>`` is the principal. The core stamps that from the
+    connection, never from a body (D-039). Anything else, the empty string included, is ``unknown``."""
     c = (client or "").strip().lower()
     if c.startswith(("peer", "ingress")):
         return "peer"
     if c.startswith("seat:"):
         return "seat:" + c[5:].strip()
-    return "principal"
+    if c == "principal" or c.startswith("principal:"):
+        return "principal"
+    return "unknown"
 
 
 def approver_allowed(client: str, allowed: Iterable[str] | None) -> bool:
-    """May ``client`` answer an ask whose allowed list is ``allowed``? An empty list keeps the old
-    rule: any local client that is not a peer."""
+    """May ``client`` answer an ask whose allowed list is ``allowed``? An empty list keeps the old rule: the
+    principal or a seat. A peer or an unknown answerer never may."""
     ident = approver_identity(client)
-    if ident == "peer":
+    if ident in ("peer", "unknown"):
         return False
     allowed = list(allowed or [])
     if not allowed:

@@ -217,7 +217,7 @@ def test_slow_event_subscriber_is_cut_off_not_blocking():
 async def http(port, method, path, body=None, headers=None):
     r, w = await asyncio.open_connection("127.0.0.1", port)
     data = json.dumps(body).encode() if body is not None else b""
-    hs = "".join("{}: {}\r\n".format(k, v) for k, v in (headers or {}).items())
+    hs = "".join("{}: {}\r\n".format(k, v) for k, v in dict({"X-Exo-Token": "t0k"}, **(headers or {})).items())
     w.write("{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: {}\r\n{}\r\n".format(
         method, path, port, len(data), hs).encode() + data)
     await w.drain()
@@ -233,7 +233,7 @@ def test_http_routes_origin_and_event_stream():
         c = centre(src)
         c.record(ev(1, "message.delta", {"message_id": "m1", "text": "old"}))
         c.record(ev(2, "ui.panel", {"panel_id": "p", "action": "open", "kind": "chart", "text": "t"}, sid=None))
-        web = WebServer(c)
+        web = WebServer(c, token="t0k")
         port = await web.start("127.0.0.1", 0)
         code, body = await http(port, "POST", "/api/chat/sessions", {"title": "x"})
         assert code == 200 and json.loads(body)["session"]["id"] == "s9"
@@ -250,7 +250,7 @@ def test_http_routes_origin_and_event_stream():
 
         # the stream replays from ?since and then goes live
         r, w = await asyncio.open_connection("127.0.0.1", port)
-        w.write(b"GET /api/events?since=1&session=s9 HTTP/1.1\r\nHost: x\r\n\r\n")
+        w.write("GET /api/events?since=1&session=s9&token=t0k HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n".format(port).encode())
         await w.drain()
         await asyncio.wait_for(r.readuntil(b"\n\n"), 2)                 # headers + comment
         first = await asyncio.wait_for(r.readuntil(b"\n\n"), 2)
@@ -266,7 +266,7 @@ def test_http_routes_origin_and_event_stream():
         w.close()
         # Last-Event-ID resumes too
         r, w = await asyncio.open_connection("127.0.0.1", port)
-        w.write(b"GET /api/events HTTP/1.1\r\nHost: x\r\nLast-Event-ID: 4\r\n\r\n")
+        w.write("GET /api/events?token=t0k HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nLast-Event-ID: 4\r\n\r\n".format(port).encode())
         await w.drain()
         await asyncio.wait_for(r.readuntil(b"\n\n"), 2)
         frame = await asyncio.wait_for(r.readuntil(b"\n\n"), 2)
@@ -288,12 +288,12 @@ def test_chat_through_a_real_core_streams_text():
         c = CommandCentre(load_settings(), DispatcherSource(disp))
         await c.bootstrap()
         follow = asyncio.create_task(c.follow())
-        web = WebServer(c)
+        web = WebServer(c, token="t0k")
         port = await web.start("127.0.0.1", 0)
         code, body = await http(port, "POST", "/api/chat/sessions", {"title": "t"})
         sid = json.loads(body)["session"]["id"]
         r, w = await asyncio.open_connection("127.0.0.1", port)
-        w.write("GET /api/events?session={} HTTP/1.1\r\nHost: x\r\n\r\n".format(sid).encode())
+        w.write("GET /api/events?session={}&token=t0k HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n".format(sid, port).encode())
         await w.drain()
         code, _ = await http(port, "POST", "/api/chat/sessions/{}/send".format(sid), {"text": "hello there"})
         assert code == 200

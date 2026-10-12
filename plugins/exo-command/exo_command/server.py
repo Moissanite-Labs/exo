@@ -17,12 +17,18 @@ Routes:
   *    /api/providers...       provider setup (D-034): see ``providers.py``; loopback peer, loopback Host,
                               same Origin and the per-launch token, or refused
 
-The server binds to loopback by default. Writes are limited to the routes in ``api.py`` and answering an
-approval, and a POST from another origin is refused, so a web page elsewhere cannot answer your approvals.
+Access (D-039). The server binds to loopback by default. Every request must name this server in its Host header
+(``127.0.0.1:<port>``, ``localhost:<port>`` or ``[::1]:<port>``), so a DNS rebinding name gets nothing, not even the
+page. Every ``/api/`` route and both event streams also need the per-launch page token: ``X-Exo-Token`` on fetches,
+or ``?token=`` on the two event streams (a browser EventSource cannot set headers). An Origin, when sent, must be
+this same host, and Sec-Fetch-Site must be same-origin or none. Only the page shell (``/`` and ``/static/``) is
+served without the token: it is code, not data. `exo web` prints the page address with the token in the URL
+fragment (never sent to a server) and opens it in the browser; the page moves it to sessionStorage.
 """
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import mimetypes
 import secrets
@@ -41,6 +47,7 @@ HEARTBEAT = 15.0
 REASONS = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
            501: "Not Implemented", 502: "Bad Gateway"}
 DECISIONS = ("allow", "deny", "allow_always")
+STREAMS = ("/api/events", "/api/stream")
 
 
 class WebServer:
@@ -53,12 +60,38 @@ class WebServer:
         self._server: Optional[asyncio.AbstractServer] = None
         self._conns: set = set()
         self._feeds: list = []
+        self._hosts: set = set()
 
     # ------------------------------------------------------------ lifecycle
 
     async def start(self, host: str = "127.0.0.1", port: int = 0) -> int:
         self._server = await asyncio.start_server(self._client, host, port)
-        return self._server.sockets[0].getsockname()[1]
+        bound = self._server.sockets[0].getsockname()[1]
+        names = {"127.0.0.1", "localhost", "[::1]"}
+        if host and host not in ("0.0.0.0", "::", ""):
+            names.add("[{}]".format(host) if ":" in host and not host.startswith("[") else host)
+        self._hosts = {"{}:{}".format(n, bound).lower() for n in names}
+        return bound
+
+    def _refuse(self, headers: Dict[str, str], path: str, q: Dict[str, Any]) -> Optional[Tuple[int, Dict[str, Any]]]:
+        """None when the request may go on, else the refusal (D-039; see the module docstring)."""
+        host = headers.get("host", "").strip().lower()
+        if host not in self._hosts:
+            return 403, {"error": "bad Host header: open the page at the address `exo web` printed"}
+        if path == "/" or path.startswith("/static/"):
+            return None
+        origin = headers.get("origin")
+        if origin is not None and origin.strip().lower() != "http://" + host:
+            return 403, {"error": "cross-origin request refused"}
+        site = headers.get("sec-fetch-site")
+        if site is not None and site not in ("same-origin", "none"):
+            return 403, {"error": "cross-site request refused"}
+        sent = headers.get(prov.TOKEN_HEADER, "")
+        if not sent and path in STREAMS:
+            sent = (q.get("token") or [""])[0]
+        if not sent or not hmac.compare_digest(sent.encode(), self.token.encode()):
+            return 403, {"error": "missing or wrong page token: open the link `exo web` printed"}
+        return None
 
     async def run(self, host: str, port: int) -> None:
         """Connect to the core, then serve until cancelled. Keeps retrying the core in the background."""
@@ -149,6 +182,9 @@ class WebServer:
             headers[k.strip().lower()] = v.strip()
         url = urlsplit(target)
         path, q = url.path, parse_qs(url.query)
+        refused = self._refuse(headers, path, q)
+        if refused is not None:
+            return await self._json(writer, *refused)
         c = self.centre
         if path == "/" and method == "GET":
             return await self._file(writer, STATIC / "index.html")
@@ -285,7 +321,7 @@ class WebServer:
 
     async def _send(self, writer, status: int, body: bytes, ctype: str) -> None:
         head = ("HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n"
-                "Connection: close\r\n\r\n").format(status, REASONS.get(status, ""), ctype, len(body))
+                "Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n").format(status, REASONS.get(status, ""), ctype, len(body))
         writer.write(head.encode() + body)
         await writer.drain()
 

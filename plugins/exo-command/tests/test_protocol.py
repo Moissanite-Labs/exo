@@ -173,7 +173,7 @@ def test_web_server_serves_snapshot_stream_and_answers_approvals(tmp_path):
     async def http(port, method, path, body=None, headers=None):
         r, w = await asyncio.open_connection("127.0.0.1", port)
         data = json.dumps(body).encode() if body is not None else b""
-        hs = "".join("{}: {}\r\n".format(k, v) for k, v in (headers or {}).items())
+        hs = "".join("{}: {}\r\n".format(k, v) for k, v in dict({"X-Exo-Token": "t0k"}, **(headers or {})).items())
         w.write("{} {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: {}\r\n{}\r\n".format(
             method, path, port, len(data), hs).encode() + data)
         await w.drain()
@@ -185,7 +185,7 @@ def test_web_server_serves_snapshot_stream_and_answers_approvals(tmp_path):
     async def main():
         centre = CommandCentre(load_settings(), DispatcherSource(disp))
         await centre.bootstrap()
-        web = WebServer(centre)
+        web = WebServer(centre, token="t0k")
         port = await web.start("127.0.0.1", 0)
         code, page = await http(port, "GET", "/")
         assert code == 200 and b"/static/app.js" in page
@@ -212,7 +212,7 @@ def test_web_server_serves_snapshot_stream_and_answers_approvals(tmp_path):
 
         # SSE: a change in the core reaches the page.
         r, w = await asyncio.open_connection("127.0.0.1", port)
-        w.write(b"GET /api/stream HTTP/1.1\r\nHost: x\r\n\r\n")
+        w.write("GET /api/stream?token=t0k HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n".format(port).encode())
         await w.drain()
         await asyncio.wait_for(r.readuntil(b"\n\n"), 2)   # headers + comment
         await asyncio.wait_for(r.readuntil(b"\n\n"), 2)   # initial seq

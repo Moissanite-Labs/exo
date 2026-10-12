@@ -14,12 +14,26 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 
 ## Environment of bash and jobs
 
-`bash` and background jobs run with a filtered copy of the environment. Removed: the bus identity (`EXO_BUS_*`),
-`EXO_*` key variables, every provider key named by `key_env` in the model catalog, and any name ending `_API_KEY`,
-`_TOKEN`, `_SECRET` or `_PASSWORD`, plus `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`. A seat can let named
-variables through with `[tools] env_allow = ["GH_TOKEN"]`. Only tool subprocesses are filtered: model providers and
-the claude-cli child read the real environment. MCP servers get the environment their own `env` table asks for
-(`${VAR}` expansion), not this filter.
+`bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,
+`exo.envscrub.scrub_env` (D-039). Removed:
+
+- every provider key named by `key_env` in the model catalog;
+- names ending `_API_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, `_CREDENTIALS`, `_KEY`, `_KEYS`, `_KEYS_DIR`,
+  `_KEYS_FILE` or `_DSN`, and names containing `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY`,
+  `API_KEY`, `PRIVATE_KEY`, `ACCESS_KEY` or `_KEY_`;
+- `AWS_*`, `GH_*`, `GITHUB_TOKEN`, names ending `DATABASE_URL`;
+- the bus identity (`EXO_BUS_*`) and the core's socket and credential (`EXOD_*`, `EXO_PRINCIPAL*`, `EXO_*SOCK*`);
+- anything the seat lists in `[tools] env_deny` (exact names or patterns like `COMPANY_*`).
+
+A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_deny` wins over `env_allow`. This is
+a heuristic: a secret under an innocent name still passes, so keep keys in the key store. `EXO_HOME` stays: tools
+run `exo` commands, and the default path is no secret.
+
+Model providers read the real environment. The claude-cli provider does not pass it on: the `claude` child gets an
+explicit minimal set (`exo.envscrub.minimal_env`: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`,
+`TERM`, `TMPDIR`, `TZ`, `CLAUDE_CONFIG_DIR`, `XDG_*_HOME`, proxy variables and CA bundle paths) plus its fixed
+switches, and never an API key. MCP servers get the environment their own `env` table asks for (`${VAR}`
+expansion), not this filter.
 
 ## Pipeline exit codes
 

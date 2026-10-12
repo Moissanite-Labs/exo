@@ -12,7 +12,6 @@ PID-reuse fingerprint guard, snapshots and the Windows path.
 from __future__ import annotations
 
 import contextlib
-import functools
 import os
 import shutil
 import signal
@@ -111,45 +110,14 @@ def kill_process_group(proc: subprocess.Popen, grace: float = TERM_GRACE) -> Non
         proc.wait(timeout=0.5)
 
 
-_SECRET_SUFFIXES = ("_KEY", "_KEYS", "_KEYS_DIR", "_KEYS_FILE", "_TOKEN", "_SECRET", "_PASSWORD")
-# Names that never reach a tool subprocess, beyond the model catalog's key_env names.
-_TOOL_SECRET_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
-_TOOL_SECRET_NAMES = frozenset({"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"})
+def tool_env(base: dict[str, str] | None = None, allow: Iterable[str] = (), deny: Iterable[str] = ()) -> dict[str, str]:
+    """The environment a tool subprocess gets (bash and background jobs): ``exo.envscrub.scrub_env`` (D-039),
+    so no provider key, token, cloud credential, bus identity or core socket/credential variable. ``allow`` and
+    ``deny`` are the seat's ``[tools] env_allow`` and ``env_deny``. Only a copy is filtered: model providers read
+    the real environment and keep their keys."""
+    from exo.envscrub import scrub_env
 
-
-@functools.lru_cache(maxsize=1)
-def _catalog_key_envs() -> frozenset[str]:
-    """Every provider key variable the model catalog names (``key_env`` may be a string or a list)."""
-    try:
-        from exo.core.models.router import load_catalog
-
-        names: set[str] = set()
-        for spec in (load_catalog().get("providers") or {}).values():
-            v = spec.get("key_env") if isinstance(spec, dict) else None
-            names.update([v] if isinstance(v, str) else [str(x) for x in v or []])
-        return frozenset(n for n in names if n)
-    except Exception:
-        return frozenset()
-
-
-def tool_env(base: dict[str, str] | None = None, allow: Iterable[str] = ()) -> dict[str, str]:
-    """The environment a tool subprocess gets (bash and background jobs). Removed: the launcher's bus identity
-    (EXO_BUS_*), EXO_* variables that point at keys or hold secrets, every provider key named in the model
-    catalog, and any name ending in _API_KEY, _TOKEN, _SECRET or _PASSWORD (plus AWS_SECRET_ACCESS_KEY and
-    AWS_SESSION_TOKEN). ``allow`` names variables a seat lets through (``[tools] env_allow``). Only a copy is
-    filtered: model providers read the real environment and keep their keys."""
-    src = os.environ if base is None else base
-    allowed = {str(a) for a in allow}
-    catalog = _catalog_key_envs()
-
-    def drop(k: str) -> bool:
-        if k in allowed:
-            return False
-        u = k.upper()
-        return (k.startswith("EXO_") and (k.startswith("EXO_BUS_") or k.endswith(_SECRET_SUFFIXES))) or \
-            k in catalog or u in _TOOL_SECRET_NAMES or u.endswith(_TOOL_SECRET_SUFFIXES)
-
-    out = {k: v for k, v in src.items() if not drop(k)}
+    out = scrub_env(base, allow, deny)
     out.update({"PAGER": "cat", "GIT_PAGER": "cat", "TERM": "dumb"})
     return out
 
@@ -218,7 +186,8 @@ def raise_nofile_limit(cap: int = 10240) -> int | None:
 
 def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: int = OUTPUT_CAP,
                 cancel: threading.Event | None = None,
-                emit: Callable[[str], None] | None = None, env_allow: Iterable[str] = ()) -> tuple[int, str, str]:
+                emit: Callable[[str], None] | None = None, env_allow: Iterable[str] = (),
+                env_deny: Iterable[str] = ()) -> tuple[int, str, str]:
     """Run ``command`` under bash. Returns ``(exit_code, output, status)``.
 
     status is ``ok``, ``timeout`` (exit 124) or ``interrupted`` (exit 130).
@@ -226,7 +195,7 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
     """
     side_fd, side_path = open_side()
     try:
-        env = tool_env(allow=env_allow)
+        env = tool_env(allow=env_allow, deny=env_deny)
         proc = subprocess.Popen(
             wrap_pipestatus(command, side_fd, env), cwd=cwd, stdin=subprocess.DEVNULL, pass_fds=(side_fd,),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True, env=env)
@@ -300,7 +269,8 @@ def bash(args: dict[str, Any], ctx: ToolContext) -> str:
         return _start_job(args, ctx, cwd)
     code, output, status = run_command(args["command"], str(cwd), timeout,
                                        cancel=ctx.cancel, emit=ctx.emit,
-                                       env_allow=ctx.meta.get("env_allow") or ())
+                                       env_allow=ctx.meta.get("env_allow") or (),
+                                       env_deny=ctx.meta.get("env_deny") or ())
     output = output.rstrip("\n")
     if status == "timeout":
         output += f"\n[Command timed out after {timeout:g}s; process group killed]"

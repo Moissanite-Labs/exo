@@ -60,7 +60,8 @@ async def _run_gated_turn(eng: CoreEngine, answer: str) -> list[s.Event]:
                 # the turn is paused here: the tool has not run
                 assert ev.body.risk == "high" and ev.body.call.name == "send_message"
                 assert eng.hub.since(0) and not [e for e in eng.hub.since(0) if isinstance(e.body, s.ToolCompleted)]
-                resp = await d.run(s.Command.of(s.ApprovalRespond(request_id=ev.body.request_id, decision=answer)))
+                resp = await d.run(s.Command.of(s.ApprovalRespond(request_id=ev.body.request_id, decision=answer)),
+                                   "principal:tui")
                 assert resp.ok
                 answered = True
         await asyncio.sleep(0.01)

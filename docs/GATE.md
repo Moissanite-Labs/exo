@@ -45,11 +45,34 @@ seat name, so it cannot be reused for another request, decision or text. An unsi
 signed seat answer is refused as `forbidden`. The public key comes from the bus registry when
 that document verifies, else from `<keys dir>/<seat>.pub`.
 
-Any other local client answers as the principal. That identity is not signed: it is as strong as
-the socket's file permissions (the same OS user).
+## Who answered: the connection, not the body (D-039)
 
-A seat may approve one exact text with `allow`. Only the principal can answer `allow_always`; a
-seat's `allow_always` is refused.
+The core never takes the answerer from the `approval.respond` body. The transport stamps a caller:
+
+- **principal**: the terminal client's own in-process core, the web client, or a socket client
+  that sends the core's per-launch principal credential in the `X-Exo-Principal` header. The
+  credential is a random token the core writes beside its socket when it starts
+  (`$EXO_HOME/run/exod.principal.key` or `run/agent-<seat>.principal.key`, mode 0600) and deletes
+  when it stops. A credential sent from a process that is a child, grandchild and so on of the
+  core (a bash tool call or a background job) does not count.
+- **local**: everything else on the socket (a tool subprocess, a channel, another daemon), and
+  every stdio or TCP connection.
+
+A principal connection answers as the principal; `client` is only a label (`principal:tui`,
+`principal:web`). A local connection can answer only as a seat, with the signature above. An
+empty `client`, `principal`, `exo-tui` or any other name from a local connection is refused as
+`forbidden`, so a tool that speaks the protocol cannot answer its own approval. The answerer shows
+in `approval.resolved` as `by`.
+
+A seat may approve one exact text with `allow`. Only a principal connection can answer
+`allow_always`; anything else is refused.
+
+Limits. The credential file is guarded by the gate: its name ends in `.key`, so reading it is a
+`credentials` act that always asks. No environment variable carries it, and `tool_env` drops
+`EXOD_*`, `EXO_PRINCIPAL*` and `EXO_*SOCK*`. A tool process is the same OS user, so code that
+both reads the file without the gate seeing it and detaches from the core's process tree could
+still pass. The full fix is an OS sandbox for tools; until then the gate and the process-tree
+check are the guard.
 
 ## Standing grants ("always")
 

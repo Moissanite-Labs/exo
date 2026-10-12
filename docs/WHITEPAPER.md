@@ -235,7 +235,9 @@ is written to the ledger, and you can list and revoke it. Only you can grant it.
 Who may approve is also explicit. By default only you can. You may name another agent as a reviewer for a
 kind of act, for example public posts, and then that agent's answer must carry its own signature, so an
 answer cannot be forged or replayed for a different text. A message from another agent is input, never
-consent: if it tries to approve something, it is refused and shown to you. And before a post goes to a
+consent: if it tries to approve something, it is refused and shown to you. Exo knows an answer is yours by
+the connection it came from, your window or your web page, never by what the answer claims, so a command the
+agent runs cannot approve the agent's own request. And before a post goes to a
 public place, Exo sweeps it for internal names, home folder paths, model names and internal ids, and holds
 it if any appear. A false alarm costs one extra question. A leaked name in a public repository cannot be
 taken back.

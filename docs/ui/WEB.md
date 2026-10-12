@@ -16,6 +16,24 @@ start, the page shows the reason and the log path. If the agent is held by a win
 says to close that window or run `exo stop`. The background core stays up after the page closes (`exo stop` ends it).
 With `--socket` or `--url` nothing is started; the page says the core is not reachable.
 
+## Opening the page and the page token (D-039)
+
+`exo web` makes a random page token for each launch and keeps it in memory only. It prints the page address with
+the token in the URL fragment, `http://127.0.0.1:7342/#token=...`, and, when run in a terminal, opens that address
+in the browser. A fragment is never sent to a server or written to a server log. The page moves the token to
+`sessionStorage` (this tab only) and takes it out of the address bar. A new launch makes a new token, so open the
+new link after a restart; `--no-open` prints the link without opening it.
+
+Every `/api/` route needs the token: the page sends it as `X-Exo-Token` on every fetch (`api()` in `dom.js`) and as
+`?token=` on the two event streams (`stream()` in `dom.js`; a browser EventSource cannot send headers). The Host
+header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, so a DNS rebinding name gets nothing, not
+even the page. An Origin, when sent, must be that same host, and Sec-Fetch-Site must be same-origin or none. Only
+the page shell (`/`, `/static/`) loads without the token. Responses carry `Referrer-Policy: no-referrer`.
+
+The web process answers approvals as the principal: it reads the core's principal credential
+(`run/<socket>.principal.key`) on each request, so it re-joins a core that restarted with a new one. The optional
+ASGI app (`asgi.py`) is gone: it re-exposed the routes with no checks.
+
 ## Screens
 
 The public set is in `docs/media/`: `web-01-start.png` (empty start: the site's hero behind the brand block,
@@ -78,8 +96,8 @@ password field with Save, Test and Remove. After Save the field is cleared at on
 read once to build the request body and is never logged, shown again, put in a URL or kept in browser storage.
 A select lists the configured routes, then the available ones, with Save default. The routes need the page
 token: `exo web` prints a link with `#token=...`; the page moves it to `sessionStorage` (this tab only),
-removes it from the address bar and sends it as `X-Exo-Token` on `/api/providers` calls only. Without a token
-the tab only asks you to open that link. When no provider is ready, the Chat view shows one quiet line with a
+removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider routes also
+need a loopback peer). Without a token the tab only asks you to open that link. When no provider is ready, the Chat view shows one quiet line with a
 link to this tab.
 
 ## Motion and accessibility

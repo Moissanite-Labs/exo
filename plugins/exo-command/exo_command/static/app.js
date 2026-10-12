@@ -10,7 +10,7 @@ import * as providers from "./providers.js";
 
 const VIEWS = [["chat", "Chat", chat], ["tasks", "Tasks", tasks], ["schedule", "Schedule", schedule], ["command", "Command", command], ["providers", "Providers", providers]];
 
-// The page token for provider routes arrives in the URL fragment (`exo web` prints it). Keep it in this tab's
+// The page token arrives in the URL fragment (`exo web` prints and opens it); every request needs it (D-039). Keep it in this tab's
 // sessionStorage only, then take it out of the address bar and history.
 function takeToken() {
   const parts = (location.hash || "").slice(1).split("&").filter(Boolean);

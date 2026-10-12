@@ -1,5 +1,7 @@
 // The read-mostly command centre view (approvals, decisions, sessions, tasks, projects, cost).
 // mount(el) draws into el; the returned function stops its timers and stream.
+import { api, stream } from "./dom.js";
+
 export function mount(app) {
   "use strict";
   // It reads /api/snapshot and re-reads it whenever /api/stream says the core published something.
@@ -57,11 +59,9 @@ export function mount(app) {
   }
 
   function respond(id, decision) {
-    fetch("/api/approvals/" + encodeURIComponent(id), { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision: decision }) })
-      .then(function (r) { return r.json(); })
-      .then(function (d) { if (d.error) { err = d.error; render(); } else load(); })
-      .catch(function (e) { err = String(e); render(); });
+    api("POST", "/api/approvals/" + encodeURIComponent(id), { decision: decision })
+      .then(function () { load(); })
+      .catch(function (e) { err = e.message || String(e); render(); });
   }
   function approvals(d) {
     var body = d.pending.length ? h("div", { class: "xc-stack" }, d.pending.map(function (a) {
@@ -177,16 +177,16 @@ export function mount(app) {
   }
 
   function load(fresh) {
-    return fetch("/api/snapshot" + (fresh ? "?fresh=true" : "")).then(function (r) { return r.json(); })
+    return api("GET", "/api/snapshot" + (fresh ? "?fresh=true" : ""))
       .then(function (d) { snap = d; err = null; render(); })
-      .catch(function (e) { err = String(e); render(); });
+      .catch(function (e) { err = e.message || String(e); render(); });
   }
   function later() { clearTimeout(timer); timer = setTimeout(function () { load(false); }, 150); }
 
   var es = null, poll = null;
   load(false);
   try {
-    es = new EventSource("/api/stream");
+    es = stream("/api/stream");
     es.onmessage = later;
   } catch (e) { poll = setInterval(function () { if (!document.hidden) load(false); }, 5000); }
   return function unmount() { clearTimeout(timer); clearInterval(poll); if (es) es.close(); };

@@ -191,7 +191,7 @@ class ApprovalRespond:
     request_id: str
     decision: Literal["allow", "deny", "allow_always"]
     note: str = ""
-    client: str = ""  # who answered (a client or channel id); reaches post_approval_response
+    client: str = ""  # a label, or seat:<name> with sig; who answered is stamped from the connection (D-039)
     binding: str = ""  # D-033: the ApprovalRequested.binding the answer was given for; a mismatch is refused
     sig: str = ""  # D-033: a seat's Ed25519 signature (exo.core.approvals.sign_approval); required for seat:<name>
 

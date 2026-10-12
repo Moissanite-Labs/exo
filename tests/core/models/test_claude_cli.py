@@ -11,16 +11,18 @@ from exo.core.models.router import Router
 from exo.core.types import Message, ToolCall, ToolResult, ToolSpec
 from exo.models_cmd import available_models
 
-# A fake CLI speaking stream-json both ways. FAKE_MODE picks the behaviour, FAKE_OUT records what it saw.
+# A fake CLI speaking stream-json both ways. fake.json beside it (the CLI gets a minimal env, D-039) gives the mode
+# (the behaviour), out (where it records what it saw) and pid.
 FAKE = f"""#!{sys.executable}
 import json, os, sys, time
-mode = os.environ.get("FAKE_MODE", "ok")
+cfg = json.load(open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "fake.json")))
+mode = cfg["mode"]
 out = lambda d: print(json.dumps(d), flush=True)
 if mode == "fail":
     sys.stderr.write("boom\\n")
     sys.exit(3)
 if mode == "sleep":
-    open(os.environ["FAKE_PID"], "w").write(str(os.getpid()))
+    open(cfg["pid"], "w").write(str(os.getpid()))
     time.sleep(60)
 frames = []
 for line in sys.stdin:
@@ -31,7 +33,7 @@ for line in sys.stdin:
 settings = json.load(open(sys.argv[sys.argv.index("--settings") + 1]))
 json.dump({{"argv": sys.argv[1:], "frames": frames, "cwd": os.getcwd(), "env": dict(os.environ),
            "system": open(sys.argv[sys.argv.index("--system-prompt-file") + 1]).read(),
-           "body": json.loads(settings["env"]["CLAUDE_CODE_EXTRA_BODY"])}}, open(os.environ["FAKE_OUT"], "w"))
+           "body": json.loads(settings["env"]["CLAUDE_CODE_EXTRA_BODY"])}}, open(cfg["out"], "w"))
 if mode == "nologin":
     out({{"type": "assistant", "error": "authentication_failed", "message": {{"content": [{{"type": "text", "text": "Not logged in"}}]}}}})
     out({{"type": "result", "subtype": "success", "is_error": True}})
@@ -62,9 +64,10 @@ def fake_claude(tmp_path):
 
 
 def router(tmp_path, mode="ok", **env):
-    return Router(roles={"main": ["claude-cli:sonnet"]},
-                  env={"PATH": fake_claude(tmp_path), "FAKE_MODE": mode, "FAKE_OUT": str(tmp_path / "out.json"),
-                       "FAKE_PID": str(tmp_path / "pid"), **env})
+    path = fake_claude(tmp_path)
+    (tmp_path / "bin" / "fake.json").write_text(json.dumps({"mode": mode, "out": str(tmp_path / "out.json"),
+                                                            "pid": str(tmp_path / "pid")}))
+    return Router(roles={"main": ["claude-cli:sonnet"]}, env={"PATH": path, **env})
 
 
 def run(r, messages, tools=()):
@@ -78,7 +81,8 @@ def seen(tmp_path):
 
 
 def test_success_argv_env_and_isolation(tmp_path):
-    r = router(tmp_path, ANTHROPIC_API_KEY="sk-secret", ANTHROPIC_AUTH_TOKEN="tok", ANTHROPIC_BASE_URL="http://x")
+    r = router(tmp_path, ANTHROPIC_API_KEY="sk-secret", ANTHROPIC_AUTH_TOKEN="tok", ANTHROPIC_BASE_URL="http://x",
+               SOME_PARENT_VAR="x", AWS_ACCESS_KEY_ID="a", LANG="C")
     evs = run(r, [Message.system("be brief"), Message.user("hello")])
     assert "".join(e.text for e in evs if e.kind == "text") == "hi there"  # streamed delta plus the missed rest
     done = evs[-1]
@@ -96,6 +100,8 @@ def test_success_argv_env_and_isolation(tmp_path):
     assert [a[a.index("--input-format") + 1], a[a.index("--output-format") + 1]] == ["stream-json"] * 2
     for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
         assert k not in s["env"]  # the OAuth login is used, never a key
+    assert "SOME_PARENT_VAR" not in s["env"] and "AWS_ACCESS_KEY_ID" not in s["env"]  # D-039: a minimal env
+    assert s["env"]["LANG"] == "C"
     assert s["env"]["CLAUDE_CODE_MAX_RETRIES"] == "0"
     assert s["system"] == "be brief" and "claude-cli-cwd-" in s["cwd"]
     assert s["frames"] == [{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]}}]

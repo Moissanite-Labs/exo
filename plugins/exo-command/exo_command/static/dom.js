@@ -33,13 +33,17 @@ export function when(iso) {
   return isNaN(t) ? "" : ago(t / 1000);
 }
 
+// Every request carries the page token (D-039): the server refuses any /api/ call without it.
+export function token() { return sessionStorage.getItem("xc-token") || ""; }
+
+// An event stream with the token as a query parameter: a browser EventSource cannot send headers.
+export function stream(path) {
+  return new EventSource(path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token()));
+}
+
 export async function api(method, path, body) {
-  const opt = { method, headers: {} };
+  const opt = { method, headers: { "X-Exo-Token": token() } };
   if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
-  if (path.startsWith("/api/providers")) {
-    const tok = sessionStorage.getItem("xc-token");
-    if (tok) opt.headers["X-Exo-Token"] = tok;
-  }
   const r = await fetch(path, opt);
   let data = {};
   try { data = await r.json(); } catch (e) { /* not json */ }

@@ -32,7 +32,7 @@ async def _turn(d: Dispatcher, eng: CoreEngine, sid: str, text: str, answer: str
             for ev in eng.hub.since(start):
                 if isinstance(ev.body, s.ApprovalRequested) and ev.body.request_id in eng._approvals:
                     resp = await d.run(s.Command.of(s.ApprovalRespond(request_id=ev.body.request_id,
-                                                                      decision=answer)))
+                                                                      decision=answer)), "principal:tui")
                     assert resp.ok
         await asyncio.sleep(0.01)
 

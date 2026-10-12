@@ -23,8 +23,11 @@ Panels:
 
 ```sh
 exo serve                      # the core, in one terminal
-exo web                        # the web client: http://127.0.0.1:7342
+exo web                        # the web client: opens http://127.0.0.1:7342/#token=...
 ```
+
+The page needs the token in that link for every request (D-039): `exo web` prints the link and opens it in your
+browser; open the printed link yourself after `--no-open` or a restart. See `docs/ui/WEB.md`.
 
 `exo web` finds this folder (`$EXO_PLUGIN_DIRS`, `$EXO_HOME/plugins`, then the repo's `plugins/`) and
 calls `exo_command.__main__.main()`; arguments after `web` go to it. `python -m exo_command` still works
@@ -33,9 +36,6 @@ with `PYTHONPATH=plugins/exo-command`.
 Options: `--socket PATH` (default `$EXO_HOME/run/exod.sock`), `--url URL --token-file FILE` for a core
 on TCP, `--host`, `--port`. It uses the standard library only. `exo web` will call
 XX
-
-Optional: `exo_command.asgi.build_app()` returns a FastAPI app with the same JSON routes, if you would
-rather mount the client in your own server. FastAPI is not required.
 
 The slash command `/exo-command` prints a short text digest of the same panels (it connects to the
 running core).

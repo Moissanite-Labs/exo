@@ -46,8 +46,12 @@ MCP_SERVER = Path(__file__).with_name("claude_cli_mcp.py")
 
 
 def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The CLI's environment: the caller's, minus API credentials (OAuth login only), plus fixed switches."""
-    out = {k: v for k, v in (os.environ if env is None else env).items() if k not in DROP_ENV}
+    """The CLI's environment (D-039): an explicit minimal set from the caller's (``exo.envscrub.minimal_env``:
+    PATH, HOME, locale, terminal, CLAUDE_CONFIG_DIR, proxies, CA bundles), never an API credential (OAuth login
+    only, so nothing in DROP_ENV), plus fixed switches. The parent's other variables never reach the CLI."""
+    from exo.envscrub import minimal_env
+
+    out = {k: v for k, v in minimal_env(os.environ if env is None else env).items() if k not in DROP_ENV}
     out.update(CHILD_ENV)
     return out
 

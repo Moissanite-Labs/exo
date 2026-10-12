@@ -10,6 +10,7 @@ hand-written files both load::
               roles = {main = ["anthropic:x"]}    # plus any router config keys (providers, local, fake)
     [tools]   toolsets = ["fs", "search", "skills"]   # or top-level toolsets; omit for every toolset
               env_allow = ["GH_TOKEN"]   # secret-looking env vars bash and jobs may still see (default none)
+              env_deny = ["COMPANY_*"]   # more names or patterns bash, jobs and code_find never see (D-039)
     [skills]  folders = ["~/notes/skills"]   # also `pack`; `load = [names]` limits the index to those skills
     [mcp.files]  command = "uvx"  args = ["server"]      # see core/mcp_client.py
     [channels.bus]  seat = "scout"     # channels to run with the server, each with factory(link, **config)
@@ -79,6 +80,7 @@ class Seat:
     models: dict[str, Any] = field(default_factory=dict)  # router config overrides
     toolsets: list[str] | None = None                       # None = every toolset
     env_allow: list[str] = field(default_factory=list)      # [tools] env_allow: variables tool subprocesses may keep
+    env_deny: list[str] = field(default_factory=list)       # [tools] env_deny: names or patterns they never see (D-039)
     skill_folders: list[str] = field(default_factory=list)
     skill_load: list[str] | None = None                     # None = every skill found
     mcp: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -125,7 +127,7 @@ def parse(data: dict[str, Any], name: str = "", path: str = "", soul: str = "") 
         principal=str(pr_id) if pr_id else None, principal_store=_table(pr).get("store") or None,
         tier=models.get("tier"), models={k: models[k] for k in ROUTER_KEYS if k in models},
         toolsets=_strs(tools.get("toolsets")) if "toolsets" in tools else _strs(data.get("toolsets")),
-        env_allow=_strs(tools.get("env_allow")) or [], skill_folders=folders, skill_load=_strs(skills.get("load")),
+        env_allow=_strs(tools.get("env_allow")) or [], env_deny=_strs(tools.get("env_deny")) or [], skill_folders=folders, skill_load=_strs(skills.get("load")),
         mcp={k: v for k, v in mcp.items() if isinstance(v, dict)},
         plugins=_strs(plugins.get("enabled") if isinstance(plugins, dict) else plugins), channels=channels,
         peers=_table(data.get("peers")), jobs=_table(data.get("jobs")), trace=_table(data.get("trace")),

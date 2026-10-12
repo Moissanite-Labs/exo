@@ -43,7 +43,7 @@ def call(ctx, tool, args):
     return asyncio.run(cb(tool_name=tool, args=args, session_id="s1", tool_call_id="c1", turn_id="t1"))
 
 
-def answer(ctx, verdict, choice, by="tui"):
+def answer(ctx, verdict, choice, by="principal:tui"):
     [cb] = ctx.hooks["post_approval_response"]
     cb(pattern_key="plugin_rule:" + verdict["rule_key"], choice=choice, decided_by=by)
 
@@ -125,14 +125,17 @@ def test_bad_approver_table_is_an_error(bad):
 
 def test_identity_and_allowed():
     allowed = ["principal", "seat:saga-divan"]
-    assert gate.approver_identity("tui") == "principal" and gate.approver_identity("") == "principal"
+    assert gate.approver_identity("principal:tui") == "principal" and gate.approver_identity("principal") == "principal"
+    # D-039: an empty or made-up client is nobody; the core stamps the principal from the connection
+    assert gate.approver_identity("") == "unknown" and gate.approver_identity("tui") == "unknown"
+    assert not gate.approver_allowed("", []) and not gate.approver_allowed("tui", ["principal"])
     assert gate.approver_identity("seat:Saga-Divan") == "seat:saga-divan"
     assert gate.approver_identity("peer:x") == "peer"
     assert gate.approver_allowed("seat:saga-divan", allowed)
     assert not gate.approver_allowed("seat:builder", allowed)
     assert not gate.approver_allowed("seat:builder", ["principal"])
     assert not gate.approver_allowed("peer:saga-divan", allowed)
-    assert gate.approver_allowed("web", [])          # no table: the old rule, any local non-peer client
+    assert gate.approver_allowed("principal:web", [])  # no table: the principal or a seat
 
 
 def test_store_approvals_reach_the_ask(keyed_store):
@@ -152,10 +155,10 @@ def test_always_grant_survives_restart_and_expires(keyed_store):
     now = [1_000_000.0]
     _, ctx = make_gate(store, key, clock=lambda: now[0])
     r = call(ctx, *post("Ship it."))
-    answer(ctx, r, "always", by="tui")
+    answer(ctx, r, "always", by="principal:tui")
     grants = json.loads((store / "state" / "approval-grants.json").read_text())
     assert len(grants) == 1 and grants[0]["binding"] == r["binding"] and grants[0]["rule"] == "github_post"
-    assert grants[0]["expires"] == now[0] + 2 * 86400 and grants[0]["by"] == "tui"
+    assert grants[0]["expires"] == now[0] + 2 * 86400 and grants[0]["by"] == "principal:tui"
     assert oct((store / "state" / "approval-grants.json").stat().st_mode & 0o777) == "0o600"
     row = [b for b in events(store) if b.get("phase") == "grant"][0]
     assert row["grant"] == grants[0]["id"] and row["binding"] == r["binding"] and row["expires"]

@@ -56,8 +56,10 @@ def test_app_strips_the_token_from_the_url():
     assert i < js.index("await bus.start()")
 
 
-def test_token_header_only_for_provider_paths():
+def test_token_goes_with_every_request():
+    """D-039: api() sends X-Exo-Token on every call, and stream() puts it on the EventSource URL."""
     js = text("dom.js")
-    assert js.count("X-Exo-Token") == 1
-    block = js[js.index('startsWith("/api/providers")'):js.index("await fetch(path") if "await fetch(path" in js else js.index("fetch(path")]
-    assert "X-Exo-Token" in block
+    api = js[js.index("export async function api("):js.index("await fetch(path")]
+    assert '"X-Exo-Token": token()' in api and "startsWith(" not in api
+    stream = js[js.index("export function stream("):js.index("export async function api(")]
+    assert "new EventSource(" in stream and '"token="' in stream

@@ -81,6 +81,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-035 Typing `exo` opens Exo: bare command, installer on PATH, `exo update` | `docs/INSTALL.md` "The `exo` command", `docs/COMMANDS.md` Part 2 "Running Exo" | §1 | n/a | n/a |
 | D-036 One shared core: `exo web` finds or starts it | `docs/ui/WEB.md` "Connecting to the core", `docs/USER-GUIDE.md` §2, `docs/COMMANDS.md` | §2 | n/a | n/a |
 | D-038 Gate default ask: shell allowlist, store is credentials, policy edits only tighten | `docs/GATE.md` "Shell commands: an allowlist", "The store is credentials", "Policy changes during a session", `docs/COMMANDS.md` | §6 | n/a | MISSING (written after v0.2) |
+| D-039 Approval identity from the connection, web token on every route, one secret scrub | `docs/GATE.md` "Who answered: the connection, not the body", `docs/ui/WEB.md` "Opening the page and the page token", `docs/TOOLS.md` "Environment of bash and jobs", `docs/SEATS.md` | §2, §6, §10 | §2 | WP §7 |
 | Web client (command centre) | `plugins/exo-command/README.md`, `docs/ui/WEB.md` | §2 | n/a | WP §24 |
 | Bus (agent to agent relay) | `plugins/exo-bus/README.md` | MISSING | §9 "Use the bus" | WP §29 (named, not explained) |
 | Upstream tracking (`exo upstream`) | `docs/PINNING.md`, `docs/STANDALONE.md` §3 | n/a | MISSING | WP §25 |

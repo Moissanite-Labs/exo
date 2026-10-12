@@ -185,7 +185,7 @@ class JobManager:
             log.write_bytes(b"")
             os.chmod(log, 0o600)
             side_fd, side = open_side()
-            env = tool_env(allow=getattr(self.e, "env_allow", ()))
+            env = tool_env(allow=getattr(self.e, "env_allow", ()), deny=getattr(self.e, "env_deny", ()))
             try:
                 proc = subprocess.Popen(wrap_pipestatus(command, side_fd, env), cwd=cwd, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
