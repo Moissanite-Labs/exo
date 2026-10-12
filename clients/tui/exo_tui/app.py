@@ -367,7 +367,9 @@ class ExoApp(App):
         self.model = info.get("model") or self.model
         self.clear_transcript()
         self.render_history(got.get("messages", []))
-        self.note(f"session {sid}", "note")
+        n = len(got.get("messages", []))
+        title = info.get("title") or ""
+        self.note(f"resumed {title + ' ' if title else ''}({sid}, {n} messages)", "note")
         self.refresh_status()
 
     async def new_session(self) -> None:
