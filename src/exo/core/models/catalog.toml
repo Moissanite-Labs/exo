@@ -53,6 +53,8 @@ local = true
 transport = "openai"
 base_url = "https://opencode.ai/zen/go/v1"
 key_env = "OPENCODE_GO_API_KEY"
+# Go asks for a stable per-conversation id (routing, prompt caching) and a named user agent.
+session_header = "x-opencode-session"
 
 # Nous Portal. TODO(D-018): left commented out. The base URL below is in Nous's Hermes docs
 # (https://hermes-agent.nousresearch.com/docs/integrations/nous-portal) but those docs describe

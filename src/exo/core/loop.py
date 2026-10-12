@@ -243,6 +243,7 @@ class Loop:
         opts = dict(self.provider_opts)
         if self.model:
             opts["model"] = self.model
+        opts["session_id"] = session  # providers that route or cache per conversation send it as a header
         specs = self._specs()
         attempt = 0
         while True:
