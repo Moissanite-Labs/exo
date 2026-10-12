@@ -83,3 +83,20 @@ def test_handoff_default_path_is_the_handoffs_folder(tmp_path):
         assert path.endswith(f"/Work/handoffs/{eng.agent}-{got['output']['date']}.md")
 
     run_app(tmp_path, sc)
+
+
+def test_long_turn_hint_ignores_tool_time(tmp_path):
+    """D-032: the tip uses the harness's share (wall minus tool time and approvals), like turn.slow."""
+    async def sc(app, pilot, client, eng):
+        app.tutorial = True
+
+        def fire(timing):
+            app.hint_budget = 1
+            app.handle(s.Event.of(s.TurnCompleted(turn_id="t", timing=timing), 1, session=app.session))
+
+        fire({"wall_ms": 400_000, "tool_ms": 380_000, "approval_ms": 0})  # a long build
+        assert "long_turn" not in app.onb.seen()
+        fire({"wall_ms": 90_000, "tool_ms": 10_000, "approval_ms": 0})
+        assert "long_turn" in app.onb.seen()
+
+    run_app(tmp_path, sc)

@@ -24,7 +24,7 @@ from exo_tui.widgets import (ApprovalCard, Block, Composer, EditScreen, Palette,
 CLIENT_ID = "exo-tui"
 DEFAULT_WINDOW = 200_000
 MAX_FILE = 64 * 1024
-LONG_TURN_MS = 60_000  # the same line as the turn.slow trace rule
+LONG_TURN_MS = 60_000  # the same line as the turn.slow trace rule: wall minus tool time and approval waits
 AT_RE = re.compile(r"(?<!\S)@(\S+)")
 # name -> (group, description). /help is generated from this table, so every command shows up there.
 COMMANDS = {
@@ -271,7 +271,7 @@ class ExoApp(App):
             self.flush()
             self.cur = None
             self.hint_budget = 1
-            if (b.timing.get("wall_ms", 0) - b.timing.get("approval_ms", 0)) >= LONG_TURN_MS:
+            if (b.timing.get("wall_ms", 0) - b.timing.get("tool_ms", 0) - b.timing.get("approval_ms", 0)) >= LONG_TURN_MS:
                 self.hint("long_turn")
             self.run_worker(self.refresh_findings(), exit_on_error=False)
         elif isinstance(b, s.ReasoningDelta):

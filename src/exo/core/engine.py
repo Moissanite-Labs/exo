@@ -316,6 +316,7 @@ class CoreEngine:
         harness_tool.register(self.registry, self.trace_text, self.findings.file)  # D-025
         peer_target.attach(self)  # D-026: peers and peer_send tools
         self.jobs = jobs_mod.attach(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
+        self.handoff_sources["jobs"] = self._open_jobs  # /handoff lists the agent's running background jobs
         self.mcp = McpManager({**(mcp or {}), **(seat.mcp if seat else {})}, env)
         self._started: asyncio.Future | None = None
         system_prompt = "\n\n".join(p for p in (system_prompt, seat.soul if seat else "", self.skills.prompt(),
@@ -498,6 +499,13 @@ class CoreEngine:
         ctx = ToolContext(cwd=(info.cwd if info and info.cwd else self.cwd), session=sid, call_id=call.id,
                           emit=emit, meta={"turn_id": lctx.get("turn_id", ""), "jobs": self.jobs})
         return await self.registry.call(call, ctx)
+
+    def _open_jobs(self, session: str | None = None) -> list[dict[str, Any]]:
+        """Running background jobs of this agent (jobs belong to the agent, not one thread), for /handoff."""
+        now = time.time()
+        return [{"id": r["id"], "command": trace.scrub(r["command"], 200), "state": r["state"],
+                 "elapsed": jobs_mod.fmt_elapsed(jobs_mod._elapsed(r["started"], now)), "thread": r["session"],
+                 "log": r["log"]} for r in self.jobs.rows() if r["state"] == jobs_mod.ACTIVE]
 
     def _seat_cwd(self, seat: Seat | None) -> str | None:
         """The seat's default cwd (``[session] cwd``). A folder that does not exist is ignored, and said so."""
