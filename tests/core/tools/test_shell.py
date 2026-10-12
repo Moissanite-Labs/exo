@@ -1,0 +1,73 @@
+import os
+import sys
+import threading
+import time
+
+import pytest
+
+from exo.core.tools.builtin.shell import run_command
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # A zombie still answers kill(0); check its state via ps.
+    state = os.popen(f"ps -o stat= -p {pid}").read().strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def test_exit_code_cwd_and_stderr(run, tmp_path):
+    (tmp_path / "sub").mkdir()
+    res = run("bash", command="pwd; echo oops >&2; exit 3", cwd="sub")
+    text = res.text()
+    assert text.splitlines()[0].endswith("/sub")
+    assert "oops" in text and text.endswith("[exit 3]")
+    assert run("bash", command="true").text() == "(no output)\n[exit 0]"
+    assert run("bash", command="true", cwd="nope").is_error
+
+
+def test_timeout_kills_child_process_group(tmp_path):
+    pidfile = tmp_path / "pid"
+    # The grandchild ignores TERM, so the group must be escalated to KILL.
+    cmd = f"bash -c 'trap \"\" TERM; echo $$ > {pidfile}; sleep 60' & wait"
+    t0 = time.monotonic()
+    code, out, status = run_command(cmd, str(tmp_path), timeout=0.5)
+    assert status == "timeout" and code == 124
+    assert time.monotonic() - t0 < 6
+    pid = int(pidfile.read_text())
+    deadline = time.monotonic() + 3
+    while _alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _alive(pid)
+
+
+def test_timeout_message_via_tool(run):
+    res = run("bash", command="echo start; sleep 30", timeout=0.3)
+    assert "start" in res.text() and "timed out" in res.text() and res.text().endswith("[exit 124]")
+
+
+def test_cancel_interrupts(tmp_path):
+    ev = threading.Event()
+    threading.Timer(0.2, ev.set).start()
+    code, _out, status = run_command("sleep 30", str(tmp_path), timeout=20, cancel=ev)
+    assert status == "interrupted" and code == 130
+
+
+def test_output_cap_keeps_head_and_tail(tmp_path):
+    seen = []
+    code, out, _ = run_command("seq 1 100000", str(tmp_path), cap=2000, emit=seen.append)
+    assert code == 0 and len(out) < 2200
+    assert out.startswith("1\n2\n") and out.rstrip().endswith("100000") and "chars cut" in out
+    assert "".join(seen).count("\n") == 100000
+
+
+def test_background_straggler_does_not_hang(tmp_path):
+    t0 = time.monotonic()
+    code, out, status = run_command("sleep 30 & echo done", str(tmp_path), timeout=20)
+    assert status == "ok" and "done" in out and time.monotonic() - t0 < 6

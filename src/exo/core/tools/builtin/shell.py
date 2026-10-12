@@ -1,0 +1,186 @@
+# Lifted from NousResearch/hermes-agent tools/environments/local.py and tools/environments/base.py @ dce1e9b37581dd62e480a9064dc04a709c2940d3 (MIT, Copyright (c) 2025 Nous Research). See PROVENANCE.toml.
+"""bash tool: run a command with a timeout, a working folder and an output cap.
+
+The child runs in its own session (``start_new_session``), so on timeout or
+cancel the whole process group is torn down: TERM, a short grace wait on the
+group (not just the wrapper, which can exit before grandchildren), then KILL.
+Lifted from Hermes's ``_kill_process_group_posix`` / ``_wait_for_group_exit``
+and the adaptive poll loop of ``_wait_for_process``; Exo drops psutil, the
+PID-reuse fingerprint guard, snapshots and the Windows path.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+from typing import Any, Callable
+
+from exo.core.tools.registry import Registry, ToolContext, ToolError
+
+DEFAULT_TIMEOUT = 120
+MAX_TIMEOUT = 600
+OUTPUT_CAP = 30_000  # chars kept: head and tail halves around a cut marker
+TERM_GRACE = 1.0
+
+
+class _Capped:
+    """Head and tail window over a stream so a chatty command cannot exhaust memory."""
+
+    def __init__(self, cap: int) -> None:
+        self.cap, self.head, self.tail, self.total = cap, "", "", 0
+
+    def add(self, text: str) -> None:
+        self.total += len(text)
+        half = self.cap // 2
+        if len(self.head) < half:
+            take = half - len(self.head)
+            self.head += text[:take]
+            text = text[take:]
+        if text:
+            self.tail = (self.tail + text)[-half:]
+
+    def render(self) -> str:
+        dropped = self.total - len(self.head) - len(self.tail)
+        if dropped <= 0:
+            return self.head + self.tail
+        return f"{self.head}\n[... {dropped} chars cut ...]\n{self.tail}"
+
+
+def _drain(proc: subprocess.Popen, out: _Capped, emit: Callable[[str], None] | None) -> None:
+    assert proc.stdout is not None
+    for chunk in iter(lambda: proc.stdout.read1(65536), b""):  # type: ignore[union-attr]
+        text = chunk.decode("utf-8", errors="replace")
+        out.add(text)
+        if emit:
+            with contextlib.suppress(Exception):
+                emit(text)
+
+
+def _wait_for_group_exit(proc: subprocess.Popen, pgid: int, timeout: float) -> bool:
+    """Wait until the group is gone, reaping the wrapper (an unreaped leader keeps it alive)."""
+    deadline = time.monotonic() + timeout
+    while True:
+        with contextlib.suppress(Exception):
+            proc.poll()
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass  # exists, or only zombies remain (macOS answers EPERM there)
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def kill_process_group(proc: subprocess.Popen, grace: float = TERM_GRACE) -> None:
+    """TERM the child's process group, wait ``grace`` seconds, then KILL it."""
+    if sys.platform == "win32":
+        proc.kill()
+        return
+    pgid = getattr(proc, "_exo_pgid", None)
+    if pgid is None:
+        try:
+            pgid = os.getpgid(proc.pid)
+        except ProcessLookupError:
+            return
+    if pgid == os.getpgrp():
+        # Child shares our group (spawner skipped setsid): killpg would hit us. Kill by PID.
+        with contextlib.suppress(Exception):
+            proc.kill()
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+        if not _wait_for_group_exit(proc, pgid, grace):
+            os.killpg(pgid, signal.SIGKILL)
+            _wait_for_group_exit(proc, pgid, 2.0)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        with contextlib.suppress(Exception):
+            proc.kill()
+    with contextlib.suppress(subprocess.TimeoutExpired, OSError):
+        proc.wait(timeout=0.5)
+
+
+def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: int = OUTPUT_CAP,
+                cancel: threading.Event | None = None,
+                emit: Callable[[str], None] | None = None) -> tuple[int, str, str]:
+    """Run ``command`` under bash. Returns ``(exit_code, output, status)``.
+
+    status is ``ok``, ``timeout`` (exit 124) or ``interrupted`` (exit 130).
+    stdout and stderr are merged in arrival order.
+    """
+    shell = shutil.which("bash") or "/bin/sh"
+    proc = subprocess.Popen(
+        [shell, "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+        env={**os.environ, "PAGER": "cat", "GIT_PAGER": "cat", "TERM": "dumb"})
+    if sys.platform != "win32":
+        with contextlib.suppress(ProcessLookupError):
+            proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
+    out = _Capped(cap)
+    drain = threading.Thread(target=_drain, args=(proc, out, emit), daemon=True)
+    drain.start()
+    deadline = time.monotonic() + timeout
+    status = "ok"
+    sleep = 0.005  # adaptive poll: fast commands return fast, long ones cost little CPU
+    try:
+        while proc.poll() is None:
+            if cancel is not None and cancel.is_set():
+                status = "interrupted"
+                break
+            if time.monotonic() > deadline:
+                status = "timeout"
+                break
+            time.sleep(sleep)
+            sleep = min(sleep * 1.5, 0.2)
+    except BaseException:
+        kill_process_group(proc)
+        raise
+    if status != "ok":
+        kill_process_group(proc)
+    else:
+        # The wrapper exited; reap any background stragglers still holding the pipe open.
+        drain.join(timeout=2)
+        if drain.is_alive():
+            kill_process_group(proc, grace=0.2)
+    drain.join(timeout=2)
+    with contextlib.suppress(Exception):
+        proc.stdout.close()  # type: ignore[union-attr]
+    code = {"timeout": 124, "interrupted": 130}.get(status, proc.returncode or 0)
+    return code, out.render(), status
+
+
+def bash(args: dict[str, Any], ctx: ToolContext) -> str:
+    timeout = float(args.get("timeout") or DEFAULT_TIMEOUT)
+    if not 0 < timeout <= MAX_TIMEOUT:
+        raise ToolError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
+    cwd = ctx.resolve(args.get("cwd") or ".")
+    if not cwd.is_dir():
+        raise ToolError(f"cwd is not a folder: {cwd}")
+    code, output, status = run_command(args["command"], str(cwd), timeout,
+                                       cancel=ctx.cancel, emit=ctx.emit)
+    output = output.rstrip("\n")
+    if status == "timeout":
+        output += f"\n[Command timed out after {timeout:g}s; process group killed]"
+    elif status == "interrupted":
+        output += "\n[Command interrupted]"
+    return f"{output.lstrip() if output.strip() else '(no output)'}\n[exit {code}]"
+
+
+def register(reg: Registry) -> None:
+    reg.tool("bash", "Run a shell command with bash -c. stdout and stderr are merged; long output "
+             f"keeps the head and tail. Default timeout {DEFAULT_TIMEOUT}s (max {MAX_TIMEOUT}); on "
+             "timeout the whole process group is killed. Not interactive: stdin is closed.",
+             {"type": "object", "properties": {
+                 "command": {"type": "string"},
+                 "timeout": {"type": "number", "description": "Seconds before the command is killed"},
+                 "cwd": {"type": "string", "description": "Working folder (default session cwd)"}},
+              "required": ["command"]}, risk="high", toolset="shell")(bash)

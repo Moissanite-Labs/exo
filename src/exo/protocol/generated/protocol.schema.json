@@ -1,0 +1,1463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Exo protocol v1",
+  "protocol": 1,
+  "commands": {
+    "hello": {
+      "$ref": "#/$defs/Hello"
+    },
+    "session.create": {
+      "$ref": "#/$defs/SessionCreate"
+    },
+    "session.list": {
+      "$ref": "#/$defs/SessionList"
+    },
+    "session.get": {
+      "$ref": "#/$defs/SessionGet"
+    },
+    "session.fork": {
+      "$ref": "#/$defs/SessionFork"
+    },
+    "session.resume": {
+      "$ref": "#/$defs/SessionResume"
+    },
+    "session.undo": {
+      "$ref": "#/$defs/SessionUndo"
+    },
+    "turn.send": {
+      "$ref": "#/$defs/TurnSend"
+    },
+    "turn.interrupt": {
+      "$ref": "#/$defs/TurnInterrupt"
+    },
+    "approval.respond": {
+      "$ref": "#/$defs/ApprovalRespond"
+    },
+    "question.answer": {
+      "$ref": "#/$defs/QuestionAnswer"
+    },
+    "command.run": {
+      "$ref": "#/$defs/CommandRun"
+    },
+    "commands.list": {
+      "$ref": "#/$defs/CommandsList"
+    },
+    "events.subscribe": {
+      "$ref": "#/$defs/EventsSubscribe"
+    },
+    "search": {
+      "$ref": "#/$defs/Search"
+    },
+    "config.get": {
+      "$ref": "#/$defs/ConfigGet"
+    },
+    "config.set": {
+      "$ref": "#/$defs/ConfigSet"
+    },
+    "models.list": {
+      "$ref": "#/$defs/ModelsList"
+    },
+    "models.set": {
+      "$ref": "#/$defs/ModelsSet"
+    },
+    "tools.list": {
+      "$ref": "#/$defs/ToolsList"
+    },
+    "skills.list": {
+      "$ref": "#/$defs/SkillsList"
+    },
+    "tasks.list": {
+      "$ref": "#/$defs/TasksList"
+    },
+    "seat.list": {
+      "$ref": "#/$defs/SeatList"
+    },
+    "taste.list": {
+      "$ref": "#/$defs/TasteList"
+    },
+    "taste.edit": {
+      "$ref": "#/$defs/TasteEdit"
+    }
+  },
+  "events": {
+    "session.created": {
+      "$ref": "#/$defs/SessionCreated"
+    },
+    "session.updated": {
+      "$ref": "#/$defs/SessionUpdated"
+    },
+    "turn.started": {
+      "$ref": "#/$defs/TurnStarted"
+    },
+    "turn.completed": {
+      "$ref": "#/$defs/TurnCompleted"
+    },
+    "message.delta": {
+      "$ref": "#/$defs/MessageDelta"
+    },
+    "message.completed": {
+      "$ref": "#/$defs/MessageCompleted"
+    },
+    "reasoning.delta": {
+      "$ref": "#/$defs/ReasoningDelta"
+    },
+    "tool.started": {
+      "$ref": "#/$defs/ToolStarted"
+    },
+    "tool.output": {
+      "$ref": "#/$defs/ToolOutput"
+    },
+    "tool.completed": {
+      "$ref": "#/$defs/ToolCompleted"
+    },
+    "approval.requested": {
+      "$ref": "#/$defs/ApprovalRequested"
+    },
+    "approval.resolved": {
+      "$ref": "#/$defs/ApprovalResolved"
+    },
+    "question.asked": {
+      "$ref": "#/$defs/QuestionAsked"
+    },
+    "context.compacted": {
+      "$ref": "#/$defs/ContextCompacted"
+    },
+    "handoff.written": {
+      "$ref": "#/$defs/HandoffWritten"
+    },
+    "task.updated": {
+      "$ref": "#/$defs/TaskUpdated"
+    },
+    "usage.updated": {
+      "$ref": "#/$defs/UsageUpdated"
+    },
+    "decision.queued": {
+      "$ref": "#/$defs/DecisionQueued"
+    },
+    "taste.updated": {
+      "$ref": "#/$defs/TasteUpdated"
+    },
+    "notice": {
+      "$ref": "#/$defs/Notice"
+    },
+    "error": {
+      "$ref": "#/$defs/Error"
+    }
+  },
+  "$defs": {
+    "ApprovalRequested": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "risk": {
+          "type": "string",
+          "default": "medium"
+        },
+        "call": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolCall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "allow",
+            "deny",
+            "allow_always"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "summary"
+      ],
+      "description": "Server-to-client request; any client answers with approval.respond."
+    },
+    "ApprovalResolved": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "decision"
+      ]
+    },
+    "ApprovalRespond": {
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string"
+        },
+        "decision": {
+          "enum": [
+            "allow",
+            "deny",
+            "allow_always"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "decision"
+      ]
+    },
+    "Command": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "body": {},
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "body"
+      ],
+      "description": "Client to server. ``id`` correlates the Response."
+    },
+    "CommandRun": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "args": {
+          "type": "string",
+          "default": ""
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "description": "Run a slash command, e.g. name=\"exo\", args=\"handoff\"."
+    },
+    "CommandsList": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConfigGet": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConfigSet": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "key"
+      ]
+    },
+    "ContentPart": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": [
+            "text",
+            "image",
+            "reasoning"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "default": ""
+        },
+        "data": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mime": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "signature": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "description": "One piece of message content. text: ``text`` holds the text. image: ``data`` is base64, ``mime`` its type (or ``url`` instead of data). reasoning: ``text`` holds the thinking; ``signature`` is the provider's opaque token that must be sent back unchanged (Anthropic thinking blocks)."
+    },
+    "ContextCompacted": {
+      "type": "object",
+      "properties": {
+        "before_tokens": {
+          "type": "integer"
+        },
+        "after_tokens": {
+          "type": "integer"
+        },
+        "summary_message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "before_tokens",
+        "after_tokens"
+      ]
+    },
+    "DecisionQueued": {
+      "type": "object",
+      "properties": {
+        "decision_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "default": ""
+        },
+        "detail": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "decision_id",
+        "title"
+      ]
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean",
+          "default": false
+        },
+        "command_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "ErrorInfo": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "Event": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer"
+        },
+        "type": {
+          "type": "string"
+        },
+        "body": {},
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "ts": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "seq",
+        "type",
+        "body"
+      ],
+      "description": "Server to clients. ``seq`` is assigned by the server, strictly increasing across the whole stream; ``session`` is None for global events."
+    },
+    "EventsSubscribe": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "type": "integer",
+          "default": 0
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "description": "Stream events with seq > since. session=None means all sessions."
+    },
+    "HandoffWritten": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
+    "Hello": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "integer",
+          "default": 1
+        },
+        "client": {
+          "type": "string",
+          "default": ""
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "screen_cols": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "description": "Handshake. Server replies with its protocol version and capabilities."
+    },
+    "Message": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          },
+          "default": []
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolCall"
+          },
+          "default": []
+        },
+        "tool_results": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolResult"
+          },
+          "default": []
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "meta": {
+          "type": "object",
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "role"
+      ],
+      "description": "One conversation message in Exo's provider-neutral shape. assistant messages may carry ``tool_calls``; ``tool`` messages carry ``tool_results`` (one or more; transports split or merge as their API needs). ``meta`` is free-form and never sent to a provider (cache hints, origin, seq)."
+    },
+    "MessageCompleted": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/Message"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "message"
+      ]
+    },
+    "MessageDelta": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "message_id",
+        "text"
+      ]
+    },
+    "ModelsList": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "ModelsSet": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "default": "main"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "model"
+      ]
+    },
+    "Notice": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "level": {
+          "enum": [
+            "info",
+            "warn"
+          ],
+          "default": "info"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "text"
+      ]
+    },
+    "QuestionAnswer": {
+      "type": "object",
+      "properties": {
+        "question_id": {
+          "type": "string"
+        },
+        "answer": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "question_id",
+        "answer"
+      ]
+    },
+    "QuestionAsked": {
+      "type": "object",
+      "properties": {
+        "question_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "question_id",
+        "text"
+      ]
+    },
+    "ReasoningDelta": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "message_id",
+        "text"
+      ]
+    },
+    "Response": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean",
+          "default": true
+        },
+        "result": {
+          "type": "object",
+          "default": {}
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "description": "Server reply to one Command. ``result`` is command-specific JSON."
+    },
+    "Search": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "sessions",
+            "store",
+            "all"
+          ],
+          "default": "all"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "query"
+      ]
+    },
+    "SeatList": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "SessionCreate": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "default": ""
+        },
+        "seat": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "SessionCreated": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/SessionInfo"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session"
+      ]
+    },
+    "SessionFork": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "at_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "title": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session"
+      ]
+    },
+    "SessionGet": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session"
+      ]
+    },
+    "SessionInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "default": ""
+        },
+        "seat": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "created": {
+          "type": "string",
+          "default": ""
+        },
+        "updated": {
+          "type": "string",
+          "default": ""
+        },
+        "message_count": {
+          "type": "integer",
+          "default": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
+    },
+    "SessionList": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "default": 50
+        },
+        "seat": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "SessionResume": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session"
+      ]
+    },
+    "SessionUndo": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "turns": {
+          "type": "integer",
+          "default": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session"
+      ]
+    },
+    "SessionUpdated": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/$defs/SessionInfo"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session"
+      ]
+    },
+    "SkillsList": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "TaskUpdated": {
+      "type": "object",
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "default": ""
+        },
+        "status": {
+          "type": "string",
+          "default": ""
+        },
+        "child_session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "detail": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "task_id"
+      ],
+      "description": "Subagents and board tasks."
+    },
+    "TasksList": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "TasteEdit": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "enum": [
+            "add",
+            "update",
+            "remove"
+          ]
+        },
+        "rule_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "text": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "action"
+      ]
+    },
+    "TasteList": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "TasteUpdated": {
+      "type": "object",
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "action": {
+          "enum": [
+            "add",
+            "update",
+            "remove"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "default": ""
+        },
+        "path": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "action"
+      ],
+      "description": "Learned taste shown inline with a link to the editable file (D-012)."
+    },
+    "ToolCall": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "object",
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name"
+      ],
+      "description": "A model's request to run a tool. ``arguments`` is already parsed JSON."
+    },
+    "ToolCompleted": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/$defs/ToolResult"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "default": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "result"
+      ]
+    },
+    "ToolOutput": {
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "text"
+      ],
+      "description": "Partial output while a tool runs (shell stdout, progress)."
+    },
+    "ToolResult": {
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          },
+          "default": []
+        },
+        "is_error": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id"
+      ],
+      "description": "Outcome of one tool call, matched to it by ``call_id``."
+    },
+    "ToolStarted": {
+      "type": "object",
+      "properties": {
+        "call": {
+          "$ref": "#/$defs/ToolCall"
+        },
+        "risk": {
+          "type": "string",
+          "default": "low"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call"
+      ]
+    },
+    "ToolsList": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "TurnCompleted": {
+      "type": "object",
+      "properties": {
+        "turn_id": {
+          "type": "string"
+        },
+        "stop_reason": {
+          "type": "string",
+          "default": "end"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "turn_id"
+      ]
+    },
+    "TurnInterrupt": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session"
+      ]
+    },
+    "TurnSend": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "default": ""
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentPart"
+          },
+          "default": []
+        },
+        "mode": {
+          "enum": [
+            "send",
+            "queue",
+            "steer"
+          ],
+          "default": "send"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session"
+      ],
+      "description": "Send user input. mode: send (start a turn), queue (run after the current turn), steer (inject into the running turn at the next tool boundary)."
+    },
+    "TurnStarted": {
+      "type": "object",
+      "properties": {
+        "turn_id": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "turn_id"
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "default": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "default": 0
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "default": 0
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "default": 0
+        },
+        "reasoning_tokens": {
+          "type": "integer",
+          "default": 0
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "description": "Token and cost accounting for one call (or a running total)."
+    },
+    "UsageUpdated": {
+      "type": "object",
+      "properties": {
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
+        "session_total": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "usage"
+      ]
+    }
+  }
+}

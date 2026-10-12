@@ -1,0 +1,91 @@
+# Exo model catalog: providers, model metadata and default role routes.
+# Data, not code (docs/STANDALONE.md 1.2, "provider plugins: lift as data").
+# User config overrides any table here. Keys are read from the named environment
+# variables only; `key_env` may be a list (one credential per variable, rotated in order).
+# Prices are USD per million tokens (Anthropic first-party list prices, cached 2026-10-06).
+# cache_write defaults to 1.25 x input when omitted.
+
+[providers.anthropic]
+transport = "anthropic"
+base_url = "https://api.anthropic.com"
+key_env = "ANTHROPIC_API_KEY"
+
+[providers.openrouter]
+transport = "openai"
+base_url = "https://openrouter.ai/api/v1"
+key_env = "OPENROUTER_API_KEY"
+
+[providers.openai]
+transport = "openai"
+base_url = "https://api.openai.com/v1"
+key_env = "OPENAI_API_KEY"
+
+# Local OpenAI-compatible servers: no key, the small-model and device path.
+[providers.llamacpp]
+transport = "openai"
+base_url = "http://127.0.0.1:8080/v1"
+local = true
+
+[providers.ollama]
+transport = "openai"
+base_url = "http://127.0.0.1:11434/v1"
+local = true
+
+[providers.lmstudio]
+transport = "openai"
+base_url = "http://127.0.0.1:1234/v1"
+local = true
+
+[providers.vllm]
+transport = "openai"
+base_url = "http://127.0.0.1:8000/v1"
+local = true
+
+# Models are keyed "provider:model".
+[models."anthropic:claude-opus-5-5"]
+context = 1000000
+max_output = 128000
+input = 4.00
+output = 20.00
+cache_read = 0.20
+
+[models."anthropic:claude-sonnet-5-5"]
+context = 1000000
+max_output = 128000
+input = 2.00
+output = 10.00
+cache_read = 0.20
+
+[models."anthropic:claude-haiku-5-5"]
+context = 1000000
+max_output = 128000
+input = 0.10
+output = 0.50
+
+[models."anthropic:claude-fable-5-1"]
+context = 1000000
+max_output = 128000
+input = 10.00
+output = 50.00
+cache_read = 0.25
+
+# Roles: each is an ordered route list; the first available route serves, the rest
+# are fallbacks. Resolution when a role is empty or every route fails:
+#   decision -> aux -> main;  aux -> main.
+# "decision" is for cheap structured choices: routing, gating, classification,
+# tool selection, whether to show a UI panel. Leave it empty to use aux.
+[roles]
+main = ["anthropic:claude-opus-5-5", "openrouter:anthropic/claude-opus-5.5"]
+aux = ["anthropic:claude-haiku-5-5"]
+decision = []
+
+# Decision-model placeholders (under research; fill in ids once chosen):
+# [models."openrouter:<typesafe-jev-id>"]      # Typesafe Jev, hosted
+# context = 0
+# [providers.laya]                             # Laya, local via the OpenAI-compatible transport
+# transport = "openai"
+# base_url = "http://127.0.0.1:8081/v1"
+# local = true
+# [models."laya:<laya-model-id>"]
+# context = 0
+# Then: [roles] decision = ["laya:<laya-model-id>", "openrouter:<typesafe-jev-id>"]

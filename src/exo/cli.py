@@ -4,6 +4,8 @@
   exo interview                            ask the next onboarding questions
   exo import-store <path> [--id ID]        adopt an existing store (copied)
   exo config [get|set ...]                 read or change config.json
+  exo serve | exo chat [--resume ID]       run the exod server; chat with it
+  exo upstream report|mark|check|merge     track lifted Hermes modules
   exo find <words...> [-n 8]               ranked nodes
   exo get <id> [--body-only]               print one node
   exo ctx <words...> [--budget 1500]       best nodes packed under a token budget
@@ -37,6 +39,8 @@ from .brief import register as register_brief, cmd_brief  # noqa: F401
 from .consolidate import register as register_consolidate, cmd_consolidate, cmd_proposals  # noqa: F401
 from .onboard import (register as register_onboard, add_init_args, cmd_init as onboard_init,  # noqa: F401
                       cmd_interview, cmd_import_store, cmd_config)
+from .upstream import register as register_upstream, cmd_upstream  # noqa: F401
+from .cli_chat import register as register_chat
 
 
 def key_path(name: str) -> Path:
@@ -209,6 +213,8 @@ def build_parser() -> argparse.ArgumentParser:
     register_brief(sp, common)
     register_consolidate(sp, common)
     register_onboard(sp, common)
+    register_upstream(sp, common)
+    register_chat(sp, common)
     return ap
 
 
@@ -220,6 +226,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_import_store(a)
     if a.cmd == 'config':
         return cmd_config(a)
+    if a.cmd == 'upstream':
+        return cmd_upstream(a)
+    if a.cmd in ('serve', 'chat'):
+        return a.func(a)
     if a.cmd == 'keygen':
         return cmd_keygen(a)
     store = resolve_store(a)

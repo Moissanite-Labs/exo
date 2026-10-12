@@ -1,0 +1,201 @@
+# Lifted from NousResearch/hermes-agent agent/transports/types.py, agent/transports/base.py @ dce1e9b37581dd62e480a9064dc04a709c2940d3 (MIT, Copyright (c) 2025 Nous Research). See PROVENANCE.toml.
+"""Shared transport base: HTTP + SSE plumbing and stream assembly.
+
+Upstream split a transport into convert_messages, convert_tools, build_kwargs and
+normalize_response, with streaming and retries left on the agent. Exo keeps that
+split but owns the stream here: a transport builds a request body and turns SSE
+events into ``ProviderEvent`` items; this base does the HTTP call, error mapping
+and assembly of the final assistant ``Message``. Retries and fallback belong to
+the router, not the transport.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from email.utils import parsedate_to_datetime
+from typing import Any, AsyncIterator, Iterator
+
+import httpx
+
+from exo.core.types import ContentPart, Message, ProviderEvent, StopReason, ToolCall, ToolSpec, Usage
+
+# HTTP statuses that may succeed on retry or on another route.
+RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504, 529})
+
+
+def map_finish_reason(reason: str | None, mapping: dict[str, StopReason]) -> StopReason:
+    """Translate a provider stop reason via ``mapping``; unknown or None -> ``end``."""
+    return "end" if reason is None else mapping.get(reason, "end")
+
+
+def parse_retry_after(value: str | None, now: float | None = None) -> float | None:
+    """Seconds from a Retry-After header (delta seconds or HTTP date), or None."""
+    if not value:
+        return None
+    try:
+        secs = float(value)
+    except ValueError:
+        try:
+            secs = parsedate_to_datetime(value).timestamp() - (now or time.time())
+        except (TypeError, ValueError):
+            return None
+    return secs if secs > 0 else None
+
+
+def error_event(text: str, status: int | None = None, retryable: bool | None = None,
+                retry_after: float | None = None) -> ProviderEvent:
+    """Build the terminal error event. ``retry_after`` rides in ``message.meta``
+    (meta is never sent to a provider) so the router can honor provider resets."""
+    if retryable is None:
+        retryable = status is None or status in RETRYABLE_STATUS
+    meta = {"retry_after": retry_after} if retry_after else {}
+    return ProviderEvent(kind="error", error=text, status=status, retryable=retryable,
+                         message=Message(role="assistant", meta=meta) if meta else None)
+
+
+def iter_sse(lines: Iterator[str] | list[str]) -> Iterator[tuple[str, str]]:
+    """Yield ``(event, data)`` pairs from SSE lines (sync; used by tests and the async reader)."""
+    event, data = "", []
+    for line in lines:
+        if line == "":
+            if data:
+                yield event or "message", "\n".join(data)
+            event, data = "", []
+        elif line.startswith(":"):
+            continue
+        else:
+            name, _, value = line.partition(":")
+            value = value[1:] if value.startswith(" ") else value
+            if name == "event":
+                event = value
+            elif name == "data":
+                data.append(value)
+    if data:
+        yield event or "message", "\n".join(data)
+
+
+class StreamState:
+    """Assembles deltas into the final assistant Message."""
+
+    def __init__(self) -> None:
+        self.parts: list[ContentPart] = []
+        self.tool_calls: list[ToolCall] = []
+        self.usage = Usage()
+        self.stop_reason: StopReason | None = None
+        self.meta: dict[str, Any] = {}
+
+    def add_text(self, kind: str, text: str) -> ProviderEvent | None:
+        if not text:
+            return None
+        ptype = "reasoning" if kind == "reasoning" else "text"
+        last = self.parts[-1] if self.parts else None
+        if last is not None and last.type == ptype and last.signature is None and last.data is None:
+            last.text += text
+        else:
+            self.parts.append(ContentPart(type=ptype, text=text))
+        return ProviderEvent(kind="reasoning" if ptype == "reasoning" else "text", text=text)
+
+    def add_tool_call(self, call: ToolCall) -> ProviderEvent:
+        self.tool_calls.append(call)
+        return ProviderEvent(kind="tool_call", tool_call=call)
+
+    def done(self) -> ProviderEvent:
+        stop = self.stop_reason or ("tool_use" if self.tool_calls else "end")
+        if stop == "end" and self.tool_calls:
+            stop = "tool_use"
+        msg = Message(role="assistant", content=self.parts, tool_calls=self.tool_calls, meta=self.meta)
+        return ProviderEvent(kind="done", stop_reason=stop, message=msg, usage=self.usage)
+
+
+def parse_json_args(raw: str) -> dict[str, Any]:
+    """Decode tool arguments; empty -> {}, bad JSON or non-object -> {} (upstream behavior)."""
+    if not raw or not raw.strip():
+        return {}
+    try:
+        val = json.loads(raw)
+    except ValueError:
+        return {}
+    return val if isinstance(val, dict) else {}
+
+
+class HttpTransport:
+    """Base for HTTP streaming providers. Subclasses implement the four hooks."""
+
+    name = "http"
+    path = ""
+
+    def __init__(self, base_url: str, api_key: str | None = None, *, name: str | None = None,
+                 model: str | None = None, client: httpx.AsyncClient | None = None,
+                 timeout: float = 600.0, headers: dict[str, str] | None = None) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+        self.extra_headers = dict(headers or {})
+        self._client = client
+        self._timeout = timeout
+        if name:
+            self.name = name
+
+    # --- hooks -------------------------------------------------------------
+    def headers(self) -> dict[str, str]:
+        raise NotImplementedError
+
+    def build_body(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def handle(self, event: str, data: str, st: StreamState) -> Iterator[ProviderEvent]:
+        """Turn one SSE event into ProviderEvents. Set ``st.meta['_finished']`` when
+        the provider signals the end; yield an ``error`` event to abort."""
+        raise NotImplementedError
+
+    def error_text(self, body: str) -> str:
+        try:
+            err = json.loads(body).get("error")
+        except (ValueError, AttributeError):
+            return body[:500]
+        if isinstance(err, dict):
+            return str(err.get("message") or err.get("type") or err)[:500]
+        return str(err or body)[:500]
+
+    # --- stream ------------------------------------------------------------
+    async def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
+        body = self.build_body(messages, tools, **opts)
+        url = self.base_url + self.path
+        client = self._client or httpx.AsyncClient(timeout=self._timeout)
+        st = StreamState()
+        try:
+            async with client.stream("POST", url, json=body, headers={**self.headers(), **self.extra_headers}) as resp:
+                if resp.status_code >= 400:
+                    raw = (await resp.aread()).decode("utf-8", "replace")
+                    yield error_event(f"HTTP {resp.status_code}: {self.error_text(raw)}", resp.status_code,
+                                      retry_after=parse_retry_after(resp.headers.get("retry-after")))
+                    return
+                buf: list[str] = []
+                async for line in resp.aiter_lines():
+                    buf.append(line)
+                    if line != "":
+                        continue
+                    for ev, payload in iter_sse(buf):
+                        for out in self.handle(ev, payload, st):
+                            yield out
+                            if out.kind == "error":
+                                return
+                    buf = []
+                for ev, payload in iter_sse(buf):
+                    for out in self.handle(ev, payload, st):
+                        yield out
+                        if out.kind == "error":
+                            return
+        except httpx.HTTPError as exc:
+            yield error_event(f"{type(exc).__name__}: {exc}", None, retryable=True)
+            return
+        finally:
+            if self._client is None:
+                await client.aclose()
+        if not st.meta.pop("_finished", False) and not st.parts and not st.tool_calls:
+            yield error_event("stream ended without a response", None, retryable=True)
+            return
+        if st.usage != Usage():
+            yield ProviderEvent(kind="usage", usage=st.usage)
+        yield st.done()

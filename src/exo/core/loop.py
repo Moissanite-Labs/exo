@@ -1,0 +1,379 @@
+"""The async turn loop.
+
+One turn: store the user message, build a fresh model input (context engine),
+stream the reply, run any tool calls, and loop until the model stops, the
+iteration cap is hit, or the turn is interrupted. Every step is an event,
+written to sessions.sqlite before it is published (``EventBus.emit``).
+
+Injected, never imported: the provider (any ``exo.core.types.Provider``), the
+tool specs and tool runner, the memory provider and the context engine. That
+keeps the loop independent of the registry, router and slot modules.
+
+Memory call sites (all optional, sync or async): ``system_prompt_block()``,
+``prefetch(query, session_id=)``, ``on_turn_start(turn_number, message, session_id=)``,
+``sync_turn(user_content, assistant_content, session_id=)``.
+Context call sites: ``note(session_id)``, ``await build(session_id, system)``,
+optional ``on_turn_complete(session_id, usage)`` and an ``on_event`` attribute.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable, Iterable
+
+from exo.core.context import TreeContext, _maybe_await
+from exo.core.sessions import EventBus, SessionStore, new_id
+from exo.core.types import ContentPart, Message, Provider, ToolCall, ToolResult, ToolSpec, Usage
+from exo.protocol import schema as ev
+
+ToolRunner = Callable[[ToolCall, dict[str, Any]], "ToolResult | Awaitable[ToolResult]"]
+
+
+@dataclass
+class TurnResult:
+    turn_id: str
+    stop_reason: str
+    message: Message | None = None
+    usage: Usage = field(default_factory=Usage)
+    error: str | None = None
+
+
+class _Interrupted(Exception):
+    pass
+
+
+@dataclass
+class _Stream:
+    text: list[str] = field(default_factory=list)
+    reasoning: list[str] = field(default_factory=list)
+    calls: list[ToolCall] = field(default_factory=list)
+    usage: Usage | None = None
+    done: Any = None
+    error: Any = None
+
+
+class _SessionState:
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.interrupt = asyncio.Event()
+        self.steer: list[Message] = []
+        self.running = False
+        self.total = Usage()
+
+
+class Loop:
+    def __init__(self, store: SessionStore, provider: Provider, *, bus: EventBus | None = None,
+                 context: Any = None, memory: Any = None,
+                 tool_specs: Iterable[ToolSpec] | Callable[[], Iterable[ToolSpec]] = (),
+                 run_tool: ToolRunner | None = None, system_prompt: str = "",
+                 model: str | None = None, max_iterations: int = 24, max_retries: int = 3,
+                 retry_delay: float = 0.5, provider_opts: dict[str, Any] | None = None):
+        self.store = store
+        self.provider = provider
+        self.bus = bus or EventBus(store)
+        self.context = context if context is not None else TreeContext(store, None)
+        if hasattr(self.context, "on_event"):
+            self.context.on_event = self.bus.emit
+        self.memory = memory
+        self.tool_specs = tool_specs
+        self.run_tool = run_tool
+        self.system_prompt = system_prompt
+        self.model = model
+        self.max_iterations = max_iterations
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.provider_opts = dict(provider_opts or {})
+        self._state: dict[str, _SessionState] = {}
+
+    # ---------------------------------------------------------------- public
+
+    def state(self, session: str) -> _SessionState:
+        return self._state.setdefault(session, _SessionState())
+
+    async def create_session(self, **kw: Any) -> ev.SessionInfo:
+        info = self.store.create_session(**kw)
+        await self.bus.emit(ev.SessionCreated(session=info), info.id)
+        return info
+
+    async def fork(self, session: str, at_message: str | None = None, title: str = "") -> ev.SessionInfo:
+        info = self.store.fork(session, at_message, title)
+        await self.bus.emit(ev.SessionCreated(session=info), info.id)
+        return info
+
+    async def resume(self, session: str) -> ev.SessionInfo:
+        """Reattach after a restart: repair a half-finished tool round, restart summaries."""
+        info = self.store.get_session(session)
+        if info is None:
+            raise KeyError(session)
+        await self._repair(session)
+        if hasattr(self.context, "note"):
+            await _maybe_await(self.context.note(session))
+        return self.store.get_session(session)  # type: ignore[return-value]
+
+    def interrupt(self, session: str) -> bool:
+        st = self.state(session)
+        if st.running:
+            st.interrupt.set()
+        return st.running
+
+    async def send(self, session: str, text: str = "", parts: list[ContentPart] | None = None,
+                   mode: str = "send") -> TurnResult | None:
+        """Run a turn. ``steer`` while a turn runs injects the message between tool
+        rounds and returns None; ``queue`` and ``send`` wait for the running turn."""
+        if self.store.get_session(session) is None:
+            raise KeyError(session)
+        msg = Message(role="user", content=list(parts or []))
+        if text:
+            msg.content.insert(0, ContentPart.of_text(text))
+        st = self.state(session)
+        if mode == "steer" and st.running:
+            st.steer.append(msg)
+            return None
+        async with st.lock:
+            st.running = True
+            st.interrupt.clear()
+            try:
+                return await self._turn(session, msg, st)
+            finally:
+                st.running = False
+                st.interrupt.clear()
+
+    # ---------------------------------------------------------------- turn
+
+    async def _emit(self, body: Any, session: str) -> None:
+        await self.bus.emit(body, session)
+
+    def _specs(self) -> list[ToolSpec]:
+        specs = self.tool_specs() if callable(self.tool_specs) else self.tool_specs
+        return list(specs or [])
+
+    async def _add(self, session: str, msg: Message, turn_id: str) -> Message:
+        self.store.append_message(session, msg, turn_id)
+        await self._emit(ev.MessageCompleted(message=msg), session)
+        return msg
+
+    async def _turn(self, session: str, user: Message, st: _SessionState) -> TurnResult:
+        turn_id = new_id("t")
+        await self._repair(session)
+        await self._add(session, user, turn_id)
+        await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or ""), session)
+        turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user")
+        await self._memory("on_turn_start", turn_no, user.text(), session_id=session)
+        result = TurnResult(turn_id=turn_id, stop_reason="end")
+        try:
+            await self._rounds(session, turn_id, user, st, result)
+        except _Interrupted:
+            result.stop_reason = "interrupted"
+        except Exception as exc:  # unexpected bug in a collaborator: end the turn cleanly
+            result.stop_reason, result.error = "error", str(exc) or type(exc).__name__
+            await self._emit(ev.Error(code="turn_failed", message=result.error), session)
+        await self._emit(ev.TurnCompleted(turn_id=turn_id, stop_reason=result.stop_reason,
+                                          usage=result.usage), session)
+        reply = result.message.text() if result.message else ""
+        await self._memory("sync_turn", user.text(), reply, session_id=session)
+        if hasattr(self.context, "on_turn_complete"):
+            await _maybe_await(self.context.on_turn_complete(session, result.usage))
+        info = self.store.update_session(session)
+        await self._emit(ev.SessionUpdated(session=info), session)
+        return result
+
+    async def _system(self, session: str, query: str) -> str:
+        parts = [self.system_prompt]
+        parts.append(await self._memory("system_prompt_block") or "")
+        recall = await self._memory("prefetch", query, session_id=session) or ""
+        if recall:
+            parts.append("# Recalled memory\n" + recall)
+        return "\n\n".join(p for p in parts if p)
+
+    async def _rounds(self, session: str, turn_id: str, user: Message, st: _SessionState,
+                      result: TurnResult) -> None:
+        system = await self._system(session, user.text())
+        for _ in range(self.max_iterations):
+            if hasattr(self.context, "note"):
+                await _maybe_await(self.context.note(session))
+            messages = await self.context.build(session, system)
+            msg_id = new_id("m")
+            stream = await self._call(session, messages, msg_id, st, result)
+            if stream.usage is not None:
+                result.usage = result.usage + stream.usage
+                st.total = st.total + stream.usage
+                await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total), session)
+            if stream.error is not None:
+                result.stop_reason, result.error = "error", stream.error.error or "provider error"
+                await self._emit(ev.Error(code="provider_error", message=result.error,
+                                          retryable=stream.error.retryable), session)
+                return
+            reply = self._assemble(stream, msg_id)
+            result.message = await self._add(session, reply, turn_id)
+            if not reply.tool_calls:
+                result.stop_reason = stream.done.stop_reason or "end"
+                if result.stop_reason == "tool_use":
+                    result.stop_reason = "end"
+                return
+            await self._tools(session, turn_id, reply.tool_calls, st)
+            if st.steer:
+                for m in st.steer:
+                    await self._add(session, m, turn_id)
+                st.steer.clear()
+        result.stop_reason = "max_iterations"
+        await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
+                                   level="warn"), session)
+
+    def _assemble(self, s: _Stream, msg_id: str) -> Message:
+        msg = s.done.message if s.done is not None and s.done.message is not None else None
+        if msg is None:
+            content = []
+            if s.reasoning:
+                content.append(ContentPart(type="reasoning", text="".join(s.reasoning)))
+            if s.text:
+                content.append(ContentPart.of_text("".join(s.text)))
+            msg = Message(role="assistant", content=content, tool_calls=list(s.calls))
+        elif not msg.tool_calls and s.calls:
+            msg.tool_calls = list(s.calls)
+        msg.id = msg_id
+        return msg
+
+    # ---------------------------------------------------------------- provider call
+
+    async def _call(self, session: str, messages: list[Message], msg_id: str, st: _SessionState,
+                    result: TurnResult) -> _Stream:
+        """Stream one model call with retry. Retries only while nothing was shown."""
+        opts = dict(self.provider_opts)
+        if self.model:
+            opts["model"] = self.model
+        specs = self._specs()
+        attempt = 0
+        while True:
+            s = _Stream()
+            try:
+                await self._interruptible(self._consume(session, messages, specs, opts, msg_id, s), st)
+            except _Interrupted:
+                if s.text or s.reasoning:
+                    partial = self._assemble(_Stream(text=s.text, reasoning=s.reasoning), msg_id)
+                    partial.meta["interrupted"] = True
+                    result.message = await self._add(session, partial, result.turn_id)
+                raise
+            except Exception as exc:
+                s.error = _err(str(exc) or type(exc).__name__, True)
+            if s.done is None and s.error is None:
+                s.error = _err("stream ended without done", True)
+            if s.error is None:
+                return s
+            shown = bool(s.text or s.reasoning or s.calls)
+            if not s.error.retryable or shown or attempt >= self.max_retries:
+                return s
+            attempt += 1
+            await self._emit(ev.Notice(text=f"retrying model call ({attempt}/{self.max_retries}):"
+                                       f" {s.error.error}", level="warn"), session)
+            await self._interruptible(asyncio.sleep(self.retry_delay * 2 ** (attempt - 1)), st)
+
+    async def _consume(self, session: str, messages: list[Message], specs: list[ToolSpec],
+                       opts: dict[str, Any], msg_id: str, s: _Stream) -> None:
+        agen = self.provider.stream(messages, specs, **opts)
+        try:
+            async for pe in agen:
+                if pe.kind == "text" and pe.text:
+                    s.text.append(pe.text)
+                    await self._emit(ev.MessageDelta(message_id=msg_id, text=pe.text), session)
+                elif pe.kind == "reasoning" and pe.text:
+                    s.reasoning.append(pe.text)
+                    await self._emit(ev.ReasoningDelta(message_id=msg_id, text=pe.text), session)
+                elif pe.kind == "tool_call" and pe.tool_call is not None:
+                    s.calls.append(pe.tool_call)
+                elif pe.kind == "usage" and pe.usage is not None:
+                    s.usage = pe.usage
+                elif pe.kind == "done":
+                    s.done = pe
+                    if pe.usage is not None:
+                        s.usage = pe.usage
+                    break
+                elif pe.kind == "error":
+                    s.error = pe
+                    break
+        finally:
+            aclose = getattr(agen, "aclose", None)
+            if aclose is not None:
+                try:
+                    await aclose()
+                except Exception:
+                    pass
+
+    async def _interruptible(self, coro: Awaitable[Any], st: _SessionState) -> Any:
+        task = asyncio.ensure_future(coro)
+        stop = asyncio.ensure_future(st.interrupt.wait())
+        try:
+            await asyncio.wait({task, stop}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stop.cancel()
+        if task.done():
+            return task.result()
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+        raise _Interrupted()
+
+    # ---------------------------------------------------------------- tools
+
+    async def _tools(self, session: str, turn_id: str, calls: list[ToolCall], st: _SessionState) -> None:
+        risks = {s.name: s.risk for s in self._specs()}
+        results: list[ToolResult] = []
+        try:
+            for call in calls:
+                await self._emit(ev.ToolStarted(call=call, risk=risks.get(call.name, "low")), session)
+                t0 = time.monotonic()
+                res = await self._interruptible(self._run_one(session, turn_id, call), st)
+                results.append(res)
+                await self._emit(ev.ToolCompleted(result=res, duration_ms=int((time.monotonic() - t0) * 1000)),
+                                 session)
+        finally:  # every call gets a result, even on interrupt, so the transcript stays valid
+            done = {r.call_id for r in results}
+            results += [ToolResult.of_text(c.id, "interrupted before completion", True)
+                        for c in calls if c.id not in done]
+            await self._add(session, Message.tool(results), turn_id)
+
+    async def _run_one(self, session: str, turn_id: str, call: ToolCall) -> ToolResult:
+        if self.run_tool is None:
+            return ToolResult.of_text(call.id, f"no tool runner; cannot run {call.name}", True)
+
+        async def output(text: str) -> None:
+            await self._emit(ev.ToolOutput(call_id=call.id, text=text), session)
+
+        ctx = {"session": session, "turn_id": turn_id, "emit_output": output, "store": self.store}
+        try:
+            res = await _maybe_await(self.run_tool(call, ctx))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return ToolResult.of_text(call.id, f"{type(exc).__name__}: {exc}", True)
+        if not isinstance(res, ToolResult):
+            res = ToolResult.of_text(call.id, str(res))
+        res.call_id = call.id
+        return res
+
+    async def _repair(self, session: str) -> None:
+        """After a crash mid tool round, close dangling tool calls with error results."""
+        msgs = self.store.messages(session, since=max(0, self.store.last_seq(session) - 1))
+        if msgs and msgs[-1].role == "assistant" and msgs[-1].tool_calls:
+            results = [ToolResult.of_text(c.id, "not run: session was interrupted", True)
+                       for c in msgs[-1].tool_calls]
+            await self._add(session, Message.tool(results), msgs[-1].meta.get("turn_id") or "")
+
+    async def _memory(self, method: str, *args: Any, **kw: Any) -> Any:
+        fn = getattr(self.memory, method, None) if self.memory is not None else None
+        if fn is None:
+            return None
+        try:
+            return await _maybe_await(fn(*args, **kw))
+        except Exception:  # memory is best effort; a failing provider never breaks a turn
+            return None
+
+
+def _err(text: str, retryable: bool) -> Any:
+    from exo.core.types import ProviderEvent
+
+    return ProviderEvent(kind="error", error=text, retryable=retryable)
+
