@@ -276,6 +276,12 @@ sets it to `~/Work/handoffs`.
 `EXO_VERCEL_SCOPE`, and the token file from `EXO_DEPLOY_ENV`. Put them in the environment or in an untracked
 `~/.config/exo/deploy.conf`. It deploys from a copy outside git.
 
+Staging first (D-047). With no flag the script deploys to `staging.exo.askaconsult.com` (Vercel project
+`exo-site-staging`), which sends `X-Robots-Tag: noindex, nofollow` and serves a `robots.txt` that disallows everything.
+Check the change there, then promote with `scripts/deploy-site.sh --prod`, which names the target, asks you to type
+`production` when run interactively, and deploys to `exo.askaconsult.com` (project `exo-site`). `--yes` skips the
+prompt for scripted runs, `--redeploy` skips the project, domain and DNS setup. Both targets deploy from a git-free copy.
+
 **Before the repo goes public.** Git history still holds the files removed in D-042. Rewrite history first (for
 example with `git filter-repo`), then publish.
 
