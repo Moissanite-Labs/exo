@@ -282,3 +282,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   env, then the OS keychain (service `exo`), then `~/.config/exo/keys.env` (mode 0600); never from chat.
 - **Resolves:** the D-012 judge-model question (eval = main) and the decision provider for A's seats
   (Laya default, Jev for experiments). Still open: the eval monthly ceiling and a decision-API cap.
+
+## D-019 (2026-10-12) Jev is the default decision model; Laya is the local fallback
+- **A's ruling:** "lets use jev as default instead if laya quality is subpar".
+- **Evidence:** base Laya on two probes: "Is deleting a production database reversible?" yes 0.62
+  (confidence 0.04); printer-ink receipt filed under taxes 0.46. Jev: no 0.80; office-supplies 0.99.
+  Laya's server warns its confidence is uncalibrated.
+- **Decision:** default `decision` route = Jev, then local Laya, then aux, then main. The gate consults
+  the decision model by default, tighten-only (D-015 unchanged). Amends D-015 and D-018's "local Laya
+  default". exo-decide (a fine-tuned Laya) can take the default back only by beating Jev on the held-out
+  set; never trained on Jev outputs (terms).
