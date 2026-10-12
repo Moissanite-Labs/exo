@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" width="160" height="160">
+<polygon fill="none" stroke="#8b8b86" stroke-width="1.2" points="20,140 140,140 140,20 20,20"/><line x1="80" y1="80" x2="20" y2="140" stroke="#b4b3ad" stroke-width="1.6" stroke-linecap="round"/><line x1="80" y1="80" x2="140" y2="140" stroke="#b4b3ad" stroke-width="1.6" stroke-linecap="round"/><line x1="80" y1="80" x2="20" y2="20" stroke="#b4b3ad" stroke-width="1.6" stroke-linecap="round"/><line x1="80" y1="80" x2="140" y2="20" stroke="#b4b3ad" stroke-width="1.6" stroke-linecap="round"/>
+</svg>

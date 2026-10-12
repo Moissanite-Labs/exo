@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>The Exo egg</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+  html, body { margin: 0; height: 100%; background: #08090a; color: #eceae4; font: 500 12px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  .hud { position: fixed; left: 20px; bottom: 18px; display: flex; gap: 18px; align-items: center; letter-spacing: .12em; text-transform: uppercase; color: #b4b3ad; }
+  .hud b { color: #ff5b14; font-weight: 600; }
+  .hud input { accent-color: #ff5b14; width: 180px; }
+  .hud a { color: #8b8b86; }
+  .hud.off { display: none; }
+</style>
+</head>
+<body>
+<canvas id="egg" aria-label="The Exo egg, a living lattice"></canvas>
+<div class="hud" id="hud">
+  <label>Stage <input id="st" type="range" min="0" max="4" step="0.05"> <b id="stv"></b> <span id="stn"></span></label>
+  <label>Activity <input id="ac" type="range" min="0" max="1" step="0.05"></label>
+  <a href="./">Brand</a>
+</div>
+<script src="egg.js"></script>
+<script>
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var stage = q.has("stage") ? +q.get("stage") : 0, act = q.has("activity") ? +q.get("activity") : 0.55;
+    var egg = ExoEgg.mount(document.getElementById("egg"), { stage: stage, activity: act, seed: +(q.get("seed") || 7),
+      reducedMotion: q.get("still") === "1" ? true : undefined });
+    if (q.get("hud") === "0") document.getElementById("hud").classList.add("off");
+    var st = document.getElementById("st"), ac = document.getElementById("ac");
+    st.value = stage; ac.value = act;
+    function label() { var s = +st.value; document.getElementById("stv").textContent = s.toFixed(2);
+      document.getElementById("stn").textContent = ExoEgg.STAGES[Math.min(4, Math.round(s))].name; }
+    st.addEventListener("input", function () { egg.setStage(+st.value); label(); });
+    ac.addEventListener("input", function () { egg.setActivity(+ac.value); });
+    label();
+    window.egg = egg;
+  })();
+</script>
+</body>
+</html>
