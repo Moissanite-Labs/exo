@@ -82,6 +82,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/trace [N]` | Show timing, route and estimated cost for the last N turns (default 10). |
 | `/findings` | Show what the harness found wrong with itself. |
 | `/grants` | List standing approvals. `/grants revoke <id>` removes one. |
+| `/gate` | Show whether policy files changed this session. `/gate accept` adopts the change. |
 | `/peers` | List other live sessions you can message. |
 | `/send <peer> <text>` | Message another session yourself. |
 | `/handoff [path]` | The agent writes a handoff note for the next session. |
@@ -137,6 +138,15 @@ What the gate asks about, and why:
   are asked again. This is so a draft you read cannot be swapped for another.
 - **Posts to public places are swept for internal names**, such as seat names, home paths and model ids. A hit holds
   the post and lists what it found.
+- **Code the gate cannot see into asks (D-038).** A script file, `python -c`, `node -e`, a heredoc fed to a shell,
+  `make`, `npm run` or `npm test`, `npx`, `xargs`, `find -exec`, a variable or `$( )` in the program's place, a shell
+  function, `source`, or a program the gate does not know: each asks once, for that exact command. Plain work still
+  runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like.
+- **Your store is like a key (D-038).** A write to your store's `policies/`, `state/` (your standing grants), the
+  ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always" covers it. Reading your
+  policies does not ask.
+- **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
+  the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
   act on a public place. Reading and local edits do not. Your `policies/gates.yaml` can change any cell.
 

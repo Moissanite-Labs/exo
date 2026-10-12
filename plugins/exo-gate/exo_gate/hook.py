@@ -121,8 +121,9 @@ class GrantStore:
     """Standing "always" grants on disk (D-033). One JSON list, mode 0600, written atomically.
 
     A grant has a scope (``rule`` = category, ``target`` = glob), an expiry and, for an outward act,
-    the ``binding`` hash of the exact text it covers. Credentials never get a grant. An outward
-    grant without a binding never matches, so no outward category has an unscoped always."""
+    the ``binding`` hash of the exact text it covers. Credentials and store writes never get a grant
+    (``gate.NO_GRANT``). An outward grant without a binding never matches, so no outward category has an
+    unscoped always."""
 
     def __init__(self, path: Optional[Path], clock: Callable[[], float] = time.time):
         self.path = path
@@ -149,7 +150,7 @@ class GrantStore:
         os.replace(tmp, self.path)
 
     def match(self, category: str, target: str, binding: str, outward: bool) -> Optional[dict]:
-        if category == "credentials":
+        if category in gate.NO_GRANT:
             return None
         now = self.clock()
         with self._lock:
@@ -180,7 +181,7 @@ class GrantStore:
         return hit
 
     def add(self, category: str, target: str, binding: str, days: float, by: str, tool: str = "") -> Optional[dict]:
-        if not self.path or category == "credentials" or days <= 0:
+        if not self.path or category in gate.NO_GRANT or days <= 0:
             return None
         now = self.clock()
         g = {"id": "g_" + secrets.token_hex(6), "rule": category, "target": _glob.escape(target or ""),
@@ -246,9 +247,12 @@ class Gate:
         self.router_getter = router_getter
         self.risk_lookup = risk_lookup
         self.sink = sink if sink is not None else LedgerSink(settings)
-        self._policies: Optional[dict] = None
+        self._policies: Optional[dict] = None      # pinned: the policy in force for this session
         self._policy_stamp: tuple = ()
         self._policy_error = ""
+        self._changed: Optional[dict] = None       # D-038: files changed since; waits for /gate accept
+        self._changed_stamp: tuple = ()
+        self._changed_error = ""
         self._pending: Dict[str, tuple[Optional[str], Optional[str], dict]] = {}
         self._spent: Dict[str, float] = {}
         self._lock = threading.Lock()
@@ -268,19 +272,55 @@ class Gate:
         paths = gate.scrub_sources(self.settings.principal_store)
         return tuple((str(p), p.stat().st_mtime_ns if p.exists() else 0) for p in paths)
 
+    def _load(self) -> tuple[dict, str]:
+        try:
+            return gate.load_policies(self.settings.principal_store), ""
+        except (gate.PolicyError, OSError) as exc:
+            # Fall back to the defaults, which ask on anything irreversible or public.
+            logger.warning("exo-gate: policy error, using defaults: %s", exc)
+            return gate.normalize_policies({}), str(exc)
+
     def policies(self) -> dict:
-        stamp = self._stamp() + self._scrub_stamp()
-        if self._policies is None or stamp != self._policy_stamp:
-            try:
-                self._policies = gate.load_policies(self.settings.principal_store)
-                self._policy_error = ""
-            except (gate.PolicyError, OSError) as exc:
-                # Fall back to the defaults, which ask on anything irreversible or public.
-                logger.warning("exo-gate: policy error, using defaults: %s", exc)
-                self._policies = gate.normalize_policies({})
-                self._policy_error = str(exc)
-            self._policy_stamp = stamp
+        """The pinned policy: what was on disk when this gate first looked (D-038). A file changed later is
+        loaded by ``changed_policies`` and can only make a decision stricter until the principal accepts it."""
+        if self._policies is None:
+            self._policy_stamp = self._stamp() + self._scrub_stamp()
+            self._policies, self._policy_error = self._load()
         return self._policies
+
+    def changed_policies(self) -> Optional[dict]:
+        """The policy on disk when it differs from the pinned one, else None. The first sight of each
+        change writes a ``policy_change`` row with the files' hashes."""
+        self.policies()
+        stamp = self._stamp() + self._scrub_stamp()
+        if stamp == self._policy_stamp:
+            self._changed, self._changed_stamp = None, ()
+            return None
+        if stamp != self._changed_stamp:
+            self._changed, self._changed_error = self._load()
+            self._changed_stamp = stamp
+            self.sink.append({"gate": PLUGIN_ID, "phase": "policy_change", "files": self._file_hashes(),
+                              "error": self._changed_error or None})
+        return self._changed
+
+    def _file_hashes(self) -> dict:
+        root = self.settings.principal_store
+        out = {}
+        for p in (gate.policy_files(root) if root else []):
+            try:
+                out[p.name] = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+            except OSError:
+                out[p.name] = None
+        return out
+
+    def accept_policies(self, by: str = "principal") -> str:
+        """Make the changed policy files the pinned policy (``/gate accept``)."""
+        if self.changed_policies() is None:
+            return "policy unchanged since the session started"
+        self._policies, self._policy_error = self._changed, self._changed_error
+        self._policy_stamp, self._changed, self._changed_stamp = self._changed_stamp, None, ()
+        self.sink.append({"gate": PLUGIN_ID, "phase": "policy_accept", "files": self._file_hashes(), "by": by})
+        return "accepted the changed policy files"
 
     # --- hooks ------------------------------------------------------------------------
 
@@ -297,9 +337,9 @@ class Gate:
             pass
 
     def _rule_key(self, tool: str, args: Mapping, c: gate.Classification, d: gate.Decision) -> str:
-        # An "always" answer must not cover a different public or irreversible act, so those
-        # keys are bound to the exact arguments. Others are bound to category and target.
-        if c.category == "credentials" or gate.is_outward(c, d) or d.violations:
+        # An "always" answer must not cover a different public or irreversible act, or different code the
+        # gate cannot see into, so those keys are bound to the exact arguments. Others: category and target.
+        if gate.binds_exact(c, d) or d.violations:
             return f"exo-gate:{c.category}:{gate.approval_binding(c, args)[:16]}"  # D-033: text-bound
         return f"exo-gate:{c.category}:{c.target or tool}"
 
@@ -383,9 +423,17 @@ class Gate:
         c = gate.classify({"tool": tool, "args": args})
         self._load_body_file(c)
         today = _dt.date.today().isoformat()
-        d = gate.decide(c, self.policies(), {"spent_today": self._spent.get(today, 0.0)})
+        ctx = {"spent_today": self._spent.get(today, 0.0)}
+        d = gate.decide(c, self.policies(), ctx)
         if self._policy_error:
             d.reason += f" (policy error, defaults used: {self._policy_error[:120]})"
+        changed = self.changed_policies()
+        if changed is not None:
+            # D-038: a policy changed mid-session only tightens. Loosening waits for /gate accept.
+            d2 = gate.decide(c, changed, ctx)
+            if _RANK[d2.outcome] > _RANK[d.outcome]:
+                d = d2
+            d.reason += " (policy files changed this session; the stricter of old and new applies until /gate accept)"
         if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
             d.reason += f" (registry risk is high and {tool} is not a known tool)"
             d.outcome = "ask"
@@ -399,7 +447,7 @@ class Gate:
         today = _dt.date.today().isoformat()
         if d.outcome != "deny":
             self._tighten(d, verdict)
-        outward = gate.is_outward(c, d)
+        outward = gate.binds_exact(c, d)
         binding = gate.approval_binding(c, args) if outward else ""
         grant = self._grant_for(c, d, binding, outward) if d.outcome == "ask" else None
         if grant:
@@ -433,11 +481,11 @@ class Gate:
                       "persist": True}
             if binding:
                 result["binding"] = binding
-            if c.category == "credentials":
+            if c.category in gate.NO_GRANT:
                 result["once"] = True      # the core never stores an "always" for this (no standing allow)
             body["rule_key"] = key
             body["approvers"] = approvers
-        if self.settings.mode == "observe" and c.category != "credentials":  # credentials are enforced in every mode
+        if self.settings.mode == "observe" and c.category not in gate.NO_GRANT:  # enforced in every mode
             body["would"] = result["action"] if result else "run"
             result = None
         if d.outcome in ("allow", "log") and c.cost:
@@ -471,7 +519,7 @@ class Gate:
     # --- standing grants (D-033) --------------------------------------------------------
 
     def _grant_for(self, c: gate.Classification, d: gate.Decision, binding: str, outward: bool) -> Optional[dict]:
-        if c.category == "credentials" or (d.violations and not binding):
+        if c.category in gate.NO_GRANT or (d.violations and not binding):
             return None
         try:
             return self.grants.match(c.category, c.target or c.tool, binding, outward)
@@ -524,6 +572,18 @@ def grants_command(g: "Gate", args: str = "") -> str:
     return "\n".join(out)
 
 
+def gate_command(g: "Gate", args: str = "") -> str:
+    """``/gate`` shows whether the policy files changed this session; ``/gate accept`` adopts them (D-038)."""
+    words = (args or "").split()
+    if words[:1] == ["accept"]:
+        return g.accept_policies()
+    if words and words[0] != "status":
+        return "usage: gate [status] | gate accept"
+    if g.changed_policies() is None:
+        return "policy as loaded at session start"
+    return "policy files changed this session; the stricter of old and new applies. Run /gate accept to adopt them."
+
+
 def _iso(ts: float) -> str:
     return _dt.datetime.fromtimestamp(float(ts), _dt.timezone.utc).isoformat(timespec="seconds")
 
@@ -559,6 +619,8 @@ def register(ctx) -> Gate:
         try:
             reg_cmd("grants", lambda args="": grants_command(g, args), "List or revoke standing approval grants",
                     "[list] | revoke <id>")
+            reg_cmd("gate", lambda args="": gate_command(g, args), "Show or accept policy files changed this session",
+                    "[status] | accept")
         except Exception:
-            logger.warning("exo-gate: could not register /grants", exc_info=True)
+            logger.warning("exo-gate: could not register /grants or /gate", exc_info=True)
     return g
