@@ -32,6 +32,9 @@ from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar
 CLIENT_ID = "exo-tui"
 DEFAULT_WINDOW = 200_000
 MAX_FILE = 64 * 1024
+WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
+PAGE = 60  # entries added per "load earlier"
+FLUSH_EVERY = 0.1  # streaming repaint interval in seconds (at most 10 a second)
 LONG_TURN_MS = 60_000  # the same line as the turn.slow trace rule: wall minus tool time and approval waits
 AT_RE = re.compile(r"(?<!\S)@(\S+)")
 # name -> (group, description). /help is generated from this table, so every command shows up there.
@@ -120,6 +123,7 @@ class ExoApp(App):
         Binding("ctrl+e", "edit_answer", "edit", priority=True),
         Binding("ctrl+r", "verdict('reject')", "reject", priority=True),
         Binding("escape", "escape", "esc", show=False),
+        Binding("f6", "load_earlier", "earlier", priority=True, show=False),
     ]
 
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
@@ -187,6 +191,9 @@ class ExoApp(App):
         self.intro_pending = ""  # "first" or "manual" from sending /intro until its turn starts
         self.sent: list[Any] = []  # every command body this client sent, for tests and debugging
         self._dirty = False
+        self.older: list[tuple] = []  # history entries not mounted yet, oldest first
+        self.earlier_row: Static | None = None
+        self._loading = False
 
     # ------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
@@ -205,6 +212,7 @@ class ExoApp(App):
         self.brand, self.strip, self.prompt = self.query_one(BrandBar), self.query_one(StatusStrip), self.query_one(PromptMark)
         self.composer = self.query_one(Composer)  # cached: a modal screen on top hides them from query_one
         self.composer.focus()
+        self.watch(self.transcript, "scroll_y", self.watch_transcript_scroll, init=False)
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
         if self.motion:
             self.set_interval(0.12, self.tick)  # spinners, the live dot and the packet on the wire
@@ -240,8 +248,9 @@ class ExoApp(App):
         return self.query_one("#transcript", VerticalScroll)
 
     def transcript_text(self) -> str:
-        return "\n".join(w.text if isinstance(w, Block) else f"{w.tool_name} {w.output}"
-                         for w in self.transcript.children if isinstance(w, (Block, ToolBlock)))
+        old = [e[2] if e[0] == "block" else f"{e[2]} {e[5]}" for e in self.older]
+        return "\n".join(old + [w.text if isinstance(w, Block) else f"{w.tool_name} {w.output}"
+                               for w in self.transcript.children if isinstance(w, (Block, ToolBlock))])
 
     def status_text(self) -> str:
         """The status strip as plain text (the strip itself draws instruments from the same numbers)."""
@@ -291,20 +300,34 @@ class ExoApp(App):
         self.query_one("#activity", Static).update(line)
 
     def add(self, widget: Block | ToolBlock) -> None:
-        if not (isinstance(widget, Block) and widget.kind in ("note", "warn", "job", "memory")):
+        self.add_many([widget])
+
+    def add_many(self, widgets: list[Block | ToolBlock]) -> None:
+        """One mount call and one scroll for a whole batch."""
+        if not widgets:
+            return
+        if any(not (isinstance(w, Block) and w.kind in ("note", "warn", "job", "memory")) for w in widgets):
             for w in self.query("#welcome, #hero"):  # a system line does not end the empty start; a message does
                 w.remove()
-        self.transcript.mount(widget)
+        self.transcript.mount(*widgets)
         self.transcript.scroll_end(animate=False)
 
+    def close_cur(self) -> None:
+        """End the streaming block: paint it as Markdown once, and stop appending to it."""
+        c, self.cur = self.cur, None
+        if c is not None and c.streaming:
+            c.streaming = False
+            if c.is_mounted:
+                c.flush()
+
     def note(self, text: str, kind: str = "note") -> None:
-        self.cur = None
+        self.close_cur()
         self.add(Block(text, kind))
 
     def mark_dirty(self) -> None:
         if not self._dirty:
             self._dirty = True
-            self.set_timer(0.04, self.flush)
+            self.set_timer(FLUSH_EVERY, self.flush)
 
     def flush(self) -> None:
         self._dirty = False
@@ -380,7 +403,7 @@ class ExoApp(App):
         except Exception:
             return
         if self.findings > before:
-            self.cur = None
+            self.close_cur()
             self.add(Block(f"{self.findings} open", "finding", head=f"{self.findings} open",
                            body="The harness noticed something odd and filed it.", meta=f"/findings {th.DOT} /trace"))
             self.hint("finding")
@@ -400,13 +423,12 @@ class ExoApp(App):
             self.turn_t0 = time.monotonic()
             self.model = b.model or self.model
             self.requested, self.served = self.model, ""  # what this turn asked for; ModelCall says what served
-            self.cur = None
+            self.close_cur()
         elif isinstance(b, s.TurnCompleted):
             self.busy = False
             self.turn_t0 = 0.0
             self.running_tools = 0
-            self.flush()
-            self.cur = None
+            self.close_cur()
             self.hint_budget = 1
             if (b.timing.get("wall_ms", 0) - b.timing.get("tool_ms", 0) - b.timing.get("approval_ms", 0)) >= LONG_TURN_MS:
                 self.hint("long_turn")
@@ -417,7 +439,9 @@ class ExoApp(App):
             self.turn_t0 = 0.0
             if self.cur is None or self.cur_id != b.message_id:
                 self.cur_id = b.message_id
+                self.close_cur()
                 self.cur = Block("", "assistant")
+                self.cur.streaming = True
                 self.add(self.cur)
             self.cur.text += b.text
             self.mark_dirty()
@@ -431,9 +455,10 @@ class ExoApp(App):
                             self.cur = Block(text, "assistant")
                             self.add(self.cur)
                     self.cur.text = text
-                    self.flush()
+                    self.cur.streaming = False
+                    self.cur.flush()
                     self.last_answer = (m.id, text)
-                self.cur = None
+                self.close_cur()
         elif isinstance(b, s.ToolStarted):
             tb = ToolBlock(b.call.id, b.call.name, b.call.arguments)
             tb.expanded = self.expanded
@@ -441,7 +466,7 @@ class ExoApp(App):
                 self.hint("code_find")
             self.tools[b.call.id] = tb
             self.running_tools += 1
-            self.cur = None
+            self.close_cur()
             self.add(tb)
         elif isinstance(b, s.ToolOutput):
             if tb := self.tools.get(b.call_id):
@@ -504,7 +529,7 @@ class ExoApp(App):
         elif isinstance(b, s.UiPanel):
             self.on_ui_panel(b)
         elif isinstance(b, s.TasteUpdated):
-            self.cur = None
+            self.close_cur()
             self.add(Block(f"taste {b.action}: {b.text} {b.path}", "taste",
                            head={"add": "learned", "update": "updated", "remove": "removed"}.get(b.action, b.action),
                            body=b.text, meta=f"edit file {th.DOT} {b.path}" if b.path else ""))
@@ -530,31 +555,89 @@ class ExoApp(App):
         self.transcript.remove_children()
         self.tools.clear()
         self.cur = None
+        self.older = []
+        self.earlier_row = None
         self.last_answer = (None, "")
 
-    def render_history(self, messages: list[dict[str, Any]]) -> None:
+    def history_entries(self, messages: list[dict[str, Any]]) -> list[tuple]:
+        """Turn stored messages into plain tuples: ("block", kind, text) or ("tool", id, name, args, status, output)."""
+        out: list[tuple] = []
+        by_id: dict[str, int] = {}
         for m in messages:
             if (m.get("meta") or {}).get("note"):  # context notes from other threads are for the model (D-028)
                 continue
             text = "".join(p.get("text", "") for p in m.get("content", []) if p.get("type") == "text")
             if m["role"] == "user" and text:
                 peer = (m.get("meta") or {}).get("peer") or (m.get("meta") or {}).get("job")
-                self.add(Block(text, "peer") if peer else Block(text, "user"))
+                out.append(("block", "peer" if peer else "user", text))
             elif m["role"] == "assistant":
                 if text:
-                    self.add(Block(text, "assistant"))
+                    out.append(("block", "assistant", text))
                     self.last_answer = (m.get("id"), text)
                 for tc in m.get("tool_calls", []):
-                    tb = ToolBlock(tc["id"], tc["name"], tc.get("arguments"))
-                    tb.status = "done"
-                    self.tools[tc["id"]] = tb
-                    self.add(tb)
+                    by_id[tc["id"]] = len(out)
+                    out.append(("tool", tc["id"], tc["name"], tc.get("arguments"), "done", ""))
             elif m["role"] == "tool":
                 for r in m.get("tool_results", []):
-                    if tb := self.tools.get(r["call_id"]):
-                        tb.output = "".join(p.get("text", "") for p in r.get("content", []))
-                        tb.status = "error" if r.get("is_error") else "done"
-                        tb.flush()
+                    if (n := by_id.get(r["call_id"])) is not None:
+                        out[n] = out[n][:4] + ("error" if r.get("is_error") else "done",
+                                               "".join(p.get("text", "") for p in r.get("content", [])))
+        return out
+
+    def widgets_for(self, entries: list[tuple]) -> list[Block | ToolBlock]:
+        widgets: list[Block | ToolBlock] = []
+        for e in entries:
+            if e[0] == "block":
+                widgets.append(Block(e[2], e[1]))
+            else:
+                tb = ToolBlock(e[1], e[2], e[3])
+                tb.status, tb.output = e[4], e[5]
+                self.tools[e[1]] = tb
+                widgets.append(tb)
+        return widgets
+
+    def render_history(self, messages: list[dict[str, Any]]) -> None:
+        """Mount only the last WINDOW entries; the rest wait as data until asked for (f6 or scroll to the top)."""
+        entries = self.history_entries(messages)
+        self.older, recent = entries[:-WINDOW], entries[-WINDOW:]
+        self.add_many(self.widgets_for(recent))
+        self.update_earlier_row()
+
+    def update_earlier_row(self) -> None:
+        n = len(self.older)
+        if n and self.earlier_row is None:
+            self.earlier_row = Static("", id="earlier", classes="block note")
+            self.transcript.mount(self.earlier_row, before=0)
+        if self.earlier_row is not None:
+            if n:
+                self.earlier_row.update(Text(f"{n} earlier message{'s' if n != 1 else ''}. "
+                                             "Press F6 or scroll to the top to load more.", style="dim italic"))
+            else:
+                self.earlier_row.remove()
+                self.earlier_row = None
+
+    def action_load_earlier(self) -> None:
+        if self._loading or not self.older or self.modal_open():
+            return
+        self._loading = True
+        self.run_worker(self.load_earlier(), exit_on_error=False)
+
+    async def load_earlier(self) -> None:
+        try:
+            tr = self.transcript
+            page, self.older = self.older[-PAGE:], self.older[:-PAGE]
+            widgets = self.widgets_for(page)
+            anchor = next((w for w in tr.children if w is not self.earlier_row), None)
+            await tr.mount(*widgets, before=anchor if anchor is not None else 0)
+            self.update_earlier_row()
+            if anchor is not None:  # keep what the reader was looking at in place
+                tr.call_after_refresh(tr.scroll_to_widget, anchor, animate=False, top=True)
+        finally:
+            self._loading = False
+
+    def watch_transcript_scroll(self, old: float, new: float) -> None:
+        if new <= 0 < old and self.older:
+            self.action_load_earlier()
 
     @staticmethod
     def label_of(info: dict[str, Any]) -> str:
@@ -640,7 +723,7 @@ class ExoApp(App):
             send = f"Run this shell command with your shell tool and show me the output:\n{cmd}"
         self.add(Block(shown, "user", steer=self.busy))
         self.hint("steer" if self.busy else "first_message")
-        self.cur = None
+        self.close_cur()
         await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
                                    mode="steer" if self.busy else "send"))
 
@@ -711,7 +794,7 @@ class ExoApp(App):
             if resp.ok:
                 out = resp.result.get("output")
                 if out and name == "context":
-                    self.cur = None
+                    self.close_cur()
                     self.add(Block(out if isinstance(out, str) else str(out), "report", head="context " + th.DOT + " next call"))
                 elif out:
                     self.note(out if isinstance(out, str) else str(out))
@@ -720,7 +803,7 @@ class ExoApp(App):
     async def intro(self, kind: str) -> None:
         """Send the orientation as a normal user turn. It shows as "/intro"; the agent gets the longer prompt."""
         self.add(Block("/intro", "user"))
-        self.cur = None
+        self.close_cur()
         self.intro_pending = kind
         resp = await self.post(s.TurnSend(session=self.session, text=INTRO_PROMPT,
                                           mode="steer" if self.busy else "send"))
@@ -745,7 +828,7 @@ class ExoApp(App):
             self.note("the core returned no handoff facts", "error")
             return
         self.add(Block("/handoff" + (f" {args.strip()}" if args.strip() else ""), "user"))
-        self.cur = None
+        self.close_cur()
         await self.post(s.TurnSend(session=self.session, text=handoff_prompt(facts),
                                    mode="steer" if self.busy else "send"))
 

@@ -57,6 +57,7 @@ class Block(Static):
         self.meta = meta  # panel footer line, dim
         self.shown: Any = None
         self.steer = steer  # a user message sent while a turn was running
+        self.streaming = False  # True while text is still arriving: paint cheap plain text, Markdown once it closes
 
     def paint(self, renderable: Any) -> None:
         self.shown = renderable  # kept so tests and snapshots can read what was drawn
@@ -88,7 +89,9 @@ class Block(Static):
 
     def flush(self) -> None:
         k = self.kind
-        if k == "assistant":
+        if k == "assistant" and self.streaming:
+            self.paint(Padding(Text(self.text, style=rich_style("fg2")), (0, 0, 0, 2)))
+        elif k == "assistant":
             self.paint(Padding(Markdown(self.text, style=rich_style("fg2")), (0, 0, 0, 2)))
         elif k == "user":
             row = Table.grid(padding=(0, 1))

@@ -466,3 +466,117 @@ def test_new_is_a_thread_of_the_same_memory(tmp_path):
         assert eng.store.get_session(app.session).kind == "private"
 
     run(tmp_path, sc)
+
+
+# ---------------------------------------------------------------- long transcripts (issue 17)
+def msg_blocks(app):
+    return [w for w in app.transcript.children if isinstance(w, Block) and w.kind in ("user", "assistant", "peer")]
+
+
+def long_history(n):
+    msgs = []
+    for i in range(n):
+        if i % 2 == 0:
+            msgs.append({"id": f"u{i}", "role": "user", "content": [{"type": "text", "text": f"question {i}"}]})
+        else:
+            msgs.append({"id": f"a{i}", "role": "assistant", "content": [{"type": "text", "text": f"answer {i}\n```py\nx = {i}\n```"}]})
+    return msgs
+
+
+def test_resume_long_history_mounts_only_a_window(tmp_path):
+    from exo_tui import app as appmod
+
+    async def sc(app, pilot, client, eng):
+        app.clear_transcript()
+        app.render_history(long_history(2000))
+        await pilot.pause(0.3)
+        blocks = msg_blocks(app)
+        assert len(blocks) == appmod.WINDOW
+        assert len(app.older) == 2000 - appmod.WINDOW
+        assert len(app.transcript.children) <= appmod.WINDOW + 4
+        assert "1940 earlier" in str(app.earlier_row.render())
+        assert "question 0" in app.transcript_text()  # older text still counts as transcript (/copy)
+
+    run(tmp_path, sc)
+
+
+def test_history_skips_context_notes_and_shows_job_lines_as_peer(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.clear_transcript()
+        app.render_history([
+            {"id": "n", "role": "user", "meta": {"note": True}, "content": [{"type": "text", "text": "hidden note"}]},
+            {"id": "j", "role": "user", "meta": {"job": "j1"}, "content": [{"type": "text", "text": "job finished"}]},
+            {"id": "u", "role": "user", "content": [{"type": "text", "text": "plain"}]},
+        ])
+        await pilot.pause(0.1)
+        blocks = [(w.kind, w.text) for w in msg_blocks(app)]
+        assert blocks == [("peer", "job finished"), ("user", "plain")]
+
+    run(tmp_path, sc)
+
+
+def test_load_earlier_adds_a_page_and_drops_the_row_at_the_end(tmp_path):
+    from exo_tui import app as appmod
+
+    async def sc(app, pilot, client, eng):
+        total = appmod.WINDOW + appmod.PAGE + 10
+        app.clear_transcript()
+        app.render_history(long_history(total))
+        await pilot.pause(0.2)
+        app.action_load_earlier()
+        await until(lambda: len(app.older) == 10, pilot)
+        await pilot.pause(0.2)
+        assert len(msg_blocks(app)) == appmod.WINDOW + appmod.PAGE
+        assert app.earlier_row is not None
+        await pilot.press("f6")
+        await until(lambda: not app.older and app.earlier_row is None, pilot)
+        await pilot.pause(0.2)
+        texts = [w.text for w in msg_blocks(app)]
+        assert len(texts) == total and texts[0] == "question 0" and texts[-1] == f"answer {total - 1}\n```py\nx = {total - 1}\n```"
+
+    run(tmp_path, sc)
+
+
+def test_streaming_block_paints_plain_text_then_markdown_once(tmp_path):
+    from rich.markdown import Markdown
+    from rich.padding import Padding
+
+    async def sc(app, pilot, client, eng):
+        await pilot.pause(0.5)  # let the startup notices land; a notice ends the stream by design
+        painted = []
+        orig = Block.paint
+
+        def spy(self, renderable):
+            inner = renderable.renderable if isinstance(renderable, Padding) else renderable
+            if self.kind == "assistant":
+                painted.append(type(inner).__name__)
+            return orig(self, renderable)
+
+        Block.paint = spy
+        try:
+            for i in range(300):  # delivered without yielding, so the repaint timer cannot fire in between
+                app.handle(s.Event(seq=i, type="message.delta", body=s.MessageDelta(message_id="m1", text=f"word{i} ")))
+            await pilot.pause(0.5)
+            assert Markdown.__name__ not in painted  # plain text while it streams
+            assert len(painted) < 10  # not one repaint per delta
+            assert app.cur is not None and app.cur.streaming
+            app.close_cur()
+            await pilot.pause(0.1)
+            assert painted[-1] == "Markdown" and app.cur is None
+            assert app.transcript_text().endswith("word299 ")
+        finally:
+            Block.paint = orig
+
+    run(tmp_path, sc)
+
+
+def test_a_tool_start_closes_the_streaming_block(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.handle(s.Event(seq=1, type="message.delta", body=s.MessageDelta(message_id="m1", text="before the tool")))
+        blk = app.cur
+        assert blk is not None and blk.streaming
+        app.close_cur()  # what every `self.cur = None` site now calls
+        await pilot.pause(0.1)
+        assert not blk.streaming and app.cur is None
+
+    run(tmp_path, sc)
