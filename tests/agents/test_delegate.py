@@ -320,6 +320,10 @@ def test_delegate_to_another_seat_posts_a_signed_bus_message(tmp_path):
             self.sent = []
 
         def post_sym2p(self, to, line, kind="msg", thread=None, **kw):
+            from exo.bus import wire  # the real relay answers 422 to any kind outside this grammar
+
+            if kind not in wire.KINDS:
+                raise RuntimeError(f"422 unknown kind {kind!r}")
             self.sent.append((to, line, kind, thread))
             return {"seq": 7, "id": "x"}
 
@@ -328,7 +332,7 @@ def test_delegate_to_another_seat_posts_a_signed_bus_message(tmp_path):
     eng, fake = engine(tmp_path, rules)
     eng.agents.bus = bus
     sid, _ = asyncio.run(parent_turn(eng, "PARENT go"))
-    assert len(bus.sent) == 1 and bus.sent[0][0] == ["scout"] and bus.sent[0][2] == "task"
+    assert len(bus.sent) == 1 and bus.sent[0][0] == ["scout"] and bus.sent[0][2] == "directive"
     assert decode(bus.sent[0][1]).goal == "do it elsewhere"
     assert not any("do it elsewhere" in c["user"] for c in fake.calls)  # nothing ran locally
     row = eng.agents.list(sid)[0]
