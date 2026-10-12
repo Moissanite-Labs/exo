@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" width="960" height="540" role="img" aria-labelledby="t d">
+<title id="t">Exo session</title>
+<desc id="d">An animated terminal session. The user asks Exo to fix a failing test. Exo reads a file, searches code, edits and runs the tests, then stops at an approval gate for a git push. The push is approved and signed, and a status strip shows model, memory, cache and cost.</desc>
+<style>
+text{font-family:ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace}
+@keyframes typ{0%,5.62%{transform:translateX(0)}5.62%{animation-timing-function:steps(45,end)}21.88%{transform:translateX(419px);opacity:1}21.94%,100%{transform:translateX(419px);opacity:0}}.cover{animation:typ 16.0s linear infinite}@keyframes cur{0%,5.00%{opacity:0;transform:translateX(0)}5.62%{opacity:1;animation-timing-function:steps(45,end)}21.88%{opacity:1;transform:translateX(405px)}25.62%,100%{opacity:0;transform:translateX(405px)}}.cursor{opacity:0;animation:cur 16.0s linear infinite}
+@keyframes scene{0%{opacity:0}2.19%{opacity:1}94.38%{opacity:1}99.06%,100%{opacity:0}}.scene{animation:scene 16.0s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.spin{transform-box:fill-box;transform-origin:center;animation:spin .8s linear infinite}@keyframes spinv{0%,40.62%{opacity:0}41.88%,50.62%{opacity:1}51.25%,100%{opacity:0}}.spinv{opacity:0;animation:spinv 16.0s linear infinite}@keyframes key{0%,75.00%{opacity:0}75.62%,100%{opacity:1}}.key{opacity:0;animation:key 16.0s linear infinite}@keyframes gauge{0%,86.88%{transform:scaleX(0)}93.75%,100%{transform:scaleX(1)}}.gauge{transform-box:fill-box;transform-origin:left center;transform:scaleX(0);animation:gauge 16.0s cubic-bezier(.2,.7,.1,1) infinite}@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+@media (prefers-reduced-motion: reduce){.scene,.cover,.cursor,.spinv,.spin,.s,.key,.gauge{animation:none!important}.s,.key{opacity:1!important;transform:none!important}.gauge{transform:none}.cover,.cursor,.spinv{display:none}.scene{opacity:1}}
+@keyframes a1{0%,26.25%{opacity:0;transform:translateY(4px);}27.81%,100%{opacity:1;transform:translateY(0);}}.a1{opacity:0;animation:a1 16.0s linear infinite}
+@keyframes a2{0%,30.63%{opacity:0;transform:translateY(4px);}32.19%,100%{opacity:1;transform:translateY(0);}}.a2{opacity:0;animation:a2 16.0s linear infinite}
+@keyframes a3{0%,35.00%{opacity:0;transform:translateY(4px);}36.56%,100%{opacity:1;transform:translateY(0);}}.a3{opacity:0;animation:a3 16.0s linear infinite}
+@keyframes a4{0%,39.38%{opacity:0;transform:translateY(4px);}40.94%,100%{opacity:1;transform:translateY(0);}}.a4{opacity:0;animation:a4 16.0s linear infinite}
+@keyframes a5{0%,51.25%{opacity:0;}52.81%,100%{opacity:1;}}.a5{opacity:0;animation:a5 16.0s linear infinite}
+@keyframes a6{0%,56.25%{opacity:0;transform:translateY(6px);}57.81%,100%{opacity:1;transform:translateY(0);}}.a6{opacity:0;animation:a6 16.0s linear infinite}
+@keyframes keyt{0%,75.00%{fill:#eceae4}75.62%,100%{fill:#08090a}}.keyt{animation:keyt 16.0s linear infinite}
+@media (prefers-reduced-motion: reduce){.keyt{animation:none!important;fill:#08090a}}
+@keyframes a7{0%,80.00%{opacity:0;transform:translateY(4px);}81.56%,100%{opacity:1;transform:translateY(0);}}.a7{opacity:0;animation:a7 16.0s linear infinite}
+@keyframes a8{0%,85.00%{opacity:0;transform:translateY(4px);}86.56%,100%{opacity:1;transform:translateY(0);}}.a8{opacity:0;animation:a8 16.0s linear infinite}
+</style>
+<rect width="960" height="540" fill="#08090a"/>
+<g class="scene">
+<rect x="40" y="28" width="880" height="484" fill="#0e1012" stroke="#343a41"/>
+<path d="M40 72H920" stroke="#24282d"/>
+<circle cx="62" cy="50" r="5" fill="none" stroke="#343a41"/>
+<circle cx="80" cy="50" r="5" fill="none" stroke="#343a41"/>
+<circle cx="98" cy="50" r="5" fill="none" stroke="#343a41"/>
+<text x="128" y="54" font-size="12" letter-spacing="1.8" fill="#8b8b86">EXO · ATLAS</text>
+<text x="70" y="112" font-size="16" font-weight="700" fill="#ff5b14">›</text>
+<text x="92" y="112" font-size="15" fill="#eceae4" textLength="405" lengthAdjust="spacingAndGlyphs">fix the failing test in tests/test_slugify.py</text>
+<rect class="cover" x="91" y="94" width="421" height="26" fill="#0e1012"/>
+<rect class="cursor" x="92" y="98" width="8" height="18" fill="#ff5b14"/>
+<g class="a1 s" ><rect x="70" y="149" width="6" height="6" fill="#9fb4c4"/><text x="86" y="158" font-size="14" fill="#eceae4">read_file</text><text x="202" y="158" font-size="14" fill="#8b8b86">src/slugify/core.py</text><text x="896" y="158" font-size="12" text-anchor="end" fill="#8b8b86">31ms</text></g>
+<g class="a2 s" ><rect x="70" y="175" width="6" height="6" fill="#9fb4c4"/><text x="86" y="184" font-size="14" fill="#eceae4">code_find</text><text x="202" y="184" font-size="14" fill="#8b8b86">unicode normalise</text><text x="896" y="184" font-size="12" text-anchor="end" fill="#8b8b86">640ms</text></g>
+<g class="a3 s" ><rect x="70" y="201" width="6" height="6" fill="#9fb4c4"/><text x="86" y="210" font-size="14" fill="#eceae4">edit_file</text><text x="202" y="210" font-size="14" fill="#8b8b86">src/slugify/core.py +4 −1</text><text x="896" y="210" font-size="12" text-anchor="end" fill="#8b8b86">8ms</text></g>
+<g class="a4 s" ><rect x="70" y="227" width="6" height="6" fill="#9fb4c4"/><text x="86" y="236" font-size="14" fill="#eceae4">bash</text><text x="202" y="236" font-size="14" fill="#8b8b86">pytest -q tests/test_slugify.py</text></g>
+<g class="spinv"><circle class="spin" cx="890" cy="231" r="5" fill="none" stroke="#9fb4c4" stroke-width="1.5" stroke-dasharray="9 23"/></g>
+<text class="a5 s" x="896" y="236" font-size="12" text-anchor="end" fill="#4ade80">ok · 14 passed · 2.1s</text>
+<g class="a6 s" ><rect x="70" y="270" width="826" height="116" fill="#ff5b14" fill-opacity=".06" stroke="#ff5b14"/><text x="90" y="298" font-size="12" letter-spacing="2.4" fill="#ff5b14">APPROVAL · HIGH RISK</text><text x="90" y="328" font-size="16" fill="#eceae4">git push origin fix/unicode-slugs</text><rect x="90" y="346" width="26" height="24" fill="none" stroke="#343a41"/><rect class="key" x="90" y="346" width="26" height="24" fill="#ff5b14"/><text x="103" y="363" font-size="13" text-anchor="middle" fill="#08090a" class="keyt">y</text><text x="126" y="363" font-size="13" fill="#b4b3ad">allow</text><rect x="222" y="346" width="26" height="24" fill="none" stroke="#343a41"/><text x="235" y="363" font-size="13" text-anchor="middle" fill="#eceae4">n</text><text x="258" y="363" font-size="13" fill="#b4b3ad">deny</text><rect x="342" y="346" width="26" height="24" fill="none" stroke="#343a41"/><text x="355" y="363" font-size="13" text-anchor="middle" fill="#eceae4">a</text><text x="378" y="363" font-size="13" fill="#b4b3ad">allow always</text></g>
+<text class="a7 s" x="70" y="414" font-size="13" fill="#4ade80">✓ approved · seat-signed · exact text 3f9c…</text>
+<g class="a8 s" ><path d="M40 426H920" stroke="#24282d"/><text x="64" y="464" font-size="12" fill="#8b8b86" letter-spacing="1.2">MODEL</text><text x="115" y="464" font-size="12" fill="#eceae4">claude-sonnet-4-5</text><text x="330" y="464" font-size="12" fill="#8b8b86" letter-spacing="1.2">MEMORY</text><text x="390" y="464" font-size="12" fill="#eceae4">18k/200k</text><text x="520" y="464" font-size="12" fill="#8b8b86" letter-spacing="1.2">CACHE</text><text x="571" y="464" font-size="12" fill="#eceae4">82%</text><text x="760" y="464" font-size="12" fill="#8b8b86" letter-spacing="1.2">COST</text><text x="802" y="464" font-size="12" fill="#eceae4">$0.14</text><rect x="618" y="455" width="100" height="10" fill="none" stroke="#343a41"/></g>
+<rect class="gauge" x="618" y="455" width="82" height="10" fill="#9fb4c4"/>
+</g>
+</svg>

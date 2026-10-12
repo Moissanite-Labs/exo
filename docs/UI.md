@@ -72,20 +72,11 @@ Where the numbers come from, all from events the core already sends: `model.call
 
 ## Screenshots
 
-Made by `scripts/ui_shots.py` (Textual pilot, `save_screenshot`, in-process core with the scripted model) and
-converted by `scripts/svg_to_png.sh` (rsvg-convert, else headless Chrome, else qlmanage).
-
-| State | Image |
-|---|---|
-| Boot sequence | `docs/ui/01b-boot.png` |
-| Empty start | `docs/ui/01-empty.png` |
-| A turn with tools running, fallback and cache in the strip | `docs/ui/02-tools.png` |
-| Approval panel | `docs/ui/03-approval.png` |
-| Finished answer with tips, taste panel and a memory event | `docs/ui/04-answer.png` |
-| `/context` report | `docs/ui/05-context.png` |
-| 80x24 terminal | `docs/ui/06-narrow-80x24.png` |
-
-SVG sources sit beside the PNGs.
+The public set is in `docs/media/` (`tui-01-start.png` to `tui-05-job.png`): start, a turn with tools, an
+approval panel, the `/context` report and a background job. They come from `scripts/promo_shots.py`, which
+drives the app with Textual's pilot over an in-process core and a scripted model, with neutral demo data.
+`docs/media/README.md` has the commands. The older shots in `docs/ui/` were removed because they used internal
+names. `scripts/ui_shots.py` still renders the full set (boot, narrow 80x24) for local checks.
 
 ## Credit
 
