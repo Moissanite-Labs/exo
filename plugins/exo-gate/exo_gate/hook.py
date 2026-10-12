@@ -94,7 +94,8 @@ def resolve_settings(overrides: Mapping[str, Any] | None = None,
     if not store and env.get("EXO_PRINCIPAL"):
         store = str(exo_home / "principals" / env["EXO_PRINCIPAL"])
     author = str(get("author"))
-    key_path = get("key_path") or str(exo_home / "keys" / f"{author}.key")
+    seat = env.get("EXO_SEAT") or author  # the seat's own signing key, the same file the bus client uses
+    key_path = get("key_path") or str(exo_home / "keys" / f"{seat}.key")
     mode = str(get("mode")).strip().lower()
     return Settings(
         principal_store=Path(store).expanduser() if store else None,
@@ -124,15 +125,15 @@ class LedgerSink:
         if not s.principal_store or not s.principal_store.is_dir():
             logger.info("exo-gate: no principal store; decisions are logged only")
             return None
-        if not s.key_path or not s.key_path.is_file():
-            logger.warning("exo-gate: no signing key at %s; decisions are logged only", s.key_path)
-            return None
         try:
+            from exo.core.seats import ensure_key
+            if s.key_path and not s.key_path.is_file():
+                ensure_key(s.key_path)  # first use: generate the seat key (0600)
             from exo import crypto
             from exo.ledger import Ledger
             self._ledger = Ledger(s.principal_store / "ledger.sqlite", crypto.Signer.from_file(s.author, s.key_path))
         except Exception as exc:  # pragma: no cover - depends on the host
-            logger.warning("exo-gate: cannot open ledger: %s", exc)
+            logger.warning("exo-gate: cannot open ledger or key at %s: %s", s.key_path, exc)
             self._ledger = None
         return self._ledger
 
@@ -221,22 +222,24 @@ class Gate:
         except Exception:
             return ""
 
-    async def _verdict(self, d: gate.Decision, c: gate.Classification, risk: str, tool: str) -> Optional[str]:
-        """The decision model's top option for this call, or None (off, no router, failure)."""
+    async def _verdict(self, d: gate.Decision, c: gate.Classification, risk: str, tool: str) -> Optional[tuple]:
+        """``(top option, {"route", "source"})`` from the decision role, or None (no router, failure).
+        The route is the one that answered: the first route (Jev) or a fallback."""
         router = self.router_getter() if self.router_getter else None
         if router is None:
             return None
         try:
-            from exo.core.models.decision import ask_choice
+            from exo.core.models.decision import ask_choice_result
             state = {"tool": tool, "classification": c.as_dict(), "risk": risk, "rule_outcome": d.outcome,
                      "reason": d.reason}
-            probs = await asyncio.wait_for(
-                ask_choice(router, state, "How strictly should this tool call be gated?", list(gate.OUTCOMES)),
-                timeout=20)
+            res = await asyncio.wait_for(
+                ask_choice_result(router, state, "How strictly should this tool call be gated?",
+                                  list(gate.OUTCOMES)), timeout=20)
         except Exception:
             logger.warning("exo-gate: decision model failed; keeping the rule outcome", exc_info=True)
             return None
-        return max(probs, key=probs.get) if probs else None
+        probs = res.probabilities
+        return (max(probs, key=probs.get), {"route": res.route, "source": res.source}) if probs else None
 
     @staticmethod
     def _tighten(d: gate.Decision, verdict: Optional[str]) -> None:
@@ -260,14 +263,14 @@ class Gate:
             try:
                 c, d = self._rules(tool_name, args, risk_s)
                 if d.outcome != "deny":
-                    verdict = await self._verdict(d, c, risk_s, tool_name)
+                    verdict = await self._verdict(d, c, risk_s, tool_name)  # (option, via) or None
             except Exception:
                 logger.exception("exo-gate: rules failed before the decision model on %s", tool_name)
         return self.pre_tool_call(tool_name, args, session_id, task_id, tool_call_id, turn_id, risk,
                                   _verdict=verdict)
 
     def pre_tool_call(self, tool_name: str = "", args: Any = None, session_id: str = "", task_id: str = "",
-                      tool_call_id: str = "", turn_id: str = "", risk: Any = None, _verdict: Optional[str] = None,
+                      tool_call_id: str = "", turn_id: str = "", risk: Any = None, _verdict: Any = None,
                       **_: Any) -> Optional[dict]:
         args = args if isinstance(args, dict) else {}
         try:
@@ -295,7 +298,8 @@ class Gate:
         return c, d
 
     def _pre_tool_call(self, tool: str, args: dict, session_id: str, tool_call_id: str,
-                       risk: str = "", verdict: Optional[str] = None) -> Optional[dict]:
+                       risk: str = "", verdict: Any = None) -> Optional[dict]:
+        verdict, via = verdict if isinstance(verdict, tuple) else (verdict, None)
         c, d = self._rules(tool, args, risk)
         pol = self.policies()
         today = _dt.date.today().isoformat()
@@ -308,6 +312,8 @@ class Gate:
             "tool_call_id": tool_call_id or None,
             "args_sha256": hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode("utf-8")).hexdigest(),
         }
+        if verdict:
+            body["decision_model"] = {"verdict": verdict, **(via or {})}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}

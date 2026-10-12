@@ -1,0 +1,555 @@
+"""The Exo chat screen: transcript, activity strip, composer, status line, right-hand panel."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.widgets import Static
+
+from exo.core.types import ContentPart
+from exo.protocol import schema as s
+from exo_tui.widgets import (ApprovalCard, Block, Composer, EditScreen, Palette, PanelView, ToolBlock)
+
+CLIENT_ID = "exo-tui"
+DEFAULT_WINDOW = 200_000
+MAX_FILE = 64 * 1024
+AT_RE = re.compile(r"(?<!\S)@(\S+)")
+LOCAL_COMMANDS = {"new": "start a new session", "sessions": "pick a session", "model": "pick or set the model",
+                  "fork": "fork this session", "undo": "undo the last turn", "help": "list commands",
+                  "exit": "quit"}
+
+
+class ExoApp(App):
+    TITLE = "exo"
+    ENABLE_COMMAND_PALETTE = False
+    CSS = """
+    #main { height: 1fr; }
+    #left { width: 1fr; }
+    #transcript { height: 1fr; padding: 0 1; }
+    .block { margin-bottom: 1; }
+    .user { color: $text; }
+    #activity { height: 1; color: $text-muted; padding: 0 1; }
+    #status { height: 1; background: $boost; color: $text-muted; padding: 0 1; }
+    #composer { height: auto; max-height: 8; min-height: 3; }
+    #approval { height: auto; border: round $warning; padding: 0 1; }
+    #panel { width: 45%; border-left: solid $primary; padding: 0 1; }
+    #panel-scroll { height: 1fr; }
+    #panel-choices { height: auto; max-height: 10; }
+    Palette, EditScreen { align: center middle; }
+    #palette-box, #edit-box { width: 80%; height: 70%; border: round $primary; background: $surface; padding: 0 1; }
+    #edit-area { height: 1fr; }
+    """
+    BINDINGS = [
+        Binding("ctrl+p", "palette", "palette", priority=True),
+        Binding("ctrl+o", "toggle_tools", "tool output", priority=True),
+        Binding("ctrl+y", "verdict('accept')", "accept", priority=True),
+        Binding("ctrl+e", "edit_answer", "edit", priority=True),
+        Binding("ctrl+r", "verdict('reject')", "reject", priority=True),
+        Binding("escape", "escape", "esc", show=False),
+    ]
+
+    def __init__(self, client: Any, session: str | None = None, resume: bool = False,
+                 seat: str | None = None, title: str = "") -> None:
+        super().__init__()
+        self.client = client
+        self.session = session
+        self.resume = resume
+        self.seat = seat
+        self.title_arg = title
+        self.model = ""
+        self.window = DEFAULT_WINDOW
+        self.ctx_tokens = 0
+        self.cost = 0.0
+        self.busy = False
+        self.expanded = False
+        self.ready = asyncio.Event()
+        self.cur: Block | None = None
+        self.cur_id: str | None = None
+        self.last_answer: tuple[str | None, str] = (None, "")
+        self.tools: dict[str, ToolBlock] = {}
+        self.approvals: list[s.ApprovalRequested] = []
+        self.card: ApprovalCard | None = None
+        self.question: str | None = None
+        self.running_tools = 0
+        self.agents: dict[str, str] = {}
+        self.panels: dict[str, tuple[str, str, str, str, dict]] = {}
+        self.panel_order: list[str] = []
+        self.panel_touched: set[str] = set()
+        self.commands: list[dict[str, Any]] = []
+        self.sent: list[Any] = []  # every command body this client sent, for tests and debugging
+        self._dirty = False
+
+    # ------------------------------------------------------------ layout
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="main"):
+            with Vertical(id="left"):
+                yield VerticalScroll(id="transcript")
+                yield Static("", id="activity")
+                yield Composer()
+            yield PanelView()
+        yield Static("", id="status")
+
+    def on_mount(self) -> None:
+        self.query_one(Composer).focus()
+        self.refresh_status()
+        self.run_worker(self.boot(), exit_on_error=False)
+
+    # ------------------------------------------------------------ helpers
+    @property
+    def transcript(self) -> VerticalScroll:
+        return self.query_one("#transcript", VerticalScroll)
+
+    def transcript_text(self) -> str:
+        return "\n".join(w.text if isinstance(w, Block) else f"{w.tool_name} {w.output}"
+                         for w in self.transcript.children if isinstance(w, (Block, ToolBlock)))
+
+    def status_text(self) -> str:
+        pct = min(999, round(100 * self.ctx_tokens / self.window)) if self.window else 0
+        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}% · ${self.cost:.2f}"
+
+    def refresh_status(self) -> None:
+        self.query_one("#status", Static).update(self.status_text())
+
+    def refresh_activity(self) -> None:
+        bits = []
+        if self.running_tools:
+            bits.append("running tool" if self.running_tools == 1 else f"running {self.running_tools} tools")
+        elif self.busy:
+            bits.append("working")
+        live = sum(1 for v in self.agents.values() if v in ("queued", "running"))
+        if live:
+            bits.append(f"{live} subagent{'s' if live != 1 else ''}")
+        self.query_one("#activity", Static).update(" · ".join(bits))
+
+    def add(self, widget: Block | ToolBlock) -> None:
+        self.transcript.mount(widget)
+        self.transcript.scroll_end(animate=False)
+
+    def note(self, text: str, kind: str = "note") -> None:
+        self.cur = None
+        self.add(Block(text, kind))
+
+    def mark_dirty(self) -> None:
+        if not self._dirty:
+            self._dirty = True
+            self.set_timer(0.04, self.flush)
+
+    def flush(self) -> None:
+        self._dirty = False
+        if self.cur is not None and self.cur.is_mounted:
+            self.cur.flush()
+            self.transcript.scroll_end(animate=False)
+
+    # ------------------------------------------------------------ boot and events
+    async def boot(self) -> None:
+        try:
+            hello = await self.client.call(s.Hello(client=CLIENT_ID, capabilities=["markdown", "diff"],
+                                                   screen_cols=self.size.width or None))
+            try:
+                for m in (await self.client.call(s.ModelsList())).get("models", []):
+                    if m.get("role") == "main":
+                        self.model = self.model or m.get("route", "")
+                        if m.get("context"):
+                            self.window = int(m["context"])
+                            break
+                self.commands = (await self.client.call(s.CommandsList())).get("commands", [])
+            except Exception:
+                pass
+            if self.resume and not self.session:
+                rows = (await self.client.call(s.SessionList(limit=1, seat=self.seat)))["sessions"]
+                self.session = rows[0]["id"] if rows else None
+            if self.session:
+                await self.load_session(self.session)
+            else:
+                await self.new_session()
+            self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
+        except Exception as exc:
+            self.note(f"cannot start: {type(exc).__name__}: {exc}", "error")
+        self.refresh_status()
+        self.ready.set()
+
+    async def pump(self, since: int) -> None:
+        async for ev in self.client.events(since=since, reconnect=True):
+            if ev.session not in (None, self.session):
+                continue
+            try:
+                self.handle(ev)
+            except Exception as exc:  # a bad event must not stop the feed
+                self.note(f"event {ev.type}: {type(exc).__name__}: {exc}", "error")
+
+    def handle(self, ev: s.Event) -> None:
+        b = ev.body
+        if isinstance(b, s.TurnStarted):
+            self.busy = True
+            self.model = b.model or self.model
+            self.cur = None
+        elif isinstance(b, s.TurnCompleted):
+            self.busy = False
+            self.running_tools = 0
+            self.flush()
+            self.cur = None
+        elif isinstance(b, s.MessageDelta):
+            if self.cur is None or self.cur_id != b.message_id:
+                self.cur_id = b.message_id
+                self.cur = Block("", "assistant")
+                self.add(self.cur)
+            self.cur.text += b.text
+            self.mark_dirty()
+        elif isinstance(b, s.MessageCompleted):
+            m = b.message
+            if m.role == "assistant":
+                text = m.text()
+                if text:
+                    if self.cur is None or self.cur_id != m.id:
+                        if self.cur is None or not self.cur.text:
+                            self.cur = Block(text, "assistant")
+                            self.add(self.cur)
+                    self.cur.text = text
+                    self.flush()
+                    self.last_answer = (m.id, text)
+                self.cur = None
+        elif isinstance(b, s.ToolStarted):
+            tb = ToolBlock(b.call.id, b.call.name, b.call.arguments)
+            tb.expanded = self.expanded
+            self.tools[b.call.id] = tb
+            self.running_tools += 1
+            self.cur = None
+            self.add(tb)
+        elif isinstance(b, s.ToolOutput):
+            if tb := self.tools.get(b.call_id):
+                tb.output += b.text
+                tb.flush()
+        elif isinstance(b, s.ToolCompleted):
+            self.running_tools = max(0, self.running_tools - 1)
+            if tb := self.tools.get(b.result.call_id):
+                tb.output = b.result.text() or tb.output
+                tb.status = "error" if b.result.is_error else "done"
+                tb.flush()
+        elif isinstance(b, s.ApprovalRequested):
+            self.approvals.append(b)
+            self.show_approval()
+        elif isinstance(b, s.ApprovalResolved):
+            self.approvals = [a for a in self.approvals if a.request_id != b.request_id]
+            if self.card is not None and self.card.req.request_id == b.request_id:
+                self.close_card()
+        elif isinstance(b, s.QuestionAsked):
+            self.question = b.question_id
+            opts = f" [{' / '.join(b.options)}]" if b.options else ""
+            self.note(f"question: {b.text}{opts}  (type your answer)")
+        elif isinstance(b, s.UsageUpdated):
+            u = b.usage
+            self.ctx_tokens = u.input_tokens + u.cache_read_tokens
+            if b.session_total and b.session_total.cost_usd is not None:
+                self.cost = b.session_total.cost_usd
+            self.model = b.model or self.model
+        elif isinstance(b, s.TaskUpdated):
+            self.agents[b.task_id] = b.status
+        elif isinstance(b, s.UiPanel):
+            self.on_ui_panel(b)
+        elif isinstance(b, s.TasteUpdated):
+            self.note(f"taste {b.action}: {b.text} {b.path}")
+        elif isinstance(b, s.ContextCompacted):
+            self.note(f"context compacted: {b.before_tokens} to {b.after_tokens} tokens")
+        elif isinstance(b, s.SessionUpdated):
+            if b.session.id == self.session:
+                self.model = b.session.model or self.model
+                self.seat = self.seat or b.session.seat
+        elif isinstance(b, s.Notice):
+            self.note(f"{b.level}: {b.text}" if b.level != "info" else b.text)
+        elif isinstance(b, s.Error):
+            self.note(f"error: {b.code}: {b.message}", "error")
+        self.refresh_status()
+        self.refresh_activity()
+
+    # ------------------------------------------------------------ sessions
+    def clear_transcript(self) -> None:
+        self.transcript.remove_children()
+        self.tools.clear()
+        self.cur = None
+        self.last_answer = (None, "")
+
+    def render_history(self, messages: list[dict[str, Any]]) -> None:
+        for m in messages:
+            text = "".join(p.get("text", "") for p in m.get("content", []) if p.get("type") == "text")
+            if m["role"] == "user" and text:
+                self.add(Block(text, "user"))
+            elif m["role"] == "assistant":
+                if text:
+                    self.add(Block(text, "assistant"))
+                    self.last_answer = (m.get("id"), text)
+                for tc in m.get("tool_calls", []):
+                    tb = ToolBlock(tc["id"], tc["name"], tc.get("arguments"))
+                    tb.status = "done"
+                    self.tools[tc["id"]] = tb
+                    self.add(tb)
+            elif m["role"] == "tool":
+                for r in m.get("tool_results", []):
+                    if tb := self.tools.get(r["call_id"]):
+                        tb.output = "".join(p.get("text", "") for p in r.get("content", []))
+                        tb.status = "error" if r.get("is_error") else "done"
+                        tb.flush()
+
+    async def load_session(self, sid: str) -> None:
+        got = await self.client.call(s.SessionResume(session=sid))
+        self.session = sid
+        info = got["session"]
+        self.seat = self.seat or info.get("seat")
+        self.model = info.get("model") or self.model
+        self.clear_transcript()
+        self.render_history(got.get("messages", []))
+        self.note(f"session {sid}", "note")
+        self.refresh_status()
+
+    async def new_session(self) -> None:
+        got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat))
+        self.session = got["session"]["id"]
+        self.model = got["session"].get("model") or self.model
+        self.clear_transcript()
+        self.note(f"session {self.session}")
+        self.refresh_status()
+
+    # ------------------------------------------------------------ sending
+    async def post(self, body: Any) -> s.Response:
+        self.sent.append(body)
+        resp = await self.client.send(body)
+        if not resp.ok:
+            self.note(f"error: {resp.error.code}: {resp.error.message}", "error")
+        return resp
+
+    def on_composer_submitted(self, msg: Composer.Submitted) -> None:
+        text = msg.text.strip()
+        if text:
+            self.run_worker(self.submit(text), exit_on_error=False)
+
+    def file_parts(self, text: str) -> list[ContentPart]:
+        parts, seen = [], set()
+        for m in AT_RE.finditer(text):
+            rel = m.group(1).rstrip(".,;:)")
+            p = Path(rel).expanduser()
+            if not p.is_absolute():
+                p = Path(os.getcwd()) / p
+            if rel in seen or not p.is_file():
+                continue
+            seen.add(rel)
+            try:
+                body = p.read_bytes()[:MAX_FILE].decode("utf-8", "replace")
+            except OSError:
+                continue
+            parts.append(ContentPart.of_text(f"[file {rel}]\n{body}"))
+        return parts
+
+    async def submit(self, text: str) -> None:
+        if self.question and not text.startswith("/"):
+            qid, self.question = self.question, None
+            self.add(Block(text, "user"))
+            await self.post(s.QuestionAnswer(question_id=qid, answer=text))
+            return
+        if text.startswith("/"):
+            name, _, args = text[1:].partition(" ")
+            await self.slash(name, args.strip())
+            return
+        shown, send = text, text
+        if text.startswith("!"):
+            cmd = text[1:].strip()
+            send = f"Run this shell command with your shell tool and show me the output:\n{cmd}"
+        self.add(Block(shown, "user"))
+        self.cur = None
+        await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
+                                   mode="steer" if self.busy else "send"))
+
+    async def slash(self, name: str, args: str) -> None:
+        if name == "exit":
+            self.exit()
+        elif name == "new":
+            await self.new_session()
+        elif name == "sessions":
+            await self.pick_session()
+        elif name == "model":
+            await self.set_model(args)
+        elif name == "fork":
+            resp = await self.post(s.SessionFork(session=self.session, title=args))
+            if resp.ok:
+                await self.load_session(resp.result["session"]["id"])
+        elif name == "undo":
+            resp = await self.post(s.SessionUndo(session=self.session))
+            if resp.ok:
+                await self.load_session(self.session)
+        elif name == "help":
+            names = [f"/{n}  {d}" for n, d in LOCAL_COMMANDS.items()]
+            names += [f"/{c['name']}  {c.get('description', '')}" for c in self.commands]
+            self.note("\n".join(names + ["@path adds a file   !cmd runs a shell command   ctrl+p palette",
+                                         "ctrl+o tool output   ctrl+y accept  ctrl+e edit  ctrl+r reject"]))
+        elif name == "panel":
+            if self.panel_order:
+                self.show_panel(self.panel_order[-1], report=True)
+        else:
+            resp = await self.post(s.CommandRun(name=name, args=args, session=self.session))
+            if resp.ok:
+                out = resp.result.get("output")
+                if out:
+                    self.note(out if isinstance(out, str) else str(out))
+
+    async def pick_session(self) -> None:
+        rows = (await self.client.call(s.SessionList(limit=50)))["sessions"]
+        items = [(f"{r.get('title') or r['id']}  ({r.get('message_count', 0)} msgs, {r.get('status', '')})", r["id"])
+                 for r in rows]
+        self.push_screen(Palette(items, "sessions"), lambda v: v and self.run_worker(
+            self.load_session(v), exit_on_error=False))
+
+    async def set_model(self, ref: str) -> None:
+        if not ref:
+            rows = (await self.client.call(s.ModelsList())).get("models", [])
+            seen, items = set(), []
+            for r in rows:
+                if r["route"] not in seen:
+                    seen.add(r["route"])
+                    items.append((f"{r['route']}  ({r['role']})", r["route"]))
+            self.push_screen(Palette(items, "models"), lambda v: v and self.run_worker(
+                self.set_model(v), exit_on_error=False))
+            return
+        resp = await self.post(s.ModelsSet(model=ref, session=self.session))
+        if resp.ok:
+            self.model = ref
+            self.refresh_status()
+
+    # ------------------------------------------------------------ approvals
+    def show_approval(self) -> None:
+        if self.card is not None or not self.approvals:
+            return
+        self.card = ApprovalCard(self.approvals[0])
+        self.query_one("#left").mount(self.card, before=self.query_one("#activity"))
+
+    def close_card(self) -> None:
+        if self.card is not None:
+            self.card.remove()
+            self.card = None
+        self.show_approval()
+        if self.card is None:
+            self.query_one(Composer).focus()
+
+    def on_approval_card_answered(self, msg: ApprovalCard.Answered) -> None:
+        self.approvals = [a for a in self.approvals if a.request_id != msg.request_id]
+        self.note(f"approval: {msg.decision}" + (f" ({msg.note})" if msg.note else ""))
+        self.close_card()
+        self.run_worker(self.post(s.ApprovalRespond(request_id=msg.request_id, decision=msg.decision,
+                                                    note=msg.note, client=CLIENT_ID)), exit_on_error=False)
+
+    # ------------------------------------------------------------ panels
+    def on_ui_panel(self, b: s.UiPanel) -> None:
+        if b.action == "close":
+            if b.panel_id in self.panels and b.panel_id not in self.panel_touched:
+                self.respond_panel(b.panel_id, "ignored")
+            self.drop_panel(b.panel_id)
+            return
+        known = b.panel_id in self.panels
+        self.panels[b.panel_id] = (b.kind, b.title, b.text, b.reason, b.data)
+        if b.panel_id not in self.panel_order:
+            self.panel_order.append(b.panel_id)
+        self.show_panel(b.panel_id, report=not known)
+
+    def show_panel(self, pid: str, report: bool = False) -> None:
+        kind, title, text, _reason, data = self.panels[pid]
+        view = self.query_one(PanelView)
+        view.show(pid, kind, title, text, data)
+        if report:
+            self.respond_panel(pid, "opened")
+        if view.options:
+            view.query_one("#panel-choices").focus()
+
+    def drop_panel(self, pid: str) -> None:
+        self.panels.pop(pid, None)
+        self.panel_touched.discard(pid)
+        if pid in self.panel_order:
+            self.panel_order.remove(pid)
+        view = self.query_one(PanelView)
+        if view.panel_id == pid:
+            if self.panel_order:
+                self.show_panel(self.panel_order[-1])
+            else:
+                view.hide()
+                self.query_one(Composer).focus()
+
+    def respond_panel(self, pid: str, action: str, value: dict[str, Any] | None = None) -> None:
+        if action != "opened":
+            self.panel_touched.add(pid)
+        self.run_worker(self.post(s.UiRespond(panel_id=pid, action=action, value=value or {})),
+                        exit_on_error=False)
+
+    def on_panel_view_chose(self, msg: PanelView.Chose) -> None:
+        self.respond_panel(msg.panel_id, "acted", {"choice": msg.choice})
+        self.query_one(Composer).focus()
+
+    # ------------------------------------------------------------ actions
+    def modal_open(self) -> bool:
+        return len(self.screen_stack) > 1
+
+    def action_escape(self) -> None:
+        view = self.query_one(PanelView)
+        if view.display and view.panel_id:
+            pid = view.panel_id
+            self.respond_panel(pid, "dismissed")
+            self.drop_panel(pid)
+        elif self.busy and self.session:
+            self.run_worker(self.post(s.TurnInterrupt(session=self.session)), exit_on_error=False)
+
+    def action_toggle_tools(self) -> None:
+        if self.modal_open():
+            return
+        self.expanded = not self.expanded
+        for tb in self.tools.values():
+            if tb.is_mounted:
+                tb.expanded = self.expanded
+                tb.flush()
+
+    def action_verdict(self, verdict: str) -> None:
+        if self.modal_open() or not self.last_answer[1]:
+            return
+        self.run_worker(self.send_verdict(verdict, ""), exit_on_error=False)
+
+    def action_edit_answer(self) -> None:
+        if self.modal_open() or not self.last_answer[1]:
+            return
+        self.push_screen(EditScreen(self.last_answer[1]), lambda t: t is not None and self.run_worker(
+            self.send_verdict("edit", t), exit_on_error=False))
+
+    async def send_verdict(self, verdict: str, text: str) -> None:
+        mid, _ = self.last_answer
+        resp = await self.post(s.FeedbackSend(session=self.session, verdict=verdict, message_id=mid, text=text))
+        if resp.ok:
+            self.note(f"feedback sent: {verdict}")
+
+    def action_palette(self) -> None:
+        if self.modal_open():
+            return
+        items: list[tuple[str, Any]] = [(f"/{n}  {d}", ("slash", n)) for n, d in LOCAL_COMMANDS.items()]
+        items += [(f"/{c['name']}  {c.get('description', '')}", ("slash", c["name"])) for c in self.commands]
+        items += [("verdict: accept", ("verdict", "accept")), ("verdict: reject", ("verdict", "reject")),
+                  ("verdict: edit", ("edit", "")), ("toggle tool output", ("tools", "")),
+                  ("reopen last panel", ("slash", "panel"))]
+
+        def chosen(v: Any) -> None:
+            if not v:
+                return
+            kind, arg = v
+            if kind == "slash":
+                self.run_worker(self.slash(arg, ""), exit_on_error=False)
+            elif kind == "verdict":
+                self.action_verdict(arg)
+            elif kind == "edit":
+                self.action_edit_answer()
+            elif kind == "tools":
+                self.action_toggle_tools()
+
+        self.push_screen(Palette(items, "commands, settings, sessions"), chosen)
+
+    async def on_unmount(self) -> None:
+        close = getattr(self.client, "aclose", None)
+        if close:
+            await close()

@@ -36,6 +36,25 @@ def seats_dir(home: str | Path) -> Path:
     return Path(home) / "seats"
 
 
+def key_path(home: str | Path, name: str) -> Path:
+    """Where a seat's Ed25519 signing key lives. The bus client and the gate use the same file."""
+    return Path(home) / "keys" / f"{name}.key"
+
+
+def ensure_key(path: str | Path) -> Path:
+    """Create the key file (mode 0600, plus a .pub beside it) if it is missing. Never prints or returns key
+    material, and never overwrites an existing key."""
+    from exo import crypto
+
+    path = Path(path)
+    if not path.exists():
+        try:
+            crypto.save_key(crypto.keygen(), path)
+        except FileExistsError:  # another process won the race
+            pass
+    return path
+
+
 def _table(v: Any) -> dict:
     return v if isinstance(v, dict) else {}
 
@@ -61,6 +80,10 @@ class Seat:
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)  # enabled channels -> factory config
     soul: str = ""
     path: str = ""
+    key: str | None = None                                  # signing key file; default $EXO_HOME/keys/<name>.key
+
+    def key_path(self, home: str | Path) -> Path:
+        return Path(self.key).expanduser() if self.key else key_path(home, self.name)
 
     def summary(self) -> dict[str, Any]:
         d = asdict(self)
@@ -94,7 +117,7 @@ def parse(data: dict[str, Any], name: str = "", path: str = "", soul: str = "") 
         skill_folders=folders, skill_load=_strs(skills.get("load")),
         mcp={k: v for k, v in mcp.items() if isinstance(v, dict)},
         plugins=_strs(plugins.get("enabled") if isinstance(plugins, dict) else plugins), channels=channels,
-        soul=soul, path=path)
+        soul=soul, path=path, key=str(head.get("key") or data.get("key") or "") or None)
 
 
 def _candidates(home: str | Path, name: str) -> list[Path]:

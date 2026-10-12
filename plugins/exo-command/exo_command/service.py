@@ -13,6 +13,7 @@ Sections read the in-memory state, so they are cheap; the projects scan gets a l
 from __future__ import annotations
 
 import asyncio
+import collections
 import time
 import traceback
 from typing import Any, Dict, List, Optional
@@ -28,6 +29,7 @@ SECTIONS = ("projects", "sessions", "tasks", "approvals", "decisions", "costs")
 PROJECTS_CACHE_FLOOR = 120
 REPLAY_WINDOW = 5000      # events replayed on start, newest first-seq minus this
 SESSION_LIMIT = 200
+EVENT_RING = 3000         # recent events kept for the chat stream (late browsers, reconnects)
 
 
 class CommandCentre:
@@ -39,6 +41,10 @@ class CommandCentre:
         self._waiters: List[asyncio.Queue] = []
         self.connected = False
         self.last_error: Optional[str] = None
+        self.ring: "collections.deque[Dict[str, Any]]" = collections.deque(maxlen=EVENT_RING)
+        self.panels: Dict[str, Dict[str, Any]] = {}   # open ui.panel panels, by panel_id
+        self._ring_seq = 0
+        self._event_subs: List[asyncio.Queue] = []
 
     # ------------------------------------------------------------ feeding the state
 
@@ -48,6 +54,8 @@ class CommandCentre:
         since = max(0, int(hello.get("seq") or 0) - REPLAY_WINDOW)
         replay = await src.call(s.EventsSubscribe(since=since))
         self.state.apply_all(replay.get("events") or [])
+        for ev in replay.get("events") or []:
+            self.record(ev)
         # A core that does not support a query yet (``unsupported``) just leaves that panel to the events.
         self.state.load_sessions((await self._optional(s.SessionList(limit=SESSION_LIMIT))).get("sessions") or [])
         self.state.load_tasks((await self._optional(s.TasksList())).get("tasks") or [])
@@ -69,6 +77,8 @@ class CommandCentre:
         res = await src.call(s.EventsSubscribe(since=self.state.seq))
         events = res.get("events") or []
         self.state.apply_all(events)
+        for ev in events:
+            self.record(ev)
         if events:
             self._notify()
         return len(events)
@@ -77,7 +87,47 @@ class CommandCentre:
         """Fold the live stream until cancelled. Reconnects are the source's job."""
         async for ev in self._need_source().stream(self.state.seq):
             self.state.apply(ev)
+            self.record(ev)
             self._notify()
+
+    # ------------------------------------------------------------ the chat stream
+
+    def record(self, ev: Dict[str, Any]) -> None:
+        """Keep an event for chat clients, fold open panels, and hand it to live subscribers.
+        An event at or below the last recorded seq is a replay and is ignored."""
+        seq = int(ev.get("seq") or 0)
+        if seq <= self._ring_seq:
+            return
+        self._ring_seq = seq
+        self.ring.append(ev)
+        if ev.get("type") == "ui.panel":
+            body = ev.get("body") or {}
+            pid = body.get("panel_id")
+            if pid and body.get("action") == "close":
+                self.panels.pop(pid, None)
+            elif pid:
+                cur = self.panels.get(pid, {}) if body.get("action") == "update" else {}
+                self.panels[pid] = {**cur, **{k: v for k, v in body.items() if v not in (None, "", {})},
+                                    "session": ev.get("session"), "seq": seq}
+        for q in list(self._event_subs):
+            try:
+                q.put_nowait(ev)
+            except asyncio.QueueFull:   # a slow reader: end its stream, it resumes from Last-Event-ID
+                self._event_subs.remove(q)
+                q.get_nowait()
+                q.put_nowait(None)
+
+    def events_since(self, since: int = 0, session: Optional[str] = None) -> List[Dict[str, Any]]:
+        return [e for e in self.ring if e["seq"] > since and (session is None or e.get("session") in (None, session))]
+
+    def subscribe_events(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        self._event_subs.append(q)
+        return q
+
+    def unsubscribe_events(self, q: asyncio.Queue) -> None:
+        if q in self._event_subs:
+            self._event_subs.remove(q)
 
     async def respond_approval(self, request_id: str, decision: str, note: str = "") -> Dict[str, Any]:
         return await self._need_source().call(s.ApprovalRespond(request_id=request_id, decision=decision, note=note))

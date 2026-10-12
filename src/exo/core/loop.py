@@ -50,6 +50,7 @@ class _Stream:
     reasoning: list[str] = field(default_factory=list)
     calls: list[ToolCall] = field(default_factory=list)
     usage: Usage | None = None
+    route: str = ""  # provider:model that served the call (set by the router; empty for a bare provider)
     done: Any = None
     error: Any = None
 
@@ -124,6 +125,7 @@ class Loop:
         rounds and returns None; ``queue`` and ``send`` wait for the running turn."""
         if self.store.get_session(session) is None:
             raise KeyError(session)
+        self.store.assert_open(session)
         msg = Message(role="user", content=list(parts or []))
         if text:
             msg.content.insert(0, ContentPart.of_text(text))
@@ -202,7 +204,7 @@ class Loop:
             if stream.usage is not None:
                 result.usage = result.usage + stream.usage
                 st.total = st.total + stream.usage
-                await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total, model=self.model or ""), session)
+                await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total, model=stream.route or self.model or ""), session)
             if stream.error is not None:
                 result.stop_reason, result.error = "error", stream.error.error or "provider error"
                 await self._emit(ev.Error(code="provider_error", message=result.error,
@@ -288,8 +290,10 @@ class Loop:
                     s.calls.append(pe.tool_call)
                 elif pe.kind == "usage" and pe.usage is not None:
                     s.usage = pe.usage
+                    s.route = getattr(pe, "route", "") or s.route
                 elif pe.kind == "done":
                     s.done = pe
+                    s.route = getattr(pe, "route", "") or s.route
                     if pe.usage is not None:
                         s.usage = pe.usage
                     break
@@ -305,6 +309,10 @@ class Loop:
                     pass
 
     async def _interruptible(self, coro: Awaitable[Any], st: _SessionState) -> Any:
+        if st.interrupt.is_set():  # an interrupt that arrived between steps must not lose a race with a fast step
+            if asyncio.iscoroutine(coro):
+                coro.close()
+            raise _Interrupted()
         task = asyncio.ensure_future(coro)
         stop = asyncio.ensure_future(st.interrupt.wait())
         try:

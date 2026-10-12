@@ -1,0 +1,111 @@
+"""Where the learning loop keeps its state: the principal store, a signed ledger and the settings.
+
+The store root comes from config `learn.store`. If that is not set it falls back to the exo-memory
+plugin's own setting (plugin config, its profile file, then `EXO_STORE` or `EXO_PRINCIPAL` in the
+environment). With none of these, learning is off; `Learner.notice` says so once.
+"""
+from __future__ import annotations
+
+import copy
+import json
+import os
+import re
+import threading
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from exo import crypto
+from exo.config import Config, ConfigError
+from exo.ledger import Ledger
+from exo.store import PrincipalStore
+
+AGENT = "exo-learn"
+PRINCIPAL = "principal"
+PID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+DEFAULTS: dict[str, Any] = {
+    "enabled": True,
+    "fast_loop": {
+        "enabled": True,
+        "every_turns": 10,       # user turns since the last review that trigger one without a signal
+        "deadline": 90.0,        # seconds a review may run
+        "daily_cap": 20,         # reviews per day
+        "max_chars": 12000,      # prompt size cap
+        "critic": True,
+    },
+    "promote": {
+        "min_sessions": 2,       # independent sessions needed for auto-promotion (5.6 rule 4)
+        "stale_days": 14,        # an open proposal older than this may become a question (rule 6)
+        "eval_gate_for": ["skill"],   # proposal types that must pass the eval gate (rule 5)
+        "guarded_domains": [],
+        "high_impact_domains": [],    # taste in these domains also needs the gate
+        "voi_floor": 0.3,
+    },
+    "climb": {"candidates": 10, "judge_samples": 3, "margin": 0.01},
+}
+
+
+def _merge(base: dict, extra: Mapping) -> dict:
+    for k, v in extra.items():
+        if isinstance(v, Mapping) and isinstance(base.get(k), dict):
+            _merge(base[k], v)
+        elif k in base:
+            base[k] = v
+    return base
+
+
+def load_config(engine: Any) -> Config | None:
+    try:
+        return Config.load(getattr(engine, "home", None))
+    except (ConfigError, OSError):
+        return None
+
+
+def load_settings(engine: Any) -> dict:
+    cfg = load_config(engine)
+    return _merge(copy.deepcopy(DEFAULTS), (cfg.get("learn") if cfg else None) or {})
+
+
+def resolve_store(engine: Any, env: Mapping[str, str] | None = None) -> Path | None:
+    """The principal store root for this engine, or None when learning has nowhere to write."""
+    env = os.environ if env is None else env
+    home = Path(getattr(engine, "home", None) or env.get("EXO_HOME") or Path.home() / ".exo")
+    cfg = load_config(engine)
+    explicit = cfg.get("learn.store") if cfg else None
+    if explicit:
+        return Path(str(explicit)).expanduser()
+    plugin_cfg: dict = {}
+    plugins = getattr(engine, "plugins", None)
+    if plugins is not None:
+        plugin_cfg = dict((getattr(plugins, "config", None) or {}).get("exo-memory") or {})
+    try:
+        plugin_cfg = {**json.loads((home / "exo-memory" / "config.json").read_text("utf-8")), **plugin_cfg}
+    except (OSError, ValueError):
+        pass
+    root = plugin_cfg.get("store_root") or env.get("EXO_STORE")
+    if root:
+        return Path(str(root)).expanduser()
+    pid = plugin_cfg.get("principal") or env.get("EXO_PRINCIPAL")
+    if pid and PID_RE.match(str(pid)):
+        return home / "principals" / str(pid)
+    return None
+
+
+class Runtime:
+    """A store with a signed ledger. Keys live at `<home>/keys/<agent>.key` (made on first use)."""
+
+    def __init__(self, root: Path, home: Path, agent: str = AGENT) -> None:
+        self.root = Path(root)
+        self.home = Path(home)
+        self.agent = agent
+        self.store = PrincipalStore(root)
+        kp = self.home / "keys" / f"{agent}.key"
+        if not kp.exists():
+            crypto.save_key(crypto.keygen(), kp)
+        self.signer = crypto.Signer(agent, crypto.load_key(kp))
+        self.ledger = Ledger(self.store.ledger_path, self.signer)
+        self.lock = threading.RLock()
+
+    def close(self) -> None:
+        self.ledger.close()
