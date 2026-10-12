@@ -126,6 +126,16 @@ export interface Hello {
   screen_cols?: number | null;
 }
 
+export interface MemorySummarized {
+  node_id: string;
+  level: number;
+  start: number;
+  end: number;
+  before_tokens: number;
+  after_tokens: number;
+  tree?: string;
+}
+
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
   content?: ContentPart[];
@@ -247,6 +257,7 @@ export interface SessionCreate {
   seat?: string | null;
   model?: string | null;
   cwd?: string | null;
+  kind?: string;
 }
 
 export interface SessionCreated {
@@ -274,6 +285,8 @@ export interface SessionInfo {
   updated?: string;
   message_count?: number;
   status?: string;
+  agent?: string | null;
+  kind?: string;
 }
 
 export interface SessionList {
@@ -461,6 +474,7 @@ export interface EventBodies {
   "approval.resolved": ApprovalResolved;
   "question.asked": QuestionAsked;
   "context.compacted": ContextCompacted;
+  "memory.summarized": MemorySummarized;
   "handoff.written": HandoffWritten;
   "task.updated": TaskUpdated;
   "usage.updated": UsageUpdated;
