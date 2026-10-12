@@ -1,3 +1,5 @@
+import re
+
 from exo.core.models.anthropic import (
     AnthropicProvider, apply_cache_control, convert_messages, convert_tools, normalize_model, thinking_params,
 )
@@ -70,9 +72,10 @@ def test_convert_pairs_tools_merges_results_and_keeps_signed_thinking():
     blocks = out[1]["content"]
     assert blocks[0] == {"type": "thinking", "thinking": "hmm", "signature": "sig"}
     assert [b["type"] for b in blocks] == ["thinking", "text", "tool_use", "tool_use"]
-    assert blocks[2]["id"] == "call_1"
+    sid = blocks[2]["id"]
+    assert sid.startswith("call_1_") and re.fullmatch(r"[a-zA-Z0-9_-]+", sid)
     results = out[2]["content"]
-    assert [r["tool_use_id"] for r in results] == ["call_1", "c2"]
+    assert [r["tool_use_id"] for r in results] == [sid, "c2"]
     assert results[1]["is_error"] and results[1]["content"] == "(no output)"
 
 

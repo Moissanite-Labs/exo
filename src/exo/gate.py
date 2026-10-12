@@ -12,6 +12,11 @@ cell through the principal's policies (gates matrix, scopes, category overrides,
 reserved and denied actions, budget, posting checks) and an operator floor that the principal
 policy cannot lower: an irreversible public act that touches a third party always asks.
 
+Approvals (D-033, docs/GATE.md): `approval_binding` hashes the exact outbound text, target and
+arguments of an outward act, so an edit voids an approval; `approvers_for` reads who may answer
+from `policies/approvals.yaml`. Posts to public targets also pass `check_scrub`, which looks for
+internal names, home paths, model ids and internal ids.
+
 Nothing here names a principal. Every value that belongs to one person lives in their store
 under `policies/`. Stdlib only; the YAML reader is a small subset parser (see `parse_yaml`).
 """
@@ -20,6 +25,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import shlex
 from dataclasses import asdict, dataclass, field
@@ -45,6 +51,7 @@ CATEGORIES: dict[str, tuple[str, str, bool]] = {
     "delegate":          ("reversible", "private", False),
     "web_read":          ("reversible", "private", False),
     "reaction":          ("reversible", "internal", False),
+    "peer_message":      ("reversible", "internal", False),  # D-026: the receiving seat gates it, not the sender
     "schedule":          ("costly", "private", False),
     "credentials":       ("costly", "private", False),
     "browser":           ("costly", "internal", False),
@@ -604,6 +611,12 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     segs, bodies = split_commands(cmd or "")
     parts = [_classify_argv(s, cmd, bodies, depth) for s in segs]
     c = _most_severe(parts) or _make("shell", command=cmd)
+    hit = _shell_credential_hit(cmd, segs)
+    if hit and c.category != "credentials":
+        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
+        c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
+                  command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
+        c.signals.append("secret store")
     c.command = cmd
     # Outbound text: if several gh segments post text, keep the most severe one's text.
     if not c.text and c.category in OUTBOUND and bodies and c.category != "web_post":
@@ -652,6 +665,8 @@ TOOLS: dict[str, str] = {
                                     "annotate_preview", "desktop_project", "edit_file")},
     **{t: "generate" for t in ("image_generate", "video_generate", "text_to_speech")},
     **{t: "delegate" for t in ("delegate_task", "start_chat")},
+    "peers": "read", "peer_send": "peer_message",
+    "jobs": "read", "job_output": "read", "job_kill": "shell",  # D-032: the bash command itself is classified as foreground bash
     **{t: "credentials" for t in ("browser_vault_fill", "browser_vault_unlock", "browser_vault_save_login",
                                     "browser_vault_enter_code")},
     **{t: "browser" for t in ("browser_cdp", "browser_exec", "browser_dialog", "computer_use")},
@@ -663,8 +678,161 @@ TOOLS: dict[str, str] = {
     "close_terminal": "shell",
 }
 
-_SENSITIVE_PATH = re.compile(r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
-                             r"credentials(\.json)?|id_rsa|id_ed25519|[^/]+\.pem|[^/]+\.key)(/|$)")
+# One list of secret stores, used by the path tools (read/write/patch) and by shell parsing.
+# Segment patterns match at any depth; EXO_HOME and EXO_KEYS_FILE overrides are added by
+# is_sensitive_path() because they can sit anywhere.
+_SENSITIVE_PATH = re.compile(
+    r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
+    r"credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|"
+    r"keys\.env|\.config/exo/keys(\.env)?|\.exo/keys|\.divan/[^/]+\.key|auth\.json|"
+    r"client_secret[^/]*\.json|\.unii/[^/]+/token|[^/]*token[^/]*\.(json|txt|pickle|ya?ml)|[^/]+\.token|"
+    r"\.config/gh/hosts\.yml|\.git-credentials|\.docker/config\.json|\.kube/config|"
+    r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
+    r"proc/[^/]+/environ)(/|$)")
+
+# Concrete examples a shell glob is tested against ("could this glob match a secret store?").
+_SENSITIVE_SAMPLES = ("keys.env", ".exo/keys", ".config/exo/keys.env", ".divan/seat.key", "auth.json",
+                      "google_token.json", ".unii/acct/token", "client_secret_1.json", ".hermes/p/.env",
+                      ".netrc", ".env", ".npmrc", ".pypirc", ".ssh/id_rsa", ".ssh/id_ed25519", ".aws/credentials",
+                      ".gnupg/pubring.kbx", "credentials.json", "server.pem",
+                      ".config/gh/hosts.yml", ".git-credentials", ".docker/config.json", ".kube/config")
+
+
+def _home() -> str:
+    return os.environ.get("HOME") or os.path.expanduser("~")
+
+
+def _exo_home() -> str:
+    return os.path.expanduser(os.environ.get("EXO_HOME") or "") or os.path.join(_home(), ".exo")
+
+
+def _expand_text(text: str) -> str:
+    """~, $HOME and $EXO_HOME (also ${...}) spelled out; nothing else is evaluated."""
+    home, exo = _home(), _exo_home()
+    text = re.sub(r"\$\{?EXO_HOME\}?", lambda m: exo, text)
+    text = re.sub(r"\$\{?HOME\}?", lambda m: home, text)
+    return re.sub(r"(^|(?<=[\s'\"=:<>]))~(?=/|$|\s|['\"])", lambda m: m.group(1) + home, text)
+
+
+def _dynamic_secret_paths() -> list[str]:
+    paths = [os.path.join(_exo_home(), "keys")]
+    kf = os.environ.get("EXO_KEYS_FILE")
+    paths.append(os.path.expanduser(kf) if kf else os.path.join(_home(), ".config", "exo", "keys.env"))
+    return paths
+
+
+def is_sensitive_path(path: str) -> bool:
+    """True when ``path`` names one of the secret stores (ssh, cloud and netrc credentials, Exo's key
+    stores, signing keys, token and client-secret files, .env files). Never reads the file."""
+    path = _expand_text(str(path or "")).strip()
+    if not path:
+        return False
+    if path.endswith(".pub"):
+        return False  # public keys are meant to be shared
+    if _SENSITIVE_PATH.search(path.replace("\\", "/")):
+        return True
+    try:
+        cands = {os.path.abspath(path), os.path.realpath(path)}
+    except (OSError, ValueError):
+        cands = {path}
+    for root in _dynamic_secret_paths():
+        roots = {os.path.abspath(root), os.path.realpath(root)}
+        if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots):
+            return True
+    return False
+
+
+def _glob_hits_secret(tok: str) -> bool:
+    """A shell glob that could expand to a secret store. Bare `*` or `*.json` do not count; the last
+    component needs three literal characters, or the directory must itself be a secret store."""
+    tok = _expand_text(tok)
+    if not re.search(r"[*?\[]", tok):
+        return False
+    d, _, base = tok.rpartition("/")
+    stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
+    home = _home()
+    samples = [os.path.join(home, x) for x in _SENSITIVE_SAMPLES] + [os.path.join(_exo_home(), "keys", "seat.key"),
+                                                                       _dynamic_secret_paths()[1]]
+    d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
+    in_store_dir = bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
+    if len(stem) < 3 and not in_store_dir:
+        return False
+    pats = [tok] if tok.startswith("/") else [tok, "*/" + tok]
+    samples += list(_SENSITIVE_SAMPLES)
+    return any(fnmatch.fnmatch(x, pat) for x in samples for pat in pats)
+
+
+_PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "directory", "dir", "root", "source",
+                  "src", "dest", "destination")
+
+
+def args_sensitive(args: Mapping) -> str:
+    """The first path-like tool argument that names a secret store, or ''."""
+    for k in _PATH_ARG_KEYS:
+        v = args.get(k)
+        for item in (v if isinstance(v, (list, tuple)) else [v]):
+            if isinstance(item, str) and item and (is_sensitive_path(item) or _glob_hits_secret(item)):
+                return item
+    return ""
+
+
+_KEYCHAIN = re.compile(r"\bsecurity\s+(?:-\S+\s+)*(find-generic-password|find-internet-password|"
+                       r"find-key|dump-keychain|export|unlock-keychain|show-keychain-info|import)\b")
+_SECRET_VAR = re.compile(r"\$\{?[A-Za-z0-9_]*(API_KEY|_KEY|_TOKEN|_SECRET|_PASSWORD|_PASSWD)\b")
+_PIECE_SPLIT = re.compile(r"[\s'\"<>;|&()`,]+")
+
+
+def _env_dump(argv: list[str]) -> bool:
+    """env/printenv/set/export/declare printing the environment (or a secret-looking variable)."""
+    if not argv:
+        return False
+    prog, rest = argv[0].rsplit("/", 1)[-1], argv[1:]
+    if prog == "env":
+        rest = [a for a in rest if not re.fullmatch(r"[A-Za-z_]\w*=.*", a)]
+        return not [a for a in rest if not a.startswith("-")]
+    if prog == "printenv":
+        return not rest or any(re.search(r"KEY|TOKEN|SECRET|PASS", a, re.I) for a in rest)
+    if prog in ("set", "typeset", "declare", "export", "compgen", "readonly"):
+        flags = [a for a in rest if a.startswith("-")]
+        names = [a for a in rest if not a.startswith("-")]
+        if prog == "compgen":
+            return "-e" in flags or "-v" in flags
+        if prog == "set":
+            return not rest
+        return not names and (not flags or any(f in ("-p", "-x", "-px", "-xp") for f in flags))
+    return False
+
+
+def _shell_credential_hit(cmd: str, segs: list[list[str]]) -> str:
+    """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a
+    redirection or a quoted `bash -c` string), the Keychain, or a bare environment dump. '' if nothing."""
+    text = _expand_text(cmd)
+    if _KEYCHAIN.search(text):
+        return "keychain access"
+    if _SECRET_VAR.search(text):
+        return "secret environment variable"
+    pieces = [p for p in _PIECE_SPLIT.split(text) if p]
+    for seg in segs:
+        pieces += [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)", "", t) for t in seg]
+        flat, _ = _strip_prefixes_keep_env(seg)
+        if _env_dump(flat):
+            return "environment dump"
+        if flat and flat[0].rsplit("/", 1)[-1] == "security" and any(
+                a in ("-w", "-g", "-gs", "-wg") for a in flat[1:]) and len(flat) > 1 and flat[1].startswith("find"):
+            return "keychain access"
+    for p in pieces:
+        p = re.sub(r"^[\w-]+=", "", p) if "=" in p and not p.startswith("=") else p
+        if p and (is_sensitive_path(p) or _glob_hits_secret(p)):
+            return p
+    return ""
+
+
+def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
+    """Like _strip_prefixes but `env` itself is kept so a bare `env` can be seen as a dump."""
+    while argv and (re.fullmatch(r"[A-Za-z_]\w*=.*", argv[0]) or argv[0].rsplit("/", 1)[-1] in ("sudo", "doas", "command", "builtin", "exec", "nohup", "time")):
+        argv = argv[1:]
+    return argv, False
+
 
 # Name hints for tools not in the table (plugins, MCP servers). Ordered; first match wins.
 _READ_VERBS = {"get", "list", "read", "search", "fetch", "query", "view", "find", "describe", "show",
@@ -740,7 +908,7 @@ def classify(action: Any) -> Classification:
         c = classify_code(str(args.get("code") or ""))
     elif tool in ("write_file", "patch", "edit_file"):
         path = _first(args, ("path", "file_path"))
-        cat = "credentials" if _SENSITIVE_PATH.search(path) else "local_write"
+        cat = "credentials" if (is_sensitive_path(path) or args_sensitive(args)) else "local_write"
         c = _make(cat, summary=f"write {path}", target=path, link=path)
     elif tool == "web_extract":
         urls = args.get("urls") or [args.get("url", "")]
@@ -757,6 +925,9 @@ def classify(action: Any) -> Classification:
         c = _make("read" if action in ("list", "get", "status", "") else "schedule", summary=f"cron {action}")
     else:
         cat = TOOLS.get(tool) or classify_by_name(tool)
+        secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
+        if secret:
+            cat = "credentials"
         target = _first(args, _TARGET_KEYS)
         text = _first(args, _TEXT_KEYS) if cat in OUTBOUND else ""
         title = _first(args, _TITLE_KEYS) if cat in OUTBOUND else ""
@@ -772,6 +943,9 @@ def classify(action: Any) -> Classification:
                   title=title, cost=cost)
         if cat == "unknown":
             c.signals.append("unrecognised tool")
+        if secret:
+            c.signals.append("secret store")
+            c.summary, c.target = f"{tool} {secret}"[:120], secret
     c.tool = tool
     if c.category in ("web_post", "web_read") and c.target and _is_local_host(c.target):
         c.exposure, c.third_party = "private", False
@@ -865,6 +1039,8 @@ def normalize_policies(raw: Mapping | None) -> dict:
             raise PolicyError(f"posting.{k} must be a list")
     pol["posting"]["footer"] = str(pol["posting"].get("footer") or "")
     pol["agents"] = [str(a) for a in (raw.get("agents") or [])]
+    pol["approvals"] = normalize_approvals(raw.get("approvals"))  # D-033
+    pol["scrub"] = normalize_scrub(pol["posting"].get("scrub"), raw.get("internal_names") or ())  # D-033
     if raw.get("interruptions"):
         pol["interruptions"] = raw["interruptions"]
     pol["_normalized"] = True
@@ -945,7 +1121,8 @@ def check_post(text: str, posting: Mapping, *, title: str = "", agents: Iterable
     out: list[str] = []
     both = "\n".join(x for x in (title, text) if x)
     footer = str(posting.get("footer") or "").strip()
-    if footer and text and exposure != "private" and not text.rstrip().endswith(footer):
+    footer_on = posting.get("footer_exposures") or ("internal", "public")
+    if footer and text and exposure in footer_on and not text.rstrip().endswith(footer):
         out.append(f"missing footer: {footer}")
     for f in posting.get("forbid") or []:
         if isinstance(f, Mapping):
@@ -1023,12 +1200,17 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     if eff.category in (posting.get("applies_to") or POSTING_DEFAULT) and (eff.text or eff.title):
         violations = check_post(eff.text, posting, title=eff.title, agents=pol.get("agents") or [],
                                 exposure=eff.exposure)
+        violations += check_scrub(eff.text, pol.get("scrub"), title=eff.title, exposure=eff.exposure)  # D-033
         if violations:
             bump("ask", "posting rules: " + "; ".join(violations), "posting")
 
     # Operator floor (P11): outside the principal model, cannot be lowered by policy.
     if eff.reversibility == "irreversible" and eff.exposure == "public" and eff.third_party:
         bump("ask", "irreversible, public and affects a third party", "floor")
+
+    # Credentials floor: no policy, rule, scope or escalate setting lowers this. The principal answers.
+    if eff.category == "credentials":
+        bump("ask", "credentials always ask the principal", "floor")
 
     hit = _list_matches(gates.get("deny") or [], eff)
     if hit:
@@ -1050,6 +1232,37 @@ def summarize(c: Classification, d: Decision, default: str = "skip") -> str:
         line += f" Link: {c.link}."
     line += f" Default if no reply: {default}."
     return " ".join(line.split())
+
+
+# --- peer messages (D-026) -------------------------------------------------------------------
+
+PEER_OUTCOMES = ("auto", "hold", "deny")
+PEER_TRUST = ("principal", "same-principal", "other", "remote", "unverified")
+# Who wrote it, as the receiving side could check it. A person typing in a client of this seat is the
+# principal; another session of the same principal on this machine is same-principal; a session of a
+# different or unknown principal is other; a bus seat is remote; a bad or missing signature is unverified.
+PEER_DEFAULTS = {"principal": "auto", "same-principal": "auto", "other": "hold", "remote": "hold",
+                 "unverified": "deny"}
+
+
+def decide_peer(trust: str, sender: str = "", config: Mapping | None = None) -> tuple[str, str]:
+    """``(outcome, reason)`` for a message from ``sender`` at ``trust``: auto, hold or deny.
+
+    ``config`` is the receiving seat's ``peers`` settings: ``policy`` maps a trust level to an outcome, and
+    ``rules`` (``{"from": glob, "outcome": ...}``, first match wins) override it for named senders. An
+    unverified sender is denied whatever the config says, and no setting makes a peer message consent to
+    anything: this decides delivery only."""
+    config = config or {}
+    if trust == "unverified":
+        return "deny", "the signature did not verify"
+    for rule in config.get("rules") or []:
+        if isinstance(rule, Mapping) and fnmatch.fnmatch(sender, str(rule.get("from") or "")):
+            out = str(rule.get("outcome") or "")
+            if out in PEER_OUTCOMES:
+                return out, f"rule for {rule['from']}"
+    table = {**PEER_DEFAULTS, **{k: v for k, v in (config.get("policy") or {}).items() if v in PEER_OUTCOMES}}
+    out = table.get(trust, "hold")
+    return out, f"{trust} sender: {out}"
 
 
 # --- YAML subset reader (stdlib only) ------------------------------------------------------
@@ -1313,14 +1526,15 @@ def _agent_names(agents_dir: Path) -> list[str]:
 
 def policy_files(root: str | Path) -> list[Path]:
     pdir = Path(root) / "policies"
-    return [pdir / n for n in ("gates.yaml", "budget.yaml", "interruptions.yaml", "posting.md", "posting.yaml")]
+    return [pdir / n for n in ("gates.yaml", "budget.yaml", "interruptions.yaml", "posting.md", "posting.yaml",
+                               "approvals.yaml")]
 
 
 def load_policies(root: str | Path | None) -> dict:
     """Read `<root>/policies/` and `<root>/agents/` into normalized policies. A missing root or
     missing files fall back to the defaults (which ask on anything irreversible or public)."""
     if not root:
-        return normalize_policies({})
+        return normalize_policies({"internal_names": internal_names(None)})
     root = Path(root)
     pdir = root / "policies"
     raw: dict = {}
@@ -1342,4 +1556,300 @@ def load_policies(root: str | Path | None) -> dict:
     raw["posting"] = posting
     if posting.get("forbid_agent_names"):
         raw["agents"] = _agent_names(root / "agents")
+    raw["approvals"] = load_approvals(root)  # D-033
+    raw["internal_names"] = internal_names(root)
     return normalize_policies(raw)
+
+
+# --- approval binding, authority and standing grants (D-033) ---------------------------------
+#
+# An approval for an outward act (posting, email, social, payment, or anything public or
+# irreversible) is bound to a hash of the exact text, title, target and arguments. Any edit
+# gives a new hash, so an old approval or standing grant no longer covers it. Who may answer
+# is a small table in policies/approvals.yaml: category -> principal, seat:<name> or
+# role:<name>. The principal can always answer; an empty table means only the principal.
+
+APPROVER_DEFAULT = ("principal",)
+_APPROVER_ENTRY = re.compile(r"^(principal|seat:[a-z0-9][a-z0-9_-]*|role:[a-z0-9][a-z0-9_-]*)$")
+DEFAULT_APPROVALS: dict = {"default": list(APPROVER_DEFAULT), "categories": {}, "roles": {},
+                           "always_days": 30.0, "outward_always_days": 7.0}
+
+
+def is_outward(c: Classification, d: Decision | None = None) -> bool:
+    """True when an approval must bind to the exact text: posts, messages, money, and anything
+    public or irreversible."""
+    exposure = (d.exposure if d is not None and d.exposure else c.exposure)
+    return (c.category in OUTBOUND or c.category in ("payment", "account") or exposure == "public"
+            or c.reversibility == "irreversible")
+
+
+def approval_binding(c: Classification, args: Mapping | None = None) -> str:
+    """sha256 over the outbound text, title, target, tool and full arguments. Text read from a
+    body file counts too, so editing the file voids the approval."""
+    doc = {"category": c.category, "tool": c.tool, "target": c.target, "title": c.title, "text": c.text,
+           "command": c.command, "args": dict(args or {})}
+    raw = json.dumps(doc, sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _approver_list(v: Any, where: str) -> list[str]:
+    out = []
+    for e in _as_list(v or []):
+        e = str(e).strip().lower()
+        if not _APPROVER_ENTRY.match(e):
+            raise PolicyError(f"{where}: approver {e!r} must be principal, seat:<name> or role:<name>")
+        out.append(e)
+    return out
+
+
+def normalize_approvals(raw: Mapping | None) -> dict:
+    """``policies/approvals.yaml`` into ``{default, categories, roles, always_days, outward_always_days}``."""
+    raw = dict(raw or {})
+    out = json.loads(json.dumps(DEFAULT_APPROVALS))
+    table = raw.get("approvers") or {}
+    if not isinstance(table, Mapping):
+        raise PolicyError("approvals.approvers must be a mapping of category: [approvers]")
+    if table.get("default") is not None:
+        out["default"] = _approver_list(table["default"], "approvals.approvers.default")
+    cats = table.get("categories")
+    if cats is None:
+        cats = {k: v for k, v in table.items() if k != "default"}
+    if not isinstance(cats, Mapping):
+        raise PolicyError("approvals.approvers.categories must be a mapping")
+    out["categories"] = {str(k): _approver_list(v, f"approvals.approvers.{k}") for k, v in cats.items()}
+    roles = raw.get("roles") or {}
+    if not isinstance(roles, Mapping):
+        raise PolicyError("approvals.roles must be a mapping of role: [seat:<name>, ...]")
+    out["roles"] = {}
+    for k, v in roles.items():
+        members = _approver_list(v, f"approvals.roles.{k}")
+        if any(m.startswith("role:") for m in members):
+            raise PolicyError(f"approvals.roles.{k}: a role lists seats or principal, not other roles")
+        out["roles"][str(k).lower()] = members
+    for lst in [out["default"], *out["categories"].values()]:
+        for e in lst:
+            if e.startswith("role:") and e[5:] not in out["roles"]:
+                raise PolicyError(f"approvals: {e} is not defined under roles")
+    always = raw.get("always") or {}
+    if not isinstance(always, Mapping):
+        raise PolicyError("approvals.always must be a mapping")
+    for src, dst in (("days", "always_days"), ("outward_days", "outward_always_days")):
+        if always.get(src) is not None:
+            try:
+                out[dst] = max(0.0, float(always[src]))
+            except (TypeError, ValueError):
+                raise PolicyError(f"approvals.always.{src} must be a number") from None
+    return out
+
+
+def approvers_for(category: str, approvals: Mapping | None) -> list[str]:
+    """Who may answer an ask in ``category``: ``principal`` and ``seat:<name>`` entries, roles
+    expanded. The principal is always first: their consent is the root of every approval."""
+    a = approvals or DEFAULT_APPROVALS
+    entries = (a.get("categories") or {}).get(category, a.get("default") or list(APPROVER_DEFAULT))
+    out = ["principal"]
+    for e in entries:
+        for m in (a.get("roles") or {}).get(e[5:], []) if e.startswith("role:") else [e]:
+            if m not in out:
+                out.append(m)
+    return out
+
+
+def approver_identity(client: str) -> str:
+    """The identity a client answers as. ``seat:<name>`` is a seat; a peer or ingress client is
+    ``peer`` (never consent, D-026); any other local client is the principal."""
+    c = (client or "").strip().lower()
+    if c.startswith(("peer", "ingress")):
+        return "peer"
+    if c.startswith("seat:"):
+        return "seat:" + c[5:].strip()
+    return "principal"
+
+
+def approver_allowed(client: str, allowed: Iterable[str] | None) -> bool:
+    """May ``client`` answer an ask whose allowed list is ``allowed``? An empty list keeps the old
+    rule: any local client that is not a peer."""
+    ident = approver_identity(client)
+    if ident == "peer":
+        return False
+    allowed = list(allowed or [])
+    if not allowed:
+        return True
+    return ident in allowed
+
+
+def load_approvals(root: str | Path | None) -> dict:
+    """Read ``<root>/policies/approvals.yaml``; defaults when missing."""
+    if not root:
+        return {}
+    p = Path(root) / "policies" / "approvals.yaml"
+    if not p.is_file():
+        return {}
+    try:
+        return parse_yaml(p.read_text(encoding="utf-8")) or {}
+    except PolicyError as e:
+        raise PolicyError(f"{p}: {e}") from None
+
+
+# --- outbound scrub (D-033) -------------------------------------------------------------------
+#
+# Posts to public targets are swept for internal identifiers: seat and agent names, home paths,
+# model ids and internal task or thread ids. The names come from the seat files, the agents/
+# folder, the bus registry and the user's own list. A hit holds the post (ask) and lists what
+# was found. Matching tradeoff: a name that is one plain word ("scout", "builder") matches only
+# as a whole token, so "scouting" passes but "the scout said" is held. A name with a hyphen,
+# underscore or digit ("saga-divan") is distinctive, so it also matches inside longer words and
+# with any separator ("saga divan", "saga_divan"). Add a word to ``scrub.allow`` to stop a
+# false positive.
+
+DEFAULT_SCRUB: dict = {"enabled": True, "exposures": ["public"], "seat_names": True, "home_paths": True,
+                       "model_ids": True, "internal_ids": True, "names": [], "patterns": [], "allow": [],
+                       "model_patterns": [r"\bclaude-[a-z]+-\d[\w.-]*", r"\bgpt-\d[\w.-]*"]}
+_HOME_PATTERNS = [(r"(?<![\w./-])~/", "home path"), (r"/Users/[A-Za-z0-9._-]+", "home path"),
+                  (r"/home/[A-Za-z0-9._-]+", "home path")]
+# exo ids are <prefix>_<16 hex> (protocol.schema.new_id): sessions, tasks, jobs, approvals.
+_INTERNAL_ID = r"\b[a-z]{1,5}_[0-9a-f]{16}\b"
+
+
+def _catalog_models() -> tuple[list[str], list[str]]:
+    """``(model names, provider names)`` from the model catalog. Empty on any read error."""
+    global _CATALOG_CACHE
+    if _CATALOG_CACHE is not None:
+        return _CATALOG_CACHE
+    names: set[str] = set()
+    providers: set[str] = set()
+    try:
+        import tomllib
+        data = tomllib.loads((Path(__file__).parent / "core" / "models" / "catalog.toml").read_text("utf-8"))
+        providers = {str(p) for p in (data.get("providers") or {})}
+        refs = list(data.get("models") or {})
+        for routes in (data.get("roles") or {}).values():
+            refs += [str(r) for r in (routes if isinstance(routes, list) else [])]
+        for ref in refs:
+            model = str(ref).partition(":")[2]
+            if model:
+                names.add(model)
+                names.add(model.rsplit("/", 1)[-1])
+    except Exception:
+        pass
+    _CATALOG_CACHE = (sorted(names), sorted(providers))
+    return _CATALOG_CACHE
+
+
+_CATALOG_CACHE: tuple[list[str], list[str]] | None = None
+
+
+def name_pattern(name: str) -> str:
+    """Regex for one internal name. Plain words match only as whole tokens; distinctive names
+    (a hyphen, underscore or digit, four characters or more) also match inside words and with
+    any separator."""
+    n = name.strip()
+    if re.fullmatch(r"[A-Za-z]+", n) or len(n) < 4:
+        return r"(?<![\w-])" + re.escape(n) + r"(?![\w-])"
+    parts = [p for p in re.split(r"[-_ .]+", n) if p]
+    return r"[-_ .]?".join(re.escape(p) for p in parts)
+
+
+def normalize_scrub(raw: Mapping | None, names: Iterable[str] = ()) -> dict:
+    """``posting.scrub`` plus discovered internal names into ``{enabled, exposures, rules, allow}``.
+    Each rule is ``{pattern, label}``; matching is case-insensitive."""
+    cfg = json.loads(json.dumps(DEFAULT_SCRUB))
+    raw = raw if isinstance(raw, Mapping) else {}
+    for k, v in raw.items():
+        cfg[k] = v
+    for k in ("exposures", "names", "patterns", "allow", "model_patterns"):
+        if not isinstance(cfg.get(k) or [], list):
+            raise PolicyError(f"posting.scrub.{k} must be a list")
+    rules: list[dict] = []
+    seen: set[str] = set()
+
+    def add(pattern: str, label: str) -> None:
+        if pattern and pattern not in seen:
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                raise PolicyError(f"posting.scrub: bad pattern {pattern!r}: {e}") from None
+            seen.add(pattern)
+            rules.append({"pattern": pattern, "label": label})
+
+    all_names = [str(n) for n in (cfg.get("names") or [])]
+    if cfg.get("seat_names", True):
+        all_names += [str(n) for n in names]
+    for n in dict.fromkeys(x.strip() for x in all_names):
+        if n:
+            add(name_pattern(n), "internal name")
+    if cfg.get("home_paths", True):
+        for p, label in _HOME_PATTERNS:
+            add(p, label)
+    if cfg.get("model_ids", True):
+        models, providers = _catalog_models()
+        for m in models:
+            add(name_pattern(m), "model id")
+        if providers:
+            add(r"\b(?:" + "|".join(re.escape(p) for p in providers) + r"):[\w./-]+", "model id")
+        for p in cfg.get("model_patterns") or []:
+            add(str(p), "model id")
+    if cfg.get("internal_ids", True):
+        add(_INTERNAL_ID, "internal id")
+    for p in cfg.get("patterns") or []:
+        if isinstance(p, Mapping):
+            add(str(p.get("pattern") or ""), str(p.get("label") or "internal pattern"))
+        else:
+            add(str(p), "internal pattern")
+    return {"enabled": bool(cfg.get("enabled", True)), "exposures": [str(x) for x in cfg.get("exposures") or []],
+            "rules": rules, "allow": [str(a).lower() for a in cfg.get("allow") or []]}
+
+
+def check_scrub(text: str, scrub: Mapping | None, *, title: str = "", exposure: str = "public") -> list[str]:
+    """Internal identifiers found in outbound text, as ``"<label>: <match>"``. Empty = clean."""
+    if not scrub or not scrub.get("enabled") or exposure not in (scrub.get("exposures") or []):
+        return []
+    both = "\n".join(x for x in (title, text) if x)
+    if not both:
+        return []
+    allow = set(scrub.get("allow") or [])
+    out: list[str] = []
+    for r in scrub.get("rules") or []:
+        for m in re.finditer(r["pattern"], both, re.I):
+            hit = m.group(0)
+            if hit.lower() in allow:
+                continue
+            v = f"{r['label']}: {hit}"
+            if v not in out:
+                out.append(v)
+            break
+    return out[:20]
+
+
+def scrub_sources(root: str | Path | None, env: Mapping[str, str] | None = None) -> list[Path]:
+    """Files and folders the scrub names come from (the hook watches them for changes)."""
+    env = os.environ if env is None else env
+    exo_home = Path(env.get("EXO_HOME") or Path.home() / ".exo").expanduser()
+    paths = [exo_home / "seats", Path(env.get("EXO_BUS_REGISTRY") or exo_home / "bus" / "registry.json")]
+    if env.get("EXO_INTERNAL_NAMES"):
+        paths.append(Path(env["EXO_INTERNAL_NAMES"]).expanduser())
+    if root:
+        paths += [Path(root) / "agents", Path(root) / "policies" / "internal-names.txt"]
+    return paths
+
+
+def internal_names(root: str | Path | None, env: Mapping[str, str] | None = None) -> list[str]:
+    """Seat names from ``$EXO_HOME/seats`` and the bus registry, agent names from the store, and
+    the user's list (``policies/internal-names.txt`` or ``$EXO_INTERNAL_NAMES``, one per line)."""
+    names: list[str] = []
+    for p in scrub_sources(root, env):
+        try:
+            if p.name == "seats" and p.is_dir():
+                names += [q.stem if q.is_file() else q.name for q in sorted(p.iterdir())
+                          if not q.name.startswith((".", "_")) and (q.is_dir() or q.suffix in (".toml", ".json"))]
+            elif p.name == "agents" and p.is_dir():
+                names += _agent_names(p)
+            elif p.suffix == ".json" and p.is_file():
+                doc = json.loads(p.read_text(encoding="utf-8"))
+                names += [str(s.get("seat")) for s in doc.get("seats") or [] if isinstance(s, Mapping) and s.get("seat")]
+            elif p.is_file():
+                names += [ln.strip() for ln in p.read_text(encoding="utf-8").splitlines()
+                          if ln.strip() and not ln.lstrip().startswith("#")]
+        except (OSError, ValueError):
+            continue
+    return list(dict.fromkeys(n for n in names if n))

@@ -13,6 +13,7 @@ Keys: environment, then the macOS Keychain (macOS only), then ~/.config/exo/keys
 from __future__ import annotations
 
 import os
+import shutil
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -21,9 +22,11 @@ from typing import Any, AsyncIterator, Callable, Mapping
 
 from exo.core.models.anthropic import AnthropicProvider
 from exo.core.models.base import error_event
+from exo.core.models.claude_cli import ClaudeCliProvider
 from exo.core.models.decision import DecisionProvider
 from exo.core.models.keys import lookup_key
 from exo.core.models.openai_chat import OpenAIChatProvider
+from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
 
 CATALOG_PATH = Path(__file__).with_name("catalog.toml")
@@ -117,9 +120,15 @@ class Router:
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any] | None, **kw: Any) -> Router:
-        """Build from the ``[models]`` table of Exo config: ``roles``, ``providers``."""
+        """Build from the ``[models]`` table of Exo config: ``roles``, ``providers``, and ``models`` (per
+        "provider:model" overrides of the catalog: ``input``, ``output``, ``cache_read``, ``cache_write`` USD per
+        million tokens, ``context``)."""
         config = config or {}
-        return cls(roles=config.get("roles"), providers=config.get("providers"), **kw)
+        r = cls(roles=config.get("roles"), providers=config.get("providers"), **kw)
+        for ref, info in (config.get("models") or {}).items():  # prices and limits per "provider:model" (D-032)
+            if isinstance(info, dict):
+                r.models[ref] = {**r.models.get(ref, {}), **info}
+        return r
 
     # --- resolution ----------------------------------------------------------
     def chain(self, role: str = "main") -> list[Route]:
@@ -144,10 +153,18 @@ class Router:
 
     def set_role(self, role: str, refs: list[str]) -> None:
         for ref in refs:
+            if not ref or ref.startswith("-") or any(c.isspace() for c in ref):
+                raise ValueError(f"bad model ref {ref!r}")
             route = Route.parse(ref)
+            if route.provider not in self.providers and route.provider not in self.instances:
+                raise ValueError(f"unknown provider {route.provider!r} in {ref!r}")
             if not self._allows(route.provider, role):
                 raise ValueError(f"provider {route.provider!r} cannot serve role {role!r}")
         self.roles[role] = list(refs)
+
+    def prefer(self, role: str, ref: str) -> None:
+        """Put ``ref`` first for ``role`` and keep the old routes behind it as fallbacks."""
+        self.set_role(role, [ref, *[r for r in self.roles.get(role, []) if r != ref]])
 
     def credentials(self, provider: str) -> list[Credential]:
         if provider in self._creds:
@@ -155,6 +172,13 @@ class Router:
         creds: list[Credential] = []
         if provider in self.instances:
             creds = [Credential(provider, None, self.instances[provider])]
+        elif (spec := self.providers.get(provider)) is not None and spec.get("transport") == "claude-cli":
+            # No key: the CLI's own OAuth login is the credential. Available only if the binary is on PATH.
+            exe = shutil.which(spec.get("command", "claude"), path=self.env.get("PATH", ""))
+            if exe:
+                prov = ClaudeCliProvider(exe, name=provider, env=self.env,
+                                         **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
+                creds = [Credential(provider, None, prov)]
         elif (spec := self.providers.get(provider)) is not None:
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
@@ -163,7 +187,8 @@ class Router:
             for i, key in enumerate(keys):
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
-                                 headers=spec.get("headers"), session_header=spec.get("session_header"))
+                                 headers=spec.get("headers"), session_header=spec.get("session_header"),
+                                 **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
                 creds.append(Credential(cid, key, prov))
         self._creds[provider] = creds
         return creds
@@ -202,12 +227,16 @@ class Router:
         self.cooldowns.pop(cred_id, None)
         self.cooldowns.pop(f"{cred_id}|{model}", None)
 
-    def price(self, route: Route, usage: Usage | None) -> Usage | None:
+    def price(self, route: Route, usage: Usage | None, input_includes_cache: bool = False) -> Usage | None:
+        """Fill ``cost_usd`` from the catalog price of the route that served the call (USD per million tokens).
+        None stays None when the route has no price (never 0). ``input_includes_cache``: the provider counts cached
+        tokens inside ``input_tokens`` (OpenAI style), so they are charged at the cache-read rate only."""
         info = self.models.get(route.ref)
         if usage is None or usage.cost_usd is not None or not info or "input" not in info:
             return usage
         inp = info["input"]
-        cost = (usage.input_tokens * inp + usage.output_tokens * info.get("output", 0)
+        fresh = usage.input_tokens - (usage.cache_read_tokens if input_includes_cache else 0)
+        cost = (max(fresh, 0) * inp + usage.output_tokens * info.get("output", 0)
                 + usage.cache_read_tokens * info.get("cache_read", inp * 0.1)
                 + usage.cache_write_tokens * info.get("cache_write", inp * 1.25)) / 1e6
         return Usage(**{**vars(usage), "cost_usd": round(cost, 8)})
@@ -219,25 +248,44 @@ class Router:
         then falling back to later routes until output has started. Ends with exactly one
         ``done`` or ``error``."""
         tried: list[str] = []
+        attempts: list[dict[str, Any]] = []  # every try, for the model.call record (D-025)
         last: ProviderEvent | None = None
-        for route in self.chain(role):
+        chain = self.chain(role)
+        for i, route in enumerate(chain):
             while (picked := self._pick(route, self.clock())) is not None:
                 cred, sole = picked
                 tried.append(route.ref)
                 failed: list[ProviderEvent] = []
-                async for ev in self._attempt(route, cred, sole, messages, tools, opts, failed):
+                async for ev in self._attempt(route, cred, sole, messages, tools, opts, failed, attempts):
                     yield ev
                 if not failed:
                     return
                 last = failed[0]
-        yield self._exhausted(role, tried, last)
+                nxt = next((r for r in chain[i:] if self._pick(r, self.clock())), None)
+                if nxt is None:
+                    if attempts[-1]["outcome"] == "fallback":
+                        attempts[-1]["outcome"] = "error"  # nothing left to fall back to
+                if nxt is not None:  # tell the user why the wait ended and where the call goes next
+                    why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
+                           if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
+                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}")
+        end = self._exhausted(role, tried, last)
+        end.attempts = attempts
+        yield end
 
     async def _attempt(self, route: Route, cred: Credential, sole: bool, messages: list[Message],
-                       tools: list[ToolSpec], opts: dict[str, Any],
-                       failed: list[ProviderEvent]) -> AsyncIterator[ProviderEvent]:
+                       tools: list[ToolSpec], opts: dict[str, Any], failed: list[ProviderEvent],
+                       attempts: list[dict[str, Any]] | None = None) -> AsyncIterator[ProviderEvent]:
         """One call on one credential. A failure that may fall back is swallowed and
-        appended to ``failed``; anything else (including a terminal error) is yielded."""
-        started = False
+        appended to ``failed``; anything else (including a terminal error) is yielded.
+        Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``)."""
+        started, t0 = False, time.monotonic()
+        attempts = [] if attempts is None else attempts
+
+        def note(outcome: str, err: str = "") -> None:
+            attempts.append({"route": route.ref, "outcome": outcome, "error": scrub(err, 160),
+                             "ms": int((time.monotonic() - t0) * 1000)})
+
         async for ev in cred.provider.stream(messages, tools, **{**opts, "model": route.model}):
             if ev.kind == "error":
                 retry_after = ev.retry_after
@@ -245,16 +293,22 @@ class Router:
                 if fallback:
                     self.record_failure(cred.id, route.model, ev.status, retry_after, sole)
                 if started or not fallback:
+                    note("error", ev.error or "")
+                    ev.route, ev.attempts = route.ref, attempts
                     yield ev
                 else:
+                    note("timeout" if (ev.error or "").startswith("ReadTimeout") or "timed out" in (ev.error or "")
+                         else "fallback", ev.error or "")
                     failed.append(ev)
                 return
             if ev.kind in ("text", "reasoning", "tool_call"):
                 started = True
             elif ev.kind in ("usage", "done"):
-                ev.usage = self.price(route, ev.usage)
+                ev.usage = self.price(route, ev.usage, getattr(cred.provider, "input_includes_cache", False))
                 ev.route = route.ref  # the route that served this call, after any fallback
                 if ev.kind == "done":
+                    note("ok")
+                    ev.attempts = attempts
                     self.record_success(cred.id, route.model)
                     if ev.message is not None:
                         ev.message.meta.setdefault("model", route.ref)

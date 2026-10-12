@@ -3,28 +3,37 @@
 import { h, api, short, when, partsText, tag, empty } from "./dom.js";
 import * as bus from "./bus.js";
 import { renderPanel } from "./panels.js";
+import { createHero } from "./hero.js";
 
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
+  let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
 
   const listEl = h("div", { class: "xc-sessions" });
   const logEl = h("div", { class: "xc-log", role: "log", "aria-live": "polite" });
   const apprEl = h("div", { class: "xc-approvals" });
-  const statusEl = h("div", { class: "xc-status" });
+  const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
   const sideEl = h("aside", { class: "xc-side" });
-  const input = h("textarea", { class: "xc-input", rows: "2", placeholder: "Message. Enter sends, Shift+Enter adds a line.", "aria-label": "Message" });
-  const sendBtn = h("button", { class: "xc-btn", onclick: () => send() }, "Send");
+  const input = h("textarea", { class: "xc-input", rows: "2", placeholder: "Ask, or give a task. Enter sends, Shift+Enter adds a line.", "aria-label": "Message" });
+  const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
   const stopBtn = h("button", { class: "xc-btn", onclick: () => interrupt() }, "Stop");
-  const composer = h("div", { class: "xc-composer" }, input, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn));
+  const promptEl = h("span", { class: "xc-cp", "aria-hidden": "true" }, "\u203A");
+  const composer = h("div", { class: "xc-composer" }, promptEl, input, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn));
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });
-  const newBtn = h("button", { class: "xc-btn", onclick: () => create() }, "New session");
+  const newBtn = h("button", { class: "xc-btn xc-primary", onclick: () => create() }, "New thread");
+  const heroCanvas = h("canvas", { class: "xc-hero-canvas", "aria-hidden": "true" });
+  const heroText = h("div", { class: "xc-hero-text" });
+  const heroEl = h("div", { class: "xc-hero", "aria-hidden": "false" }, h("div", { class: "xc-hero-grid" }), heroCanvas, heroText);
+  const hero = createHero(heroCanvas);
+  let heroOn = false, heroTimer = 0;
+  const stage = h("div", { class: "xc-stage" }, heroEl, logEl);
   root.replaceChildren(h("div", { class: "xc-chat" },
-    h("nav", { class: "xc-chat-left" }, newBtn, listEl),
-    h("main", { class: "xc-chat-main" }, logEl, apprEl, statusEl, composer),
+    h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl),
+    h("main", { class: "xc-chat-main" }, stage, apprEl, statusEl, composer),
     sideEl));
 
   // ---------------------------------------------------------------- items
@@ -68,14 +77,41 @@ export function mount(root) {
       case "approval.requested": approvals[b.request_id] = { ...b, session: ev.session }; drawApprovals(); drawSessions(); return;
       case "approval.resolved": delete approvals[b.request_id]; drawApprovals(); drawSessions(); return;
       case "ui.panel": panelsOpen = bus.openPanels(); drawSide(); return;
-      case "notice": flash(b.text); return;
+      case "notice":
+        if (mine && /^tip\b/i.test(b.text || "")) { push({ kind: "sys", id: "tip" + ev.seq, tone: "tip", text: b.text.replace(/^tip:?\s*/i, "") }); return; }
+        flash(b.text); return;
       default: break;
     }
     if (!mine) return;
     switch (ev.type) {
-      case "turn.started": busy = true; model = b.model || model; drawStatus(); break;
-      case "turn.completed": busy = false; drawStatus(); break;
-      case "usage.updated": if (b.session_total) cost = b.session_total.cost_usd; if (b.model) model = b.model; drawStatus(); break;
+      case "turn.started": busy = true; if (b.model) { model = b.model; requested = b.model; } drawStatus(); break;
+      case "turn.completed": busy = false; drawStatus(); loadContext(); break;
+      case "usage.updated": {
+        if (b.session_total) { costSeen = true; cost = b.session_total.cost_usd == null ? null : b.session_total.cost_usd; }   // null = unpriced, never $0
+        if (b.model && !model) model = b.model;
+        instruments(b.usage); drawStatus(); break;
+      }
+      case "model.call":
+        if (b.route) model = b.route;
+        if (b.requested) requested = b.requested;
+        if (b.usage) instruments(b.usage);
+        calls.unshift({ route: b.route || "", requested: b.requested || "", ttft: b.ttft_ms, ms: b.total_ms, cache: b.usage ? cacheOf(b.usage) : null, cost: b.usage ? b.usage.cost_usd : undefined, error: b.error });
+        calls = calls.slice(0, 6);
+        drawStatus(); drawSide(true); break;
+      case "job.updated": {
+        const bits = [b.state || "running"];
+        if (b.exit_code != null && b.exit_code !== 0) bits.push("exit " + b.exit_code);
+        if (b.elapsed_ms) bits.push(b.elapsed_ms >= 1000 ? (b.elapsed_ms / 1000).toFixed(1) + "s" : b.elapsed_ms + "ms");
+        sys("job", short(b.command || b.job_id, 60) + " \u00B7 " + bits.join(" \u00B7 ") + (b.detail ? " \u00B7 " + short(b.detail, 80) : ""), "mem");
+        break;
+      }
+      case "memory.summarized":
+        loadContext();
+        sys("memory", "log " + b.start + "-" + b.end + " folded \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
+      case "context.compacted":
+        sys("context", "compacted \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
+      case "peer.message": push({ kind: "peer", id: b.msg_id || "peer" + items.length, sender: b.sender, text: b.text, trust: b.trust, mode: b.mode }); break;
+      case "taste.updated": push({ kind: "taste", id: "taste-" + b.rule_id + "-" + ev.seq, action: b.action, text: b.text, path: b.path }); break;
       case "message.delta": delta(b); break;
       case "message.completed": completed(b.message || {}); break;
       case "tool.started": if (!find(b.call.id)) push({ kind: "tool", id: b.call.id, name: b.call.name, args: b.call.arguments || {}, output: "", status: "running", risk: b.risk }); break;
@@ -114,33 +150,113 @@ export function mount(root) {
     }
   }
 
+  // What the next call carries (input + cached) and how much of it came from the cache.
+  function instruments(u) {
+    if (!u) return;
+    const total = (u.input_tokens || 0) + (u.cache_read_tokens || 0) + (u.cache_write_tokens || 0);
+    if (total > 0) { ctxTokens = total; cacheShare = (u.cache_read_tokens || 0) / total; }
+  }
+  function cacheOf(u) {
+    const t = (u.input_tokens || 0) + (u.cache_read_tokens || 0) + (u.cache_write_tokens || 0);
+    return t > 0 ? (u.cache_read_tokens || 0) / t : null;
+  }
+  // /context and /findings are read-only reports the core answers itself; the numbers feed the instruments.
+  async function runCommand(name, args) {
+    const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(current) + "/command", { name, args: args || "" });
+    return d.output;
+  }
+  function parseContext(t) {
+    const n = (re) => { const m = re.exec(t); return m ? Number(m[1]) : 0; };
+    const nodes = /Tree nodes: (\d+) done, (\d+) pending/.exec(t);
+    return { system: n(/system\s+(\d+)/), tree: n(/summary tree\s+(\d+)/), notes: n(/other threads\s+(\d+)/), tail: n(/recent tail\s+(\d+)/), total: n(/total\s+(\d+)/),
+      summaries: n(/(\d+) summaries over/), nodes: n(/summaries over (\d+) nodes/), done: nodes ? +nodes[1] : 0, pending: nodes ? +nodes[2] : 0, log: n(/Log: (\d+) entries/), frontier: n(/summarized up to (\d+)/) };
+  }
+  async function loadContext() {
+    const id = current;
+    if (!id) return;
+    try {
+      const out = await runCommand("context");
+      if (id !== current || typeof out !== "string") return;
+      ctx = parseContext(out); ctxTokens = ctx.total || ctxTokens;
+      drawStatus(); drawSide(true); if (!items.length) drawHero();
+    } catch (e) { /* older core: the instruments fall back to what the events carry */ }
+    try {
+      const out = await runCommand("findings", "count");
+      if (id === current && out && typeof out.open === "number") { findings = out.open; drawStatus(); }
+    } catch (e) { /* no findings count */ }
+  }
+  function sys(label, text, tone) { push({ kind: "sys", id: "sys" + items.length + "-" + Date.now(), label, text, tone }); }
+
   // ---------------------------------------------------------------- drawing
 
   function stick() { if (logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 120) logEl.scrollTop = logEl.scrollHeight; }
   function push(it) {
+    it.fresh = true;
     items.push(it);
     if (items.length === 1) { drawLog(); return; }
     logEl.appendChild(itemEl(it)); stick();
   }
-  function redraw(it) { if (it.el && it.el.isConnected) { const n = itemEl(it); it.el.replaceWith(n); } else drawLog(); }
+  function drawHero() {
+    const want = items.length === 0;
+    if (want) {
+      clearTimeout(heroTimer);
+      const s = sessions.find((x) => x.id === current);
+      const chip = (k, l) => h("span", { class: "xc-chipk" }, h("b", null, k), l);
+      const line = (k, v) => h("div", { class: "xc-hl" }, h("span", { class: "xc-i" }, k), h("span", { class: "xc-v" }, v));
+      heroText.replaceChildren(
+        h("div", { class: "xc-hero-title" }, "E X O"),
+        h("div", { class: "xc-hero-sub" }, current ? "ready \u00B7 nothing in this thread yet" : "no thread open \u00B7 pick one or start a new thread", h("span", { class: "xc-caret" })),
+        h("div", { class: "xc-hlines" },
+          line("agent", (s && (s.agent || s.seat)) || "exo"),
+          line("model", model || (s && s.model) || "not set"),
+          line("memory", ctx ? ctx.summaries + " summaries \u00B7 " + ctx.nodes + " nodes \u00B7 log " + ctx.log + " entries" : "reading\u2026")),
+        h("div", { class: "xc-chips" }, chip("\u21B5", "send"), chip("\u21E7\u21B5", "new line"), chip("/", "context \u00B7 findings \u00B7 trace"), chip("y n a", "approvals")));
+      heroEl.classList.remove("out"); heroEl.hidden = false;
+      if (!heroOn) { heroOn = true; hero.start(); }
+    } else if (heroOn) {
+      heroOn = false; heroEl.classList.add("out");
+      heroTimer = setTimeout(() => { heroEl.hidden = true; hero.stop(); }, 600);
+    }
+  }
+  function redraw(it) { const old = it.el; if (old && old.isConnected) { old.replaceWith(itemEl(it)); } else drawLog(); }   // keep the old node: itemEl points it.el at the new one
   function drawLog() {
-    logEl.replaceChildren(...(items.length ? items.map(itemEl) : [empty(current ? "No messages yet. Say something." : "Pick a session or start a new one.")]));
+    logEl.replaceChildren(...items.map(itemEl));
+    drawHero();
     logEl.scrollTop = logEl.scrollHeight;
   }
 
   function itemEl(it) {
     let el;
+    const fresh = it.fresh ? " xc-in" : "";
+    it.fresh = false;
     if (it.kind === "user") {
-      el = h("div", { class: "xc-msg xc-user" }, h("span", { class: "xc-prompt" }, "> "), h("span", { class: "xc-text" }, it.text));
+      el = h("div", { class: "xc-msg xc-user" + fresh }, h("span", { class: "xc-prompt" }, "\u203A"), h("span", { class: "xc-text" }, it.text));
     } else if (it.kind === "assistant") {
       it.textEl = h("div", { class: "xc-text" }, it.text);
-      el = h("div", { class: "xc-msg xc-asst" + (it.streaming ? " xc-streaming" : "") }, it.textEl, it.streaming ? null : feedbackBar(it));
+      el = h("div", { class: "xc-msg xc-asst" + (it.streaming ? " xc-streaming" : "") + fresh }, it.textEl, it.streaming ? null : feedbackBar(it));
+    } else if (it.kind === "sys") {
+      el = h("div", { class: "xc-msg xc-sysline" + (it.tone === "tip" ? " xc-tip" : "") + fresh },
+        it.tone === "tip" ? "tip: " + it.text : [h("span", { class: "xc-k" }, it.label), " \u00B7 " + it.text]);
+    } else if (it.kind === "report") {
+      el = h("section", { class: "xc-msg xc-pn" + fresh }, h("div", { class: "xc-ph" }, it.title), h("pre", { class: "xc-report" }, it.text));
+    } else if (it.kind === "peer") {
+      el = h("section", { class: "xc-msg xc-pn xc-peer" + fresh },
+        h("div", { class: "xc-ph" }, "Peer \u00B7 " + (it.sender || "unknown"), it.trust ? tag(it.trust) : null, it.mode ? tag(it.mode) : null),
+        h("div", { class: "xc-pb xc-text" }, it.text),
+        h("div", { class: "xc-pm" }, "from another session, not from you"));
+    } else if (it.kind === "taste") {
+      el = h("section", { class: "xc-msg xc-pn" + fresh },
+        h("div", { class: "xc-ph" }, "Taste \u00B7 " + (it.action || "updated")),
+        it.text ? h("div", { class: "xc-pb" }, it.text) : null,
+        it.path ? h("div", { class: "xc-pm" }, it.path) : null);
     } else {
-      const args = short(JSON.stringify(it.args), 140);
-      el = h("details", { class: "xc-msg xc-tool-item xc-ts-" + it.status },
-        h("summary", null, h("span", { class: "xc-prompt" }, it.status === "running" ? "… " : it.status === "error" ? "! " : "• "),
-          it.name + " ", h("span", { class: "xc-dim" }, args), it.ms ? h("span", { class: "xc-dim" }, " " + it.ms + "ms") : null),
-        h("pre", { class: "xc-pre-body" }, it.output || (it.status === "running" ? "running" : "(no output)")));
+      const args = short(Object.values(it.args || {}).map((v) => (typeof v === "string" ? v : JSON.stringify(v))).join(" "), 120);
+      const glyph = it.status === "running" ? "\u25CF" : it.status === "error" ? "\u00D7" : "\u00B7";
+      el = h("details", { class: "xc-msg xc-tool-item xc-ts-" + it.status + fresh },
+        h("summary", null, h("span", { class: "xc-tg" }, glyph), h("span", { class: "xc-tname" }, it.name), h("span", { class: "xc-targs" }, args),
+          it.status === "running" ? h("span", { class: "xc-wire" }) : null,
+          it.ms ? h("span", { class: "xc-tms" }, it.ms >= 1000 ? (it.ms / 1000).toFixed(1) + "s" : it.ms + "ms") : null),
+        h("pre", { class: "xc-pre-body" }, (it.args && Object.keys(it.args).length ? JSON.stringify(it.args, null, 1) + "\n\n" : "") + (it.output || (it.status === "running" ? "running" : "(no output)"))));
     }
     it.el = el;
     return el;
@@ -161,11 +277,40 @@ export function mount(root) {
   }
 
   function drawStatus() {
-    const bits = [busy ? "working" : "idle"];
-    if (model) bits.push(model);
-    if (cost != null) bits.push("$" + cost.toFixed(cost < 1 ? 3 : 2));
-    statusEl.replaceChildren(h("span", null, bits.join(" · ")), notice ? h("span", { class: "xc-flash" }, notice) : null);
+    const cell = (label, ...v) => h("span", null, h("span", { class: "xc-i" }, label), h("span", { class: "xc-v" }, ...v));
+    const out = [h("span", { class: "xc-state" + (busy ? " on" : "") }, h("span", { class: "xc-dot" + (busy ? " on" : "") }), busy ? "working" : "idle")];
+    if (model) {
+      const fell = requested && requested !== model;
+      const m = cell("model", model);
+      m.classList.add("xc-model");
+      if (fell) m.appendChild(h("span", { class: "xc-via", title: "asked " + requested }, "\u2190 fallback"));
+      out.push(m);
+    }
+    if (ctxTokens != null) {
+      const pct = Math.min(100, Math.round(ctxTokens / 2000));   // against a nominal 200k window
+      out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "memory"),
+        h("span", { class: "xc-gauge" + (pct > 80 ? " hot" : ""), title: "context for the next call, nominal 200k window" }, h("i", { style: "width:" + pct + "%" })),
+        h("span", { class: "xc-v" }, fmtTok(ctxTokens))));
+    }
+    if (cacheShare != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "cache"), h("span", { class: "xc-v" }, Math.round(cacheShare * 100) + "%")));
+    if (findings != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "findings"), h("span", { class: "xc-v" + (findings ? " xc-via" : "") }, String(findings))));
+    if (cost != null || costSeen) out.push(cell("cost", cost != null ? money(cost) : "unknown"));
+    out.push(busy ? h("span", { class: "xc-wire", "aria-hidden": "true" }) : h("span", { class: "xc-spacer" }));
+    if (notice) out.push(h("span", { class: "xc-flash" }, notice));
+    statusEl.replaceChildren(...out);
     stopBtn.disabled = !busy;
+    promptEl.textContent = busy ? "steer \u203A" : "\u203A";
+    composer.classList.toggle("xc-steer", busy);
+    const live = document.getElementById("xc-live");
+    if (live) live.classList.toggle("on", busy);
+  }
+  function money(v) { return "$" + v.toFixed(v < 1 ? 3 : 2); }
+  function fmtTok(n) { return n >= 10000 ? Math.round(n / 1000) + "k" : n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n); }
+  function drawWhere() {
+    const el = document.getElementById("xc-where");
+    if (!el) return;
+    const s = sessions.find((x) => x.id === current);
+    el.replaceChildren(...(s ? [h("b", null, s.agent || s.seat || "exo"), " \u00B7 " + short(s.title || s.id, 36)] : []));
   }
 
   function drawSessions() {
@@ -173,21 +318,64 @@ export function mount(root) {
     listEl.replaceChildren(...(sessions.length ? sessions.map((s) =>
       h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id) },
         h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
-        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", waiting.has(s.id) ? "needs you" : "", when(s.updated)].filter(Boolean).join(" · ")))) : [empty("No sessions yet.")]));
+        h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))))) : [empty("No threads yet.")]));
+    drawWhere();
   }
 
+  const HOTKEYS = { allow: "y", deny: "n", allow_always: "a", always: "a" };
+  function keyFor(o, taken) {
+    let k = HOTKEYS[o] || o[0] || "?";
+    for (const c of o) { if (!taken.has(k)) break; k = c; }
+    taken.add(k);
+    return k;
+  }
   function drawApprovals() {
     const mine = Object.values(approvals).filter((a) => a.session === current);
-    apprEl.replaceChildren(...mine.map((a) => h("article", { class: "xc-card xc-approval xc-risk-" + a.risk },
-      h("div", { class: "xc-card-top" }, h("strong", null, a.summary), tag(a.risk, a.risk === "high" ? "red" : "amber")),
-      a.call ? h("div", { class: "xc-tool" }, a.call.name + " " + short(JSON.stringify(a.call.arguments || {}), 200)) : null,
-      h("div", { class: "xc-btnrow" }, (a.options || ["allow", "deny", "allow_always"]).map((o) =>
-        h("button", { class: "xc-btn", onclick: () => answer(a, o) }, o.replace("_", " ")))))));
+    apprEl.replaceChildren(...mine.map((a) => {
+      const taken = new Set();
+      const opts = (a.options || ["allow", "deny", "allow_always"]).map((o) => [o, keyFor(o, taken)]);
+      return h("article", { class: "xc-pn xc-gate xc-in xc-risk-" + a.risk, "data-approval": a.request_id },
+        h("div", { class: "xc-ph" }, "Approval \u00B7 " + (a.risk || "medium") + " risk"),
+        h("div", { class: "xc-pb" }, a.summary),
+        a.call ? h("div", { class: "xc-pm" }, a.call.name + " " + short(JSON.stringify(a.call.arguments || {}), 200)) : null,
+        h("div", { class: "xc-keys" }, opts.map(([o, k]) =>
+          h("button", { class: "xc-key" + (o === "allow" ? " xc-key-go" : ""), onclick: () => answer(a, o) }, h("b", null, k), o.replace("_", " ")))));
+    }));
+    apprEl.style.paddingBottom = mine.length ? "12px" : "";
   }
+  function onKey(e) {
+    if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || "")) return;
+    const a = Object.values(approvals).find((x) => x.session === current);
+    if (!a) return;
+    const taken = new Set();
+    for (const o of (a.options || ["allow", "deny", "allow_always"])) if (keyFor(o, taken) === e.key.toLowerCase()) { e.preventDefault(); answer(a, o); return; }
+  }
+  document.addEventListener("keydown", onKey);
 
-  function drawSide() {
+  function gaugeRow(label, n, max, hot) {
+    return h("div", { class: "xc-gr" }, h("span", { class: "xc-i" }, label), h("span", { class: "xc-gauge" + (hot ? " hot" : "") }, h("i", { style: "width:" + Math.max(n ? 2 : 0, Math.min(100, Math.round(100 * n / max))) + "%" })), h("span", { class: "xc-v" }, fmtTok(n)));
+  }
+  function instrumentColumn() {
+    const mem = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Memory"));
+    if (ctx) {
+      const max = Math.max(ctx.total, 1);
+      mem.append(h("div", { class: "xc-big" }, h("span", null, fmtTok(ctx.total)), h("span", { class: "xc-i" }, "tokens on the next call")),
+        gaugeRow("system", ctx.system, max), gaugeRow("tree", ctx.tree, max), gaugeRow("threads", ctx.notes, max), gaugeRow("tail", ctx.tail, max),
+        h("div", { class: "xc-pm" }, "tree \u00B7 " + ctx.summaries + " summaries over " + ctx.nodes + " nodes" + (ctx.pending ? " \u00B7 " + ctx.pending + " pending" : "")),
+        h("div", { class: "xc-pm" }, "log \u00B7 " + ctx.log + " entries, folded up to " + ctx.frontier));
+    } else mem.append(h("div", { class: "xc-pm" }, ctxTokens != null ? fmtTok(ctxTokens) + " tokens on the last call" : "no report yet"));
+    const cl = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Last calls"));
+    if (calls.length) calls.forEach((k) => cl.append(h("div", { class: "xc-call" + (k.error ? " xc-bad" : "") },
+      h("span", { class: "xc-v" }, short((k.route || k.requested || "no route").split(":").pop(), 22)),
+      h("span", { class: "xc-pm" }, [k.ttft != null ? "ttft " + k.ttft + "ms" : "", k.cache != null ? "cache " + Math.round(k.cache * 100) + "%" : "", k.cost === undefined ? "" : k.cost === null ? "cost unknown" : money(k.cost)].filter(Boolean).join(" \u00B7 ")),
+      k.requested && k.route && k.requested !== k.route ? h("span", { class: "xc-via" }, "\u2190 fallback") : null)));
+    else cl.append(h("div", { class: "xc-pm" }, "no calls yet in this thread"));
+    return [mem, cl];
+  }
+  function drawSide(onlyInstruments) {
     const mine = panelsOpen.filter((p) => !p.session || p.session === current);
-    sideEl.replaceChildren(...(mine.length ? mine.map((p) => renderPanel(p, { act: panelAct, dismiss: panelDismiss })) : [h("div", { class: "xc-dim xc-side-empty" }, "Panels the model opens show here.")]));
+    if (onlyInstruments && mine.length) return;
+    sideEl.replaceChildren(...(mine.length ? mine.map((p) => { const n = renderPanel(p, { act: panelAct, dismiss: panelDismiss }); if (!seen.has(p.panel_id)) n.classList.add("xc-in"); return n; }) : instrumentColumn()));
     sideEl.classList.toggle("xc-has", mine.length > 0);
     for (const p of mine) if (!seen.has(p.panel_id)) { seen.add(p.panel_id); respondPanel(p, "opened", {}, true); }
   }
@@ -199,7 +387,7 @@ export function mount(root) {
   }
 
   async function open(id) {
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; flash("");
+    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
@@ -211,7 +399,7 @@ export function mount(root) {
       model = (d.session && d.session.model) || "";
     } catch (e) { fail(e); }
     loading = false;
-    drawLog(); drawStatus();
+    drawLog(); drawStatus(); loadContext();
     const buffered = pending; pending = [];
     buffered.forEach(handle);
     try {
@@ -232,6 +420,16 @@ export function mount(root) {
   async function send() {
     const text = input.value.trim();
     if (!text) return;
+    const slash = /^\/(context|findings|trace)\b\s*(.*)$/.exec(text);
+    if (slash && current) {
+      input.value = "";
+      try {
+        const out = await runCommand(slash[1], slash[2]);
+        if (slash[1] === "context" && typeof out === "string") { ctx = parseContext(out); ctxTokens = ctx.total || ctxTokens; drawStatus(); drawSide(true); }
+        push({ kind: "report", id: "rep" + Date.now(), title: slash[1] + (slash[1] === "context" ? " \u00B7 next call" : ""), text: typeof out === "string" ? out : JSON.stringify(out, null, 1) });
+      } catch (e) { fail(e); }
+      return;
+    }
     try {
       if (!current) {
         const d = await api("POST", "/api/chat/sessions", { title: short(text, 60) });
@@ -272,7 +470,8 @@ export function mount(root) {
 
   // ---------------------------------------------------------------- start
 
-  const off = bus.on(handle);
+  const offBus = bus.on(handle);
+  const off = () => { offBus(); document.removeEventListener("keydown", onKey); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   refreshSessions().then(() => { if (!current && sessions.length) open(sessions[0].id); });
   return off;

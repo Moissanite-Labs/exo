@@ -82,7 +82,7 @@ def test_send_and_stream(tmp_path):
         assert "hello" in app.transcript_text()
         assert app.last_answer[1] == "Hello **there**, friend"
         assert app.status_text().startswith("tester · ")
-        assert "ctx" in app.status_text() and "$" in app.status_text()
+        assert "ctx" in app.status_text() and "unknown" in app.status_text()  # D-032: unpriced is unknown, never $0
 
     run(tmp_path, sc)
 
@@ -264,5 +264,205 @@ def test_fuzzy_and_tool_collapse(tmp_path):
         assert not tb.expanded
         await pilot.press("ctrl+o")
         assert tb.expanded and app.expanded
+
+    run(tmp_path, sc)
+
+
+def test_waiting_strip_then_text_and_warn_notice(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.handle(s.Event.of(s.TurnStarted(turn_id="t1", model="kimi-k3"), 1, app.session))
+        app.turn_t0 -= 12  # twelve seconds without a byte
+        app.refresh_activity()
+        assert "waiting for kimi-k3 12s" in str(app.query_one("#activity").render())
+        app.handle(s.Event.of(s.Notice(text="a:m did not answer in 60 s; trying b:m", level="warn"), 2, app.session))
+        await pilot.pause(0.05)
+        assert "warn: a:m did not answer in 60 s; trying b:m" in app.transcript_text()
+        assert any("warn" in w.classes for w in app.transcript.children)
+        app.handle(s.Event.of(s.ReasoningDelta(message_id="m1", text="hm"), 3, app.session))
+        assert "waiting" not in str(app.query_one("#activity").render())
+        assert "working" in str(app.query_one("#activity").render())
+
+    run(tmp_path, sc)
+
+
+def test_status_shows_findings_and_event_errors_reach_the_core(tmp_path):
+    async def sc(app, pilot, client, eng):
+        eng.findings.file("sig", "something", severity="bug")
+        await send(app, pilot, "hello")
+        await until(lambda: "1 findings" in app.status_text(), pilot)
+        # an exception in the TUI's own event path becomes a harness.error event (D-025)
+        app.handle = lambda ev: (_ for _ in ()).throw(NameError("boom"))
+        await send(app, pilot, "hello")
+        await until(lambda: any(isinstance(e.body, s.HarnessError) and "tui event" in e.body.where
+                                for e in eng.hub.since(0)), pilot)
+
+    run(tmp_path, sc)
+
+
+def test_help_lists_every_registered_command(tmp_path):
+    from exo_tui.app import COMMANDS, GROUPS
+
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "/help")
+        await until(lambda: "/help" in app.transcript_text(), pilot)
+        lines = [ln.strip() for ln in app.help_text().splitlines()]
+        for name in [*COMMANDS, *(c["name"] for c in app.commands)]:
+            assert any(ln.startswith(f"/{name}  ") for ln in lines), name
+        assert all(f"{g}:" in lines for g in GROUPS)
+        assert {"restart", "default", "new", "resume", "sessions", "clear", "quit", "cwd", "usage"} <= set(COMMANDS)
+
+    run(tmp_path, sc)
+
+
+def test_context_and_compact_commands(tmp_path):
+    from exo_tui.app import COMMANDS
+
+    async def sc(app, pilot, client, eng):
+        assert {"context", "compact"} <= set(COMMANDS)
+        await send(app, pilot, "/help")
+        await until(lambda: "/context" in app.transcript_text() and "/compact" in app.transcript_text(), pilot)
+        await send(app, pilot, "hello")
+        await until(lambda: "friend" in app.transcript_text(), pilot)
+        await send(app, pilot, "/context")
+        await until(lambda: "recent tail" in app.transcript_text(), pilot)
+        assert any(isinstance(b, s.CommandRun) and b.name == "context" and b.session == app.session for b in app.sent)
+        await send(app, pilot, "/compact")
+        await until(lambda: "Compacted:" in app.transcript_text(), pilot)
+        assert "compacting..." in app.transcript_text()
+        assert not any(isinstance(b, s.Peers) for b in app.sent)  # no new protocol command: command.run only
+
+    run(tmp_path, sc)
+
+
+def test_model_flag_text_is_rejected(tmp_path):
+    async def sc(app, pilot, client, eng):
+        before = app.model
+        await send(app, pilot, "/model --default fake:x")
+        await until(lambda: "not a model ref" in app.transcript_text(), pilot)
+        assert app.model == before and not any(isinstance(b, s.ModelsSet) for b in app.sent)
+        await send(app, pilot, "/model nope:thing")  # unknown provider: the engine says bad_model
+        await until(lambda: "bad_model" in app.transcript_text(), pilot)
+        assert app.model == before
+
+    run(tmp_path, sc)
+
+
+def test_default_model_persists_with_fallbacks(tmp_path):
+    import json
+
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "/model default fake:y")
+        await until(lambda: "default model: fake:y" in app.transcript_text(), pilot)
+        cfg = json.loads((tmp_path / "home" / "config.json").read_text())
+        assert cfg["models"]["roles"]["main"] == ["fake:y", "fake:x"]
+
+    eng_providers = None  # noqa: F841
+    run(tmp_path, sc)
+
+
+def test_default_without_arg_opens_picker_and_sets_default(tmp_path):
+    import json
+
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "/default")
+        await until(lambda: isinstance(app.screen, Palette), pilot)
+        assert "default" in app.screen.placeholder
+        assert any(v == "fake:x" for _, v in app.screen.items)
+        await pilot.press("enter")
+        await until(lambda: "default model: fake:x" in app.transcript_text(), pilot)
+        cfg = json.loads((tmp_path / "home" / "config.json").read_text())
+        assert cfg["models"]["roles"]["main"][0] == "fake:x"
+
+    run(tmp_path, sc)
+
+
+def test_session_update_does_not_clobber_model_in_use(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.model = "p:in-use"
+        info = s.SessionInfo(id=app.session, model="p:stored")
+        app.handle(s.Event.of(s.SessionUpdated(session=info), 1, app.session))
+        assert app.model == "p:in-use"
+
+    run(tmp_path, sc)
+
+
+def test_restart_schedules_new_tab_and_exits(tmp_path, monkeypatch):
+    from exo_tui import restart as rs
+    calls = []
+    monkeypatch.setattr(rs, "schedule_restart", lambda cmd, pid=None: calls.append(cmd))
+    monkeypatch.setattr(rs, "has_opener", lambda *a, **k: True)
+    monkeypatch.setenv("EXO_RESTART_CMD", "exo-canary /work")
+
+    async def sc(app, pilot, client, eng):
+        sid = app.session
+        await send(app, pilot, "/restart")
+        await until(lambda: calls, pilot)
+        assert calls[0] == ["exo-canary", "/work", "--session", sid]
+
+    run(tmp_path, sc)
+
+
+def test_peers_command_send_and_inline_peer_message(tmp_path):
+    import shutil
+    import tempfile
+
+    from exo.core.seats import Seat
+    from exo.server.app import Dispatcher, HttpServer
+
+    d = tempfile.mkdtemp(prefix="exot", dir="/tmp")  # short: unix socket paths
+    try:
+        models = {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
+        mine = CoreEngine(tmp_path / "h1", models, cwd=str(tmp_path), env={}, seat=Seat(name="tester"), peers_dir=d)
+        other = CoreEngine(tmp_path / "h2", models, cwd=str(tmp_path), env={}, seat=Seat(name="razi"), peers_dir=d)
+        client = FakeServerClient(mine)
+
+        async def main():
+            srv = HttpServer(Dispatcher(other, other.hub))
+            await srv.start_unix(f"{d}/razi.sock")
+            await other.start_peers(f"{d}/razi.sock")
+            sb = (await other.loop.create_session(title="razi work")).id
+            app = ExoApp(client, seat="tester")
+            async with app.run_test(size=(120, 40)) as pilot:
+                await asyncio.wait_for(app.ready.wait(), 5)
+                await mine.start_peers(f"{d}/tester.sock")  # the TUI's own engine serves no socket here; give it one
+                srv2 = HttpServer(Dispatcher(mine, mine.hub))
+                await srv2.start_unix(f"{d}/tester.sock")
+                await send(app, pilot, "/peers")
+                await until(lambda: "razi" in app.transcript_text(), pilot)
+                await send(app, pilot, "/send razi are you free?")
+                await until(lambda: any("are you free?" in m.text() for m in other.store.messages(sb)), pilot)
+                await other.peer_node.send("tester", "yes, go ahead", sb, "agent")
+                await until(lambda: "peer message from razi" in app.transcript_text(), pilot)
+                assert "yes, go ahead" in app.transcript_text()
+                assert "/peers" in app.help_text() and "/send" in app.help_text()
+                await srv2.close()
+            await other.close()
+            await srv.close()
+
+        asyncio.run(main())
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_new_is_a_thread_of_the_same_memory(tmp_path):
+    from exo.core.context import NOTE_HEAD
+
+    async def sc(app, pilot, client, eng):
+        first = app.session
+        await send(app, pilot, "hello from the first window")
+        await until(lambda: not app.busy and app.last_answer[1], pilot)
+        await send(app, pilot, "/new")
+        await until(lambda: app.session != first, pilot)
+        assert "same memory" in app.transcript_text()
+        second = app.session
+        await send(app, pilot, "hello again")
+        await until(lambda: not app.busy and "Hello" in app.last_answer[1], pilot)
+        stored = eng.store.messages(second)
+        assert any(m.meta.get("note") and "first window" in m.text() for m in stored)  # it knows the other thread
+        await app.load_session(second)
+        assert NOTE_HEAD not in app.transcript_text() and "resumed thread" in app.transcript_text()
+        await send(app, pilot, "/new private")
+        await until(lambda: app.session not in (first, second), pilot)
+        assert eng.store.get_session(app.session).kind == "private"
 
     run(tmp_path, sc)

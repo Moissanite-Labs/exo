@@ -183,7 +183,9 @@ class Scheduler:
             loop = Loop(e.store, provider, bus=_Bus(e), tool_specs=lambda: e.registry.specs(names=names),
                         run_tool=e.run_tool, system_prompt=PROMPT, model=model, max_retries=e.loop.max_retries,
                         retry_delay=e.loop.retry_delay)
-            info = await loop.create_session(title=f"scheduled: {job['title'][:60]}", model=model, cwd=e.cwd)
+            loop.approval_ms, loop.on_turn_end = e.loop.approval_ms, e.observe_turn
+            info = await loop.create_session(title=f"scheduled: {job['title'][:60]}", model=model, cwd=e.cwd,
+                                             agent=getattr(e, "agent", None), kind="scheduled")
             sid = info.id
             self._emit(job, task_id, "running", f"Running {job['title']!r}.", sid)
             res = await loop.send(sid, job["prompt"])

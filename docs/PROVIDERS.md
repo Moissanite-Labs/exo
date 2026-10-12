@@ -13,7 +13,8 @@ Exo looks for a key by its variable name (for example `OPENCODE_GO_API_KEY`). It
 
    It prompts for the value and does not echo it. On Linux this step is skipped.
 3. The file `~/.config/exo/keys.env` (macOS and Linux), one `NAME=value` per line. It must be mode 0600
-   (`chmod 600 ~/.config/exo/keys.env`). If it is looser, Exo refuses to read it and warns.
+   (`chmod 600 ~/.config/exo/keys.env`). If it is looser, Exo refuses to read it and warns. Set `EXO_KEYS_FILE`
+   to read a different path instead.
 
 ### On Linux
 
@@ -55,7 +56,7 @@ a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:
 
     exo decide "Is this safe to run?" --options safe,risky --state "rm -rf build/"
 
-Jev: set `TYPESAFE_API_KEY` (env, macOS Keychain service `exo`, or keys.env). It is the first default route of the
+Jev: set `TYPESAFE_API_KEY` (env, macOS Keychain service `exo` (macOS only), or keys.env). It is the first default route of the
 `decision` role (`["jev:jev-latest", "laya:laya"]`, owner ruling: base Laya was poor in a live check, Jev
 answered sensibly). Without a key Jev is skipped and the role falls through to Laya, then aux, then main.
 Shapes were checked live on 2026-10-11 (7 calls). Score levels count from 0; a score can fall between

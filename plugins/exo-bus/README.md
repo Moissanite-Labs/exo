@@ -42,6 +42,19 @@ python -m exo.bus checkpoint --db $EXO_HOME/bus/relay.sqlite --relay-key <relay 
 An existing Divan relay database and `registry.json` open unchanged (same schema and signatures).
 The `/mcp` endpoint mounts when the `mcp` package (v2) is installed; set `EXO_BUS_MCP=0` to turn it off.
 
+## Peers on Hermes (D-026)
+
+`exo_bus_hermes/peers.py` makes a Hermes profile a peer: set `EXO_PEERS=1` (or `peers.enabled: true` under
+the plugin settings) and the plugin starts a listener thread, a presence file in the shared peers directory,
+the tools `peers` and `peer_send`, the commands `/peers`, `/peer-release` and `/peer-deny`, and the `peers`
+skill. See docs/PEERS.md for what it can and cannot do (gateway sessions in particular).
+
+Why the bus is still not a Hermes platform: Hermes has `register_platform` (a gateway adapter that turns
+chat messages into user input behind its allowlists and pairing), not `register_channel`. A bus adapter would
+be a few hundred lines and would admit text from other seats as user-level input, so it needs a security
+review of its own. Not done here; bus messages reach Hermes through the `bus_inbox` tool, and peers cover the
+live case.
+
 ## Channel plan
 
 Done in v0.1: tools, polling channel, DM vs shared-chat routing, thread continuity, read cursor on

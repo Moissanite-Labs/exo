@@ -261,7 +261,7 @@ def test_fork_lineage_and_undo(tmp_path):
 
 def _tree_loop(tmp_path, summ, **kw):
     store = SessionStore(tmp_path / "s.sqlite")
-    ctx = TreeContext(store, DefaultCompressor(summ, retry_delay=0), leaf_size=2, tail_messages=2, **kw)
+    ctx = TreeContext(store, DefaultCompressor(summ, retry_delay=0), leaf_size=2, tail_messages=2, **{"min_compact_tokens": 0, **kw})
     prov = Script(default="ok")
     loop = Loop(store, prov, context=ctx, retry_delay=0)
     seen = []
@@ -285,7 +285,7 @@ def test_turn_is_fresh_call_from_tree_and_tail(tmp_path):
     assert len(last) <= 1 + 2 + 2  # system, maybe a bridge, tail of at most leaf+tail
     assert last[-1].text() == "q3"
     assert "q0" not in [m.text() for m in last[1:]]
-    assert any(e.type == "context.compacted" for e in seen)
+    assert any(e.type == "memory.summarized" for e in seen)  # tree upkeep, not a context compaction
     assert "TURNS TO SUMMARIZE" in summ.prompts[0] and "[USER] q0" in summ.prompts[0]
 
 
@@ -420,3 +420,129 @@ def test_usage_updated_model_names_the_route_that_served_after_fallback(tmp_path
     asyncio.run(go())
     usage = [e.body for e in store.events_since(0) if isinstance(e.body, ev.UsageUpdated)]
     assert usage and usage[-1].model == "b:small"
+
+
+def test_session_updated_publishes_model_in_use(tmp_path):
+    store, loop, seen = make(tmp_path, Script(reply("hi")), model="p:in-use")
+
+    async def go():
+        s = await loop.create_session(title="t", model="p:stale")
+        await loop.send(s.id, "hello")
+        return s.id
+
+    sid = run(go())
+    assert store.get_session(sid).model == "p:in-use"
+    last = [e for e in seen if e.type == "session.updated"][-1]
+    assert last.body.session.model == "p:in-use"
+
+
+def test_model_call_records_the_route_from_the_ok_attempt_when_unstamped(tmp_path):
+    from exo.protocol import schema as ev
+
+    attempts = [{"route": "p:big", "outcome": "ok", "error": "", "ms": 1}]
+    done = ProviderEvent(kind="done", stop_reason="end", attempts=attempts)  # no route stamped on the event
+    store, loop, _ = make(tmp_path, Script([done]))
+
+    async def go():
+        s = await loop.create_session()
+        await loop.send(s.id, "hi")
+    run(go())
+    calls = [e.body for e in store.events_since(0) if isinstance(e.body, ev.ModelCall)]
+    assert calls and calls[-1].route == "p:big"
+
+
+def test_model_call_with_real_router_success_on_first_attempt_sets_route(tmp_path):
+    """Live path: real Router, fake provider stream, no fallback. The stored and published model.call names the
+    serving route (field `route`; there is no field called `served` on the event)."""
+    from exo.core.models import FakeProvider, Router
+    from exo.protocol import schema as ev
+
+    router = Router(roles={"main": ["p:big"]}, catalog={"providers": {}, "models": {}, "roles": {}},
+                    instances={"p": FakeProvider(["hi"], name="p")}, env={})
+    store, loop, seen = make(tmp_path, router.provider("main"), model="p:big")
+
+    async def go():
+        info = await loop.create_session()
+        await loop.send(info.id, "hello")
+    run(go())
+    calls = [e.body for e in store.events_since(0) if isinstance(e.body, ev.ModelCall)]
+    assert calls and calls[-1].route == "p:big" and calls[-1].attempts[0]["outcome"] == "ok"
+    assert calls[-1].attempts[0]["route"] == "p:big"
+    stored = [e for e in store.events_since(0) if e.type == "model.call"][-1]
+    assert stored.body.route == "p:big"
+    published = [e for e in seen if e.type == "model.call"]
+    assert published and all(e.body.route == "p:big" for e in published)
+
+
+def test_compaction_skips_tiny_spans_and_summaries_that_do_not_shrink():
+    from exo.core.context import TreeContext
+
+    async def fat(content, **kw):
+        return content + " and more words that make the summary larger than its source"
+
+    async def lean(content, **kw):
+        return "short"
+
+    def tree(summ, **kw):
+        store = SessionStore(":memory:")
+        s = store.create_session(title="t")
+        for i in range(6):
+            store.append_message(s.id, Message.user("word " * 900 if i < 5 else "tail"))
+        ctx = TreeContext(store, type("C", (), {"summarize": staticmethod(summ)})(), leaf_size=2, tail_messages=2, **kw)
+
+        async def go():
+            ctx.note(s.id)
+            await ctx.settle(s.id)
+            return [(n.status, n.text) for n in store.summaries(s.id)]
+        return run(go())
+
+    assert {st for st, _ in tree(lean, min_compact_tokens=100000)} == {"skipped"}  # too small to be worth it
+    assert {st for st, _ in tree(fat)} == {"skipped"}  # grew, so kept verbatim
+    assert {st for st, _ in tree(lean)} == {"done"}  # big enough and shrinks
+
+
+def test_steer_during_the_final_reply_gets_its_own_answer(tmp_path):
+    prov = Script(["WAIT", *reply("first answer")], reply("answer to the steer"))
+    prov.gate = asyncio.Event()
+    store, loop, seen = make(tmp_path, prov)
+
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "start"))
+        while not prov.calls:
+            await asyncio.sleep(0.005)
+        assert await loop.send(s.id, "one more thing", mode="steer") is None
+        prov.gate.set()
+        return s, await task
+
+    s, res = run(go())
+    assert res.message.text() == "answer to the steer"
+    assert len(prov.calls) == 2 and "one more thing" in [m.text() for m in prov.calls[1]]
+    roles = [(m.role, m.text()) for m in store.messages(s.id)]
+    assert roles[-2:] == [("user", "one more thing"), ("assistant", "answer to the steer")]
+
+
+def test_steer_after_the_last_call_still_gets_an_answer(tmp_path):
+    prov = Script(reply("first answer"), reply("late answer"))
+    store, loop, seen = make(tmp_path, prov)
+
+    async def go():
+        s = await loop.create_session()
+        st = loop.state(s.id)
+
+        async def late(*a, **k):  # arrives while the turn is closing, after the model's final reply
+            st.steer.append(Message.user("late note"))
+        orig = loop._rounds
+        calls = []
+
+        async def rounds(*a, **k):
+            await orig(*a, **k)
+            if not calls:
+                calls.append(1)
+                await late()
+        loop._rounds = rounds
+        return s, await loop.send(s.id, "start")
+
+    s, res = run(go())
+    assert res.message.text() == "late answer"
+    assert [m.text() for m in store.messages(s.id)][-2:] == ["late note", "late answer"]

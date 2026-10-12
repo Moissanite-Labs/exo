@@ -311,3 +311,24 @@ def test_fallback_route_is_recorded_when_jev_fails(keyed_store):
     ctx = gated(store, key, router)
     assert call(ctx, "read_file", {"path": "x"}) is None  # the model failed; the rule outcome stands
     assert "decision_model" not in events(store)[-1]["body"]
+
+
+def test_credentials_always_ask_once_only_even_in_observe_mode(keyed_store):
+    store, key = keyed_store
+    for extra in ({}, {"mode": "observe"}):
+        g, ctx = make_gate(store, key, decision_model=False, **extra)
+        r = call(ctx, "read_file", {"path": "~/.config/exo/keys.env"})
+        assert r["action"] == "approve" and r["once"] is True
+        assert r["rule_key"].startswith("exo-gate:credentials:")
+        r2 = call(ctx, "terminal", {"command": "security find-generic-password -s exo -w"})
+        assert r2["action"] == "approve" and r2["once"] is True
+    g, ctx = make_gate(store, key, decision_model=False)
+    assert call(ctx, "read_file", {"path": "docs/keys.md"}) is None
+
+
+def test_internal_error_on_a_secret_read_is_not_a_free_pass(keyed_store, monkeypatch):
+    store, key = keyed_store
+    g, ctx = make_gate(store, key, decision_model=False)
+    monkeypatch.setattr(g, "_rules", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert g.pre_tool_call("read_file", {"path": "~/.exo/keys/seat.key"})["action"] == "approve"
+    assert g.pre_tool_call("read_file", {"path": "README.md"}) is None

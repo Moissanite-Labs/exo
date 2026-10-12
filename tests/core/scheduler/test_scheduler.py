@@ -109,6 +109,9 @@ async def test_run_now_emits_task_and_notice(tmp_path):
     ev = [t for t in bodies(eng, s.TaskUpdated) if t.task_id == r["task_id"]]
     assert [t.status for t in ev] == ["queued", "running", "done"]
     assert ev[1].child_session and all(t.detail for t in ev)
+    run = eng.store.get_session(ev[1].child_session)
+    assert (run.agent, run.kind) == (eng.agent, "scheduled")  # a cron run writes into the agent's one log (D-028)
+    assert eng.store.last_pos(eng.agent) >= 2
     notes = bodies(eng, s.Notice)
     assert notes and notes[-1].text == "Report: the report" and notes[-1].level == "info"
     job = eng.scheduler.get(jid)

@@ -15,11 +15,19 @@ The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It f
 | `on_pre_compress` | Finds rulings, corrections and open decisions with `exo.capture`. Writes `ruling`, `verdict` and `question` events, then returns a short block for the compressor to keep verbatim. Checkpoint API v2. |
 | `on_session_end` | A `note` event of type `consolidate_pending`. |
 
-Tools: `exo_recall(query, budget)`, `exo_note(text, kind)`, `exo_should_have_been(target, wanted, reason)`,
+Tools: `exo_recall(query, budget)`, `exo_get(id, body_only)` (a whole belief node, same store and access as recall; D-032), `exo_note(text, kind)`, `exo_should_have_been(target, wanted, reason)`,
 `exo_zoom(id, n)`, `exo_date(id)`.
 
 A correction becomes a `verdict` event that points at the agent output it judges. If that output is not
 in the ledger yet, it is logged first.
+
+## One log on the Exo core (D-028)
+
+The Exo core keeps each agent's one log and summary tree in `sessions.sqlite` and passes a read view of it to
+`initialize(..., agent_log=view)`. Then exo-memory keeps no episodic log of its own: it writes nothing to
+`<store>/episodic/`, its recall searches the agent log (the summary view is skipped, since the tree is already in
+the system message), and `exo_zoom` / `exo_date` give way to the core's `memory_zoom`. The ledger and belief
+recall are unchanged. On any other host it keeps its own episodic layer as below.
 
 ## Where data lives
 

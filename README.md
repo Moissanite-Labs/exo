@@ -25,6 +25,20 @@ Needs `git` and Python 3.11 or newer, on macOS or Linux (tested on Arch with Pyt
 This is the only install section. Options, what each step does, safety rules and re-runs are in
 `docs/INSTALL.md`. To add a model key, see `docs/PROVIDERS.md`.
 
+## First launch and learning Exo
+
+The first time `exo-tui` runs on an `EXO_HOME`, the agent gives you a short orientation (`/intro`) and turns on
+tutorial mode: small dim "tip:" lines the first time something comes up (the approval gate, typing to steer a
+running turn, a model fallback, and so on). `/intro` runs the orientation again any time. `/tutorial on`, `off`
+or `reset` controls the tips. Skip the first-run intro with `exo-tui --no-intro`. Details in
+`docs/ONBOARDING.md` (D-030).
+
+Commands you will use in the TUI (`/help` lists all): `/new`, `/sessions`, `/fork`, `/undo`, `/cwd`, `/context`,
+`/compact`, `/model`, `/default`, `/usage`, `/trace` (timing and estimated cost per turn), `/findings`, `/peers`,
+`/send`, `/handoff [path]` (the agent writes a handoff note for the next session to
+`~/Work/handoffs/<seat>-<date>.md`, or to the path you give), `/intro`, `/tutorial`. Exo warns once when a
+thread's folder is not inside a git repo; a seat sets its default folder with `[session] cwd` in `seat.toml`.
+
 ## Two goals, held together
 
 - **Fit one person as closely as possible.** The first principal is Ahraz Arifuddin.
@@ -42,6 +56,7 @@ Phase 1 (inventory) and phase 2 (research) in progress. Read along:
 | `DECISIONS.md` | Every significant choice, why, and what was rejected |
 | `inventory/` | Everything built so far that could fold into Exo, with keep / merge / drop |
 | `research/` | Guardian-angel reading notes, principles, base evaluation |
+| `docs/DOCS-MAP.md` | Index of all docs: whitepaper, user guide, developer guide, technical docs, and what is missing |
 | `docs/ARCHITECTURE.md` | Components, memory and context model, migration path (phase 3) |
 
 ## Model keys
@@ -49,5 +64,10 @@ Phase 1 (inventory) and phase 2 (research) in progress. Read along:
 Exo reads a provider key from the environment, then (macOS only) the Keychain, then
 `~/.config/exo/keys.env` (mode 600). On Linux use the environment or `keys.env`. Steps are in
 `docs/PROVIDERS.md`.
+
+## Credits and inspirations
+
+- [dzhng/jevgrep](https://github.com/dzhng/jevgrep) (MIT): the `jg` code search behind the `code_find` tool and
+  the `jevgrep` skill (D-029).
 
 Private repository of Aska Digital.

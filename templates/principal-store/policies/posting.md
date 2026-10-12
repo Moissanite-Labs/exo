@@ -33,7 +33,10 @@ lists what is wrong. Leave a value empty to switch its check off.
 ```yaml
 posting:
   # Exact line the text must end with, for example a disclosure line. Empty = none.
+  # Example: footer: "> Automated posting by agentic team with human oversight."
   footer: ""
+  # Exposures the footer is required on: internal (the principal's team) and public.
+  footer_exposures: [internal, public]
   # Patterns that must not appear. Each is a regex with a label, for example
   # - {pattern: "\u2014", label: "em dash"}
   forbid: []
@@ -44,4 +47,14 @@ posting:
   forbid_agent_names: true
   # Categories the checks apply to.
   applies_to: [github_post, message_send, email_send, social_post]
+  # Internal identifiers that must not leave (on by default, public targets only). The gate
+  # builds the list itself: seat names ($EXO_HOME/seats and the bus registry), agent names,
+  # home paths (/Users/<name>, /home/<name>, ~/), model ids from the catalog and internal
+  # task and thread ids. Add names one per line in policies/internal-names.txt, or below.
+  scrub:
+    enabled: true
+    exposures: [public]
+    names: []          # extra internal names: repos, hosts, project code names
+    patterns: []       # extra regexes, for example {pattern: '\blrn-\d+\b', label: "lesson id"}
+    allow: []          # exact strings never flagged, for example a seat name that is a common word
 ```

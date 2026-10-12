@@ -19,10 +19,12 @@ optional ``on_turn_complete(session_id, usage)`` and an ``on_event`` attribute.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable
 
+from exo.core import trace
 from exo.core.context import TreeContext, _maybe_await
 from exo.core.sessions import EventBus, SessionStore, new_id
 from exo.core.types import ContentPart, Message, Provider, ToolCall, ToolResult, ToolSpec, Usage
@@ -53,6 +55,11 @@ class _Stream:
     route: str = ""  # provider:model that served the call (set by the router; empty for a bare provider)
     done: Any = None
     error: Any = None
+    attempts: list[dict[str, Any]] = field(default_factory=list)  # the router's tries (D-025)
+    t0: float = 0.0
+    first_ms: int | None = None  # time to the first streamed text, reasoning or tool call
+    total_ms: int = 0
+    retries: int = 0
 
 
 class _SessionState:
@@ -62,6 +69,7 @@ class _SessionState:
         self.steer: list[Message] = []
         self.running = False
         self.total = Usage()
+        self.stats: dict[str, int] = {}  # this turn's timing summary, filled as it runs (D-025)
 
 
 class Loop:
@@ -86,6 +94,9 @@ class Loop:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.provider_opts = dict(provider_opts or {})
+        self.approval_ms: dict[str, int] = {}  # session -> time spent waiting on approvals; the engine adds to it
+        self.on_turn_end: Callable[[str, str], Awaitable[None]] | None = None  # (session, turn_id), after the turn
+        self.system_extra: Callable[[], str] | None = None  # text appended to the stable system part (D-030)
         self._state: dict[str, _SessionState] = {}
 
     # ---------------------------------------------------------------- public
@@ -119,8 +130,17 @@ class Loop:
             st.interrupt.set()
         return st.running
 
+    def steer(self, session: str, msg: Message) -> bool:
+        """Put a message into the running turn at its next tool round. False when no turn is running
+        (the caller queues it instead): unlike ``send(mode="steer")`` this never starts a turn."""
+        st = self.state(session)
+        if not st.running:
+            return False
+        st.steer.append(msg)
+        return True
+
     async def send(self, session: str, text: str = "", parts: list[ContentPart] | None = None,
-                   mode: str = "send") -> TurnResult | None:
+                   mode: str = "send", meta: dict[str, Any] | None = None) -> TurnResult | None:
         """Run a turn. ``steer`` while a turn runs injects the message between tool
         rounds and returns None; ``queue`` and ``send`` wait for the running turn."""
         if self.store.get_session(session) is None:
@@ -129,6 +149,8 @@ class Loop:
         msg = Message(role="user", content=list(parts or []))
         if text:
             msg.content.insert(0, ContentPart.of_text(text))
+        if meta:
+            msg.meta.update(meta)
         st = self.state(session)
         if mode == "steer" and st.running:
             st.steer.append(msg)
@@ -157,22 +179,39 @@ class Loop:
         return msg
 
     async def _turn(self, session: str, user: Message, st: _SessionState) -> TurnResult:
-        turn_id = new_id("t")
+        turn_id, t0 = new_id("t"), time.monotonic()
+        st.stats = {"model_ms": 0, "tool_ms": 0, "model_calls": 0, "fallbacks": 0, "tool_errors": 0}
+        waited = self.approval_ms.get(session, 0)
         await self._repair(session)
         await self._add(session, user, turn_id)
         await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or ""), session)
-        turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user")
+        turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user" and not _.meta.get("note"))
         await self._memory("on_turn_start", turn_no, user.text(), session_id=session)
         result = TurnResult(turn_id=turn_id, stop_reason="end")
         try:
             await self._rounds(session, turn_id, user, st, result)
+            while st.steer and result.stop_reason == "end":  # arrived between the last call and the turn's end
+                late = list(st.steer)
+                st.steer.clear()
+                for m in late:
+                    await self._add(session, m, turn_id)
+                await self._rounds(session, turn_id, late[-1], st, result)
         except _Interrupted:
             result.stop_reason = "interrupted"
         except Exception as exc:  # unexpected bug in a collaborator: end the turn cleanly
             result.stop_reason, result.error = "error", str(exc) or type(exc).__name__
             await self._emit(ev.Error(code="turn_failed", message=result.error), session)
+            await self._emit(trace.error_body("turn loop", exc), session)
+        if st.steer:  # a message that arrived after the last tool round is context for the next turn, not lost
+            for m in st.steer:
+                await self._add(session, m, turn_id)
+            st.steer.clear()
+        wall, approval = int((time.monotonic() - t0) * 1000), self.approval_ms.get(session, 0) - waited
+        timing = {"wall_ms": wall, "model_ms": st.stats["model_ms"], "approval_ms": approval,
+                  "tool_ms": max(0, st.stats["tool_ms"] - approval), "model_calls": st.stats["model_calls"],
+                  "fallbacks": st.stats["fallbacks"], "tool_errors": st.stats["tool_errors"]}
         await self._emit(ev.TurnCompleted(turn_id=turn_id, stop_reason=result.stop_reason,
-                                          usage=result.usage), session)
+                                          usage=result.usage, timing=timing), session)
         reply = result.message.text() if result.message else ""
         await self._memory("sync_turn", user.text(), reply, session_id=session)
         if self.memory is not None and hasattr(self.memory, "checkpoint"):
@@ -180,27 +219,50 @@ class Loop:
             await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
         if hasattr(self.context, "on_turn_complete"):
             await _maybe_await(self.context.on_turn_complete(session, result.usage))
-        info = self.store.update_session(session)
+        info = self.store.update_session(session, **({"model": self.model} if self.model else {}))
         await self._emit(ev.SessionUpdated(session=info), session)
+        if self.on_turn_end is not None:
+            try:
+                await self.on_turn_end(session, turn_id)
+            except Exception as exc:  # observation never breaks a turn, but it is recorded
+                await self._emit(trace.error_body("turn observer", exc), session)
         return result
 
-    async def _system(self, session: str, query: str) -> str:
-        parts = [self.system_prompt]
-        parts.append(await self._memory("system_prompt_block") or "")
+    def _takes_recall(self) -> bool:
+        """True when the context engine places per-turn recall itself (AgentContext, D-028), so the system
+        message stays byte-stable for the prompt cache."""
+        try:
+            params = inspect.signature(self.context.build).parameters
+        except (TypeError, ValueError):
+            return False
+        return "recall" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    async def base_system(self) -> str:
+        """The stable part of the system text: system prompt and the memory provider's block (no recall)."""
+        extra = self.system_extra() if self.system_extra else ""  # last: never moves what comes before it (D-030)
+        return "\n\n".join(p for p in (self.system_prompt, await self._memory("system_prompt_block") or "", extra) if p)
+
+    async def _system(self, session: str, query: str) -> tuple[str, str]:
+        """(system text, recall). Recall is folded into the system text unless the context engine takes it."""
+        base = await self.base_system()
+        parts = [base]
         recall = await self._memory("prefetch", query, session_id=session) or ""
-        if recall:
+        if recall and not self._takes_recall():
             parts.append("# Recalled memory\n" + recall)
-        return "\n\n".join(p for p in parts if p)
+            recall = ""
+        return "\n\n".join(p for p in parts if p), recall
 
     async def _rounds(self, session: str, turn_id: str, user: Message, st: _SessionState,
                       result: TurnResult) -> None:
-        system = await self._system(session, user.text())
+        system, recall = await self._system(session, user.text())
+        extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
         for _ in range(self.max_iterations):
             if hasattr(self.context, "note"):
                 await _maybe_await(self.context.note(session))
-            messages = await self.context.build(session, system)
+            messages = await self.context.build(session, system, **extra)
             msg_id = new_id("m")
             stream = await self._call(session, messages, msg_id, st, result)
+            await self._record_call(session, stream, _, st)
             if stream.usage is not None:
                 result.usage = result.usage + stream.usage
                 st.total = st.total + stream.usage
@@ -216,6 +278,11 @@ class Loop:
                 result.stop_reason = stream.done.stop_reason or "end"
                 if result.stop_reason == "tool_use":
                     result.stop_reason = "end"
+                if st.steer and result.stop_reason == "end":  # a message came in during this call: answer it now
+                    for m in st.steer:
+                        await self._add(session, m, turn_id)
+                    st.steer.clear()
+                    continue
                 return
             await self._tools(session, turn_id, reply.tool_calls, st)
             if st.steer:
@@ -225,6 +292,21 @@ class Loop:
         result.stop_reason = "max_iterations"
         await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
                                    level="warn"), session)
+
+    async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState) -> None:
+        """The model.call event (what was asked, who served, every attempt) and the turn's running totals."""
+        role = self.provider.name.split(":", 1)[1] if self.provider.name.startswith("router:") else ""
+        st.stats["model_calls"] += 1
+        st.stats["model_ms"] += s.total_ms
+        st.stats["fallbacks"] += sum(1 for a in s.attempts if a.get("outcome") not in ("ok", None))
+        served = ""
+        if s.error is None:  # the route the router stamped, else the attempt that succeeded (D-025)
+            served = s.route or next((a.get("route", "") for a in reversed(s.attempts) if a.get("outcome") == "ok"), "")
+        await self._emit(ev.ModelCall(
+            iteration=iteration + 1, role=role, requested=self.model or "", route=served,
+            attempts=s.attempts, ttft_ms=s.first_ms, total_ms=s.total_ms, usage=s.usage,
+            stop_reason=(s.done.stop_reason or "") if s.done is not None else "",
+            error=trace.scrub(s.error.error, 300) if s.error is not None else "", retries=s.retries), session)
 
     def _assemble(self, s: _Stream, msg_id: str) -> Message:
         msg = s.done.message if s.done is not None and s.done.message is not None else None
@@ -248,11 +330,14 @@ class Loop:
         opts = dict(self.provider_opts)
         if self.model:
             opts["model"] = self.model
-        opts["session_id"] = session  # providers that route or cache per conversation send it as a header
+        # providers that route or cache per conversation send it as a header; all threads of one agent are one
+        # conversation to them (D-028), so they share the provider's prompt cache
+        key = getattr(self.context, "cache_key", None)
+        opts["session_id"] = (key(session) if callable(key) else None) or session
         specs = self._specs()
-        attempt = 0
+        attempt, history, t0 = 0, [], time.monotonic()
         while True:
-            s = _Stream()
+            s = _Stream(t0=t0)
             try:
                 await self._interruptible(self._consume(session, messages, specs, opts, msg_id, s), st)
             except _Interrupted:
@@ -265,12 +350,14 @@ class Loop:
                 s.error = _err(str(exc) or type(exc).__name__, True)
             if s.done is None and s.error is None:
                 s.error = _err("stream ended without done", True)
+            s.total_ms, s.retries, s.attempts = int((time.monotonic() - t0) * 1000), attempt, history + s.attempts
             if s.error is None:
                 return s
             shown = bool(s.text or s.reasoning or s.calls)
             if not s.error.retryable or shown or attempt >= self.max_retries:
                 return s
             attempt += 1
+            history = s.attempts
             await self._emit(ev.Notice(text=f"retrying model call ({attempt}/{self.max_retries}):"
                                        f" {s.error.error}", level="warn"), session)
             await self._interruptible(asyncio.sleep(self.retry_delay * 2 ** (attempt - 1)), st)
@@ -280,12 +367,16 @@ class Loop:
         agen = self.provider.stream(messages, specs, **opts)
         try:
             async for pe in agen:
+                if pe.kind in ("text", "reasoning", "tool_call") and s.first_ms is None and (pe.text or pe.tool_call):
+                    s.first_ms = int((time.monotonic() - s.t0) * 1000)
                 if pe.kind == "text" and pe.text:
                     s.text.append(pe.text)
                     await self._emit(ev.MessageDelta(message_id=msg_id, text=pe.text), session)
                 elif pe.kind == "reasoning" and pe.text:
                     s.reasoning.append(pe.text)
                     await self._emit(ev.ReasoningDelta(message_id=msg_id, text=pe.text), session)
+                elif pe.kind == "notice":
+                    await self._emit(ev.Notice(text=pe.text, level="warn"), session)
                 elif pe.kind == "tool_call" and pe.tool_call is not None:
                     s.calls.append(pe.tool_call)
                 elif pe.kind == "usage" and pe.usage is not None:
@@ -294,11 +385,13 @@ class Loop:
                 elif pe.kind == "done":
                     s.done = pe
                     s.route = getattr(pe, "route", "") or s.route
+                    s.attempts = pe.attempts
                     if pe.usage is not None:
                         s.usage = pe.usage
                     break
                 elif pe.kind == "error":
                     s.error = pe
+                    s.attempts, s.route = pe.attempts, pe.route or s.route
                     break
         finally:
             aclose = getattr(agen, "aclose", None)
@@ -339,8 +432,10 @@ class Loop:
                 t0 = time.monotonic()
                 res = await self._interruptible(self._run_one(session, turn_id, call), st)
                 results.append(res)
-                await self._emit(ev.ToolCompleted(result=res, duration_ms=int((time.monotonic() - t0) * 1000)),
-                                 session)
+                ms = int((time.monotonic() - t0) * 1000)
+                st.stats["tool_ms"] += ms
+                st.stats["tool_errors"] += int(res.is_error)
+                await self._emit(ev.ToolCompleted(result=res, duration_ms=ms, is_error=res.is_error), session)
         finally:  # every call gets a result, even on interrupt, so the transcript stays valid
             done = {r.call_id for r in results}
             results += [ToolResult.of_text(c.id, "interrupted before completion", True)
@@ -359,7 +454,8 @@ class Loop:
             res = await _maybe_await(self.run_tool(call, ctx))
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # the registry turns tool failures into results, so this is a harness bug
+            await self._emit(trace.error_body(f"tool runner ({call.name})", exc), session)
             return ToolResult.of_text(call.id, f"{type(exc).__name__}: {exc}", True)
         if not isinstance(res, ToolResult):
             res = ToolResult.of_text(call.id, str(res))
@@ -380,7 +476,8 @@ class Loop:
             return None
         try:
             return await _maybe_await(fn(*args, **kw))
-        except Exception:  # memory is best effort; a failing provider never breaks a turn
+        except Exception as exc:  # memory is best effort; a failing provider never breaks a turn, but it is recorded
+            await self._emit(trace.error_body(f"memory.{method}", exc), kw.get("session_id"))
             return None
 
 

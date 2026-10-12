@@ -39,7 +39,9 @@ READ_ONLY = {"scout", "critic"}  # low-risk tools only
 ROLE_TIERS = {"scout": "fast", "verifier": "standard", "builder": "standard", "critic": "deep"}
 # Hermes DELEGATE_BLOCKED_TOOLS, renamed for Exo: no recursion (unless depth allows), no user
 # interaction (no ui panels), no shared memory writes, no outward messages, no scheduling in the parent's name.
-BLOCKED_TOOLS = frozenset({"delegate", "clarify", "ask", "memory", "send_message", "bus_post", "cronjob_manage", "ui"})
+BLOCKED_TOOLS = frozenset({"delegate", "clarify", "ask", "memory", "send_message", "bus_post", "cronjob_manage", "ui",
+                           "exo_harness_report", "exo_trace", "peers", "peer_send",
+                           "jobs", "job_output", "job_kill"})  # jobs belong to the main agent's threads (D-032)  # peers are the main agent's (D-026); self-observation is the main agent's job (D-025)
 BLOCKED_TOOLSETS = frozenset({"memory", "bus", "delegation", "kanban", "skills"})  # children get no skills index
 WRITE_TOOLS = {"write_file", "edit_file"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.M)
@@ -51,6 +53,8 @@ CHILD_PROMPT = (
     "Keep your final summary tight: lead with outcomes, prefer bullet points over paragraphs, and don't replay your "
     "whole process. Your response is returned to the parent agent as a summary, and overlong summaries crowd out the "
     "parent's context window.")
+CODE_FIND_NOTE = ("\n\nScouts and verifiers: use `code_find` to learn unfamiliar code or answer a behavior question across "
+                  "files; use grep or read_file when you already know the symbol or path.")
 ORCHESTRATOR_NOTE = (
     "\n\nYou may use the `delegate` tool to run independent subtasks in parallel. Do not re-delegate your whole "
     "task to one worker. Coordinate your workers' results; you are responsible for the final summary.")
@@ -297,12 +301,16 @@ class Delegator:
             return await e.run_tool(call, lctx)
 
         prompt = CHILD_PROMPT + (ORCHESTRATOR_NOTE if "delegate" in names else "")
+        if "code_find" in names:
+            prompt += CODE_FIND_NOTE
         if b.cwd:
             prompt += f"\n\nWorking directory: {b.cwd}"
-        return Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
-                    e.router.provider("aux"))), tool_specs=lambda: e.registry.specs(names=sorted(names)),
-                    run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
-                    max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
+        child = Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
+                     e.router.provider("aux"))), tool_specs=lambda: e.registry.specs(names=sorted(names)),
+                     run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
+                     max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
+        child.approval_ms = e.loop.approval_ms  # engine.ask adds to one table; the parent turn reads it
+        return child
 
     def _emit(self, parent: str, b: Brief, status: str, child: str | None, packet: str) -> None:
         self.engine.hub.publish(s.TaskUpdated(task_id=b.id, title=b.goal[:80], status=status, child_session=child,
@@ -328,7 +336,8 @@ class Delegator:
             async with self.sems.setdefault(b.depth, asyncio.Semaphore(self.limits.max_concurrent)):
                 loop = self._loop(b, provider, model)
                 info = await loop.create_session(title=f"{b.role}: {b.goal[:60]}", model=model,
-                                                 cwd=b.cwd or None, parent=parent or None)
+                                                 cwd=b.cwd or None, parent=parent or None,
+                                                 agent=getattr(self.engine, "agent", None), kind="subagent")
                 sid = info.id
                 self.allow[sid], self.loops[sid] = set(b.tools), loop
                 self.tiers[sid] = b.tier

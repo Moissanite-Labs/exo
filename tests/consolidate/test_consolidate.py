@@ -323,3 +323,20 @@ def test_cli_hook(template_store, led, corrections, tmp_path):
     assert C.cmd_proposals(a, template_store) == 0
     template_store.reload()
     assert template_store.lint().errors == []
+
+
+def test_proposal_ids_that_look_like_phone_numbers_do_not_break_lint(template_store, led, corrections):
+    """Proposal ids are random-looking hex; 11+ digits in a row trips the store's phone LEAKS pattern.
+    Regression for a flaky accept (~1 run in 100): node text must never carry such a run."""
+    import dataclasses
+    from exo.store import LEAKS
+    run(template_store, led)
+    p = next(iter(C.load_state(led).proposals.values()))
+    digits = "p-361364896092"
+    for pid in (digits, "p-36136489609a", "p-123456789012"):
+        q = dataclasses.replace(p, id=pid, supersedes=digits)
+        for text in (C._render_body(q, f"T (2026-10-12, {C.proposal_ref(q.id)})"),
+                     C._render_body(q), C.render_new_node(q)):
+            assert not any(pat.search(text) for pat in LEAKS), text
+    assert C.proposal_ref("p-1e0ab9625a43") == "p-1e0ab9625a43"
+    assert C.proposal_ref(digits) == "p-3613648960"

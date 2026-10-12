@@ -9,7 +9,7 @@ from exo.core.types import ToolCall, ToolResult, ToolSpec, from_dict
 
 def test_schema_output_is_json_and_roundtrips(reg):
     schemas = reg.schemas()
-    names = [s["name"] for s in schemas]
+    names = [s["name"] for s in schemas if s["name"] != "code_find"]  # code_find shows only where jg runs
     assert names == sorted(names)
     assert set(names) == {"read_file", "write_file", "edit_file", "apply_patch", "glob", "grep", "bash"}
     for s in json.loads(json.dumps(schemas)):
@@ -22,7 +22,7 @@ def test_schema_output_is_json_and_roundtrips(reg):
 
 
 def test_toolsets_filter(reg):
-    assert reg.toolsets()["search"] == ["glob", "grep"]
+    assert reg.toolsets()["search"] == ["code_find", "glob", "grep"]
     assert [s.name for s in reg.specs(toolsets=["shell"])] == ["bash"]
     assert [s.name for s in reg.specs(names=["grep", "nope"])] == ["grep"]
 
