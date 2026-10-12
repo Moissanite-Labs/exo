@@ -9,6 +9,7 @@ centre's source. A core that does not handle a command yet answers 501.
   GET  /api/chat/sessions/<id>             session.get           the transcript so far
   POST /api/chat/sessions/<id>/send        turn.send             {text, mode}
   POST /api/chat/sessions/<id>/interrupt   turn.interrupt
+  POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
   POST /api/chat/sessions/<id>/command     command.run           {name, args}; read-only names only
   GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
   POST /api/feedback                       feedback.send         {session, verdict, message_id, text}
@@ -110,8 +111,8 @@ def _route(method: str, p: list, key: str):
         return (g if get else po if post else None) or False
     if len(p) == 3 and p[:2] == ["chat", "sessions"]:
         return _transcript if get else False
-    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command"):
-        return ({"send": _send, "interrupt": _interrupt, "command": _command}[p[3]]) if post else False
+    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command", "unsteer"):
+        return ({"send": _send, "interrupt": _interrupt, "command": _command, "unsteer": _unsteer}[p[3]]) if post else False
     return None
 
 
@@ -144,6 +145,11 @@ async def _send(c, p, q, body):
 async def _command(c, p, q, body):
     name = _choice(body, "name", READ_COMMANDS)
     return await c.source.call(s.CommandRun(name=name, args=_str(body, "args", limit=40), session=p[2]))
+
+
+async def _unsteer(c, p, q, body):
+    res = await c.source.call(s.CommandRun(name="unsteer", args=_str(body, "message_id", limit=80), session=p[2]))
+    return res.get("output") or {"cancelled": []}
 
 
 async def _interrupt(c, p, q, body):

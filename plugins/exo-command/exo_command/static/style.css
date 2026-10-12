@@ -491,3 +491,10 @@ body { margin: 0; background: #08090a; }
 .xc-guide[hidden] { display: none; }
 .xc-guide-still { transition: none; }
 @media (prefers-reduced-motion: reduce) { .xc-guide { transition: none; } }
+
+/* Queued steer messages (D-045) */
+.xc-steers { display: flex; flex-direction: column; gap: 4px; padding: 0 22px; }
+.xc-steers:empty { display: none; }
+.xc-steer-chip { display: flex; align-items: center; gap: 10px; font: 400 12.5px var(--xc-mono); color: var(--fg-2); border-left: 2px solid var(--line-2); padding: 2px 0 2px 10px; }
+.xc-steer-chip .xc-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xc-x { padding: 0 8px; line-height: 20px; }

@@ -67,7 +67,8 @@ ROUTES = [("GET", "/api/health", None), ("GET", "/api/snapshot", None), ("GET", 
           ("GET", "/api/chat/sessions", None), ("POST", "/api/chat/sessions", {"title": "x"}),
           ("GET", "/api/chat/panels", None), ("POST", "/api/approvals/r1", {"decision": "allow_always"}),
           ("POST", "/api/schedule", {"action": "list"}), ("GET", "/api/providers", None),
-          ("POST", "/api/feedback", {"session": "s1", "verdict": "accept"})]
+          ("POST", "/api/feedback", {"session": "s1", "verdict": "accept"}),
+          ("POST", "/api/chat/sessions/s1/unsteer", {"message_id": "m_1"})]
 STREAMS = ["/api/events", "/api/stream"]
 
 

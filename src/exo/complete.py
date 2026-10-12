@@ -22,7 +22,7 @@ from typing import Any, Callable, Iterable, Sequence
 # dict) and in commands.list; this table only adds the shape and the group for commands every client may meet.
 ARG_HINTS: dict[str, str] = {
     "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "undo": "", "clear": "",
-    "cwd": "", "context": "", "compact": "", "restart": "", "stop": "", "exit": "", "quit": "",
+    "cwd": "", "context": "", "compact": "", "restart": "", "stop": "", "unsteer": "", "exit": "", "quit": "",
     "model": "[default] <model>", "default": "[model]", "providers": "[add] [name]", "usage": "",
     "panel": "", "peers": "", "send": "<peer> <text>", "handoff": "[path]", "intro": "",
     "tutorial": "[on|off|reset]", "copy": "[last|error|all]", "help": "",

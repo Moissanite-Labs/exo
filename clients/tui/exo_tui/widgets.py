@@ -30,7 +30,7 @@ from exo_tui.theme import (DOT, PROMPT, SPINNER, chips, gauge, header_rule, huma
                            rich_style)
 
 IDLE_HINT = "ask anything " + DOT + " /help"
-BUSY_HINT = "lands at the next tool round " + DOT + " ctrl+c stops the turn"
+BUSY_HINT = "lands at the next tool round " + DOT + " up pulls a queued one back " + DOT + " ctrl+c stops the turn"
 
 
 def reveal(widget: Widget) -> None:
@@ -61,6 +61,7 @@ class Block(Static):
         self.meta = meta  # panel footer line, dim
         self.shown: Any = None
         self.steer = steer  # a user message sent while a turn was running
+        self.pending = False  # a steer the core still holds: up or /unsteer pulls it back (D-045)
         self.streaming = False  # text still arriving: paint cheap plain text, Markdown once the block closes
 
     def paint(self, renderable: Any) -> None:
@@ -101,7 +102,7 @@ class Block(Static):
             row = Table.grid(padding=(0, 1))
             lead = Text()
             if self.steer:
-                lead.append("steer ", style=rich_style("fg3"))
+                lead.append("steer queued " if self.pending else "steer ", style=rich_style("fg3"))
             lead.append(PROMPT, style=rich_style("accent", "bold"))
             row.add_column(no_wrap=True)
             row.add_column(ratio=1)
@@ -454,7 +455,7 @@ class ApprovalCard(Vertical, can_focus=True):
         else:
             out.append(chips(pairs))
             if not self.has_focus:
-                out.append(Text("tab or click here to answer; your typing is safe", style=rich_style("fg3")))
+                out.append(Text("tab, click or ctrl+g to answer; your typing is safe", style=rich_style("fg3")))
         return Group(*out)
 
     def compose(self) -> ComposeResult:

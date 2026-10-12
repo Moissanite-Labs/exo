@@ -222,3 +222,37 @@ def test_unix_socket_path_too_long_is_a_clear_error(tmp_path):
     long_path = tmp_path / ("d" * 120) / "exod.sock"
     with pytest.raises(ValueError, match="socket path too long"):
         asyncio.run(srv.start_unix(long_path))
+
+
+def test_event_stream_survives_an_error_reply_when_reconnecting(monkeypatch):
+    """D-045: a 4xx or 5xx on the stream (a core restarting) must not end a reconnecting feed."""
+    import asyncio
+
+    from exo.protocol.client import Client, ClientError
+
+    async def go():
+        c = Client(socket="/nonexistent.sock")
+        calls = []
+
+        async def fake_stream(since, session):
+            calls.append(since)
+            if len(calls) == 1:
+                raise ClientError(s.ErrorInfo(code="http_503", message="starting"))
+            yield s.Event.of(s.Notice(text="back"), 7, None)
+
+        monkeypatch.setattr(c, "_stream", fake_stream)
+        got = []
+        async for ev in c.events(since=3, reconnect=True, backoff=0.01):
+            got.append(ev)
+            break
+        assert got and got[0].seq == 7 and calls == [3, 3]
+        calls.clear()
+        try:
+            async for _ in c.events(since=3):  # without reconnect the error still reaches the caller
+                pass
+        except ClientError:
+            pass
+        else:
+            raise AssertionError("expected ClientError")
+
+    asyncio.run(go())

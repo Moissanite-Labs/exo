@@ -316,6 +316,7 @@ class CoreEngine:
         self.plugins.router = self.router  # plugins reach it as ctx.router
         self._approvals: dict[str, tuple[asyncio.Future, str | None]] = {}
         self._open_approvals: dict[str, s.ApprovalRequested] = {}  # what approvals.list shows
+        self._announced: set[str] = set()  # approval ids whose ApprovalResolved went out (D-045)
         self._always: set[str] = set()
         self._approval_rules: dict[str, tuple[list[str], str]] = {}  # rid -> (approvers, binding), D-033
         self._deciders: dict[str, str] = {}
@@ -619,18 +620,29 @@ class CoreEngine:
             opened.append(rid)
         self._open_approvals[rid] = req
         self.hub.publish(req, session)
+        answered = False
         try:
             decision = await fut
+            answered = True
             if decided_by is not None:
                 decided_by.append(self._deciders.pop(rid, "unknown"))
             return decision
         finally:
+            if not answered:  # the turn was stopped or the ask cancelled: close the card in every client (D-045)
+                self.announce_resolved(rid, "cancelled", "core", session)
             if session:  # the turn summary reports this apart from tool time
                 self.loop.approval_ms[session] = self.loop.approval_ms.get(session, 0) + int((time.monotonic() - t0) * 1000)
+            self._announced.discard(rid)
             self._approvals.pop(rid, None)
             self._open_approvals.pop(rid, None)
             self._deciders.pop(rid, None)
             self._approval_rules.pop(rid, None)
+
+    def announce_resolved(self, rid: str, decision: str, by: str, session: str | None) -> None:
+        """Tell every client an approval is closed, once per request."""
+        if rid not in self._announced:
+            self._announced.add(rid)
+            self.hub.publish(s.ApprovalResolved(request_id=rid, decision=decision, by=by), session)
 
     # ------------------------------------------------------------ dispatch
 
@@ -707,8 +719,9 @@ class CoreEngine:
         except SessionLocked as exc:  # a finished child session takes no new turns
             raise CommandFailed("session_locked", str(exc)) from None
         if b.mode == "steer" and self.loop.state(b.session).running:
-            await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=PRINCIPAL_META)
-            return {"steered": True}
+            await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=PRINCIPAL_META)  # no await inside
+            queue = self.loop.state(b.session).steer
+            return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
         task = asyncio.create_task(self._turn(b, PRINCIPAL_META))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -838,7 +851,7 @@ class CoreEngine:
                                                  "a seat approves one exact text with allow")
         self._deciders[b.request_id] = by
         fut.set_result(b.decision)
-        self.hub.publish(s.ApprovalResolved(request_id=b.request_id, decision=b.decision, by=by), sid)
+        self.announce_resolved(b.request_id, b.decision, by, sid)
         return {}
 
     async def _search(self, b: s.Search) -> dict[str, Any]:
@@ -990,6 +1003,13 @@ class CoreEngine:
             if arg == "count":  # "open" is what needs work (open + reopened); by_state reconciles every finding
                 return {"open": self.findings.open_count(), "by_state": self.findings.counts()}
             return self.findings.text(arg if arg in STATUSES else "all", viewer=b.session or "ui")
+        if b.name == "unsteer":  # D-045: pull a queued steer message back; args is its id, empty means the newest
+            if not b.session:
+                raise CommandFailed("bad_request", "unsteer needs a session")
+            gone = self.loop.unsteer(b.session, b.args.strip())
+            for m in gone:
+                self.hub.publish(s.SteerCancelled(message_id=m.id or "", text=m.text()), b.session)
+            return {"cancelled": [{"id": m.id, "text": m.text()} for m in gone]}
         if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
             word, _, rest = b.args.strip().partition(" ")
             if word == "reload":

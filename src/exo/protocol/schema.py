@@ -5,7 +5,7 @@ a ``seq`` so a client resumes with ``events.subscribe(since=seq)``.
 
 The interface started fixed at wave 1 and has grown additively since. Stdlib only. Rules:
 - At most 30 commands and under 30 event types (tests enforce the cap; D-026 used the last command slot).
-  Today there are 30 commands and 28 events. New features add fields or a ``command.run`` built-in, not a type.
+  Today there are 30 commands and 29 events. New features add fields or a ``command.run`` built-in, not a type.
 - Additive changes only within a protocol version: new optional fields with
   defaults, or new types. Never rename or remove.
 - Commands are strict: unknown type or unknown field is rejected.
@@ -209,7 +209,8 @@ class CommandRun:
     """Run a slash command, e.g. name="exo", args="handoff". The core answers some built-in commands itself
     (the command cap is full, so new ones go here, not in new command types): ``trace``, ``findings``,
     ``context`` (what the next model call for ``session`` carries, read-only) and ``compact`` (summarize now
-    what is eligible in the agent's memory; runs in the core that holds the agent lock)."""
+    what is eligible in the agent's memory; runs in the core that holds the agent lock) and ``unsteer`` (pull
+    back a queued steer message before it is delivered: args is its id, empty means the newest, D-045)."""
 
     name: str
     args: str = ""
@@ -361,7 +362,7 @@ class Peers:
     pub: str = ""  # bus: the sender seat's key from the bus registry (pinned on first sight, D-040)
 
 
-# ---------------------------------------------------------------- events (28, tests require fewer than 30)
+# ---------------------------------------------------------------- events (29, tests require fewer than 30)
 
 
 @event("session.created")
@@ -460,6 +461,16 @@ class ApprovalResolved:
     request_id: str
     decision: str
     by: str = ""  # client or rule that decided
+
+
+@event("steer.cancelled")
+@dataclass
+class SteerCancelled:
+    """A queued steer message was pulled back before it was delivered (D-045); clients drop its pending line.
+    A delivered one shows up as ``message.completed`` instead."""
+
+    message_id: str
+    text: str = ""
 
 
 @event("question.asked")

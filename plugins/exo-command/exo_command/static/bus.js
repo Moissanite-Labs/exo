@@ -6,7 +6,7 @@ import { api, stream } from "./dom.js";
 const listeners = new Set();
 let source = null;
 let panels = [];
-let state = { connected: false, seq: 0 };
+let state = { connected: false, seq: 0, denied: false, resumed: 0 };
 const stateListeners = new Set();
 
 export function on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
@@ -25,12 +25,32 @@ export async function start() {
     since = d.seq || 0;
   } catch (e) { /* the stream still works without the panel list */ }
   setState({ seq: since });
-  source = stream("/api/events?since=" + since);
-  source.onopen = () => setState({ connected: true });
-  source.onerror = () => setState({ connected: false });
+  connect();
+}
+
+// A browser EventSource reconnects by itself after a dropped connection, but gives up for good on an HTTP error
+// (403 after the server restarted with a new page token, 502 while the core restarts). Then we open a new one
+// ourselves from the last seq we saw, so the page is never left listening to nothing (D-045).
+let retry = 0, retryTimer = 0;
+function connect() {
+  clearTimeout(retryTimer);
+  if (source) source.close();
+  source = stream("/api/events?since=" + state.seq);
+  source.onopen = () => { retry = 0; const back = state.denied || !state.connected; setState({ connected: true, denied: false, resumed: back ? state.resumed + 1 : state.resumed }); };
+  source.onerror = () => {
+    setState({ connected: false });
+    if (source && source.readyState === 2) {   // CLOSED: the browser will not retry
+      retry += 1;
+      retryTimer = setTimeout(async () => {
+        try { await api("GET", "/api/health"); } catch (e) { if (e.status === 403) setState({ denied: true }); }
+        connect();
+      }, Math.min(15000, 500 * 2 ** Math.min(retry, 5)));
+    }
+  };
   source.onmessage = (m) => {
     let ev;
     try { ev = JSON.parse(m.data); } catch (e) { return; }
+    if (ev.seq && ev.seq <= state.seq) return;   // a replay of what this page already handled
     foldPanel(ev);
     setState({ seq: Math.max(state.seq, ev.seq || 0) });
     listeners.forEach((f) => { try { f(ev); } catch (e) { console.error(e); } });

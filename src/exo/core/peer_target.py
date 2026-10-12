@@ -161,7 +161,7 @@ class EngineTarget(Target):
             return
         rid = opened[0] if opened else ""
         if rid in self.e._approvals and not task.done():  # nobody answered (expired): close the prompt
-            self.e.hub.publish(s.ApprovalResolved(request_id=rid, decision=state, by="peers"), self.pick_session(held.ing))
+            self.e.announce_resolved(rid, state, "peers", self.pick_session(held.ing))
             task.cancel()
 
     # ---------------------------------------------------------------- record

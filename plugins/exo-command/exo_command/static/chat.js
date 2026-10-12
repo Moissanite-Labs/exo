@@ -8,13 +8,15 @@ import { attachComposer } from "./composer.js";
 
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
-  let approvals = {}, panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
+  let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
+  const landed = new Set();   // user messages the core has added to a conversation
 
   const listEl = h("div", { class: "xc-sessions" });
   const logEl = h("div", { class: "xc-log", role: "log", "aria-live": "polite" });
   const apprEl = h("div", { class: "xc-approvals" });
+  const steerEl = h("div", { class: "xc-steers", "aria-label": "Queued steer messages" });
   const statusEl = h("div", { class: "xc-strip", "aria-label": "Status" });
   const sideEl = h("aside", { class: "xc-side" });
   const input = h("textarea", { class: "xc-input", rows: "2", placeholder: "Ask, or give a task. Enter sends, Shift+Enter adds a line.", "aria-label": "Message" });
@@ -27,7 +29,8 @@ export function mount(root) {
     reducedMotion: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
-  });
+    if (e.key === "ArrowUp" && !input.value && lastSteer() && !e.defaultPrevented) { e.preventDefault(); e.stopImmediatePropagation(); unsteer(lastSteer()); }
+  }, true);
   const newBtn = h("button", { class: "xc-btn xc-primary", onclick: () => create() }, "New thread");
   const heroCanvas = h("canvas", { class: "xc-hero-canvas", "aria-hidden": "true" });
   const heroText = h("div", { class: "xc-hero-text" });
@@ -39,7 +42,7 @@ export function mount(root) {
     h("a", { href: "#providers" }, "Set up providers"));
   root.replaceChildren(h("div", { class: "xc-chat" },
     h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl),
-    h("main", { class: "xc-chat-main" }, setupBanner, stage, apprEl, statusEl, help.guideEl, composer, help.menuEl),
+    h("main", { class: "xc-chat-main" }, setupBanner, stage, apprEl, statusEl, steerEl, help.guideEl, composer, help.menuEl),
     sideEl));
 
   if (sessionStorage.getItem("xc-token")) {   // quiet check: skipped on any error
@@ -77,15 +80,23 @@ export function mount(root) {
 
   // ---------------------------------------------------------------- events
 
+  let lastEvent = 0;
   function handle(ev) {
+    if (ev.seq) lastEvent = Math.max(lastEvent, ev.seq);
     if (loading) { pending.push(ev); return; }
     if (ev.seq <= loadedSeq && ev.session === current) return;
     const mine = ev.session === current;
     const b = ev.body || {};
+    if (ev.type === "message.completed" && b.message && b.message.role === "user") {   // a steer that lands is no longer pending
+      landed.add(b.message.id);   // the event can beat the reply to the send
+      if (steers[b.message.id]) { delete steers[b.message.id]; drawSteers(); }
+    }
+    if (ev.type === "turn.completed" && Object.keys(steers).length) { for (const k of Object.keys(steers)) if (steers[k].session === ev.session) delete steers[k]; drawSteers(); }
     switch (ev.type) {
+      case "steer.cancelled": if (steers[b.message_id]) { delete steers[b.message_id]; drawSteers(); } return;
       case "session.created": case "session.updated": refreshSessions(); return;
-      case "approval.requested": approvals[b.request_id] = { ...b, session: ev.session }; drawApprovals(); drawSessions(); return;
-      case "approval.resolved": delete approvals[b.request_id]; drawApprovals(); drawSessions(); return;
+      case "approval.requested": if (gone.has(b.request_id)) return; approvals[b.request_id] = { ...b, session: ev.session, seq: ev.seq }; drawApprovals(); drawSessions(); return;
+      case "approval.resolved": gone.add(b.request_id); delete approvals[b.request_id]; drawApprovals(); drawSessions(); return;
       case "ui.panel": panelsOpen = bus.openPanels(); drawSide(); return;
       case "notice":
         if (mine && /^tip\b/i.test(b.text || "")) { push({ kind: "sys", id: "tip" + ev.seq, tone: "tip", text: b.text.replace(/^tip:?\s*/i, "") }); return; }
@@ -404,8 +415,8 @@ export function mount(root) {
   }
 
   async function open(id) {
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
-    drawSessions(); drawLog(); drawApprovals(); drawSide();
+    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; steers = {}; flash("");
+    drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
       if (current !== id) return;
@@ -419,9 +430,18 @@ export function mount(root) {
     drawLog(); drawStatus(); loadContext();
     const buffered = pending; pending = [];
     buffered.forEach(handle);
+    syncApprovals();
+  }
+
+  // The server's list is the truth (it asks the core): replace what we hold, so a card the core no longer has goes (D-045).
+  async function syncApprovals() {
+    const stamp = lastEvent;
     try {
       const a = await api("GET", "/api/section/approvals");
-      for (const x of (a.pending || [])) approvals[x.request_id] = { ...x, session: x.session };
+      const fresh = {};
+      for (const x of (a.pending || [])) if (!gone.has(x.request_id)) fresh[x.request_id] = { ...x, session: x.session };
+      for (const [id, x] of Object.entries(approvals)) if (!fresh[id] && x.seq > stamp) fresh[id] = x;   // arrived by event while we asked
+      approvals = fresh;
       drawApprovals(); drawSessions();
     } catch (e) { /* approvals still arrive by event */ }
   }
@@ -461,8 +481,29 @@ export function mount(root) {
         await open(d.session.id);
       }
       input.value = ""; help.sent(text);
-      await api("POST", "/api/chat/sessions/" + encodeURIComponent(current) + "/send", { text, mode: busy ? "steer" : "send" });
+      const steering = busy, sid = current;
+      const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send" });
+      if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; drawSteers(); }
       flash("");
+    } catch (e) { fail(e); }
+  }
+
+  // Queued steers (D-045): a message sent while a turn runs waits for the next tool round. Until it lands the
+  // user can pull it back: the x on its chip, or Up in an empty box, puts the text back to edit.
+  function lastSteer() { const mine = Object.values(steers).filter((x) => x.session === current); return mine[mine.length - 1] || null; }
+  function drawSteers() {
+    const mine = Object.values(steers).filter((x) => x.session === current);
+    steerEl.replaceChildren(...mine.map((x) => h("div", { class: "xc-steer-chip", "data-steer": x.id },
+      h("span", { class: "xc-i" }, "steer queued"), h("span", { class: "xc-text" }, short(x.text, 140)),
+      h("button", { class: "xc-btn xc-x", title: "Pull this back into the box (Up in an empty box does the same)", "aria-label": "Cancel queued steer",
+        onclick: () => unsteer(x) }, "\u00D7"))));
+  }
+  async function unsteer(x) {
+    try {
+      const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(x.session) + "/unsteer", { message_id: x.id });
+      delete steers[x.id]; drawSteers();
+      if ((d.cancelled || []).length) { input.value = input.value.trim() ? x.text + "\n" + input.value : x.text; input.focus(); input.dispatchEvent(new Event("input")); }
+      else flash("that message already landed");
     } catch (e) { fail(e); }
   }
 
@@ -471,7 +512,11 @@ export function mount(root) {
   }
 
   async function answer(a, decision) {
-    try { await api("POST", "/api/approvals/" + encodeURIComponent(a.request_id), { decision }); delete approvals[a.request_id]; drawApprovals(); drawSessions(); } catch (e) { fail(e); }
+    try { await api("POST", "/api/approvals/" + encodeURIComponent(a.request_id), { decision }); delete approvals[a.request_id]; gone.add(a.request_id); drawApprovals(); drawSessions(); }
+    catch (e) {
+      if (e.status === 404) { delete approvals[a.request_id]; gone.add(a.request_id); drawApprovals(); drawSessions(); flash("that approval was already closed"); }   // the core no longer holds it
+      else fail(e);
+    }
   }
 
   async function feedback(it, verdict, text) {
@@ -495,7 +540,9 @@ export function mount(root) {
   // ---------------------------------------------------------------- start
 
   const offBus = bus.on(handle);
-  const off = () => { offBus(); help.stop(); document.removeEventListener("keydown", onKey); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  let resumed = 0;
+  const offState = bus.onState((st) => { if (st.resumed !== resumed) { resumed = st.resumed; if (current) syncApprovals(); } });
+  const off = () => { offBus(); offState(); help.stop(); document.removeEventListener("keydown", onKey); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   refreshSessions().then(() => { if (!current && sessions.length) open(sessions[0].id); });
   return off;

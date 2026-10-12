@@ -151,6 +151,8 @@ class SharedClient:
                      reconnect: bool = False, backoff: float = 0.5) -> AsyncIterator[s.Event]:
         import httpx
 
+        from exo.protocol.client import ClientError
+
         self.last_seq = since
         while True:
             try:
@@ -159,6 +161,9 @@ class SharedClient:
                     yield ev
             except (httpx.TransportError, httpx.StreamError, OSError):
                 pass
+            except ClientError:  # the new core answered with a refusal for now: back off and ask again
+                if not reconnect:
+                    raise
             if not reconnect:
                 return
             await asyncio.sleep(backoff)
