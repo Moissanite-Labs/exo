@@ -210,6 +210,8 @@ class Loop:
         timing = {"wall_ms": wall, "model_ms": st.stats["model_ms"], "approval_ms": approval,
                   "tool_ms": max(0, st.stats["tool_ms"] - approval), "model_calls": st.stats["model_calls"],
                   "fallbacks": st.stats["fallbacks"], "tool_errors": st.stats["tool_errors"]}
+        if st.stats.get("interrupted_tool"):
+            timing["interrupted_tool"] = st.stats["interrupted_tool"]
         await self._emit(ev.TurnCompleted(turn_id=turn_id, stop_reason=result.stop_reason,
                                           usage=result.usage, timing=timing), session)
         reply = result.message.text() if result.message else ""
@@ -430,7 +432,12 @@ class Loop:
             for call in calls:
                 await self._emit(ev.ToolStarted(call=call, risk=risks.get(call.name, "low")), session)
                 t0 = time.monotonic()
-                res = await self._interruptible(self._run_one(session, turn_id, call), st)
+                try:
+                    res = await self._interruptible(self._run_one(session, turn_id, call), st)
+                except _Interrupted:  # a tool cut short still spent the time up to the interrupt (f_8e7f52cd)
+                    st.stats["tool_ms"] += int((time.monotonic() - t0) * 1000)
+                    st.stats["interrupted_tool"] = call.name
+                    raise
                 results.append(res)
                 ms = int((time.monotonic() - t0) * 1000)
                 st.stats["tool_ms"] += ms

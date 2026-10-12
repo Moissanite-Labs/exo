@@ -387,7 +387,7 @@ class TurnCompleted:
     turn_id: str
     stop_reason: str = "end"
     usage: Usage | None = None
-    # wall_ms, model_ms, tool_ms, approval_ms, model_calls, fallbacks, tool_errors (D-025); empty on old sessions
+    # wall_ms, model_ms, tool_ms, approval_ms, model_calls, fallbacks, tool_errors (D-025), and interrupted_tool when a tool was cut short; empty on old sessions
     timing: dict[str, Any] = field(default_factory=dict)
 
 
