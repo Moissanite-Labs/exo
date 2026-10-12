@@ -550,8 +550,9 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
                 add(f"model.timeout:{a['route']}", "bug", f"{a['route']} timed out",
                     f"{a.get('error', '')} (after {_fmt_ms(a.get('ms', 0))})".strip())
             elif a.get("outcome") in ("fallback", "error"):
+                cool = a.get("cooldown_s")  # the route's circuit breaker opened on this failure
                 add(f"model.fallback:{a['route']}", "bug", f"{a['route']} failed; the call fell back",
-                    str(a.get("error", "")))
+                    str(a.get("error", "")) + (f" (route skipped for {_fmt_ms(cool * 1000)})" if cool else ""))
     for tr in t.tools:
         if tr.is_error:
             add(f"tool.error:{tr.name}:{_norm(tr.error)}", "papercut", f"Tool {tr.name} failed", tr.error)

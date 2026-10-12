@@ -37,6 +37,9 @@ SOLE_TTL = 60.0
 AUTH_TTL = 300.0
 LONG_TTL = 4 * 3600.0
 REPROBE_FRACTION = 0.02
+BREAKER_FAILURES = 2  # consecutive retryable failures of one route before it is skipped
+BREAKER_COOLDOWN_S = 600.0  # first skip; doubles on each failed trial
+BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
@@ -73,6 +76,15 @@ class Cooldown:
 
 
 @dataclass
+class Breaker:
+    """Route circuit breaker state: consecutive failures, and when the open route may take one trial call."""
+    fails: int = 0
+    level: int = 0  # how many times it has opened without a success in between
+    until: float = 0.0
+    trial: bool = False  # the one call allowed after a cool-down is out
+
+
+@dataclass
 class Credential:
     id: str
     key: str | None = field(repr=False)
@@ -104,7 +116,8 @@ class Router:
     def __init__(self, roles: Mapping[str, list[str]] | None = None, providers: Mapping[str, dict] | None = None,
                  *, catalog: dict[str, Any] | None = None, instances: Mapping[str, Provider] | None = None,
                  env: Mapping[str, str] | None = None, clock: Callable[[], float] = time.time,
-                 client: Any = None, key_sources: bool | None = None) -> None:
+                 client: Any = None, key_sources: bool | None = None,
+                 breaker: Mapping[str, Any] | None = None) -> None:
         cat = load_catalog() if catalog is None else catalog
         self.providers: dict[str, dict] = {**cat.get("providers", {}), **(providers or {})}
         self.models: dict[str, dict] = dict(cat.get("models", {}))
@@ -116,15 +129,21 @@ class Router:
         self.clock = clock
         self.client = client
         self.cooldowns: dict[str, Cooldown] = {}
+        self.breakers: dict[str, Breaker] = {}  # route ref -> state; in memory, per process
+        b = breaker or {}
+        self.breaker_failures = max(1, int(b.get("failures") or BREAKER_FAILURES))
+        self.breaker_cooldown_s = float(b.get("cooldown_s") or BREAKER_COOLDOWN_S)
+        self.breaker_max_s = max(self.breaker_cooldown_s, float(b.get("max_cooldown_s") or BREAKER_MAX_S))
         self._creds: dict[str, list[Credential]] = {}
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any] | None, **kw: Any) -> Router:
-        """Build from the ``[models]`` table of Exo config: ``roles``, ``providers``, and ``models`` (per
-        "provider:model" overrides of the catalog: ``input``, ``output``, ``cache_read``, ``cache_write`` USD per
-        million tokens, ``context``)."""
+        """Build from the ``[models]`` table of Exo config: ``roles``, ``providers``, ``breaker`` (``failures``,
+        ``cooldown_s``, ``max_cooldown_s``: the route circuit breaker) and ``models`` (per "provider:model"
+        overrides of the catalog: ``input``, ``output``, ``cache_read``, ``cache_write`` USD per million tokens,
+        ``context``)."""
         config = config or {}
-        r = cls(roles=config.get("roles"), providers=config.get("providers"), **kw)
+        r = cls(roles=config.get("roles"), providers=config.get("providers"), breaker=config.get("breaker"), **kw)
         for ref, info in (config.get("models") or {}).items():  # prices and limits per "provider:model" (D-032)
             if isinstance(info, dict):
                 r.models[ref] = {**r.models.get(ref, {}), **info}
@@ -201,6 +220,8 @@ class Router:
             self._creds.pop(n, None)
             for k in [k for k in self.cooldowns if k == n or k.startswith((n + "|", n + "#"))]:
                 self.cooldowns.pop(k, None)
+            for k in [k for k in self.breakers if k.startswith(n + ":")]:
+                self.breakers.pop(k, None)
         return names
 
     def _key(self, name: str) -> str | None:
@@ -219,9 +240,9 @@ class Router:
 
     # --- outcome bookkeeping ---------------------------------------------------
     def record_failure(self, cred_id: str, model: str, status: int | None, retry_after: float | None,
-                       sole: bool) -> Cooldown:
+                       sole: bool, model_only: bool = False) -> Cooldown:
         now = self.clock()
-        key = f"{cred_id}|{model}" if status == 404 else cred_id
+        key = f"{cred_id}|{model}" if status == 404 or model_only else cred_id
         cd = self.cooldowns.get(key) or Cooldown()
         cd.strikes += 1
         cd.status = status
@@ -236,6 +257,34 @@ class Router:
     def record_success(self, cred_id: str, model: str) -> None:
         self.cooldowns.pop(cred_id, None)
         self.cooldowns.pop(f"{cred_id}|{model}", None)
+
+    # --- route circuit breaker -----------------------------------------------------
+    def route_open(self, ref: str, now: float) -> bool:
+        """True while the route's breaker is open (skip it). Once the cool-down ends, one caller gets the trial
+        call (a lease keeps concurrent callers off the route until that call reports)."""
+        b = self.breakers.get(ref)
+        if b is None or b.level == 0:
+            return False
+        if b.until > now:
+            return True
+        b.until = now + 60.0  # trial lease; the trial's outcome replaces it
+        b.trial = True
+        return False
+
+    def route_failed(self, ref: str, now: float) -> float | None:
+        """Count a retryable failure. Returns the cool-down in seconds when this failure opens the breaker."""
+        b = self.breakers.setdefault(ref, Breaker())
+        b.fails = self.breaker_failures if b.trial else b.fails + 1  # a failed trial reopens at once
+        if b.fails < self.breaker_failures:
+            return None
+        b.level += 1
+        b.fails, b.trial = 0, False
+        cool = min(self.breaker_cooldown_s * 2 ** (b.level - 1), self.breaker_max_s)
+        b.until = now + cool
+        return cool
+
+    def route_ok(self, ref: str) -> None:
+        self.breakers.pop(ref, None)
 
     def price(self, route: Route, usage: Usage | None, input_includes_cache: bool = False) -> Usage | None:
         """Fill ``cost_usd`` from the catalog price of the route that served the call (USD per million tokens).
@@ -261,7 +310,13 @@ class Router:
         attempts: list[dict[str, Any]] = []  # every try, for the model.call record (D-025)
         last: ProviderEvent | None = None
         chain = self.chain(role)
+        usable = [r for r in chain if self._pick(r, self.clock()) is not None]
+        skip = {r.ref for r in usable if self.route_open(r.ref, self.clock())}
+        if len(skip) == len(usable):
+            skip = set()  # every usable route is cooling down: try them anyway rather than fail without a call
         for i, route in enumerate(chain):
+            if route.ref in skip:
+                continue
             while (picked := self._pick(route, self.clock())) is not None:
                 cred, sole = picked
                 tried.append(route.ref)
@@ -271,7 +326,7 @@ class Router:
                 if not failed:
                     return
                 last = failed[0]
-                nxt = next((r for r in chain[i:] if self._pick(r, self.clock())), None)
+                nxt = next((r for r in chain[i:] if r.ref not in skip and self._pick(r, self.clock())), None)
                 if nxt is None:
                     if attempts[-1]["outcome"] == "fallback":
                         attempts[-1]["outcome"] = "error"  # nothing left to fall back to
@@ -279,6 +334,9 @@ class Router:
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
                     yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}")
+                if attempts and attempts[-1].get("cooldown_s"):
+                    yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for "
+                                                            f"{attempts[-1]['cooldown_s'] / 60:.0f} min")
         end = self._exhausted(role, tried, last)
         end.attempts = attempts
         yield end
@@ -291,17 +349,23 @@ class Router:
         Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``)."""
         started, t0 = False, time.monotonic()
         attempts = [] if attempts is None else attempts
+        cool: float | None = None  # set when this failure opens the route's breaker
 
         def note(outcome: str, err: str = "") -> None:
             attempts.append({"route": route.ref, "outcome": outcome, "error": scrub(err, 160),
-                             "ms": int((time.monotonic() - t0) * 1000)})
+                             "ms": int((time.monotonic() - t0) * 1000),
+                             **({"cooldown_s": int(cool)} if cool else {})})
 
         async for ev in cred.provider.stream(messages, tools, **{**opts, "model": route.model}):
             if ev.kind == "error":
                 retry_after = ev.retry_after
-                fallback = (ev.status not in NO_FALLBACK_STATUS) if ev.status is not None else ev.retryable
+                # 400, 413 and 422 do not fall back, unless the transport marked the upstream as down (retryable).
+                fallback = (ev.status not in NO_FALLBACK_STATUS or ev.retryable) if ev.status is not None else ev.retryable
                 if fallback:
-                    self.record_failure(cred.id, route.model, ev.status, retry_after, sole)
+                    self.record_failure(cred.id, route.model, ev.status, retry_after, sole,
+                                        model_only=ev.status in NO_FALLBACK_STATUS)  # an upstream 400 is this model's
+                    if ev.retryable:
+                        cool = self.route_failed(route.ref, self.clock())
                 if started or not fallback:
                     note("error", ev.error or "")
                     ev.route, ev.attempts = route.ref, attempts
@@ -320,6 +384,7 @@ class Router:
                     note("ok")
                     ev.attempts = attempts
                     self.record_success(cred.id, route.model)
+                    self.route_ok(route.ref)
                     if ev.message is not None:
                         ev.message.meta.setdefault("model", route.ref)
             yield ev

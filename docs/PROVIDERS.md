@@ -109,7 +109,8 @@ claude, minimax, qwen); a hand-typed ref to one gets "not served by Exo's OpenCo
 Free and preview routes (`step-5-preview-free`, `longcat-2.5-preview-free`) are served over
 `/chat/completions`, but their upstream is flaky: seen 2026-10-12, the same request returned 429
 "Endpoint is unavailable", 400 "missing tags" (an upstream routing error, not our request), and then 200.
-Exo reports these as "upstream is unavailable right now"; retry or pick another model. Go also needs the
+Exo reports these as "upstream is unavailable right now" and treats them as retryable: the call falls back to the
+next route. Nous routes (`nous:stepfun/step-5-preview:free`) flake the same way and get the same handling. Go also needs the
 `x-opencode-session` header (Exo sends it).
 
 Nous Portal: the base URL is in Nous's Hermes docs, but they describe OAuth-minted tokens, and it is
@@ -152,6 +153,20 @@ Add or change a provider in config under `[models.providers.NAME]` with `transpo
 
 Each role is a list of `provider:model` routes. The first available one serves; the rest are fallbacks.
 Override any role in `[models.roles]` in your config.
+
+### Route circuit breaker
+
+A route that keeps failing is skipped instead of costing every turn a failed try. After `failures` consecutive
+retryable failures (429, 5xx, timeouts, or an upstream-unavailable 400) the route is skipped for `cooldown_s`.
+Then one trial call is allowed: success clears the route, failure skips it again for twice as long, up to
+`max_cooldown_s`. State is in memory, per process, and `exo providers` key changes reset it. If every route
+of a role is skipped, they are all tried anyway. The trip is logged once: the attempt that opened the breaker
+carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Config, in `[models.breaker]`:
+
+    [models.breaker]
+    failures = 2          # default 2
+    cooldown_s = 600      # default 10 min
+    max_cooldown_s = 3600 # default 1 h
 
 | Role | Default | Falls back to |
 |---|---|---|

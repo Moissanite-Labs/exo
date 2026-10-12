@@ -78,15 +78,23 @@ class OpenAIChatProvider(HttpTransport):
             h["authorization"] = f"Bearer {self.api_key}"
         return h
 
+    _UPSTREAM_MARKS = ("missing tags", "endpoint is unavailable")
+
+    def upstream_down(self, status: int, text: str) -> bool:
+        """OpenCode Go and Nous relay free and preview models whose upstream flakes with 400 'missing tags' or
+        'Endpoint is unavailable'. Retryable on another route, and the route circuit breaker counts it."""
+        return (self.name.startswith(("opencode-go", "nous")) and status in (400, 429, 502, 503)
+                and any(m in text.lower() for m in self._UPSTREAM_MARKS))
+
     def explain_error(self, status: int, text: str) -> str:
-        if not self.name.startswith("opencode-go"):
-            return text
         low, model = text.lower(), self.model or "this model"
-        if "does not support this protocol" in low or "requires a credential" in low:
-            return (f"model {model} is not served by Exo's OpenCode Go adapter yet "
-                    f"(it needs /responses or /messages, Exo speaks /chat/completions): {text}")
-        if status in (400, 429, 502, 503) and ("missing tags" in low or "endpoint is unavailable" in low):
-            return (f"OpenCode Go's upstream for {model} is unavailable right now (common for free or preview "
+        if self.name.startswith("opencode-go"):
+            if "does not support this protocol" in low or "requires a credential" in low:
+                return (f"model {model} is not served by Exo's OpenCode Go adapter yet "
+                        f"(it needs /responses or /messages, Exo speaks /chat/completions): {text}")
+        if self.upstream_down(status, text):
+            who = "OpenCode Go's" if self.name.startswith("opencode-go") else "Nous's"
+            return (f"{who} upstream for {model} is unavailable right now (common for free or preview "
                     f"routes); retry later or pick another model: {text}")
         return text
 
