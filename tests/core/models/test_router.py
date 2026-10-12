@@ -4,7 +4,7 @@ import pytest
 
 from exo.core.models import FakeProvider, ModelError, Router, aux
 from exo.core.models.fake import rate_limited, tool_turn
-from exo.core.models.router import SOLE_TTL, Route, cooldown_until
+from exo.core.models.router import SOLE_TTL, Breaker, Route, cooldown_until
 from exo.core.types import Message, Provider, ProviderEvent
 
 from .conftest import Recorder, collect, fixture_bytes
@@ -178,3 +178,61 @@ def test_set_role_rejects_flag_text_and_unknown_provider():
     assert r.roles["main"] == ["a:m"]
     r.prefer("main", "a:other")
     assert r.roles["main"] == ["a:other", "a:m"]
+
+
+def _flaky_pair(n_fail, **cfg):
+    primary = FakeProvider([rate_limited()] * n_fail + ["primary back"] * 5, name="p")
+    backup = FakeProvider(["from backup"] * 20, name="b")
+    clock = Clock()
+    r = Router(roles={"main": ["p:free", "b:small"]}, catalog={"providers": {}, "models": {}, "roles": {}},
+               instances={"p": primary, "b": backup}, env={}, clock=clock, breaker=cfg or None)
+    return r, primary, backup, clock
+
+
+def test_breaker_opens_after_two_failures_and_logs_once():
+    r, primary, backup, clock = _flaky_pair(3)
+    first = run(r)
+    assert first[-1].attempts[0].get("cooldown_s") is None  # one failure: not yet
+    clock.t += SOLE_TTL + 1  # the credential cooldown is over; only the breaker can keep the route out
+    second = run(r)
+    assert second[-1].attempts[0]["cooldown_s"] == 600
+    assert any(e.kind == "notice" and "skipping it for 10 min" in e.text for e in second)
+    clock.t += SOLE_TTL + 1
+    third = run(r)
+    assert len(primary.calls) == 2 and third[-1].message.text() == "from backup"
+    assert not any("cooldown_s" in a for a in third[-1].attempts)  # logged once, on the failure that tripped it
+
+
+def test_breaker_trial_after_cooldown_reopens_doubled_then_recovers():
+    r, primary, backup, clock = _flaky_pair(3)
+    for _ in range(2):
+        run(r)
+        clock.t += SOLE_TTL + 1
+    clock.t += 600  # cool-down over: one trial call
+    trial = run(r)
+    assert len(primary.calls) == 3 and trial[-1].attempts[0]["cooldown_s"] == 1200  # failed trial: doubled
+    clock.t += 1201 + SOLE_TTL
+    assert run(r)[-1].message.text() == "primary back"
+    assert "p:free" not in r.breakers  # recovered: counters cleared
+
+
+def test_breaker_cooldown_capped_and_configurable():
+    r, *_ = _flaky_pair(0, failures=1, cooldown_s=100, max_cooldown_s=250)
+    assert [r.route_failed("x:y", 0.0), r.route_failed("x:y", 1.0), r.route_failed("x:y", 2.0)] == [100, 200, 250]
+
+
+def test_breaker_ignored_when_every_route_is_open():
+    r, primary, backup, clock = _flaky_pair(0)
+    for ref in ("p:free", "b:small"):
+        r.breakers[ref] = Breaker(level=1, until=clock.t + 500)
+    assert run(r)[-1].message.text() == "primary back"  # tried anyway: failing without a call helps nobody
+
+
+def test_nonretryable_errors_do_not_count():
+    r, *_ = _flaky_pair(0)
+    bad = FakeProvider([ProviderEvent(kind="error", error="HTTP 400: bad", status=400, retryable=False)] * 3, name="p")
+    r.instances["p"] = bad
+    r._creds.clear()
+    for _ in range(3):
+        run(r)
+    assert "p:free" not in r.breakers

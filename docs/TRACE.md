@@ -47,7 +47,7 @@ rest fall back to config.json (`exo trace` reads the seat of the session it show
 | `turn.slow` | the harness's share of a turn over the limit: wall time minus tool time and approval waits (model plus overhead). A long build or a slow human does not fire it. Old sessions without a timing summary use the recorded tool durations. Bug at 5 times the limit | 60 s (`turn_wall_s`) |
 | `turn.wall` | total turn wall time, work included, over a separate high cap | 30 min (`turn_total_wall_s`) |
 | `model.wait:<route>` | time to first token over the limit | 30 s (`model_wait_s`) |
-| `model.fallback:<route>`, `model.timeout:<route>` | a try failed and the call moved on | any |
+| `model.fallback:<route>`, `model.timeout:<route>` | a try failed and the call moved on. If the failure opened the route's circuit breaker the flag says how long the route is skipped, and that attempt in `model.call` carries `cooldown_s` (config `[models.breaker]`: `failures`, `cooldown_s`, `max_cooldown_s`; see PROVIDERS.md) | any; breaker 2 failures, 10 min, up to 1 h |
 | `tool.error:<tool>:<kind>` | a tool returned an error | any |
 | `harness.error:<where>:<type>` | a caught exception | any |
 | `shell.masked_exit` | a bash result carried `note: pipeline stage N exited C`: an earlier stage failed but the last one succeeded, so the reported exit was 0 | any |

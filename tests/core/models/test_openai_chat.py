@@ -91,3 +91,24 @@ def test_opencode_go_catalog_hides_responses_and_messages_models():
     for m in ("gpt-6-luna", "grok-4.7", "muse-spark-1.3-contributor", "claude-haiku-5-5", "minimax-m3", "qwen3.8-max"):
         assert any(h in m for h in hide), m
     assert not any(h in "step-5-preview-free" for h in hide)
+
+
+def test_nous_missing_tags_400_is_retryable_upstream():
+    rec = Recorder((400, b'{"error":{"message":"Additional info: missing tags"}}', {}))
+    prov = OpenAIChatProvider("https://inference-api.nousresearch.com/v1", "k", name="nous",
+                              model="stepfun/step-5-preview:free", client=rec.client())
+    err = collect(prov.stream([Message.user("hi")], [], max_tokens=8))[-1]
+    assert err.status == 400 and err.retryable and "Nous's upstream for stepfun/step-5-preview:free" in err.error
+    other = OpenAIChatProvider("https://x/v1", "k", name="openai", client=Recorder((400, b'{"error":{"message":"missing tags"}}', {})).client())
+    assert not collect(other.stream([Message.user("hi")], []))[-1].retryable  # only relays that flake this way
+
+
+def test_upstream_400_falls_back_and_cools_down_only_that_model():
+    from exo.core.models import FakeProvider, Router
+    from exo.core.types import ProviderEvent
+    down = ProviderEvent(kind="error", error="HTTP 400: missing tags", status=400, retryable=True)
+    p, b = FakeProvider([down, "x"], name="p"), FakeProvider(["ok", "ok2"], name="b")
+    r = Router(roles={"main": ["p:free", "b:m"]}, catalog={"providers": {}, "models": {}, "roles": {}},
+               instances={"p": p, "b": b}, env={})
+    events = collect(r.stream("main", [Message.user("hi")], []))
+    assert events[-1].message.text() == "ok" and "p|free" in r.cooldowns and "p" not in r.cooldowns
