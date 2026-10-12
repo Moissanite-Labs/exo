@@ -220,3 +220,46 @@ async def test_bad_action(tmp_path):
     eng = mk(tmp_path)
     assert "error" in await handle_schedule_edit(eng, {"action": "dance"})
     assert (await handle_schedule_edit(eng, s.ScheduleEdit(action="list")))["jobs"] == []
+
+
+@aio
+async def test_loop_survives_a_failing_tick_and_reports_it(tmp_path):
+    eng = mk(tmp_path)
+    sch = eng.scheduler = Scheduler(eng)
+    sch.error_pause = 0.01
+    real, calls = sch.tick, []
+
+    async def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("bad row")
+        return await real()
+
+    sch.tick = flaky
+    jid = sch.add("every 1h", "x")["id"]
+    sch.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (sch.clock() - 5, jid))
+    sch.db.commit()
+    sch.start()
+    for _ in range(100):
+        await asyncio.sleep(0.02)
+        if sch.get(jid)["last_status"]:
+            break
+    await sch.stop()
+    assert sch.get(jid)["last_status"] == "done"  # the loop kept going after the first tick raised
+    errs = bodies(eng, s.HarnessError)
+    assert any(b.where == "scheduler tick" and "bad row" in b.message for b in errs)
+
+
+@aio
+async def test_unexpected_loop_exit_is_reported(tmp_path):
+    eng = mk(tmp_path)
+    sch = eng.scheduler = Scheduler(eng)
+
+    async def boom():
+        raise ValueError("loop bug")
+
+    sch._run_loop = boom
+    sch.start()
+    await asyncio.sleep(0.05)
+    assert any(b.where == "scheduler loop" and "loop bug" in b.message for b in bodies(eng, s.HarnessError))
+    assert any("scheduler stopped" in n.text for n in bodies(eng, s.Notice))

@@ -17,6 +17,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
+from exo.core import trace
 from exo.core.agents.delegate import BLOCKED_TOOLS
 from exo.core.loop import Loop
 from exo.core.models.router import TIERS
@@ -103,6 +104,7 @@ class Scheduler:
         self.db.commit()
         self.running: dict[str, asyncio.Task] = {}
         self._wake, self._main = asyncio.Event(), None
+        self.error_pause = 5.0  # seconds to wait after a failed tick, so a persistent fault does not spin
 
     # ------------------------------------------------------------ jobs
 
@@ -232,6 +234,16 @@ class Scheduler:
     def start(self) -> None:
         if self._main is None:
             self._main = asyncio.ensure_future(self._run_loop())
+            self._main.add_done_callback(self._loop_ended)
+
+    def _loop_ended(self, task: asyncio.Future) -> None:
+        """The loop only ends by stop(); any other end is a bug that must not pass quietly."""
+        if task.cancelled() or self._main is None:
+            return
+        exc = task.exception()
+        trace.report("scheduler loop", exc or "the loop ended without being stopped")
+        self.engine.hub.publish(s.Notice(text="The scheduler stopped; scheduled jobs will not run until restart.",
+                                         level="warn"))
 
     async def stop(self) -> None:
         main, self._main = self._main, None
@@ -247,7 +259,14 @@ class Scheduler:
 
     async def _run_loop(self) -> None:
         while True:
-            await self.tick()
+            try:
+                await self.tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # one bad tick (a bad row, a full disk) must not end every future job
+                trace.report("scheduler tick", exc)
+                await asyncio.sleep(self.error_pause)
+                continue
             nxt = [j["next_run"] for j in self.list() if not j["paused"] and j["next_run"] is not None]
             delay = max(0.0, min(nxt) - self.clock()) if nxt else 3600.0
             self._wake.clear()
