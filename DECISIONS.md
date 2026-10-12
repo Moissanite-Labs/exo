@@ -391,6 +391,40 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** web client view, receipts for bus sends, held messages across restarts, live gateway test.
 
 
+## D-028 (2026-10-12) One agent, one continuous memory
+- **Why (A, verbatim):** "well if the harness is built according to my vision for the implemenation of the optchat
+  memory system all sessions should technically be the same agent with continuous memory". Exo had taken the turn
+  model (D-013) but kept sessions: a summary tree per session, `/new` as a blank mind, exo-memory's daily log as a
+  second log reached through recall. Two windows of one seat were two minds.
+- **Decision:** docs/MEMORY-MODEL.md. A seat is one agent with one append-only log (in sessions.sqlite, a position
+  and hash chain per entry, `exo memory verify`) and one summary tree. Windows, channels, scheduled runs and peer
+  messages are threads of it. A call is the agent's tree in a byte-stable system message, the thread's own tail,
+  and stored notes of what other threads did since this thread last looked. `/new` is a new thread (same memory),
+  `/new private` is logged but never shared, `/sessions` lists threads. One process writes an agent
+  (`run/agent-<id>.lock`); windows without exod join the first window's core and take over if it closes.
+  Subagents keep their own logs (`memory_zoom(subagent=...)`); their report reaches the parent as the delegate
+  result. exo-memory reads the core log instead of writing its own. Existing sessions were imported once, in time
+  order, with `origin=import`; nothing deleted.
+- **Protocol:** still 30 commands: `session.create` takes `kind`, `SessionInfo` carries `agent` and `kind`. One
+  event, `memory.summarized` (27 of 30): tree upkeep was showing as `context.compacted`, which read as context
+  compaction in the trace and TUI.
+- **Calls made by the lead:** messages stay stored per thread with an agent position on top, so undo, fork, tool
+  repair and every session-keyed event keep working; undo hides log entries rather than deleting them. Recall moved
+  out of the system message to just before the turn. Small spans (the 0bb212e floor) stay out of the system
+  message and count toward the view budget, so they merge instead of piling up. Providers that key their cache on a
+  conversation id get one id per agent. A steer that lands during or after the final reply now gets its own model
+  call in the same turn. Peers between threads of one agent were left in place (harmless), not removed.
+- **Live check (temp copy of ~/.exo, glm-5.3-flash, 25 turns):** a fact told in window A was answered in a new
+  window B on its first turn with no recall call; two windows ran at once and each saw the other's fact at its next
+  call; after `/new` the earlier facts were answered; after a restart the agent continued and the imported canary
+  thread was listed; the log verified (104 entries). Cache: the 20-turn run read 18.8% from cache against 58.7% in
+  the old canary trace (kimi-k3), traced to a per-thread provider session id splitting the cache, plus the import
+  backlog changing the prefix. Fixed after the run; the fixed code was not re-measured live at 20 turns (turn
+  budget). Offline, on the same 20-turn script with an ideal prefix cache, prefix reuse is 84% against 93% before
+  (77% against 79% with recall).
+- **Not done:** a live 20-turn cache measurement on the fixed code; importing exo-memory's old episodic log (it
+  holds copies of the same sessions); summaries for imports are slow on glm-5.3-flash (about 75 s per leaf).
+
 ## D-029 (2026-10-12) jevgrep as code_find; native port later if the measured win holds
 - **Why:** "where is X decided" questions cost an agent many grep and read rounds. dzhng/jevgrep (MIT, `jg`
   0.8.0) asks the Jev decision model, which Exo already uses, to pick files and verbatim excerpts.
