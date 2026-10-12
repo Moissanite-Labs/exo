@@ -19,6 +19,7 @@ optional ``on_turn_complete(session_id, usage)`` and an ``on_event`` attribute.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable
@@ -183,11 +184,17 @@ class Loop:
         await self._repair(session)
         await self._add(session, user, turn_id)
         await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or ""), session)
-        turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user")
+        turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user" and not _.meta.get("note"))
         await self._memory("on_turn_start", turn_no, user.text(), session_id=session)
         result = TurnResult(turn_id=turn_id, stop_reason="end")
         try:
             await self._rounds(session, turn_id, user, st, result)
+            while st.steer and result.stop_reason == "end":  # arrived between the last call and the turn's end
+                late = list(st.steer)
+                st.steer.clear()
+                for m in late:
+                    await self._add(session, m, turn_id)
+                await self._rounds(session, turn_id, late[-1], st, result)
         except _Interrupted:
             result.stop_reason = "interrupted"
         except Exception as exc:  # unexpected bug in a collaborator: end the turn cleanly
@@ -220,21 +227,33 @@ class Loop:
                 await self._emit(trace.error_body("turn observer", exc), session)
         return result
 
-    async def _system(self, session: str, query: str) -> str:
+    def _takes_recall(self) -> bool:
+        """True when the context engine places per-turn recall itself (AgentContext, D-028), so the system
+        message stays byte-stable for the prompt cache."""
+        try:
+            params = inspect.signature(self.context.build).parameters
+        except (TypeError, ValueError):
+            return False
+        return "recall" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    async def _system(self, session: str, query: str) -> tuple[str, str]:
+        """(system text, recall). Recall is folded into the system text unless the context engine takes it."""
         parts = [self.system_prompt]
         parts.append(await self._memory("system_prompt_block") or "")
         recall = await self._memory("prefetch", query, session_id=session) or ""
-        if recall:
+        if recall and not self._takes_recall():
             parts.append("# Recalled memory\n" + recall)
-        return "\n\n".join(p for p in parts if p)
+            recall = ""
+        return "\n\n".join(p for p in parts if p), recall
 
     async def _rounds(self, session: str, turn_id: str, user: Message, st: _SessionState,
                       result: TurnResult) -> None:
-        system = await self._system(session, user.text())
+        system, recall = await self._system(session, user.text())
+        extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
         for _ in range(self.max_iterations):
             if hasattr(self.context, "note"):
                 await _maybe_await(self.context.note(session))
-            messages = await self.context.build(session, system)
+            messages = await self.context.build(session, system, **extra)
             msg_id = new_id("m")
             stream = await self._call(session, messages, msg_id, st, result)
             await self._record_call(session, stream, _, st)
@@ -253,6 +272,11 @@ class Loop:
                 result.stop_reason = stream.done.stop_reason or "end"
                 if result.stop_reason == "tool_use":
                     result.stop_reason = "end"
+                if st.steer and result.stop_reason == "end":  # a message came in during this call: answer it now
+                    for m in st.steer:
+                        await self._add(session, m, turn_id)
+                    st.steer.clear()
+                    continue
                 return
             await self._tools(session, turn_id, reply.tool_calls, st)
             if st.steer:

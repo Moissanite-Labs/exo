@@ -136,8 +136,13 @@ class ContextAdapter:
             self._started.add(session)
             _safe(self.plugin, "on_session_start", session, platform="exo")
 
-    async def build(self, session: str, system: str) -> list[Message]:
-        msgs = await self.tree.build(session, system)
+    async def build(self, session: str, system: str, **kw: Any) -> list[Message]:
+        if "recall" in inspect.signature(self.tree.build).parameters:
+            msgs = await self.tree.build(session, system, **kw)
+        else:  # a per-session tree: recall goes in the system message, as before D-028
+            recall = kw.get("recall") or ""
+            msgs = await self.tree.build(session, (system + "\n\n" if system else "") + "# Recalled memory\n" + recall
+                                         if recall else system)
         pick = getattr(self.plugin, "select_context", None)
         if pick is None:
             return msgs

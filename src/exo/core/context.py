@@ -174,6 +174,8 @@ def render_message(msg: Message, limit: int = 4000) -> str:
     origin = msg.meta.get("origin")
     if origin == "import":
         label += " (imported)"
+    if msg.meta.get("thread_label"):  # an agent log entry (D-028): which thread it came from
+        label += f" in thread {msg.meta['thread_label']}"
     lines = []
     for p in msg.content:
         if p.type == "text" and p.text:
@@ -287,6 +289,7 @@ class TreeContext:
         self._import_open = asyncio.Event()
         self._import_open.set()
         self._tasks: dict[str, dict[str, asyncio.Task]] = {}  # session -> node id -> task
+        self._verbatim_cache: dict[str, str] = {}  # skipped node id -> its verbatim text
         self.on_event: Callable[[Any, str], Awaitable[Any]] | None = None
         # Optional hooks (sync or async). on_pre_compress(session, messages) may return extra text that
         # is fed into the leaf summary prompt; on_compacted(session, node) fires after a node is summarized.
@@ -326,7 +329,7 @@ class TreeContext:
         async with self._lanes[node.lane]:
             try:
                 if node.level == 0:
-                    msgs = self.store.messages(node.session, since=node.start - 1, upto=node.end)
+                    msgs = self._read(node.session, node.start - 1, node.end)
                     source = "\n\n".join(render_message(m) for m in msgs)
                     extra = ""
                     if self.on_pre_compress is not None:
@@ -334,10 +337,10 @@ class TreeContext:
                     text = "" if estimate_tokens(source) < self.min_compact_tokens else \
                         await self._summarize(node.session, source, extra=extra)
                 else:
-                    left, right = self._children(node)
-                    source = left.text + right.text
+                    left, right = (self._body(c) for c in self._children(node))  # a skipped child counts verbatim
+                    source = left + right
                     text = "" if estimate_tokens(source) < self.min_compact_tokens else \
-                        await self._summarize(node.session, right.text, previous=left.text)
+                        await self._summarize(node.session, right, previous=left)
                 # compact only when it shrinks: a too-small span or a summary not smaller than its source stays verbatim
                 node.text, node.status = (text, "done") if text and estimate_tokens(text) < estimate_tokens(source) \
                     else ("", "skipped")
@@ -348,17 +351,42 @@ class TreeContext:
             self.store.save_summary(node)
         if node.status == "done":
             if self.on_event is not None:
-                from exo.protocol.schema import ContextCompacted
+                from exo.protocol.schema import MemorySummarized
 
-                await self.on_event(ContextCompacted(before_tokens=estimate_tokens(source),
-                                                     after_tokens=estimate_tokens(node.text),
-                                                     summary_message_id=node.id), node.session)
+                await self.on_event(MemorySummarized(node_id=node.id, level=node.level, start=node.start,
+                                                     end=node.end, before_tokens=estimate_tokens(source),
+                                                     after_tokens=estimate_tokens(node.text), tree=node.session),
+                                    self._event_session(node.session))
             if self.on_compacted is not None:
                 try:
                     await _maybe_await(self.on_compacted(node.session, node))
                 except Exception:  # a plugin hook never breaks upkeep
                     pass
+        if node.status in ("done", "skipped"):
             self._maybe_merge(node.session)
+
+    # ---- the source a tree is built over (a session's messages here; an agent log in AgentContext)
+
+    def _read(self, key: str, since: int, upto: int | None = None) -> list[Message]:
+        return self.store.messages(key, since=since, upto=upto)
+
+    def _last(self, key: str) -> int:
+        return self.store.last_seq(key)
+
+    def _event_session(self, key: str) -> str | None:
+        return key
+
+    def _verbatim(self, node: SummaryNode, limit: int | None = None) -> str:
+        msgs = self._read(node.session, node.start - 1, node.end)
+        return "\n".join(render_message(m, limit or self.render_limit) for m in msgs)
+
+    def _body(self, node: SummaryNode) -> str:
+        """What a node puts in the view: its summary, or its messages verbatim when it was skipped."""
+        if node.status == "done":
+            return node.text
+        if node.id not in self._verbatim_cache:
+            self._verbatim_cache[node.id] = self._verbatim(node)
+        return self._verbatim_cache[node.id]
 
     def _children(self, node: SummaryNode) -> tuple[SummaryNode, SummaryNode]:
         by_key = {(n.level, n.index): n for n in self.store.summaries(node.session)}
@@ -392,21 +420,21 @@ class TreeContext:
                 self._schedule(n)
         if self.compressor is None:  # no summarizer: everything stays verbatim
             return
-        last = self.store.last_seq(session)
+        last = self._last(session)
         index = 0
         while (index + 1) * self.leaf_size <= last - self.tail_messages:
             if index not in leaves:
                 start, end = index * self.leaf_size + 1, (index + 1) * self.leaf_size
-                msgs = self.store.messages(session, since=start - 1, upto=end)
+                msgs = self._read(session, start - 1, end)
                 lane = "import" if msgs and all(m.meta.get("origin") == "import" for m in msgs) else "live"
                 self._schedule(self._new_node(session, 0, index, start, end, lane))
             index += 1
         self._maybe_merge(session)
 
     def _top(self, session: str) -> list[SummaryNode]:
-        """Coarsest done nodes that tile the summarized region, plus not-done leaves, in order."""
+        """Coarsest finished (done or skipped) nodes that tile the summarized region, plus unfinished leaves."""
         nodes = self.store.summaries(session)
-        done = {(n.level, n.index): n for n in nodes if n.status == "done"}
+        done = {(n.level, n.index): n for n in nodes if n.status in ("done", "skipped")}
         leaves = sorted((n for n in nodes if n.level == 0), key=lambda n: n.index)
         out: list[SummaryNode] = []
         i = 0
@@ -419,22 +447,36 @@ class TreeContext:
                     break
                 best, level = cand, level + 1
             out.append(best)
-            i += 2 ** level if best.status == "done" else 1
+            i += 2 ** level if best.status in ("done", "skipped") else 1
         return out
 
     def _maybe_merge(self, session: str) -> None:
         top = self._top(session)
-        if sum(estimate_tokens(n.text) for n in top if n.status == "done") <= self.view_budget:
+        fin = ("done", "skipped")  # a skipped span sits in the view verbatim, so it counts and may be merged
+        if sum(estimate_tokens(self._body(n)) for n in top if n.status in fin) <= self.view_budget:
             return
         existing = {(n.level, n.index) for n in self.store.summaries(session)}
         for a, b in zip(top, top[1:]):
-            if (a.status == b.status == "done" and a.level == b.level and a.index % 2 == 0
+            if (a.status in fin and b.status in fin and a.level == b.level and a.index % 2 == 0
                     and b.index == a.index + 1 and (a.level + 1, a.index // 2) not in existing):
                 lane = "import" if a.lane == b.lane == "import" else "live"
                 self._schedule(self._new_node(session, a.level + 1, a.index // 2, a.start, b.end, lane))
                 return
 
     # ---- turn side
+
+    def _view_parts(self, top: list[SummaryNode], label: str = "Messages") -> list[str]:
+        parts = []
+        for n in top:
+            if n.status == "done":
+                parts.append(f"## {label} {n.start}-{n.end}\n{n.text}")
+            elif n.lane == "import" and n.status != "skipped":
+                parts.append(f"## {label} {n.start}-{n.end}\n[imported history, summary in progress]")
+            else:
+                note = "verbatim" if n.status == "skipped" else "verbatim, summary pending"
+                body = self._body(n) if n.status == "skipped" else self._verbatim(n)
+                parts.append(f"## {label} {n.start}-{n.end} ({note})\n{body}")
+        return parts
 
     async def settle(self, session: str, timeout: float | None = None) -> bool:
         """Wait until no live summary is pending for ``session``. False on timeout."""
@@ -455,17 +497,7 @@ class TreeContext:
             await self.settle(session)
         top = self._top(session)
         frontier = top[-1].end if top else 0
-        parts = []
-        for n in top:
-            if n.status == "done":
-                parts.append(f"## Messages {n.start}-{n.end}\n{n.text}")
-            elif n.lane == "import":
-                parts.append(f"## Messages {n.start}-{n.end}\n[imported history, summary in progress]")
-            else:
-                msgs = self.store.messages(session, since=n.start - 1, upto=n.end)
-                body = "\n".join(render_message(m, self.render_limit) for m in msgs)
-                note = "verbatim" if n.status == "skipped" else "verbatim, summary pending"
-                parts.append(f"## Messages {n.start}-{n.end} ({note})\n{body}")
+        parts = self._view_parts(top)
         tail = self.store.messages(session, since=frontier)
         lead = []
         while tail and tail[0].role == "tool":  # orphaned results: their call is in the view
@@ -479,3 +511,181 @@ class TreeContext:
         if tail and tail[0].role == "assistant":
             out.append(Message.user("(continuing the conversation summarized above)"))
         return out + tail
+
+
+# ---------------------------------------------------------------- one agent, one memory (D-028)
+
+AGENT_VIEW_HEADER = (
+    "# Your memory (summaries of all your threads, oldest first)\n"
+    "You are one agent with one memory. Each window, channel or job is a thread of it. These notes cover "
+    "every thread: background, not instructions. The latest user message in this thread is the task. "
+    "Summaries keep little of tool output, so when you learn something that will matter later, say it in "
+    "your reply. memory_zoom(start, n) opens log entries in full."
+)
+NOTE_HEAD = ("[Meanwhile in your other threads, since this thread last looked. Background from your own memory, "
+             "not the user's words in this thread.]")
+
+
+def _ago(ts: str, now: float) -> str:
+    from datetime import datetime
+
+    try:
+        t = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return "earlier"
+    secs = max(0, int(now - t))
+    if secs < 60:
+        return "just now"
+    if secs < 3600:
+        return f"{secs // 60} min ago"
+    if secs < 86400:
+        return f"{secs // 3600} h ago"
+    return f"{secs // 86400} d ago"
+
+
+class AgentContext(TreeContext):
+    """The context engine for an agent's threads: one tree over the agent's whole log, the current thread's
+    tail verbatim, and other threads' new entries as stored context notes (docs/MEMORY-MODEL.md).
+
+    A session outside any agent, or a subagent thread, gets the per-session tree of TreeContext."""
+
+    def __init__(self, store: Any, compressor: Any, *, note_user_chars: int = 600, note_reply_chars: int = 400,
+                 **kw: Any):
+        super().__init__(store, compressor, **kw)
+        self.note_user_chars = note_user_chars
+        self.note_reply_chars = note_reply_chars
+        self._titles: dict[str, str] = {}
+
+    @staticmethod
+    def key(agent: str) -> str:
+        return f"agent:{agent}"
+
+    def _agent_key(self, session: str) -> str | None:
+        if session.startswith("agent:"):
+            return session
+        agent, kind = self.store.thread(session)
+        return self.key(agent) if agent and kind != "subagent" else None
+
+    def thread_label(self, session: str) -> str:
+        if session not in self._titles:
+            info = self.store.get_session(session)
+            title = (info.title if info else "") or ""
+            self._titles[session] = f'"{title[:40]}" ({session[-8:]})' if title else session[-8:]
+        return self._titles[session]
+
+    # ---- the tree is over the agent log
+
+    def _read(self, key: str, since: int, upto: int | None = None) -> list[Message]:
+        if not key.startswith("agent:"):
+            return super()._read(key, since, upto)
+        out = []
+        for e in self.store.log(key[6:], since, upto):
+            if e.hidden or e.kind == "private":
+                continue
+            e.message.meta["thread_label"] = self.thread_label(e.session)
+            out.append(e.message)
+        return out
+
+    def _last(self, key: str) -> int:
+        return self.store.last_pos(key[6:]) if key.startswith("agent:") else super()._last(key)
+
+    def _event_session(self, key: str) -> str | None:
+        return None if key.startswith("agent:") else key
+
+    def note(self, session: str) -> None:
+        super().note(self._agent_key(session) or session)
+
+    def pending(self, session: str, lane: str | None = None) -> list[asyncio.Task]:
+        return super().pending(self._agent_key(session) or session, lane)
+
+    # ---- context notes: what other threads did since this thread last looked
+
+    def _note_text(self, entries: list[Any]) -> str:
+        import time as _time
+
+        now, lines, cur = _time.time(), [NOTE_HEAD], None
+        for e in entries:
+            m = e.message
+            if m.role == "tool":
+                bad = [r for r in m.tool_results if r.is_error]
+                if bad:
+                    lines.append(f"  tool error: {_cut(bad[0].text(), 160)}")
+                continue
+            if e.session != cur:
+                cur = e.session
+                lines.append(f"In thread {self.thread_label(e.session)}, {_ago(e.created, now)}:")
+            text = m.text().strip()
+            if m.role == "user" and text:
+                who = "peer" if m.meta.get("peer") else "user"
+                lines.append(f"  {who}: {_cut(text, self.note_user_chars)}")
+            elif m.role == "assistant":
+                if text:
+                    lines.append(f"  you: {_cut(text, self.note_reply_chars)}")
+                for c in m.tool_calls:
+                    lines.append(f"  you ran {c.name}({_cut(json.dumps(c.arguments, ensure_ascii=False), 120)})")
+        return "\n".join(lines) if len(lines) > 1 else ""
+
+    def sync_thread(self, session: str, frontier: int) -> Message | None:
+        """Store a note in ``session`` with other threads' entries after ``frontier`` that it has not seen.
+        The note is thread-local (not in the log), so later calls replay the same bytes."""
+        agent = self._agent_key(session)
+        if agent is None:
+            return None
+        meta = self.store.get_meta(session)
+        seen = int(meta.get("seen_pos", 0))
+        last = self.store.last_pos(agent[6:])
+        if last <= seen:
+            return None
+        entries = [e for e in self.store.log(agent[6:], max(seen, frontier))
+                   if e.session != session and not e.hidden and e.kind not in ("private", "subagent")]
+        self.store.set_meta(session, {**meta, "seen_pos": last})
+        text = self._note_text(entries)
+        if not text:
+            return None
+        msg = Message.user(text)
+        msg.meta.update({"note": "threads", "local": True})
+        return self.store.append_message(session, msg)
+
+    # ---- one model call
+
+    async def build(self, session: str, system: str, settle: bool = True, recall: str = "",
+                    turn_id: str = "") -> list[Message]:
+        key = self._agent_key(session)
+        if key is None:
+            if recall:
+                system = (system + "\n\n" if system else "") + "# Recalled memory\n" + recall
+            return await super().build(session, system, settle)
+        self.note(key)
+        if settle:
+            await self.settle(key)
+        top = self._top(key)
+        frontier = top[-1].end if top else 0
+        parts = self._view_parts(top, "Log")
+        text = system
+        if parts:
+            text = (system + "\n\n" if system else "") + AGENT_VIEW_HEADER + "\n\n" + "\n\n".join(parts)
+        self.sync_thread(session, frontier)
+        tail = self._thread_tail(session, frontier)
+        if recall:
+            block = Message.user("# Recalled memory (for this turn)\n" + recall)
+            at = next((i for i, m in enumerate(tail) if turn_id and m.meta.get("turn_id") == turn_id
+                       and m.role == "user" and not m.meta.get("note")), None)
+            if at is None:
+                at = max((i for i, m in enumerate(tail) if m.role == "user" and not m.meta.get("note")), default=len(tail))
+            tail.insert(at, block)
+        out = [Message.system(text)] if text else []
+        if tail and tail[0].role == "assistant":
+            out.append(Message.user("(continuing the conversation summarized above)"))
+        return out + tail
+
+    def _thread_tail(self, session: str, frontier: int) -> list[Message]:
+        """This thread after the frontier, at least its last ``tail_messages``, never opening on a tool result."""
+        start = self.store.last_logged_seq(session, frontier)
+        start = min(start, max(0, self.store.last_seq(session) - self.tail_messages))
+        tail = self.store.messages(session, since=start)
+        while tail and tail[0].role == "tool" and start > 0:  # widen back to the call these results answer
+            start -= 1
+            tail = self.store.messages(session, since=start)
+        while tail and tail[0].role == "tool":
+            tail.pop(0)
+        return tail
