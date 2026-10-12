@@ -83,6 +83,9 @@ class Client:
                     yield ev
             except (httpx.TransportError, httpx.StreamError):
                 pass
+            except ClientError:  # a refusal or a 5xx while the core restarts: keep trying, never end the feed (D-045)
+                if not reconnect:
+                    raise
             if not reconnect:
                 return
             await asyncio.sleep(backoff)

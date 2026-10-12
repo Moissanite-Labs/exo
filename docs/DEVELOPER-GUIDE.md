@@ -87,7 +87,8 @@ After any change to the schema, regenerate the exports and commit them:
 
 `command.run` takes `name`, `args` and `session`. The core answers a few names itself, in
 `CoreEngine._builtin_command` in `src/exo/core/engine.py`: `context`, `compact`, `trace`, `findings`,
-`handoff_facts` and `harness_error`. Anything else goes to a command a plugin registered. To add one:
+`handoff_facts`, `harness_error` and `unsteer` (pull a queued steer message back; args is its id, empty means the
+newest; publishes `steer.cancelled`, D-045). Anything else goes to a command a plugin registered. To add one:
 
 1. For a core command, add a branch in `_builtin_command` and an entry in `_commands_list` so it shows in
    `commands.list`. Return a string, dict or list.

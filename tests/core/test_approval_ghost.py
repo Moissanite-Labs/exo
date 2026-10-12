@@ -1,0 +1,83 @@
+"""D-045: an approval card never outlives its request, and a queued steer can be pulled back."""
+from __future__ import annotations
+
+import asyncio
+
+from exo.core.engine import CoreEngine
+from exo.core.types import ToolCall
+from exo.protocol import schema as s
+from exo.server.app import Dispatcher
+
+FAKE = {"rules": [{"match": "hello", "steps": ["hi"]},
+                  {"match": "slow", "steps": [{"tool": "bash", "args": {"command": "sleep 2"}}, "done"]}]}
+
+
+def engine(tmp_path) -> CoreEngine:
+    return CoreEngine(tmp_path / "home", {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
+                      cwd=str(tmp_path), env={})
+
+
+def events_of(hub, kind):
+    return [e for e in hub.since(0) if e.type == kind]
+
+
+def test_cancelled_ask_publishes_resolved(tmp_path):
+    async def go():
+        eng = engine(tmp_path)
+        d = Dispatcher(eng, caller="principal:tui")
+        sid = (await d.run(s.Command.of(s.SessionCreate(title="t")))).result["session"]["id"]
+        task = asyncio.ensure_future(eng.ask(sid, "run it?", ToolCall(id="c1", name="bash", arguments={})))
+        await asyncio.sleep(0.05)
+        (req,) = events_of(d.hub, "approval.requested")
+        task.cancel()  # a stopped turn cancels the call that waits on the card
+        await asyncio.gather(task, return_exceptions=True)
+        (res,) = events_of(d.hub, "approval.resolved")
+        assert res.body.request_id == req.body.request_id and res.body.decision == "cancelled"
+        assert (await d.run(s.Command.of(s.ApprovalsList()))).result["approvals"] == []
+
+    asyncio.run(go())
+
+
+def test_answered_ask_publishes_resolved_once(tmp_path):
+    async def go():
+        eng = engine(tmp_path)
+        d = Dispatcher(eng, caller="principal:tui")
+        sid = (await d.run(s.Command.of(s.SessionCreate(title="t")))).result["session"]["id"]
+        task = asyncio.ensure_future(eng.ask(sid, "run it?", None))
+        await asyncio.sleep(0.05)
+        (req,) = events_of(d.hub, "approval.requested")
+        r = await d.run(s.Command.of(s.ApprovalRespond(request_id=req.body.request_id, decision="allow")))
+        assert r.ok, r.error
+        assert await task == "allow"
+        assert len(events_of(d.hub, "approval.resolved")) == 1
+
+    asyncio.run(go())
+
+
+def test_steer_can_be_cancelled_before_delivery(tmp_path):
+    async def go():
+        eng = engine(tmp_path)
+        d = Dispatcher(eng, caller="principal:tui")
+        sid = (await d.run(s.Command.of(s.SessionCreate(title="t")))).result["session"]["id"]
+        await d.run(s.Command.of(s.TurnSend(session=sid, text="slow")))
+        for _ in range(100):
+            if eng.loop.state(sid).running:
+                break
+            await asyncio.sleep(0.02)
+        one = (await d.run(s.Command.of(s.TurnSend(session=sid, text="first", mode="steer")))).result
+        two = (await d.run(s.Command.of(s.TurnSend(session=sid, text="second", mode="steer")))).result
+        assert one["steered"] and one["message_id"] and two["message_id"] != one["message_id"]
+        out = (await d.run(s.Command.of(s.CommandRun(name="unsteer", args=one["message_id"], session=sid)))).result
+        assert out["output"]["cancelled"] == [{"id": one["message_id"], "text": "first"}]
+        (ev,) = events_of(d.hub, "steer.cancelled")
+        assert ev.body.message_id == one["message_id"] and ev.body.text == "first"
+        newest = (await d.run(s.Command.of(s.CommandRun(name="unsteer", session=sid)))).result["output"]
+        assert [m["text"] for m in newest["cancelled"]] == ["second"]
+        again = (await d.run(s.Command.of(s.CommandRun(name="unsteer", session=sid)))).result["output"]
+        assert again["cancelled"] == []  # nothing left to pull back
+        while eng.loop.state(sid).running:
+            await asyncio.sleep(0.05)
+        texts = [m.text() for m in eng.store.messages(sid) if m.role == "user"]
+        assert texts == ["slow"]  # neither cancelled steer reached the conversation
+
+    asyncio.run(go())

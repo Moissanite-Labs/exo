@@ -52,6 +52,7 @@ COMMANDS = {
     "compact": ("session", "summarize now what is eligible in this agent's memory, then show tokens before and after"),
     "restart": ("session", "reopen this session in a new terminal tab and exit this one"),
     "stop": ("session", "stop the running turn (what was done is kept)"),
+    "unsteer": ("session", "pull your last queued steer message back into the composer, if it has not landed yet"),
     "exit": ("session", "quit"),
     "quit": ("session", "same as /exit"),
     "model": ("model", "pick the model for this session; /model <ref> sets it"),
@@ -130,6 +131,7 @@ class ExoApp(App):
         Binding("ctrl+r", "verdict('reject')", "reject", priority=True),
         Binding("escape", "escape", "esc", show=False),
         Binding("ctrl+c", "ctrl_c", "stop", show=False),
+        Binding("ctrl+g", "answer_card", "answer", priority=True, show=False),
         Binding("f6", "load_earlier", "earlier", priority=True, show=False),
     ]
 
@@ -184,6 +186,9 @@ class ExoApp(App):
         self.tools: dict[str, ToolBlock] = {}
         self.approvals: list[s.ApprovalRequested] = []
         self.card: ApprovalCard | None = None
+        self.reconcile_every = 3.0  # how often an open card is checked against the core's own list (D-045)
+        self._reconciled = 0.0
+        self.pending_steers: list[tuple[str, Block]] = []  # (message id, its transcript line) not yet delivered
         self.question: str | None = None
         self.running_tools = 0
         self.agents: dict[str, str] = {}
@@ -238,6 +243,7 @@ class ExoApp(App):
         self.composer.key_hook = self.composer_key
         self.composer.focus()
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
+        self.set_interval(1.0, self.reconcile_approvals)
         if self.motion:
             self.set_interval(10.0, self.update_guidance)  # a pause, not an animation; events also call it
             self.set_interval(0.12, self.tick)  # spinners, the live dot and the packet on the wire
@@ -494,6 +500,8 @@ class ExoApp(App):
             self.mark_dirty()
         elif isinstance(b, s.MessageCompleted):
             m = b.message
+            if m.role == "user" and m.id:
+                self.steer_landed(m.id)
             if m.role == "assistant":
                 text = m.text()
                 if text:
@@ -534,6 +542,8 @@ class ExoApp(App):
             self.approvals = [a for a in self.approvals if a.request_id != b.request_id]
             if self.card is not None and self.card.req.request_id == b.request_id:
                 self.close_card()
+        elif isinstance(b, s.SteerCancelled):
+            self.drop_pending_steer(b.message_id)
         elif isinstance(b, s.QuestionAsked):
             self.question = b.question_id
             opts = f" [{' / '.join(b.options)}]" if b.options else ""
@@ -784,6 +794,9 @@ class ExoApp(App):
                 return True
             return False
         row, last = c.cursor_location[0], c.document.line_count - 1
+        if key == "up" and not c.text and self.pending_steers:  # D-045: up pulls the queued steer back to edit
+            self.run_worker(self.unsteer(), exit_on_error=False)
+            return True
         if key == "up" and row == 0:
             v = self.hist.prev(c.text)
             if v is not None:
@@ -963,11 +976,56 @@ class ExoApp(App):
         if text.startswith("!"):
             cmd = text[1:].strip()
             send = f"Run this shell command with your shell tool and show me the output:\n{cmd}"
-        self.add(Block(shown, "user", steer=self.busy))
-        self.hint("steer" if self.busy else "first_message")
+        steering = self.busy
+        block = Block(shown, "user", steer=steering)
+        self.add(block)
+        self.hint("steer" if steering else "first_message")
         self.close_cur()
-        await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
-                                   mode="steer" if self.busy else "send"))
+        resp = await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
+                                          mode="steer" if steering else "send"))
+        if steering and resp.ok and resp.result.get("message_id"):  # queued, not delivered: it can be pulled back
+            self.pending_steers.append((resp.result["message_id"], block))
+            block.pending = True
+            block.flush()
+
+    def steer_landed(self, message_id: str) -> None:
+        """The steer reached the conversation (message.completed): it is no longer pending."""
+        for mid, block in self.pending_steers:
+            if mid == message_id:
+                self.pending_steers.remove((mid, block))
+                block.pending = False
+                if block.is_mounted:
+                    block.flush()
+                return
+
+    def drop_pending_steer(self, message_id: str) -> None:
+        for mid, block in self.pending_steers:
+            if mid == message_id:
+                self.pending_steers.remove((mid, block))
+                block.remove()
+                return
+
+    async def unsteer(self) -> bool:
+        """Pull the newest queued steer message back into the composer (D-045). Never stops the turn."""
+        if not self.session:
+            return False
+        if not self.pending_steers:
+            self.note("nothing queued to pull back: a steer lands at the next tool round", "hint")
+            return False
+        mid, block = self.pending_steers[-1]
+        resp = await self.post(s.CommandRun(name="unsteer", args=mid, session=self.session))
+        gone = (resp.result.get("output") or {}).get("cancelled", []) if resp.ok else []
+        if not gone:  # it landed while we asked
+            self.steer_landed(mid)
+            if resp.ok:
+                self.note("nothing queued to pull back: that steer already landed", "hint")
+            return False
+        self.drop_pending_steer(mid)
+        text = block.text
+        cur = self.composer.text
+        self.put((text + "\n" + cur) if cur.strip() else text)
+        self.composer.focus()
+        return True
 
     async def slash(self, name: str, args: str) -> None:
         if not self.busy:
@@ -984,6 +1042,8 @@ class ExoApp(App):
             self.exit()
         elif name == "stop":
             self.stop_turn()
+        elif name == "unsteer":
+            await self.unsteer()
         elif name == "restart":
             await self.restart()
         elif name == "peers":
@@ -1325,6 +1385,31 @@ class ExoApp(App):
             return
         self.card = ApprovalCard(self.approvals[0])
         self.query_one("#left").mount(self.card, before=self.query_one("#activity"))
+
+    def action_answer_card(self) -> None:
+        """ctrl+g: put the focus on the approval card from anywhere; the draft in the composer stays as it is."""
+        if self.card is not None and not self.modal_open():
+            self.card.focus()
+
+    async def reconcile_approvals(self) -> None:
+        """D-045: the core's list is the truth. A card whose request the core no longer holds (a missed
+        approval.resolved, a restarted core, a replayed old request) is removed instead of lingering."""
+        if not (self.approvals or self.card) or not self.session:
+            return
+        now = time.monotonic()
+        if now - self._reconciled < self.reconcile_every:
+            return
+        self._reconciled = now
+        try:
+            resp = await self.client.send(s.ApprovalsList(session=self.session))
+        except Exception:
+            return
+        if not resp.ok:
+            return
+        live = {a.get("request_id") for a in resp.result.get("approvals", [])}
+        self.approvals = [a for a in self.approvals if a.request_id in live]
+        if self.card is not None and self.card.req.request_id not in live:
+            self.close_card()
 
     def close_card(self) -> None:
         if self.card is not None:

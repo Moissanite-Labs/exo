@@ -54,11 +54,17 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   1781 → 153 tok` and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic
   (a `notice` that starts with `tip`).
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
-  `[y] allow [n] deny [a] allow always`; the keys work when the composer is not focused. Taste, diff and the
+  `[y] allow [n] deny [a] allow always`; the keys work when the composer is not focused. The page replaces its cards with the server's list on every thread open and every stream reconnect, and the server asks the core first, so a card the core no longer holds is dropped (D-045). Taste, diff and the
   other panels are cold. A peer message has the sender in the header, a grey rule and the line "from another
   session, not from you": it never looks like the user. Panels and new transcript items reveal on arrival.
 - **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
-  `›` while a turn runs, a cut-corner Send.
+  `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
+  box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
+  (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it.
+- **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
+  retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
+  already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
+  the whole page history, so streamed text doubled. A stale page token shows "page link expired" in the corner.
 - **Boot.** Four lines go green as real calls answer: core, agent, memory (message count on record), model
   route. A line the server cannot answer stays dim as `unavailable`. Skipped under reduced motion, with
   `?boot=0`, and after the first time in a tab.

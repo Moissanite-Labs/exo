@@ -325,6 +325,11 @@ export interface SessionUpdated {
 export interface SkillsList {
 }
 
+export interface SteerCancelled {
+  message_id: string;
+  text?: string;
+}
+
 export interface TaskUpdated {
   task_id: string;
   title?: string;
@@ -488,6 +493,7 @@ export interface EventBodies {
   "tool.completed": ToolCompleted;
   "approval.requested": ApprovalRequested;
   "approval.resolved": ApprovalResolved;
+  "steer.cancelled": SteerCancelled;
   "question.asked": QuestionAsked;
   "context.compacted": ContextCompacted;
   "memory.summarized": MemorySummarized;

@@ -890,3 +890,34 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Failover:** `SharedClient._failover` runs the socket probe, the engine start and the wait for another window in
   a thread, so the terminal keeps drawing.
 - **Docs:** user guide, UI, COMMANDS, WEB, JOBS, TRACE, ONBOARDING, the site, the whitepaper and the intro skill.
+
+## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Why:** the principal reported an approval card stuck on screen in the terminal and on the web with nothing pending in
+  the core, a card the terminal could not answer, a web chat that stopped responding, and wanted to cancel a queued steer.
+- **Stuck card, core:** `CoreEngine.ask` published `approval.resolved` only from the respond path. A turn stopped or
+  cancelled while the card was open (ctrl+c, `/stop`, a peer hold that expired) closed nothing in the clients. Now one
+  `announce_resolved` runs on every exit, once per request: answered, expired, or `cancelled` by `core`.
+- **Stuck card, web:** the web server keeps a mirror of open approvals built from replayed events, and the page merged
+  that list into what it held and never removed anything. A request replayed from the log after a core restart (no
+  resolved event was ever written) came back on every refresh. Now `CommandCentre.reconcile_approvals` compares the
+  mirror with `approvals.list` at bootstrap and before `/api/section/approvals` answers (only requests older than the
+  call are dropped), and the page replaces its cards with that list on each thread open and stream reconnect. A 404
+  on answering also removes the card. A resolved id is remembered so a late replay cannot bring it back.
+- **Stuck card, terminal:** the window had no check against the core. It now asks `approvals.list` every 3 s while a
+  card is open and drops any it no longer holds. The card was reachable by Tab, but only that way: `ctrl+g` now moves
+  focus to it from anywhere and the card says "tab, click or ctrl+g". The shared-socket path as the principal (second
+  window, `X-Exo-Principal`) is covered by a test and works.
+- **Web chat stopped:** `/api/events` took `?since=` before `Last-Event-ID`. A browser that reconnects by itself repeats
+  its first URL, so every dropped connection replayed the whole history from page load and `message.delta` text doubled.
+  The server now resumes from the later of the two and the page ignores a seq it has handled. A browser EventSource also
+  never retries after an HTTP error (403 after the web server restarts with a new token, 502 while the core restarts), so
+  the page listened to nothing. `bus.js` now reopens the stream itself with backoff from the last seq, and shows "page
+  link expired" on a 403. Terminal: `Client.events(reconnect=True)` let a `ClientError` (non-200) end the feed for good;
+  it and `SharedClient.events` now back off and retry.
+- **Cancel a queued steer:** the command cap is full, so it is a `command.run` built-in, `unsteer` (args: message id,
+  empty means the newest), and one new event, `steer.cancelled` (29 events, still under the cap of 30). `turn.send`
+  in steer mode now returns `message_id`. The terminal shows `steer queued ›`; Up in an empty composer or `/unsteer`
+  pulls it back into the composer. The web shows a chip above the box with an `×` and Up does the same. A steer that
+  landed first answers "nothing queued" and is not removed twice. Esc is not used (D-043).
+- **Not changed:** the gate, approval identity (D-033, D-039) and the page token.
+- **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.

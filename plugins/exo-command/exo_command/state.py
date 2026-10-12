@@ -168,7 +168,7 @@ class State:
         rid = b.get("request_id")
         self.approvals[rid] = {"request_id": rid, "session": sid, "summary": b.get("summary") or "",
                                "risk": b.get("risk") or "medium", "call": b.get("call"),
-                               "options": b.get("options") or [], "requested_at": ts}
+                               "options": b.get("options") or [], "requested_at": ts, "seq": self.seq}
         if sid:
             self._session(sid)["pending_approvals"] += 1
 
@@ -180,6 +180,10 @@ class State:
         if a.get("session") and a["session"] in self.sessions:
             s = self.sessions[a["session"]]
             s["pending_approvals"] = max(0, s["pending_approvals"] - 1)
+
+    def forget_approval(self, rid: str) -> None:
+        """The core no longer holds this request (D-045): drop it as a resolution nobody announced."""
+        self._on_approval_resolved(None, {"request_id": rid, "decision": "gone", "by": "core"}, None)
 
     def _on_task_updated(self, sid, b, ts):
         tid = b.get("task_id")

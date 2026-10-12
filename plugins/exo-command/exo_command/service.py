@@ -61,8 +61,25 @@ class CommandCentre:
         self.state.load_sessions((await self._optional(s.SessionList(limit=SESSION_LIMIT))).get("sessions") or [])
         self.state.load_tasks((await self._optional(s.TasksList())).get("tasks") or [])
         self.state.seq = max(self.state.seq, int(replay.get("seq") or 0))
+        await self.reconcile_approvals()
         self.connected, self.last_error = True, None
         self._notify()
+
+    async def reconcile_approvals(self) -> None:
+        """D-045: the core's open list is the truth. A request replayed from the log whose answer was never
+        announced (a restarted core, a cancelled turn on an older core) must not stay on the page as a card."""
+        seq0 = self.state.seq
+        try:
+            res = await self._need_source().call(s.ApprovalsList())
+        except Exception:
+            return  # an older core without the command, or down: the events still apply
+        live = {a.get("request_id") for a in res.get("approvals") or []}
+        stale = [rid for rid, a in self.state.approvals.items()
+                 if rid not in live and int(a.get("seq") or 0) <= seq0]
+        for rid in stale:
+            self.state.forget_approval(rid)
+        if stale:
+            self._notify()
 
     async def _optional(self, body: Any) -> Dict[str, Any]:
         try:

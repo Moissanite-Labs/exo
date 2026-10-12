@@ -46,3 +46,37 @@ def test_second_window_joins_then_takes_over(home):
         assert isinstance(two.inner, LocalClient)
         await two.aclose()
     asyncio.run(go())
+
+
+def test_joined_window_answers_an_approval_as_principal_and_sees_it_close(home):
+    """D-045: the approval card of a window that joined the core works end to end over the shared socket with the
+    principal credential, and the resolved event reaches that window's own stream."""
+    async def go():
+        one = connect()
+        sid = (await one.call(s.SessionCreate(title="A")))["session"]["id"]
+        two = connect()
+        assert isinstance(two, SharedClient)
+        seen: list[str] = []
+
+        async def watch():
+            async for ev in two.events(since=0):
+                seen.append(ev.type)
+                if ev.type == "approval.resolved":
+                    return
+
+        w = asyncio.ensure_future(watch())
+        ask = asyncio.ensure_future(one.engine.ask(sid, "run it?", None))
+        for _ in range(100):
+            rows = (await two.call(s.ApprovalsList()))["approvals"]
+            if rows:
+                break
+            await asyncio.sleep(0.02)
+        assert rows, "the joined window sees the open approval"
+        await two.call(s.ApprovalRespond(request_id=rows[0]["request_id"], decision="allow", client="tui"))
+        assert await asyncio.wait_for(ask, 5) == "allow"
+        await asyncio.wait_for(w, 5)
+        assert "approval.requested" in seen and "approval.resolved" in seen
+        assert (await two.call(s.ApprovalsList()))["approvals"] == []
+        await one.aclose()
+        await two.aclose()
+    asyncio.run(go())

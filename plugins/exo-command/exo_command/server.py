@@ -204,6 +204,8 @@ class WebServer:
             name = path[len("/api/section/"):]
             if name not in SECTIONS:
                 return await self._json(writer, 404, {"error": "unknown section {!r}".format(name)})
+            if name == "approvals":   # D-045: ask the core first, so a card it no longer holds is not served
+                await c.reconcile_approvals()
             return await self._json(writer, 200, c.section(name, fresh=q.get("fresh", ["false"])[0] == "true"))
         if path == "/api/stream" and method == "GET":
             return await self._sse(writer)
@@ -212,8 +214,10 @@ class WebServer:
                 return await self._json(writer, 405, {"error": "POST only"})
             return await self._approve(reader, writer, headers, path[len("/api/approvals/"):])
         if path == "/api/events" and method == "GET":
-            raw = (q.get("since") or [headers.get("last-event-id") or "0"])[0]
-            since = int(raw) if raw.isdigit() else 0
+            # A browser that reconnects by itself repeats the first URL (its old ?since=) and adds Last-Event-ID:
+            # resume from the later of the two, or every dropped connection replays the page's whole history (D-045).
+            raws = [(q.get("since") or ["0"])[0], headers.get("last-event-id") or "0"]
+            since = max([int(r) for r in raws if r.isdigit()] or [0])
             return await self._events(writer, since, (q.get("session") or [None])[0])
         if path == "/api/providers" or path.startswith("/api/providers/"):
             return await self._providers(reader, writer, headers, method, path)

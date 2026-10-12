@@ -47,7 +47,7 @@ function show(id) {
 }
 
 bus.onState((s) => {
-  connText.textContent = s.connected ? "live" : "reconnecting";
+  connText.textContent = s.connected ? "live" : s.denied ? "page link expired: reopen the link exo web printed" : "reconnecting";
   led.className = "xc-dot " + (s.connected ? "ok" : "");
 });
 

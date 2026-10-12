@@ -25,7 +25,7 @@ seats. `exo.gate` is the action gate (`docs/GATE.md`). `exo.ingest` imports past
 
 ## The protocol in numbers
 
-`src/exo/protocol/schema.py` is the source of truth. It holds 30 commands (the cap, all used) and 28 event types (the
+`src/exo/protocol/schema.py` is the source of truth. It holds 30 commands (the cap, all used) and 29 event types (the
 tests require fewer than 30). `tests/docs/test_docs_map.py` checks these two numbers against the schema, so this paragraph cannot go
 stale without a failing test. After a schema change, run `python -m exo.protocol.export --check`.
 

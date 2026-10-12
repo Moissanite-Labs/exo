@@ -144,10 +144,23 @@ class Loop:
         st.steer.append(msg)
         return True
 
+    def unsteer(self, session: str, message_id: str = "") -> list[Message]:
+        """Pull queued steer messages back before they are delivered (D-045): the one with ``message_id``, or
+        with no id the newest. A message already added to the conversation is not here any more: nothing is
+        removed and the list is empty."""
+        st = self.state(session)
+        if message_id:
+            gone = [m for m in st.steer if m.id == message_id]
+        else:
+            gone = st.steer[-1:]
+        for m in gone:
+            st.steer.remove(m)
+        return gone
+
     async def send(self, session: str, text: str = "", parts: list[ContentPart] | None = None,
                    mode: str = "send", meta: dict[str, Any] | None = None) -> TurnResult | None:
         """Run a turn. ``steer`` while a turn runs injects the message between tool
-        rounds and returns None; ``queue`` and ``send`` wait for the running turn."""
+        rounds and returns None (the message is the newest of ``state(session).steer``); ``queue`` and ``send`` wait for the running turn."""
         if self.store.get_session(session) is None:
             raise KeyError(session)
         self.store.assert_open(session)
@@ -161,6 +174,7 @@ class Loop:
         msg.meta.setdefault("author", provenance.infer("user", msg.meta))
         st = self.state(session)
         if mode == "steer" and st.running:
+            msg.id = msg.id or new_id("m")  # a client can name it to cancel it (D-045)
             st.steer.append(msg)
             return None
         async with st.lock:

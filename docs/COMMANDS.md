@@ -44,6 +44,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/cwd` | Show this session's working folder. | none | `session.get` |
 | `/restart` | Reopen this session in a new terminal tab and quit this one. | none | `ExoApp.restart`, `clients/tui/exo_tui/restart.py` |
 | `/stop` | Stop the running turn (same as ctrl+c). | none | `ExoApp.stop_turn` |
+| `/unsteer` | Pull your newest queued steer message back into the composer, if it has not landed yet (Up in an empty composer does the same). Never stops the turn. | none | `ExoApp.unsteer` (`command.run` built-in `unsteer`) |
 | `/exit` | Quit. | none | `ExoApp.slash` |
 | `/quit` | Same as `/exit`. | none | same |
 | `/model` | Pick the model for this session, or set it. | `<ref>` sets it. `default <ref>` sets the default. | `ExoApp.set_model` (`models.list`, `models.set`) |
