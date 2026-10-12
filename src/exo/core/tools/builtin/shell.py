@@ -177,10 +177,11 @@ def bash(args: dict[str, Any], ctx: ToolContext) -> str:
 
 def register(reg: Registry) -> None:
     reg.tool("bash", "Run a shell command with bash -c. stdout and stderr are merged; long output "
-             f"keeps the head and tail. Default timeout {DEFAULT_TIMEOUT}s (max {MAX_TIMEOUT}); on "
-             "timeout the whole process group is killed. Not interactive: stdin is closed.",
+             f"keeps the head and tail. Default timeout {DEFAULT_TIMEOUT}s (max {MAX_TIMEOUT}; larger "
+             "values are rejected); on timeout the whole process group is killed. Not interactive: "
+             "stdin is closed. macOS has no `timeout` command, so use the timeout parameter.",
              {"type": "object", "properties": {
                  "command": {"type": "string"},
-                 "timeout": {"type": "number", "description": "Seconds before the command is killed"},
+                 "timeout": {"type": "number", "description": f"Seconds before the command is killed (max {MAX_TIMEOUT}; larger values are rejected)"},
                  "cwd": {"type": "string", "description": "Working folder (default session cwd)"}},
               "required": ["command"]}, risk="high", toolset="shell")(bash)

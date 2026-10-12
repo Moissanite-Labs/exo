@@ -297,3 +297,70 @@ def test_status_shows_findings_and_event_errors_reach_the_core(tmp_path):
                                 for e in eng.hub.since(0)), pilot)
 
     run(tmp_path, sc)
+
+
+def test_help_lists_every_registered_command(tmp_path):
+    from exo_tui.app import COMMANDS, GROUPS
+
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "/help")
+        await until(lambda: "/help" in app.transcript_text(), pilot)
+        lines = [ln.strip() for ln in app.help_text().splitlines()]
+        for name in [*COMMANDS, *(c["name"] for c in app.commands)]:
+            assert any(ln.startswith(f"/{name}  ") for ln in lines), name
+        assert all(f"{g}:" in lines for g in GROUPS)
+        assert {"restart", "default", "new", "resume", "sessions", "clear", "quit", "cwd", "usage"} <= set(COMMANDS)
+
+    run(tmp_path, sc)
+
+
+def test_model_flag_text_is_rejected(tmp_path):
+    async def sc(app, pilot, client, eng):
+        before = app.model
+        await send(app, pilot, "/model --default fake:x")
+        await until(lambda: "not a model ref" in app.transcript_text(), pilot)
+        assert app.model == before and not any(isinstance(b, s.ModelsSet) for b in app.sent)
+        await send(app, pilot, "/model nope:thing")  # unknown provider: the engine says bad_model
+        await until(lambda: "bad_model" in app.transcript_text(), pilot)
+        assert app.model == before
+
+    run(tmp_path, sc)
+
+
+def test_default_model_persists_with_fallbacks(tmp_path):
+    import json
+
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "/model default fake:y")
+        await until(lambda: "default model: fake:y" in app.transcript_text(), pilot)
+        cfg = json.loads((tmp_path / "home" / "config.json").read_text())
+        assert cfg["models"]["roles"]["main"] == ["fake:y", "fake:x"]
+
+    eng_providers = None  # noqa: F841
+    run(tmp_path, sc)
+
+
+def test_session_update_does_not_clobber_model_in_use(tmp_path):
+    async def sc(app, pilot, client, eng):
+        app.model = "p:in-use"
+        info = s.SessionInfo(id=app.session, model="p:stored")
+        app.handle(s.Event.of(s.SessionUpdated(session=info), 1, app.session))
+        assert app.model == "p:in-use"
+
+    run(tmp_path, sc)
+
+
+def test_restart_schedules_new_tab_and_exits(tmp_path, monkeypatch):
+    from exo_tui import restart as rs
+    calls = []
+    monkeypatch.setattr(rs, "schedule_restart", lambda cmd, pid=None: calls.append(cmd))
+    monkeypatch.setattr(rs, "has_opener", lambda *a, **k: True)
+    monkeypatch.setenv("EXO_RESTART_CMD", "exo-canary /work")
+
+    async def sc(app, pilot, client, eng):
+        sid = app.session
+        await send(app, pilot, "/restart")
+        await until(lambda: calls, pilot)
+        assert calls[0] == ["exo-canary", "/work", "--session", sid]
+
+    run(tmp_path, sc)
