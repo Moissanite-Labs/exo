@@ -1,0 +1,27 @@
+section: quality-bar
+node: mind/quality-bar
+title: What done means to the principal
+type: preference
+summary: The principal's quality bar for finished work, from the onboarding interview.
+load_when: Before calling any piece of work finished or sending it for review.
+stability: durable
+order: 50
+questions:
+  - id: quality.done
+    ask: What does done mean to you? What must be true before an agent says a task is finished?
+    why: Stops half-finished work being reported as done.
+    covers: [quality.done]
+    weight: 5
+    imagined: ["Tested and working", "Reviewed by me", "Shipped and verified live"]
+  - id: quality.tradeoff
+    ask: When speed and polish pull apart, which do you usually want?
+    why: A default for the most common trade-off.
+    covers: [quality.tradeoff]
+    weight: 4
+    imagined: ["Speed, fix later", "Polish, take the time", "Depends on whether it is public"]
+  - id: quality.example
+    ask: Name one piece of work, by anyone, that meets your bar. What makes it good?
+    why: A concrete example carries more than a rule.
+    covers: [quality.example]
+    weight: 3
+    imagined: ["A product", "A document", "A codebase"]

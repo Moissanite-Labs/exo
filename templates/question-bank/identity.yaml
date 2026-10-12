@@ -1,0 +1,41 @@
+# Question bank: identity. Generic for any principal (D-004). Answers land in the node below as
+# low-confidence `a-said` beliefs. Schema: see docs/ONBOARDING.md.
+section: identity
+node: person/identity
+title: Who the principal is
+type: fact
+summary: Who the principal is, in their own words from the onboarding interview.
+load_when: Any task that needs to know who the principal is, their role or their organisations.
+stability: durable
+order: 10
+questions:
+  - id: identity.name
+    ask: What should your agents call you, and is there a short name they should use in chat?
+    why: Every report and draft addresses you by name.
+    covers: [identity.name]
+    weight: 5
+    imagined: ["Full name only", "A short nickname", "Initials"]
+  - id: identity.role
+    ask: In one or two sentences, what do you do and for which organisations?
+    why: Your role decides which work is yours and which is delegable.
+    covers: [identity.role, identity.orgs]
+    weight: 5
+    imagined: ["Founder of one company", "Employee on a team", "Several roles at once"]
+    followups:
+      - id: identity.orgs-detail
+        ask: Which of those organisations should agents act for, and which only observe?
+        covers: [identity.orgs-scope]
+        weight: 3
+        when_matches: "(?i)\\b(and|also|several|companies|clients|both)\\b"
+  - id: identity.base
+    ask: Where are you based, and which time zone should agents plan in?
+    why: Scheduling, quiet hours and deadlines depend on it.
+    covers: [identity.timezone]
+    weight: 4
+    imagined: ["One fixed time zone", "Travels often", "Splits time between two places"]
+  - id: identity.background
+    ask: What background should an agent know so it does not explain things you already know well?
+    why: Sets the level of explanation in every answer.
+    covers: [identity.expertise]
+    weight: 3
+    imagined: ["Deep technical", "Business and operations", "Mixed"]

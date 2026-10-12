@@ -1,6 +1,9 @@
 """exo command line.
 
-  exo init <id> [--from-template [PATH]]   create an empty principal store
+  exo init <id> [--from-template [PATH]] [--interview]   create a principal store
+  exo interview                            ask the next onboarding questions
+  exo import-store <path> [--id ID]        adopt an existing store (copied)
+  exo config [get|set ...]                 read or change config.json
   exo find <words...> [-n 8]               ranked nodes
   exo get <id> [--body-only]               print one node
   exo ctx <words...> [--budget 1500]       best nodes packed under a token budget
@@ -32,6 +35,8 @@ from .ask import register as register_ask, cmd_ask  # noqa: F401
 from .eval import register as register_eval, cmd_eval  # noqa: F401
 from .brief import register as register_brief, cmd_brief  # noqa: F401
 from .consolidate import register as register_consolidate, cmd_consolidate, cmd_proposals  # noqa: F401
+from .onboard import (register as register_onboard, add_init_args, cmd_init as onboard_init,  # noqa: F401
+                      cmd_interview, cmd_import_store, cmd_config)
 
 
 def key_path(name: str) -> Path:
@@ -170,6 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('id')
     p.add_argument('--from-template', nargs='?', const='', default='', metavar='PATH',
                    help='template directory (default: the bundled empty store)')
+    add_init_args(p)
 
     p = sp.add_parser('find', parents=[common]); p.add_argument('words', nargs='+'); p.add_argument('-n', type=int, default=8)
     p = sp.add_parser('get', parents=[common]); p.add_argument('id'); p.add_argument('--body-only', action='store_true')
@@ -202,13 +208,18 @@ def build_parser() -> argparse.ArgumentParser:
     register_eval(sp, common)
     register_brief(sp, common)
     register_consolidate(sp, common)
+    register_onboard(sp, common)
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
     a = build_parser().parse_args(argv)
     if a.cmd == 'init':
-        return cmd_init(a)
+        return onboard_init(a)
+    if a.cmd == 'import-store':
+        return cmd_import_store(a)
+    if a.cmd == 'config':
+        return cmd_config(a)
     if a.cmd == 'keygen':
         return cmd_keygen(a)
     store = resolve_store(a)

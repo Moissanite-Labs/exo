@@ -37,5 +37,18 @@ except ImportError:  # loaded as a plain module rather than a package
 
 def register(ctx) -> None:
     ctx.register_context_engine(ExoContextEngine())
-    ctx.register_command('exo', handle, description='Exo sessions: branch, handoff, resume',
-                         args_hint='branch|handoff|resume <topic>')
+    from exo.dispatcher import register_root, register_subcommand
+    try:
+        from .exo_context.commands import cmd_branch, cmd_handoff, cmd_resume
+    except ImportError:
+        from exo_context.commands import cmd_branch, cmd_handoff, cmd_resume  # type: ignore[no-redef]
+    P = 'exo-context'
+    register_subcommand('branch', lambda rest: cmd_branch(rest),
+                        'Write a handoff and print the line that starts a fresh session on it.',
+                        plugin=P, args_hint='<topic>')
+    register_subcommand('handoff', lambda rest: cmd_handoff(rest),
+                        'Write a handoff for this session.', plugin=P, args_hint='[topic]')
+    register_subcommand('resume', lambda rest: cmd_resume(rest),
+                        'Load the newest handoff for a topic (or a path) into this session.',
+                        plugin=P, args_hint='<topic>')
+    register_root(ctx)  # no-op when exo-memory already registered /exo

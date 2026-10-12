@@ -1,0 +1,27 @@
+section: rhythm
+node: relationship/rhythm
+title: The principal's working rhythm
+type: preference
+summary: When the principal works, how they hand off, and how sessions should run, from the interview.
+load_when: Scheduling, choosing when to report, or deciding whether to wait for the principal.
+stability: volatile
+order: 70
+questions:
+  - id: rhythm.hours
+    ask: When are you usually working, and when should agents stay quiet?
+    why: Sets quiet hours and when to batch reports.
+    covers: [rhythm.hours]
+    weight: 4
+    imagined: ["Office hours", "Late nights", "Irregular"]
+  - id: rhythm.brief
+    ask: Do you want a regular brief? If so, when, and what should it cover?
+    why: Decides the summary rhythm (principle 16).
+    covers: [rhythm.brief]
+    weight: 3
+    imagined: ["Morning brief", "End of day", "Weekly only"]
+  - id: rhythm.away
+    ask: When you step away for hours or days, what should agents keep doing and what should they pause?
+    why: Agents keep working while you are away; this sets the limits.
+    covers: [rhythm.away]
+    weight: 4
+    imagined: ["Keep going on agreed work", "Pause everything", "Only finish what is started"]

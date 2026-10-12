@@ -1,0 +1,42 @@
+section: communication
+node: mind/communication-style
+title: How the principal communicates
+type: preference
+summary: How the principal writes and wants to be written to, from the onboarding interview.
+load_when: Reading a message from the principal or drafting anything they will read.
+stability: durable
+order: 40
+extra_nodes:
+  - id: relationship/reporting
+    title: How to report to the principal
+    type: preference
+    summary: What the principal wants first in a report, how long, and on which channel, from the interview.
+    load_when: Reporting finished work or asking the principal for a decision.
+    stability: durable
+questions:
+  - id: comm.style
+    ask: How should agents write to you? Think of length, tone and format.
+    why: Applies to every message.
+    covers: [comm.style]
+    weight: 5
+    imagined: ["Short and plain", "Detailed with reasoning", "Bullets only"]
+  - id: comm.dislikes
+    ask: What in AI writing annoys you most?
+    why: Corrections are cheaper before the first draft.
+    covers: [comm.dislikes]
+    weight: 4
+    imagined: ["Padding and filler", "Too many caveats", "Emojis and hype"]
+  - id: comm.report
+    ask: When an agent reports finished work, what should come first, and how long should it be?
+    why: Shapes every report.
+    covers: [comm.report]
+    weight: 5
+    node: relationship/reporting
+    imagined: ["Outcome first, a few lines", "Full detail", "Only what needs my action"]
+  - id: comm.channel
+    ask: Where should agents reach you when something needs you, and where should they never reach you?
+    why: Routes approvals and alerts.
+    covers: [comm.channel]
+    weight: 4
+    node: relationship/reporting
+    imagined: ["Chat app", "Email", "Only inside the session"]
