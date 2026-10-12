@@ -73,6 +73,10 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
     cache_dir = Path(home) / 'cache' / 'models'
     for st in router.providers_status():
         name, spec = st['provider'], router.providers.get(st['provider'], {})
+        if spec.get('transport') == 'claude-cli':  # static list; offered only when the binary is on PATH
+            if router.credentials(name):
+                out += [{'route': f'{name}:{m}', 'provider': name} for m in spec.get('models') or []]
+            continue
         if (spec.get('transport', 'openai') != 'openai' or spec.get('local') or st.get('key') != 'yes'
                 or (st.get('roles') and 'main' not in st['roles'])):  # e.g. decision-only providers
             continue
