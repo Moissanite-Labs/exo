@@ -360,6 +360,22 @@ def test_default_model_persists_with_fallbacks(tmp_path):
     run(tmp_path, sc)
 
 
+def test_default_without_arg_opens_picker_and_sets_default(tmp_path):
+    import json
+
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "/default")
+        await until(lambda: isinstance(app.screen, Palette), pilot)
+        assert "default" in app.screen.placeholder
+        assert any(v == "fake:x" for _, v in app.screen.items)
+        await pilot.press("enter")
+        await until(lambda: "default model: fake:x" in app.transcript_text(), pilot)
+        cfg = json.loads((tmp_path / "home" / "config.json").read_text())
+        assert cfg["models"]["roles"]["main"][0] == "fake:x"
+
+    run(tmp_path, sc)
+
+
 def test_session_update_does_not_clobber_model_in_use(tmp_path):
     async def sc(app, pilot, client, eng):
         app.model = "p:in-use"
