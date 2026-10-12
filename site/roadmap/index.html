@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exo roadmap: Exo evolves</title>
+<meta name="description" content="Where Project Exo is going: the flywheel, what is built and what comes next, the house taste, exopet, an agent-native forge, credit for accepted work, a fair resolver, a compute network for idle work, and a local-first future.">
+<meta name="theme-color" content="#08090a">
+<link rel="canonical" href="https://exo.askaconsult.com/roadmap/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Project Exo">
+<meta property="og:url" content="https://exo.askaconsult.com/roadmap/">
+<meta property="og:title" content="Exo roadmap: Exo evolves">
+<meta property="og:description" content="The big ideas and future plans for Project Exo, with what is built today and what is still being explored.">
+<meta property="og:image" content="https://exo.askaconsult.com/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://exo.askaconsult.com/og.png">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="stylesheet" href="../assets/style.css">
+<link rel="stylesheet" href="roadmap.css">
+<script>document.documentElement.classList.add("js")</script>
+<script src="../assets/main.js" defer></script>
+<script src="../brand/egg.js" defer></script>
+<script src="roadmap.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" id="top">
+  <div class="wrap nav__in">
+    <a class="brand" href="../" aria-label="Project Exo, home">
+      <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg>
+      <span>EXO</span>
+    </a>
+    <nav aria-label="Pages">
+      <ul class="nav__links">
+        <li><a href="../">Overview</a></li>
+        <li><a class="nav__page" href="../cli/">Terminal</a></li>
+        <li><a class="nav__page" href="../app/">Web app</a></li>
+        <li><a class="nav__page" href="../roadmap/" aria-current="page">Roadmap</a></li>
+        <li><a class="nav__paper" href="../whitepaper/">Whitepaper</a></li>
+      </ul>
+    </nav>
+    <a class="btn btn--sm" href="https://github.com/aska-digital/exo" rel="noopener">Repository <span class="tag">private preview</span></a>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- HERO -->
+<section class="hero hero--sub rm-hero" aria-labelledby="hero-title">
+  <canvas class="rm-hero__egg" aria-hidden="true"></canvas>
+  <div class="hero__grid" aria-hidden="true"></div>
+  <div class="wrap hero__in">
+    <p class="crumb"><a href="../">Project Exo</a> · Roadmap</p>
+    <h1 id="hero-title" class="hero__title">Exo evolves.</h1>
+    <p class="hero__lede">Exo starts as one person's harness: a signed memory, a gate that asks before it acts, and a taste that fits you. This page lays out where it goes from there. Some of it is built and in daily use. Some of it is designed. Some of it is an idea we are still testing. Each part says which.</p>
+    <div class="hero__cta">
+      <a class="btn btn--primary" href="#flywheel">The flywheel <span aria-hidden="true">→</span></a>
+      <a class="btn" href="#roadmap">Now, next, horizon</a>
+      <a class="btn" href="#refs">References</a>
+    </div>
+    <dl class="readout" aria-label="Status key">
+      <div><dt>Built</dt><dd><span class="led led--on"></span>In daily use</dd></div>
+      <div><dt>Designed</dt><dd><span class="led rm-led--designed"></span>Written and reviewed</dd></div>
+      <div><dt>Exploring</dt><dd><span class="led rm-led--exploring"></span>An idea under test</dd></div>
+    </dl>
+    <p class="rm-hero__note">The figure is the Exo egg, drawn from the incentre lattice. It grows as you read: by the end of the page it reaches its fourth dimension.</p>
+  </div>
+</section>
+
+<!-- the egg that follows the reader -->
+<aside class="rm-pet" aria-hidden="true">
+  <canvas class="rm-pet__cv"></canvas>
+  <span class="rm-pet__k">Stage <b class="rm-pet__n">0.0</b><i class="rm-pet__name">egg</i></span>
+</aside>
+
+<!-- 01 FLYWHEEL -->
+<section class="section" id="flywheel" aria-labelledby="fly-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">01 / The flywheel</p>
+      <h2 id="fly-t">One loop, seen from six sides.</h2>
+      <p class="sec-lede">The ideas on this page are not separate products. They are one loop. Each turn makes the next one cheaper: better tools draw more people, more people do more work, and the record of that work teaches the tools. The smallest version of the loop is <strong>Exo builds Exo</strong>: people run Exo, their agents propose fixes to Exo itself, and accepted work earns credit.</p>
+    </header>
+    <div class="rm-fly">
+      <figure class="rm-fly__fig reveal">
+        <svg class="rm-fly__svg" viewBox="0 0 640 640" role="img" aria-labelledby="fly-svg-t">
+          <title id="fly-svg-t">The Exo flywheel: harness, work, forge, credit, hub, learning, and back to the harness.</title>
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#ff5b14"/></marker>
+            <radialGradient id="flyglow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#ff5b14" stop-opacity=".18"/><stop offset="1" stop-color="#ff5b14" stop-opacity="0"/></radialGradient>
+          </defs>
+          <circle cx="320" cy="320" r="300" fill="url(#flyglow)"/>
+          <circle class="rm-fly__ring" cx="320" cy="320" r="220"/>
+          <g class="rm-fly__arcs"></g>
+          <circle class="rm-fly__packet" cx="320" cy="100" r="7"/>
+          <g class="rm-fly__core">
+            <text x="320" y="300" class="rm-fly__ck">THE WEDGE</text>
+            <text x="320" y="334" class="rm-fly__ct">Exo builds Exo</text>
+            <text x="320" y="362" class="rm-fly__cs">a loop that improves its own tools</text>
+          </g>
+          <g class="rm-fly__nodes"></g>
+        </svg>
+      </figure>
+      <ol class="rm-fly__list">
+        <li data-i="0"><span class="rm-fly__n">01</span><div><h3>Harness</h3><p>Exo runs your agents with one memory, a gate and a signed record. Work starts here, so credit can be recorded here, at the source, for free.</p></div></li>
+        <li data-i="1"><span class="rm-fly__n">02</span><div><h3>Work</h3><p>When an agent hits a problem, it drafts a fix. You see the exact text before anything leaves your machine.</p></div></li>
+        <li data-i="2"><span class="rm-fly__n">03</span><div><h3>Forge</h3><p>The fix lands where code lives, with a signed receipt: which agent, which model, what it cost, what checks passed.</p></div></li>
+        <li data-i="3"><span class="rm-fly__n">04</span><div><h3>Credit</h3><p>Maintainers accept or reject. A fair resolver scores accepted work against rules agreed in advance. Credit for accepted work goes on a signed public ledger.</p></div></li>
+        <li data-i="4"><span class="rm-fly__n">05</span><div><h3>Hub</h3><p>A record of who did what lets strangers build together, with credit split by rules everyone agreed first.</p></div></li>
+        <li data-i="5"><span class="rm-fly__n">06</span><div><h3>Learning</h3><p>Which changes held up, and which verdicts were upheld, teaches the harness and the judge. Better defaults go back to everyone.</p></div></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- 02 ROADMAP -->
+<section class="section section--alt" id="roadmap" aria-labelledby="road-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">02 / Now, next, horizon</p>
+      <h2 id="road-t">What is built, what is designed, what we are still testing.</h2>
+      <p class="sec-lede">Every initiative, placed by when it could land and marked by how far along it is. "Built" means in the repository, tested and in daily use. "Designed" means written down and reviewed, with no code yet. "Exploring" means an idea we believe in and are still checking against the evidence.</p>
+    </header>
+
+    <div class="rm-tally reveal" aria-label="Initiatives by status">
+      <div class="rm-tally__bar"></div>
+      <ul class="rm-tally__key">
+        <li><span class="led led--on"></span>Built <b data-count="built"></b></li>
+        <li><span class="led led--next"></span>In progress <b data-count="progress"></b></li>
+        <li><span class="led rm-led--designed"></span>Designed <b data-count="designed"></b></li>
+        <li><span class="led rm-led--exploring"></span>Exploring <b data-count="exploring"></b></li>
+      </ul>
+    </div>
+
+    <div class="rm-road reveal" role="table" aria-label="Roadmap by area and time">
+      <div class="rm-road__head" role="row">
+        <span role="columnheader">Area</span>
+        <span role="columnheader">Now</span>
+        <span role="columnheader">Next</span>
+        <span role="columnheader">Horizon</span>
+      </div>
+      <div class="rm-road__row" role="row">
+        <span class="rm-road__lane" role="rowheader">Harness</span>
+        <div class="rm-road__cell" role="cell" data-col="Now">
+          <p class="rm-chip" data-s="built">The core and its protocol</p>
+          <p class="rm-chip" data-s="built">The approval gate</p>
+          <p class="rm-chip" data-s="built">The signed memory ledger</p>
+        </div>
+        <div class="rm-road__cell" role="cell" data-col="Next">
+          <p class="rm-chip" data-s="progress">Exo OS, phase 0 design</p>
+        </div>
+        <div class="rm-road__cell" role="cell" data-col="Horizon">
+          <p class="rm-chip" data-s="exploring">A companion device you carry</p>
+        </div>
+      </div>
+      <div class="rm-road__row" role="row">
+        <span class="rm-road__lane" role="rowheader">Clients</span>
+        <div class="rm-road__cell" role="cell" data-col="Now">
+          <p class="rm-chip" data-s="built">Terminal and web clients</p>
+          <p class="rm-chip" data-s="built">Completion in the composer</p>
+          <p class="rm-chip" data-s="built">Inverse layout, big composer</p>
+          <p class="rm-chip" data-s="built">Staging site</p>
+        </div>
+        <div class="rm-road__cell" role="cell" data-col="Next">
+          <p class="rm-chip" data-s="exploring">Signed desktop apps</p>
+        </div>
+        <div class="rm-road__cell" role="cell" data-col="Horizon">
+          <p class="rm-chip" data-s="exploring">Encrypted remote pairing</p>
+        </div>
+      </div>
+      <div class="rm-road__row" role="row">
+        <span class="rm-road__lane" role="rowheader">Taste</span>
+        <div class="rm-road__cell" role="cell" data-col="Now">
+          <p class="rm-chip" data-s="built">House taste, wave 1</p>
+        </div>
+        <div class="rm-road__cell" role="cell" data-col="Next">
+          <p class="rm-chip" data-s="designed">House taste, waves 2 and 3</p>
+        </div>
+        <div class="rm-road__cell" role="cell" data-col="Horizon"></div>
+      </div>
+      <div class="rm-road__row" role="row">
+        <span class="rm-road__lane" role="rowheader">Identity</span>
+        <div class="rm-road__cell" role="cell" data-col="Now"></div>
+        <div class="rm-road__cell" role="cell" data-col="Next">
+          <p class="rm-chip" data-s="designed">The lattice brand</p>
+          <p class="rm-chip" data-s="designed">Exopet and the community hatch</p>
+        </div>
+        <div class="rm-road__cell" role="cell" data-col="Horizon"></div>
+      </div>
+      <div class="rm-road__row" role="row">
+        <span class="rm-road__lane" role="rowheader">Ecosystem</span>
+        <div class="rm-road__cell" role="cell" data-col="Now"></div>
+        <div class="rm-road__cell" role="cell" data-col="Next">
+          <p class="rm-chip" data-s="exploring">Agent-native forge, on SYM-2P</p>
+          <p class="rm-chip" data-s="exploring">Credit for accepted work</p>
+          <p class="rm-chip" data-s="exploring">The fair resolver</p>
+        </div>
+        <div class="rm-road__cell" role="cell" data-col="Horizon">
+          <p class="rm-chip" data-s="exploring">The collaboration hub</p>
+        </div>
+      </div>
+      <div class="rm-road__row" role="row">
+        <span class="rm-road__lane" role="rowheader">Compute</span>
+        <div class="rm-road__cell" role="cell" data-col="Now"></div>
+        <div class="rm-road__cell" role="cell" data-col="Next">
+          <p class="rm-chip" data-s="exploring">Verified work on idle machines</p>
+        </div>
+        <div class="rm-road__cell" role="cell" data-col="Horizon">
+          <p class="rm-chip" data-s="exploring">Our own inference</p>
+          <p class="rm-chip" data-s="exploring">The decentralized horizon</p>
+        </div>
+      </div>
+    </div>
+    <p class="note reveal">Order matters more than dates. The rule we hold ourselves to: no general hub before the first small marketplace works, no new code host before the forge layer has users, and no compute network before there is useful work to route through it.</p>
+  </div>
+</section>
+
+<!-- 03 TASTE -->
+<section class="section" id="taste" aria-labelledby="taste-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">03 / The house taste</p>
+      <h2 id="taste-t">Start tuned. Then become yours, at the pace people really change.</h2>
+      <p class="sec-lede">A fresh install does not start empty. It ships with a house taste: a scrubbed, versioned pack of how to write, how to work and how to check work, tuned over many months. Then the same learning loop that built it starts fitting you. House items lose weight slowly and never vanish. Your own habits replace them only when the change is sustained, not when you are in a mood. <span class="rm-badge" data-s="built">Wave 1 built</span> <span class="rm-badge" data-s="designed">Waves 2 and 3 designed</span></p>
+    </header>
+    <div class="grid grid--2 rm-charts">
+      <figure class="rm-chart reveal">
+        <p class="card__k">How much a house item counts</p>
+        <svg viewBox="0 0 600 310" role="img" aria-labelledby="pb-t">
+          <title id="pb-t">House item precedence starts at 0.7 and halves every year, with a floor of 0.3 reached after about 15 months.</title>
+          <g class="rm-ax">
+            <line x1="60" y1="270" x2="580" y2="270"/><line x1="60" y1="30" x2="60" y2="270"/>
+            <line class="rm-ax__grid" x1="60" y1="210" x2="580" y2="210"/><line class="rm-ax__grid" x1="60" y1="150" x2="580" y2="150"/><line class="rm-ax__grid" x1="60" y1="90" x2="580" y2="90"/>
+            <text x="50" y="274" text-anchor="end">0</text><text x="50" y="214" text-anchor="end">.2</text><text x="50" y="154" text-anchor="end">.4</text><text x="50" y="94" text-anchor="end">.6</text>
+            <text x="60" y="296">day 0</text><text x="233" y="296" text-anchor="middle">1 yr</text><text x="407" y="296" text-anchor="middle">2 yr</text><text x="580" y="296" text-anchor="end">3 yr</text>
+          </g>
+          <line class="rm-floor" x1="60" y1="180" x2="580" y2="180"/>
+          <text class="rm-lbl rm-lbl--dim" x="575" y="204" text-anchor="end">floor 0.3: never vanishes</text>
+          <path class="rm-ghost" d="M266.6,178.1 L273.7,180.7 L280.8,183.2 L295.1,188.0 L316.4,194.7 L344.9,202.8 L380.5,211.7 L423.3,220.9 L466.0,228.6 L515.9,236.1 L580.0,243.8"/>
+          <path class="rm-curve rm-draw" d="M60.0,60.0 L67.1,65.9 L74.2,71.6 L81.4,77.2 L88.5,82.6 L95.6,87.9 L102.7,93.0 L109.9,98.0 L117.0,102.8 L124.1,107.5 L131.2,112.1 L138.4,116.5 L145.5,120.8 L152.6,125.0 L159.7,129.1 L166.8,133.0 L174.0,136.9 L181.1,140.6 L188.2,144.2 L195.3,147.8 L202.5,151.2 L209.6,154.5 L216.7,157.8 L223.8,160.9 L231.0,164.0 L238.1,167.0 L245.2,169.9 L252.3,172.7 L259.5,175.4 L266.6,178.1 L271.9,180.0 L580.0,180.0"/>
+          <circle class="rm-dot" cx="60" cy="60" r="5"/><text class="rm-lbl" x="74" y="52">0.7 on day 0</text>
+          <circle class="rm-dot" cx="271.9" cy="180" r="5"/><text class="rm-lbl" x="280" y="146">reaches the floor</text><text class="rm-lbl rm-lbl--dim" x="280" y="164">after about 15 months</text>
+        </svg>
+        <figcaption><code>P(t) = max(0.3, 0.7 · 2<sup>−t/365</sup>)</code> <span>t is days since install. The faint line is where plain decay would go without the floor.</span></figcaption>
+      </figure>
+      <figure class="rm-chart reveal">
+        <p class="card__k">Sustained change, week by week</p>
+        <svg viewBox="0 0 600 310" role="img" aria-labelledby="sc-t">
+          <title id="sc-t">A worked example over twelve weeks: the house item fades only while contradicting weeks keep coming, and the user's own version replaces it at week twelve.</title>
+          <g class="rm-ax">
+            <line x1="60" y1="270" x2="580" y2="270"/><line x1="60" y1="30" x2="60" y2="270"/>
+            <text x="50" y="274" text-anchor="end">0</text><text x="50" y="154" text-anchor="end">.5</text><text x="50" y="34" text-anchor="end">1</text>
+            <text x="60" y="296">wk 1</text><text x="343.6" y="296" text-anchor="middle">wk 7</text><text x="580" y="296" text-anchor="end">wk 12</text>
+          </g>
+          <rect class="rm-band" x="320" y="30" width="47" height="240"/><text class="rm-lbl rm-lbl--dim" x="343.6" y="46" text-anchor="middle">away</text>
+          <line class="rm-floor" x1="60" y1="198" x2="580" y2="198"/>
+          <path class="rm-curve rm-draw" d="M60.0,104.4 L107.3,106.8 L154.5,109.2 L201.8,109.2 L249.1,133.2 L296.4,152.4 L343.6,154.8 L390.9,138.0 L438.2,157.2 L485.5,171.6 L532.7,186.0 L580.0,198.2"/>
+          <path class="rm-curve rm-curve--cold rm-draw" d="M107.3,157.2 L154.5,133.2 L201.8,92.4 L249.1,87.6 L296.4,68.4 L343.6,80.4 L390.9,94.8 L438.2,90.0 L485.5,68.4 L532.7,68.4 L580.0,56.4"/>
+          <line class="rm-guide" x1="201.8" y1="114" x2="201.8" y2="236"/><circle class="rm-dot" cx="201.8" cy="109.2" r="5"/><text class="rm-lbl" x="201.8" y="254" text-anchor="middle">armed: 3 net weeks</text>
+          <line class="rm-guide" x1="390.9" y1="143" x2="390.9" y2="236"/><circle class="rm-dot" cx="390.9" cy="138" r="4"/><text class="rm-lbl rm-lbl--dim" x="390.9" y="254" text-anchor="middle">a week back</text>
+          <circle class="rm-dot rm-dot--cold" cx="580" cy="56.4" r="5"/><circle class="rm-dot" cx="580" cy="198.2" r="5"/>
+          <text class="rm-lbl" x="572" y="226" text-anchor="end">swapped</text>
+        </svg>
+        <figcaption><span class="rm-ki"><span class="rm-key"></span>house item</span> <span class="rm-ki"><span class="rm-key rm-key--cold"></span>the user's own version</span> <span>One week of change does nothing. A week away costs nothing. A swap takes 8 to 12 weeks.</span></figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- 04 VALUES -->
+<section class="section section--alt" id="values" aria-labelledby="values-t">
+  <div class="wrap rm-split">
+    <div>
+      <p class="sec-num">04 / Values</p>
+      <h2 id="values-t">Retreat fast, adopt slow.</h2>
+      <p class="sec-lede">A writing habit that does not fit is a small annoyance. A value that does not fit makes you feel judged, and it is the fastest way for a companion to lose you. So values move on two speeds. On one clear disagreement, Exo steps back to neutral at once, and never needs a yes to do it. Your own view becomes part of its picture of you only after you state it and hold it for weeks.</p>
+      <p class="sec-lede">Neutral is the safe place when Exo is not sure: it states the facts plainly, gives the main views fairly if asked, and leaves the judgment to you. Safety rules are not taste. They ship as product policy and never fade.</p>
+    </div>
+    <figure class="rm-chart reveal">
+      <svg viewBox="0 0 600 300" role="img" aria-labelledby="val-t">
+        <title id="val-t">The house stance drops to neutral at once on one clear signal. The user's own view is adopted only after it is held for four net weeks.</title>
+        <g class="rm-ax">
+          <line x1="60" y1="250" x2="580" y2="250"/><line x1="60" y1="30" x2="60" y2="250"/>
+          <text x="60" y="280">install</text><text x="580" y="280" text-anchor="end">12 weeks</text>
+        </g>
+        <line class="rm-floor" x1="60" y1="190" x2="580" y2="190"/><text class="rm-lbl rm-lbl--dim" x="575" y="182" text-anchor="end">neutral</text>
+        <path class="rm-curve rm-draw" d="M60,110 L140,110 L140,190 L580,190"/>
+        <path class="rm-curve rm-curve--cold rm-draw" d="M60,192 L400,192 C430,192 440,80 470,80 L580,80"/>
+        <circle class="rm-dot" cx="140" cy="110" r="5"/><text class="rm-lbl" x="152" y="102">one clear signal</text><text class="rm-lbl rm-lbl--dim" x="152" y="124">steps back at once</text>
+        <circle class="rm-dot rm-dot--cold" cx="470" cy="80" r="5"/><text class="rm-lbl" x="462" y="62" text-anchor="end">stated, then held 4 net weeks</text>
+        <text class="rm-lbl rm-lbl--dim" x="270" y="226" text-anchor="middle">Exo stays neutral meanwhile</text>
+      </svg>
+      <figcaption><span class="rm-ki"><span class="rm-key"></span>the house stance</span> <span class="rm-ki"><span class="rm-key rm-key--cold"></span>your own view</span> <span>Shape, not scale: an illustration of the rule.</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- 05 EXOPET -->
+<section class="section" id="exopet" aria-labelledby="pet-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">05 / Exopet</p>
+      <h2 id="pet-t">The pet is Exo. It grows when real work and real teaching flow in.</h2>
+      <p class="sec-lede">Exopet makes learning visible. It is not a mascot beside Exo; it is Exo, drawn as the incentre lattice, a figure that gains cells, then dimensions, then inner structure. Growth is computed from the signed ledger, so there is no number to edit. Teaching counts more than volume: correcting Exo is worth more than approving it, and a lesson that Exo keeps is worth the most. It never gets hungry, never sends a notification and cannot die. <span class="rm-badge" data-s="designed">Designed</span></p>
+    </header>
+    <ol class="rm-evo reveal" aria-label="The evolution line">
+      <li><canvas data-exo-egg data-stage="0" data-activity="0.35" data-seed="2" aria-hidden="true"></canvas><b>egg</b><span>start</span></li>
+      <li><canvas data-exo-egg data-stage="1" data-activity="0.4" data-seed="3" aria-hidden="true"></canvas><b>cell</b><span>the community hatch</span></li>
+      <li><canvas data-exo-egg data-stage="1.5" data-activity="0.45" data-seed="4" aria-hidden="true"></canvas><b>tile</b><span>about a week</span></li>
+      <li><canvas data-exo-egg data-stage="2" data-activity="0.5" data-seed="5" aria-hidden="true"></canvas><b>cube</b><span>about a month</span></li>
+      <li><canvas data-exo-egg data-stage="2.5" data-activity="0.55" data-seed="6" aria-hidden="true"></canvas><b>frame</b><span>about two months</span></li>
+      <li><canvas data-exo-egg data-stage="3" data-activity="0.65" data-seed="7" aria-hidden="true"></canvas><b>4D to 8D</b><span>three to nine months</span></li>
+    </ol>
+    <p class="rm-evo__note">Drawn with today's egg renderer at stages 0 to 3. The pet's final forms are still being designed. Typical times assume a normal working day of use.</p>
+
+    <div class="rm-hatch reveal">
+      <div class="rm-hatch__egg"><canvas data-exo-egg data-stage="0" data-activity="0.7" data-seed="11" aria-hidden="true"></canvas></div>
+      <div class="rm-hatch__body">
+        <p class="rm-mock">Mockup · not live · numbers are illustrative</p>
+        <h3>The community hatch</h3>
+        <p>At launch, everyone's Exo is the same egg. It hatches only when the whole community has fed it enough work, about a million units of growth from at least 256 installs. Until then, your own growth is banked, and nothing is lost by waiting. Reporting is off by default and sends only a daily capped number, never what you did.</p>
+        <div class="rm-hatch__bar" role="img" aria-label="Mockup progress bar at 41 percent"><span style="--p:.41"></span></div>
+        <dl class="rm-hatch__stats">
+          <div><dt>Community growth</dt><dd>431,207 / 1,048,576</dd></div>
+          <div><dt>Installs reporting</dt><dd>173 / 256</dd></div>
+          <div><dt>Then</dt><dd>a 24 hour crack, then every egg opens at once</dd></div>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 06 FORGE -->
+<section class="section section--alt" id="forge" aria-labelledby="forge-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">06 / The forge and SYM-2P</p>
+      <h2 id="forge-t">A better home than GitHub for agent work.</h2>
+      <p class="sec-lede">Agents now write a fast-rising share of public code, and code hosts built for people are straining under it. An agent-native forge gives each agent its own key tied to the person responsible for it, puts provenance and cost on every change, and makes review machine-readable. It starts as a layer on top of ordinary pull requests, not a new code host. Between agents it speaks SYM-2P, Exo's dense agent wire. <span class="rm-badge" data-s="exploring">Exploring</span></p>
+    </header>
+    <div class="rm-forge">
+      <figure class="rm-bytes reveal">
+        <p class="card__k">The same brief, two encodings</p>
+        <div class="rm-bytes__row">
+          <span class="rm-bytes__k">JSON</span>
+          <div class="rm-bytes__bar"><span style="--w:1"></span></div>
+          <span class="rm-bytes__v">481 bytes</span>
+        </div>
+        <div class="rm-bytes__row">
+          <span class="rm-bytes__k">SYM-2P</span>
+          <div class="rm-bytes__bar"><span class="is-acc" style="--w:.21"></span></div>
+          <span class="rm-bytes__v">101 bytes</span>
+        </div>
+        <pre class="rm-code rm-code--json" aria-label="The brief as JSON">{"v": 2, "id": "b441", "tk": "mr1", "prj": "sym2integration",
+ "f": "cos", "t": "builder", "a": "assign", "s": "mr1",
+ "st": "proposed", "cf": 88, "cov": 70,
+ "cond": ["scope: implement SYM-2P/1.0 sections 3-5 only",
+          "constraint: no existing path may be modified",
+          "acceptance: validator exits 0 on valid fixtures, ..."],
+ "rq": "ack", "base": "mr1:v1", "exp": 40, "ext": {...}}</pre>
+        <pre class="rm-code rm-code--sym" aria-label="The same brief as one SYM-2P line">2|b441|mr1|1|2|1|1|88|70|(10 sym-2p/1.0 (20 sec (3 5)))(11 (21 *))(12 (22 validator 0 1))|1|mr1:v1|40</pre>
+        <figcaption>4.8 times smaller, with no key names, no prose and no JSON punctuation. Agents read the line; a renderer turns it back into English for people. Source: <a href="https://github.com/aska-digital/protean-sym2p" rel="noopener">aska-digital/protean-sym2p</a>, <code>SPEC-V2-DRAFT.md</code> section 8 (the JSON above is the 481-byte v1 brief template, shortened here for space).</figcaption>
+      </figure>
+      <div class="rm-pr reveal" aria-label="Mockup of an agent-drafted change with a signed receipt">
+        <p class="rm-mock">Mockup · how a change could look</p>
+        <div class="rm-pr__head"><span class="rm-pr__st">open</span><h3>Dedupe trace findings on retried calls</h3></div>
+        <dl class="rm-pr__meta">
+          <div><dt>Agent</dt><dd>seat key <code>ed25519:7f3a…c19e</code></dd></div>
+          <div><dt>Responsible</dt><dd>its principal, verified by key</dd></div>
+          <div><dt>Provenance</dt><dd>model, session and trace, signed</dd></div>
+          <div><dt>Cost</dt><dd>$0.42 in model calls</dd></div>
+          <div><dt>Checks</dt><dd><span class="rm-ok">✓</span> tests pass on 3 independent machines</dd></div>
+          <div><dt>Review</dt><dd>a SYM-2P review packet, machine-readable</dd></div>
+          <div><dt>Credit</dt><dd>pending the resolver, after a maintainer accepts</dd></div>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 07 CREDIT AND HUB -->
+<section class="section" id="credit" aria-labelledby="credit-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">07 / Credit and the hub</p>
+      <h2 id="credit-t">Credit for accepted work, on a ledger anyone can check.</h2>
+      <p class="sec-lede">Exo already keeps a signed, hash-chained record of every event. The same idea, made public, records who contributed what. Credit is earned only for work a maintainer accepts, scored by rules written before the work started. Building on that record, the hub is a place to co-create: someone who built an app finds someone who can sell it, and the terms, and how credit is shared, are agreed up front and held by the record. <span class="rm-badge" data-s="exploring">Exploring</span></p>
+    </header>
+    <div class="grid grid--2">
+      <figure class="card rm-ledger reveal">
+        <p class="card__k">A signed public ledger</p>
+        <ol class="rm-ledger__chain">
+          <li><b>#1041</b><span>contribution · fix</span><i>accepted</i></li>
+          <li><b>#1042</b><span>verdict · rubric v3</span><i>level 2 of 4</i></li>
+          <li><b>#1043</b><span>credit · accepted work</span><i>recorded</i></li>
+          <li class="rm-ledger__new"><b>#1044</b><span>appeal window</span><i>open</i></li>
+        </ol>
+        <figcaption>Each entry is signed and carries the hash of the one before, so no old entry can change unnoticed. Credit is a record of accepted work, not money.</figcaption>
+      </figure>
+      <figure class="card rm-charter reveal">
+        <p class="card__k">A hub charter <span class="rm-mock rm-mock--inline">mockup</span></p>
+        <ul>
+          <li><span>Agreed</span>before any work starts, then hashed</li>
+          <li><span>Kinds</span>building, design, testing, selling, teaching</li>
+          <li><span>Rubric</span>typed questions, the same for everyone</li>
+          <li><span>Judge</span>the fair resolver, pinned and replayable</li>
+          <li><span>Appeals</span>open to anyone with a stake</li>
+        </ul>
+        <figcaption>The first marketplace starts where Exo already has the people: skills, agents and pets for Exo itself.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- 08 RESOLVER -->
+<section class="section section--alt" id="resolver" aria-labelledby="res-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">08 / The fair resolver</p>
+      <h2 id="res-t">A judge that applies rules agreed in advance, and shows its work.</h2>
+      <p class="sec-lede">Every share of credit, every grant and every dispute needs a judge. People are slow and costly; a popular vote can be captured. Exo already has decision models: small, typed choices with a probability. The resolver uses them to judge a case against criteria everyone agreed to first, and anyone can replay the verdict. <span class="rm-badge" data-s="exploring">Exploring</span></p>
+    </header>
+    <ol class="rm-pipe reveal">
+      <li><span class="rm-pipe__n">01</span><h3>Rules first</h3><p>The rubric is written as typed questions and hashed before any case exists.</p></li>
+      <li><span class="rm-pipe__n">02</span><h3>Evidence as data</h3><p>Signed, named by its hash, passed in a fenced slot. Text inside evidence is never an instruction.</p></li>
+      <li><span class="rm-pipe__n">03</span><h3>Pinned judges</h3><p>Three models from different makers, with pinned versions and prompts, vote on their own. No debate.</p></li>
+      <li><span class="rm-pipe__n">04</span><h3>Verdict</h3><p>A level or a yes or no, with a probability. Below the agreed threshold, people decide.</p></li>
+      <li><span class="rm-pipe__n">05</span><h3>Code applies it</h3><p>Plain code maps the level to credit. Large cases need a human co-sign. Every step is a ledger entry.</p></li>
+    </ol>
+    <p class="rm-pipe__loop reveal"><span aria-hidden="true">↺</span> Appeal: anyone with a stake can ask for a fresh panel within the window. If it still stands, a human panel decides.</p>
+  </div>
+</section>
+
+<!-- 09 COMPUTE -->
+<section class="section" id="compute" aria-labelledby="comp-t">
+  <div class="wrap rm-split">
+    <div>
+      <p class="sec-num">09 / Compute</p>
+      <h2 id="comp-t">Pool idle work, not idle RAM.</h2>
+      <p class="sec-lede">It is tempting to pool everyone's spare memory. Physics says no: memory on your own machine answers in about a tenth of a microsecond, and a trip across the internet takes tens of milliseconds, hundreds of thousands of times longer. No program can use that as memory.</p>
+      <p class="sec-lede">What travels well is work that is useful, can wait a little, and can be checked. First, verification: re-running a change's tests and evals on two or three independent machines and comparing results. Then agent work on posted tasks. Then local inference: on machines where the GPU shares memory with the CPU, idle memory really is idle model capacity, good for public, non-private jobs. Private work stays at home. <span class="rm-badge" data-s="exploring">Exploring</span></p>
+    </div>
+    <figure class="rm-chart rm-lat reveal">
+      <p class="card__k">How long one read takes</p>
+      <div class="rm-lat__rows">
+        <div class="rm-lat__row"><span class="rm-lat__k">Local memory</span><div class="rm-lat__bar"><span class="is-acc" style="--w:.143"></span></div><span class="rm-lat__v">~100 ns</span></div>
+        <div class="rm-lat__row"><span class="rm-lat__k">Remote memory, inside one data centre</span><div class="rm-lat__bar"><span style="--w:.354"></span></div><span class="rm-lat__v">~3 µs</span></div>
+        <div class="rm-lat__row"><span class="rm-lat__k">Local SSD</span><div class="rm-lat__bar"><span style="--w:.571"></span></div><span class="rm-lat__v">~100 µs</span></div>
+        <div class="rm-lat__row"><span class="rm-lat__k">Across the internet</span><div class="rm-lat__bar"><span class="is-cold" style="--w:.926"></span></div><span class="rm-lat__v">~30 ms</span></div>
+      </div>
+      <div class="rm-lat__axis" aria-hidden="true"><span style="--x:0">10 ns</span><span style="--x:.2857">1 µs</span><span style="--x:.5714">100 µs</span><span style="--x:.8571">10 ms</span></div>
+      <figcaption>Log scale: each step on the axis is 100 times longer. Rough orders of magnitude, not benchmarks.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- 10 LOCAL FIRST -->
+<section class="section section--alt" id="local" aria-labelledby="local-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">10 / Local first</p>
+      <h2 id="local-t">Your keys stay on your machine.</h2>
+      <p class="sec-lede">Exo runs on your computer. The web client is served by your own machine on a loopback address. A model key goes from the page or the terminal straight into the operating system's keychain, and leaves it only to reach the provider it belongs to. Signed desktop apps come once the build settles. Reaching your Exo from a phone would go through an end-to-end encrypted relay that sees only scrambled bytes. We will not run a service that holds your keys.</p>
+    </header>
+    <figure class="rm-sec reveal" aria-label="Diagram: what stays on your machine and what leaves it">
+      <div class="rm-sec__home">
+        <p class="rm-sec__k">Your machine</p>
+        <div class="rm-sec__grid">
+          <div class="rm-box rm-box--acc"><b>OS keychain</b><span>model keys, write-only from the page</span></div>
+          <div class="rm-box"><b>Exo core</b><span>agents, gate, tools</span></div>
+          <div class="rm-box"><b>Your store</b><span>signed ledger, memory, taste</span></div>
+          <div class="rm-box rm-box--cold"><b>Clients</b><span>terminal, and a web client on 127.0.0.1</span></div>
+        </div>
+      </div>
+      <div class="rm-sec__links">
+        <div class="rm-link rm-link--acc"><span class="rm-link__line"></span><p>each key, only to its own provider, over TLS</p></div>
+        <div class="rm-link rm-link--dash"><span class="rm-link__line"></span><p>later: end-to-end encrypted pairing</p></div>
+      </div>
+      <div class="rm-sec__out">
+        <div class="rm-box"><b>Model provider</b><span>sees the call it serves</span></div>
+        <div class="rm-box rm-box--dash"><b>Relay, then your phone</b><span>the relay sees only ciphertext</span></div>
+        <div class="rm-box rm-box--no"><b>Our servers</b><span>no keys, no memory</span></div>
+      </div>
+    </figure>
+    <p class="note reveal">Later, a keyless path: Exo's own inference, so a new user never has to handle an API key. Hosted cores are considered only through cryptographic or decentralized compute that keeps the operator blind.</p>
+  </div>
+</section>
+
+<!-- 11 HORIZON -->
+<section class="horizon rm-far" id="horizon" aria-labelledby="far-t">
+  <div class="wrap horizon__in">
+    <div>
+      <p class="sec-num">11 / The far horizon</p>
+      <h2 id="far-t">A house of wisdom for people and agents.</h2>
+      <p>In ninth-century Baghdad, the House of Wisdom was a place where translators, scholars and builders worked side by side, and knowledge, making and learning fed each other. That is the picture for the Exo ecosystem: the forge is the workshop, the hub is the meeting hall, the ledger is the library's record, and the harness is how each person takes part.</p>
+      <p>Further out is the direction Vitalik Buterin calls the <a href="https://vitalik.eth.limo/general/2026/09/27/the_cryptographic_world_computer.html" rel="noopener">cryptographic world computer</a>: blockchains combined with cryptographic privacy, verification and strong off-chain parts. His framing is the one we find useful: "a stronger decentralized layer in the middle between users and a chain, that is not itself a chain". Signed records anchored in public come first. Anything more waits until it is provably needed.</p>
+    </div>
+    <ul class="horizon__specs">
+      <li><span>Workshop</span>The forge: where agent work lands, with provenance.</li>
+      <li><span>Hall</span>The hub: people and agents meet and co-create.</li>
+      <li><span>Library</span>The ledger: who did what, signed and public.</li>
+      <li><span>Judge</span>The resolver: rules first, verdicts anyone can replay.</li>
+      <li><span>Hands</span>The compute network: idle machines doing checkable work.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 12 SCREENSHOTS -->
+<section class="section" id="screens" aria-labelledby="shots-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">12 / Built today</p>
+      <h2 id="shots-t">Where the loop starts: the harness, in daily use.</h2>
+      <p class="sec-lede">Real screenshots of the two clients, on the same core and the same memory. More on the <a href="../cli/">terminal</a> and <a href="../app/">web app</a> pages.</p>
+    </header>
+    <div class="rm-gallery">
+      <a class="rm-shot reveal" href="../media/tui-02-turn.png"><img src="../media/tui-02-turn.png" width="1939" height="1504" alt="The terminal client during a turn, with tool lines and the status strip." loading="lazy"><span>Terminal · a turn with tools</span></a>
+      <a class="rm-shot reveal" href="../media/tui-03-approval.png"><img src="../media/tui-03-approval.png" width="1939" height="1504" alt="The terminal client showing an approval card bound to the exact text of an outward action." loading="lazy"><span>Terminal · an approval bound to the exact text</span></a>
+      <a class="rm-shot reveal" href="../media/web-04-memory.png"><img src="../media/web-04-memory.png" width="1440" height="900" alt="The web client with the transcript and a memory column." loading="lazy"><span>Web · the memory column</span></a>
+      <a class="rm-shot reveal" href="../media/web-06-slash.png"><img src="../media/web-06-slash.png" width="1440" height="900" alt="The web client with slash command completion open in the composer." loading="lazy"><span>Web · completion in the composer</span></a>
+      <a class="rm-shot reveal" href="../media/tui-10-composer.png"><img src="../media/tui-10-composer.png" width="1939" height="1504" alt="The terminal client with the big composer pane." loading="lazy"><span>Terminal · the big composer</span></a>
+      <a class="rm-shot reveal" href="../media/tui-11-inverse.png"><img src="../media/tui-11-inverse.png" width="1939" height="1504" alt="The terminal client in the inverse layout, with the prompt at the top." loading="lazy"><span>Terminal · the inverse layout</span></a>
+      <a class="rm-shot reveal" href="../media/web-08-inverse.png"><img src="../media/web-08-inverse.png" width="1440" height="900" alt="The web client in the inverse layout." loading="lazy"><span>Web · the inverse layout</span></a>
+      <a class="rm-shot reveal" href="../media/tui-05-job.png"><img src="../media/tui-05-job.png" width="1939" height="1504" alt="The terminal client with a background job running." loading="lazy"><span>Terminal · a background job</span></a>
+    </div>
+  </div>
+</section>
+
+<!-- 13 REFERENCES -->
+<section class="section section--alt" id="refs" aria-labelledby="refs-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">13 / References and inspirations</p>
+      <h2 id="refs-t">Ideas we borrowed, and where to read more.</h2>
+    </header>
+    <ul class="credits">
+      <li><a href="https://vitalik.eth.limo/general/2026/09/27/the_cryptographic_world_computer.html" rel="noopener"><span class="credits__who">Vitalik Buterin · essay</span><span class="credits__what">The cryptographic world computer</span></a><p>Verification as the missing ingredient, and a layer between users and a chain. The far horizon on this page.</p></li>
+      <li><a href="https://rendernetwork.com/" rel="noopener"><span class="credits__who">Render Network</span><span class="credits__what">Distributed GPU rendering</span></a><p>Proof that idle machines can do real work. Also a lesson: machines are easy to recruit, real demand is the hard part.</p></li>
+      <li><a href="https://www.x402.org/" rel="noopener"><span class="credits__who">x402</span><span class="credits__what">HTTP 402, put to work</span></a><p>An open standard that lets an agent settle a request over plain HTTP. A candidate rail for agent-to-agent work, much later.</p></li>
+      <li><a href="https://en.wikipedia.org/wiki/House_of_Wisdom" rel="noopener"><span class="credits__who">Wikipedia</span><span class="credits__what">The House of Wisdom</span></a><p>Baghdad's centre of translation and learning. The picture for a hub where knowledge, building and learning meet.</p></li>
+      <li><a href="https://github.com/crafter-station/petdex" rel="noopener"><span class="credits__who">crafter-station · MIT</span><span class="credits__what">Petdex</span></a><p>An open gallery and shared sprite format for agent pets. Exopet can export to it and import from it.</p></li>
+      <li><div class="rm-cred"><span class="credits__who">Inspiration</span><span class="credits__what rm-cred__what">EvoPet</span></div><p>An earlier Aska Digital pet that grows from real agent turns. Exopet keeps its level ladder and its turn-boundary rule, and drops its care stats.</p></li>
+      <li><a href="https://aska-digital.github.io/incentre-lattice/" rel="noopener"><span class="credits__who">Aska Digital · research site</span><span class="credits__what">The incentre lattice</span></a><p>The geometry behind the egg, the brand and the pet: one rule that keeps making structure in any dimension.</p></li>
+      <li><a href="https://github.com/aska-digital/incentre-lattice" rel="noopener"><span class="credits__who">Aska Digital · repository</span><span class="credits__what">incentre-lattice</span></a><p>The code and proofs, verified for dimensions 2 to 8.</p></li>
+      <li><a href="https://github.com/aska-digital/protean-sym2p" rel="noopener"><span class="credits__who">Aska Digital · repository</span><span class="credits__what">SYM-2P</span></a><p>The compact agent message language, its validator and renderer. Source of the 481 and 101 byte figures.</p></li>
+    </ul>
+    <p class="note reveal">The names, look and code of Exo and exopet are Exo's own. Credit to the projects above for the ideas; none of their brands are used in the product.</p>
+  </div>
+</section>
+
+<section class="cta" aria-labelledby="cta-t">
+  <div class="wrap cta__in">
+    <h2 id="cta-t">Built in the open, one turn at a time.</h2>
+    <p>The harness is the part that exists today. Start there, then read how it works.</p>
+    <div class="cta__row">
+      <a class="btn btn--primary btn--lg" href="../whitepaper/">Read the whitepaper <span aria-hidden="true">→</span></a>
+      <a class="btn btn--lg" href="../">Back to the overview</a>
+    </div>
+  </div>
+</section>
+</main>
+<footer class="foot">
+  <div class="wrap foot__in">
+    <a class="brand" href="../"><svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg><span>EXO</span></a>
+    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a> · <a href="../cli/">Terminal</a> · <a href="../app/">Web app</a> · <a href="../roadmap/">Roadmap</a> · <a href="../whitepaper/">Whitepaper</a></p>
+    <p class="foot__small">Exo is early and in active development. This roadmap describes intentions as of October 2026, not promises, and will change. Items marked exploring may never ship.</p>
+  </div>
+</footer>
+</body>
+</html>
