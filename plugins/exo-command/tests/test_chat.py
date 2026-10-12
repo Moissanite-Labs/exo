@@ -99,6 +99,16 @@ def test_bad_input_is_refused_before_any_command():
     assert src.calls == []
 
 
+def test_read_only_command_route():
+    src = FakeSource({"command.run": {"output": "Next call for thread x"}})
+    c = centre(src)
+    assert call(c, "POST", "/api/chat/sessions/s1/command", {"name": "context"}) == (200, {"output": "Next call for thread x"})
+    assert call(c, "POST", "/api/chat/sessions/s1/command", {"name": "findings", "args": "count"})[0] == 200
+    assert call(c, "POST", "/api/chat/sessions/s1/command", {"name": "compact"})[0] == 400
+    assert call(c, "GET", "/api/chat/sessions/s1/command")[0] == 405
+    assert [(b.name, b.args, b.session) for b in src.calls] == [("context", "", "s1"), ("findings", "count", "s1")]
+
+
 def test_methods_and_unknown_paths():
     c = centre()
     assert call(c, "GET", "/api/feedback")[0] == 405

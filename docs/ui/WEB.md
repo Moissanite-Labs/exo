@@ -11,7 +11,9 @@ or file from outside.
 | State | File |
 | --- | --- |
 | Boot sequence (under 1 s, any key skips) | `web-boot.png` |
-| Empty start | `web-start.png` |
+| Empty start: the site's hero behind the brand block, instrument column on the right | `web-start.png` |
+| Empty start under reduced motion (one still frame) | `web-start-reduced.png` |
+| The `/context` report in the transcript, instruments filled | `web-context.png` |
 | A turn with tools running | `web-turn.png` |
 | An approval panel and a diff panel | `web-approval.png` |
 | A finished answer, memory event, peer and taste panels, tip | `web-answer.png` |
@@ -24,7 +26,7 @@ or file from outside.
 - **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
   that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
   against a nominal 200k window, from `usage.updated`), cache share of that call, session cost. While busy a
-  packet travels along a dashed wire at the end of the strip. Findings are not shown: no event carries them yet.
+  packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
 - **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed;
   click to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded ·
   1781 → 153 tok` and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic
@@ -38,6 +40,23 @@ or file from outside.
 - **Boot.** Four lines go green as real calls answer: core, agent, memory (message count on record), model
   route. A line the server cannot answer stays dim as `unavailable`. Skipped under reduced motion, with
   `?boot=0`, and after the first time in a tab.
+
+## Empty thread and instrument column
+
+- An empty thread shows the site's hero: the masked hairline grid and the node shell around an orange core
+  (`hero.js`, ported from `site/assets/main.js`), behind a brand block (`E X O`, agent, model, memory line)
+  and key hints as chips. It fades out when the first item arrives. It draws about 24 frames a second with the
+  pixel ratio capped at 1.5, stops when the tab is hidden or the canvas is off screen, and draws one still
+  frame under reduced motion. Measured in headless Chrome on an idle empty thread: 1.7 percent main-thread
+  time with motion, 0.0 percent with reduced motion.
+- With no panel open, the right column is a quiet instrument column: memory (tokens on the next call split into
+  system, tree, other threads and tail, tree nodes, log and fold frontier) and the last calls (served route,
+  ttft, cache share, fallback). It is hidden under 1100 px. The memory numbers come from `/context`, read
+  after a thread opens, after each turn and after a memory event. The last calls come from `model.call`
+  events, so they start empty when a thread is opened.
+- Typing `/context`, `/findings` or `/trace` in the composer runs that report and shows it in the transcript.
+  The plugin exposes this as `POST /api/chat/sessions/<id>/command` (names limited to those three, sent as the
+  existing `command.run`): a plugin route, not a protocol change.
 
 ## Motion and accessibility
 
