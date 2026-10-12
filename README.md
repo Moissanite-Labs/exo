@@ -101,7 +101,7 @@ Commands you will use in the terminal (`/help` lists all): `/new`, `/sessions`, 
 | [`docs/media/README.md`](docs/media/README.md) | How the images and animations are made |
 
 Folders: `src/` the core, `clients/tui/` the terminal client, `plugins/` memory, context, gate, bus, command
-centre and orchestra, `inventory/` and `research/` the groundwork, `site/` the project website.
+centre and orchestra, `research/` the groundwork, `site/` the project website.
 
 ## Two goals, held together
 

@@ -37,7 +37,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-004 Fit one person, replicate for anyone | `docs/ARCHITECTURE.md` §5 "Onboarding a new principal", `docs/INSTALL.md` | §1 | §1 "Core, plugins, clients" | WP §10 |
 | D-005 Base: Hermes as a distribution | `docs/PINNING.md`, `docs/ARCHITECTURE.md` §2 "L0" | n/a | MISSING | WP §25 (after D-009) |
 | D-006 Principles v1 | `research/PRINCIPLES.md`, `docs/ARCHITECTURE.md` | n/a | n/a | WP Part I |
-| D-007 Inventory ratified | `inventory/INVENTORY.md`, `docs/ARCHITECTURE.md` §6 | n/a | n/a | n/a |
+| D-007 Inventory ratified | `docs/ARCHITECTURE.md` §6 (inventory kept outside the repo) | n/a | n/a | n/a |
 | D-008 Waves of parallel agents | `docs/STANDALONE.md` §6 "Phased build plan" | n/a | §8 | WP §31 |
 | D-009 Exo is standalone, Hermes is a source | `docs/STANDALONE.md` §0 | n/a | §1 | WP §25 |
 | D-010 Standalone core, protocol first | `docs/STANDALONE.md` §5, `docs/CORE-V2-INTERFACES.md` | §2 | §2 | WP §11, §12 |

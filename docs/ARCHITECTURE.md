@@ -1,7 +1,7 @@
 # Exo architecture v1
 
 Status: v1, 2026-10-11. Charter: `research/PRINCIPLES.md`. Choices: `DECISIONS.md` (D-004 fit and
-replicate, D-005 Hermes as a distribution, D-006 principles). Inventory: `inventory/INVENTORY.md`.
+replicate, D-005 Hermes as a distribution, D-006 principles). Inventory: kept outside the repo (D-042).
 
 ## 1. Shape in one picture
 
@@ -110,7 +110,7 @@ interruption budget), `agents/` (the principal's own named agents and charters),
 
 A is principal #1: his store is seeded from `~/hafiz`, his policies from his standing rulings.
 
-## 6. Mapping of fused projects (from `inventory/INVENTORY.md`, ratified in D-007)
+## 6. Mapping of fused projects (from the inventory, ratified in D-007; the inventory is kept outside the repo)
 
 | Today | Becomes in Exo | Layer | Generic part | Principal part |
 |---|---|---|---|---|
@@ -154,7 +154,7 @@ Exo plugins → `exo init` interview → optional `exo ingest` of existing histo
 ```
 exo/
   DECISIONS.md  README.md  pyproject.toml  LICENSE (MIT)
-  research/  inventory/  docs/
+  research/  docs/
   src/exo/            ledger.py store.py consolidate.py retrieve.py ask.py gate.py eval.py
                       ingest/ onboard.py brief.py cli.py crypto.py
   plugins/            exo-memory/ exo-context/ exo-gate/ exo-bus/ exo-command/ exo-orchestra/
