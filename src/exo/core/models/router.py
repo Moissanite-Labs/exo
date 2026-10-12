@@ -163,7 +163,7 @@ class Router:
             for i, key in enumerate(keys):
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
-                                 headers=spec.get("headers"))
+                                 headers=spec.get("headers"), session_header=spec.get("session_header"))
                 creds.append(Credential(cid, key, prov))
         self._creds[provider] = creds
         return creds

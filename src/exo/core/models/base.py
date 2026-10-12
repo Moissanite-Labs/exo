@@ -117,6 +117,9 @@ def parse_json_args(raw: str) -> dict[str, Any]:
     return val if isinstance(val, dict) else {}
 
 
+USER_AGENT = "exo/0.1"  # some providers (OpenCode Go) ask clients to name themselves, not their HTTP library
+
+
 class HttpTransport:
     """Base for HTTP streaming providers. Subclasses implement the four hooks."""
 
@@ -125,11 +128,13 @@ class HttpTransport:
 
     def __init__(self, base_url: str, api_key: str | None = None, *, name: str | None = None,
                  model: str | None = None, client: httpx.AsyncClient | None = None,
-                 timeout: float = 600.0, headers: dict[str, str] | None = None) -> None:
+                 timeout: float = 600.0, headers: dict[str, str] | None = None,
+                 session_header: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.extra_headers = dict(headers or {})
+        self.session_header = session_header
         self._client = client
         self._timeout = timeout
         if name:
@@ -158,12 +163,16 @@ class HttpTransport:
 
     # --- stream ------------------------------------------------------------
     async def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
+        session_id = opts.pop("session_id", None)
         body = self.build_body(messages, tools, **opts)
         url = self.base_url + self.path
+        sent = {"user-agent": USER_AGENT, **self.headers(), **self.extra_headers}
+        if self.session_header and session_id:
+            sent[self.session_header] = str(session_id)
         client = self._client or httpx.AsyncClient(timeout=self._timeout)
         st = StreamState()
         try:
-            async with client.stream("POST", url, json=body, headers={**self.headers(), **self.extra_headers}) as resp:
+            async with client.stream("POST", url, json=body, headers=sent) as resp:
                 if resp.status_code >= 400:
                     raw = (await resp.aread()).decode("utf-8", "replace")
                     yield error_event(f"HTTP {resp.status_code}: {self.error_text(raw)}", resp.status_code,
