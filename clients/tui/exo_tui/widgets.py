@@ -25,9 +25,12 @@ class Block(Static):
         super().__init__("", classes=f"block {kind}")
         self.text = text
         self.kind = kind
+        self.streaming = False  # True while text is still arriving: paint cheap plain text, Markdown once it closes
 
     def flush(self) -> None:
-        if self.kind == "assistant":
+        if self.kind == "assistant" and self.streaming:
+            self.update(Text(self.text))
+        elif self.kind == "assistant":
             self.update(Markdown(self.text))
         elif self.kind == "user":
             self.update(Text("> " + self.text, style="bold"))

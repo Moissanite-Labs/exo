@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -22,6 +23,9 @@ from exo_tui.widgets import (ApprovalCard, Block, Composer, EditScreen, Palette,
 CLIENT_ID = "exo-tui"
 DEFAULT_WINDOW = 200_000
 MAX_FILE = 64 * 1024
+WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
+PAGE = 60  # entries added per "load earlier"
+FLUSH_EVERY = 0.1  # streaming repaint interval in seconds (at most 10 a second)
 AT_RE = re.compile(r"(?<!\S)@(\S+)")
 # name -> (group, description). /help is generated from this table, so every command shows up there.
 COMMANDS = {
@@ -74,6 +78,7 @@ class ExoApp(App):
         Binding("ctrl+e", "edit_answer", "edit", priority=True),
         Binding("ctrl+r", "verdict('reject')", "reject", priority=True),
         Binding("escape", "escape", "esc", show=False),
+        Binding("f6", "load_earlier", "earlier", priority=True, show=False),
     ]
 
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
@@ -108,6 +113,9 @@ class ExoApp(App):
         self.commands: list[dict[str, Any]] = []
         self.sent: list[Any] = []  # every command body this client sent, for tests and debugging
         self._dirty = False
+        self.older: list[tuple] = []  # history entries not mounted yet, oldest first
+        self.earlier_row: Static | None = None
+        self._loading = False
 
     # ------------------------------------------------------------ layout
     def compose(self) -> ComposeResult:
@@ -121,6 +129,7 @@ class ExoApp(App):
 
     def on_mount(self) -> None:
         self.query_one(Composer).focus()
+        self.watch(self.transcript, "scroll_y", self.watch_transcript_scroll, init=False)
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
         self.refresh_status()
         self.run_worker(self.boot(), exit_on_error=False)
@@ -131,8 +140,9 @@ class ExoApp(App):
         return self.query_one("#transcript", VerticalScroll)
 
     def transcript_text(self) -> str:
-        return "\n".join(w.text if isinstance(w, Block) else f"{w.tool_name} {w.output}"
-                         for w in self.transcript.children if isinstance(w, (Block, ToolBlock)))
+        old = [e[2] if e[0] == "block" else f"{e[2]} {e[5]}" for e in self.older]
+        return "\n".join(old + [w.text if isinstance(w, Block) else f"{w.tool_name} {w.output}"
+                               for w in self.transcript.children if isinstance(w, (Block, ToolBlock))])
 
     def status_text(self) -> str:
         pct = min(999, round(100 * self.ctx_tokens / self.window)) if self.window else 0
@@ -156,17 +166,30 @@ class ExoApp(App):
         self.query_one("#activity", Static).update(" · ".join(bits))
 
     def add(self, widget: Block | ToolBlock) -> None:
-        self.transcript.mount(widget)
-        self.transcript.scroll_end(animate=False)
+        self.add_many([widget])
+
+    def add_many(self, widgets: list[Block | ToolBlock]) -> None:
+        """One mount call and one scroll for a whole batch."""
+        if widgets:
+            self.transcript.mount(*widgets)
+            self.transcript.scroll_end(animate=False)
+
+    def close_cur(self) -> None:
+        """End the streaming block: paint it as Markdown once, and stop appending to it."""
+        c, self.cur = self.cur, None
+        if c is not None and c.streaming:
+            c.streaming = False
+            if c.is_mounted:
+                c.flush()
 
     def note(self, text: str, kind: str = "note") -> None:
-        self.cur = None
+        self.close_cur()
         self.add(Block(text, kind))
 
     def mark_dirty(self) -> None:
         if not self._dirty:
             self._dirty = True
-            self.set_timer(0.04, self.flush)
+            self.set_timer(FLUSH_EVERY, self.flush)
 
     def flush(self) -> None:
         self._dirty = False
@@ -237,13 +260,12 @@ class ExoApp(App):
             self.busy = True
             self.turn_t0 = time.monotonic()
             self.model = b.model or self.model
-            self.cur = None
+            self.close_cur()
         elif isinstance(b, s.TurnCompleted):
             self.busy = False
             self.turn_t0 = 0.0
             self.running_tools = 0
-            self.flush()
-            self.cur = None
+            self.close_cur()
             self.run_worker(self.refresh_findings(), exit_on_error=False)
         elif isinstance(b, s.ReasoningDelta):
             self.turn_t0 = 0.0
@@ -251,7 +273,9 @@ class ExoApp(App):
             self.turn_t0 = 0.0
             if self.cur is None or self.cur_id != b.message_id:
                 self.cur_id = b.message_id
+                self.close_cur()
                 self.cur = Block("", "assistant")
+                self.cur.streaming = True
                 self.add(self.cur)
             self.cur.text += b.text
             self.mark_dirty()
@@ -265,15 +289,16 @@ class ExoApp(App):
                             self.cur = Block(text, "assistant")
                             self.add(self.cur)
                     self.cur.text = text
-                    self.flush()
+                    self.cur.streaming = False
+                    self.cur.flush()
                     self.last_answer = (m.id, text)
-                self.cur = None
+                self.close_cur()
         elif isinstance(b, s.ToolStarted):
             tb = ToolBlock(b.call.id, b.call.name, b.call.arguments)
             tb.expanded = self.expanded
             self.tools[b.call.id] = tb
             self.running_tools += 1
-            self.cur = None
+            self.close_cur()
             self.add(tb)
         elif isinstance(b, s.ToolOutput):
             if tb := self.tools.get(b.call_id):
@@ -335,29 +360,89 @@ class ExoApp(App):
         self.transcript.remove_children()
         self.tools.clear()
         self.cur = None
+        self.older = []
+        self.earlier_row = None
         self.last_answer = (None, "")
 
-    def render_history(self, messages: list[dict[str, Any]]) -> None:
+    def history_entries(self, messages: list[dict[str, Any]]) -> list[tuple]:
+        """Turn stored messages into plain tuples: ("block", kind, text) or ("tool", id, name, args, status, output)."""
+        out: list[tuple] = []
+        by_id: dict[str, int] = {}
         for m in messages:
             text = "".join(p.get("text", "") for p in m.get("content", []) if p.get("type") == "text")
             if m["role"] == "user" and text:
                 peer = (m.get("meta") or {}).get("peer")
-                self.add(Block(text, "peer") if peer else Block(text, "user"))
+                out.append(("block", "peer" if peer else "user", text))
             elif m["role"] == "assistant":
                 if text:
-                    self.add(Block(text, "assistant"))
+                    out.append(("block", "assistant", text))
                     self.last_answer = (m.get("id"), text)
                 for tc in m.get("tool_calls", []):
-                    tb = ToolBlock(tc["id"], tc["name"], tc.get("arguments"))
-                    tb.status = "done"
-                    self.tools[tc["id"]] = tb
-                    self.add(tb)
+                    by_id[tc["id"]] = len(out)
+                    out.append(("tool", tc["id"], tc["name"], tc.get("arguments"), "done", ""))
             elif m["role"] == "tool":
                 for r in m.get("tool_results", []):
-                    if tb := self.tools.get(r["call_id"]):
-                        tb.output = "".join(p.get("text", "") for p in r.get("content", []))
-                        tb.status = "error" if r.get("is_error") else "done"
-                        tb.flush()
+                    if (n := by_id.get(r["call_id"])) is not None:
+                        e = out[n]
+                        out[n] = e[:4] + ("error" if r.get("is_error") else "done",
+                                          "".join(p.get("text", "") for p in r.get("content", [])))
+        return out
+
+    def widgets_for(self, entries: list[tuple]) -> list[Block | ToolBlock]:
+        widgets: list[Block | ToolBlock] = []
+        for e in entries:
+            if e[0] == "block":
+                widgets.append(Block(e[2], e[1]))
+            else:
+                tb = ToolBlock(e[1], e[2], e[3])
+                tb.status, tb.output = e[4], e[5]
+                tb.expanded = self.expanded
+                self.tools[e[1]] = tb
+                widgets.append(tb)
+        return widgets
+
+    def render_history(self, messages: list[dict[str, Any]]) -> None:
+        """Mount only the last WINDOW entries; the rest wait as data until asked for (f6 or scroll to the top)."""
+        entries = self.history_entries(messages)
+        self.older, recent = entries[:-WINDOW], entries[-WINDOW:]
+        self.add_many(self.widgets_for(recent))
+        self.update_earlier_row()
+
+    def update_earlier_row(self) -> None:
+        n = len(self.older)
+        if n and self.earlier_row is None:
+            self.earlier_row = Static("", id="earlier", classes="block note")
+            self.transcript.mount(self.earlier_row, before=0)
+        if self.earlier_row is not None:
+            if n:
+                self.earlier_row.update(Text(f"{n} earlier message{'s' if n != 1 else ''}. "
+                                             "Press F6 or scroll to the top to load more.", style="dim italic"))
+            else:
+                self.earlier_row.remove()
+                self.earlier_row = None
+
+    def action_load_earlier(self) -> None:
+        if self._loading or not self.older or self.modal_open():
+            return
+        self._loading = True
+        self.run_worker(self.load_earlier(), exit_on_error=False)
+
+    async def load_earlier(self) -> None:
+        try:
+            tr = self.transcript
+            page, self.older = self.older[-PAGE:], self.older[:-PAGE]
+            widgets = self.widgets_for(page)
+            anchor = next((w for w in tr.children if w is not self.earlier_row), None)
+            await tr.mount(*widgets, before=anchor if anchor is not None else 0)
+            self.update_earlier_row()
+            if anchor is not None:  # keep what the reader was looking at in place
+                tr.call_after_refresh(tr.scroll_to_widget, anchor, animate=False, top=True)
+        finally:
+            self._loading = False
+
+    def watch_transcript_scroll(self, old: float, new: float) -> None:
+        if new <= 0 < old and self.older:
+            self.action_load_earlier()
 
     async def load_session(self, sid: str) -> None:
         got = await self.client.call(s.SessionResume(session=sid))
@@ -423,7 +508,7 @@ class ExoApp(App):
             cmd = text[1:].strip()
             send = f"Run this shell command with your shell tool and show me the output:\n{cmd}"
         self.add(Block(shown, "user"))
-        self.cur = None
+        self.close_cur()
         await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
                                    mode="steer" if self.busy else "send"))
 
