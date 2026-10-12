@@ -17,16 +17,22 @@ def test_macos_terminal_and_iterm():
     assert "iTerm2" in got[0][2]
 
 
-def test_macos_falls_back_to_window_without_accessibility():
-    got = []
+def test_macos_scripts_never_target_existing_tabs_or_send_keystrokes():
+    for env in ({}, {"TERM_PROGRAM": "iTerm.app"}, {"TERM_PROGRAM": "Apple_Terminal"}):
+        got = []
+        assert open_tab(["exo", "--session", "s1"], env, "darwin", got.append) == "opened"
+        assert len(got) == 1
+        script = got[0][2]
+        for bad in ("in front window", "current session", "current window", "keystroke", "System Events"):
+            assert bad not in script, (env, bad)
 
+
+def test_macos_failure_returns_command_to_run_by_hand():
     def runner(a):
-        got.append(a)
-        if len(got) == 1:
-            raise OSError("not allowed")
+        raise OSError("denied")
 
-    assert open_tab(["exo"], {}, "darwin", runner) == "opened"
-    assert len(got) == 2 and "keystroke" not in got[1][2]
+    out = open_tab(["exo", "--session", "s1"], {}, "darwin", runner)
+    assert out != "opened" and "exo --session s1" in out
 
 
 def test_linux_openers_and_manual_fallback():

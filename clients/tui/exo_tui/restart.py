@@ -70,19 +70,14 @@ def open_tab(cmd: list[str], env: dict[str, str] | None = None, platform: str | 
     try:
         if platform == "darwin":
             q = _applescript_quote(shell_line)
+            # Never target an existing tab and never send keystrokes: both can type into another program.
+            # Each script makes a NEW window that runs the command itself.
             if env.get("TERM_PROGRAM") == "iTerm.app":
-                script = ('tell application "iTerm2" to tell current window to create tab with default profile '
-                          f'command "{q}"')
+                script = ('tell application "iTerm2"\nactivate\n'
+                          f'create window with default profile command "{q}"\nend tell')
             else:
-                script = ('tell application "Terminal"\nactivate\n'
-                          f'tell application "System Events" to keystroke "t" using command down\n'
-                          f'do script "{q}" in front window\nend tell')
-            try:
-                run(["osascript", "-e", script])
-            except Exception:  # no Accessibility permission for the keystroke: open a window instead
-                if env.get("TERM_PROGRAM") == "iTerm.app":
-                    raise
-                run(["osascript", "-e", f'tell application "Terminal" to do script "{q}"'])
+                script = f'tell application "Terminal"\nactivate\ndo script "{q}"\nend tell'
+            run(["osascript", "-e", script])
             return "opened"
         if which("kitty") and env.get("KITTY_WINDOW_ID"):
             run(["kitty", "@", "launch", "--type=tab", "--cwd=current", *cmd])
