@@ -80,7 +80,7 @@ def test_handoff_default_path_is_the_handoffs_folder(tmp_path):
     async def sc(app, pilot, client, eng):
         got = await client.call(s.CommandRun(name="handoff_facts", args="", session=app.session))
         path = got["output"]["path"]
-        assert path.endswith(f"/Work/handoffs/{eng.agent}-{got['output']['date']}.md")
+        assert path.endswith(f"/handoffs/{eng.agent}-{got['output']['date']}.md")
 
     run_app(tmp_path, sc)
 
