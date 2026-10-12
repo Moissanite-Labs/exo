@@ -26,6 +26,7 @@ from typing import Mapping
 log = logging.getLogger("exo.keys")
 KEYCHAIN_SERVICE = "exo"
 KEYCHAIN_TIMEOUT = 3.0
+_warned_loose: set[str] = set()  # keys files already warned about in this process
 
 
 def keys_file_path() -> Path:
@@ -64,7 +65,7 @@ def secret_service_get(name: str) -> str | None:
 
 
 def file_get(name: str, path: Path | None = None) -> str | None:
-    """Read ``name`` from the keys file. Refuses (and warns, once per call) when group or
+    """Read ``name`` from the keys file. Refuses (and warns, once per file per process) when group or
     others can read it."""
     path = path or keys_file_path()
     try:
@@ -72,7 +73,9 @@ def file_get(name: str, path: Path | None = None) -> str | None:
     except OSError:
         return None
     if mode & 0o077:
-        log.warning("refusing to read %s: mode is %o, expected 600 (run: chmod 600 %s)", path, mode, path)
+        if str(path) not in _warned_loose:
+            _warned_loose.add(str(path))
+            log.warning("refusing to read %s: mode is %o, expected 600 (run: chmod 600 %s)", path, mode, path)
         return None
     try:
         text = path.read_text(encoding="utf-8")
