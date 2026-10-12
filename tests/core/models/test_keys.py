@@ -155,9 +155,10 @@ def test_jev_stub_falls_through(monkeypatch):
 def test_catalog_providers():
     r = Router(env={})
     for name, env, base in [("opencode-go", "OPENCODE_GO_API_KEY", "https://opencode.ai/zen/go/v1"),
-                            ("jev", "TYPESAFE_API_KEY", "https://api.typesafe.ai/v1")]:
+                            ("jev", "TYPESAFE_API_KEY", "https://api.typesafe.ai/v1"),
+                            ("nous", "NOUS_API_KEY", "https://inference-api.nousresearch.com/v1")]:
         assert r.providers[name]["key_env"] == env and r.providers[name]["base_url"] == base
-    assert "nous" not in r.providers  # unverified, commented out
+    assert r.providers["opencode-go"]["session_header"] == "x-opencode-session"
     for local in ("llamacpp", "ollama", "lmstudio"):
         assert r.providers[local]["local"]
 
