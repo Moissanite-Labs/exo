@@ -435,3 +435,15 @@ code, kbd {
   content: ""; position: absolute; top: 0; right: 0; width: var(--cut); height: var(--cut); pointer-events: none;
   background: linear-gradient(to bottom left, transparent calc(50% - 1px), var(--line-2) calc(50% - 1px), var(--line-2) calc(50% + .5px), transparent calc(50% + .5px));
 }
+
+/* ---------- Explainers and whitepaper links ---------- */
+.part p:not(.part__n) + p { margin-top: 12px; }
+.part p.part__why { color: var(--fg); }
+.part p.part__why + p { margin-top: 14px; }
+.note a, .sec-lede a { color: var(--fg); text-decoration-color: var(--accent); text-underline-offset: 4px; }
+.note a:hover, .sec-lede a:hover { color: var(--accent); }
+.nav__links a.nav__paper { color: var(--accent); }
+.nav__links a.nav__paper:hover { color: var(--accent-2); }
+.cta__row { display: flex; flex-wrap: wrap; gap: 12px; }
+.cta__row .btn { margin-top: 10px; }
+.sec-lede + .sec-lede { margin-top: 14px; }

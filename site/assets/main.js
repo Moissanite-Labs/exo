@@ -20,7 +20,7 @@
   }
 
   /* ---------- Active nav link ---------- */
-  var links = Array.prototype.slice.call(document.querySelectorAll(".nav__links a"));
+  var links = Array.prototype.slice.call(document.querySelectorAll('.nav__links a[href^="#"]'));
   if ("IntersectionObserver" in window && links.length) {
     var map = {};
     links.forEach(function (a) { map[a.getAttribute("href").slice(1)] = a; });
