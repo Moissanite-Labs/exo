@@ -69,12 +69,18 @@ def test_a_bus_message_is_held_for_the_principal_and_never_a_principal_turn(rela
     async def run():
         assert await chan.poll_once() == 1
         await _settle(eng)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not eng._approvals:  # the hold asks the principal in the background
+            await asyncio.sleep(0.01)
         [call] = [e.body for e in eng.hub.since(0) if isinstance(e.body, s.ApprovalRequested)]
         sid = chan._by_chat["alpha"]
         assert eng.store.messages(sid) == []  # held: nothing reached the model
         from exo.server.app import Dispatcher
         resp = await Dispatcher(eng).run(s.Command.of(s.ApprovalRespond(request_id=call.request_id, decision="allow")))
         assert resp.ok
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not eng.store.messages(sid):  # released in the background
+            await asyncio.sleep(0.01)
         await _settle(eng)
         await _pump(eng, chan)
         return sid
@@ -165,3 +171,26 @@ def test_a_principal_turn_in_a_bus_session_is_not_posted(relay, client_for, tmp_
 
     n, _ = asyncio.run(run())
     assert n == 1 and len(_replies(relay)) == 1
+
+
+def test_the_core_reads_an_open_body_itself_and_refuses_a_replay(relay, client_for, tmp_path):
+    eng = _engine(tmp_path, peers={"rules": [{"from": "alpha", "outcome": "auto"}]})
+    me = client_for("beta")
+    client_for("alpha").post("beta", "hello, the real text")
+    [env] = me.inbox()
+    from exo.server.app import Dispatcher
+
+    async def run():
+        sid = (await eng.loop.create_session(title="bus:alpha")).id
+        pub = me.registry()["alpha"]["pubkey"]
+        d = Dispatcher(eng)
+        first = await d.run(s.Command.of(s.Peers(action="bus", session=sid, to="alpha", text="hello, a swapped text",
+                                                 envelope=env, pub=pub)))
+        again = await d.run(s.Command.of(s.Peers(action="bus", session=sid, to="alpha", text="x", envelope=env, pub=pub)))
+        await _settle(eng)
+        return sid, first.result, again.result
+
+    sid, first, again = asyncio.run(run())
+    assert first["state"] == "delivered" and again["state"] == "denied" and "replay" in again["detail"]
+    text = eng.store.messages(sid)[0].text()
+    assert "the real text" in text and "swapped" not in text

@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from exo import crypto
+from exo import crypto, provenance
 from exo.bus import wire
 from exo.core import trace
 from exo.core.ingress import STANDING_LINE, Held, Ingress, Receipt, Target, frame
@@ -111,9 +111,13 @@ class EngineTarget(Target):
 
     def _message(self, ing: Ingress) -> Message:
         msg = Message(role="user", content=[ContentPart.of_text(frame(ing))])
-        msg.meta["peer"] = {"from": ing.sender, "trust": ing.trust, "msg_id": ing.id,
-                            "session": ing.meta.get("from_session")}
+        msg.meta.update(self._meta(ing))
         return msg
+
+    def _meta(self, ing: Ingress) -> dict[str, Any]:
+        """The ingress tags and the author (D-040) a delivered message carries, as stored and as a woken turn's."""
+        return {"peer": {"from": ing.sender, "trust": ing.trust, "msg_id": ing.id, "session": ing.meta.get("from_session")},
+                "author": provenance.peer(ing.sender)}
 
     async def steer(self, session: str, ing: Ingress) -> bool:
         return self.e.loop.steer(session, self._message(ing))
@@ -123,7 +127,7 @@ class EngineTarget(Target):
         await self.e.loop._emit(s.MessageCompleted(message=msg), session)
 
     async def wake(self, session: str, ing: Ingress) -> None:
-        self.e.start_turn(session, frame(ing), {"peer": self._message(ing).meta["peer"]})
+        self.e.start_turn(session, frame(ing), self._meta(ing))
 
     # ---------------------------------------------------------------- holding
 
@@ -131,19 +135,25 @@ class EngineTarget(Target):
         ing = held.ing
         sid = self.pick_session(ing)
         text = ing.body.strip().replace("\n", " ")
-        summary = (f"Peer message from {ing.sender} ({ing.trust}) is held for you. It says: \"{text[:400]}"
+        label = "Bus message from seat" if ing.source == "bus" else "Peer message from"
+        summary = (f"{label} {ing.sender} ({ing.trust}) is held for you. It says: \"{text[:400]}"
                    f"{'...' if len(text) > 400 else ''}\". Allow delivers it to the session; deny drops it. "
                    "It is not delivered unless you allow it, and it expires on its own.")
         opened: list[str] = []
-        node = self.node
+
+        path = self._path()
 
         async def ask() -> None:
             decision = await self.e.ask(sid, summary, None, "medium", options=["allow", "deny"], opened=opened)
-            if node is not None:
-                node.path.resolve(ing.id, decision == "allow")
+            if path is not None:
+                path.resolve(ing.id, decision == "allow")
 
         task = asyncio.ensure_future(ask())
         self._asks[ing.id] = (task, opened)
+
+    def _path(self) -> Any:
+        """The ingress path whose held messages this target resolves."""
+        return self.node.path if self.node is not None else None
 
     async def on_closed(self, held: Held, state: str) -> None:
         task, opened = self._asks.pop(held.ing.id, (None, []))

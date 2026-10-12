@@ -174,6 +174,14 @@ methods matter for the principal's words:
 Do not log or print message text from these hooks. Report errors through `exo.core.trace.report` so they show as
 `harness.error` and become findings.
 
+**Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
+`peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat
+text as the principal's only when `principal` is true; `exo.provenance.principal_view(messages)` turns every other
+user message into role `other`, which the capture extractors skip. A new way for text to reach a session must stamp
+`meta.author` itself (pass it as `meta` to `loop.send`, or set it on the stored `Message`), never derive it from
+the text. A new ledger writer that records the principal's words writes them under a principal id; anything the
+agent decides on its own is written under the agent's name.
+
 ## 5. Add a seat
 
 A seat is a TOML file in `$EXO_HOME/seats/<name>.toml`, or `<name>/seat.toml` with a `SOUL.md`. The full format is
@@ -435,7 +443,8 @@ party) never promotes on its own must stay above any new rule that could promote
 when the config is merged, so a setting you forget to add does nothing.
 
 **Add a signal.** Write a ledger event of a kind in `SIGNAL_KINDS`, with `refs` pointing at the output it judges, so
-the reviewer finds it. Panel responses are recorded as `note` events of type `ui_signal` and are not in that list.
+the reviewer finds it. Its author must be a principal id (`exo.provenance.principal_names`) or the loop ignores it
+(D-040). Panel responses are recorded as `note` events of type `ui_signal` and are not in that list.
 The protocol commands `feedback.send` and `ui.respond` reach the loop through `handle_feedback` and
 `handle_ui_respond` in `learn/signals.py`.
 

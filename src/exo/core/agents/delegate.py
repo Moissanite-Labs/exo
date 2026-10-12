@@ -343,7 +343,7 @@ class Delegator:
                 self.tiers[sid] = b.tier
                 db._q("UPDATE tasks SET child=?, status='running', updated=? WHERE id=?", (sid, s.now_ts(), b.id))
                 self._emit(parent, b, "running", sid, line)
-                turn = asyncio.ensure_future(loop.send(sid, render(b)))
+                turn = asyncio.ensure_future(loop.send(sid, render(b), meta={"author": "delegate"}))  # D-040
                 try:
                     result = await asyncio.wait_for(asyncio.shield(turn), b.timeout_s or None)
                 except asyncio.TimeoutError:

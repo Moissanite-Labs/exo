@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from exo import taste
+from exo import provenance, taste
 from exo.capture import clip
 from exo.consolidate import PTYPES, consolidate_run, load_policy, load_state, propose_typed
 
@@ -100,7 +100,8 @@ def is_unattended(lr: Learner, session: str) -> bool:
 def new_signals(lr: Learner) -> list[dict]:
     rt = lr.runtime
     mark = watermark(rt.ledger)
-    return [e for e in rt.ledger.iter(kind=SIGNAL_KINDS, since=mark) if e["author"] != rt.agent]
+    who = provenance.principal_names(rt.store)  # D-040: only the principal's own events are signals
+    return [e for e in rt.ledger.iter(kind=SIGNAL_KINDS, since=mark) if e["author"] != rt.agent and e["author"] in who]
 
 
 def needs_review(events: list[dict], turns: int, every: int) -> str | None:

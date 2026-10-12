@@ -248,8 +248,9 @@ def test_claude_ai_export_zip(tmp_path, led):
     stats = ingest("claude_ai", z, led, ME)
     assert stats["added"] == 3
     assert utterances(led)[0]["body"]["src"]["member"] == "data-2025/conversations.json"
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["export.zip", "ledger.sqlite", "ledger.sqlite-shm",
-                                                          "ledger.sqlite-wal"]  # nothing extracted
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["exo-home", "export.zip", "ledger.sqlite", "ledger.sqlite-shm",
+                                                          "ledger.sqlite-wal", "ledger.sqlite.head"]  # nothing extracted
+    # (exo-home holds the second head anchor, D-040)
 
 
 def test_chatgpt_export(tmp_path, led):

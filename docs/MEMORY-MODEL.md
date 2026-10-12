@@ -116,6 +116,52 @@ Same commands and events as before: no protocol change for capture.
   verbatim for good, and one `harness.error` event (`where` = `summary`) records it, so it shows in `exo trace` and
   findings once, not every turn.
 
+## Who wrote it: every message has an author (D-040)
+
+Before D-040 the core decided "is this the principal?" by looking for tags that say it is not (a peer tag, a job
+tag). Per-turn capture then got bare role and content, so a peer message framed as a ruling was saved as the
+principal's ruling, and the agent could write `exo_note(kind="ruling")` for itself. Now the core stamps an author on
+every message from the path it came in by, never from its text (`src/exo/provenance.py`):
+
+| Path in | Author |
+|---|---|
+| `turn.send` from one of the seat's clients | `principal` |
+| the model's reply | `agent` |
+| a tool result | `tool` |
+| a peer message (D-026) | `peer:<name>` |
+| a bus message | `bus:<seat>` |
+| a background job notice | `job` |
+| a delegation brief to a subagent | `delegate` |
+| a scheduled prompt | `schedule` |
+| harness notes, thread sync, imports | `system` |
+
+The author is stored in `meta.author`. A message stored before D-040 has none; it is read by its tags as before.
+
+What uses it:
+
+- `is_principal(msg)` is true only when the author is `principal` (and the old checks still pass).
+- Every memory hook gets the author. `on_turn_start(..., author=)`, `sync_turn(..., turn_author={"author": ...})`,
+  and each message dict in `checkpoint`, `on_pre_compress` and `capture_principal` has `author` and, for user
+  messages, `principal: true|false`. exo-memory captures rulings and corrections only from principal messages and
+  logs a peer's or job's turn under that author, not the principal's id.
+- The learning loop's chat capture (`record_chat_signals`) and `/handoff` pins read the same flags.
+- Peer, bus and job text enters the context inside its own tag (`[peer message from ...]`, `[bus message from
+  ...]`, `[job notice ...]`), with a closing line that says it is not the user.
+
+The agent's own tools cannot speak for the principal. `exo_note` writes `note`, `question`, `action` or
+`artifact`. Asked for `ruling` or `answer`, it writes a `note` with `type: agent_note` and `claimed_kind`, and says
+so. `exo_should_have_been` records the agent's report of a correction, signed as the agent with `for: <principal>`.
+The principal's own correction is captured from their own message.
+
+In the ledger, the principal's voice is an event whose author is one of `exo.provenance.principal_names(store)`:
+`principal`, the store's id, and the principal ids listed in the key registry (`exo init`, `exo import-store` and
+exo-memory add them; `exo keys principal ID` adds one by hand). Consolidation and learning read rulings, verdicts,
+answers and utterances only from those authors (LEARNING.md).
+
+What it does not cover: who is on the other end of a client connection. Any local process that can reach the
+seat's socket can still send `turn.send`, and that counts as the principal. Binding a turn to a real client is
+separate work (the approval identity and web authentication branch).
+
 ## Concurrency
 
 - One process writes an agent's log and tree: it holds `$EXO_HOME/run/agent-<id>.lock` (an OS file lock,

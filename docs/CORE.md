@@ -56,7 +56,39 @@ Each event is one canonical JSON document (sorted keys, no whitespace, UTF-8).
 
 The chain hash of an event is `sha256(prev + id)`. It is stored per row and becomes the next
 event's `prev`. `verify()` recomputes every id, link, chain hash and signature. Pass
-`trusted={author: [pubkeys]}` to also pin keys to authors.
+`trusted={author: [pubkeys]}` to also pin keys to authors, or a key registry (below).
+
+### Pinned keys (D-040)
+
+Each event carries the key that signed it, so a chain checked only against its own keys proves nothing about who
+wrote it: a fresh key can sign anything. `$EXO_HOME/keys/registry.json` (0600, `exo.keyring.KeyRegistry`) lists the
+keys this home trusts, the bus seats it has seen, and the ledger author ids that are the principal.
+
+- A key Exo makes in `$EXO_HOME/keys` is pinned when it is made (`crypto.save_key`). A name that already has a
+  different pinned key is not changed: `exo keys pin NAME PUB --replace` does that by hand.
+- A home made before D-040 gets a registry the first time it is opened: every key already in `keys/` is pinned, and
+  every store under `principals/` is a principal id. That moment is trusted as it stands.
+- `exo log verify` and `exo memory verify` pass the registry as `trusted`. An event fails when its key is not pinned,
+  or when its author has its own pinned key and the event is signed by another one. The principal's words may be
+  signed by any pinned key, because the agent's seat records them.
+- `exo keys` lists the registry; `exo keys pin` and `exo keys principal` change it.
+
+### Head anchor (D-040)
+
+The triggers stop a careless edit, not a deliberate one: drop the delete trigger, delete the tail, put the trigger
+back, and the shorter chain still links. So each append also writes the head (seq, row count, chain hash) to
+`<ledger>.head` beside the database and to `$EXO_HOME/keys/heads/<hash>.json`, both 0600.
+
+- `verify()` checks every anchor it finds: the ledger must reach that seq and the chain hash there must match. It also
+  fails when an append-only trigger was missing when the ledger was opened (the open puts it back).
+- `append()` refuses to write when an anchor does not match, so the next event cannot hide a truncation.
+- With no anchor at all (a ledger from before D-040, or a copy without its `.head`), `verify()` is ok and says
+  `anchored: false`. The next append anchors it. `exo log anchor` does it now.
+- `exo init` clears an anchor left at its path by a deleted store.
+
+What this does not protect against: a process running as the same user that rewrites the database and both anchor
+files together, or deletes both anchors. The gate is what stands in the way of that: `keys/` and the store are
+credentials to it.
 
 Kinds: `utterance`, `ruling`, `verdict`, `action`, `artifact`, `ingest`, `question`, `answer`,
 `belief_proposed`, `belief_accepted`, `note`.
@@ -82,7 +114,7 @@ signer = crypto.Signer("agent-one", crypto.load_key(Path.home() / ".exo/keys/age
 led = Ledger(store.ledger_path, signer)
 ev = led.append("utterance", {"text": "hello"}, "agent-one", session="s1")
 led.append("verdict", {"verdict": "edit", "target": ev["id"], "text": "shorter"}, "principal")
-led.verify()            # {"ok": True, "checked": 2, "head": "..."}
+led.verify()            # {"ok": True, "checked": 2, "head": "...", "anchored": True}
 
 store.find("posting rules", n=5)     # [(node_id, score), ...]
 store.ctx("posting rules", budget=1500).text
@@ -111,8 +143,10 @@ The task-first version is in `docs/USER-GUIDE.md` section 11.
 exo init <id> [--from-template [PATH]] [--root DIR] [--interview]
 exo find|get|ctx|links|lint|graph|index ...   [--principal ID | --root DIR]
 exo log append <kind> --author NAME (--text T | --body JSON) [--session S] [--ref ID ...]
-exo log verify | exo log tail [-n 10] [--kind K]
+exo log verify | exo log anchor | exo log tail [-n 10] [--kind K]
 exo keygen <name> [--out PATH]
+exo keys [list | pin NAME PUB [--seat] [--replace] | principal ID]
+exo memory [verify]                              agent logs and every store's ledger (D-040)
 exo import-store <path> [--id ID] | exo interview | exo ingest <kind> <path>
 ```
 

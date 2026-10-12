@@ -167,9 +167,13 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 | `exo graph` | Writes `graph/graph.json` (store). | none | `cmd_graph` |
 | `exo index` | Refreshes the node table in `INDEX.md` (store). | none | `cmd_index` |
 | `exo log append <kind>` | Appends a signed event to the ledger (store). `<kind>` is one of the ledger kinds in `docs/CORE.md`. | `--author NAME` (required). `--key PATH` (default `$EXO_HOME/keys/<author>.key`). `--text T` or `--body JSON`, else stdin. `--session S`. `--ref ID` (repeatable). | `cmd_log` |
-| `exo log verify` | Checks every id, link, chain hash and signature. Prints JSON. Exit code 1 if broken (store). | none | `cmd_log` |
+| `exo log verify` | Checks every id, link, chain hash and signature, each key against the key registry, the head anchors and the append-only triggers (D-040). Prints JSON. Exit code 1 if broken (store). | none | `cmd_log` |
+| `exo log anchor` | Writes the current head to the ledger's anchor files (a store made before D-040; the next append does it too). | none | `cmd_log` |
 | `exo log tail` | Prints the last events (store). | `-n N` (default 10), `--kind K` | `cmd_log` |
-| `exo keygen <name>` | Creates an Ed25519 key, mode 0600. Refuses to overwrite. | `--out PATH` (default `$EXO_HOME/keys/<name>.key`) | `cmd_keygen` |
+| `exo keygen <name>` | Creates an Ed25519 key, mode 0600. Refuses to overwrite. A key made in `$EXO_HOME/keys` is pinned in the key registry. | `--out PATH` (default `$EXO_HOME/keys/<name>.key`) | `cmd_keygen` |
+| `exo keys [list]` | The key registry (D-040): pinned signing keys, bus seats, principal ids. | `--json` | `cmd_keys` |
+| `exo keys pin NAME PUB` | Pins a public key (base64 or a `.pub` file) under a name. Refuses to change a pinned key without `--replace`. Exit code 1 if refused. | `--seat` (NAME is a bus seat), `--replace` | `cmd_keys` |
+| `exo keys principal ID` | Marks a ledger author id as the principal, for consolidation and learning. | none | `cmd_keys` |
 | `exo ingest <kind> <path>` | Imports conversations into the ledger as signed events. Kinds: `claude_code`, `hermes`, `claude_ai_export`, `chatgpt_export`, `grok_export` (aliases such as `claude-code`, `chatgpt`). The source is read only (store, or `--ledger`). | `--since TIME`, `--author NAME`, `--as SEAT` (signing seat, default `ingest`), `--key PATH`, `--ledger PATH` | `src/exo/ingest/cli.py` |
 
 ### Learning and review
@@ -226,7 +230,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 | `exo findings add <title>` | Files a finding by hand. | `--severity bug\|papercut` (default `papercut`), `--signature S`, `--detail TEXT` | same |
 | `exo findings fix <id>` | Marks a finding fixed. Later turns re-measure it. | `--in SHA` (required) | same |
 | `exo findings export` | A digest for the developer session. | `--md` | same |
-| `exo memory [verify]` | Checks the hash chain of each agent's one log. Exit code 1 if broken. | `--agent NAME` (default: all), `--json` | `cmd_memory` in `src/exo/memory_cmd.py` |
+| `exo memory [verify]` | Checks the hash chain of each agent's one log, and each principal store's ledger against the pinned keys, its head anchors and its triggers (D-040). Exit code 1 if broken. | `--agent NAME` (default: all), `--principal ID` or `--root DIR` (default: every store in the home), `--json` | `cmd_memory` in `src/exo/memory_cmd.py` |
 | `exo memory threads` | Lists each agent's threads. | `--agent NAME`, `--json` | same |
 
 ### Tracking upstream and reading wire packets

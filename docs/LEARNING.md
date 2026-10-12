@@ -18,6 +18,12 @@ Learning writes to your principal store and its signed ledger. The store comes f
 
 Each signal becomes a ledger event. An edit also stores a preference pair: the answer, and your better version.
 
+Only your own words are signals (D-040). The loop reads a ruling, verdict, answer or utterance only when its author is
+you (`exo.provenance.principal_names`: `principal`, your store's id, and the principal ids in the key registry). A
+ruling the agent wrote with `exo_note`, a correction it reported with `exo_should_have_been`, or text that came from a
+peer, a bus seat or a job notice is never read as yours, whatever it says. Consolidation counts these as
+`not_principal` and skips them.
+
 ## The fast loop
 
 After a turn, a cheap reviewer on the `aux` route reads new signals and writes typed proposals. It only proposes.
@@ -29,7 +35,8 @@ fact, or question (when the signal is unclear). Limits live in `learn.fast_loop`
 
 `exo.learn.promote.apply_policy` decides each open proposal, in this order:
 
-1. You said it (a ruling or an answer is in the evidence): promote now.
+1. You said it (a ruling or an answer that you wrote is in the evidence): promote now. The event's author is checked,
+   not only its kind, so an agent-written ruling never triggers this rule (D-040).
 2. Guarded (irreversible, public, financial, third party): never promoted on its own. It becomes a question once.
 3. It conflicts with an existing belief: it stays held and a question is raised. Never silent.
 4. Taste or fact, not guarded, high weight, evidence from at least `min_sessions` (2) sessions, no critic objection:

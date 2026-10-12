@@ -348,15 +348,17 @@ class Peers:
     """Live sessions messaging each other (D-026). One command with an action, because the command cap leaves
     one slot: ``list`` shows peers, ``send`` posts a message from this daemon (``via`` says whether a person
     or a model wrote it), ``deliver`` and ``receipt`` are the daemon-to-daemon calls (a signed envelope in,
-    a delivery receipt back)."""
+    a delivery receipt back). ``bus`` is the bus channel handing in one inbox envelope (D-040): the core checks it
+    against the seat's pinned key and puts it through the same hold and trust policy as a peer message."""
 
-    action: Literal["list", "send", "deliver", "receipt"] = "list"
-    to: str = ""  # send: a peer name from list, or a bus seat
-    text: str = ""  # send
-    session: str | None = None  # send: the sending session; list: the asking session (left out of the answer)
+    action: Literal["list", "send", "deliver", "receipt", "bus"] = "list"
+    to: str = ""  # send: a peer name from list, or a bus seat; bus: the chat id (seat, team:<name> or group)
+    text: str = ""  # send; bus: the envelope's text, decrypted by the channel
+    session: str | None = None  # send: the sending session; list: the asking session; bus: the chat's session
     via: Literal["agent", "human"] = "human"  # send: who wrote it. A person typing /send is the principal.
     local_only: bool = False  # list: this daemon's sessions only (what another daemon asks)
-    envelope: dict[str, Any] = field(default_factory=dict)  # deliver, receipt
+    envelope: dict[str, Any] = field(default_factory=dict)  # deliver, receipt; bus: the inbox envelope as received
+    pub: str = ""  # bus: the sender seat's key from the bus registry (pinned on first sight, D-040)
 
 
 # ---------------------------------------------------------------- events (28, tests require fewer than 30)

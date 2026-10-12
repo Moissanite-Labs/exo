@@ -474,8 +474,12 @@ def create_store(pid: str, root: str | os.PathLike | None = None,
                  template: str | os.PathLike | None = None) -> PrincipalStore:
     root = Path(root) if root else principal_root(pid)
     store = PrincipalStore.create(root, template=template)
-    Ledger(store.ledger_path).close()
+    led = Ledger(store.ledger_path)
+    led.clear_anchors()  # a new ledger: an anchor left by a deleted store at this path is stale (D-040)
+    led.close()
     os.chmod(store.ledger_path, 0o600)
+    from .keyring import KeyRegistry
+    KeyRegistry.load().add_principal(pid)  # D-040: ledger events by this id are the principal's voice
     return store
 
 
@@ -668,6 +672,8 @@ def cmd_import_store(a) -> int:
         st = import_store(src, dest, include_private=a.include_private)
     except (ValueError, FileExistsError) as e:
         sys.exit(str(e))
+    from .keyring import KeyRegistry
+    KeyRegistry.load().add_principal(pid)  # D-040: ledger events by this id are the principal's voice
     activated = _activate(pid, Path(a.root) if a.root else None, force=a.activate)
     print(f'imported {st["files"]} files ({st["bytes"]} bytes) from {src} as principal {pid} at {st["root"]}')
     if st['skipped']:

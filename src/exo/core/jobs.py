@@ -114,13 +114,17 @@ class JobTarget(EngineTarget):
         from exo.core.ingress import frame
 
         msg = Message(role="user", content=[ContentPart.of_text(frame(ing))])
-        msg.meta["job"] = {"id": ing.meta.get("job_id"), "state": ing.meta.get("state"), "msg_id": ing.id}
+        msg.meta.update(self._meta(ing))
         return msg
+
+    def _meta(self, ing: Ingress) -> dict[str, Any]:
+        return {"job": {"id": ing.meta.get("job_id"), "state": ing.meta.get("state"), "msg_id": ing.id},
+                "author": "job"}  # D-040: the harness, not the principal
 
     async def wake(self, session: str, ing: Ingress) -> None:
         from exo.core.ingress import frame
 
-        self.e.start_turn(session, frame(ing), {"job": self._message(ing).meta["job"]})
+        self.e.start_turn(session, frame(ing), self._meta(ing))
 
     async def record(self, ing: Ingress, receipt: Receipt, notify: bool) -> None:
         pass  # the job.updated event carries the delivery mode

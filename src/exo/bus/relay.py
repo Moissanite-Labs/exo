@@ -42,9 +42,11 @@ class Relay:
         self.subscribers: dict[str, set[asyncio.Queue]] = {}
 
     # --- auth -----------------------------------------------------------------
-    def signer_keys(self, seat: str) -> list[str]:
-        """Keys a message from `seat` may be signed with: the seat's own, or the relay's (MCP posts)."""
-        return [k for k in (self.registry.pubkey(seat), self.relay_pubkey) if k]
+    def signer_keys(self, seat: str, env: dict | None = None) -> list[str]:
+        """Keys a message from `seat` may be signed with: the seat's own, and the relay's only on an envelope the
+        relay marked as composed for that seat (an MCP post, D-040). The relay key never signs as a seat."""
+        relay = self.relay_pubkey if env is not None and wire.relay_composed(env) else None
+        return [k for k in (self.registry.pubkey(seat), relay) if k]
 
     def authed_seat(self, headers, method: str, path: str) -> str:
         try:
@@ -58,7 +60,7 @@ class Relay:
             raise HTTPException(422, "envelope must have exactly the v1 fields")
         if self.registry.seat(env["from"]) is None:
             raise HTTPException(403, f"unknown seat {env['from']!r}")
-        if not any(wire.verify_doc(env, k) for k in self.signer_keys(env["from"])):
+        if not any(wire.verify_doc(env, k) for k in self.signer_keys(env["from"], env)):
             raise HTTPException(401, "envelope signature does not verify")
         if wire.envelope_id(env) != env["id"]:
             raise HTTPException(422, "id does not match envelope content")
@@ -109,8 +111,9 @@ class Relay:
             if not pub:
                 raise HTTPException(422, f"unknown seat {enc_to!r}")
             body, enc = wire.encrypt_body(body, key, enc_to, pub)
+        attach = [wire.relay_mark(seat)] if key is self.relay_key else []  # D-040: say who really signed
         for _ in range(5):
-            env = wire.make_envelope(seat, to, body, self.store.head()[1], kind, thread, enc)
+            env = wire.make_envelope(seat, to, body, self.store.head()[1], kind, thread, enc, attach)
             try:
                 return await self.accept(wire.finish_envelope(env, key))
             except HTTPException as e:

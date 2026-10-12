@@ -269,7 +269,8 @@ def test_exo_note(provider):
     ev = provider._state().rt.ledger.get(r["id"])
     assert ev["kind"] == "note" and ev["author"] == "agent-one" and ev["body"]["text"] == "the staging bucket is blue"
     r = call(provider, "exo_note", text="pricing is the principal's call", kind="ruling")
-    assert provider._state().rt.ledger.get(r["id"])["kind"] == "ruling"
+    assert provider._state().rt.ledger.get(r["id"])["kind"] == "note"  # D-040: the agent cannot write a ruling
+    assert r["kind"] == "agent_note"
     assert "error" in call(provider, "exo_note", text="x", kind="belief_accepted")
     assert "error" in call(provider, "exo_note", text="")
 
@@ -279,7 +280,7 @@ def test_exo_should_have_been(provider):
     last = evs(provider, "utterance")[-1]["id"]
     r = call(provider, "exo_should_have_been", target="last", wanted="three bullet points", reason="reads on phone")
     v = provider._state().rt.ledger.get(r["id"])
-    assert v["kind"] == "verdict" and v["author"] == "pat"
+    assert v["kind"] == "verdict" and v["author"] == "agent-one" and v["body"]["for"] == "pat"  # D-040
     assert v["body"]["verdict"] == "should_have_been" and v["body"]["target"] == last and v["refs"] == [last]
     assert v["body"]["wanted"] == "three bullet points" and v["body"]["reason"] == "reads on phone"
     r2 = call(provider, "exo_should_have_been", target=last, wanted="shorter")

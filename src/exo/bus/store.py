@@ -115,7 +115,7 @@ class Store:
         return self._select(where, (), limit)
 
     def verify(self, from_seq: int = 1, to_seq: int | None = None, keys_for=None) -> dict:
-        """Recompute ids, chain links and (if keys_for(seat) -> [pubkeys] is given) signatures."""
+        """Recompute ids, chain links and (if keys_for(seat, envelope) -> [pubkeys] is given) signatures."""
         from_seq = max(1, from_seq)
         if to_seq is None:
             to_seq = self.head()[0]
@@ -130,7 +130,7 @@ class Store:
                 return self._bad(env, "id does not match envelope content", checked)
             if wire.chain_hash(prev, env["id"]) != env["chain"]:
                 return self._bad(env, "stored chain hash is wrong", checked)
-            if keys_for and not any(wire.verify_doc(e, k) for k in keys_for(env["from"])):
+            if keys_for and not any(wire.verify_doc(e, k) for k in keys_for(env["from"], e)):
                 return self._bad(env, "signature does not verify", checked)
             prev, checked = env["chain"], checked + 1
         return {"ok": True, "from": from_seq, "to": to_seq, "checked": checked, "head": prev}

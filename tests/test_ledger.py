@@ -25,7 +25,7 @@ def test_append_iter_head(tmp_path, signer):
     assert [e["id"] for e in led.iter(since=b["ts"])][0] == b["id"]
     assert led.get(b["id"])["refs"] == [a["id"]]
     assert led.get(a["id"])["body"] == {"text": "hello"}
-    assert led.verify() == {"ok": True, "checked": 3, "head": c["chain"]}
+    assert led.verify() == {"ok": True, "checked": 3, "head": c["chain"], "anchored": True}
 
 
 def test_verdict_requires_target(tmp_path, signer):

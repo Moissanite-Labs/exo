@@ -6,6 +6,9 @@
     proposal_reject(store, ledger, pid, "why")    # note belief_rejected
 
 Input kinds: `verdict`, `ruling`, `utterance`, `answer`, and `note` of type `consolidate_pending`.
+Only events whose author is the principal (`exo.provenance.principal_names`: `principal`, the store's id, and
+principal ids pinned in the key registry) are read as the principal's voice (D-040). A ruling the agent wrote
+with `exo_note`, or one a peer's text produced, is skipped and counted in `not_principal`.
 
 - Each verdict (edit, reject, should_have_been) and each ruling becomes a **belief proposal** in
   positive local form, "The principal wants Y, not X, because Z", with evidence refs, domain, type,
@@ -67,7 +70,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from . import taste
+from . import provenance, taste
 from .capture import (CORRECTION, IMPERATIVE_RE, RULING, caps_emphasis, classify_sentence, clip,
                       is_imperative, is_trivial, normalize, sentences)
 from .ledger import Ledger
@@ -790,6 +793,7 @@ class RunResult:
     rejected: list[str] = field(default_factory=list)
     stale: list[tuple[str, float]] = field(default_factory=list)
     pending_sessions: int = 0
+    not_principal: int = 0       # D-040: principal-voice events written by someone else, skipped
     pairs: list[dict] = field(default_factory=list)
     dry_run: bool = False
 
@@ -803,6 +807,8 @@ class RunResult:
                 lines.append(f"{label}: {', '.join(items)}")
         for pid, w in self.stale:
             lines.append(f"stale: {pid} weight {w:.2f}")
+        if self.not_principal:
+            lines.append(f"skipped {self.not_principal} not written by the principal (agent, peer or tool)")
         return "\n".join(lines)
 
 
@@ -822,6 +828,7 @@ class _Run:
         self.ctx = ReflectContext(sorted(doms | {"mind"}), self.policy, self.now[:10])
         self.thr = float(self.policy["similarity"])
         self.meta: dict[str, Any] = {}    # typed-proposal fields for the next propose() call
+        self.principals = provenance.principal_names(store)  # D-040: only these authors speak for the principal
 
     # -- writes --------------------------------------------------------------
     def append(self, kind: str, body: dict, refs: Iterable[str] = (), session: str | None = None) -> dict | None:
@@ -1077,6 +1084,12 @@ class _Run:
                     self.res.read += 1
                 continue
             if ev["author"] == self.author and k != "answer":
+                continue
+            if ev["author"] not in self.principals:
+                # D-040: a ruling, verdict, answer or utterance the agent, a peer or a tool wrote is not the
+                # principal's voice, whatever its text says. It is read (the watermark moves) but never proposed.
+                self.res.read += 1
+                self.res.not_principal += 1
                 continue
             self.res.read += 1
             if k in ("verdict", "ruling"):

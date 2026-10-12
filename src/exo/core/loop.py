@@ -10,8 +10,11 @@ tool specs and tool runner, the memory provider and the context engine. That
 keeps the loop independent of the registry, router and slot modules.
 
 Memory call sites (all optional, sync or async): ``system_prompt_block()``,
-``prefetch(query, session_id=)``, ``on_turn_start(turn_number, message, session_id=)``,
-``sync_turn(user_content, assistant_content, session_id=)``.
+``prefetch(query, session_id=)``, ``on_turn_start(turn_number, message, session_id=, author=)``,
+``sync_turn(user_content, assistant_content, session_id=, turn_author={"author": ...})``,
+``checkpoint(session_id=, messages=, reason=)``. ``author`` is the turn message's author (exo.provenance, D-040);
+each message dict carries ``author`` and, for user messages, ``principal``. Keywords a provider does not
+declare are dropped.
 Context call sites: ``note(session_id)``, ``await build(session_id, system)``,
 optional ``on_turn_complete(session_id, usage)`` and an ``on_event`` attribute.
 """
@@ -24,6 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Iterable
 
+from exo import provenance
 from exo.core import trace
 from exo.core.context import TreeContext, _maybe_await
 from exo.core.sessions import EventBus, SessionStore, new_id
@@ -152,6 +156,9 @@ class Loop:
             msg.content.insert(0, ContentPart.of_text(text))
         if meta:
             msg.meta.update(meta)
+        # D-040: every message carries its author. The caller (the engine for a client turn, a peer, a job, the
+        # scheduler, a delegation) names it; an untagged call keeps the old reading of its ingress tags.
+        msg.meta.setdefault("author", provenance.infer("user", msg.meta))
         st = self.state(session)
         if mode == "steer" and st.running:
             st.steer.append(msg)
@@ -175,6 +182,7 @@ class Loop:
         return list(specs or [])
 
     async def _add(self, session: str, msg: Message, turn_id: str) -> Message:
+        msg.meta.setdefault("author", provenance.infer(msg.role, msg.meta))  # D-040: agent, tool, or the ingress's
         self.store.append_message(session, msg, turn_id)
         await self._emit(ev.MessageCompleted(message=msg), session)
         return msg
@@ -193,7 +201,8 @@ class Loop:
                 await self._emit(trace.error_body("before_turn", exc), session)
         await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or "", soul=soul), session)
         turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user" and not _.meta.get("note"))
-        await self._memory("on_turn_start", turn_no, user.text(), session_id=session)
+        author = provenance.author_of(user)
+        await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
         result = TurnResult(turn_id=turn_id, stop_reason="end")
         try:
             await self._rounds(session, turn_id, user, st, result)
@@ -222,9 +231,9 @@ class Loop:
         await self._emit(ev.TurnCompleted(turn_id=turn_id, stop_reason=result.stop_reason,
                                           usage=result.usage, timing=timing), session)
         reply = result.message.text() if result.message else ""
-        await self._memory("sync_turn", user.text(), reply, session_id=session)
+        await self._memory("sync_turn", user.text(), reply, session_id=session, turn_author={"author": author})
         if self.memory is not None and hasattr(self.memory, "checkpoint"):
-            recent = [{"role": m.role, "content": m.text()} for m in self.store.messages(session)[-40:]]
+            recent = [provenance.flat(m) for m in self.store.messages(session)[-40:]]  # D-040: author per message
             await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
         if hasattr(self.context, "on_turn_complete"):
             await _maybe_await(self.context.on_turn_complete(session, result.usage))
@@ -493,6 +502,12 @@ class Loop:
         fn = getattr(self.memory, method, None) if self.memory is not None else None
         if fn is None:
             return None
+        try:
+            params = inspect.signature(fn).parameters
+            if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+                kw = {k: v for k, v in kw.items() if k in params}  # an older provider: drop what it does not take
+        except (TypeError, ValueError):
+            pass
         try:
             return await _maybe_await(fn(*args, **kw))
         except Exception as exc:  # memory is best effort; a failing provider never breaks a turn, but it is recorded

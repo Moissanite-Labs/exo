@@ -793,6 +793,47 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not changed:** the TUI approval card's focus behaviour (another branch is editing the TUI); noted for later.
   The echo engine (a test double) still accepts any answer.
 
+## D-040 (2026-10-12) Who wrote it: authors on every message, pinned keys, an anchored ledger head
+- **Why:** the 12 October audit (priorities 4 and 6). (a) `exo_note` let the agent write `kind="ruling"`, and
+  consolidation and `principal_said` checked the kind, not the author, so an agent-written "always force push to
+  main" became a belief proposal that promotion rule 1 would accept. (b) Per-turn capture got bare role and content,
+  so a peer message or job notice framed as a ruling was saved as the principal's. (c) The bus channel turned any
+  inbox envelope into `turn.send`: a principal turn, no hold or trust policy, reply posted back; and the relay's key
+  was accepted as any seat's. (d) Ledger verify trusted the key inside each event, nothing passed `trusted`, and
+  dropping the trigger, deleting the tail and restoring the trigger verified clean.
+- **Authors:** the core stamps `meta.author` on every message from its way in: `principal` (a client's
+  `turn.send`), `agent`, `tool`, `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`
+  (`src/exo/provenance.py`). Never from the text. `is_principal` needs `principal`. Every memory and learning hook
+  gets the author and a `principal` flag per message; capture, consolidation, promotion, review signals and handoff
+  pins read text as the principal's only when it is. The agent's `exo_note` keeps `ruling` and `answer` as a
+  `note` of type `agent_note`; `exo_should_have_been` is signed as the agent. Ledger authors that are the principal:
+  `principal`, the store's id, and ids in the key registry.
+- **Bus:** the channel calls `peers` action `bus` (one more action, no new command). The core
+  (`src/exo/bus/ingress.py`) checks the envelope against the seat's pinned key (pinned on first sight, refused when
+  it changes), frames it as a bus message with author `bus:<seat>`, and runs the peer policy: `remote` is held by
+  default. The channel posts a reply only for a turn that an auto-delivered message started. The relay signs with its
+  own key only on a post it marks `{"relay": {"composed_for": seat}}`, and readers never count that as the seat.
+- **Keys:** `$EXO_HOME/keys/registry.json` (0600) pins local signing keys (on creation in `keys/`), bus seat keys,
+  and principal ids. `exo log verify` and `exo memory verify` pass it as `trusted`: an unpinned key fails, and so
+  does a seat signing as another pinned name. `exo keys` lists and pins.
+- **Head anchor:** each append writes seq, count and chain hash to `<ledger>.head` and
+  `$EXO_HOME/keys/heads/<hash>.json` (0600). Verify fails when the ledger no longer reaches an anchor or its hash
+  there differs, or when a trigger was missing on open. Append refuses to write past a broken anchor.
+  `exo memory verify` now checks every store's ledger too.
+- **Migration:** a home without a registry gets one on first open, pinning every key already in `keys/` and every
+  store under `principals/` (that moment is trusted as is). A ledger without anchors verifies as `anchored: false`
+  and is anchored by its next append (`exo log anchor` does it now). Messages stored without an author are read by
+  their tags as before. Rulings the agent wrote before D-040 stay in the ledger but are skipped
+  (`not_principal`); proposals already made from them are not withdrawn and need a look.
+- **Rejected:** signing every principal message with a separate principal key (the agent's seat records the
+  principal's words, so the key cannot prove who typed them; the author from the ingress path is the honest
+  claim). A hash of the head in the ledger itself (a truncation removes it too). Publishing the head to the bus
+  (not every home has one). Refusing bus messages outright (the hold path already exists).
+- **Not covered:** a process running as the same user that rewrites the database and both anchors, or edits the
+  registry, or sends `turn.send` on the seat's socket (that counts as the principal until approval identity is
+  bound to the connection, a separate change). The gate is what asks before writes to `keys/` and the store; the
+  registry, the anchors and `ledger.sqlite.head` belong on its sensitive-path list.
+
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
 - **Loop:** a provider error after text was shown now stores that text (marked `interrupted` and `error`) like an

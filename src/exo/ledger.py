@@ -15,16 +15,33 @@ Each event is a canonical JSON document:
 
 The chain hash of an event is sha256(prev + id). It is stored per row and becomes the
 next event's `prev`. Rows cannot be updated or deleted: triggers abort any attempt.
+
+Head anchor (D-040). Triggers stop a careless delete, not a deliberate one: a writer can drop a trigger,
+delete the tail and put the trigger back, and the shorter chain still links. So every append also writes the
+new head (sequence number, row count and chain hash) to two files outside the database: `<ledger>.head` beside
+it and `$EXO_HOME/keys/heads/<hash of the ledger path>.json` (the keys directory, which the gate treats as
+credentials). Both are 0600. `verify` checks every anchor it finds: the ledger must hold at least that many
+events and the chain hash at that position must match. `append` refuses to write past an anchor that does not
+match, so a truncated ledger cannot be papered over by the next event. A trigger found missing when the ledger
+is opened is recreated, and `verify` reports it.
+
+What anchoring does not protect against: a process running as the same user that rewrites the database and both
+anchor files together, or deletes both anchors (verify then reports the ledger as unanchored, not as broken).
+
+Trust (D-040). `verify(trusted=...)` takes either a map of author to allowed public keys or a key registry
+(exo.keyring.KeyRegistry). With the registry, an event signed by a key nobody pinned fails.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from nacl.signing import SigningKey
 
@@ -51,6 +68,9 @@ CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
   BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
 """
 COLS = "seq,id,ts,author,kind,body,session,refs,prev,pub,sig,chain"
+TRIGGERS = ("events_no_update", "events_no_delete")
+
+logger = logging.getLogger(__name__)
 
 
 class LedgerError(ValueError):
@@ -95,8 +115,114 @@ class Ledger:
         self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None, timeout=30)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=30000")
+        self.missing_triggers = self._missing_triggers()
+        if self.missing_triggers:
+            logger.warning("ledger %s: append-only trigger(s) %s were missing; recreated", self.path,
+                           ", ".join(self.missing_triggers))
         self.db.executescript(SCHEMA)
         self._lock = threading.Lock()
+
+    def _missing_triggers(self) -> list[str]:
+        """Triggers absent from an existing events table (a fresh database has neither table nor triggers)."""
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
+            return []
+        have = {r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+        return [t for t in TRIGGERS if t not in have]
+
+    # --- head anchors (D-040) --------------------------------------------------
+
+    def anchor_paths(self) -> list[Path]:
+        """`<ledger>.head` beside the database, and one file per ledger under `$EXO_HOME/keys/heads/`."""
+        from .store import exo_home
+        real = str(self.path.resolve())
+        name = hashlib.sha256(real.encode("utf-8")).hexdigest()[:24] + ".json"
+        return [self.path.with_name(self.path.name + ".head"), exo_home() / "keys" / "heads" / name]
+
+    @staticmethod
+    def _read_anchor(path: Path) -> dict | None:
+        try:
+            a = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            return {"unreadable": True}
+        return a if isinstance(a, dict) else {"unreadable": True}
+
+    def _anchor_problem(self, a: Mapping, head: "Head") -> str:
+        if a.get("unreadable") or not isinstance(a.get("seq"), int) or not isinstance(a.get("chain"), str):
+            return "the anchor file is unreadable"
+        if a["seq"] > head.seq:
+            return f"the ledger ends at seq {head.seq} but its anchor says seq {a['seq']}: events were removed"
+        if a["seq"] == 0:
+            return "" if a["chain"] == GENESIS else "the anchor's empty-ledger hash is wrong"
+        row = self.db.execute("SELECT chain FROM events WHERE seq = ?", (a["seq"],)).fetchone()
+        if row is None or row[0] != a["chain"]:
+            return f"the chain hash at seq {a['seq']} does not match its anchor: the ledger was rewritten"
+        count = self.db.execute("SELECT COUNT(*) FROM events WHERE seq <= ?", (a["seq"],)).fetchone()[0]
+        if isinstance(a.get("count"), int) and count != a["count"]:
+            return f"{a['count']} events were anchored up to seq {a['seq']}, {count} remain"
+        return ""
+
+    def anchors(self) -> list[tuple[Path, dict]]:
+        out = []
+        for p in self.anchor_paths():
+            a = self._read_anchor(p)
+            if a is not None:
+                out.append((p, a))
+        return out
+
+    def check_anchors(self) -> str:
+        """'' when every anchor found matches the ledger, else why not. A writer updates the anchors just before
+        its COMMIT, under the write lock, so the check takes that lock too: it never sees an anchor ahead of a
+        commit still in flight. A database it cannot lock (read-only) is checked as it stands."""
+        with self._lock:
+            locked = True
+            try:
+                self.db.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError:
+                locked = False
+            try:
+                head = self.head()
+                for p, a in self.anchors():
+                    why = self._anchor_problem(a, head)
+                    if why:
+                        return f"head anchor {p}: {why}"
+                return ""
+            finally:
+                if locked:
+                    self.db.execute("ROLLBACK")
+
+    def _write_anchors(self, head: "Head", count: int) -> list[tuple[Path, bytes | None]]:
+        """Write the head to every anchor path. Returns the previous bytes of each, to undo on rollback."""
+        doc = json.dumps({"v": 1, "ledger": str(self.path.resolve()), "seq": head.seq, "count": count,
+                          "chain": head.chain, "id": head.id}, sort_keys=True).encode("utf-8")
+        before = []
+        for i, p in enumerate(self.anchor_paths()):
+            try:
+                old = p.read_bytes() if p.exists() else None
+                _atomic_write(p, doc)
+                before.append((p, old))
+            except OSError as exc:
+                if i == 0:  # the anchor beside the ledger is required; the home copy is best effort
+                    raise
+                logger.warning("ledger %s: cannot write head anchor %s: %s", self.path, p, exc)
+        return before
+
+    def anchor(self) -> dict:
+        """Anchor the current head (a store that predates D-040, or after `exo init` reuses a path)."""
+        with self._lock:
+            self.db.execute("BEGIN IMMEDIATE")
+            try:
+                head = self.head()
+                self._write_anchors(head, len(self))
+            finally:
+                self.db.execute("COMMIT")
+        return {"seq": head.seq, "chain": head.chain}
+
+    def clear_anchors(self) -> None:
+        """Remove this path's anchors: only for a new, empty ledger made where an old one was deleted."""
+        for p in self.anchor_paths():
+            p.unlink(missing_ok=True)
 
     def close(self) -> None:
         self.db.close()
@@ -173,6 +299,10 @@ class Ledger:
                     if not self.db.execute("SELECT 1 FROM events WHERE id = ?", (r,)).fetchone():
                         raise LedgerError(f"ref {r} is not an event in this ledger")
                 head = self.head()
+                for p, a in self.anchors():
+                    why = self._anchor_problem(a, head)
+                    if why:
+                        raise LedgerError(f"refusing to append: head anchor {p}: {why}. Run: exo memory verify")
                 event = {"ts": crypto.now_ts(), "author": author, "kind": kind, "body": body,
                          "session": session, "refs": refs, "prev": head.chain, "pub": self.signer.pub}
                 event["id"] = event_id(event)
@@ -182,17 +312,28 @@ class Ledger:
                     f"INSERT INTO events ({COLS.split(',', 1)[1]}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     (event["id"], event["ts"], author, kind, crypto.canonical(body).decode("utf-8"), session,
                      json.dumps(refs), event["prev"], event["pub"], event["sig"], chain))
-                self.db.execute("COMMIT")
+                undo = self._write_anchors(Head(head.seq + 1, event["id"], chain), head.seq + 1)
+                try:
+                    self.db.execute("COMMIT")
+                except BaseException:
+                    for p, old in undo:
+                        if old is None:
+                            p.unlink(missing_ok=True)
+                        else:
+                            _atomic_write(p, old)
+                    raise
             except BaseException:
-                self.db.execute("ROLLBACK")
+                if self.db.in_transaction:
+                    self.db.execute("ROLLBACK")
                 raise
         return {**event, "seq": head.seq + 1, "chain": chain}
 
     # --- verify --------------------------------------------------------------
 
-    def verify(self, trusted: Mapping[str, Iterable[str]] | None = None) -> dict:
-        """Recompute every id, chain link and signature. If `trusted` maps author to allowed
-        public keys, also require each event's key to be one of them."""
+    def verify(self, trusted: Mapping[str, Iterable[str]] | Any | None = None) -> dict:
+        """Recompute every id, chain link and signature, then check the head anchors and the append-only
+        triggers. `trusted` is a map of author to allowed public keys, or a key registry with
+        `reason(author, pub)` (exo.keyring): an event whose key it does not trust fails."""
         prev, checked = GENESIS, 0
         for ev in self.iter():
             doc = signed_part(ev)
@@ -204,10 +345,32 @@ class Ledger:
                 return _bad(ev, "stored chain hash is wrong", checked)
             if not crypto.verify_doc(doc, ev["pub"]):
                 return _bad(ev, "signature does not verify", checked)
-            if trusted is not None and ev["pub"] not in set(trusted.get(ev["author"], ())):
+            if trusted is not None and hasattr(trusted, "reason"):
+                why = trusted.reason(ev["author"], ev["pub"])
+                if why:
+                    return _bad(ev, f"untrusted key for author {ev['author']!r}: {why}", checked)
+            elif trusted is not None and ev["pub"] not in set(trusted.get(ev["author"], ())):
                 return _bad(ev, f"key is not trusted for author {ev['author']!r}", checked)
             prev, checked = ev["chain"], checked + 1
-        return {"ok": True, "checked": checked, "head": prev}
+        missing = sorted(set(self.missing_triggers) | set(self._missing_triggers()))
+        if missing:
+            return {"ok": False, "error": f"append-only trigger {', '.join(missing)} was missing (recreated on "
+                    "open); the ledger may have been edited", "checked": checked, "head": prev}
+        why = self.check_anchors()
+        if why:
+            return {"ok": False, "error": why, "checked": checked, "head": prev}
+        return {"ok": True, "checked": checked, "head": prev, "anchored": bool(self.anchors())}
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    if not path.parent.exists():  # keys/heads under $EXO_HOME: private like the rest of keys/
+        path.parent.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.parent.mkdir(mode=0o700, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+    os.replace(tmp, path)
 
 
 def _bad(ev: dict, reason: str, checked: int) -> dict:

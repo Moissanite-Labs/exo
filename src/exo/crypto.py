@@ -51,7 +51,8 @@ def pubkey_b64(key: SigningKey) -> str:
 
 
 def save_key(key: SigningKey, path: str | os.PathLike) -> Path:
-    """Write the seed (0600) and the public key next to it. Refuses to overwrite."""
+    """Write the seed (0600) and the public key next to it. Refuses to overwrite. A key written into
+    ``$EXO_HOME/keys`` is pinned in the key registry (exo.keyring)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -59,6 +60,8 @@ def save_key(key: SigningKey, path: str | os.PathLike) -> Path:
         fh.write(b64(bytes(key)) + "\n")
     os.chmod(path, 0o600)
     path.with_suffix(".pub").write_text(pubkey_b64(key) + "\n")
+    from .keyring import pin_new_key  # D-040: a key made in $EXO_HOME/keys is pinned as it is made
+    pin_new_key(path, pubkey_b64(key))
     return path
 
 

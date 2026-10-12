@@ -102,6 +102,8 @@ class StubLink:
         self.calls.append(body)
         if type(body).__name__ == "SessionCreate":
             return {"session": {"id": f"s_{len(self.calls)}"}}
+        if type(body).__name__ == "Peers":  # D-040: the core's ingress path; this stub's policy delivers everything
+            return {"msg_id": "bm_x", "state": "delivered", "session": body.session}
         return {"accepted": True}
 
     async def events(self, since=0, session=None):
@@ -129,7 +131,7 @@ def test_channel_routes_inbox_to_turns_and_replies_signed(bus, tmp_path):
         ch = BusChannel(link, extra)
         assert await ch.start()
         await asyncio.sleep(0.5)  # the poll loop picks the inbox up on start
-        n = len([c for c in link.calls if type(c).__name__ == "TurnSend"])
+        n = len([c for c in link.calls if type(c).__name__ == "Peers" and c.action == "bus"])
         again = await ch.poll_once()  # nothing new: cursor and dedup hold
         sessions = dict(ch._by_chat)
         sid = sessions["gamma"]
@@ -142,8 +144,9 @@ def test_channel_routes_inbox_to_turns_and_replies_signed(bus, tmp_path):
 
     n, again, sessions, calls = asyncio.run(main())
     assert (n, again) == (2, 0) and set(sessions) == {"gamma", "team:core"}
-    sends = [c for c in calls if type(c).__name__ == "TurnSend"]
-    assert "direct to beta" in sends[0].text and "seat gamma" in sends[0].text
+    sends = [c for c in calls if type(c).__name__ == "Peers"]
+    assert sends[0].text == "direct to beta" and sends[0].envelope["from"] == "gamma" and sends[0].pub
+    assert not [c for c in calls if type(c).__name__ == "TurnSend"]  # never a principal turn
     reply = bus.client("gamma").inbox()[-1]
     assert reply["body"] == "reply from exo" and reply["from"] == "beta" and reply["thread"] == "d1"
     assert route({"to": ["team:core"], "from": "delta"}, "beta") == ("team:core", "group")

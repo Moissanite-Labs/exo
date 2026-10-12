@@ -339,7 +339,7 @@ def test_recorded_session_cost_in_exo_trace_tool(tmp_path):
 
     sid = run(go())
     out = eng.trace_text(sid, 5)
-    assert "$203.00" in out and "cache r/w 0/0  unknown" not in out
+    assert "$210.00" in out and "cache r/w 0/0  unknown" not in out  # the standing line names bus messages (D-040)
     assert "calls in turn 1" in out
     plain = engine(tmp_path / "np", [{"match": "go", "steps": ["ok"]}])
     async def go2():

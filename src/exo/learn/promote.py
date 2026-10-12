@@ -2,7 +2,7 @@
 
 `apply_policy` walks the open proposals and applies the rules in order:
 
-1. The principal said it (a ruling or an answer is among the evidence): promote now.
+1. The principal said it (a ruling or an answer the principal wrote is among the evidence): promote now.
 2. Guarded (irreversible, public, financial, third party): never auto-promote. It becomes a question once.
 3. Conflict with an existing belief: stays held; consolidation already raised the question. Never silent.
 4. Taste or fact, not guarded, weight high, evidence from at least `min_sessions` different sessions, no critic
@@ -17,9 +17,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any
 
-from exo import taste
+from exo import provenance, taste
 from exo.ask import QuestionQueue
 from exo.consolidate import (ConsolidateError, Proposal, load_policy, load_state, proposal_accept,
                              proposal_revert, _status)
@@ -52,10 +53,12 @@ def sessions_of(ledger: Any, evidence_ids: list[str]) -> set[str]:
     return out
 
 
-def principal_said(ledger: Any, p: Proposal) -> bool:
-    if p.kind == "ruling":
-        return True
-    return any((ledger.get(e["id"]) or {}).get("kind") in ("ruling", "answer") for e in p.evidence)
+def principal_said(ledger: Any, p: Proposal, principals: Iterable[str] | None = None) -> bool:
+    """Rule 1: a ruling or an answer among the evidence, written by the principal (D-040). The kind alone is not
+    enough: the agent could write a `ruling` for itself, and a peer's text could be captured as one."""
+    who = set(principals) if principals is not None else set(provenance.principal_names())
+    return any((ev := ledger.get(e["id"]) or {}).get("kind") in ("ruling", "answer") and ev.get("author") in who
+               for e in p.evidence)
 
 
 def ask_once(lr: Learner, p: Proposal, why: str) -> str | None:
@@ -117,7 +120,7 @@ def _decide(lr: Learner, p: Proposal, weight: float, held: bool, gated: bool, al
             now: str) -> Decision:
     rt = lr.runtime
     # Rule 1: the principal said it.
-    if principal_said(rt.ledger, p) and not held:
+    if principal_said(rt.ledger, p, provenance.principal_names(rt.store)) and not held:
         return Decision(p.id, "promoted", 1, "the principal said it")
     # Rule 3 before rule 2 for a held proposal: the conflict already raised its question, so it only waits.
     if held:
