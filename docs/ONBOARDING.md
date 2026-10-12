@@ -6,7 +6,7 @@ principal a store (sections 2 and 3).
 ## 1. Learning Exo: `/intro` and tutorial mode
 
 Exo has unfamiliar parts (one memory for all windows, no manual compaction, an approval gate, peers). Two
-tools teach them, both in the terminal client (`exo-tui`) and neither adds a protocol command.
+tools teach them, both in the terminal client (`exo`) and neither adds a protocol command.
 
 ### `/intro`
 Sends a normal user turn (it shows as `/intro`). The agent loads the `exo-intro` skill
@@ -17,11 +17,11 @@ appears in the skill, so the two cannot drift.
 
 ### First run
 `$EXO_HOME/state/onboarding.json` holds `{"onboarded": <time>, "hints_seen": [...]}`. When `onboarded` is
-missing, `exo-tui` runs `/intro` at launch and turns tutorial mode on. The marker is written when the intro
+missing, `exo` runs `/intro` at launch and turns tutorial mode on. The marker is written when the intro
 turn actually starts, so a crash before that shows the intro again next time. It does not run when you resume
 a session (`--resume`, `--session`), and never in tests, `exo serve` or headless runs, because only the
-`exo-tui` entry point asks for it.
-- `exo-tui --no-intro` skips it and records the home as onboarded.
+`exo` entry point asks for it.
+- `exo --no-intro` skips it and records the home as onboarded.
 - `EXO_NO_INTRO=1` skips it for that launch and writes nothing.
 - Delete the file (or run `/tutorial reset` for tips only) to see it again.
 

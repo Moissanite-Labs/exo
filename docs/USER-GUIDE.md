@@ -5,7 +5,7 @@ technical page that has the detail. The map of all docs is `docs/DOCS-MAP.md`.
 
 ## 1. Install and first run
 
-Install steps are in the README (`## Install`) and `docs/INSTALL.md`. Keys and models are in `docs/PROVIDERS.md`.
+Install steps are in the README (`## Quick start`: install, then type `exo`) and `docs/INSTALL.md`. Keys and models are in `docs/PROVIDERS.md`.
 Setting up your own store and the first interview are in `docs/ONBOARDING.md`. This guide does not repeat them.
 
 After install, set up a model provider. Pick one way; all three store the key the same way and show the same
@@ -16,15 +16,17 @@ status:
     exo providers test anthropic  # one tiny live call: ok with latency, or why it failed
 
 Or type `/providers` in the terminal client, or open the Providers tab in `exo web`. Never paste a key into chat or
-type it after the command name. If no provider works, `exo tui` and `exo web` tell you. Details and the security of
+type it after the command name. If no provider works, `exo` and `exo web` tell you. Details and the security of
 the web route: `docs/PROVIDERS.md`.
 
-Then start the terminal client:
+Then start the terminal client by typing the command, in the folder you want to work in:
 
-    exo tui                 # or: exo-tui
+    exo                     # same as `exo tui`; flags pass through: exo --resume (or `exo resume`), exo --seat NAME
 
 The first time it runs on an `EXO_HOME`, the agent gives a short orientation (`/intro`) and turns on tutorial mode.
-Skip the orientation with `exo-tui --no-intro`. More: `docs/ONBOARDING.md`.
+If no model provider works yet, the providers panel opens first and the orientation waits until you add one.
+Skip the orientation with `exo --no-intro`. Upgrade with `exo update`; `exo --version` shows what you have.
+More: `docs/ONBOARDING.md`.
 
 ## 2. The two clients
 

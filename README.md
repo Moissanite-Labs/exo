@@ -67,17 +67,22 @@ Needs `git` and Python 3.11 or newer, on macOS or Linux (tested on Arch with Pyt
 
     git clone https://github.com/aska-digital/exo && cd exo
     scripts/install.sh --dry-run      # print the plan, change nothing
-    scripts/install.sh                # install
-    . ~/.exo/env.sh && exo models     # check providers and routes
-    exo-tui                           # the terminal client
+    scripts/install.sh                # install: puts `exo` on your PATH (~/.local/bin/exo)
+    exo                               # the terminal client, in the current directory
+
+If `~/.local/bin` is not on your PATH, the installer prints the line to add to your shell rc file (or run it
+with `--modify-path` and it adds the line). First run with no model key opens the providers panel. Upgrade
+with `exo update`. `exo --version` shows the version and, for a checkout install, the git sha. Flags pass
+through to the client: `exo --resume` (or `exo resume`), `exo --seat NAME`, `exo --no-intro`. Other commands keep working:
+`exo models`, `exo providers`, `exo -h` lists all.
 
 For the web client, run `exo serve` in one terminal and `exo web` in another, then open
 `http://127.0.0.1:7342`. Options, what each install step does, safety rules and re-runs are in
 [`docs/INSTALL.md`](docs/INSTALL.md). To add a model key, see [`docs/PROVIDERS.md`](docs/PROVIDERS.md).
 
-The first time `exo-tui` runs on an `EXO_HOME`, the agent gives a short orientation (`/intro`) and turns on
+The first time `exo` runs on an `EXO_HOME`, the agent gives a short orientation (`/intro`) and turns on
 tutorial mode: small tips the first time something comes up. `/tutorial off` turns them off, and
-`exo-tui --no-intro` skips the orientation. Details in [`docs/ONBOARDING.md`](docs/ONBOARDING.md).
+`exo --no-intro` skips the orientation. Details in [`docs/ONBOARDING.md`](docs/ONBOARDING.md).
 
 Commands you will use in the terminal (`/help` lists all): `/new`, `/sessions`, `/fork`, `/undo`, `/cwd`,
 `/context`, `/compact`, `/model`, `/default`, `/usage`, `/trace`, `/findings`, `/peers`, `/send`, `/handoff`,

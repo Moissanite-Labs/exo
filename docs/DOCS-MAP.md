@@ -78,7 +78,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Signed ledger, crypto and the principal store | `docs/CORE.md`, `docs/STORE-V2.md` | §11 | MISSING | WP §19, §20 |
 | Retrieval | `docs/STORE-V2.md` §3, `docs/CORE.md` "Python API" | §11 (`exo find`, `exo ctx`) | MISSING | WP §21 |
 | Eval, ask queue, brief, consolidate | `docs/TOOLS-CLI.md` | MISSING (a pointer in §11 only) | §9 "Work on the learning loop" (consolidate and proposals) | WP §6, §22 |
-| Installer | `docs/INSTALL.md` | §1 | n/a | n/a |
+| D-035 Typing `exo` opens Exo: bare command, installer on PATH, `exo update` | `docs/INSTALL.md` "The `exo` command", `docs/COMMANDS.md` Part 2 "Running Exo" | §1 | n/a | n/a |
 | Web client (command centre) | `plugins/exo-command/README.md`, `docs/ui/WEB.md` | §2 | n/a | WP §24 |
 | Bus (agent to agent relay) | `plugins/exo-bus/README.md` | MISSING | §9 "Use the bus" | WP §29 (named, not explained) |
 | Upstream tracking (`exo upstream`) | `docs/PINNING.md`, `docs/STANDALONE.md` §3 | n/a | MISSING | WP §25 |

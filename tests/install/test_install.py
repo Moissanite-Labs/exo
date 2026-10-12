@@ -115,3 +115,72 @@ def test_default_install_leaves_hermes_alone(box):
     assert not (exo / "hermes").exists() and not (exo / "bin" / "exo-hermes").exists()
     assert not (exo / "hermes-home" / "config.yaml").exists()
     assert "hermes_dir" not in (exo / "config.json").read_text()
+
+
+# --- the `exo` command on PATH -----------------------------------------------------
+
+def run_sh(tmp_path, *args, shell="/bin/zsh"):
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("EXO_", "HERMES_"))}
+    env.update(HOME=str(tmp_path / "home"), EXO_HOME=str(tmp_path / "exo"), SHELL=shell,
+               PATH="/usr/bin:/bin:" + str(Path(sys.executable).parent))
+    return subprocess.run([BASH, str(SCRIPT), "--python", sys.executable, *args], env=env,
+                          capture_output=True, text=True, timeout=600)
+
+
+def test_dry_run_plans_the_exo_command_and_path_line(box):
+    before = snapshot(box)
+    r = run_sh(box, "--dry-run", "--no-interview")
+    assert r.returncode == 0, r.stderr
+    bin_dir = (box / "home" / ".local" / "bin")
+    assert f"ln -sfn {box.resolve() / 'exo' / 'venv' / 'bin' / 'exo'}" in r.stdout.replace("\\", "")
+    assert "is not on your PATH" in r.stdout and 'export PATH=' in r.stdout and ".zshrc" in r.stdout
+    assert "[tui]" in r.stdout.replace("\\", "")
+    assert snapshot(box) == before and not bin_dir.exists()
+
+
+def test_dry_run_modify_path_prints_but_writes_nothing(box):
+    before = snapshot(box)
+    r = run_sh(box, "--dry-run", "--no-interview", "--modify-path")
+    assert r.returncode == 0 and "append to" in r.stdout
+    assert snapshot(box) == before
+
+
+def _pypi_reachable() -> bool:
+    import socket
+    try:
+        socket.create_connection(("pypi.org", 443), timeout=3).close()
+        return True
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not shutil.which("uv"), reason="uv not installed")
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="needs Python 3.11")
+def test_real_install_puts_exo_on_path_and_rerun_upgrades(box):
+    if not _pypi_reachable():
+        pytest.skip("no network for pip")
+    rc = box / "home" / ".zshrc"
+    rc.write_text("# mine\n")
+    r = run_sh(box, "--no-interview", "-y", "--exo-source", str(REPO))
+    assert r.returncode == 0, r.stderr + r.stdout
+    link = box / "home" / ".local" / "bin" / "exo"
+    assert link.is_symlink() and link.resolve() == (box / "exo" / "venv" / "bin" / "exo").resolve()
+    assert rc.read_text() == "# mine\n"                       # rc files are not edited without --modify-path
+    assert "export PATH=" in r.stdout
+    v = subprocess.run([str(link), "--version"], capture_output=True, text=True,
+                       env={**os.environ, "EXO_HOME": str(box / "exo")})
+    assert v.returncode == 0 and v.stdout.startswith("exo 0.")
+    import json
+    cfg = json.loads((box / "exo" / "config.json").read_text())
+    assert cfg["install"]["mode"] == "venv" and cfg["install"]["venv"].endswith("/venv")
+    # a second run, now with --modify-path, adds the line once; a third changes nothing
+    assert run_sh(box, "--no-interview", "-y", "--exo-source", str(REPO), "--modify-path").returncode == 0
+    assert rc.read_text().count("export PATH=") == 1
+    assert run_sh(box, "--no-interview", "-y", "--exo-source", str(REPO), "--modify-path").returncode == 0
+    assert rc.read_text().count("export PATH=") == 1
+    assert link.is_symlink()
+    # a foreign file at the link path is never replaced
+    link.unlink()
+    link.write_text("mine")
+    r = run_sh(box, "--no-interview", "-y", "--exo-source", str(REPO))
+    assert r.returncode == 0 and link.read_text() == "mine" and "left alone" in r.stderr
