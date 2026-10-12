@@ -49,6 +49,8 @@ from exo.protocol import schema as s
 from exo.server.engine import CommandFailed, Hub
 
 _MISSING = object()
+CODE_FIND_LINE = ("Use code_find for unfamiliar code and behavior questions across many files; use grep or read_file "
+                  "when you already know the symbol or path.")
 SYSTEM_PROMPT = ("You are Exo, a careful coding agent. Use the tools to read, edit and run "
                  "things in the working directory, then answer briefly.")
 
@@ -231,6 +233,7 @@ class CoreEngine:
         self.mcp = McpManager({**(mcp or {}), **(seat.mcp if seat else {})}, env)
         self._started: asyncio.Future | None = None
         system_prompt = "\n\n".join(p for p in (system_prompt, seat.soul if seat else "", self.skills.prompt(),
+                                                   CODE_FIND_LINE if self.registry.specs(names=["code_find"]) else "",
                                                    STANDING_LINE if self.peer_cfg.enabled else "") if p)
         slots = self.plugins.slots
         tree = TreeContext(self.store, DefaultCompressor(self.router.provider("aux")), **(tree_cfg or {}))

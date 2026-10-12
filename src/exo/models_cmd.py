@@ -28,6 +28,9 @@ def render(router: Router) -> str:
     lines.append('roles (first route serves, the rest are fallbacks):')
     for role, refs in router.resolved_roles().items():
         lines.append(f"  {role:<9} {' > '.join(refs) or '-'}")
+    from .core.tools.builtin.codefind import status as code_find_status
+    lines.append('tools:')
+    lines.append(f'  {code_find_status()}')
     return '\n'.join(lines)
 
 
