@@ -292,3 +292,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the decision model by default, tighten-only (D-015 unchanged). Amends D-015 and D-018's "local Laya
   default". exo-decide (a fine-tuned Laya) can take the default back only by beating Jev on the held-out
   set; never trained on Jev outputs (terms).
+
+## D-020 (2026-10-12) Exo OS: a new branch of Exo, design first
+- **A's ask:** "Exo OS. An OS form of the exo harness that replaces Omarchy entirely with an innovative
+  AI-first operating system ... making it the foundation for the user's entire experience and
+  interaction with the digital realm". Built by saga-minar on charminar.
+- **Decision:** phase 0 is research and design only (BRIEF-07, folder `os/` on branch
+  `exo-os/phase-0`): base system, shell, security, small hardware, roadmap and proposed decisions.
+  Exo OS runs the same core and protocol as Exo; no fork.
+- **Lead call:** nothing on charminar's live OS changes in phase 0. It is Shahid's working machine
+  (CRM, WhatsApp, Jarvis). Where the OS first runs is A's call after the design.
