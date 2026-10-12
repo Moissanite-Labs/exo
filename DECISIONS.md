@@ -371,3 +371,22 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   The TUI shows the serving route and an open-findings count.
 - **Not done:** pricing (`cost_usd` stays null for models missing from the catalog) is a separate fix; a
   provider time to first token is measured at the loop, not inside each provider.
+
+## D-026 (2026-10-12) Peers and one ingress path
+- **Why:** A watched two Claude Code sessions avoid a file collision by messaging each other and asked for it in
+  Exo, and for Hermes agents too (docs/PEERS.md).
+- **Decision:** anything outside the principal's keyboard goes through one path, `Ingress(source, sender, trust,
+  body)` -> exo-gate policy (auto, hold, deny) -> deliver (steer, queue, wake) -> receipt, event, trace. Peers are
+  the first source; the bus channel, scheduler and MCP Events plug in later (D-027) with only their transport.
+  Policy is the receiving seat's: auto for the same principal, hold otherwise, deny for a bad signature; held
+  messages wait 30 minutes for an approval card. A peer message is input, never consent: attempts to approve
+  are refused and shown to the principal.
+- **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
+  `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
+  the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
+- **Hermes:** the exo-bus plugin gets a peers module. Mid-turn delivery uses `agent.steer`, not
+  `ctx.inject_message`, because in the CLI inject lands on the interrupt queue and interrupts. The bus is not
+  registered as a Hermes platform: that is a gateway adapter admitting bus text as user input, so it needs its own
+  review.
+- **Not done:** web client view, receipts for bus sends, held messages across restarts, live gateway test.
+
