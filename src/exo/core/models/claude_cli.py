@@ -29,6 +29,7 @@ from typing import Any, AsyncIterator, Mapping
 import httpx
 
 from exo.core.models.base import StreamState, error_event
+from exo.core.models.anthropic import sanitize_tool_id
 from exo.core.types import ContentPart, Message, ProviderEvent, ToolCall, ToolSpec, Usage
 
 PREFIX = "mcp__hermes__"  # the inert server is named "hermes" so tool names match the proven plugin
@@ -84,11 +85,11 @@ def build_frames(messages: list[Message], names: set[str]) -> tuple[str, list[di
             continue
         if m.role == "tool":
             role = "user"
-            blocks = [{"type": "tool_result", "tool_use_id": r.call_id, "is_error": r.is_error,
+            blocks = [{"type": "tool_result", "tool_use_id": sanitize_tool_id(r.call_id), "is_error": r.is_error,
                        "content": r.text() or ("(error)" if r.is_error else "(no output)")} for r in m.tool_results]
         elif m.role == "assistant":
             role, blocks = "assistant", _blocks(m)  # thinking is not replayed (no signatures kept)
-            blocks += [{"type": "tool_use", "id": tc.id, "name": PREFIX + tc.name if tc.name in names else tc.name,
+            blocks += [{"type": "tool_use", "id": sanitize_tool_id(tc.id), "name": PREFIX + tc.name if tc.name in names else tc.name,
                         "input": tc.arguments} for tc in m.tool_calls]
         else:
             role, blocks = "user", _blocks(m)
