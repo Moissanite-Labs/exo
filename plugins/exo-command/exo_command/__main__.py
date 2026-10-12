@@ -3,7 +3,7 @@
     python -m exo_command [--socket PATH | --url URL --token-file FILE] [--host H] [--port P]
 
 With no flags it connects to the local daemon at ``$EXO_HOME/run/exod.sock`` and serves
-``http://127.0.0.1:7342``. Later ``exo web`` will call ``main()`` here.
+``http://127.0.0.1:7342``. ``exo web`` calls ``main()`` here.
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 """Seats: a named configuration of one agent (docs/SEATS.md).
 
 A seat file lives at ``$EXO_HOME/seats/<name>.toml`` (or ``.json``), or ``<name>/seat.toml`` with a
-``SOUL.md`` beside it. Two spellings are accepted for each part so the orchestra templates and
+``SOUL.md`` beside it. A few short spellings are accepted for each part so the orchestra templates and
 hand-written files both load::
 
     name = "scout"                     # or [seat] name = ...; defaults to the file name

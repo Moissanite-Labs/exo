@@ -23,15 +23,16 @@ Panels:
 
 ```sh
 exo serve                      # the core, in one terminal
-PYTHONPATH=plugins/exo-command python -m exo_command   # the web client: http://127.0.0.1:7342
+exo web                        # the web client: http://127.0.0.1:7342
 ```
 
-The `PYTHONPATH` is needed until the plugin ships as an installed package (it moves under `src/exo/ext/`
-later, per docs/STANDALONE.md section 4).
+`exo web` finds this folder (`$EXO_PLUGIN_DIRS`, `$EXO_HOME/plugins`, then the repo's `plugins/`) and
+calls `exo_command.__main__.main()`; arguments after `web` go to it. `python -m exo_command` still works
+with `PYTHONPATH=plugins/exo-command`.
 
 Options: `--socket PATH` (default `$EXO_HOME/run/exod.sock`), `--url URL --token-file FILE` for a core
 on TCP, `--host`, `--port`. It uses the standard library only. `exo web` will call
-`exo_command.__main__.main()` once the CLI owner wires it in.
+XX
 
 Optional: `exo_command.asgi.build_app()` returns a FastAPI app with the same JSON routes, if you would
 rather mount the client in your own server. FastAPI is not required.

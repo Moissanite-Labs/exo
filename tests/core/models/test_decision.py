@@ -161,10 +161,10 @@ def test_tighten_only():
     assert tighten_only("a", "c", order=("a", "b", "c")) == "c"
 
 
-def test_default_catalog_routes_decision_to_laya_then_aux():
+def test_default_catalog_routes_decision_to_jev_then_laya():
     r = Router(env={})
     assert r.providers["laya"]["base_url"] == "http://127.0.0.1:8000/v1" and r.providers["laya"]["local"]
-    assert [x.ref for x in r.chain("decision")][0] == "laya:laya"
+    assert [x.ref for x in r.chain("decision")][:2] == ["jev:jev-latest", "laya:laya"]
 
 
 def test_cli_decide(monkeypatch, capsys):

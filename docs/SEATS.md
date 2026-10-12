@@ -4,9 +4,13 @@ A seat is one named configuration of an Exo agent: who it serves, which models, 
 skills, which MCP servers, which plugins and channels. Run one with `exo serve --seat <name>`
 (sets `EXO_SEAT`; the engine factory reads it). `seat.list` shows the files and the active seat.
 
+This is the one seat format. The role templates in `plugins/exo-orchestra/seats/*/seat.toml` are written in
+it (see `plugins/exo-orchestra/SEATS.md`), and `/orchestra check <file>` validates a file against it.
+
 Where: `$EXO_HOME/seats/<name>.toml`, `<name>.json`, or `<name>/seat.toml` with a `SOUL.md` beside it
-(its text is added to the system prompt). Two spellings are accepted so the orchestra templates in
-`plugins/exo-orchestra/seats/*/seat.toml` and hand-written files both load.
+(its text is added to the system prompt). A few shorter spellings are accepted (top-level `name`, `role`,
+`toolsets`, `principal = "ada"`, `[plugins]` as a list); the examples below use the canonical ones. Keys the loader
+does not read are ignored.
 
 ```toml
 [seat]                       # or top-level name / role / description; name defaults to the file name

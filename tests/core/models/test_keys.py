@@ -125,7 +125,8 @@ def test_eval_override():
 
 def test_decision_default_falls_back_and_override():
     r = Router(env={})
-    assert r.roles["decision"] == ["laya:laya"] and r.chain("decision") == [Route("laya", "laya")] + r.chain("aux") + [
+    assert r.roles["decision"] == ["jev:jev-latest", "laya:laya"]
+    assert r.chain("decision") == [Route("jev", "jev-latest"), Route("laya", "laya")] + r.chain("aux") + [
         x for x in r.chain("main") if x not in r.chain("aux")]
     r = Router(env={}, roles={"decision": ["jev:jev-latest"]})
     assert r.chain("decision")[0] == Route("jev", "jev-latest")

@@ -302,3 +302,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Exo OS runs the same core and protocol as Exo; no fork.
 - **Lead call:** nothing on charminar's live OS changes in phase 0. It is Shahid's working machine
   (CRM, WhatsApp, Jarvis). Where the OS first runs is A's call after the design.
+
+## D-021 (2026-10-12) Wave 2 closed
+- **Done:** the six plugins run on the Exo core (no Hermes imports in memory, context, gate, bus,
+  command, orchestra); skills loader, MCP client, seats (one canonical format, docs/SEATS.md), `exo web`,
+  `exo decide`, config.get/set, seat.list, approvals.list, session status. Root suite 513 passed; plugin
+  suites green.
+- **Acceptance (STANDALONE.md section 6), live on OpenCode Go (Kimi K3 main, GLM 5.3 Flash aux):** a
+  turn-1 correction survived compaction and was quoted verbatim; `rm -rf` on a scratch path raised
+  approval.requested and a deny blocked it; bus round trip verified (tests, signed both ways).
+- **Open, carried to wave 3:** capture misses corrections phrased as "Important correction ... NOT X";
+  the gate has no signing key so decisions are logged, not ledgered; confirm Jev answers gate calls
+  live; usage.updated.model reports the configured route, not the one that served after fallback.

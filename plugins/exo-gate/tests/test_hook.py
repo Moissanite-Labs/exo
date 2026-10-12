@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import sys
 
@@ -43,8 +44,9 @@ def events(store):
 
 
 def call(ctx, tool, args, **kw):
-    [cb] = ctx.hooks["pre_tool_call"]
-    return cb(tool_name=tool, args=args, session_id="s1", tool_call_id="c1", turn_id="t1", task_id="", **kw)
+    [cb] = ctx.hooks["pre_tool_call"]  # an async hook: the core awaits it
+    return asyncio.run(cb(tool_name=tool, args=args, session_id="s1", tool_call_id="c1", turn_id="t1",
+                          task_id="", **kw))
 
 
 def test_register_wires_both_hooks(keyed_store):
@@ -202,3 +204,73 @@ def test_plugin_entry_point_imports(monkeypatch):
     ctx = MockCtx()
     mod.register(ctx)
     assert "pre_tool_call" in ctx.hooks
+
+
+# --- decision model seam (D-015) ---------------------------------------------------------
+
+def decision_router(top, calls=None):
+    """A real Router whose decision role is a mocked decision API that answers with `top` as the top option."""
+    import httpx
+    from exo.core.models import Router
+
+    def handler(req):
+        if calls is not None:
+            calls.append(req)
+        probs = {o: 0.05 for o in ("allow", "log", "ask", "deny")}
+        probs[top] = 0.85
+        return httpx.Response(200, json={"model": "m", "usage": {}, "answers": {"q": {
+            "type": "choice", "choice": top, "probabilities": probs, "confidence": 0.9}}})
+    return Router(roles={"decision": ["jev:jev-latest"]}, env={},
+                  client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                  providers={"jev": {"transport": "decision", "base_url": "https://x/v1", "roles": ["decision"]}})
+
+
+def gated(store, key, router, enabled=True):
+    ctx = MockCtx({"principal_store": str(store), "key_path": str(key),
+                   "decision_model": enabled})
+    ctx.router = router
+    hook.register(ctx)
+    return ctx
+
+
+def test_decision_model_can_be_turned_off_and_is_then_never_asked(keyed_store):
+    store, key = keyed_store
+    calls = []
+    ctx = gated(store, key, decision_router("deny", calls), enabled=False)
+    assert call(ctx, "read_file", {"path": "x"}) is None
+    assert calls == []
+
+
+def test_model_deny_tightens_allow_to_deny(keyed_store):
+    store, key = keyed_store
+    calls = []
+    ctx = gated(store, key, decision_router("deny", calls))
+    r = call(ctx, "read_file", {"path": "x"})
+    assert r["action"] == "block" and len(calls) == 1
+    assert events(store)[-1]["body"]["outcome"] == "deny"
+
+
+def test_model_allow_never_loosens_ask(keyed_store):
+    store, key = keyed_store
+    ctx = gated(store, key, decision_router("allow"))
+    r = call(ctx, "terminal", {"command": f"gh pr comment 12 -R other/repo --body 'Suggest a fix.\n{FOOT}'"})
+    assert r["action"] == "approve"
+    assert events(store)[-1]["body"]["outcome"] == "ask"
+
+
+def test_model_not_consulted_when_rules_deny(keyed_store):
+    store, key = keyed_store
+    calls = []
+    ctx = gated(store, key, decision_router("allow", calls))
+    r = call(ctx, "terminal", {"command": "git push --force origin main"})
+    assert r["action"] == "block" and calls == []
+
+
+def test_model_failure_keeps_the_rule_outcome(keyed_store):
+    store, key = keyed_store
+    ctx = gated(store, key, None)  # no router yet
+    assert call(ctx, "read_file", {"path": "x"}) is None
+
+
+def test_decision_model_is_on_by_default():
+    assert hook.resolve_settings(env={}).decision_model is True

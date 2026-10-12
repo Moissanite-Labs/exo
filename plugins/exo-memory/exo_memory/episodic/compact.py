@@ -22,7 +22,7 @@ model copies id formats into its output when it sees them). The SCALE
 line gives the model a sense of the byte budget, since models can't
 count bytes.
 
-Summarization goes through the Exo router's ``aux`` role (exo.ext.compat), so
+Summarization goes through the Exo router's ``aux`` role (``aux_sync``), so
 operators can pin a cheap model for it under ``models.roles.aux`` in config.json.
 The summarizer is injectable for tests.
 """
@@ -152,12 +152,30 @@ def _extract_text(response) -> str:
     return ""
 
 
-def default_summarizer(messages: list) -> str:
-    """Summarize through the aux model role of the Exo router (blocking; runs on the
-    compactor thread)."""
-    from exo.ext.compat import aux_summarize
+def router_summarizer(get_router: Callable[[], object]) -> Summarizer:
+    """A blocking summarizer over the engine's Router (``aux`` role). ``get_router`` is called per
+    use, because the engine owns the router only after plugins have registered."""
 
-    return aux_summarize(messages)
+    import uuid
+    conversation = "exo-memory-" + uuid.uuid4().hex[:12]  # providers like opencode-go reject calls without one
+
+    def summarize(messages: list) -> str:
+        from exo.core.models.router import aux_sync
+        from exo.core.types import ContentPart, Message
+
+        router = get_router()
+        if router is None:
+            raise RuntimeError("no model router: the engine has not attached one yet")
+        msgs = [Message(role=m["role"], content=[ContentPart.of_text(str(m.get("content") or ""))])
+                for m in messages if m.get("role") in ("system", "user", "assistant")]
+        return aux_sync(router, msgs, role="aux", session_id=conversation, temperature=0, max_tokens=1024)
+
+    return summarize
+
+
+def default_summarizer(messages: list) -> str:
+    """No router bound: compaction waits (the node stays unbuilt) until a host passes a summarizer."""
+    raise RuntimeError("exo-memory: no summarizer configured (the plugin passes router_summarizer at register)")
 
 
 def build_node(

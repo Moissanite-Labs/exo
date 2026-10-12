@@ -175,7 +175,8 @@ class CoreEngine:
                  env: dict[str, str] | None = None, delegation: dict[str, Any] | None = None,
                  seat: Seat | None = None, skill_folders: Iterable[str | os.PathLike] | None = None,
                  mcp: dict[str, dict[str, Any]] | None = None,
-                 channels: dict[str, dict[str, Any]] | None = None, **loop_kw: Any) -> None:
+                 channels: dict[str, dict[str, Any]] | None = None,
+                 tree_cfg: dict[str, Any] | None = None, **loop_kw: Any) -> None:
         self.home = Path(home)
         self.cwd = cwd or os.getcwd()
         self.store = SessionStore(self.home / "sessions.sqlite")
@@ -187,6 +188,7 @@ class CoreEngine:
         self.plugins = plugins or PluginManager()
         self.plugins.router = self.router  # plugins reach it as ctx.router
         self._approvals: dict[str, tuple[asyncio.Future, str | None]] = {}
+        self._open_approvals: dict[str, s.ApprovalRequested] = {}  # what approvals.list shows
         self._always: set[str] = set()
         self._deciders: dict[str, str] = {}
         self._channels: dict[str, Any] = {}
@@ -203,7 +205,7 @@ class CoreEngine:
         self._started: asyncio.Future | None = None
         system_prompt = "\n\n".join(p for p in (system_prompt, seat.soul if seat else "", self.skills.prompt()) if p)
         slots = self.plugins.slots
-        tree = TreeContext(self.store, DefaultCompressor(self.router.provider("aux")))
+        tree = TreeContext(self.store, DefaultCompressor(self.router.provider("aux")), **(tree_cfg or {}))
         self.loop = Loop(self.store, self.router.provider("main"), bus=HubBus(self),  # type: ignore[arg-type]
                          context=ContextAdapter(tree, slots.context, slots.memory), memory=slots.memory,
                          tool_specs=self._specs, run_tool=self.run_tool,
@@ -346,7 +348,9 @@ class CoreEngine:
         rid = s.new_id("a")
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._approvals[rid] = (fut, session)
-        self.hub.publish(s.ApprovalRequested(request_id=rid, summary=summary, risk=risk, call=call), session)
+        req = s.ApprovalRequested(request_id=rid, summary=summary, risk=risk, call=call)
+        self._open_approvals[rid] = req
+        self.hub.publish(req, session)
         try:
             decision = await fut
             if decided_by is not None:
@@ -354,6 +358,7 @@ class CoreEngine:
             return decision
         finally:
             self._approvals.pop(rid, None)
+            self._open_approvals.pop(rid, None)
             self._deciders.pop(rid, None)
 
     # ------------------------------------------------------------ dispatch
@@ -378,7 +383,21 @@ class CoreEngine:
         return {"session": to_dict(info)}
 
     async def _session_list(self, b: s.SessionList) -> dict[str, Any]:
-        return {"sessions": [to_dict(i) for i in self.store.list_sessions(b.limit, b.seat)]}
+        rows = []
+        for i in self.store.list_sessions(b.limit, b.seat):
+            st = self.loop._state.get(i.id)  # do not create state for an idle session
+            i.status = "live" if st is not None and st.running else "idle"
+            rows.append(to_dict(i))
+        return {"sessions": rows}
+
+    async def _approvals_list(self, b: s.ApprovalsList) -> dict[str, Any]:
+        out = []
+        for rid, req in self._open_approvals.items():
+            fut, sid = self._approvals.get(rid, (None, None))
+            if fut is None or fut.done() or (b.session and sid != b.session):
+                continue
+            out.append({**to_dict(req), "session": sid})
+        return {"approvals": out}
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
         info = self._info(b.session)
@@ -515,7 +534,9 @@ def create(seat: str | None = None) -> CoreEngine:
         folders.append(pack)
     return CoreEngine(cfg.home, models, plugins=pm, cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
                       mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
-                      delegation=cfg.get("delegation"))
+                      delegation=cfg.get("delegation"),
+                      tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
+                            if k in ("leaf_size", "tail_messages", "view_budget")})
 
 
 __all__ = ["ContextAdapter", "CoreEngine", "HubBus", "SqliteLog", "create"]

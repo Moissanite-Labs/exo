@@ -1,13 +1,10 @@
 # Exo seat template: builder
 # No model or provider is named here on purpose (D-018). The seat asks for a tier (D-017);
-# the principal's router config decides which model serves it. See SEATS.md.
-schema = 1
-
+# the principal's router config decides which model serves it. The format is the core loader's: see SEATS.md.
 [seat]
 name = "{{seat_name}}"
 role = "builder"
 description = "Implements the approved design and opens the PR."
-stage = "4. build"
 soul = "SOUL.md"
 
 [principal]
@@ -20,5 +17,5 @@ tier = "standard"
 toolsets = ["fs", "shell", "search", "delegation", "memory", "skills"]
 
 [skills]
-pack = "{{exo_skills_dir}}"
+folders = ["{{exo_skills_dir}}"]
 load = ["operating-doctrine", "github-pr-workflow", "github-issue-to-pr", "git-authorship-identity-cleanup"]

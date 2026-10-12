@@ -213,7 +213,16 @@ def extract_rulings_and_corrections(messages: list[dict]) -> tuple[list[Signal],
     try:
         from . import capture
         found = capture.extract_signals(messages, skip=lambda m: is_summary_text(message_text(m)))
-        pick = lambda kind: [Signal(kind, x.text, x.index, _ts(messages[x.index])) for x in found if x.kind == kind]  # noqa: E731
+        def pick(kind: str) -> list[Signal]:
+            out = []
+            for x in found:
+                if x.kind != kind:
+                    continue
+                whole = message_text(messages[x.index]).strip() if 0 <= x.index < len(messages) else ''
+                # capture classifies a sentence; the principal's own words are kept whole when short
+                text = whole if whole and len(whole) <= MAX_VERBATIM else x.text
+                out.append(Signal(kind, text, x.index, _ts(messages[x.index])))
+            return out
         return pick('ruling'), pick('correction')
     except Exception:
         return local_extract_rulings(messages), local_extract_corrections(messages)

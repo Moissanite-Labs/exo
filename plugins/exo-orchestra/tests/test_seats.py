@@ -18,14 +18,13 @@ from exo_orchestra import orchestra  # noqa: E402
 
 SKILLS = PLUGIN.parents[1] / "skills"
 GOOD = """
-schema = 1
 [seat]
 name = "forge"
 [models]
 tier = "standard"
-main = "fake:x"
-[models.tiers]
-fast = "fake:small"
+[models.roles]
+main = ["fake:x"]
+fast = ["fake:small"]
 [tools]
 toolsets = ["fs"]
 [skills]
@@ -40,17 +39,28 @@ def test_good_seat_validates_and_maps_to_core_inputs():
     assert orchestra.models_overlay(seat) == {"main": ["fake:x"], "fast": ["fake:small"]}
 
 
+@pytest.mark.parametrize("role", orchestra.ROLES)
+def test_every_template_is_the_core_loader_format(role, tmp_path):
+    """One format: what orchestra renders is valid for it and loads in the core loader unchanged."""
+    from exo.core import seats as core_seats
+    text = orchestra.render_seat_text(role, {"seat_name": "forge"})
+    assert orchestra.validate_seat(orchestra.parse_seat(text), SKILLS) == []
+    orchestra.render_seat(role, tmp_path / "home" / "seats" / "forge", {"seat_name": "forge"})
+    seat = core_seats.load(tmp_path / "home", "forge")
+    assert seat.name == "forge" and seat.role == role and seat.tier in orchestra.TIERS
+    assert seat.toolsets and seat.skill_load and seat.soul
+
+
 @pytest.mark.parametrize("edit,needle", [
-    ("schema = 1", "schema must be 1"),
     ('name = "forge"', "seat.name is required"),
     ('tier = "standard"', "models.tier must be"),
-    ('main = "fake:x"', "models.main must be"),
+    ('main = ["fake:x"]', "models.roles.main must be"),
     ('toolsets = ["fs"]', "tools.toolsets must be"),
     ('load = ["clean-writing"]', "no skill"),
 ])
 def test_bad_seats_are_reported(edit, needle):
-    bad = {"schema = 1": "schema = 2", 'name = "forge"': 'name = "a b"', 'tier = "standard"': 'tier = "huge"',
-           'main = "fake:x"': 'main = "nocolon"', 'toolsets = ["fs"]': 'toolsets = "fs"',
+    bad = {'name = "forge"': 'name = "A b"', 'tier = "standard"': 'tier = "huge"',
+           'main = ["fake:x"]': 'main = ["nocolon"]', 'toolsets = ["fs"]': 'toolsets = "fs"',
            'load = ["clean-writing"]': 'load = ["ghost"]'}[edit]
     errs = orchestra.validate_seat(orchestra.parse_seat(GOOD.replace(edit, bad)), SKILLS)
     assert any(needle in e for e in errs), errs

@@ -91,7 +91,7 @@ def _home_key(home: Optional[str] = None) -> Optional[str]:
 
 
 def _compaction_skip():
-    from exo.ext.compat import is_compaction_summary_message
+    from exo.core.context import is_compaction_summary_message
     return is_compaction_summary_message
 
 
@@ -458,22 +458,21 @@ class ExoMemoryProvider(MemoryProvider):
                 sess["last_agent"] = ev["id"]
                 st.remember(assistant_content, ev["id"])
         self._log_episodic(st, sess, sid, user_content, assistant_content, messages)
-        self._capture_turn(st, sess, user_content, assistant_content, messages)
 
-    def _capture_turn(self, st: _State, sess: dict, user: str, assistant: str,
-                      messages: Optional[list[dict[str, Any]]]) -> None:
-        """Capture rulings and corrections as turns happen. The Exo core has no pre-compress
-        checkpoint, so each turn is scanned with a short window of earlier turns (a correction
-        needs the agent message it follows). Keys dedupe the overlap."""
-        recent = sess.setdefault("recent", [])
-        if messages:
-            window = [m for m in messages[-8:] if isinstance(m, dict)]
-        else:
-            window = recent + [m for m in ({"role": "user", "content": user},
-                                           {"role": "assistant", "content": assistant}) if (m["content"] or "").strip()]
-        sess["recent"] = window[-6:]
-        if st.cfg.get("capture_turns", True) and window:
-            self._safe(lambda: self._capture(st, window, "turn"))
+    def checkpoint(self, *, session_id: str = "", messages: Optional[list[dict[str, Any]]] = None,
+                   reason: str = "turn") -> None:
+        """Core save point. After each turn (``reason="turn"``) and just before a block is summarized
+        (``"pre_compress"``) the recent transcript is scanned for rulings and corrections. Keys dedupe
+        the overlap between consecutive windows, and with ``on_pre_compress``."""
+        st = self._state()
+        if st is None or not messages:
+            return
+        if not self._sess(st, session_id or st.session)["primary"]:
+            return
+        if reason == "turn" and not st.cfg.get("capture_turns", True):
+            return
+        window = [m for m in messages if isinstance(m, dict)]
+        self._safe(lambda: self._capture(st, window, reason))
 
     def _log_episodic(self, st: _State, sess: dict, sid: str, user: str, assistant: str,
                       messages: Optional[list[dict]]) -> None:

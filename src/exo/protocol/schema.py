@@ -85,6 +85,7 @@ class SessionInfo:
     created: str = ""
     updated: str = ""
     message_count: int = 0
+    status: str = ""  # set by session.list: "live" while a turn runs, else "idle"
 
 
 @dataclass
@@ -122,6 +123,14 @@ class SessionCreate:
 class SessionList:
     limit: int = 50
     seat: str | None = None
+
+
+@command("approvals.list")
+@dataclass
+class ApprovalsList:
+    """Approvals still waiting for an answer (a client that connects late can show and answer them)."""
+
+    session: str | None = None
 
 
 @command("session.get")
@@ -417,6 +426,7 @@ class TaskUpdated:
 class UsageUpdated:
     usage: Usage  # this call
     session_total: Usage | None = None
+    model: str = ""  # the main route the turn was started on, provider:model
 
 
 @event("decision.queued")

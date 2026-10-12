@@ -83,7 +83,8 @@ def test_gate_blocks_public_action_until_a_client_answers(tmp_path, answer, ran)
 def test_gate_does_not_ask_for_a_private_read(tmp_path):
     (tmp_path / "notes.txt").write_text("x")
     eng = _engine(tmp_path, sent=[])
-    gate = eng.plugins.hooks.entries("pre_tool_call")[0].callback
+    hook = eng.plugins.hooks.entries("pre_tool_call")[0].callback  # async: the core awaits it
+    gate = lambda **kw: asyncio.run(hook(**kw))  # noqa: E731
     assert gate(tool_name="read_file", args={"path": "notes.txt"}, session_id="s", risk="low") is None
     # an unknown tool the registry calls high risk is an ask even though the classifier cannot place it
     verdict = gate(tool_name="frobnicate", args={}, session_id="s", risk="high")

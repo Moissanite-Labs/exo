@@ -1,7 +1,7 @@
 """Seat templates, skill pack lookup, and the /orchestra command.
 
-A seat is a named config: model roles and tiers, a toolset, skills and a principal. The format is
-documented in ``SEATS.md``. The pack is generic. Seat names, owner rulings and model choices belong
+A seat is a named config: a model tier, a toolset, skills and a principal. The format is the core loader's
+(``exo.core.seats``, ``docs/SEATS.md``); this module only emits and checks it. The pack is generic. Seat names, owner rulings and model choices belong
 to the principal store (``agents/``, ``policies/``). ``render_seat`` fills the template placeholders so
 a seat file can be created for any principal. Skills load natively: the plugin registers every skill
 in the Exo pack through ``ctx.register_skill`` (no ``skills.external_dirs`` workaround).
@@ -22,21 +22,24 @@ logger = logging.getLogger(__name__)
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 ROLES = ("mission-control", "orchestrator", "researcher", "architect", "designer", "builder", "reviewer")
 TIERS = ("fast", "standard", "deep")
-MODEL_ROLES = ("main", "aux", "decision", "eval")
-SCHEMA_VERSION = 1
 PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")  # the core loader's seat name rule
 SEAT_FILE = "seat.toml"
 SOUL_FILE = "SOUL.md"
 
-_TOP = {"schema", "seat", "principal", "models", "tools", "skills", "delegation"}
+# Pipeline position of each template, for the `seats` listing (people-facing; the loader does not read it).
+STAGES = {"mission-control": "0. control", "orchestrator": "1. plan", "researcher": "1. research",
+          "architect": "2. architecture", "designer": "3. design", "builder": "4. build", "reviewer": "5. review"}
+
+# The core loader's spelling (docs/SEATS.md). Aliases it also accepts at top level are allowed in a check.
+_TOP = {"seat", "principal", "models", "tools", "skills", "mcp", "channels", "plugins",
+        "name", "role", "description", "toolsets"}
 _KEYS = {
-    "seat": {"name", "role", "description", "stage", "soul"},
-    "principal": {"store"},
-    "models": {"tier", *MODEL_ROLES, "tiers"},
+    "seat": {"name", "role", "description", "soul"},
+    "principal": {"id", "store"},
+    "models": {"tier", "roles", "providers", "local", "fake"},
     "tools": {"toolsets"},
-    "skills": {"pack", "load"},
-    "delegation": {"allow_upgrade", "escalate_on_fail"},
+    "skills": {"folders", "pack", "load"},
 }
 
 
@@ -97,75 +100,73 @@ def _strs(v: Any) -> bool:
 
 
 def validate_seat(seat: Mapping[str, Any], skills_root: Path | None = None) -> list[str]:
-    """Return a list of problems, empty when the seat is valid. Unknown keys are problems.
+    """Return a list of problems, empty when the seat is valid. Unknown keys are problems, so a typo does
+    not pass silently. The core loader has the last word on names and shape (``exo.core.seats.parse``).
 
     With ``skills_root`` set, every skill in ``skills.load`` must exist in that pack.
     """
     errs: list[str] = []
-    if seat.get("schema") != SCHEMA_VERSION:
-        errs.append(f"schema must be {SCHEMA_VERSION}")
     for k in seat:
         if k not in _TOP:
             errs.append(f"unknown table or key: {k}")
     for table, allowed in _KEYS.items():
         t = seat.get(table, {})
+        if isinstance(t, str) and table == "principal":
+            continue
         if not isinstance(t, dict):
             errs.append(f"{table} must be a table")
             continue
         errs += [f"unknown key: {table}.{k}" for k in t if k not in allowed]
     s = seat.get("seat") if isinstance(seat.get("seat"), dict) else {}
-    name = s.get("name")
+    name = s.get("name") or seat.get("name")
     if not isinstance(name, str) or not NAME_RE.match(name):
-        errs.append("seat.name is required: letters, digits, dot, dash, underscore")
-    for k in ("role", "description", "stage", "soul"):
+        errs.append("seat.name is required: lowercase letters, digits, dash, underscore")
+    for k in ("role", "description", "soul"):
         if k in s and not isinstance(s[k], str):
             errs.append(f"seat.{k} must be a string")
     m = seat.get("models") if isinstance(seat.get("models"), dict) else {}
     if "tier" in m and m["tier"] not in TIERS:
         errs.append(f"models.tier must be one of {', '.join(TIERS)}")
-    for k in MODEL_ROLES:
-        if k in m and not (isinstance(m[k], str) and ":" in m[k]):
-            errs.append(f"models.{k} must be a provider:model string")
-    tiers = m.get("tiers", {})
-    if not isinstance(tiers, dict):
-        errs.append("models.tiers must be a table")
+    roles = m.get("roles", {})
+    if not isinstance(roles, dict):
+        errs.append("models.roles must be a table of role = [\"provider:model\", ...]")
     else:
-        for k, v in tiers.items():
-            if k not in TIERS:
-                errs.append(f"models.tiers.{k}: tier must be one of {', '.join(TIERS)}")
-            elif not (isinstance(v, str) and ":" in v):
-                errs.append(f"models.tiers.{k} must be a provider:model string")
+        for k, v in roles.items():
+            if not (isinstance(v, list) and v and all(isinstance(x, str) and ":" in x for x in v)):
+                errs.append(f"models.roles.{k} must be a list of provider:model strings")
     tools = seat.get("tools") if isinstance(seat.get("tools"), dict) else {}
     if "toolsets" in tools and not _strs(tools["toolsets"]):
         errs.append("tools.toolsets must be a list of names")
     sk = seat.get("skills") if isinstance(seat.get("skills"), dict) else {}
+    if "folders" in sk and not _strs(sk["folders"]):
+        errs.append("skills.folders must be a list of paths")
     if "load" in sk and not _strs(sk["load"]):
         errs.append("skills.load must be a list of skill names")
     elif skills_root is not None:
         errs += [f"skills.load: no skill {n!r} in {skills_root}" for n in sk.get("load", [])
                  if not (skills_root / n / "SKILL.md").is_file()]
-    d = seat.get("delegation") if isinstance(seat.get("delegation"), dict) else {}
-    errs += [f"delegation.{k} must be true or false" for k in d if k in _KEYS["delegation"]
-             and not isinstance(d[k], bool)]
+    if not errs:
+        from exo.core.seats import SeatError, parse
+        try:
+            parse(dict(seat))
+        except SeatError as e:
+            errs.append(str(e))
     return errs
 
 
 def session_body(seat: Mapping[str, Any]) -> dict[str, Any]:
     """Fields for the protocol's ``session.create`` command: the seat name, and its main model if set."""
-    name = seat["seat"]["name"]
+    name = (seat.get("seat") or {}).get("name") or seat.get("name")
     body: dict[str, Any] = {"title": name, "seat": name}
-    main = (seat.get("models") or {}).get("main")
+    main = ((seat.get("models") or {}).get("roles") or {}).get("main")
     if main:
-        body["model"] = main
+        body["model"] = main[0]
     return body
 
 
 def models_overlay(seat: Mapping[str, Any]) -> dict[str, list[str]]:
-    """Router roles this seat sets: ``main``, ``aux``, ``decision``, ``eval`` and any tier routes."""
-    m = seat.get("models") or {}
-    out = {k: [m[k]] for k in MODEL_ROLES if m.get(k)}
-    out.update({k: [v] for k, v in (m.get("tiers") or {}).items()})
-    return out
+    """Router roles this seat sets (``models.roles``): ``main``, ``aux``, a tier and so on."""
+    return {k: list(v) for k, v in ((seat.get("models") or {}).get("roles") or {}).items()}
 
 
 def render_seat_text(role: str, values: Mapping[str, str] | None = None) -> str:
@@ -207,7 +208,7 @@ def list_seats() -> list[dict[str, Any]]:
     for role in ROLES:
         seat = parse_seat(render_seat_text(role))
         rows.append({"role": role, "tier": seat["models"]["tier"], "toolsets": seat["tools"]["toolsets"],
-                     "skills": seat["skills"]["load"], "stage": seat["seat"].get("stage", "")})
+                     "skills": seat["skills"]["load"], "stage": STAGES.get(role, "")})
     return rows
 
 

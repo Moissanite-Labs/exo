@@ -42,10 +42,10 @@ def register(ctx) -> None:
     opt = (lambda k, d=None: get(k, d)) if get else (lambda k, d=None: d)
     ctx.register_context_engine(ExoContextEngine(
         principal=opt('principal'), handoff_dir=opt('handoff_dir'),
+        compressor_kwargs={'router_getter': lambda: getattr(ctx, 'router', None)},
         pin_char_budget=int(opt('pin_char_budget', 6000)),
         write_handoffs=str(opt('write_handoffs', True)).lower() not in ('0', 'false', 'no', 'off')))
-    from exo.dispatcher import register_subcommand
-    from exo.ext.compat import ensure_root_command
+    from exo.dispatcher import register_root, register_subcommand
     try:
         from .exo_context.commands import cmd_branch, cmd_handoff, cmd_resume
     except ImportError:
@@ -59,4 +59,4 @@ def register(ctx) -> None:
     register_subcommand('resume', lambda rest: cmd_resume(rest),
                         'Load the newest handoff for a topic (or a path) into this session.',
                         plugin=P, args_hint='<topic>')
-    ensure_root_command(ctx)  # no-op when exo-memory already registered /exo
+    register_root(ctx)  # idempotent per plugin manager; a no-op when exo-memory registered /exo

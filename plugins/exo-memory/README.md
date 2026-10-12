@@ -50,7 +50,7 @@ Order, lowest first: defaults, environment, `<exo_home>/exo-memory/config.json`,
 | `pack_budget` | | 1500 tokens |
 | `prefetch_budget` | | 1500 tokens |
 | `episodic_share` | | 0.4 of the prefetch budget |
-| `compact_enabled` | | true. Uses the `aux` model role of the Exo router (`exo.ext.compat.aux_summarize`). |
+| `compact_enabled` | | true. Uses the `aux` model role of the Exo router (`exo.core.models.router.aux_sync`). |
 | `principal_user_ids` | | empty. When set, other human authors are logged as `user:<id>`. |
 
 See `exo_memory/config.py` for the rest.

@@ -202,7 +202,7 @@ class Loop:
             if stream.usage is not None:
                 result.usage = result.usage + stream.usage
                 st.total = st.total + stream.usage
-                await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total), session)
+                await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total, model=self.model or ""), session)
             if stream.error is not None:
                 result.stop_reason, result.error = "error", stream.error.error or "provider error"
                 await self._emit(ev.Error(code="provider_error", message=result.error,
