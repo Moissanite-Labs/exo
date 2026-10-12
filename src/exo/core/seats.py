@@ -13,6 +13,7 @@ hand-written files both load::
     [mcp.files]  command = "uvx"  args = ["server"]      # see core/mcp_client.py
     [channels.bus]  seat = "scout"     # channels to run with the server, each with factory(link, **config)
     [peers]   wake = true  policy = {other = "hold"}   # peer messages (docs/PEERS.md)
+    [jobs]    max_concurrent = 4  max_wall_s = 7200  wake = false   # background shell jobs (docs/JOBS.md)
     [plugins] enabled = ["exo-memory"]  # or a top-level list; omit for the config.json default
 """
 
@@ -80,6 +81,7 @@ class Seat:
     plugins: list[str] | None = None                        # None = the config.json default
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)  # enabled channels -> factory config
     peers: dict[str, Any] = field(default_factory=dict)     # [peers]: policy, rules, wake, hold_minutes (D-026)
+    jobs: dict[str, Any] = field(default_factory=dict)      # [jobs]: max_concurrent, max_wall_s, wake (D-032)
     soul: str = ""
     path: str = ""
     key: str | None = None                                  # signing key file; default $EXO_HOME/keys/<name>.key
@@ -119,7 +121,7 @@ def parse(data: dict[str, Any], name: str = "", path: str = "", soul: str = "") 
         skill_folders=folders, skill_load=_strs(skills.get("load")),
         mcp={k: v for k, v in mcp.items() if isinstance(v, dict)},
         plugins=_strs(plugins.get("enabled") if isinstance(plugins, dict) else plugins), channels=channels,
-        peers=_table(data.get("peers")), soul=soul, path=path, key=str(head.get("key") or data.get("key") or "") or None)
+        peers=_table(data.get("peers")), jobs=_table(data.get("jobs")), soul=soul, path=path, key=str(head.get("key") or data.get("key") or "") or None)
 
 
 def _candidates(home: str | Path, name: str) -> list[Path]:

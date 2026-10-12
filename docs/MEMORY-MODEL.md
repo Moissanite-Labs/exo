@@ -80,6 +80,30 @@ the protocol is full at 30 commands. No new command type and no new event.
 A merge left as is (its two children summaries, under the size floor) shows its children's summaries in
 the view, not the raw messages of its span.
 
+## Principal capture is a mechanism (D-032)
+
+The log keeps every word verbatim, so nothing is lost. What can still go wrong is a summary that blurs an
+instruction, or an instruction that never reaches the principal store. Three parts make that hard.
+
+1. **Verbatim directives.** The summary template has a section, `Principal Directives (verbatim)`: every
+   instruction, correction, preference and decision of the principal, quoted word for word. Merges keep it whole.
+   The prompt is not trusted alone: after a leaf is summarized, the harness reads the principal's rulings and
+   corrections in the span (`exo.capture`) and, for any whose words are not in the summary, appends them under
+   `Principal directives restored verbatim by the harness`.
+2. **Capture before summarizing.** A principal message is a live user message in a `thread` (not a peer message, job
+   notice, context note, import, scheduled prompt, slash command or bare acknowledgement). Before a leaf that holds
+   some is summarized, the leaf's span is offered to the memory provider's `capture_principal(messages, session_id,
+   source)` (exo-memory writes rulings, corrections and open decisions to the signed ledger, deduped by key). Each
+   user message in the offer carries `principal: true|false`, and the agent reply a message answers comes with it,
+   so a correction keeps its target. The leaf records the count (`summaries.principal`, `summaries.captured`) and each
+   captured log position goes in the `captures` table. The log is not touched (its hash chain stays). A hook that
+   raises or returns None leaves them uncaptured; summarizing still goes on.
+3. **Seen and forced.** `/context` shows `Principal messages not yet captured: N` (and says when no principal store
+   is attached, in which case nothing ever captures them). `/compact` offers every uncaptured principal message to
+   the hook first, tail included, then folds, and reports how many it captured and how many are still not.
+
+Same commands and events as before: no protocol change for capture.
+
 ## Concurrency
 
 - One process writes an agent's log and tree: it holds `$EXO_HOME/run/agent-<id>.lock` (an OS file lock,
@@ -115,4 +139,4 @@ before. Belief recall and the signed ledger are unchanged.
 - TUI: `/new` starts a new thread, `/sessions` and `/resume` list this agent's threads (subagent
   threads hidden), `/new private` starts a private thread. Context notes are not shown in the
   transcript.
-- `/context` and `/compact` (above). Commands stay at 30. No new events.
+- `/context` and `/compact` (above); both also report principal capture (D-032). Commands stay at 30.

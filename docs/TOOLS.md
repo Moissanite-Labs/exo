@@ -9,7 +9,8 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 | `read_file`, `write_file`, `edit_file`, `apply_patch` | fs | low, medium | Files |
 | `glob`, `grep` | search | low | Find by name or regex |
 | `code_find` | search | low | Ask what code does; get files and verbatim excerpts |
-| `bash` | shell | high | Shell with timeout and output cap |
+| `bash` | shell | high | Shell with timeout and output cap; `background: true` starts a job (docs/JOBS.md) |
+| `jobs`, `job_output`, `job_kill` | shell | low, low, medium | List, read and stop background jobs (D-032) |
 
 ## code_find (D-029)
 

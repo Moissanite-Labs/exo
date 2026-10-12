@@ -483,6 +483,22 @@ class MemorySummarized:
     tree: str = ""  # agent:<id> for an agent's tree, else the session id
 
 
+@event("job.updated")
+@dataclass
+class JobUpdated:
+    """A background shell job changed state (D-032, docs/JOBS.md): ``running`` when it starts, then one of
+    ``done`` (exit 0), ``failed`` (non-zero exit), ``killed``, ``timeout`` or ``lost`` (exod restarted).
+    One type with a state, as ``task.updated`` does, because the protocol has few event slots left."""
+
+    job_id: str
+    state: str = "running"
+    command: str = ""
+    exit_code: int | None = None
+    elapsed_ms: int = 0
+    log: str = ""
+    detail: str = ""  # plain English, e.g. why it ended
+
+
 @event("handoff.written")
 @dataclass
 class HandoffWritten:

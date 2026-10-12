@@ -476,3 +476,35 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Rejected:** a new protocol command for onboarding state (cap is full); model-written tips (cost, and they
   would enter memory); tracking seen tips in the core (a second client would then show them again for no reason).
 - **Not done:** the web client has no tips; upgraders without the marker see the intro once (pass `--no-intro`).
+
+
+## D-032 (2026-10-12) What exo-razi asked for: background jobs and principal capture (Part A); tools, trace and commands (Part B)
+- **Why (A asked exo-razi, the canary Exo agent, what it would want; the brief is ~/Work/handoffs/exo-razi-asks-brief.md):**
+  of seven asks, the two that hurt most in real use were a shell that holds the turn (a build or a long test run) and
+  the principal's words reaching memory by discipline instead of by mechanism.
+- **Item 1, background shell jobs (docs/JOBS.md).** `bash(background: true)` returns a job id at once; output goes to
+  `$EXO_HOME/run/jobs/<id>.log` (capped, one rotation); `jobs`, `job_output(id, tail, grep)` and `job_kill(id)`. A job
+  belongs to the agent, not the turn: Esc stops the turn, never the job. On exit the owning thread gets a completion
+  notice through the ingress path peers use (`core/ingress.py`, a `job` source): steered into a running turn, else
+  queued for the next one; a turn starts only if the seat allows (`[jobs] wake`, same rule as peers: off while a client
+  is attached). Limits: 4 concurrent per agent, 2 h wall, 5 MB output. Jobs end with exod; after a crash the next
+  start reports them `lost` (the process is not touched: a pid can be reused). The gate classifies the command exactly
+  as foreground bash (a test compares classifications and decisions).
+- **Item 4, principal capture as a mechanism (docs/MEMORY-MODEL.md).** (a) The summary template has a verbatim
+  `Principal Directives` section, and a harness check restores any ruling or correction the model dropped; (b) before
+  a leaf with principal messages is summarized, the span is offered to the memory provider's `capture_principal`
+  (exo-memory: the signed ledger) and the leaf records that they were captured; (c) `/context` shows the uncaptured
+  count and `/compact` captures first.
+- **Protocol:** commands stay 30. One new event, `job.updated` (28 of 29), with a `state`, not the two the brief named
+  (`job.started`, `job.completed`): the cap is tight and `task.updated` is the precedent. The start is state `running`;
+  the end state, exit code and how the notice was delivered are in the second event. `/context` and `/compact` stay
+  `command.run` built-ins; capture adds no event.
+- **Calls made by the builder:** reuse of `EngineTarget` through a `JobTarget` subclass rather than a second delivery
+  path; the notice skips the ingress consent regex because the harness wrote it (the body is framed as data); a job
+  killed by `job_kill` sends no notice; subagents cannot start jobs; lost jobs are not killed on restart; capture marks
+  positions in a new `captures` table because the log's hash chain must not change, and the `summaries` table gained
+  `principal` and `captured` columns; imports, scheduled prompts, peer messages, job notices and bare acks are not
+  "principal messages"; a hook that fails leaves messages uncaptured and does not stop summarizing; the capture hook
+  runs after `on_pre_compress` so the ledger gets correction targets from the full span before the strict pass.
+- **Not done (Part A):** the web client has no job view; Hermes has no job tools; `capture_principal` exists only in
+  exo-memory (a seat without a principal store shows its uncaptured count as never captured, which is true).

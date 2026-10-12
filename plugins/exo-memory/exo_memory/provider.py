@@ -492,6 +492,25 @@ class ExoMemoryProvider(MemoryProvider):
         window = [m for m in messages if isinstance(m, dict)]
         self._safe(lambda: self._capture(st, window, reason))
 
+    def capture_principal(self, messages: list[dict[str, Any]], *, session_id: str = "",
+                          source: str = "leaf") -> Optional[int]:
+        """D-032: the core offers a span holding the principal's own messages (with the agent output they answer, and
+        each user message flagged ``principal``) before it is summarized (a leaf) or on
+        ``/compact``. Rulings, corrections and open decisions among them go to the signed ledger (deduped by
+        key, so overlap with ``checkpoint`` and ``on_pre_compress`` costs nothing). Returns how many signals it
+        found, or None when there is no store to take them. Raises when a ledger write fails, so the core
+        counts the messages as not captured rather than pretending."""
+        st = self._state()
+        if st is None:
+            return None
+        if not messages:
+            return 0
+        if not self._sess(st, session_id or st.session)["primary"]:
+            return None
+        # a user-role message the host marks "principal": False (a peer message, a job notice) is not the principal's
+        window = [({**m, "role": "other"} if m.get("principal") is False else m) for m in messages if isinstance(m, dict)]
+        return len(self._capture(st, window, f"capture:{source}", True))
+
     def _log_episodic(self, st: _State, sess: dict, sid: str, user: str, assistant: str,
                       messages: Optional[list[dict]]) -> None:
         epi = st.rt.episodic
