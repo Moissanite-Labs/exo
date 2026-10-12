@@ -70,7 +70,8 @@ UPGRADES = (("sessions", "agent", "TEXT"), ("sessions", "kind", "TEXT NOT NULL D
             ("messages", "agent", "TEXT"), ("messages", "pos", "INTEGER"), ("messages", "hash", "TEXT"),
             ("messages", "hidden", "INTEGER NOT NULL DEFAULT 0"),
             ("summaries", "principal", "INTEGER NOT NULL DEFAULT 0"),  # D-032: principal messages in a leaf
-            ("summaries", "captured", "INTEGER NOT NULL DEFAULT 0"))   # ... and how many the capture hook took
+            ("summaries", "captured", "INTEGER NOT NULL DEFAULT 0"),   # ... and how many the capture hook took
+            ("summaries", "attempts", "INTEGER NOT NULL DEFAULT 0"))   # failed summary tries so far
 LOGGED_KINDS = ("thread", "scheduled", "private")  # thread kinds whose messages enter the agent log
 SCHEMA_VERSION = 2
 
@@ -463,11 +464,11 @@ class SessionStore:
 
     def save_summary(self, node: Any) -> None:
         self._q("INSERT INTO summaries (id, session, level, idx, start_seq, end_seq, text, status, lane,"
-                " principal, captured) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET"
+                " principal, captured, attempts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET"
                 " text=excluded.text, status=excluded.status, principal=excluded.principal,"
-                " captured=excluded.captured",
+                " captured=excluded.captured, attempts=excluded.attempts",
                 (node.id, node.session, node.level, node.index, node.start, node.end, node.text,
-                 node.status, node.lane, node.principal, node.captured))
+                 node.status, node.lane, node.principal, node.captured, node.attempts))
 
     def mark_captured(self, agent: str, positions: list[int], source: str) -> None:
         """Record that the principal store took these log positions (D-032). The log itself is never touched."""
@@ -487,7 +488,8 @@ class SessionStore:
         rows = self._q("SELECT * FROM summaries WHERE session=? ORDER BY level, idx", (sid,))
         return [SummaryNode(id=r["id"], session=r["session"], level=r["level"], index=r["idx"],
                             start=r["start_seq"], end=r["end_seq"], text=r["text"], status=r["status"],
-                            lane=r["lane"], principal=r["principal"], captured=r["captured"]) for r in rows]
+                            lane=r["lane"], principal=r["principal"], captured=r["captured"],
+                            attempts=r["attempts"]) for r in rows]
 
     # ---------------------------------------------------------------- events
 

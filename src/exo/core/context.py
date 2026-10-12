@@ -19,9 +19,11 @@ import asyncio
 import inspect
 import json
 import secrets
+import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from exo.core import trace
 from exo.core.types import Message, Provider
 
 # ---------------------------------------------------------------- lifted prompt text
@@ -266,6 +268,7 @@ class SummaryNode:
     lane: str = "live"
     principal: int = 0  # leaves: principal messages in the span (D-032)
     captured: int = 0   # leaves: how many of them the principal store's capture hook took before summarizing
+    attempts: int = 0   # failed summary tries; at the cap the node is skipped and stays verbatim
 
 
 Summarizer = Callable[..., Awaitable[str]]
@@ -314,7 +317,8 @@ class TreeContext:
 
     def __init__(self, store: Any, compressor: Any, *, leaf_size: int = 8, tail_messages: int = 12,
                  view_budget: int = 6000, live_parallel: int = 8, import_parallel: int = 2,
-                 settle_timeout: float = 60.0, render_limit: int = 2000, min_compact_tokens: int = 1500):
+                 settle_timeout: float = 60.0, render_limit: int = 2000, min_compact_tokens: int = 1500,
+                 max_attempts: int = 3, retry_backoff: float = 30.0):
         self.store = store
         self.compressor = compressor
         self.leaf_size = leaf_size
@@ -323,6 +327,9 @@ class TreeContext:
         self.settle_timeout = settle_timeout
         self.render_limit = render_limit
         self.min_compact_tokens = min_compact_tokens  # a span smaller than this is never summarized
+        self.max_attempts = max_attempts  # a node whose summary fails this often is skipped: verbatim for good
+        self.retry_backoff = retry_backoff  # seconds before the second try; doubles each time
+        self._retry_at: dict[str, float] = {}  # failed node id -> monotonic time of its next try
         self._lanes = {"live": asyncio.Semaphore(live_parallel),
                        "import": asyncio.Semaphore(import_parallel)}
         self._import_open = asyncio.Event()
@@ -397,6 +404,14 @@ class TreeContext:
                 raise
             except Exception as exc:
                 node.status, node.text = "failed", str(exc)
+                node.attempts += 1
+                if node.attempts >= self.max_attempts:  # give up: keep the span verbatim, say so once
+                    node.status, node.text = "skipped", ""
+                    self._retry_at.pop(node.id, None)
+                    trace.report("summary", f"summary node {node.start}-{node.end} of {node.session} cannot be summarized "
+                                 f"after {node.attempts} tries, kept verbatim: {exc}", self._event_session(node.session))
+                else:
+                    self._retry_at[node.id] = time.monotonic() + self.retry_backoff * 2 ** (node.attempts - 1)
             if not self.store.has_summary(node.id):  # undo dropped this node while it ran: do not bring it back
                 return
             self.store.save_summary(node)
@@ -497,6 +512,8 @@ class TreeContext:
         for n in nodes:  # pending in the DB with no task (restart), or failed earlier: retry
             task = running.get(n.id)
             if n.status in ("pending", "failed") and (task is None or task.done()):
+                if n.status == "failed" and time.monotonic() < self._retry_at.get(n.id, 0.0):
+                    continue  # backing off: it stays verbatim in the view until the next try
                 n.status = "pending"
                 self._schedule(n)
         if self.compressor is None:  # no summarizer: everything stays verbatim

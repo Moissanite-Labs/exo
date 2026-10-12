@@ -587,3 +587,58 @@ def test_mid_stream_error_keeps_the_text_the_user_saw(tmp_path):
     last = store.messages(s.id)[-1]
     assert last.role == "assistant" and last.text() == "half an answer "
     assert last.meta["interrupted"] is True and last.meta["error"] == "upstream reset"
+
+
+class _BrokenSummarizer:
+    def __init__(self):
+        self.calls = 0
+
+    async def summarize(self, content, previous=None):
+        self.calls += 1
+        raise RuntimeError("aux model refused")
+
+
+def _failing_tree(tmp_path, **kw):
+    from exo.core import trace
+
+    store = SessionStore(tmp_path / "s.sqlite")
+    comp = _BrokenSummarizer()
+    ctx = TreeContext(store, comp, leaf_size=2, tail_messages=2, min_compact_tokens=0, **kw)
+    s = store.create_session()
+    for i in range(6):
+        store.append_message(s.id, Message.user(f"q{i}"))
+    reported = []
+    trace.add_sink(lambda body, session: reported.append(body))
+    return store, ctx, comp, s, reported
+
+
+def test_failed_summary_backs_off_instead_of_retrying_every_turn(tmp_path):
+    store, ctx, comp, s, _ = _failing_tree(tmp_path, retry_backoff=1000.0)
+
+    async def go():
+        ctx.note(s.id)
+        await ctx.settle(s.id)
+        first = comp.calls
+        for _ in range(5):  # five more turns inside the backoff window
+            ctx.note(s.id)
+            await ctx.settle(s.id)
+        return first
+
+    first = run(go())
+    assert first == 2 and comp.calls == first  # two leaves, one try each, no retry while backing off
+
+
+def test_summary_gives_up_after_the_cap_and_reports_once(tmp_path):
+    store, ctx, comp, s, reported = _failing_tree(tmp_path, retry_backoff=0.0, max_attempts=3)
+
+    async def go():
+        for _ in range(8):
+            ctx.note(s.id)
+            await ctx.settle(s.id)
+
+    run(go())
+    assert comp.calls == 2 * 3  # two leaves, three tries each, then never again
+    nodes = store.summaries(s.id)
+    assert {n.status for n in nodes} == {"skipped"} and all(n.attempts == 3 for n in nodes)
+    assert sum(1 for b in reported if b.where == "summary") == 2  # one report per given-up leaf
+    assert [m.text() for m in run(ctx.build(s.id, ""))][-1] == "q5"  # still in the context, verbatim
