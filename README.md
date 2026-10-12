@@ -44,4 +44,9 @@ Phase 1 (inventory) and phase 2 (research) in progress. Read along:
 | `research/` | Guardian-angel reading notes, principles, base evaluation |
 | `docs/ARCHITECTURE.md` | Components, memory and context model, migration path (phase 3) |
 
+## Credits and inspirations
+
+- [dzhng/jevgrep](https://github.com/dzhng/jevgrep) (MIT): the `jg` code search behind the `code_find` tool and
+  the `jevgrep` skill (D-029).
+
 Private repository of Aska Digital.

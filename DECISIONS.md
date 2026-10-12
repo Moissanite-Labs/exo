@@ -390,3 +390,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   review.
 - **Not done:** web client view, receipts for bus sends, held messages across restarts, live gateway test.
 
+
+## D-029 (2026-10-12) jevgrep as code_find; native port later if the measured win holds
+- **Why:** "where is X decided" questions cost an agent many grep and read rounds. dzhng/jevgrep (MIT, `jg`
+  0.8.0) asks the Jev decision model, which Exo already uses, to pick files and verbatim excerpts.
+- **Decision:** a low-risk `code_find(question, path)` tool that shells out to `jg` (installed, else
+  `npx -y @dzhng/jevgrep@0.8.0`). Backends: TypeSafe Jev with Exo's jev key, then local Laya through jg's custom
+  endpoint. Hidden when Node 22+ or the package is missing, with the reason in `exo models`. Available to the main
+  agent and subagents. An Exo skill adapted from theirs, with credit. Docs in docs/TOOLS.md.
+- **Key:** `jg` ignores key environment variables and reads only a saved config, so each call writes a throwaway
+  config in a 0700 temp dir, feeds the key to `jg auth --stdin`, searches, and deletes it. The key is never in argv,
+  the child environment, a log or a result.
+- **Measured (2026-10-12, Exo repo, 4 questions):** the right files each time, 9 to 19 s per call. Against a
+  glm-5.3-flash subagent with only grep and read_file, code_find used fewer tokens (about 4.5k against 8k input)
+  and fewer tool calls, but took longer in wall time and was not more correct on this small, well-named repo; the
+  model also miscounted line numbers inside excerpts. Two questions is a weak sample.
+- **Next:** a native port (Python, Exo's own decision route, no Node) only if more measurement shows a win on
+  larger or less tidy repos. **Not done:** per-call spend accounting, a jg result cache owned by Exo.
