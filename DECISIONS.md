@@ -343,3 +343,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Open:** the canary day (A, seat `canary`, launcher `exo-canary`, a copy of the principal store so the
   real one is untouched); TUI footprint on charminar (#17, D-022 escape hatch); nightly learning trigger;
   brief "learned" section; climb candidates beyond add and drop.
+
+## D-024 (2026-10-12) Lean acceptance: continual feedback, not a day-long gate
+- **A's words:** "day done? im a lean methodology user, thats not how we operate. i will give you continual
+  feedback and pointers as i use it."
+- **Decision:** wave 3 has no "full day in the TUI" exit test. A uses the canary seat (agent exo-razi) every
+  day and sends notes as he goes; each note is a small cycle (fix and ship, or log a design item). A
+  separate session handles that feedback (`~/Work/handoffs/exo-canary-feedback.md`); product design and
+  feature building continue in the main session. Promotion of lessons still needs held-out wins (D-022).
