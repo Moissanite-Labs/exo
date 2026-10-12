@@ -307,6 +307,11 @@ class SessionStore:
         def drop(db: sqlite3.Connection) -> int:
             ids = [r[0] for r in db.execute("SELECT id FROM messages WHERE session=? AND seq>? AND hidden=0",
                                              (sid, after_seq))]
+            logged = db.execute("SELECT agent, MIN(pos) AS first FROM messages WHERE session=? AND seq>?"
+                                " AND hidden=0 AND pos IS NOT NULL", (sid, after_seq)).fetchone()
+            if logged and logged["agent"]:  # an agent tree is keyed agent:<name> and spans log positions
+                db.execute("DELETE FROM summaries WHERE session=? AND end_seq>=?",
+                           (f"agent:{logged['agent']}", logged["first"]))
             db.executemany("DELETE FROM messages_fts WHERE msg_id=?", [(i,) for i in ids])
             db.execute("UPDATE messages SET hidden=1 WHERE session=? AND seq>? AND pos IS NOT NULL", (sid, after_seq))
             db.execute("DELETE FROM messages WHERE session=? AND seq>? AND pos IS NULL", (sid, after_seq))
@@ -472,6 +477,9 @@ class SessionStore:
 
     def captured_positions(self, agent: str) -> set[int]:
         return {r[0] for r in self._q("SELECT pos FROM captures WHERE agent=?", (agent,))}
+
+    def has_summary(self, node_id: str) -> bool:
+        return bool(self._q("SELECT 1 FROM summaries WHERE id=?", (node_id,)))
 
     def summaries(self, sid: str) -> list[Any]:
         from exo.core.context import SummaryNode

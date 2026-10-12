@@ -397,6 +397,8 @@ class TreeContext:
                 raise
             except Exception as exc:
                 node.status, node.text = "failed", str(exc)
+            if not self.store.has_summary(node.id):  # undo dropped this node while it ran: do not bring it back
+                return
             self.store.save_summary(node)
         if node.status == "done":
             if self.on_event is not None:
