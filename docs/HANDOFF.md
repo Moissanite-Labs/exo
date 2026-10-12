@@ -10,7 +10,7 @@ choices were made, not only what changed.
    and the last turns of the trace.
 2. The TUI sends one user turn that shows as `/handoff`. It tells the agent to load the `exo-handoff` skill
    (`skills/exo-handoff/SKILL.md`) and to write the note with its normal write tool.
-3. The note goes to `~/Work/handoffs/<seat>-<date>.md`, or to the path you give (a folder gets `<seat>-<date>.md`
+3. The note goes to `<handoff folder>/<seat>-<date>.md` (`$EXO_HANDOFF_DIR`, else `handoff_dir` in `config.json`, else `$EXO_HOME/handoffs`), or to the path you give (a folder gets `<seat>-<date>.md`
    inside it). The write goes through the gate like any other write.
 4. The agent replies with the path and two lines of summary.
 

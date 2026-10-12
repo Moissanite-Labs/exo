@@ -122,7 +122,7 @@ Every command `/help` lists, in one line each, so you can answer "what does /x d
 - `/peers`, `/send`: peers, above.
 - `/trace`, `/findings`: trace and findings, above.
 - `/handoff [path]` has the agent write a structured handoff note (goal, state, done, next, blockers,
-  paths) to `~/Work/handoffs/<seat>-<date>.md`, or to the path you give. It uses the exo-handoff skill and the
+  paths) to `$EXO_HOME/handoffs/<seat>-<date>.md` (or `$EXO_HANDOFF_DIR`, or `handoff_dir` in `config.json`), or to the path you give. It uses the exo-handoff skill and the
   normal write tool, so the approval gate sees it.
 - `/intro` runs this orientation again. `/tutorial` turns contextual tips on or off.
 - `/help` lists every command.
