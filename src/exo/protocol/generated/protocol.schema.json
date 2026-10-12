@@ -152,6 +152,12 @@
     "ui.panel": {
       "$ref": "#/$defs/UiPanel"
     },
+    "model.call": {
+      "$ref": "#/$defs/ModelCall"
+    },
+    "harness.error": {
+      "$ref": "#/$defs/HarnessError"
+    },
     "notice": {
       "$ref": "#/$defs/Notice"
     },
@@ -642,6 +648,31 @@
         "path"
       ]
     },
+    "HarnessError": {
+      "type": "object",
+      "properties": {
+        "where": {
+          "type": "string"
+        },
+        "error_type": {
+          "type": "string",
+          "default": ""
+        },
+        "message": {
+          "type": "string",
+          "default": ""
+        },
+        "traceback": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "where"
+      ],
+      "description": "An exception the harness caught in a hook, handler, plugin or client event path (D-025). Never holds keys, headers or environment values (scrubbed before it is written)."
+    },
     "Hello": {
       "type": "object",
       "properties": {
@@ -756,6 +787,74 @@
         "message_id",
         "text"
       ]
+    },
+    "ModelCall": {
+      "type": "object",
+      "properties": {
+        "iteration": {
+          "type": "integer",
+          "default": 0
+        },
+        "role": {
+          "type": "string",
+          "default": ""
+        },
+        "requested": {
+          "type": "string",
+          "default": ""
+        },
+        "route": {
+          "type": "string",
+          "default": ""
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "default": []
+        },
+        "ttft_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "total_ms": {
+          "type": "integer",
+          "default": 0
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "stop_reason": {
+          "type": "string",
+          "default": ""
+        },
+        "error": {
+          "type": "string",
+          "default": ""
+        },
+        "retries": {
+          "type": "integer",
+          "default": 0
+        }
+      },
+      "additionalProperties": false,
+      "description": "One model call as the harness saw it (D-025): what was asked, which route served it, every attempt. attempts: [{route, outcome: ok|timeout|error|fallback, error, ms}]. ttft_ms is None when nothing streamed."
     },
     "ModelsList": {
       "type": "object",
@@ -1378,6 +1477,10 @@
         "duration_ms": {
           "type": "integer",
           "default": 0
+        },
+        "is_error": {
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false,
@@ -1479,6 +1582,10 @@
             }
           ],
           "default": null
+        },
+        "timing": {
+          "type": "object",
+          "default": {}
         }
       },
       "additionalProperties": false,

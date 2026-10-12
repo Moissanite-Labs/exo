@@ -358,6 +358,8 @@ class TurnCompleted:
     turn_id: str
     stop_reason: str = "end"
     usage: Usage | None = None
+    # wall_ms, model_ms, tool_ms, approval_ms, model_calls, fallbacks, tool_errors (D-025); empty on old sessions
+    timing: dict[str, Any] = field(default_factory=dict)
 
 
 @event("message.delta")
@@ -401,6 +403,7 @@ class ToolOutput:
 class ToolCompleted:
     result: ToolResult
     duration_ms: int = 0
+    is_error: bool = False  # same as result.is_error, for readers that skip the result body
 
 
 @event("approval.requested")
@@ -501,6 +504,37 @@ class UiPanel:
     text: str = ""
     data: dict[str, Any] = field(default_factory=dict)
     reason: str = ""  # why it was opened, one line; feeds the learning loop
+
+
+@event("model.call")
+@dataclass
+class ModelCall:
+    """One model call as the harness saw it (D-025): what was asked, which route served it, every attempt.
+    attempts: [{route, outcome: ok|timeout|error|fallback, error, ms}]. ttft_ms is None when nothing streamed."""
+
+    iteration: int = 0
+    role: str = ""  # the router role asked for, when the provider is a router
+    requested: str = ""  # the route the turn asked for, provider:model
+    route: str = ""  # the route that served it ("" when none did)
+    attempts: list[dict[str, Any]] = field(default_factory=list)
+    ttft_ms: int | None = None
+    total_ms: int = 0
+    usage: Usage | None = None
+    stop_reason: str = ""
+    error: str = ""
+    retries: int = 0  # loop-level retries before this outcome
+
+
+@event("harness.error")
+@dataclass
+class HarnessError:
+    """An exception the harness caught in a hook, handler, plugin or client event path (D-025).
+    Never holds keys, headers or environment values (scrubbed before it is written)."""
+
+    where: str
+    error_type: str = ""
+    message: str = ""
+    traceback: str = ""  # last few lines only
 
 
 @event("notice")

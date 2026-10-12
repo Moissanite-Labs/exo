@@ -112,6 +112,13 @@ export interface HandoffWritten {
   summary?: string;
 }
 
+export interface HarnessError {
+  where: string;
+  error_type?: string;
+  message?: string;
+  traceback?: string;
+}
+
 export interface Hello {
   protocol?: number;
   client?: string;
@@ -135,6 +142,20 @@ export interface MessageCompleted {
 export interface MessageDelta {
   message_id: string;
   text: string;
+}
+
+export interface ModelCall {
+  iteration?: number;
+  role?: string;
+  requested?: string;
+  route?: string;
+  attempts?: Record<string, unknown>[];
+  ttft_ms?: number | null;
+  total_ms?: number;
+  usage?: Usage | null;
+  stop_reason?: string;
+  error?: string;
+  retries?: number;
 }
 
 export interface ModelsList {
@@ -287,6 +308,7 @@ export interface ToolCall {
 export interface ToolCompleted {
   result: ToolResult;
   duration_ms?: number;
+  is_error?: boolean;
 }
 
 export interface ToolOutput {
@@ -313,6 +335,7 @@ export interface TurnCompleted {
   turn_id: string;
   stop_reason?: string;
   usage?: Usage | null;
+  timing?: Record<string, unknown>;
 }
 
 export interface TurnInterrupt {
@@ -416,6 +439,8 @@ export interface EventBodies {
   "decision.queued": DecisionQueued;
   "taste.updated": TasteUpdated;
   "ui.panel": UiPanel;
+  "model.call": ModelCall;
+  "harness.error": HarnessError;
   "notice": Notice;
   "error": Error;
 }

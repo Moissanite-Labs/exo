@@ -36,6 +36,14 @@ CREATE TABLE IF NOT EXISTS events (
     ts TEXT NOT NULL, body TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_session ON events (session, seq);
+CREATE INDEX IF NOT EXISTS events_type ON events (type, seq);
+CREATE TABLE IF NOT EXISTS findings (
+    id TEXT PRIMARY KEY, signature TEXT NOT NULL UNIQUE, source TEXT NOT NULL, severity TEXT NOT NULL,
+    title TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '', session TEXT, turn TEXT, model TEXT, version TEXT,
+    first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'open', fixed_in TEXT, fixed_at TEXT, fixed_turns INTEGER,
+    sessions TEXT NOT NULL DEFAULT '[]'
+);
 CREATE TABLE IF NOT EXISTS summaries (
     id TEXT PRIMARY KEY, session TEXT NOT NULL, level INTEGER NOT NULL, idx INTEGER NOT NULL,
     start_seq INTEGER NOT NULL, end_seq INTEGER NOT NULL, text TEXT NOT NULL DEFAULT '',
@@ -296,14 +304,15 @@ class SessionStore:
                                                           json.dumps(to_dict(ev.body), ensure_ascii=False))))
 
     def events_since(self, since: int = 0, session: str | None = None, limit: int = 10000,
-                     with_global: bool = False) -> list[Event]:
-        """Events with seq > since; ``with_global`` also keeps session-less events."""
+                     with_global: bool = False, skip: tuple[str, ...] = ()) -> list[Event]:
+        """Events with seq > since; ``with_global`` also keeps session-less events; ``skip`` drops event types."""
+        drop = f" AND type NOT IN ({','.join('?' * len(skip))})" if skip else ""
         if session is None:
-            rows = self._q("SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?", (since, limit))
+            rows = self._q(f"SELECT * FROM events WHERE seq>?{drop} ORDER BY seq LIMIT ?", (since, *skip, limit))
         else:
             extra = " OR session IS NULL" if with_global else ""
-            rows = self._q(f"SELECT * FROM events WHERE seq>? AND (session=?{extra}) ORDER BY seq LIMIT ?",
-                           (since, session, limit))
+            rows = self._q(f"SELECT * FROM events WHERE seq>? AND (session=?{extra}){drop} ORDER BY seq LIMIT ?",
+                           (since, session, *skip, limit))
         out = []
         for r in rows:
             cls = EVENTS.get(r["type"])
@@ -339,6 +348,8 @@ class EventBus:
                 out = fn(ev)
                 if asyncio.iscoroutine(out):
                     await out
-            except Exception:  # a broken client must not break the turn
-                pass
+            except Exception as exc:  # a broken client must not break the turn, but it is recorded
+                from exo.core import trace
+
+                trace.report(f"event subscriber on {ev.type}", exc, session)
         return ev
