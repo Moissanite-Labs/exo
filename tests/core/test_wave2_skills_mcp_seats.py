@@ -129,3 +129,21 @@ def test_mcp_missing_sdk_is_reported_not_raised(monkeypatch):
     monkeypatch.setitem(sys.modules, "mcp", None)
     status = asyncio.run(McpManager({"e": {"command": "x"}}, env={}).start(Registry()))
     assert not status["e"]["ok"] and "not installed" in status["e"]["error"]
+
+
+def test_seat_key_is_generated_once_with_mode_0600(tmp_path):
+    import os
+    import stat
+
+    from exo import crypto
+    from exo.core import seats
+
+    st = seats.parse({"name": "scout"})
+    path = st.key_path(tmp_path)
+    assert path == tmp_path / "keys" / "scout.key" and not path.exists()
+    seats.ensure_key(path)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600 and path.with_suffix(".pub").is_file()
+    seed = path.read_text()
+    seats.ensure_key(path)  # never overwrites
+    assert path.read_text() == seed and crypto.load_key(path)
+    assert seats.parse({"seat": {"name": "a", "key": "~/k/a.key"}}).key == "~/k/a.key"

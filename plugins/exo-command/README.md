@@ -58,6 +58,33 @@ The server binds to loopback, and a POST from another origin is refused.
 On start the client reads the last 5000 events so recent approvals, usage and task moves are not missed.
 A client that drops resumes from the last `seq`.
 
+## The web UI
+
+`exo web` serves one page on 127.0.0.1:7342 with four views: **Chat** (the default), **Tasks**,
+**Schedule** and **Command** (the overview below). It is plain HTML, CSS and ES modules, with no build step
+and nothing loaded from another site. It follows the system light or dark setting.
+
+- **Chat:** sessions on the left, a monospace transcript with streamed text, tool lines, approval cards and
+  a composer in the middle, and the side panel area on the right. Each answer has accept, edit (with a
+  text box) and reject, which send `feedback.send`. Enter sends; while a turn runs it steers.
+- **Panels:** `ui.panel` events open panels beside the chat. Kinds: markdown, diff, table, tasks,
+  approval, taste, choice, file, chart. A panel whose data is missing or odd shows its `text`. The page
+  sends `ui.respond` for opened, dismissed and acted (a choice or a taste verdict).
+- **Tasks:** `tasks.list`, kept current by `task.updated`.
+- **Schedule:** `schedule.edit` list, add, pause, resume, run now, remove.
+
+The server relays the protocol, it adds no state of its own beyond a ring of the last 3000 events and the
+list of open panels. Routes (`api.py` has the table): `GET /api/events` (SSE of every event, `?since=`,
+`?session=` or `Last-Event-ID`), `/api/chat/sessions`, `/api/chat/sessions/<id>` (+ `/send`, `/interrupt`),
+`/api/chat/panels`, `/api/feedback`, `/api/ui/respond`, `/api/tasks`, `/api/schedule`. Every write checks
+its input, refuses a request from another origin, and answers 501 if the core does not handle that
+command yet.
+
+Panel `data` shapes the page reads: diff `{files:[{path,diff}]}` or `{diff}`; table `{columns,rows}`;
+tasks `{tasks:[{title,status,detail}]}`; choice `{prompt,options:[{key,label}]}`; approval `{options}`;
+taste `{rules:[{rule_id,text}]}`; file `{path,content,start_line}`; chart `{series:[{label,value}]}` or
+`{points:[{x,y}]}`; markdown `{markdown}`.
+
 ## Hermes importer
 
 The Hermes readers moved to `src/exo/ingest/hermes_dashboard.py` (`live_agents`, `kanban_tasks`,

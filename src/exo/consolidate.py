@@ -34,6 +34,7 @@ Policy (optional `<store>/policies/consolidate.yaml`, defaults shown):
     conflict_rule: newer_wins_unless_guarded   # or newer_wins, ask
     guard_words: [publish, public, post, ...]  # replaces exo.taste.GUARD_WORDS
     half_life_days: {preference: 30, rule: 0}  # 0 or null = no decay
+                                               # add domain: {mind: 14} for a half-life per domain
     similarity: 0.6
     rule_of_three: 3
     target_overlap: 0.6                        # share of a proposal's tokens a node must cover
@@ -132,7 +133,11 @@ def load_policy(store: PrincipalStore) -> dict:
             raise ConsolidateError(f"{path}: expected a mapping")
         for k, v in raw.items():
             if k == "half_life_days" and isinstance(v, Mapping):
-                pol[k].update({t: (float(d) if d else None) for t, d in v.items()})
+                for t, d in v.items():
+                    if t == "domain" and isinstance(d, Mapping):   # domain: {mind: 14} sets a half-life per domain
+                        pol[k].update({f"domain:{n}": (float(x) if x else None) for n, x in d.items()})
+                    else:
+                        pol[k][t] = float(d) if d else None
             elif k == "domains" and isinstance(v, Mapping):
                 pol[k].update({str(a): str(b) for a, b in v.items()})
             elif k in pol:
@@ -169,7 +174,8 @@ class Observation:
 
 
 LEAD_RE = re.compile(
-    r"^\W*(?:(?:no|nope|nah|wrong|ok|okay|please|again|also|and|so|hey|look|listen|from now on|going forward|"
+    r"^\W*(?:(?:no|nope|nah|wrong|ok|okay|please|again|also|and|so|hey|look|listen|actually|"
+    r"(?:important\s+)?corrections?|from now on|going forward|"
     r"in future|in the future|henceforth|i (?:already )?(?:said|told you)|as i said|you should|you must|"
     r"agents? should|we should|make sure (?:to|you)?|remember to|always)\b[\s,.:;!-]*)+",
     re.I)
@@ -230,6 +236,7 @@ def _parse_one(text: str) -> tuple[str | None, str | None, str | None]:
     s = LEAD_RE.sub("", s).strip()
     patterns = (
         r"^(?:not|don'?t|do not|dont|never)\s+(?P<x>.+?),?\s+(?:but|instead,?)\s+(?P<y>.+)$",
+        r"^not\s+(?P<x>[^,]+?),\s*(?P<y>.+)$",
         r"^(?:instead of|rather than)\s+(?P<x>.+?),\s*(?P<y>.+)$",
         r"^(?P<y>.+?),?\s+(?:not|rather than|instead of)\s+(?P<x>.+)$",
     )
@@ -548,6 +555,11 @@ class Proposal:
     supersedes: str | None = None
     event_id: str | None = None
     quotes: list[dict] = field(default_factory=list)   # [{text, ts, id}] principal's words
+    ptype: str = "taste"         # taste | skill | fact | question (LEARNING-LOOP 5.5)
+    critic_note: str = ""        # the critic's objection, if it had one
+    target: str | None = None    # skill name for a skill patch
+    patch: str = ""              # skill patch text, or the question text
+    half_life: float | None = None
 
     def body(self) -> dict:
         d = asdict(self)
@@ -718,7 +730,8 @@ def load_state(ledger: Ledger) -> State:
             p = Proposal.from_event(ev)
             st.proposals[p.id] = p
             st.beliefs[p.id] = Belief(p.id, frozenset(p.sig), p.type, p.claim, p.created,
-                                      [Evidence(**e) for e in p.evidence], p.status, p.node_id, p.guarded, ev["id"])
+                                      [Evidence(**e) for e in p.evidence], p.status, p.node_id, p.guarded, ev["id"],
+                                      domain=p.domain)
             st.seen_evidence.update(e["id"] for e in p.evidence)
         elif k == "belief_accepted" and b.get("proposal_id") in st.beliefs:
             pid = b["proposal_id"]
@@ -796,6 +809,7 @@ class _Run:
         doms = {p.name for p in store.nodes_dir.iterdir() if p.is_dir()} if store.nodes_dir.is_dir() else set()
         self.ctx = ReflectContext(sorted(doms | {"mind"}), self.policy, self.now[:10])
         self.thr = float(self.policy["similarity"])
+        self.meta: dict[str, Any] = {}    # typed-proposal fields for the next propose() call
 
     # -- writes --------------------------------------------------------------
     def append(self, kind: str, body: dict, refs: Iterable[str] = (), session: str | None = None) -> dict | None:
@@ -841,14 +855,17 @@ class _Run:
 
     def propose(self, obs: Observation, kind: str, *, supersedes: Belief | None = None,
                 hold: dict | None = None) -> Proposal | None:
-        pid = proposal_id(kind, obs.evidence)
+        salt = self.meta.get("salt")   # typed reviewer output: one event may teach several lessons
+        pid = proposal_id(kind, [*obs.evidence, salt] if salt else obs.evidence)
         if pid in self.state.proposals:
             return None
         r = self.reflector.reflect(obs, self.ctx)
         sig = obs.sig
         evidence = [{"id": e, "ts": obs.ts if e == obs.event_id else self._ts(e), "strength": obs.strength}
                     for e in obs.evidence]
-        hl = self.policy["half_life_days"].get(r.type, self.policy["half_life_days"].get("preference"))
+        hls = self.policy["half_life_days"]
+        hl = hls.get(f"domain:{r.domain}", hls.get(r.type, hls.get("preference"))) if r.type != "rule" \
+            else hls.get("rule")
         weight = taste.combine(((e["strength"], taste.age_days(e["ts"], self.now)) for e in evidence), hl)
         node_id = (supersedes.node_id if supersedes and supersedes.node_id else None) \
             or self.target_node(sig, r.domain) or self.new_node_id(r.domain, " ".join(filter(None, (obs.want, obs.avoid))) or obs.text, pid)
@@ -857,12 +874,16 @@ class _Run:
         pair = {"id": pid, "context": f"{r.domain}: {clip(obs.text, 200)}",
                 "rejected": obs.rejected or (f"Doing {obs.avoid}" if obs.avoid else ""),
                 "chosen": chosen, "evidence": [e["id"] for e in evidence], "node": node_id}
+        meta, self.meta = self.meta, {}
+        guarded = taste.guards(obs.text + " " + r.claim, self.policy["guard_words"]) or bool(meta.get("guarded"))
         p = Proposal(pid, kind, action, node_id, r.claim, r.wants, r.avoid, r.because, r.implication, r.domain,
                      r.type, r.title, taste.label(weight), round(weight, 4), sorted(sig), evidence, pair,
-                     taste.guards(obs.text + " " + r.claim, self.policy["guard_words"]), r.reflector, self.now,
+                     guarded, r.reflector, self.now,
                      "held" if hold else "proposed", hold, supersedes.id if supersedes else None,
                      quotes=[{"text": obs.text, "ts": obs.ts, "id": obs.event_id}] if kind != "rule_of_three"
-                     else self._quotes(obs.evidence))
+                     else self._quotes(obs.evidence),
+                     ptype=meta.get("ptype", "taste"), critic_note=meta.get("critic_note", ""),
+                     half_life=hl)
         new_text, old_text = node_text_for(self.store, p)
         refs = list(dict.fromkeys(obs.evidence + ([supersedes.event_id] if supersedes and supersedes.event_id else [])
                                   + ([hold["question"]] if hold and hold.get("question") else [])))
@@ -877,7 +898,8 @@ class _Run:
                                                               ensure_ascii=False), encoding="utf-8")
         self.state.proposals[pid] = p
         self.state.beliefs[pid] = Belief(pid, frozenset(sig), p.type, p.claim, p.created,
-                                         [Evidence(**e) for e in evidence], p.status, node_id, p.guarded, p.event_id)
+                                         [Evidence(**e) for e in evidence], p.status, node_id, p.guarded, p.event_id,
+                                         domain=p.domain)
         self.state.seen_evidence.update(obs.evidence)
         self.res.proposals.append(pid)
         self.res.pairs.append(pair)
@@ -897,7 +919,7 @@ class _Run:
 
     # -- handlers ------------------------------------------------------------
     def handle_signal(self, obs: Observation) -> None:
-        if obs.event_id in self.state.seen_evidence:
+        if obs.event_id in self.state.seen_evidence and not self.meta:
             return
         kind = "correction" if obs.kind == "correction" else "ruling"
         b, rel = taste.best_match(obs.sig, self.beliefs(), self.thr, include_inactive=True)
@@ -1152,6 +1174,10 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
         raise ConsolidateError(f"proposal {p.id} is already {status}")
     now = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     p.created = p.created or now
+    if p.ptype == "question":
+        raise ConsolidateError(f"{p.id} is a question: answer it, there is nothing to accept")
+    if p.ptype == "skill":
+        return _accept_skill(store, ledger, st, p, status, author)
     path = store.nodes_dir / f"{p.node_id}.md"
     before = store.lint()
     new_text, old_text = node_text_for(store, p)
@@ -1182,6 +1208,7 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
     with pairs.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps({**p.pair, "node": p.node_id, "accepted": ev["id"]}, ensure_ascii=False) + "\n")
     _archive(store.root / "proposals", p.id)
+    _save_undo(store.root, p.id, path, old_text, new_text)
     return {"proposal_id": p.id, "node_id": p.node_id, "event": ev["id"], "action": body["action"]}
 
 
@@ -1202,6 +1229,295 @@ def proposal_reject(store: PrincipalStore, ledger: Ledger, pid: str, reason: str
     return {"proposal_id": p.id, "event": ev["id"]}
 
 
+# --- typed proposals (LEARNING-LOOP 5.5) ---------------------------------------
+
+PTYPES = ("taste", "skill", "fact", "question")
+
+
+class FixedReflector:
+    """Returns the reflection a reviewer already wrote (a dict), so one proposal path serves rules,
+    models and the fast loop. Missing fields come from the rule reflector."""
+    name = "reviewer"
+
+    def __init__(self, item: Mapping[str, Any], fallback: Reflector | None = None):
+        self.item = item
+        self.fallback = fallback or RuleReflector()
+
+    def reflect(self, obs: Observation, ctx: ReflectContext) -> Reflection:
+        base = self.fallback.reflect(obs, ctx)
+        it = self.item
+        wants = _tidy(str(it.get("wants") or "")) or base.wants
+        avoid = _tidy(str(it["avoid"])) if it.get("avoid") not in (None, "", "null") else base.avoid
+        because = _tidy(str(it.get("because") or "")) or base.because
+        claim = str(it.get("claim") or "").strip()
+        if not claim:
+            claim = f"The principal wants {wants}" + (f", not {avoid}" if avoid else "") + f", because {because}."
+        domain = it.get("domain") if it.get("domain") in ctx.domains else base.domain
+        typ = "fact" if it.get("type") == "fact" else ("rule" if it.get("rule") else base.type)
+        return Reflection(claim, wants, avoid, because, str(it.get("implication") or base.implication), domain, typ,
+                          clip(str(it.get("title") or base.title), 70), self.name)
+
+
+def _evidence_obs(ledger: Ledger, ids: Sequence[str], item: Mapping[str, Any], now: str) -> Observation | None:
+    rows = [ev for ev in (ledger.get(i) for i in ids) if ev]
+    if not rows:
+        return None
+    last = max(rows, key=lambda e: e["seq"])
+    strength = max(STRENGTH.get((e["body"] or {}).get("verdict") or e["kind"], 0.6) for e in rows)
+    quote = next((_event_text(e) for e in rows if _event_text(e)), "") or str(item.get("claim") or "")
+    return Observation(last["id"], last["seq"], last["ts"], "correction", "review", clip(quote),
+                       _tidy(str(item.get("wants") or "")) or None, _tidy(str(item.get("avoid") or "")) or None,
+                       _tidy(str(item.get("because") or "")) or None, item.get("rejected"), (), min(strength, 1.0),
+                       last.get("session"), [e["id"] for e in rows])
+
+
+def _weight_of(run: "_Run", evidence: list[dict], domain: str, typ: str) -> float:
+    hls = run.policy["half_life_days"]
+    hl = hls.get("rule") if typ == "rule" else hls.get(f"domain:{domain}", hls.get("preference"))
+    return taste.combine(((e["strength"], taste.age_days(e["ts"], run.now)) for e in evidence), hl)
+
+
+def _propose_skill(run: "_Run", obs: Observation, item: Mapping[str, Any], critic: str) -> Proposal | None:
+    name = re.sub(r"[^a-z0-9-]+", "-", str(item.get("skill") or item.get("target") or "").lower()).strip("-")
+    patch = str(item.get("patch") or "").strip()
+    if not name or not patch:
+        return None
+    pid = proposal_id("skill", [*obs.evidence, name, patch])
+    if pid in run.state.proposals:
+        return None
+    path = run.store.root / "skills" / name / "SKILL.md"
+    old = path.read_text(encoding="utf-8") if path.is_file() else ""
+    new = skill_text_after(old, name, patch, run.now[:10], pid, str(item.get("claim") or ""))
+    refl = FixedReflector(item).reflect(obs, run.ctx)
+    evidence = [{"id": e, "ts": obs.ts if e == obs.event_id else run._ts(e), "strength": obs.strength}
+                for e in obs.evidence]
+    weight = _weight_of(run, evidence, refl.domain, refl.type)
+    p = Proposal(pid, "correction", "update" if old else "create", f"skill:{name}", refl.claim, refl.wants,
+                 refl.avoid, refl.because, refl.implication, refl.domain, "procedure", refl.title,
+                 taste.label(weight), round(weight, 4), sorted(obs.sig), evidence,
+                 {"id": pid, "context": clip(obs.text, 200), "rejected": obs.rejected or "", "chosen": patch,
+                  "evidence": obs.evidence, "node": f"skill:{name}"},
+                 bool(item.get("guarded")) or taste.guards(patch + " " + refl.claim, run.policy["guard_words"]),
+                 refl.reflector, run.now, "proposed", None, None,
+                 quotes=[{"text": obs.text, "ts": obs.ts, "id": obs.event_id}], ptype="skill",
+                 critic_note=critic, target=name, patch=patch)
+    ev = run.append("belief_proposed", p.body(), refs=obs.evidence, session=obs.session)
+    p.event_id = ev["id"] if ev else None
+    if not run.dry:
+        run.pdir.mkdir(exist_ok=True)
+        (run.pdir / f"{pid}.md").write_text(new, encoding="utf-8")
+        (run.pdir / f"{pid}.diff").write_text(_diff(old, new, f"skills/{name}/SKILL").replace("nodes/", ""),
+                                              encoding="utf-8")
+        (run.pdir / f"{pid}.json").write_text(json.dumps({**p.body(), "event_id": p.event_id}, indent=1,
+                                                         ensure_ascii=False), encoding="utf-8")
+    run.state.proposals[pid] = p
+    run.state.beliefs[pid] = Belief(pid, frozenset(p.sig), p.type, p.claim, p.created,
+                                    [Evidence(**e) for e in evidence], p.status, p.node_id, p.guarded, p.event_id,
+                                    domain=p.domain)
+    run.state.seen_evidence.update(obs.evidence)
+    run.res.proposals.append(pid)
+    return p
+
+
+def skill_text_after(old: str, name: str, patch: str, date: str, pid: str, claim: str = "") -> str:
+    """A skill file with a dated lesson section added (or a new skill file when there was none)."""
+    section = f"## Lesson {date} ({pid})\n\n{patch.strip()}\n"
+    if not old.strip():
+        desc = clip(claim or patch, 120).replace(":", " -")
+        return f"---\nname: {name}\ndescription: {desc}\n---\n\n{section}"
+    return old.rstrip("\n") + "\n\n" + section
+
+
+def _propose_question(run: "_Run", obs: Observation | None, item: Mapping[str, Any], ids: Sequence[str]) -> Proposal | None:
+    text = str(item.get("question") or item.get("claim") or "").strip()
+    if not text:
+        return None
+    from .ask import QuestionQueue
+    pid = proposal_id("question", list(ids) or [text])
+    if pid in run.state.proposals:
+        return None
+    q = None if run.dry else QuestionQueue(run.store.root, ledger=run.ledger).propose(
+        text, node=item.get("target"), rationale=str(item.get("implication") or ""),
+        impact=float(item.get("impact", 0.6)), uncertainty=float(item.get("uncertainty", 0.6)),
+        default=item.get("default"), source="learn", domain=item.get("domain"))
+    domain = item.get("domain") if item.get("domain") in run.ctx.domains else default_domain(run.ctx.domains)
+    p = Proposal(pid, "correction", "ask", f"question:{q.id if q else pid}", text, text, None, "it is unclear",
+                 str(item.get("implication") or ""), domain, "question", clip(text, 70), "low", 0.0, [], [], {},
+                 False, "reviewer", run.now, "held", {"queue": q.id if q else None}, None, ptype="question",
+                 patch=text)
+    ev = run.append("belief_proposed", p.body(), refs=list(ids))
+    p.event_id = ev["id"] if ev else None
+    if not run.dry:
+        run.pdir.mkdir(exist_ok=True)
+        (run.pdir / f"{pid}.json").write_text(json.dumps({**p.body(), "event_id": p.event_id}, indent=1,
+                                                         ensure_ascii=False), encoding="utf-8")
+    run.state.proposals[pid] = p
+    run.state.beliefs[pid] = Belief(pid, frozenset(), "question", text, p.created, [], "held", p.node_id, False,
+                                    p.event_id, domain=domain)
+    run.res.proposals.append(pid)
+    return p
+
+
+def propose_typed(store: PrincipalStore, ledger: Ledger, items: Iterable[Mapping[str, Any]], *,
+                  author: str | None = None, now: str | None = None) -> list[dict]:
+    """Write reviewer output as typed proposals: `belief_proposed` events plus drafts in `<store>/proposals/`.
+
+    Each item is a dict: `type` (taste, skill, fact, question), `claim`, optional `wants`, `avoid`, `because`,
+    `implication`, `domain`, `evidence` (ledger event ids; at least one for all but questions), `guarded`,
+    `critic_note`, and `skill` plus `patch` for a skill. Taste and fact go through the same conflict and
+    reinforcement rules as consolidation. Returns one result per item: {"id", "type", "status"} where status
+    is proposed, held, reinforced or skipped."""
+    run = _Run(store, ledger, None, now, author, False)
+    out: list[dict] = []
+    for item in items:
+        ptype = str(item.get("type") or "taste")
+        ids = [i for i in (item.get("evidence") or []) if ledger.get(i)]
+        res: dict[str, Any] = {"type": ptype, "id": None, "status": "skipped"}
+        out.append(res)
+        if ptype not in PTYPES or (ptype != "question" and not ids):
+            continue
+        before = len(run.res.proposals)
+        if ptype == "question":
+            p = _propose_question(run, None, item, ids)
+        else:
+            obs = _evidence_obs(ledger, ids, item, run.now)
+            if obs is None:
+                continue
+            critic = str(item.get("critic_note") or "")
+            if ptype == "skill":
+                p = _propose_skill(run, obs, item, critic)
+            else:
+                run.reflector = FixedReflector(item)
+                run.meta = {"ptype": ptype, "critic_note": critic, "guarded": bool(item.get("guarded")),
+                            "salt": ptype + "|" + str(item.get("claim") or item.get("wants") or "")}
+                reinforced = len(run.res.reinforced)
+                run.handle_signal(obs)
+                run.meta = {}
+                if len(run.res.reinforced) > reinforced:
+                    res["status"] = "reinforced"
+                    res["id"] = run.res.reinforced[-1]
+                    continue
+                p = run.state.proposals.get(run.res.proposals[-1]) if len(run.res.proposals) > before else None
+        if p is not None:
+            res["id"], res["status"] = p.id, p.status
+    return out
+
+
+# --- accept a skill patch, undo records, revert --------------------------------
+
+def _accept_skill(store: PrincipalStore, ledger: Ledger, st: State, p: Proposal, status: str,
+                  author: str | None) -> dict:
+    path = store.root / "skills" / str(p.target) / "SKILL.md"
+    old = path.read_text(encoding="utf-8") if path.is_file() else None
+    new = skill_text_after(old or "", str(p.target), p.patch, (p.created or "")[:10], p.id, p.claim)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(new, encoding="utf-8")
+    body = {"proposal_id": p.id, "node_id": p.node_id, "action": "update" if old is not None else "create",
+            "claim": p.claim, "type": p.type, "domain": p.domain, "confidence": p.confidence, "ptype": "skill"}
+    if status == "held":
+        body["conflict_resolved_by"] = "direct accept"
+    refs = [r for r in (st.beliefs[p.id].event_id,) if r]
+    ev = ledger.append("belief_accepted", body, author or (ledger.signer.author if ledger.signer else None)
+                       or "principal", refs=refs)
+    _archive(store.root / "proposals", p.id)
+    _save_undo(store.root, p.id, path, old, new)
+    commit = _git_commit(store.root, path, f"skill {p.target}: lesson {p.id}")
+    return {"proposal_id": p.id, "node_id": p.node_id, "event": ev["id"], "action": body["action"],
+            "commit": commit}
+
+
+def _save_undo(root: Path, pid: str, path: Path, before: str | None, after: str) -> None:
+    arch = root / "proposals" / "archive"
+    arch.mkdir(parents=True, exist_ok=True)
+    (arch / f"{pid}.undo.json").write_text(
+        json.dumps({"path": str(path.relative_to(root)), "before": before, "after": after}, ensure_ascii=False),
+        encoding="utf-8")
+
+
+def _git_commit(root: Path, path: Path, message: str) -> str | None:
+    """One commit per promoted skill patch when the store is a git repo. Best effort; never raises."""
+    import subprocess
+    if not (root / ".git").exists():
+        return None
+    try:
+        ident = ["-c", "user.name=exo-learn", "-c", "user.email=exo-learn@localhost", "-c", "commit.gpgsign=false"]
+        subprocess.run(["git", "-C", str(root), "add", str(path)], check=True, capture_output=True, timeout=30)
+        subprocess.run(["git", "-C", str(root), *ident, "commit", "-m", message, "--", str(path)], check=True,
+                       capture_output=True, timeout=30)
+        out = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True,
+                             text=True, timeout=30)
+        return out.stdout.strip()
+    except Exception:
+        return None
+
+
+def _strip_section(text: str, pid: str) -> str:
+    """Remove the dated section a proposal appended (a heading that names its id) from `text`."""
+    lines = text.split("\n")
+    start = next((i for i, l in enumerate(lines) if l.startswith("#") and f"{pid})" in l), None)
+    if start is None:
+        return text
+    level = len(lines[start]) - len(lines[start].lstrip("#"))
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if lines[j].startswith("#") and len(lines[j]) - len(lines[j].lstrip("#")) <= level:
+            end = j
+            break
+    return "\n".join(lines[:start] + lines[end:]).rstrip("\n") + "\n"
+
+
+def proposal_revert(store: PrincipalStore, ledger: Ledger, pid: str, reason: str, *, author: str | None = None,
+                    now: str | None = None, follow_up: bool = True) -> dict:
+    """Undo an accepted lesson by adding events, never by deleting any (LEARNING-LOOP 5.7).
+
+    The node or skill file goes back to what it was (or loses the section this lesson added if the file
+    changed since). A `belief_rejected` note with the reason follows. If the reason implies an opposite
+    lesson, it is proposed as a new correction."""
+    if not (reason or "").strip():
+        raise ConsolidateError("a revert needs a reason")
+    st = load_state(ledger)
+    p = _find(st, pid)
+    status = _status(st, p.id)
+    if status != "accepted":
+        raise ConsolidateError(f"proposal {p.id} is {status}; only an accepted lesson can be reverted")
+    undo_path = store.root / "proposals" / "archive" / f"{p.id}.undo.json"
+    file_state = "no undo record"
+    if undo_path.is_file():
+        undo = json.loads(undo_path.read_text(encoding="utf-8"))
+        target = store.root / undo["path"]
+        current = target.read_text(encoding="utf-8") if target.is_file() else None
+        if current == undo["after"]:
+            if undo["before"] is None:
+                target.unlink()
+            else:
+                target.write_text(undo["before"], encoding="utf-8")
+            file_state = "restored"
+        elif current is not None:
+            target.write_text(_strip_section(current, p.id), encoding="utf-8")
+            file_state = "section removed"
+        if p.ptype == "skill":
+            _git_commit(store.root, target, f"revert skill {p.target}: {p.id}")
+        else:
+            store.reload()
+            store.index()
+    refs = [r for r in (st.beliefs[p.id].event_id, st.decided.get(p.id, {}).get("event")) if r]
+    ev = ledger.append("note", {"type": "belief_rejected", "proposal_id": p.id, "reason": reason.strip(),
+                                "reverted": True, "file": file_state},
+                       author or (ledger.signer.author if ledger.signer else None) or "principal", refs=refs)
+    res = {"proposal_id": p.id, "event": ev["id"], "file": file_state, "follow_up": None}
+    if follow_up:
+        want, avoid, why = parse_instruction(reason)
+        if want:
+            obs = Observation(ev["id"], ev["seq"], ev["ts"], "correction", "revert", clip(reason), want, avoid, why,
+                              None, (), STRENGTH["reject"], None, [ev["id"]])
+            rel = taste.relation(obs.sig, p.sig, float(load_policy(store)["similarity"]))
+            if rel != "agree":
+                run = _Run(store, ledger, None, now, author, False)
+                q = run.propose(obs, "correction")
+                res["follow_up"] = q.id if q else None
+    return res
+
+
 # --- CLI ----------------------------------------------------------------------
 
 def register(sp, common) -> None:
@@ -1211,9 +1527,9 @@ def register(sp, common) -> None:
     p.add_argument("--key", help="signing key path (default: $EXO_HOME/keys/<seat>.key)")
     p.add_argument("--dry-run", action="store_true", help="report without writing")
     p = sp.add_parser("proposals", parents=[common], help="review belief proposals")
-    p.add_argument("action", nargs="?", default="list", choices=["list", "show", "accept", "reject"])
+    p.add_argument("action", nargs="?", default="list", choices=["list", "show", "accept", "reject", "revert"])
     p.add_argument("id", nargs="?")
-    p.add_argument("--reason", help="why (required for reject)")
+    p.add_argument("--reason", help="why (required for reject and revert)")
     p.add_argument("--all", action="store_true", help="list decided proposals too")
     p.add_argument("--as", dest="seat", default="principal", help="signing seat for accept/reject")
     p.add_argument("--key", help="signing key path (default: $EXO_HOME/keys/<seat>.key)")
@@ -1237,7 +1553,7 @@ def cmd_consolidate(a, store: PrincipalStore) -> int:
 
 
 def cmd_proposals(a, store: PrincipalStore) -> int:
-    write = a.action in ("accept", "reject")
+    write = a.action in ("accept", "reject", "revert")
     with _open_ledger(a, store, write) as led:
         try:
             if a.action == "list":
@@ -1254,6 +1570,11 @@ def cmd_proposals(a, store: PrincipalStore) -> int:
             elif a.action == "accept":
                 r = proposal_accept(store, led, a.id)
                 print(f"accepted {r['proposal_id']}: {r['action']} nodes/{r['node_id']}.md")
+            elif a.action == "revert":
+                if not a.reason:
+                    sys.exit("exo proposals revert needs --reason")
+                r = proposal_revert(store, led, a.id, a.reason)
+                print(f"reverted {r['proposal_id']} ({r['file']})")
             else:
                 if not a.reason:
                     sys.exit("exo proposals reject needs --reason")

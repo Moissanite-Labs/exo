@@ -287,14 +287,24 @@ configured runs every child on main and nothing breaks. Catalog defaults (Anthro
 
 ## 7. Left for later waves
 
-- **Cross-seat delegation over the bus** (wave 4): send a brief as a signed bus body to another seat, run it
-  there, return the receipt. Bodies already validate both ways; the missing parts are a seat that accepts
-  briefs and format negotiation through the seat registry.
+- **Cross-seat delegation over the bus** (minimal send built; the receiving side is wave 4). Design:
+  1. `delegate` takes an optional `seat` per task. With a seat, the delegator builds the same typed `Brief`,
+     posts it as a signed bus message (`kind = "task"`, `thread = brief id`, body a SYM-2P line, through
+     `Client.post_sym2p`) and records the task as `queued` with `child = "bus:<seat>"`. It returns at once;
+     nothing runs locally. A failed post marks the task failed with the reason.
+  2. The sender signs with its seat key, `$EXO_HOME/keys/<seat>.key` (the same file the gate uses for its
+     ledger). The relay checks the signature against the registry, so only registered seats can send.
+  3. The receiving seat (wave 4) reads `kind = "task"` messages from its inbox, decodes the brief, runs it
+     through its own `Delegator` (its own limits, tiers and gate), and posts the `Receipt` line back in the
+     same thread with `kind = "receipt"`. The sender matches by thread and updates the task row.
+  4. Restart: remote tasks stay `queued` (local ones are marked failed), because the work lives elsewhere.
+  5. Still open: format negotiation through the seat registry, receipt matching on the sender, a timeout
+     for tasks that never answer, and usage from the remote receipt joining the parent's totals.
 - **Ledger mirror**: append each signed receipt to the principal ledger as an `action` event, so the learning
   loop and the eval can score delegations (which roles and limits worked).
-- **Usage roll-up**: add child usage to the parent session's totals and to `usage.updated`.
-- **Child sessions after completion**: a client can still send a turn to a finished child session, and it
-  would run with the engine's full toolset. Make finished child sessions read-only, or keep their allowlist.
+- **Done in wave 3:** child usage rolls into the parent session total and the parent emits `usage.updated`
+  for it; finished child sessions are locked (`SessionStore.lock`, `assert_open`), so a new turn fails with
+  a clear error.
 - **Background delegation** (Hermes's async mode): return at once and deliver receipts later as messages.
 - **Worktree isolation** for parallel builders that edit the same repo (Hermes `subagent_worktree.py`).
 - **Decision role** (D-015): pick the child role and toolset with a decision model instead of the parent.

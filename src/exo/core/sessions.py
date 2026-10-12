@@ -55,6 +55,10 @@ def _fts_text(msg: Message) -> str:
     return "\n".join(p for p in parts if p)
 
 
+class SessionLocked(ValueError):
+    """A turn was sent to a finished (locked) session."""
+
+
 class SessionStore:
     """Thread-safe wrapper over one sessions.sqlite file."""
 
@@ -135,6 +139,20 @@ class SessionStore:
 
     def set_meta(self, sid: str, meta: dict[str, Any]) -> None:
         self._q("UPDATE sessions SET meta=? WHERE id=?", (json.dumps(meta), sid))
+
+    def lock(self, sid: str, reason: str = "done") -> None:
+        """Close a session to new turns (a finished child). Reading and forking stay allowed."""
+        self.set_meta(sid, {**self.get_meta(sid), "locked": reason or "done"})
+
+    def status(self, sid: str) -> str:
+        """``locked:<reason>`` for a finished child session, else ``open``."""
+        reason = self.get_meta(sid).get("locked")
+        return f"locked:{reason}" if reason else "open"
+
+    def assert_open(self, sid: str) -> None:
+        reason = self.get_meta(sid).get("locked")
+        if reason:
+            raise SessionLocked(f"session {sid} is finished ({reason}) and takes no new turns; fork it to continue")
 
     def fork_point(self, sid: str) -> tuple[str | None, int | None]:
         rows = self._q("SELECT parent, fork_seq FROM sessions WHERE id=?", (sid,))

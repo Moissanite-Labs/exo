@@ -30,6 +30,7 @@ import random
 import re
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -390,6 +391,493 @@ def load_responder(spec: str) -> Responder:
     mod, _, fn = spec.partition(":")
     obj = getattr(importlib.import_module(mod), fn or "responder")
     return obj
+
+
+# --- hill-climbing pieces (LEARNING-LOOP section 6) -----------------------------------------------
+# A Responder answers one prompt. A candidate is a Responder built from a configuration (taste rules,
+# skills, settings); the same code serves any user, only the files in their store differ.
+
+PASS_MARK = 0.5
+EPS = 1e-9
+HELD_FRACTION = 0.2
+DEFAULT_GATE = {"held_tolerance": 0.0, "domain_drop": 0.1, "guarded_domains": (), "pass_mark": PASS_MARK}
+Complete = Callable[[str], str]
+
+
+def _round(x: float) -> float:
+    return round(float(x), 4)
+
+
+def _mean(xs: Iterable[float]) -> float:
+    xs = list(xs)
+    return sum(xs) / len(xs) if xs else 0.0
+
+
+JUDGE_PROMPT = ("You grade an answer for one person against what they actually wanted.\n"
+                "Rubric: {rubric}\nSituation: {question}\nWhat they wanted: {gold}\n{rejected}"
+                "Answer to grade: {answer}\n"
+                "Check stance and conclusion, not only voice. Reply with one number from 0 to 1.")
+
+
+def judge_grader(complete: Complete, rubric: str = "", samples: int = 3, prompt: str = JUDGE_PROMPT) -> Grader:
+    """A Grader that asks a model `samples` times and averages the scores (principle 12).
+
+    `complete(prompt) -> text` is any model call; the judge role is `eval`, which defaults to the main route.
+    A sample that raises is skipped; when every sample fails the item scores 0."""
+    def grade(item: Mapping, answer: str) -> float:
+        gold = item.get("gold") or item.get("chosen") or ""
+        rej = item.get("rejected")
+        text = prompt.format(rubric=rubric or "Match what the principal wanted.",
+                             question=item.get("question") or item.get("context") or "", gold=gold,
+                             rejected=f"What they rejected: {rej}\n" if rej else "", answer=answer)
+        scores = []
+        for _ in range(max(1, int(samples))):
+            try:
+                scores.append(parse_score(str(complete(text))))
+            except Exception:
+                continue
+        return _mean(scores)
+    grade.samples = max(1, int(samples))  # type: ignore[attr-defined]
+    return grade
+
+
+def _check_fn(check: Any) -> tuple[str, Callable[[Mapping, str], bool], tuple[str, ...]]:
+    """(id, passes(item, answer), domains) for a check: a dict with `forbid` or `require` (a regex) or a callable."""
+    if callable(check):
+        return getattr(check, "__name__", "check"), lambda item, ans: bool(check(item, ans)), ()
+    cid = str(check.get("id") or check.get("forbid") or check.get("require"))
+    doms = tuple(check.get("domains") or ())
+    if check.get("forbid"):
+        rx = re.compile(check["forbid"], re.I if check.get("ignore_case", True) else 0)
+        return cid, lambda item, ans: not rx.search(ans), doms
+    if check.get("require"):
+        rx = re.compile(check["require"], re.I if check.get("ignore_case", True) else 0)
+        return cid, lambda item, ans: bool(rx.search(ans)), doms
+    raise ValueError(f"check {cid!r} needs forbid or require")
+
+
+def rule_violations(checks: Iterable[Any], item: Mapping, answer: str) -> list[str]:
+    """Ids of the checks the answer breaks. A check with `domains` applies only to those domains."""
+    out = []
+    for c in checks:
+        cid, passes, doms = _check_fn(c)
+        if doms and domain_of(item) not in doms:
+            continue
+        if not passes(item, answer):
+            out.append(cid)
+    return out
+
+
+def rule_grader(checks: Iterable[Any]) -> Grader:
+    """A Grader from the store's checkable rules: 1.0 when every check passes, 0.0 on any break (a hard fail)."""
+    checks = list(checks)
+    return lambda item, answer: 0.0 if rule_violations(checks, item, answer) else 1.0
+
+
+def load_checks(root: str | os.PathLike) -> list[dict]:
+    """The store's checkable rules: `<store>/eval/rules.jsonl`, one {"id", "forbid"|"require", "domains"?} per line."""
+    return load_jsonl(Path(root) / "eval" / "rules.jsonl")
+
+
+def _item_ts(ev: Mapping) -> str:
+    return str(ev.get("ts") or "")
+
+
+def build_replays(ledger, cutoff: str | None = None) -> list[dict]:
+    """Session replay items from ledger verdict, answer and ruling events (6.1).
+
+    Each item is the context the agent had, cut before the principal's move, and what the principal did:
+      accept            gold is the accepted output
+      edit, should_have_been   gold is the better version the principal gave
+      answer            gold is the answer to the asked question
+      ruling            gold is the rule, given the principal message that led to it
+    Rejections carry no better version, so they are skipped. `cutoff` keeps events at or before that timestamp."""
+    items: list[dict] = []
+    last_user: dict[str, str] = {}
+    for ev in ledger.iter():
+        if cutoff and ev["ts"] > cutoff:
+            break
+        b = ev.get("body") or {}
+        sess = ev.get("session") or ""
+        text = next((b[k] for k in ("text", "content", "description", "summary") if isinstance(b.get(k), str)
+                     and b[k].strip()), "")
+        if ev["kind"] == "utterance" and b.get("role", "user") == "user":
+            last_user[sess] = text
+            continue
+        base = {"ts": ev["ts"], "source": ev["id"], "session": sess, "kind": "replay",
+                "domain": b.get("domain") or (b.get("node") or "general").split("/", 1)[0]}
+        if ev["kind"] == "verdict":
+            target = ledger.get(b.get("target")) if b.get("target") else None
+            ttext = ""
+            if target:
+                tb = target.get("body") or {}
+                ttext = next((tb[k] for k in ("text", "content") if isinstance(tb.get(k), str)), "")
+            context = b.get("context") or last_user.get(sess, "")
+            verdict = b.get("verdict")
+            better = b.get("chosen") or b.get("wanted") or b.get("edit") or b.get("edited") or b.get("text") or ""
+            if verdict == "accept":
+                gold = ttext or b.get("answer") or ""
+            elif verdict in ("edit", "should_have_been"):
+                gold = better
+            else:
+                continue
+            if context and gold:
+                items.append({**base, "id": f"r-{ev['id'][:12]}", "question": context, "gold": gold,
+                              "verdict": verdict, "rejected": (b.get("answer") or ttext) if verdict != "accept" else None})
+        elif ev["kind"] == "answer":
+            q = next((ledger.get(r) for r in ev.get("refs") or [] if (ledger.get(r) or {}).get("kind") == "question"),
+                     None)
+            qtext = ((q or {}).get("body") or {}).get("text", "")
+            if qtext and text:
+                items.append({**base, "id": f"r-{ev['id'][:12]}", "question": qtext, "gold": text, "verdict": "answer"})
+        elif ev["kind"] == "ruling":
+            context = last_user.get(sess, "")
+            if context and text and context != text:
+                items.append({**base, "id": f"r-{ev['id'][:12]}", "question": context, "gold": text,
+                              "verdict": "ruling"})
+    return items
+
+
+def _hash_pct(key: str) -> int:
+    import hashlib
+    return int(hashlib.sha256(key.encode()).hexdigest()[:8], 16) % 100
+
+
+def split(items: Iterable[Mapping], by: str = "ts", held_fraction: float = HELD_FRACTION,
+          train_fraction: float = 0.5) -> dict[str, list[dict]]:
+    """Train, dev and held-out.
+
+    Held-out is a fixed sample: an item is held out when a hash of its id falls in the first `held_fraction`
+    of 100, so membership never changes as items arrive and incumbent scores stay cached. Tiny sets always
+    hold out their lowest-hash item. The rest are ordered (`by="ts"`: oldest first; `by="id"`) and the older
+    `train_fraction` is train (the reviewer may read it), the newer part is dev (the climb scores on it)."""
+    items = [dict(i) for i in items]
+    cut = int(round(held_fraction * 100))
+    held = [i for i in items if _hash_pct(str(i.get("id"))) < cut]
+    if not held and len(items) >= 3:
+        held = [min(items, key=lambda i: _hash_pct(str(i.get("id"))))]
+    held_ids = {id(i) for i in held}
+    rest = [i for i in items if id(i) not in held_ids]
+    rest.sort(key=(lambda i: (_item_ts(i), str(i.get("id")))) if by == "ts" else (lambda i: str(i.get("id"))))
+    n_train = int(len(rest) * train_fraction)
+    return {"train": rest[:n_train], "dev": rest[n_train:], "held": held}
+
+
+def _choice_flip(item: Mapping, seed: int) -> bool:
+    return _hash_pct(f"{seed}:{item.get('id')}") % 2 == 1
+
+
+def score_items(items: Iterable[Mapping], responder: Responder, grader: Grader | None = None, *,
+                rules: Iterable[Any] = (), pass_mark: float = PASS_MARK, seed: int = 0,
+                weights: Mapping[str, float] | None = None) -> dict:
+    """Score every item once. Checkable rules run first and a break is a hard fail for that item (score 0, the
+    judge is not called). Pairs (`chosen` and `rejected`, no `gold`) score 1 when the responder picks the chosen
+    one, order fixed per item and seed. Everything else is graded against its `gold`."""
+    grader = grader or keyword_grader
+    rules = list(rules)
+    rows = []
+    for it in items:
+        kind = "choice" if (it.get("chosen") and it.get("rejected") and not it.get("gold")) else "qa"
+        row = {"id": it.get("id"), "domain": domain_of(it), "kind": kind, "rule_ok": True,
+               "pinned": bool(it.get("pinned"))}
+        try:
+            if kind == "choice":
+                flip = _choice_flip(it, seed)
+                a, b = (it["rejected"], it["chosen"]) if flip else (it["chosen"], it["rejected"])
+                out = str(responder(CHOICE_PROMPT.format(context=it.get("context", ""), a=a, b=b)))
+                right = "B" if flip else "A"
+                row["score"] = 1.0 if parse_choice(out) == right else 0.0
+            else:
+                q = it.get("question") or it.get("context")
+                if not q:
+                    continue
+                ans = str(responder(str(q)))
+                bad = rule_violations(rules, it, ans) if rules else []
+                if bad:
+                    row["rule_ok"], row["broken"], row["score"] = False, bad, 0.0
+                else:
+                    row["score"] = float(grader(it, ans))
+        except Exception as e:  # a failing responder scores zero, the run goes on
+            row["score"], row["error"] = 0.0, f"{type(e).__name__}: {e}"
+        row["score"] = _round(row["score"])
+        rows.append(row)
+    w = dict(weights or {})
+    kinds = sorted({r["kind"] for r in rows})
+    parts = {k: _round(_mean(r["score"] for r in rows if r["kind"] == k)) for k in kinds}
+    tot = sum(w.get(k, 1.0) for k in kinds)
+    composite = _round(sum(parts[k] * w.get(k, 1.0) for k in kinds) / tot) if tot else 0.0
+    by: dict[str, list[float]] = defaultdict(list)
+    for r in rows:
+        by[r["domain"]].append(r["score"])
+    return {"n": len(rows), "composite": composite, "parts": parts, "pass_mark": pass_mark,
+            "by_domain": {d: {"n": len(v), "score": _round(_mean(v))} for d, v in sorted(by.items())},
+            "rows": rows}
+
+
+def noise_band(composites: Iterable[float]) -> float:
+    """Run-to-run noise: the spread of the incumbent's composite across repeated scorings."""
+    xs = list(composites)
+    return _round(max(xs) - min(xs)) if len(xs) >= 2 else 0.0
+
+
+def compare(incumbent: Any, candidate: Any, items: Iterable[Mapping] = (), *, grader: Grader | None = None,
+            rules: Iterable[Any] = (), noise: float = 0.0, margin: float = 0.01, seed: int = 0) -> dict:
+    """Paired scores of an incumbent and a candidate on the same items.
+
+    Each side is a Responder (scored here with `score_items`) or a score result from `score_items`.
+    Returns the composite of each, the delta, the noise band, whether the candidate is better (delta beats
+    both `margin` and `noise`), per-domain deltas, and per-item rows for the gate."""
+    items = list(items)
+    inc = incumbent if isinstance(incumbent, Mapping) else score_items(items, incumbent, grader, rules=rules, seed=seed)
+    cand = candidate if isinstance(candidate, Mapping) else score_items(items, candidate, grader, rules=rules, seed=seed)
+    irows = {r["id"]: r for r in inc["rows"]}
+    crows = {r["id"]: r for r in cand["rows"]}
+    shared = [i for i in irows if i in crows]
+    rows = {i: {"domain": crows[i]["domain"], "inc": irows[i]["score"], "cand": crows[i]["score"],
+                "inc_rule_ok": irows[i].get("rule_ok", True), "cand_rule_ok": crows[i].get("rule_ok", True),
+                "pinned": bool(crows[i].get("pinned"))} for i in shared}
+    ci, cc = _mean(rows[i]["inc"] for i in shared), _mean(rows[i]["cand"] for i in shared)
+    by: dict[str, list[str]] = defaultdict(list)
+    for i in shared:
+        by[rows[i]["domain"]].append(i)
+    by_domain = {d: {"n": len(ids), "inc": _round(_mean(rows[i]["inc"] for i in ids)),
+                     "cand": _round(_mean(rows[i]["cand"] for i in ids)),
+                     "delta": _round(_mean(rows[i]["cand"] - rows[i]["inc"] for i in ids))}
+                 for d, ids in sorted(by.items())}
+    delta = cc - ci
+    return {"n": len(shared), "inc": _round(ci), "cand": _round(cc), "delta": _round(delta), "noise": _round(noise),
+            "margin": margin, "better": delta > max(margin, noise) + EPS,
+            "improved": [i for i in shared if rows[i]["cand"] > rows[i]["inc"] + EPS],
+            "worse": [i for i in shared if rows[i]["cand"] < rows[i]["inc"] - EPS],
+            "by_domain": by_domain, "items": rows}
+
+
+def gate(result: Mapping, policy: Mapping | None = None) -> dict:
+    """The regression gates of 6.5 on a `compare` result made on held-out and pinned items.
+
+    Fails on: a held-out composite drop beyond `held_tolerance`; any item that passed its checkable rules
+    before and breaks one now; any score drop at all in a `guarded_domains` domain; a domain drop beyond
+    `domain_drop`; a pinned item (flagged `pinned`, or listed in `policy["pinned"]`) under `pass_mark`.
+    Returns {"pass": bool, "failures": [{"gate", ...}]}; the failures name the items."""
+    pol = {**DEFAULT_GATE, **(policy or {})}
+    fails: list[dict] = []
+    if result["delta"] < -float(pol["held_tolerance"]) - EPS:
+        fails.append({"gate": "held_out_drop", "delta": result["delta"]})
+    guarded = set(pol["guarded_domains"] or ())
+    pinned = set(pol.get("pinned") or ())
+    for iid, r in result["items"].items():
+        if r["inc_rule_ok"] and not r["cand_rule_ok"]:
+            fails.append({"gate": "rule_regression", "item": iid})
+        if r["domain"] in guarded and r["cand"] < r["inc"] - EPS:
+            fails.append({"gate": "guarded_domain", "item": iid, "domain": r["domain"]})
+        if (r.get("pinned") or iid in pinned) and r["cand"] < float(pol["pass_mark"]):
+            fails.append({"gate": "pinned", "item": iid})
+    for d, v in result["by_domain"].items():
+        if v["delta"] < -float(pol["domain_drop"]) - EPS:
+            fails.append({"gate": "domain_drop", "domain": d, "delta": v["delta"]})
+    return {"pass": not fails, "failures": fails}
+
+
+# --- scoreboard ---------------------------------------------------------------------------------
+
+SCOREBOARD = "reports/scoreboard.jsonl"
+
+
+def scoreboard(root: str | os.PathLike, row: Mapping | None = None) -> dict:
+    """Append `row` (if given) to `<root>/reports/scoreboard.jsonl` and render `reports/scoreboard.html`.
+
+    A row: {"ts"?, "incumbent", "composite", "parts"?, "cost"?, "change"?: {"id", "proposal"?, "status"}}.
+    Statuses `kept` and `reverted` feed the weekly line, e.g. "score 0.71 to 0.74 this week, 6 changes kept,
+    2 reverted". Returns {"rows", "line", "html"}."""
+    root = Path(root)
+    path = root / SCOREBOARD
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if row is not None:
+        r = {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **row}
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n")
+    rows = load_jsonl(path)
+    line = _scoreboard_line(rows)
+    hp = path.with_suffix(".html")
+    hp.write_text(_scoreboard_html(rows, line), encoding="utf-8")
+    return {"rows": rows, "line": line, "html": hp}
+
+
+def _scoreboard_line(rows: list[dict], now: datetime | None = None) -> str:
+    now = now or datetime.now(timezone.utc)
+    week = [r for r in rows if (dt := parse_ts(r.get("ts"))) is not None and (now - dt).days < 7]
+    scored = [r for r in week if r.get("composite") is not None]
+    kept = sum(1 for r in week if (r.get("change") or {}).get("status") == "kept")
+    rev = sum(1 for r in week if (r.get("change") or {}).get("status") == "reverted")
+    if not scored:
+        return "no eval runs this week"
+    return (f"score {scored[0]['composite']:.2f} to {scored[-1]['composite']:.2f} this week, "
+            f"{kept} changes kept, {rev} reverted")
+
+
+def _scoreboard_html(rows: list[dict], line: str) -> str:
+    body = "".join(
+        f"<tr><td>{html.escape(str(r.get('ts', ''))[:16])}</td><td>{html.escape(str(r.get('incumbent', '')))}</td>"
+        f"<td>{'n/a' if r.get('composite') is None else format(r['composite'], '.3f')}</td>"
+        f"<td>{html.escape(', '.join(f'{k} {v:.2f}' for k, v in (r.get('parts') or {}).items()))}</td>"
+        f"<td>{html.escape(str((r.get('change') or {}).get('id', '')))} {html.escape(str((r.get('change') or {}).get('status', '')))}</td>"
+        f"<td>{r.get('cost', '')}</td></tr>" for r in rows)
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Scoreboard</title>'
+            f"<style>{CSS}</style></head><body><main><h1>Scoreboard</h1><div class=\"meta\">{html.escape(line)}</div>"
+            f"<table><tr><th>When</th><th>Incumbent</th><th>Composite</th><th>Parts</th><th>Change</th><th>Cost</th></tr>"
+            f"{body}</table></main></body></html>")
+
+
+# --- the nightly climb --------------------------------------------------------------------------
+
+@dataclass
+class Budget:
+    """Caps for one night (6.7). `judge_samples` is for whoever builds the judge; `max_calls` stops the night
+    when the responder has been called that many times (None = no cap)."""
+    candidates: int = 10
+    judge_samples: int = 3
+    max_calls: int | None = None
+    margin: float = 0.01
+    noise_runs: int = 1          # extra scorings of the incumbent to measure noise
+
+
+def load_items(root: str | os.PathLike, ledger=None, cutoff: str | None = None) -> list[dict]:
+    """Eval Q&A, preference pairs and session replays of a store, each with an id."""
+    root = Path(root)
+    items = [{**q, "id": q.get("id") or f"qa-{i}"} for i, q in enumerate(load_jsonl(root / "training" / "eval-qa.jsonl"))]
+    items += [{**p, "id": p.get("id") or f"pair-{i}"} for i, p in
+              enumerate(load_jsonl(root / "training" / "preference-pairs.jsonl")) if p.get("chosen") and p.get("rejected")]
+    if ledger is not None:
+        items += build_replays(ledger, cutoff)
+    seen, out = set(), []
+    for it in items:
+        if it["id"] not in seen:
+            seen.add(it["id"])
+            out.append(it)
+    return out
+
+
+def _cfg_hash(cfg: Any) -> str:
+    import hashlib
+    return hashlib.sha256(json.dumps(cfg, sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
+def climb(store, budget: Budget | None = None, *, incumbent: Mapping, candidates: Iterable[Mapping],
+          responder_for: Callable[[Any], Responder], grader: Grader | None = None, rules: Iterable[Any] | None = None,
+          items: Iterable[Mapping] | None = None, ledger=None, policy: Mapping | None = None,
+          weights: Mapping[str, float] | None = None, seed: int = 0) -> dict:
+    """One night of greedy, conservative hill-climbing (6.4, 6.7).
+
+    `incumbent` and each candidate are {"id", "config", "domains"?, "note"?}; `responder_for(config)` builds the
+    Responder. At most `budget.candidates` are tried. A candidate replaces the incumbent only if it is better
+    on dev by the margin and the incumbent's noise band, is not worse on held-out, and passes `gate`. Only
+    items in a candidate's `domains` are rescored; the rest reuse the incumbent's cached rows. The incumbent's
+    scores are cached in `<store>/eval/incumbent.json`. The decision is a ledger note with both scores when a
+    writable `ledger` is given. Returns the report: incumbent id, one record per candidate, accepted ids, calls."""
+    budget = budget or Budget()
+    root = Path(store) if isinstance(store, (str, os.PathLike)) else Path(store.root)
+    rules = list(load_checks(root) if rules is None else rules)
+    pool = list(items) if items is not None else load_items(root, ledger)
+    parts = split(pool)
+    dev, held = parts["dev"], parts["held"]
+    pinned = [i for i in pool if i.get("pinned") and i not in held]
+    calls = [0]
+    cap = {"on": False, "hit": False}   # the call cap applies to candidates; the incumbent baseline is always scored
+
+    def counted(cfg: Any) -> Responder:
+        inner = responder_for(cfg)
+
+        def respond(prompt: str) -> str:
+            if cap["on"] and budget.max_calls is not None and calls[0] >= budget.max_calls:
+                cap["hit"] = True
+                raise RuntimeError("call budget spent")
+            calls[0] += 1
+            return inner(prompt)
+        return respond
+
+    def score(cfg: Any, rows: list[dict]) -> dict:
+        res = score_items(rows, counted(cfg), grader, rules=rules, seed=seed, weights=weights)
+        if cap["hit"]:   # score_items turns a raising responder into zero scores, so stop here instead
+            raise RuntimeError("call budget spent")
+        return res
+
+    inc = dict(incumbent)
+    cache_path = root / "eval" / "incumbent.json"
+    key = {"cfg": _cfg_hash(inc.get("config")), "items": _cfg_hash(sorted(str(i["id"]) for i in pool))}
+    cache: dict = {}
+    try:
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    if cache.get("key") != key:
+        s_dev = score(inc["config"], dev)
+        s_held = score(inc["config"], held)
+        s_pin = score(inc["config"], pinned) if pinned else {"rows": []}
+        runs = [s_dev["composite"]] + [score(inc["config"], dev)["composite"] for _ in range(budget.noise_runs)]
+        cache = {"key": key, "dev": s_dev, "held": s_held, "pinned": s_pin, "noise": noise_band(runs)}
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    report: dict[str, Any] = {"incumbent": inc["id"], "start_composite": cache["dev"]["composite"],
+                              "noise": cache["noise"], "candidates": [], "accepted": [],
+                              "sizes": {k: len(v) for k, v in parts.items()}}
+    cap["on"] = True
+    for cand in list(candidates)[: max(0, budget.candidates)]:
+        rec: dict[str, Any] = {"id": cand["id"], "status": "dropped"}
+        report["candidates"].append(rec)
+        try:
+            doms = set(cand.get("domains") or ())
+            affected = [i for i in dev if not doms or domain_of(i) in doms]
+            cand_dev = score(cand["config"], affected)
+            inc_dev = {**cache["dev"], "rows": [r for r in cache["dev"]["rows"] if r["id"] in {i["id"] for i in affected}]}
+            cmp_dev = compare(inc_dev, cand_dev, noise=cache["noise"], margin=budget.margin)
+            rec["dev"] = {k: cmp_dev[k] for k in ("inc", "cand", "delta", "better")}
+            if not cmp_dev["better"]:
+                rec["reason"] = "not better on dev by the margin and noise"
+                continue
+            affected_held = [i for i in held if not doms or domain_of(i) in doms]
+            gate_items = affected_held + [i for i in pinned if i not in affected_held]
+            inc_rows = [r for r in cache["held"]["rows"] + cache["pinned"]["rows"]
+                        if r["id"] in {i["id"] for i in gate_items}]
+            inc_held = {"rows": inc_rows}
+            cmp_held = compare(inc_held, score(cand["config"], gate_items), margin=0.0)
+            g = gate(cmp_held, policy)
+            rec["held"] = {k: cmp_held[k] for k in ("inc", "cand", "delta")}
+            rec["gate"] = g
+            if not g["pass"]:
+                rec["status"], rec["reason"] = "gate_failed", "; ".join(sorted({f["gate"] for f in g["failures"]}))
+                continue
+        except RuntimeError as e:
+            rec["status"], rec["reason"] = "stopped", str(e)
+            break
+        rec["status"] = "accepted"
+        report["accepted"].append(cand["id"])
+        inc = dict(cand)
+        # The accepted candidate becomes the incumbent: its cached rows are its scored rows over the old ones.
+        newkey = {"cfg": _cfg_hash(inc.get("config")), "items": key["items"]}
+        merged = {r["id"]: r for r in cache["dev"]["rows"]}
+        merged.update({r["id"]: r for r in cand_dev["rows"]})
+        dev_rows = list(merged.values())
+        held_map = {r["id"]: r for r in cache["held"]["rows"]}
+        pin_map = {r["id"]: r for r in cache["pinned"]["rows"]}
+        for iid, r in cmp_held["items"].items():
+            row = {"id": iid, "domain": r["domain"], "kind": "qa", "score": r["cand"], "rule_ok": r["cand_rule_ok"],
+                   "pinned": r["pinned"]}
+            (pin_map if r["pinned"] and iid not in held_map else held_map)[iid] = row
+        cache = {"key": newkey, "dev": {"composite": _round(_mean(r["score"] for r in dev_rows)), "rows": dev_rows},
+                 "held": {"composite": _round(_mean(r["score"] for r in held_map.values())), "rows": list(held_map.values())},
+                 "pinned": {"rows": list(pin_map.values())}, "noise": cache["noise"]}
+        key = newkey
+        cache_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+        cb = cand.get("on_accept")
+        if callable(cb):
+            cb(rec)
+        if ledger is not None and getattr(ledger, "signer", None) is not None:
+            ledger.append("note", {"type": "learn_climb", "candidate": cand["id"], "note": cand.get("note", ""),
+                                   "dev": rec["dev"], "held": rec["held"]})
+    report["incumbent"] = inc["id"]
+    report["composite"] = cache["dev"]["composite"]
+    report["calls"] = calls[0]
+    return report
 
 
 # --- CLI hook -----------------------------------------------------------------------------------

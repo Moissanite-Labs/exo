@@ -188,7 +188,7 @@ def test_timeout_turn_and_token_limits(tmp_path):
     loop_forever = [tool_turn("glob", {"pattern": "*.none"})]
     rules = [("PARENT", [tool_turn("delegate", {"tasks": [{"goal": "SLOW"}, {"goal": "BUSY"}]}), "ok"]),
              ("SLOW", [hold]), ("BUSY", loop_forever)]
-    eng, _ = engine(tmp_path, rules, timeout_s=1, max_turns=2, max_tokens=10_000_000)
+    eng, _ = engine(tmp_path, rules, timeout_s=3, max_turns=2, max_tokens=10_000_000)  # wide margin (issue #6)
     asyncio.run(parent_turn(eng, "PARENT go"))
     by_goal = {decode(e.body.packet).brief: decode(e.body.packet) for e in task_events(eng)
                if e.body.status == "failed"}
@@ -280,3 +280,57 @@ def test_task_events_render_for_clients(tmp_path):
     old_client = json.loads(task_events(eng)[-1].to_json())
     old_client["body"]["future_field"] = 1
     assert s.Event.from_json(json.dumps(old_client), strict=False).body.status == "done"
+
+
+def test_child_usage_rolls_into_the_parent_total(tmp_path):
+    rules = [("PARENT", [tool_turn("delegate", {"goal": "CHILD work"}), "done"]), ("CHILD", ["child reply"])]
+    eng, _ = engine(tmp_path, rules)
+    sid, res = asyncio.run(parent_turn(eng, "PARENT go"))
+    receipt = decode(task_events(eng)[-1].body.packet)
+    ups = [e.body for e in eng.hub.since(0) if isinstance(e.body, s.UsageUpdated) and e.session == sid]
+    assert receipt.input_tokens > 0 and len(ups) == 3  # parent call 1, the child roll-up, parent call 2
+    assert ups[1].usage.input_tokens == receipt.input_tokens
+    own = sum(u.usage.input_tokens for u in (ups[0], ups[2]))
+    assert ups[2].session_total.input_tokens == own + receipt.input_tokens
+    assert eng.loop.state(sid).total.input_tokens == ups[2].session_total.input_tokens
+
+
+def test_finished_child_session_is_locked(tmp_path):
+    import pytest
+
+    from exo.core.sessions import SessionLocked
+    eng, _ = engine(tmp_path, [("PARENT", [tool_turn("delegate", {"goal": "CHILD work"}), "ok"]),
+                               ("CHILD", ["fine"])])
+    sid, _ = asyncio.run(parent_turn(eng, "PARENT go"))
+    child = decode(task_events(eng)[-1].body.packet).child_session
+    assert eng.store.status(child) == "locked:done" and eng.store.status(sid) == "open"
+    with pytest.raises(SessionLocked, match="finished"):
+        eng.store.assert_open(child)
+    with pytest.raises(SessionLocked):
+        asyncio.run(eng.loop.send(child, "one more thing"))
+    assert not [m for m in eng.store.messages(child) if "one more thing" in m.text()]
+    asyncio.run(eng.loop.send(sid, "PARENT again"))  # the parent is not locked
+
+
+def test_delegate_to_another_seat_posts_a_signed_bus_message(tmp_path):
+    class FakeBus:
+        def __init__(self):
+            self.sent = []
+
+        def post_sym2p(self, to, line, kind="msg", thread=None, **kw):
+            self.sent.append((to, line, kind, thread))
+            return {"seq": 7, "id": "x"}
+
+    bus = FakeBus()
+    rules = [("PARENT", [tool_turn("delegate", {"goal": "do it elsewhere", "seat": "scout"}), "ok"])]
+    eng, fake = engine(tmp_path, rules)
+    eng.agents.bus = bus
+    sid, _ = asyncio.run(parent_turn(eng, "PARENT go"))
+    assert len(bus.sent) == 1 and bus.sent[0][0] == ["scout"] and bus.sent[0][2] == "task"
+    assert decode(bus.sent[0][1]).goal == "do it elsewhere"
+    assert not any("do it elsewhere" in c["user"] for c in fake.calls)  # nothing ran locally
+    row = eng.agents.list(sid)[0]
+    assert row["status"] == "queued" and row["child_session"] is None
+    assert "queued" in tool_text(eng, sid).lower()
+    eng.agents.__init__(eng)  # a restart keeps the remote task queued
+    assert eng.agents.list(sid)[0]["status"] == "queued"
