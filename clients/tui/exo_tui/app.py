@@ -405,12 +405,17 @@ class ExoApp(App):
 
     async def set_model(self, ref: str) -> None:
         if not ref:
-            rows = (await self.client.call(s.ModelsList())).get("models", [])
+            self.note("loading models...")
+            res = await self.client.call(s.ModelsList())
             seen, items = set(), []
-            for r in rows:
+            for r in res.get("models", []):  # configured routes first, then everything the providers serve
                 if r["route"] not in seen:
                     seen.add(r["route"])
                     items.append((f"{r['route']}  ({r['role']})", r["route"]))
+            for r in res.get("available", []):
+                if r["route"] not in seen:
+                    seen.add(r["route"])
+                    items.append((r["route"], r["route"]))
             self.push_screen(Palette(items, "models"), lambda v: v and self.run_worker(
                 self.set_model(v), exit_on_error=False))
             return
