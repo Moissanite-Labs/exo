@@ -43,7 +43,17 @@ seat = "scout"
 
 [plugins]
 enabled = ["exo-memory", "exo-bus"]   # omit for the config.json default
+
+[session]                     # D-032
+cwd = "~/Work/exo-live"       # where this seat's threads start; beats config.json's cwd. A folder that does not
+                              # exist is ignored (and said so in the session-start notice)
+
+[trace]                       # D-032: anomaly limits for this seat over config.json's [trace] (docs/TRACE.md)
+turn_wall_s = 90              # also turn_total_wall_s, model_wait_s, subagent_s, verify_turns, verify_days
 ```
+
+When a thread starts, or a shell call works (its `cwd` argument or a leading `cd`) in a folder that is not inside
+a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.
 
 ## Skills
 

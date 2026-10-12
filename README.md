@@ -33,6 +33,12 @@ running turn, a model fallback, and so on). `/intro` runs the orientation again 
 or `reset` controls the tips. Skip the first-run intro with `exo-tui --no-intro`. Details in
 `docs/ONBOARDING.md` (D-030).
 
+Commands you will use in the TUI (`/help` lists all): `/new`, `/sessions`, `/fork`, `/undo`, `/cwd`, `/context`,
+`/compact`, `/model`, `/default`, `/usage`, `/trace` (timing and estimated cost per turn), `/findings`, `/peers`,
+`/send`, `/handoff [path]` (the agent writes a handoff note for the next session to
+`~/Work/handoffs/<seat>-<date>.md`, or to the path you give), `/intro`, `/tutorial`. Exo warns once when a
+thread's folder is not inside a git repo; a seat sets its default folder with `[session] cwd` in `seat.toml`.
+
 ## Two goals, held together
 
 - **Fit one person as closely as possible.** The first principal is Ahraz Arifuddin.
