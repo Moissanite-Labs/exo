@@ -215,3 +215,10 @@ def test_stdio_lines():
     assert responses["c0"]["result"]["subscribed"] is True
     assert responses["c1"]["ok"] and responses["c2"]["error"]["code"] == "unknown_command"
     assert events[0]["type"] == "session.created"
+
+
+def test_unix_socket_path_too_long_is_a_clear_error(tmp_path):
+    srv = HttpServer(None)
+    long_path = tmp_path / ("d" * 120) / "exod.sock"
+    with pytest.raises(ValueError, match="socket path too long"):
+        asyncio.run(srv.start_unix(long_path))
