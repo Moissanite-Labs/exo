@@ -56,6 +56,7 @@ Phase 1 (inventory) and phase 2 (research) in progress. Read along:
 | `DECISIONS.md` | Every significant choice, why, and what was rejected |
 | `inventory/` | Everything built so far that could fold into Exo, with keep / merge / drop |
 | `research/` | Guardian-angel reading notes, principles, base evaluation |
+| `docs/DOCS-MAP.md` | Index of all docs: whitepaper, user guide, developer guide, technical docs, and what is missing |
 | `docs/ARCHITECTURE.md` | Components, memory and context model, migration path (phase 3) |
 
 ## Credits and inspirations
