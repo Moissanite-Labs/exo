@@ -285,7 +285,7 @@ def test_turn_is_fresh_call_from_tree_and_tail(tmp_path):
     assert len(last) <= 1 + 2 + 2  # system, maybe a bridge, tail of at most leaf+tail
     assert last[-1].text() == "q3"
     assert "q0" not in [m.text() for m in last[1:]]
-    assert any(e.type == "context.compacted" for e in seen)
+    assert any(e.type == "memory.summarized" for e in seen)  # tree upkeep, not a context compaction
     assert "TURNS TO SUMMARIZE" in summ.prompts[0] and "[USER] q0" in summ.prompts[0]
 
 
@@ -499,3 +499,50 @@ def test_compaction_skips_tiny_spans_and_summaries_that_do_not_shrink():
     assert {st for st, _ in tree(lean, min_compact_tokens=100000)} == {"skipped"}  # too small to be worth it
     assert {st for st, _ in tree(fat)} == {"skipped"}  # grew, so kept verbatim
     assert {st for st, _ in tree(lean)} == {"done"}  # big enough and shrinks
+
+
+def test_steer_during_the_final_reply_gets_its_own_answer(tmp_path):
+    prov = Script(["WAIT", *reply("first answer")], reply("answer to the steer"))
+    prov.gate = asyncio.Event()
+    store, loop, seen = make(tmp_path, prov)
+
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "start"))
+        while not prov.calls:
+            await asyncio.sleep(0.005)
+        assert await loop.send(s.id, "one more thing", mode="steer") is None
+        prov.gate.set()
+        return s, await task
+
+    s, res = run(go())
+    assert res.message.text() == "answer to the steer"
+    assert len(prov.calls) == 2 and "one more thing" in [m.text() for m in prov.calls[1]]
+    roles = [(m.role, m.text()) for m in store.messages(s.id)]
+    assert roles[-2:] == [("user", "one more thing"), ("assistant", "answer to the steer")]
+
+
+def test_steer_after_the_last_call_still_gets_an_answer(tmp_path):
+    prov = Script(reply("first answer"), reply("late answer"))
+    store, loop, seen = make(tmp_path, prov)
+
+    async def go():
+        s = await loop.create_session()
+        st = loop.state(s.id)
+
+        async def late(*a, **k):  # arrives while the turn is closing, after the model's final reply
+            st.steer.append(Message.user("late note"))
+        orig = loop._rounds
+        calls = []
+
+        async def rounds(*a, **k):
+            await orig(*a, **k)
+            if not calls:
+                calls.append(1)
+                await late()
+        loop._rounds = rounds
+        return s, await loop.send(s.id, "start")
+
+    s, res = run(go())
+    assert res.message.text() == "late answer"
+    assert [m.text() for m in store.messages(s.id)][-2:] == ["late note", "late answer"]
