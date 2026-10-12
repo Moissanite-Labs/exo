@@ -243,7 +243,7 @@ def cmd_chat(a: Any, store: Any = None) -> int:
 
     async def main() -> int:
         socket = None if a.url else str(Path(a.socket).expanduser() if a.socket else default_socket())
-        async with Client(socket=socket, url=a.url, token=token) as client:
+        async with Client(socket=socket, url=a.url, token=token, principal="chat") as client:
             return await chat(client, read_line, write, a.session, a.resume, a.title)
 
     try:

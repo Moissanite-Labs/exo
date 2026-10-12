@@ -87,8 +87,14 @@ class Daemon:
     def events(self, cls):
         return [e for e in self.eng.hub.since(0) if isinstance(e.body, cls)]
 
-    async def cmd(self, body):
-        return await self.eng.handle(s.Command.of(body), self.eng.hub)
+    async def cmd(self, body, caller="principal:tui"):
+        """A command as the principal's own client (D-039: the connection, not the body, says who answers)."""
+        from exo import principal as pr
+        tok = pr.CALLER.set(pr.Caller(caller))
+        try:
+            return await self.eng.handle(s.Command.of(body), self.eng.hub)
+        finally:
+            pr.CALLER.reset(tok)
 
 
 async def until(fn, secs=3.0):

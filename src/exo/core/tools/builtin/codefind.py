@@ -164,22 +164,24 @@ def _run(argv: list[str], env: dict[str, str], cwd: str, timeout: float, stdin: 
     return code, out or "", err or "", status
 
 
-def _child_env(cfg_home: str) -> dict[str, str]:
-    """The parent environment minus every secret-looking variable, with jg's config pointed at the temp dir."""
-    env = {k: v for k, v in os.environ.items()
-           if not re.search(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", k, re.I)}
+def _child_env(cfg_home: str, allow: Any = (), deny: Any = ()) -> dict[str, str]:
+    """The parent environment through the one secret scrub (D-039, with the seat's env_allow and env_deny), with
+    jg's config pointed at the temp dir."""
+    from exo.envscrub import scrub_env
+
+    env = scrub_env(os.environ, allow, deny)
     env.update({"XDG_CONFIG_HOME": cfg_home, "NO_COLOR": "1", "TERM": "dumb"})
     return env
 
 
 def _search(runner: list[str], backend: Backend, question: str, root: Path, cwd: str, timeout: float,
-            cancel: threading.Event | None) -> tuple[str, int, str, str]:
+            cancel: threading.Event | None, meta: dict[str, Any] | None = None) -> tuple[str, int, str, str]:
     """One backend: temp config, auth, search, cleanup. Returns (code, stdout, stderr, status)."""
     t0 = time.monotonic()
     cfg = tempfile.mkdtemp(prefix="exo-jg-")
     try:
         os.chmod(cfg, 0o700)
-        env = _child_env(cfg)
+        env = _child_env(cfg, (meta or {}).get("env_allow") or (), (meta or {}).get("env_deny") or ())
         code, out, err, status = _run([*runner, *backend.auth], env, cwd, min(timeout, 60), backend.secret, cancel)
         if code != 0:
             return backend.name, code, out, _scrub(f"jg auth failed: {err or out}", [backend.secret])[:500]
@@ -231,7 +233,7 @@ def code_find(args: dict[str, Any], ctx: ToolContext) -> str:
             errors.append(f"{b.name}: skipped, {left:.0f}s left")
             break
         try:
-            name, code, out, note = _search(_runner, b, question, root, cwd, left, ctx.cancel)
+            name, code, out, note = _search(_runner, b, question, root, cwd, left, ctx.cancel, ctx.meta)
         except OSError as exc:
             errors.append(f"{b.name}: could not start jg ({type(exc).__name__})")
             continue

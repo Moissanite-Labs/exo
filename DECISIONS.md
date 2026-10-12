@@ -743,3 +743,45 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** terminal event-loop blocking and approval focus (another branch); gate, approvals, capture and
   ledger items (other branches).
 
+## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
+- **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
+  the principal, so a bash tool call (same user, socket 0600) could connect to the core's socket and answer its own
+  approvals with `allow_always`. (b) `exo web` re-exposed the whole protocol and the event stream with no token;
+  its only CSRF defence was Origin equals Host, which DNS rebinding defeats; `asgi.py` had no check at all. (c)
+  Secret scrubbing for tool subprocesses was a suffix rule written three ways, and the claude-cli provider passed
+  almost the whole parent environment.
+- **Decision, identity:** the transport stamps a caller for every command (`exo/principal.py`, a context variable
+  set by `Dispatcher.run` and cleared when the command returns, so a task it started does not inherit it). In
+  process (the terminal client's own core, the web's in-process dispatcher) the caller is `principal:<label>`.
+  On the Unix socket it is the principal only when the request carries the per-launch credential in
+  `X-Exo-Principal` and the connecting process (`LOCAL_PEERPID` on macOS, `SO_PEERCRED` on Linux) is not a
+  descendant of the core. Everything else, stdio and TCP included, is `local`. The credential is a random token
+  in `<socket stem>.principal.key` beside the socket (0600, in the 0700 run folder), new per launch, deleted on
+  stop, never in an environment variable. Clients that are the principal (`exo`, joined windows, `exo chat`, the
+  web) read it per request, so they re-join a restarted core.
+- **Decision, approvals:** a principal connection answers as the principal (`client` is a label: `by` is
+  `principal:tui`). A local connection answers only as `seat:<name>` with the D-033 signature, and never with
+  `allow_always`. `approver_identity` returns `unknown` for an empty or unrecognised name, and `unknown` may not
+  answer. The attack test (`tests/security/test_approval_identity.py`) runs a background bash job that finds the
+  pending approval and tries `allow_always` with every body and with the stolen credential: all refused.
+- **Decision, web:** every `/api/` route and both event streams need the page token (`X-Exo-Token`, or `?token=`
+  on the streams, since EventSource cannot set headers). Host must be `127.0.0.1:<port>`, `localhost:<port>` or
+  `[::1]:<port>`, for the page too. Origin and Sec-Fetch-Site checks stay. Only the page shell is served without
+  the token. The token stays per launch, in memory, delivered in the URL fragment that `exo web` prints and opens.
+  `asgi.py` is deleted (unused).
+- **Decision, environment:** one function, `exo.envscrub.scrub_env`, for bash, jobs and `code_find`: catalog
+  `key_env` names, secret suffixes and words, `AWS_*`, `GH_*`, `GITHUB_TOKEN`, `*DATABASE_URL`, `*_DSN`, the bus
+  identity, the core socket and credential variables, and a new seat `[tools] env_deny` (names or patterns).
+  `env_allow` keeps a name; `env_deny` wins. The claude-cli child gets `minimal_env` (PATH, HOME, locale, terminal,
+  CLAUDE_CONFIG_DIR, proxies, CA bundles) plus its switches.
+- **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
+  cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
+  has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
+  today).
+- **Limits:** a tool process is the same OS user. Code that reads the credential file without the gate seeing it
+  (the gate classes a plain read as `credentials`, always ask; indirection is the gate branch's work) and also
+  detaches from the core's process tree could still pass. The real fix is an OS sandbox for tool subprocesses.
+  The page link sits in browser history and, briefly, in the browser launcher's argv. The env scrub is a
+  heuristic.
+- **Not changed:** the TUI approval card's focus behaviour (another branch is editing the TUI); noted for later.
+  The echo engine (a test double) still accepts any answer.

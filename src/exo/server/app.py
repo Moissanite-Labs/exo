@@ -11,6 +11,10 @@ HTTP routes:
 
 stdio: each input line is a Command; output lines are Responses (have ``ok``)
 and Events (have ``seq``). ``events.subscribe`` starts the event feed.
+
+Every command runs with a caller the transport stamps (D-039, ``exo.principal``): ``principal`` only for an
+in-process client or a Unix socket request that carries the per-launch credential in ``X-Exo-Principal`` from a
+process that is not a descendant of the core; ``local`` for everything else, including stdio and TCP.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from exo.core.types import to_dict
 from exo.protocol import schema as s
+from exo import principal as pr
 from exo.server.engine import Closed, CommandFailed, Engine, Hub
 
 SERVER_CAPABILITIES = ["sse", "replay", "stdio"]
@@ -49,19 +54,29 @@ class Dispatcher:
     """Decodes commands, answers ``hello`` and ``events.subscribe`` itself, and
     sends everything else to the engine. Never raises on bad input."""
 
-    def __init__(self, engine: Engine, hub: Hub | None = None):
+    def __init__(self, engine: Engine, hub: Hub | None = None, caller: str = pr.LOCAL):
         self.engine = engine
         # An engine with its own durable hub (the real core) keeps it; tests get a memory hub.
         self.hub = hub or getattr(engine, "hub", None) or Hub()
+        self.caller = caller  # D-039: who an in-process user of this dispatcher is; transports pass their own
 
-    async def dispatch(self, raw: str | bytes) -> tuple[s.Command | None, s.Response]:
+    async def dispatch(self, raw: str | bytes, caller: str | None = None) -> tuple[s.Command | None, s.Response]:
         try:
             cmd = s.Command.from_json(raw)
         except s.ProtocolError as exc:
             return None, _fail(_raw_id(raw), exc.code, exc.message)
-        return cmd, await self.run(cmd)
+        return cmd, await self.run(cmd, caller)
 
-    async def run(self, cmd: s.Command) -> s.Response:
+    async def run(self, cmd: s.Command, caller: str | None = None) -> s.Response:
+        who = pr.Caller(caller or self.caller)
+        tok = pr.CALLER.set(who)
+        try:
+            return await self._run(cmd)
+        finally:
+            who.live = False  # a task the command started does not keep the caller's standing
+            pr.CALLER.reset(tok)
+
+    async def _run(self, cmd: s.Command) -> s.Response:
         body = cmd.body
         if isinstance(body, s.Hello):
             if body.protocol != s.PROTOCOL_VERSION:
@@ -89,10 +104,14 @@ _REASONS = {200: "OK", 400: "Bad Request", 401: "Unauthorized", 404: "Not Found"
 
 
 class HttpServer:
-    def __init__(self, dispatcher: Dispatcher, token: str | None = None, heartbeat: float = HEARTBEAT):
+    def __init__(self, dispatcher: Dispatcher, token: str | None = None, heartbeat: float = HEARTBEAT,
+                 principal: bool = False):
         self.dispatcher = dispatcher
         self.token = token
         self.heartbeat = heartbeat
+        self.principal = principal  # D-039: issue a principal credential beside the Unix socket
+        self._principal_token: str | None = None
+        self._unix_path: Path | None = None
         self._server: asyncio.base_events.Server | None = None
         self._streams: set[asyncio.Task] = set()
 
@@ -110,6 +129,9 @@ class HttpServer:
         finally:
             os.umask(old)
         os.chmod(path, 0o600)
+        self._unix_path = path
+        if self.principal:
+            self._principal_token = pr.issue(path)
 
     async def start_tcp(self, host: str, port: int) -> int:
         if not self.token:
@@ -126,6 +148,9 @@ class HttpServer:
             await self.close()
 
     async def close(self) -> None:
+        if self._principal_token and self._unix_path is not None:
+            pr.revoke(self._unix_path, self._principal_token)
+            self._principal_token = None
         if self._server is not None:
             self._server.close()
         for t in list(self._streams):
@@ -171,7 +196,7 @@ class HttpServer:
             if n > MAX_BODY:
                 return await self._json(writer, 413, {"error": "body too large"})
             raw = await reader.readexactly(n)
-            _cmd, resp = await self.dispatcher.dispatch(raw)
+            _cmd, resp = await self.dispatcher.dispatch(raw, self._caller(headers, writer))
             return await self._send(writer, 200, resp.to_json().encode())
         if url.path == "/events" and method == "GET":
             q = parse_qs(url.query)
@@ -182,6 +207,13 @@ class HttpServer:
             return await self._json(writer, 200, {"ok": True, "protocol": s.PROTOCOL_VERSION,
                                                   "seq": self.dispatcher.hub.seq})
         return await self._json(writer, 404, {"error": "not found"})
+
+    def _caller(self, headers: dict[str, str], writer: asyncio.StreamWriter) -> str:
+        """D-039: principal only on the Unix socket, with the credential, from a process outside the core's tree."""
+        if self._unix_path is None or not self._principal_token:
+            return pr.LOCAL
+        return pr.stamp(headers.get(pr.HEADER.lower()), self._principal_token, writer.get_extra_info("socket"),
+                        headers.get("x-exo-client", ""))
 
     def _authorized(self, headers: dict[str, str]) -> bool:
         if not self.token:
@@ -315,7 +347,7 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
     servers: list[HttpServer] = []
     if socket:
         # The socket file is 0600, so only this user reaches it; the token guards TCP only.
-        srv = HttpServer(dispatcher)
+        srv = HttpServer(dispatcher, principal=True)
         await srv.start_unix(socket)
         servers.append(srv)
         if (start_peers := getattr(engine, "start_peers", None)) is not None:

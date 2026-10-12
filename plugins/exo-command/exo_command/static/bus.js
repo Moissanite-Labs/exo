@@ -1,7 +1,7 @@
 // One event stream for the page: /api/events relays every protocol event from the core.
 // Listeners get plain event objects {seq, type, session, body, ts}. The browser reconnects by itself and
 // resumes from the last id, so nothing is missed or repeated.
-import { api } from "./dom.js";
+import { api, stream } from "./dom.js";
 
 const listeners = new Set();
 let source = null;
@@ -25,7 +25,7 @@ export async function start() {
     since = d.seq || 0;
   } catch (e) { /* the stream still works without the panel list */ }
   setState({ seq: since });
-  source = new EventSource("/api/events?since=" + since);
+  source = stream("/api/events?since=" + since);
   source.onopen = () => setState({ connected: true });
   source.onerror = () => setState({ connected: false });
   source.onmessage = (m) => {

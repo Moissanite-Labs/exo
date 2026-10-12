@@ -72,6 +72,12 @@ Rules for changes (written in the file header): additive only, within a protocol
 defaults, or new types. Never rename or remove. Commands are strict: an unknown field is rejected. Clients decode
 events with `strict=False` so a newer server does not break them.
 
+Who sent a command is stamped by the transport, not read from the body (D-039, `docs/GATE.md` "Who answered").
+A client of the principal that answers approvals passes a label: `Client(socket=..., principal="tui")` sends the
+core's per-launch credential; an in-process `Dispatcher(engine, caller="principal:<label>")` is the principal by
+construction. Everything else is `local` and can answer an approval only as a signed seat. Tests that answer
+approvals through a `Dispatcher` pass `caller` (for example `d.run(cmd, "principal:tui")`).
+
 After any change to the schema, regenerate the exports and commit them:
 
     python -m exo.protocol.export            # rewrites src/exo/protocol/generated/

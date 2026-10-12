@@ -42,7 +42,8 @@ class ClientSource:
     def __init__(self, socket: Optional[str] = None, url: Optional[str] = None, token: Optional[str] = None):
         from exo.protocol.client import Client
         self.socket = socket
-        self.client = Client(socket=socket, url=url, token=token)
+        # D-039: the web client answers approvals as the principal; its browsers prove themselves with the page token
+        self.client = Client(socket=socket, url=url, token=token, principal="web")
 
     async def call(self, body: Any) -> Dict[str, Any]:
         resp = await self.client.send(body)
@@ -66,7 +67,7 @@ class DispatcherSource:
         self.dispatcher = dispatcher
 
     async def call(self, body: Any) -> Dict[str, Any]:
-        resp = await self.dispatcher.run(s.Command.of(body))
+        resp = await self.dispatcher.run(s.Command.of(body), "principal:web")
         if not resp.ok:
             err = resp.error
             raise SourceError(err.code if err else "unknown", err.message if err else "")

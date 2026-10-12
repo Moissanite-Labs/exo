@@ -18,17 +18,31 @@ class ClientError(Exception):
 
 
 class Client:
-    """``Client(socket=path)`` for the local daemon, ``Client(url=..., token=...)`` for TCP."""
+    """``Client(socket=path)`` for the local daemon, ``Client(url=..., token=...)`` for TCP.
+
+    ``principal="tui"`` (or any label) marks an interactive client of the principal (D-039): over the Unix
+    socket it sends the core's per-launch credential, read fresh on each request so a restarted core is
+    re-joined. Without it the core treats the connection as ``local``, which cannot answer approvals."""
 
     def __init__(self, socket: str | None = None, url: str | None = None,
-                 token: str | None = None, timeout: float = 30.0):
+                 token: str | None = None, timeout: float = 30.0, principal: str | None = None):
         if not socket and not url:
             raise ValueError("need socket or url")
         transport = httpx.AsyncHTTPTransport(uds=str(socket)) if socket else None
         headers = {"Authorization": f"Bearer {token}"} if token else {}
+        self._socket = str(socket) if socket else None
+        self._principal = principal
         self._http = httpx.AsyncClient(base_url=url or "http://exod", transport=transport,
                                        headers=headers, timeout=timeout)
         self.last_seq = 0
+
+    def _who(self) -> dict[str, str]:
+        if not self._principal or not self._socket:
+            return {}
+        from exo import principal as pr
+
+        cred = pr.read(self._socket)
+        return {pr.HEADER: cred, "X-Exo-Client": self._principal} if cred else {}
 
     async def __aenter__(self) -> Client:
         return self
@@ -44,7 +58,8 @@ class Client:
         return await self.send_raw(s.Command.of(body).to_json())
 
     async def send_raw(self, text: str) -> s.Response:
-        r = await self._http.post("/command", content=text, headers={"Content-Type": "application/json"})
+        r = await self._http.post("/command", content=text, headers={"Content-Type": "application/json",
+                                                                     **self._who()})
         if r.status_code != 200:
             return s.Response(id="", ok=False, error=s.ErrorInfo(code=f"http_{r.status_code}", message=r.text))
         return s.Response.from_json(r.content)

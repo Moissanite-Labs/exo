@@ -149,11 +149,13 @@ def test_non_loopback_peer_is_refused():
     assert prov.guard({"host": "localhost:7342", "x-exo-token": ""}, "127.0.0.1", "")[0] == 403  # no token set
 
 
-def test_other_routes_keep_working_without_the_token():
+def test_other_routes_need_the_token_too():
+    """D-039: every /api/ route needs the page token now, and none echoes it."""
     async def go(web, port):
-        return await raw(port, "GET", "/api/health")
-    status, data, _ = serve(go)
-    assert status == 200 and "token" not in json.dumps(data)
+        return [await raw(port, "GET", "/api/health"),
+                await raw(port, "GET", "/api/health", {"X-Exo-Token": TOKEN})]
+    [(no, _, _), (status, data, text)] = serve(go)
+    assert no == 403 and status == 200 and TOKEN not in text
 
 
 # ---------------------------------------------------------------- the happy path never echoes

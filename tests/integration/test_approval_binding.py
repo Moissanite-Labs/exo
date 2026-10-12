@@ -36,7 +36,8 @@ def _engine(tmp_path, sent, store=""):
 
 async def _turn(eng, answers):
     """Run one gated turn. ``answers`` is a list of ApprovalRespond kwargs tried in order on the first
-    request; returns (request, responses)."""
+    request; returns (request, responses). The dispatcher is a local connection (D-039); an answer with
+    ``caller="principal:tui"`` comes from a principal connection."""
     d = Dispatcher(eng)
     sid = (await d.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
     await d.run(s.Command.of(s.TurnSend(session=sid, text="announce the release")))
@@ -46,8 +47,9 @@ async def _turn(eng, answers):
             if isinstance(ev.body, s.ApprovalRequested) and req is None:
                 req = ev.body
                 for kw in answers:
-                    kw = kw(req) if callable(kw) else kw
-                    out.append(await d.run(s.Command.of(s.ApprovalRespond(request_id=req.request_id, **kw))))
+                    kw = dict(kw(req) if callable(kw) else kw)
+                    caller = kw.pop("caller", None)
+                    out.append(await d.run(s.Command.of(s.ApprovalRespond(request_id=req.request_id, **kw)), caller))
         await asyncio.sleep(0.01)
     assert req is not None and not eng._tasks
     return req, out
@@ -58,9 +60,11 @@ def test_default_table_lets_only_the_principal_answer(tmp_path):
     eng = _engine(tmp_path, sent)
     req, out = asyncio.run(_turn(eng, [{"decision": "allow", "client": "seat:saga-divan"},
                                        {"decision": "allow", "client": "peer:x"},
-                                       {"decision": "allow", "client": "tui"}]))
+                                       {"decision": "allow", "client": "tui"},
+                                       {"decision": "allow", "client": "tui", "caller": "principal:tui"}]))
     assert req.approvers == ["principal"] and len(req.binding) == 64
-    assert [r.ok for r in out] == [False, False, True]
+    assert [r.ok for r in out] == [False, False, False, True]
+    assert "cannot answer approvals" in out[2].error.message  # D-039: a body that says tui is not the principal
     assert out[0].error.code == "forbidden" and "seat:saga-divan may not answer" in out[0].error.message
     assert sent == ["we shipped"]
 
@@ -106,7 +110,7 @@ def test_a_named_seat_may_answer_signed_and_others_may_not(tmp_path):
 def test_grants_command_lists_and_revokes(tmp_path):
     sent: list[str] = []
     eng = _engine(tmp_path, sent)
-    asyncio.run(_turn(eng, [{"decision": "allow_always"}]))
+    asyncio.run(_turn(eng, [{"decision": "allow_always", "caller": "principal:tui"}]))
 
     async def cmd(args):
         r = await Dispatcher(eng).run(s.Command.of(s.CommandRun(name="grants", args=args)))
@@ -115,7 +119,7 @@ def test_grants_command_lists_and_revokes(tmp_path):
 
     listing = asyncio.run(cmd(""))
     gid = listing.split()[0]
-    assert gid.startswith("g_") and "message_send on #general" in listing and "by client" in listing
+    assert gid.startswith("g_") and "message_send on #general" in listing and "by principal:tui" in listing
     assert asyncio.run(cmd(f"revoke {gid}")) == f"revoked {gid}"
     assert asyncio.run(cmd("list")) == "no standing grants"
     assert asyncio.run(cmd("revoke g_nope")) == "no grant g_nope"
@@ -124,9 +128,10 @@ def test_grants_command_lists_and_revokes(tmp_path):
 def test_an_answer_for_other_text_is_refused(tmp_path):
     sent: list[str] = []
     eng = _engine(tmp_path, sent)
-    req, out = asyncio.run(_turn(eng, [{"decision": "allow", "binding": "0" * 64},
-                                       {"decision": "deny", "binding": "x"},
-                                       {"decision": "allow", "binding": ""}]))
+    me = "principal:tui"
+    req, out = asyncio.run(_turn(eng, [{"decision": "allow", "binding": "0" * 64, "caller": me},
+                                       {"decision": "deny", "binding": "x", "caller": me},
+                                       {"decision": "allow", "binding": "", "caller": me}]))
     assert out[0].error.code == "stale" and out[1].error.code == "stale"
     assert out[2].ok and sent == ["we shipped"]  # an answer that names no binding keeps the old rule
 
@@ -146,7 +151,8 @@ def test_matching_binding_is_accepted_and_always_is_kept_by_the_gate(tmp_path):
                 if isinstance(ev.body, s.ApprovalRequested) and "req" not in holder:
                     holder["req"] = ev.body
                     holder["resp"] = await d.run(s.Command.of(s.ApprovalRespond(
-                        request_id=ev.body.request_id, decision="allow_always", binding=ev.body.binding)))
+                        request_id=ev.body.request_id, decision="allow_always", binding=ev.body.binding)),
+                        "principal:tui")
             await asyncio.sleep(0.01)
 
     asyncio.run(run())

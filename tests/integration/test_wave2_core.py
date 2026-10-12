@@ -120,16 +120,17 @@ def test_hook_gets_risk_and_approval_client_id(tmp_path):
             if reqs:
                 break
             await asyncio.sleep(0.01)
-        r = await d.run(s.Command.of(s.ApprovalRespond(request_id=reqs[0].request_id, decision="allow", client="phone-7")))
+        r = await d.run(s.Command.of(s.ApprovalRespond(request_id=reqs[0].request_id, decision="allow", client="phone-7")),
+                        "principal")
         assert r.ok
         while eng._tasks:
             await asyncio.sleep(0.01)
         resolved = [e.body for e in eng.hub.since(0) if isinstance(e.body, s.ApprovalResolved)]
-        assert resolved[0].by == "phone-7"
+        assert resolved[0].by == "principal:phone-7"  # D-039: the connection says who; the body only labels it
 
     asyncio.run(main())
     assert [x for x in seen if x[:2] == ("pre", "bash")][0][2] in ("low", "medium", "high")
-    assert ("decided", "phone-7") in seen
+    assert ("decided", "principal:phone-7") in seen
 
 
 def test_channel_lifecycle(tmp_path):

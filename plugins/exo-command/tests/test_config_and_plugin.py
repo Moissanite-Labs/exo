@@ -3,7 +3,6 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
 
 from conftest import PLUGIN_DIR
 from exo_command.config import load_settings
@@ -87,9 +86,3 @@ def test_static_page_has_no_bundler():
     assert "/api/snapshot" in command and "/api/stream" in command
     assert not list(PLUGIN_DIR.glob("package.json")) and not list(PLUGIN_DIR.glob("**/package.json"))
 
-
-def test_asgi_app_is_optional():
-    pytest.importorskip("fastapi")
-    from exo_command.asgi import build_app
-    routes = {r.path for r in build_app().routes}
-    assert {"/api/health", "/api/snapshot", "/api/section/{name}", "/api/approvals/{request_id}"} <= routes

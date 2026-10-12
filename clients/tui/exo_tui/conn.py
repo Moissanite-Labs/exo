@@ -24,7 +24,7 @@ class LocalClient:
         from exo.server.app import Dispatcher
 
         self.engine = engine
-        self.dispatcher = Dispatcher(engine)
+        self.dispatcher = Dispatcher(engine, caller="principal:tui")  # D-039: this window is the principal
         self.last_seq = 0
         self.serve_path = Path(serve) if serve else None  # other windows of this agent join here
         self._server: Any = None
@@ -34,7 +34,7 @@ class LocalClient:
             return
         from exo.server.app import HttpServer
 
-        self._server = HttpServer(self.dispatcher)
+        self._server = HttpServer(self.dispatcher, principal=True)  # joining windows prove themselves (D-039)
         self.serve_path.parent.mkdir(parents=True, exist_ok=True)
         self.serve_path.unlink(missing_ok=True)  # this process holds the writer lock, so any old socket is stale
         try:
@@ -101,7 +101,7 @@ def _open(home: Path, agent: str, wait: float = 5.0) -> Any:
     exod = home / "run" / "exod.sock"
     for p in (exod, path):
         if _alive(p):
-            return Client(socket=str(p))
+            return Client(socket=str(p), principal="tui")
     try:
         return LocalClient(load_engine("exo.core.engine:create"), serve=path)
     except WriterBusy:  # another window is starting it: wait for its socket
@@ -109,7 +109,7 @@ def _open(home: Path, agent: str, wait: float = 5.0) -> Any:
         while time.monotonic() < end:
             for p in (exod, path):
                 if _alive(p):
-                    return Client(socket=str(p))
+                    return Client(socket=str(p), principal="tui")
             time.sleep(0.05)
         raise
 
@@ -190,7 +190,7 @@ def connect(socket: str | None = None, url: str | None = None, token_file: str |
     if socket or _alive(path):  # a stale exod.sock left by a crash is not a server: fall through to in-process
         from exo.protocol.client import Client
 
-        return Client(socket=str(path))
+        return Client(socket=str(path), principal="tui")
     if seat:
         os.environ["EXO_SEAT"] = seat
     home = Path(os.environ.get("EXO_HOME") or Path.home() / ".exo").expanduser()

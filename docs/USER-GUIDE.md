@@ -50,7 +50,10 @@ and the number of open findings. Screenshots are in `docs/ui/` (for example `doc
 `docs/ui/03-approval.png`, `docs/ui/05-context.png`). The look is described in `docs/UI.md`.
 Set `EXO_REDUCED_MOTION=1` to turn motion off. `NO_COLOR` turns colour off.
 
-**Web (`exo web`).** Run `exo web` and open `http://127.0.0.1:7342`. Run `exo` and `exo web` in either order: both
+**Web (`exo web`).** Run `exo web` in a terminal. It opens the page in your browser for you. If it does not (no
+browser, or `--no-open`), open the link it prints: `http://127.0.0.1:7342/#token=...`. The part after `#token=` is a
+key for this launch only; the page needs it for everything and refuses requests without it. After you restart
+`exo web`, use the new link: the old one stops working. Run `exo` and `exo web` in either order: both
 see the same agent and threads. `exo web` joins a terminal window's core, or `exo serve`, if one is running; if
 none is, it starts `exo serve` in the background (log `$EXO_HOME/logs/exod.log`). That background core keeps running
 after you close the web page, so a later `exo` joins it. `exo stop` ends it.
@@ -150,8 +153,10 @@ What the gate asks about, and why:
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
   act on a public place. Reading and local edits do not. Your `policies/gates.yaml` can change any cell.
 
-Who may approve: you can always. A policy file can let named seats or roles approve some kinds of act. A peer
-never can. A message from a peer that tries to approve something is refused and shown to you.
+Who may approve: you can always, from the terminal window or the web page. A policy file can let named seats or
+roles approve some kinds of act, and they must sign. A peer never can. A message from a peer that tries to approve
+something is refused and shown to you. The agent cannot answer its own approvals: a command it runs that talks to
+Exo is not you, whatever it claims, and only you can answer "always".
 
 "Always" answers become standing grants. They expire (7 days for outward acts, 30 days for others) and an outward
 grant covers one exact text. `/grants` lists them. `/grants revoke <id>` removes one.
@@ -202,6 +207,7 @@ Details and the cost rules: `docs/TRACE.md`.
 | Memory looks wrong | Run `/context`, then `exo memory verify` to check the log's hash chain (`docs/MEMORY-MODEL.md`). |
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
 | The warning about "not inside a git repo" | The thread's folder is not a repo. Set `[session] cwd` in the seat, or `/cwd` to see where you are. |
+| The web page says "missing or wrong page token" | Open the link `exo web` printed this time. Each launch has a new token. |
 | Keys must stay private | Exo never writes secrets through `config.set`, and removes known key values from tool output. See `docs/SEATS.md`. |
 
 ## 11. Your store and the ledger

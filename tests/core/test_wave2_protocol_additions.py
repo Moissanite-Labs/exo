@@ -13,7 +13,7 @@ def _engine(tmp_path):
 
 def test_session_list_status_approvals_list_and_usage_model(tmp_path):
     eng = _engine(tmp_path)
-    disp = Dispatcher(eng)
+    disp = Dispatcher(eng, caller="principal:tui")
 
     async def call(body):
         r = await disp.run(s.Command.of(body))

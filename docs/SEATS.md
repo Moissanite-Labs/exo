@@ -30,6 +30,7 @@ roles = { fast = ["local:qwen"] }   # optional router overrides; also providers,
 [tools]
 toolsets = ["fs", "search", "skills", "mcp"]   # omit for all. "mcp" matches every mcp:<server>; "skills" is always kept
 env_allow = ["GH_TOKEN"]     # secret-looking variables bash and jobs may keep (default none, see docs/TOOLS.md)
+env_deny = ["COMPANY_*"]     # more names or patterns bash, jobs and code_find never see (D-039)
 
 [skills]
 folders = ["~/notes/skills"]  # searched first; "pack" is accepted as one more folder
