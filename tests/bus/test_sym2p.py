@@ -8,9 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from exo import privacy
 from exo.protocols import sym2p
 from exo.protocols.sym2p import Sym2pError, bus, v1, v2
 
+DENY_WORDS = privacy.load_denylist()  # untracked file, read at collection time
 FIX = Path(__file__).parent / "sym2p_fixtures"
 STATE = json.loads((FIX / "state" / "receiver-state.json").read_text())
 STATE = {k: v["v"] for k, v in STATE.items()}
@@ -254,8 +256,9 @@ def test_render_body_plain_english():
 
 
 def test_no_principal_names_in_library():
-    deny = ["ahraz", "kethuda", "askaconsult", "orda", "proteus", "hazen", "frida", "mozi",
-            "shaka", "kindi", "saga-divan"]
+    deny = DENY_WORDS
+    if not deny:
+        pytest.skip("no privacy deny-list (EXO_PRIVACY_DENYLIST)")
     pkg = Path(sym2p.__file__).parent
     for p in pkg.iterdir():
         if p.suffix == ".py":

@@ -5,10 +5,11 @@ import stat
 
 import pytest
 
+from exo import privacy
 from exo.retrieve import assemble
 from exo.store import PrincipalStore, parse_text, principal_root, template_dir
 
-FORBIDDEN = re.compile(r"(?i)ahraz|arifuddin|hafiz|saga-divan|askaconsult|kethuda|ahrazzle|aska")
+DENY = privacy.deny_regex()  # from an untracked file; None when absent
 
 
 def test_template_lints_clean(template_store):
@@ -24,7 +25,9 @@ def test_template_is_generic():
     for d, _, files in os.walk(template_dir()):
         for f in files:
             text = open(os.path.join(d, f), encoding="utf-8").read()
-            assert not FORBIDDEN.search(text), f"{f} mentions principal data"
+            assert not privacy.generic_findings(text), f"{f} has a home path or email"
+            if DENY:
+                assert not DENY.search(text), f"{f} mentions principal data"
 
 
 def test_create_layout(template_store):

@@ -200,7 +200,9 @@ def test_dependencies_are_listed():
     assert all(re.split(r"[<>=\[ ;]", d)[0].lower() in {"httpx", "pynacl"} for d in deps), deps
 
 
-OWNER = re.compile(r"(?i)kethuda|ahraz|ahrazzle|aska|a@askaconsult")
+from exo import privacy  # noqa: E402
+
+OWNER = privacy.deny_regex()  # names come from an untracked file; None when absent
 NEW_FILES = ["src/exo/core", "src/exo/protocol", "src/exo/server", "src/exo/cli_chat.py", "src/exo/upstream.py",
              "src/exo/config.py", "tests/integration", "tests/core", "tests/protocol", "tests/upstream",
              "docs/CORE-V2-INTERFACES.md", "PROVENANCE.toml"]
@@ -214,7 +216,8 @@ def test_no_owner_names_in_new_files():
         for f in (p.rglob("*") if p.is_dir() else [p]):
             if f.is_file() and "__pycache__" not in f.parts and f.suffix in {".py", ".md", ".toml", ".json", ".ts"}:
                 hits += [f"{f.relative_to(REPO)}:{i}" for i, line in enumerate(f.read_text().splitlines(), 1)
-                         if OWNER.search(line) and f.name != Path(__file__).name]
+                         if f.name != Path(__file__).name
+                         and ((OWNER and OWNER.search(line)) or privacy.generic_findings(line))]
     assert not hits, hits
 
 

@@ -5,7 +5,10 @@ from pathlib import Path
 
 
 from conftest import PLUGIN_DIR
+from exo import privacy
 from exo_command.config import load_settings
+
+DENY = privacy.deny_regex()  # untracked deny-list, None when absent
 
 
 def test_defaults_are_generic(monkeypatch, tmp_path):
@@ -31,11 +34,12 @@ def test_env_relative_queue_and_token(monkeypatch, tmp_path):
 
 
 def test_no_hardcoded_identity():
-    pat = re.compile(r"kethuda|/Users/|hafiz|askaconsult|ahraz", re.I)
+    deny = DENY
     hits = []
     for p in PLUGIN_DIR.rglob("*"):
         if p.is_file() and p.suffix in (".py", ".js", ".json", ".yaml", ".css", ".html") and "tests" not in p.parts:
-            if pat.search(p.read_text(errors="ignore")):
+            text = p.read_text(errors="ignore")
+            if (deny and deny.search(text)) or "/Users/" in text:
                 hits.append(str(p.relative_to(PLUGIN_DIR)))
     assert hits == []
 

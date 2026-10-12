@@ -1,6 +1,6 @@
 # Exo standalone: how the core is built and how Hermes improvements still flow in
 
-Status: proposal, 2026-10-12. Author: saga-divan (standalone-core research agent).
+Status: proposal, 2026-10-12. Author: the standalone-core research agent.
 Inputs: `DECISIONS.md` (D-004, D-005, D-009), `docs/ARCHITECTURE.md`, `docs/CORE.md`,
 `docs/PINNING.md`, `research/BASE-EVAL.md`, Exo's `src/` and `plugins/`, and the local Hermes checkout
 `~/.hermes/hermes-agent` (main at `dce1e9b`, 2026-10-09, `v0.21.6+canary`). Read only. Nothing in Hermes

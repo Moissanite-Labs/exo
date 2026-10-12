@@ -14,3 +14,10 @@ dist/
 *.key
 corpus/private/
 .DS_Store
+
+# Secrets and credentials
+*.env
+.env*
+*.pem
+auth.json
+keys.env

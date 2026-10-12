@@ -96,7 +96,7 @@ same day as Perplexity's launch [secondary, unverified]. Not covered here.
   (`chosen_decision: null`, a named owner decides), kill switch env var, exit codes (`3` = escalated is
   normal), label-free input contract, ledger rows of hashes and probabilities only, Wilson intervals,
   ECE and Brier in its eval, and "do not adopt upstream thresholds; fit our own". All of this is reusable.
-- **`ahrazzle/hermes-jev-curator`** (A's fork of anpicasso's Jev-based skill curator): A's PR #1 fixes a
+- **`<principal>/hermes-jev-curator`** (the principal's fork of anpicasso's Jev-based skill curator): A's PR #1 fixes a
   resolved-path test on macOS; issue #2 shows `use_jev: false` ignored on two of three code paths; issue
   #3 shows a malformed 200 response retried despite a "terminal" policy. Lessons for Exo: the "use the
   model" switch must hold on every path, and the decision transport must sort errors into terminal and

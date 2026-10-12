@@ -135,7 +135,7 @@ Hottest core files: `apps/desktop/electron/main.ts` 352, `gateway/run.py` 178, `
 
 Plugin contract files are much calmer: `agent/memory_provider.py` 5, `agent/context_engine.py` 6, `plugins/plugin_loader.py` 8, `gateway/platform_registry.py` 9. `hermes_cli/plugins.py` is busier at 59, mostly new hooks and registrations. `run_agent.py` 48.
 
-### A's PRs (`gh pr list --author ahrazzle --state all`)
+### The principal's PRs (`gh pr list --author <handle> --state all`)
 
 | State | Count | Core only | Core + plugin | Plugin/skill only | Tests/docs only |
 |---|---|---|---|---|---|

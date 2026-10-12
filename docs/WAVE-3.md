@@ -36,6 +36,6 @@ builders' functions, `learn.attach`, scheduler start and stop), `src/exo/cli.py`
    with the ui tool; an `edit` verdict is captured and the fast loop writes a typed proposal; a
    `schedule.edit add` job with "every 1m" runs once and reports; a gate decision is written to the ledger;
    Jev answers a gate call (or the fallback is recorded).
-3. Footprint on charminar (via saga-minar): TUI cold start and streaming check against D-022's escape hatch.
+3. Footprint on the Linux test machine: TUI cold start and streaming check against D-022's escape hatch.
 4. Canary: A uses the Exo TUI on the canary seat continually and sends notes as he goes (D-024). A lesson
    is promoted only after it scores better on held-out cases.
