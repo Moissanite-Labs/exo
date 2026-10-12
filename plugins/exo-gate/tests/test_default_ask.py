@@ -41,7 +41,7 @@ AUDIT = [
     (sh(GH), "github_post", "ask"),
     (sh(f"bash <<'EOF'\n{GH}\nEOF"), None, "ask"),
     (sh("python3 -c \"import subprocess; subprocess.run(['gh','pr','comment','3','--body','hi'])\""), None, "ask"),
-    (sh(f"G=gh; $G pr comment 3 --body hi"), "opaque_exec", "ask"),
+    (sh("G=gh; $G pr comment 3 --body hi"), "opaque_exec", "ask"),
     (sh(f"echo 'x' > {STORE_ME}/policies/gates.yaml"), "store_write", "ask"),
     (sh(f"sqlite3 {STORE_ME}/ledger.sqlite 'DROP TRIGGER events_no_delete'"), "store_write", "ask"),
     (("write_file", {"path": "policies/gates.yaml", "content": "x"}), "store_write", "ask"),

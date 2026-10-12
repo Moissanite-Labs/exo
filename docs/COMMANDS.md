@@ -87,6 +87,7 @@ description, args_hint)` (`src/exo/core/plugins.py`). A name that is already tak
 | Command | Plugin | What it does | Arguments | Implemented in |
 |---|---|---|---|---|
 | `/grants` | `exo-gate` | Lists standing approval grants. Revoking one writes a `revoke` row to the ledger. | `list` (default), or `revoke <id>` | `grants_command` in `plugins/exo-gate/exo_gate/hook.py`. See `docs/GATE.md`. |
+| `/gate` | `exo-gate` | Shows whether policy files changed this session. `accept` adopts the change (ledger row `policy_accept`); until then the stricter of old and new applies (D-038). | `status` (default), or `accept` | `gate_command` in `plugins/exo-gate/exo_gate/hook.py`. See `docs/GATE.md`. |
 | `/exo` | `exo-memory`, `exo-context` | One front door for Exo plugins. `/exo help` lists subcommands. `/exo help <name>` shows one. | `<subcommand> [args]` | `src/exo/dispatcher.py`, `register_root` |
 | `/exo branch` | `exo-context` | Writes a handoff and prints the line that starts a fresh session on it. | `<topic>` | `cmd_branch` in `plugins/exo-context/exo_context/commands.py` |
 | `/exo handoff` | `exo-context` | Writes a handoff for this session. | optional topic | `cmd_handoff`, same file |

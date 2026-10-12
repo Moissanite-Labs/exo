@@ -692,6 +692,38 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   sentences (`core_message`), not exception text. No protocol change.
 - **Not done:** `--in-process` flag (the client already falls back in process); Windows.
 
+## D-038 (2026-10-12) Gate default ask: a shell allowlist, the store is credentials, policy edits only tighten
+- **Why:** the 2026-10-12 audit reproduced that the gate classified by literal program name. A heredoc, `python -c`,
+  `G=gh; $G` or a shell function walked past it as `shell` (allow). The model could also rewrite its own policy file,
+  grant store and ledger with an allowed write, and the plugin reloaded policy on mtime, so the rewrite took effect on
+  the next call. Audit priorities 1 and 2.
+- **Decision, shell:** an allowlist. A small lexer splits the line into simple commands and finds each program
+  position. A command is `allow` only when every program is known and nothing is hidden. Anything else is the new
+  category `opaque_exec` (asks): variables, `$( )` or globs in program position, script files, shells and
+  interpreters running text, `make`, `npm run`, `npx`, `xargs`, `find -exec`, `eval`, `source`, functions, aliases,
+  git and gh aliases, unknown programs. Where the gate can see inside it classifies the inner text too and keeps the
+  stricter; the `indirection` signal makes `decide` ask even if the inner part only logs. An "always" on opaque code
+  covers that exact command only. The principal can lower `opaque_exec` only by naming it in a category line or rule.
+  The old program and prefix cases are gone; one classifier serves the core and the `exo-gate` plugin.
+- **Decision, store:** `policies/`, `state/`, `ledger.sqlite*`, `keys/`, seat files and the sockets under `$EXO_HOME`
+  or the principal store are on a protected list. Any write is `store_write`: a floor like credentials, no standing
+  grant, principal-only (`approvals.yaml` cannot add seats), enforced in observe mode. Reads stay `read`; `keys/`
+  reads stay `credentials`.
+- **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
+  row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
+  `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
+  seen or unseen, and the principal's own tightening still works at once. Rejected: an approval card for every
+  policy edit (new protocol surface, and the principal's own editor edits would trip it); trusting mtime plus a trace
+  event (a tool write that the gate missed would still take effect); detecting "made by a non-tool path" (background
+  jobs run beside the turn, so the gate cannot tell who wrote a file).
+- **Cost:** about 70 everyday commands are pinned as `allow` in `plugins/exo-gate/tests/test_default_ask.py`
+  (`pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test`...). New asks a user will see:
+  `make`, `npm run`/`npm test`, scripts, `python -c`, unknown programs such as `kill` or `open`, and any write to the
+  store. Each opaque ask is bound to the exact command.
+- **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
+  package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
+  `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
 - **Loop:** a provider error after text was shown now stores that text (marked `interrupted` and `error`) like an

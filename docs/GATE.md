@@ -4,7 +4,8 @@
 policies (`policies/gates.yaml`, `budget.yaml`, `posting.md`). The `exo-gate` plugin runs it on
 each call, records the decision in the signed ledger, and turns an ask into the protocol event
 `approval.requested`. This page covers what D-033 added: what an approval covers, who may give
-it, how long "always" lasts, and the sweep for internal names in outbound posts.
+it, how long "always" lasts, and the sweep for internal names in outbound posts. D-038 made the
+shell classifier an allowlist and put the store itself behind the gate (see the last three sections).
 
 ## What an approval covers
 
@@ -61,7 +62,9 @@ logged with the grant id.
   unscoped "always" for an outward category. Default expiry 7 days (`always.outward_days`).
 - Other acts: the scope is the category and the exact target. Default expiry 30 days
   (`always.days`).
-- Credentials never get a grant; they ask every time.
+- Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`).
+- Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` signal) is
+  granted for the exact command only, like an outward act.
 - Only the principal can create a grant.
 - Set a value to 0 to turn standing grants off for that kind.
 - `/grants` (a `command.run` command, no new protocol command) lists live grants;
@@ -98,3 +101,61 @@ principal's own channels are not swept.
 line is built in. A principal who wants a disclosure line sets it in `posting.md`, for example
 `footer: "> Automated posting by agentic team with human oversight."`, and can limit it to public
 targets with `footer_exposures: [public]`.
+
+## Shell commands: an allowlist (D-038)
+
+The shell classifier used to name dangerous programs and let everything else through as `shell`.
+Any indirection walked past it. It now works the other way round. A small lexer
+(`exo.gate._Lexer`) reads quotes, escapes, `$( )`, backticks, `$VAR`, redirections and heredocs,
+and splits the line into simple commands. Each simple command has one program position (after
+assignments, reserved words such as `if` and `do`, and prefixes such as `sudo`, `env`, `timeout`).
+
+A command is `allow` only when every program in it is known and nothing is hidden:
+
+- Known programs: `READ_PROGRAMS` (cat, ls, rg, head...), `SHELL_PROGRAMS` (mkdir, cp, pytest,
+  ruff...), the tools with their own rules (git, gh, curl, vercel, stripe, ssh, exo...), and
+  `TOOL_SUBCOMMANDS` (npm install, cargo test, go build, uv sync...). A program given by path
+  runs as itself only from a system bin folder or a virtualenv or `node_modules/.bin` folder.
+- Everything else is `opaque_exec`, which asks: a variable, `$( )` or a glob in the program
+  position; a script file; `bash`/`sh`/`zsh` reading `-c`, a file, a pipe or a heredoc;
+  `python -c`, `node -e`, `perl -e`, `ruby -e`, `osascript`; `make`, `npm run`, `npm test`,
+  `npx`, `uvx`; `xargs`; `find -exec`; `eval`, `source`, `.`, `alias`, `trap`, shell functions;
+  git aliases and command-running git config; gh aliases and extensions; an unknown program.
+- Where the gate can see inside (a `bash -c` string, a heredoc or pipe fed to a shell, the code
+  of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
+  `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
+  the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
+  and for string literals and lists of strings that parse as a command
+  (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
+- The principal can lower `opaque_exec` only by naming it: `categories: {opaque_exec: act}` or a
+  rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
+
+Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
+`npm install` runs package scripts) can run code the agent wrote earlier with a local write.
+The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+
+## The store is credentials (D-038)
+
+The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/`
+(including `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of
+`$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets) and `$EXO_HOME/seats`, any
+`seat.toml`, and `$EXO_PRINCIPAL_STORE`. Distinctive names match anywhere, so a relative
+`policies/gates.yaml` or `state/approval-grants.json` counts too.
+
+Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
+non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
+`sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
+`exo log append`, `exo keygen`, `exo init`, `git -C <store>` with a writing subcommand, and any
+writing command after `cd` into the store. `rm -rf ~/.exo` counts (an ancestor). A
+`store_write` always asks, no policy lowers it, no standing grant covers it, and only the
+principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
+observe mode too. Reads of the store stay `read`, except `keys/`, which stays `credentials`.
+
+## Policy changes during a session (D-038)
+
+The plugin pins the policy it loaded first. When a policy file (or a scrub source) changes
+later, it loads the new one, writes a `policy_change` ledger row with the files' hashes, and
+decides each call under both. The stricter outcome wins. So a change can tighten at once and
+can never loosen until the principal runs `/gate accept` (ledger row `policy_accept`), or the
+core restarts. `/gate` says whether a change is waiting.
