@@ -278,6 +278,11 @@ class Loop:
                 await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total, model=stream.route or self.model or ""), session)
             if stream.error is not None:
                 result.stop_reason, result.error = "error", stream.error.error or "provider error"
+                if stream.text or stream.reasoning:  # the user saw this text: keep it, marked, like an interrupt
+                    partial = self._assemble(_Stream(text=stream.text, reasoning=stream.reasoning), msg_id)
+                    partial.meta["interrupted"] = True
+                    partial.meta["error"] = trace.scrub(result.error, 300)
+                    result.message = await self._add(session, partial, turn_id)
                 await self._emit(ev.Error(code="provider_error", message=result.error,
                                           retryable=stream.error.retryable), session)
                 return

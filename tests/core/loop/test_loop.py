@@ -571,3 +571,19 @@ def test_steer_after_the_last_call_still_gets_an_answer(tmp_path):
     s, res = run(go())
     assert res.message.text() == "late answer"
     assert [m.text() for m in store.messages(s.id)][-2:] == ["late note", "late answer"]
+
+
+def test_mid_stream_error_keeps_the_text_the_user_saw(tmp_path):
+    prov = Script([ProviderEvent(kind="text", text="half an answer "),
+                   ProviderEvent(kind="error", error="upstream reset", retryable=True)])
+    store, loop, seen = make(tmp_path, prov)
+
+    async def go():
+        s = await loop.create_session()
+        return s, await loop.send(s.id, "long")
+
+    s, res = run(go())
+    assert res.stop_reason == "error" and len(prov.calls) == 1  # shown text: no retry
+    last = store.messages(s.id)[-1]
+    assert last.role == "assistant" and last.text() == "half an answer "
+    assert last.meta["interrupted"] is True and last.meta["error"] == "upstream reset"
