@@ -194,6 +194,7 @@ class ToolRow:
     is_error: bool = False
     error: str = ""
     session: str = ""
+    masked: str = ""  # the "note: pipeline stage N exited C" line a bash result carried, if any
 
 
 @dataclass
@@ -299,6 +300,15 @@ def _ms(ts: str) -> float:
         return 0.0
 
 
+_MASKED = re.compile(r"^note: pipeline stage (\d+) exited (\d+)", re.M)
+
+
+def _masked(text: str) -> str:
+    """The pipeline note the bash tool appends when an earlier stage failed but the last one succeeded."""
+    m = _MASKED.search(text or "")
+    return m.group(0) if m else ""
+
+
 def _canon_cmd(cmd: str) -> str:
     """A shell command reduced to what it runs: no leading cd, timeout wrapper, pipes, redirects, echo tail or
     common flags, so a test suite run twice with different wrappers still counts as the same call."""
@@ -383,7 +393,8 @@ class _Parse:
             call = st.call if st else None
             t.tools.append(ToolRow(call.name if call else "?", b.result.call_id,
                                    _args_key(call.arguments) if call else "", b.duration_ms or int(ts - began), err,
-                                   scrub(b.result.text(), 300) if err else "", self.session))
+                                   scrub(b.result.text(), 300) if err else "", self.session,
+                                   _masked(b.result.text()) if call and call.name == "bash" else ""))
             self.mark, self.first = ts, 0.0
         elif isinstance(b, ev.ApprovalRequested):
             self.asks[b.request_id] = ts
@@ -524,6 +535,9 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
     for tr in t.tools:
         if tr.is_error:
             add(f"tool.error:{tr.name}:{_norm(tr.error)}", "papercut", f"Tool {tr.name} failed", tr.error)
+    for tr in t.tools:
+        if tr.masked:
+            add("shell.masked_exit", "papercut", "A pipeline failure was hidden by its last stage", tr.masked)
     seen: dict[tuple[str, str], int] = {}
     for tr in t.tools:
         seen[(tr.name, tr.args_key)] = seen.get((tr.name, tr.args_key), 0) + 1

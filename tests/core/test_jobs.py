@@ -132,6 +132,22 @@ async def test_a_failed_job_reports_its_exit_code(tmp_path):
 
 
 @aio
+async def test_job_with_masked_pipe_stage_is_noted_and_env_is_filtered(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "fake-or")
+    monkeypatch.setenv("GH_TOKEN", "fake-gh")
+    eng = engine(tmp_path, seat=Seat(name="tester", env_allow=["GH_TOKEN"]))
+    sid = (await eng.loop.create_session(agent="tester")).id
+    job = eng.jobs.start("false | cat; env > env.out", str(tmp_path), sid)
+    await until(lambda: state(eng, job["id"]) == "done")
+    seen = (tmp_path / "env.out").read_text()
+    assert "GH_TOKEN=fake-gh" in seen and "OPENROUTER_API_KEY" not in seen
+    job = eng.jobs.start("true | false | cat", str(tmp_path), sid)
+    await until(lambda: state(eng, job["id"]) == "done")
+    assert "stage 2 exited 1" in eng.jobs.get(job["id"])["detail"]
+    await eng.close()
+
+
+@aio
 async def test_completion_notice_is_queued_for_an_idle_thread(tmp_path):
     eng = engine(tmp_path)  # wake off: an idle thread just holds it for the next turn
     sid = (await eng.loop.create_session(agent="tester")).id

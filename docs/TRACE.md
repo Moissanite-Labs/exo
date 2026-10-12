@@ -47,6 +47,7 @@ rest fall back to config.json (`exo trace` reads the seat of the session it show
 | `model.fallback:<route>`, `model.timeout:<route>` | a try failed and the call moved on | any |
 | `tool.error:<tool>:<kind>` | a tool returned an error | any |
 | `harness.error:<where>:<type>` | a caught exception | any |
+| `shell.masked_exit` | a bash result carried `note: pipeline stage N exited C`: an earlier stage failed but the last one succeeded, so the reported exit was 0 | any |
 | `tool.repeat:<tool>` | the same call (a shell command ignoring cd, timeout, pipes) twice in one turn | 2 |
 | `subagent.slow` | a subagent task over the limit | 90 s (`subagent_s`) |
 | `model.mismatch` | the shown model is not the one that served, with no fallback to explain it | any |

@@ -21,6 +21,15 @@ variables through with `[tools] env_allow = ["GH_TOKEN"]`. Only tool subprocesse
 the claude-cli child read the real environment. MCP servers get the environment their own `env` table asks for
 (`${VAR}` expansion), not this filter.
 
+## Pipeline exit codes
+
+bash reports the exit code of a pipeline's last stage, so `false | head -1` looks like success. Exo does not turn on
+`pipefail` (`grep | head` would then fail on SIGPIPE). An EXIT trap records the final pipeline's `PIPESTATUS`; when an
+earlier stage failed with a code other than 141 (SIGPIPE) and the last stage succeeded, the result gets one line, e.g.
+`note: pipeline stage 1 exited 1 (only the last stage's code is reported as the result)`. Background jobs put the same
+line in the job's end notice. Only the command's last pipeline is checked, and a command that sets its own EXIT trap
+turns the note off. The trace rule `shell.masked_exit` (docs/TRACE.md) flags it.
+
 ## code_find (D-029)
 
 `code_find(question, path=".", page=1, timeout=120)` runs [jevgrep](https://github.com/dzhng/jevgrep) (`jg`, MIT)

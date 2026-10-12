@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from exo.core.ingress import Ingress, IngressPath, Receipt
 from exo.core.peer_target import EngineTarget
 from exo.core.sessions import new_id
-from exo.core.tools.builtin.shell import kill_process_group, tool_env
+from exo.core.tools.builtin.shell import kill_process_group, masked_note, open_side, tool_env, wrap_pipestatus
 from exo.core.tools.registry import ToolContext, ToolError
 from exo.core.types import ContentPart, Message, ToolSpec
 from exo.protocol import schema as s
@@ -71,6 +71,7 @@ class Handle:
     started: float
     reason: str = ""                  # killed or timeout, set before the process group is signalled
     kill_by: str = ""
+    side: str = ""                    # side file with the final pipeline's PIPESTATUS (see shell.wrap_pipestatus)
     timer: threading.Timer | None = field(default=None, repr=False)
 
 
@@ -183,13 +184,22 @@ class JobManager:
             log = self.log_path(job_id)
             log.write_bytes(b"")
             os.chmod(log, 0o600)
-            proc = subprocess.Popen(["bash", "-c", command], cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, start_new_session=True,
-                                    env=tool_env(allow=getattr(self.e, "env_allow", ())))
+            side_fd, side = open_side()
+            env = tool_env(allow=getattr(self.e, "env_allow", ()))
+            try:
+                proc = subprocess.Popen(wrap_pipestatus(command, side_fd, env), cwd=cwd, stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True,
+                                        pass_fds=(side_fd,), env=env)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(side)
+                raise
+            finally:
+                os.close(side_fd)
             if sys.platform != "win32":
                 with contextlib.suppress(ProcessLookupError):
                     proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
-            h = Handle(job_id, proc, session, command, time.time())
+            h = Handle(job_id, proc, session, command, time.time(), side=side)
             self.live[job_id] = h
         self.e.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, pid, started, log) "
                         "VALUES (?,?,?,?,?,?,?,?,?)", (job_id, self.e.agent, session, command, cwd, ACTIVE, proc.pid,
@@ -252,13 +262,14 @@ class JobManager:
             return
         self.live.pop(h.id, None)
         ended = time.time()
+        note = masked_note(h.side) if h.side else ""  # also removes the side file
         if h.reason == "killed":
             state, detail = "killed", f"stopped by {h.kill_by or 'job_kill'}"
         elif h.reason == "timeout":
             state, detail = "timeout", f"killed after {fmt_elapsed(self.cfg.max_wall_s)} (the job wall limit)"
         else:
             state = "done" if code == 0 else "failed"
-            detail = ""
+            detail = note if code == 0 else ""
         self.e.store._q("UPDATE jobs SET state=?, exit_code=?, ended=?, detail=? WHERE id=?", (state, code, ended, detail, h.id))
         task = asyncio.ensure_future(self._announce(h, state, code, ended, detail))
         self._tasks.add(task)
