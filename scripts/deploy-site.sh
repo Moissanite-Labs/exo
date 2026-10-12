@@ -1,9 +1,13 @@
 #!/bin/bash
 # Deploy site/ to exo.askaconsult.com (Vercel project exo-site, DNS on Cloudflare).
-# Tokens are read from local hermes profile env files and never printed.
+# Tokens are read from the environment or a local env file and never printed.
 set -u
-V=$(grep -E "^VERCEL_TOKEN=" ~/.hermes/profiles/shaka/.env | head -1 | cut -d= -f2- | tr -d '"'"'")
-CF=$(grep -E "^CF_API_TOKEN=" ~/.hermes/profiles/shaka/.env | head -1 | cut -d= -f2- | tr -d '"'"'")
+# Tokens come from the environment first, then from a local hermes profile env file.
+ENVFILE="${EXO_DEPLOY_ENV:-$HOME/.hermes/profiles/shaka/.env}"
+pick() { local v; eval "v=\${$1:-}"; [ -n "$v" ] && { echo "$v"; return; }
+  [ -r "$ENVFILE" ] && grep -E "^$1=" "$ENVFILE" | head -1 | cut -d= -f2- | tr -d '"'"'"; }
+V=$(pick VERCEL_TOKEN); CF=$(pick CF_API_TOKEN)
+[ -n "$V" ] && [ -n "$CF" ] || { echo "deploy-site: set VERCEL_TOKEN and CF_API_TOKEN (or EXO_DEPLOY_ENV to an env file)" >&2; exit 1; }
 TEAM=team_FaoexnZzdTcrVOAXDutsVakN; P=exo-site; D=exo.askaconsult.com
 vc() { curl -s -H "Authorization: Bearer $V" -H "Content-Type: application/json" "$@"; }
 cf() { curl -s -H "Authorization: Bearer $CF" -H "Content-Type: application/json" "$@"; }
