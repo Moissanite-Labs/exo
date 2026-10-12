@@ -1,0 +1,37 @@
+{
+  "classes": {
+    "method": 0,
+    "value": 0
+  },
+  "contested": 0,
+  "files": {
+    "items.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "soul/house.md": "34c14b78a36cd7cf26d78286eb941aad89b88d6311ecb1e1cecfe60bc0550416"
+  },
+  "format": 1,
+  "items": 0,
+  "name": "exo-house-taste",
+  "script_version": "1",
+  "skills": [
+    "charts-in-posts",
+    "choreography",
+    "clean-writing",
+    "control-plane",
+    "council",
+    "exo-bus",
+    "exo-handoff",
+    "exo-intro",
+    "git-authorship-identity-cleanup",
+    "github-draft-review-html",
+    "github-issue-to-pr",
+    "github-issues",
+    "github-pr-audit",
+    "github-pr-workflow",
+    "jevgrep",
+    "operating-doctrine",
+    "sym-protocol"
+  ],
+  "source_head": "60e05bd1b195af2f94112fa7197a5c88289058840ce7c6df9693756bc6250f55",
+  "source_id": "",
+  "version": "0.0.0"
+}

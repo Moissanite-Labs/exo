@@ -195,6 +195,9 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 | `exo brief` | The morning brief. See `docs/TOOLS-CLI.md`. | `--html`, `--write` | `src/exo/brief.py` |
 | `exo consolidate` | Turns new ledger events into belief proposals. See `docs/TOOLS-CLI.md`. | `--as SEAT`, `--key PATH`, `--dry-run` | `src/exo/consolidate.py` |
 | `exo proposals [list\|show\|accept\|reject\|revert] [id]` | Reviews belief proposals. Default action is `list`. | `--reason` (required for `reject` and `revert`), `--all` list decided ones too, `--as SEAT` (default `principal`), `--key PATH` | `cmd_proposals` in `src/exo/consolidate.py` |
+| `exo taste [list]` | The taste layers (D-044): whether the house layer is on (or off, and why), then every active item with its weight, class and source tag (`[house 1.3]`, `[learned 0.72, 5 weeks]`, `[you said, <date>]`, `[pinned]`). Read-only. See `docs/TASTE-BASELINE.md`. | `--root DIR` or `--principal ID`, `--json` | `src/exo/baseline/cli.py` |
+| `exo taste export-house` | Builds the house taste pack from the principal's store: selects method and value items, rewrites them in neutral form, runs the privacy check and the value check. Writes nothing if any check fails; the same store gives the same bytes. | `--store DIR` (source), `--out DIR`, `--version X.Y.Z` (all required), `--check-only`, `--soul FILE`, `--decision` (the decision model may hold items, never pass them) | `src/exo/baseline/export.py` |
+| `exo taste review OUT` | Shows which value and contested items still need the principal's tick; `--tick` ticks them, `--final` writes `RELEASE.json` once all are ticked. A pack without a valid release is never used. | `--tick ID [ID ...]`, `--final` | `src/exo/baseline/review.py` |
 
 ### Running Exo
 

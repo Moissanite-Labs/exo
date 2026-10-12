@@ -404,3 +404,42 @@ def test_capture_principal_takes_rulings_and_corrections_with_their_target(provi
 def test_capture_principal_says_when_there_is_no_store(make_provider):
     p = make_provider(agent_context="subagent")
     assert p.capture_principal([U("From now on be brief.")], session_id="s1") is None
+
+
+# --- taste block (D-044) ----------------------------------------------------------
+
+
+def _released_house_pack(tmp_path):
+    """A made-up source store with two shippable items, exported, ticked and released."""
+    from exo.baseline.export import export_house
+    from exo.baseline.review import finalise, tick
+    from exo.store import PrincipalStore
+    src = PrincipalStore.create(tmp_path / "house-source")
+    for nid, typ, summary in (("work/tests-first", "rule", "Run the tests before calling a fix done."),
+                              ("mind/thin-evidence", "value", "Say when the evidence is thin.")):
+        (src.nodes_dir / f"{nid}.md").write_text(
+            f"---\nid: {nid}\ntitle: t\ntype: {typ}\ndomain: {nid.split('/')[0]}\nsummary: {summary}\n"
+            "load_when: always\nconfidence: high\nstability: durable\nvalid_from: 2026-01-01\nsources:\nlinks:\n"
+            "tags: []\n---\n\nBody.\n")
+    src.reload()
+    out = tmp_path / "house-pack"
+    res = export_house(src, out, "1.0.0")
+    assert res.ok, res.render()
+    tick(out, [i.id for i in res.items if i.needs_tick])
+    finalise(out)
+    return out
+
+
+def test_taste_block_lists_house_items_with_their_source(make_provider, tmp_path, monkeypatch):
+    monkeypatch.setenv("EXO_HOUSE_TASTE", str(_released_house_pack(tmp_path)))
+    block = make_provider().system_prompt_block()
+    assert "# Taste" in block
+    assert "- Run the tests before calling a fix done. [house 1.0]" in block
+    assert "- Say when the evidence is thin. [house 1.0]" in block
+    assert "exo_recall" in block.splitlines()[-1]
+
+
+def test_taste_block_off_with_zero_budget_or_no_pack(make_provider, tmp_path, monkeypatch):
+    assert "# Taste" not in make_provider().system_prompt_block()          # the shipped pack is empty
+    monkeypatch.setenv("EXO_HOUSE_TASTE", str(_released_house_pack(tmp_path)))
+    assert "# Taste" not in make_provider(session="s2", taste_budget=0).system_prompt_block()

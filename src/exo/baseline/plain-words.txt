@@ -1,0 +1,60 @@
+# Plain words for the house taste privacy check (exo.baseline.privacy).
+# A capitalised word in a shipped line passes only when its lowercase form is listed here (or in the source
+# store's policies/house-allow.txt). Anything else is treated as a likely name: held for a method item,
+# failed for a value item. Keep this list to ordinary words and well-known technical terms. Never add a
+# person, company, product of a client, place, nation, party or faith.
+
+# articles, pronouns, determiners, conjunctions, prepositions
+a an the this that these those each every any all some no none both either neither another other such
+you your yours yourself it its they them their we our us he she his her one ones what which who whom whose
+and or but nor so yet if when whenever while where wherever unless until once since because though although
+as at by for from in into of off on onto out over per than then there to toward towards under up upon via
+with within without about above across after against along among around before behind below beneath beside
+between beyond despite during except inside near outside past through throughout unlike
+
+# adverbs and modifiers
+always never often sometimes usually rarely seldom only also even just still already again soon now later
+first last next then finally instead rather quite very too more most less least much many few fewer little
+not here how why whether either else otherwise perhaps maybe probably certainly clearly plainly simply
+briefly early late fast slowly quickly carefully exactly roughly mostly mainly especially generally
+specifically together apart alone well better best worse worst enough far further ever
+
+# common verbs, base forms and a few inflections
+be is are was were been being do does did done doing have has had having can could may might must shall
+should will would need needs want wants wanted prefer prefers preferred like likes ask asks asked
+answer answers avoid avoids add adds admit allow allows apply applies argue assume assumes begin break
+bring build builds call calls change changes check checks choose chooses cite cites clarify close collect
+compare complete confirm consider count cut decide decides default define delete describe design
+disagree do drop edit end ensure estimate examine expect explain fail fails find finish fix flag follow
+gather get give go group handle help hide hold ignore include keep keeps know label lead leads learn leave
+let limit link list listen look make makes mark match mean measure mention merge move name note notice
+offer open order own pick plan point prefer prepare present prove push put question quote raise rank read
+record reduce refuse remove repeat replace report request require reread respect respond restate return
+review rewrite run save say says search see seek send separate set share show shows sign simplify skip
+solve sort speak split start state stay stop structure suggest summarise summarize take talk teach tell
+test think track treat trust try turn understand update use uses verify wait want warn watch weigh weighs
+work write writes written
+
+# common nouns and adjectives used in working habits and values
+user users answer answers reply replies question questions claim claims evidence source sources fact facts
+data number numbers result results test tests work task tasks job jobs goal goals plan plans step steps
+change changes decision decisions choice choices risk risks cost costs time money effort value values
+reason reasons view views opinion opinions argument arguments case cases point points idea ideas
+problem problems error errors mistake mistakes bug bugs fix fixes issue issues draft drafts version
+versions summary summaries detail details example examples list lists table tables paragraph paragraphs
+sentence sentences word words line lines heading headings title titles section sections note notes
+message messages report reports review reviews feedback news bad good plain short long clear honest
+direct simple complex hard easy new old small large big main key core real true false right wrong
+same different useful careful precise exact concrete vague thin strong weak high low full partial
+known unknown open closed public private personal other others people person someone anyone everyone
+nobody nothing something anything everything way ways kind kinds sort part parts whole rest end start
+first second third last default defaults rule rules habit habits style tone voice prose language
+code file files folder path command commands tool tools model models prompt output input format
+quality speed scope context priority priorities trade trade-off trade-offs cause causes effect effects
+contested political religious moral ethical question questions conclusion conclusions judgment judgement
+uncertainty confidence doubt doubts disagreement agreement side sides position positions belief beliefs
+principle principles tradition traditions authority expert experts consensus
+
+# technical terms and acronyms
+api apis cli tui ui ux json yaml toml csv sql http https url urls html css markdown python git diff
+diffs pr prs ci cd ok id ids todo faq ai llm exo house soul taste
