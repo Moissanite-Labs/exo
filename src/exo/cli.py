@@ -49,6 +49,7 @@ from .onboard import (register as register_onboard, add_init_args, cmd_init as o
 from .upstream import register as register_upstream, cmd_upstream  # noqa: F401
 from .cli_chat import register as register_chat
 from .models_cmd import register as register_models, cmd_models
+from .providers_cmd import register as register_providers
 from .decide_cmd import register as register_decide, cmd_decide
 from .trace_cmd import register as register_trace, cmd_trace, cmd_findings
 from .memory_cmd import register as register_memory, cmd_memory
@@ -250,6 +251,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_upstream(sp, common)
     register_chat(sp, common)
     register_models(sp, common)
+    register_providers(sp, common)
     register_decide(sp, common)
     register_trace(sp, common)
     register_memory(sp, common)
@@ -302,6 +304,9 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_tui(args[1:])
     if args and args[0] == 'web':  # argparse's REMAINDER drops a leading option such as --help
         return cmd_web(argparse.Namespace(rest=args[1:]))
+    if args and args[0] == 'providers':  # its own quiet parser: an error must never echo a pasted key
+        from .providers_cmd import main as providers_main
+        return providers_main(args[1:])
     a = build_parser().parse_args(argv)
     if a.cmd == 'init':
         return onboard_init(a)

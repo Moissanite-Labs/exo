@@ -31,10 +31,16 @@ export function mount(root) {
   const hero = createHero(heroCanvas);
   let heroOn = false, heroTimer = 0;
   const stage = h("div", { class: "xc-stage" }, heroEl, logEl);
+  const setupBanner = h("div", { class: "xc-setup", hidden: true }, h("span", null, "No model provider is set up yet."),
+    h("a", { href: "#providers" }, "Set up providers"));
   root.replaceChildren(h("div", { class: "xc-chat" },
     h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl),
-    h("main", { class: "xc-chat-main" }, stage, apprEl, statusEl, composer),
+    h("main", { class: "xc-chat-main" }, setupBanner, stage, apprEl, statusEl, composer),
     sideEl));
+
+  if (sessionStorage.getItem("xc-token")) {   // quiet check: skipped on any error
+    api("GET", "/api/providers").then((d) => { if (d && d.ready === false) setupBanner.hidden = false; }).catch(() => {});
+  }
 
   // ---------------------------------------------------------------- items
 

@@ -193,6 +193,16 @@ class Router:
         self._creds[provider] = creds
         return creds
 
+    def reload_credentials(self, provider: str | None = None) -> list[str]:
+        """Forget cached credentials (and their cooldowns) so the next call reads keys again: after a key was
+        added or removed with `exo providers`, the TUI or the web client (D-034). Returns the providers reset."""
+        names = [provider] if provider else list(self._creds)
+        for n in names:
+            self._creds.pop(n, None)
+            for k in [k for k in self.cooldowns if k == n or k.startswith((n + "|", n + "#"))]:
+                self.cooldowns.pop(k, None)
+        return names
+
     def _key(self, name: str) -> str | None:
         return lookup_key(name, self.env, sources=self.key_sources)
 

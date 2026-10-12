@@ -3,10 +3,15 @@
 Order, first hit wins:
   1. the environment variable named by the provider's ``key_env``;
   2. the macOS Keychain (skipped on other systems), service ``exo``, account = the variable name;
-  3. ``~/.config/exo/keys.env`` (``NAME=value`` lines; path overridable with ``EXO_KEYS_FILE``),
+  3. Linux only: the Secret Service through ``secret-tool``, attributes ``service=exo account=<name>``
+     (skipped when ``secret-tool`` is missing);
+  4. ``~/.config/exo/keys.env`` (``NAME=value`` lines; path overridable with ``EXO_KEYS_FILE``),
      refused with a warning if its mode is looser than 0600.
 
-Key values are never logged, printed or put in error text.
+``EXO_NO_KEYCHAIN=1`` and ``EXO_NO_SECRET_SERVICE=1`` skip steps 2 and 3 (tests and sandboxes).
+
+Key values are never logged, printed or put in error text. Writing keys lives in
+``exo.providers_setup`` (D-034).
 """
 
 from __future__ import annotations
@@ -29,10 +34,28 @@ def keys_file_path() -> Path:
 
 def keychain_get(name: str) -> str | None:
     """Read one item from the macOS Keychain. Quiet on a miss, on other systems and on timeout."""
-    if sys.platform != "darwin":
+    if sys.platform != "darwin" or os.environ.get("EXO_NO_KEYCHAIN"):
         return None
     try:
         out = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", name, "-w"],
+                             capture_output=True, text=True, timeout=KEYCHAIN_TIMEOUT, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = out.stdout.strip() if out.returncode == 0 else ""
+    return value or None
+
+
+def secret_service_get(name: str) -> str | None:
+    """Read one item from the Secret Service with ``secret-tool`` (Linux). Quiet when the tool is missing,
+    on a miss and on timeout. Off unless ``secret-tool`` is on PATH."""
+    if sys.platform == "darwin" or os.environ.get("EXO_NO_SECRET_SERVICE"):
+        return None
+    import shutil
+    exe = shutil.which("secret-tool")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "lookup", "service", KEYCHAIN_SERVICE, "account", name],
                              capture_output=True, text=True, timeout=KEYCHAIN_TIMEOUT, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -78,10 +101,34 @@ def lookup_key(name: str, env: Mapping[str, str] | None = None, *, sources: bool
     """The key for variable ``name``, or None. ``sources=False`` reads ``env`` only
     (tests and sandboxes)."""
     env = os.environ if env is None else env
-    value = env.get(name) or (keychain_get(name) or file_get(name) if sources else None)
+    value = env.get(name) or (keychain_get(name) or secret_service_get(name) or file_get(name) if sources else None)
     if value and len(value) >= MIN_SECRET_LEN:
         _loaded.add(value)
     return value or None
+
+
+def key_source(name: str, env: Mapping[str, str] | None = None, *, sources: bool = True) -> str | None:
+    """Where the key for ``name`` comes from: ``env``, ``keychain``, ``secret-service``, ``file``, or None.
+    Never the value. A value found here is remembered for redaction like any lookup."""
+    env = os.environ if env is None else env
+    found: list[tuple[str, str | None]] = [("env", env.get(name))]
+    if sources:
+        for where, get in (("keychain", keychain_get), ("secret-service", secret_service_get), ("file", file_get)):
+            if found[-1][1]:
+                break
+            found.append((where, get(name)))
+    where, value = found[-1]
+    if not value:
+        return None
+    if len(value) >= MIN_SECRET_LEN:
+        _loaded.add(value)
+    return where
+
+
+def remember_secret(value: str) -> None:
+    """Teach redaction a key value now (a key just added in this process). Never logged."""
+    if value and len(value) >= MIN_SECRET_LEN:
+        _loaded.add(value)
 
 
 def _keys_file_values(path: Path | None = None) -> list[str]:

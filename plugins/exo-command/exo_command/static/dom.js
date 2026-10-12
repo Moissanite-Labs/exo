@@ -36,6 +36,10 @@ export function when(iso) {
 export async function api(method, path, body) {
   const opt = { method, headers: {} };
   if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  if (path.startsWith("/api/providers")) {
+    const tok = sessionStorage.getItem("xc-token");
+    if (tok) opt.headers["X-Exo-Token"] = tok;
+  }
   const r = await fetch(path, opt);
   let data = {};
   try { data = await r.json(); } catch (e) { /* not json */ }

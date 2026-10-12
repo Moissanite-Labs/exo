@@ -328,7 +328,7 @@ PROGRAMS = {
     "mkfs": "delete", "wipefs": "delete", "dd": "delete",
     "sendmail": "email_send", "mail": "email_send", "mailx": "email_send", "mutt": "email_send",
     "msmtp": "email_send", "swaks": "email_send",
-    "ssh-keygen": "credentials", "ssh-add": "credentials", "passwd": "credentials",
+    "ssh-keygen": "credentials", "ssh-add": "credentials", "passwd": "credentials", "secret-tool": "credentials",
     "crontab": "schedule",
     "cat": "read", "ls": "read", "grep": "read", "rg": "read", "head": "read", "tail": "read",
     "find": "read", "pwd": "read", "echo": "read", "wc": "read", "diff": "read", "less": "read",
@@ -547,6 +547,8 @@ def _classify_argv(argv: list[str], cmd: str, bodies: list[str], depth: int = 0)
         c.signals.append("remote host")
     elif prog == "git":
         c = _classify_git(argv, cmd)
+    elif prog == "exo" and sub == "providers" and len(argv) > 2 and argv[2] in ("add", "remove", "test", "default"):
+        c = _make("credentials", summary=f"exo providers {argv[2]}", command=cmd)  # D-034: key setup is the user's
     elif prog == "gh":
         c = _classify_gh(argv, cmd, bodies)
     elif prog in ("curl", "wget", "http", "https", "xh", "httpie"):
@@ -631,6 +633,7 @@ _CODE_PATTERNS = [
     (re.compile(r"\b(requests|httpx|session|client|aiohttp\.ClientSession\(\))\.(post|put|patch|delete)\("), "web_post"),
     (re.compile(r"\burllib\.request\.urlopen\([^)]*data="), "web_post"),
     (re.compile(r"\bsmtplib\.SMTP"), "email_send"),
+    (re.compile(r"\bproviders_setup\b|/api/providers\b|\bsecret-tool\b|\bremember_secret\b"), "credentials"),
     (re.compile(r"\bstripe\.\w+\.create\("), "payment"),
 ]
 _CODE_STRINGS = re.compile(r"(['\"])((?:(?!\1).){3,400})\1")
@@ -778,6 +781,7 @@ def args_sensitive(args: Mapping) -> str:
 
 _KEYCHAIN = re.compile(r"\bsecurity\s+(?:-\S+\s+)*(find-generic-password|find-internet-password|"
                        r"find-key|dump-keychain|export|unlock-keychain|show-keychain-info|import)\b")
+_PROVIDER_ROUTE = re.compile(r"/api/providers\b|\bproviders_setup\b")  # D-034 key routes and module
 _SECRET_VAR = re.compile(r"\$\{?[A-Za-z0-9_]*(API_KEY|_KEY|_TOKEN|_SECRET|_PASSWORD|_PASSWD)\b")
 _PIECE_SPLIT = re.compile(r"[\s'\"<>;|&()`,]+")
 
@@ -809,6 +813,8 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]]) -> str:
     text = _expand_text(cmd)
     if _KEYCHAIN.search(text):
         return "keychain access"
+    if _PROVIDER_ROUTE.search(text):
+        return "provider key route"
     if _SECRET_VAR.search(text):
         return "secret environment variable"
     pieces = [p for p in _PIECE_SPLIT.split(text) if p]

@@ -18,10 +18,14 @@ GENERIC_HOME = "/home/someone"
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
+def _clean_env(monkeypatch, tmp_path_factory):
     for k in list(os.environ):
         if k.startswith("EXO_"):
             monkeypatch.delenv(k, raising=False)
+    # D-034: never the real Keychain, Secret Service or keys file.
+    monkeypatch.setenv("EXO_NO_KEYCHAIN", "1")
+    monkeypatch.setenv("EXO_NO_SECRET_SERVICE", "1")
+    monkeypatch.setenv("EXO_KEYS_FILE", str(tmp_path_factory.mktemp("keys") / "keys.env"))
 
 
 @pytest.fixture

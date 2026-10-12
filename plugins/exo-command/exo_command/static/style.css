@@ -446,3 +446,25 @@ body { margin: 0; background: #08090a; }
   .xc-root *, .xc-root *::before, .xc-root *::after { animation: none !important; transition: none !important; }
   .xc-boot { display: none; }
 }
+
+/* providers view and the chat setup banner */
+.xc-setup { display: flex; gap: 12px; align-items: center; padding: 6px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2); font: 11px var(--xc-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
+.xc-setup[hidden] { display: none; }
+.xc-prov { max-width: 960px; width: 100%; margin: 0 auto; padding: 22px 18px 40px; display: flex; flex-direction: column; gap: 14px; }
+.xc-prov-lead { color: var(--fg-2); font-size: 13px; max-width: 70ch; }
+.xc-prov-list { border: 1px solid var(--line); background: var(--line); display: grid; gap: 1px; }
+.xc-prow { background: var(--bg-2); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; border-left: 3px solid transparent; }
+.xc-prow.def { border-left-color: var(--accent); }
+.xc-prow-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.xc-prow-name { font: 600 13px var(--xc-mono); letter-spacing: .04em; min-width: 12ch; }
+.xc-prow-meta { font: 11px var(--xc-mono); color: var(--fg-3); letter-spacing: .06em; text-transform: uppercase; display: flex; gap: 6px; flex-wrap: wrap; }
+.xc-prow-meta span + span::before { content: "\00B7"; margin-right: 6px; }
+.xc-defmark { font: 600 10px var(--xc-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin-left: auto; }
+.xc-prow-act { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.xc-prow-act .xc-field { flex: 1 1 260px; max-width: 420px; }
+.xc-prov-res { font: 12px var(--xc-mono); color: var(--fg-2); overflow-wrap: anywhere; }
+.xc-prov-res.bad { color: var(--xc-errtext); }
+.xc-prov-res.ok { color: var(--cold); }
+.xc-prov-def { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border: 1px solid var(--line); background: var(--bg-2); padding: 12px 14px; }
+.xc-prov-def select { flex: 1 1 280px; max-width: 460px; }
+@media (max-width: 560px) { .xc-prov { padding: 14px 10px 30px; } .xc-prow-act .xc-field { flex-basis: 100%; max-width: none; } .xc-defmark { margin-left: 0; } }

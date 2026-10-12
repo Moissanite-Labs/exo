@@ -33,6 +33,7 @@ def test_keychain_skipped_off_darwin(monkeypatch):
 
 
 def test_keychain_command_and_miss(monkeypatch):
+    monkeypatch.delenv("EXO_NO_KEYCHAIN", raising=False)  # subprocess.run is faked below
     monkeypatch.setattr(keys.sys, "platform", "darwin")
     seen = {}
 

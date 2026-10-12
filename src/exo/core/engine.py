@@ -913,6 +913,15 @@ class CoreEngine:
             if b.args.strip() == "count":
                 return {"open": self.findings.open_count()}
             return self.findings.text("open")
+        if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
+            word, _, rest = b.args.strip().partition(" ")
+            if word == "reload":
+                name = rest.strip() or None
+                if name and name not in self.router.providers:
+                    raise CommandFailed("not_found", f"unknown provider {name!r}")
+                return {"reloaded": self.router.reload_credentials(name)}
+            from exo import providers_setup
+            return {"providers": await asyncio.to_thread(providers_setup.rows, self.router, self.home)}
         if b.name == "handoff_facts":  # D-032: the facts /handoff gives the agent; the client sends the turn
             return await self.handoff_facts(b.session, b.args)
         if b.name == "harness_error":  # a client (the TUI) reporting an exception it caught
