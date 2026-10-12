@@ -1,0 +1,23 @@
+# Provenance of Exo modules that came from Hermes Agent (docs/STANDALONE.md section 3.1).
+# One [[module]] entry per lifted or ported file. Read with stdlib tomllib.
+# Rules: every file with a lifted header has an entry; every entry's `exo` path exists;
+# `commit` moves forward only after upstream changes since it were ported or refused.
+#
+# Schema example (copy, uncomment, fill in):
+#
+# [[module]]
+# exo = "src/exo/core/slots.py"
+# mode = "lift"                 # lift = copied then edited; port = rewritten from it; watch = idea only
+# upstream = ["agent/memory_provider.py", "agent/context_engine.py"]
+# commit = "dce1e9b3758"        # upstream commit last reconciled
+# reconciled = "2026-10-12"
+# changes = "Trimmed to the methods exo-memory and exo-context use."
+#
+# [[watch]]                     # upstream areas Exo has no code for yet but wants to hear about
+# upstream = ["plugins/model-providers/**"]
+# why = "New providers."
+
+[upstream.hermes]
+repo = "https://github.com/NousResearch/hermes-agent"
+license = "MIT"
+notice = "LICENSES/hermes-agent-MIT.txt"
