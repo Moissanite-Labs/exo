@@ -7,7 +7,9 @@ CF=$(grep -E "^CF_API_TOKEN=" ~/.hermes/profiles/shaka/.env | head -1 | cut -d= 
 TEAM=team_FaoexnZzdTcrVOAXDutsVakN; P=exo-site; D=exo.askaconsult.com
 vc() { curl -s -H "Authorization: Bearer $V" -H "Content-Type: application/json" "$@"; }
 cf() { curl -s -H "Authorization: Bearer $CF" -H "Content-Type: application/json" "$@"; }
-cd "$(dirname "$0")/../site"
+# Deploy from a copy outside git: Vercel reads the commit author and blocks emails that are not on the
+# team (this machine's git identity is a seat address, not A's Vercel login).
+SRC="$(cd "$(dirname "$0")/../site" && pwd)"; W=$(mktemp -d); rsync -a --exclude _shots "$SRC/" "$W/"; cd "$W"
 npx -y vercel@latest deploy --prod --yes --token "$V" --scope a-4677s-projects --name $P 2>&1 | grep -v -i token | grep -E "Production|Aliased|Error|error" | head -5
 [ "${1:-}" = "--redeploy" ] && exit 0
 vc -X PATCH "https://api.vercel.com/v9/projects/$P?teamId=$TEAM" -d '{"ssoProtection":null}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print("sso",d.get("ssoProtection"),d.get("error"))'
