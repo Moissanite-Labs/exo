@@ -185,6 +185,32 @@ def test_policy_reload_on_change(keyed_store):
     assert call(ctx, "terminal", {"command": "git push origin x"})["action"] == "block"
 
 
+def _bump(p, text):
+    import os
+    p.write_text(text)
+    st = p.stat()
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 10_000_000))
+
+
+def test_policy_change_mid_session_only_tightens_until_accepted(keyed_store):
+    """D-038: a policy file changed during a session can tighten at once; loosening waits for the principal."""
+    store, key = keyed_store
+    g, ctx = make_gate(store, key)
+    assert call(ctx, "terminal", {"command": "rm -rf build"})["action"] == "approve"
+    p = store / "policies" / "gates.yaml"
+    loose = p.read_text().replace("  - delete\n", "").replace("vcs_merge: act", "vcs_merge: act\n  delete: act")
+    _bump(p, loose.replace("irreversible: {private: ask", "irreversible: {private: act"))
+    r = call(ctx, "terminal", {"command": "rm -rf build"})
+    assert r["action"] == "approve"                       # still the pinned (stricter) policy
+    bodies = [e["body"] for e in events(store)]
+    assert any(b.get("phase") == "policy_change" for b in bodies)
+    assert "/gate accept" in bodies[-1]["decision"]["reason"]
+    assert hook.gate_command(g, "accept").startswith("accepted")
+    assert call(ctx, "terminal", {"command": "rm -rf build"}) is None
+    assert any(e["body"].get("phase") == "policy_accept" for e in events(store))
+    assert hook.gate_command(g, "status").startswith("policy")
+
+
 def test_internal_error_fails_closed_except_reads(keyed_store, monkeypatch):
     store, key = keyed_store
     _, ctx = make_gate(store, key)
