@@ -21,6 +21,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from exo.core.private import private_file
 from exo.core.types import Message, from_dict, to_dict
 from exo.protocol.schema import EVENTS, Event, SessionInfo, now_ts
 
@@ -128,7 +129,7 @@ class SessionStore:
     def __init__(self, path: str | Path = ":memory:", migrate: bool = True):
         self.path = str(path)
         if self.path != ":memory:":
-            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+            private_file(self.path)
         self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
         self._db.row_factory = sqlite3.Row
         self._lock = threading.RLock()

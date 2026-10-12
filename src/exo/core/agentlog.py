@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from exo.core.context import render_message
+from exo.core.private import private_file
 from exo.core.types import ToolSpec
 
 PAGE = 30_000  # characters of one entry per zoom page
@@ -34,7 +35,7 @@ def claim_writer(home: str | os.PathLike, agent: str) -> Any:
     """Take the agent's writer lock (an OS file lock, gone when the process dies). Returns the open file; keep it
     open while writing and pass it to ``release_writer``. Raises WriterBusy when another process holds it."""
     path = lock_path(home, agent)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private_file(path)
     fh = open(path, "a+")
     try:
         fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
