@@ -28,7 +28,7 @@ from exo.core import trace, workspace
 from exo.core.agents import Delegator
 from exo.core import agentlog
 from exo.core.context import AgentContext, DefaultCompressor, TreeContext, _maybe_await
-from exo.core.findings import Findings
+from exo.core.findings import STATUSES, Findings
 from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
@@ -880,7 +880,7 @@ class CoreEngine:
         head = [f"running on: {self.loop.model or '-'} (session model {info.model if info else '-'}, last call served "
                 f"by {served}); chain: {', '.join(r.ref for r in self.router.chain('main')) or '-'}",
                 f"harness {self.findings.version}; {self.findings.summary()}"]
-        if fixed := self.findings.list("fixed")[:5]:  # so a count that dropped can be told from findings that were lost
+        if fixed := self.findings.list("fixed")[:5]:
             head.append("fixed, awaiting re-verification: " + ", ".join(f"{r['id']} (in {r['fixed_in']})" for r in fixed))
         if not session:
             return "\n".join(head)
@@ -965,9 +965,7 @@ class CoreEngine:
             arg = b.args.strip()
             if arg == "count":  # "open" is what needs work (open + reopened); by_state reconciles every finding
                 return {"open": self.findings.open_count(), "by_state": self.findings.counts()}
-            if arg in ("open", "fixed", "verified", "reopened"):
-                return self.findings.text(arg, viewer=b.session or "ui")
-            return self.findings.text("all", viewer=b.session or "ui")
+            return self.findings.text(arg if arg in STATUSES else "all", viewer=b.session or "ui")
         if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
             word, _, rest = b.args.strip().partition(" ")
             if word == "reload":

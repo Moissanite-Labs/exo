@@ -77,11 +77,11 @@ class Cooldown:
 
 @dataclass
 class Breaker:
-    """Route circuit breaker state: consecutive failures, and when the open route may take one trial call."""
+    """Route circuit breaker: consecutive failures, times opened, reopen time, trial call in flight."""
     fails: int = 0
-    level: int = 0  # how many times it has opened without a success in between
+    level: int = 0
     until: float = 0.0
-    trial: bool = False  # the one call allowed after a cool-down is out
+    trial: bool = False
 
 
 @dataclass
@@ -260,25 +260,22 @@ class Router:
 
     # --- route circuit breaker -----------------------------------------------------
     def route_open(self, ref: str, now: float) -> bool:
-        """True while the route's breaker is open (skip it). Once the cool-down ends, one caller gets the trial
-        call (a lease keeps concurrent callers off the route until that call reports)."""
+        """True while the route's breaker is open. After the cool-down one caller gets the trial call (a 60 s lease)."""
         b = self.breakers.get(ref)
         if b is None or b.level == 0:
             return False
         if b.until > now:
             return True
-        b.until = now + 60.0  # trial lease; the trial's outcome replaces it
-        b.trial = True
+        b.until, b.trial = now + 60.0, True
         return False
 
     def route_failed(self, ref: str, now: float) -> float | None:
-        """Count a retryable failure. Returns the cool-down in seconds when this failure opens the breaker."""
+        """Count a retryable failure; returns the cool-down in seconds if this one opens the breaker."""
         b = self.breakers.setdefault(ref, Breaker())
         b.fails = self.breaker_failures if b.trial else b.fails + 1  # a failed trial reopens at once
         if b.fails < self.breaker_failures:
             return None
-        b.level += 1
-        b.fails, b.trial = 0, False
+        b.level, b.fails, b.trial = b.level + 1, 0, False
         cool = min(self.breaker_cooldown_s * 2 ** (b.level - 1), self.breaker_max_s)
         b.until = now + cool
         return cool
@@ -312,8 +309,7 @@ class Router:
         chain = self.chain(role)
         usable = [r for r in chain if self._pick(r, self.clock()) is not None]
         skip = {r.ref for r in usable if self.route_open(r.ref, self.clock())}
-        if len(skip) == len(usable):
-            skip = set()  # every usable route is cooling down: try them anyway rather than fail without a call
+        skip = set() if len(skip) == len(usable) else skip  # all cooling down: try them anyway
         for i, route in enumerate(chain):
             if route.ref in skip:
                 continue
@@ -334,9 +330,8 @@ class Router:
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
                     yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}")
-                if attempts and attempts[-1].get("cooldown_s"):
-                    yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for "
-                                                            f"{attempts[-1]['cooldown_s'] / 60:.0f} min")
+                if attempts and (cs := attempts[-1].get("cooldown_s")):
+                    yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for {cs / 60:.0f} min")
         end = self._exhausted(role, tried, last)
         end.attempts = attempts
         yield end
