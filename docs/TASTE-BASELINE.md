@@ -101,8 +101,10 @@ A value item may ship only when it passes all of these:
    or place.
 3. **It is not an identity marker.** No religious belief or practice, no party or partisan position, no
    stance on a contested political or religious question, no health, family or life event. These identify
-   the holder, and they are the views most likely to repel a stranger. Whether stances on contested
-   questions could ever ship, if stripped of identity, is the one open question at the end.
+   the holder, and they are the views most likely to repel a stranger. On contested questions the house
+   taste ships the thinking, not the positions (ruling 4): the reasoning style behind the principal's
+   worldview and what it implies for how to weigh a question, never a religious prescription or a
+   border-based political stance.
 4. **Many people could hold it.** It is phrased at the level of a general principle, not a narrow conviction
    that points to one person.
 
@@ -692,15 +694,18 @@ The principal's answers to the three open questions of the first draft, verbatim
    adopt slowly (section 4), with a getting-to-know window on a fresh install and an immediate step back on
    strong disagreement later, and a tighter privacy check so values ship without identity.
 
-## Open question
+4. **May a house value take a stance on a contested political or religious question?** (A: never ship
+   them. B: ship them stepped back. C: ship them as normal value items.)
 
-1. **May a house value take a stance on a contested political or religious question, if it is stripped of
-   identity?** The draft says no (section 1, rule 3). Options:
-   - **Never ship them** (proposed). Safest for privacy and for first impressions; the house taste stays a
-     way of thinking, not a set of positions. Cost: some of the principal's worldview does not travel.
-   - **Ship them stepped back.** They arrive neutral and apply only after the user agrees in their own words
-     on 2 or more weeks. Cost: more machinery, and the export still holds positions that could hint at their
-     holder.
-   - **Ship them as normal value items.** They step back fast on disagreement like any value. Cost: the
-     first weeks with a user who disagrees may still feel preachy, and the pack reads as one person's
-     politics or faith, which works against D-004.
+   > "C ship the implications behind the world view and the kind of thinking behind it rather than specifics
+   > like religious prescriptions and border-based politics"
+
+   Became: contested questions ship as value items, but only at the level of reasoning. An item says how
+   the principal thinks about such questions and what follows from that way of thinking: what counts as
+   evidence, how to weigh competing goods, how to treat people who disagree, which trade-offs matter. It
+   never says what to conclude on a specific religious practice or a nation, border or party. The export
+   check (section 1) rejects any item that names a faith, nation, party or territory or prescribes a
+   practice, and the principal ticks each such item before release. These items behave like any value:
+   they step back fast on strong disagreement and adopt the user's own view slowly (section 4).
+
+There are no open questions.
