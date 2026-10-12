@@ -187,3 +187,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
   style save-without-eval (same); keeping taste separate from memory and skills (the gap in PR #126940).
+
+## D-013 (2026-10-12) Fuse UniiChat's context model into the core loop
+- **Decision:** adopt the top picks in `research/UNIICHAT.md` (A's install, built on the same idea as
+  optchat-memory). The wave 1 loop builds each turn as a fresh model call from the summary tree plus the
+  recent verbatim tail, waits for pending summaries before a turn, and summarizes in parallel with separate
+  queues for live chat and imports. Per-agent logs, history import and a `/goal` judge go to waves 2 and 3.
+- **Licence:** the shipped UniiChat code's licence is not verified, so Exo reimplements ideas and copies no
+  code or prompt text from it until the licence is known.
+- **Rejected:** recall as an add-on to a growing transcript (the Hermes model; it degrades on long sessions).
