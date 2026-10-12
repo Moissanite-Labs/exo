@@ -23,9 +23,26 @@ CLIENT_ID = "exo-tui"
 DEFAULT_WINDOW = 200_000
 MAX_FILE = 64 * 1024
 AT_RE = re.compile(r"(?<!\S)@(\S+)")
-LOCAL_COMMANDS = {"new": "start a new session", "sessions": "pick a session", "model": "pick or set the model",
-                  "fork": "fork this session", "undo": "undo the last turn", "help": "list commands",
-                  "exit": "quit"}
+# name -> (group, description). /help is generated from this table, so every command shows up there.
+COMMANDS = {
+    "new": ("session", "start a new session"),
+    "sessions": ("session", "pick a session to switch to"),
+    "resume": ("session", "same as /sessions"),
+    "fork": ("session", "fork this session"),
+    "undo": ("session", "undo the last turn"),
+    "clear": ("session", "clear the transcript view (history is kept)"),
+    "cwd": ("session", "show this session's working folder"),
+    "restart": ("session", "reopen this session in a new terminal tab and exit this one"),
+    "exit": ("session", "quit"),
+    "quit": ("session", "same as /exit"),
+    "model": ("model", "pick the model for this session; /model <ref> sets it"),
+    "default": ("model", "set the default model for new sessions: /default <ref> (same as /model default <ref>)"),
+    "usage": ("model", "show context size, cost and the model in use"),
+    "panel": ("tools", "reopen the last panel"),
+    "help": ("other", "list every command"),
+}
+LOCAL_COMMANDS = {n: d for n, (_, d) in COMMANDS.items()}
+GROUPS = ("session", "model", "tools", "other")
 
 
 class ExoApp(App):
@@ -296,7 +313,7 @@ class ExoApp(App):
             self.note(f"context compacted: {b.before_tokens} to {b.after_tokens} tokens")
         elif isinstance(b, s.SessionUpdated):
             if b.session.id == self.session:
-                self.model = b.session.model or self.model
+                self.model = self.model or b.session.model or ""
                 self.seat = self.seat or b.session.seat
         elif isinstance(b, s.Notice):
             self.note(f"{b.level}: {b.text}" if b.level != "info" else b.text, "warn" if b.level == "warn" else "note")
@@ -402,14 +419,30 @@ class ExoApp(App):
                                    mode="steer" if self.busy else "send"))
 
     async def slash(self, name: str, args: str) -> None:
-        if name == "exit":
+        if name in ("exit", "quit"):
             self.exit()
+        elif name == "restart":
+            await self.restart()
+        elif name == "clear":
+            self.clear_transcript()
+        elif name == "cwd":
+            got = await self.post(s.SessionGet(session=self.session))
+            if got.ok:
+                self.note(f"cwd: {(got.result.get('session') or {}).get('cwd') or '-'}")
+        elif name == "usage":
+            self.note(f"model {self.model or '-'}  context {self.ctx_tokens} tokens  cost ${self.cost:.2f}")
+        elif name == "default":
+            await self.set_default(args)
         elif name == "new":
             await self.new_session()
-        elif name == "sessions":
+        elif name in ("sessions", "resume"):
             await self.pick_session()
         elif name == "model":
-            await self.set_model(args)
+            word, _, rest = args.partition(" ")
+            if word == "default":
+                await self.set_default(rest.strip())
+            else:
+                await self.set_model(args)
         elif name == "fork":
             resp = await self.post(s.SessionFork(session=self.session, title=args))
             if resp.ok:
@@ -419,10 +452,7 @@ class ExoApp(App):
             if resp.ok:
                 await self.load_session(self.session)
         elif name == "help":
-            names = [f"/{n}  {d}" for n, d in LOCAL_COMMANDS.items()]
-            names += [f"/{c['name']}  {c.get('description', '')}" for c in self.commands]
-            self.note("\n".join(names + ["@path adds a file   !cmd runs a shell command   ctrl+p palette",
-                                         "ctrl+o tool output   ctrl+y accept  ctrl+e edit  ctrl+r reject"]))
+            self.note(self.help_text())
         elif name == "panel":
             if self.panel_order:
                 self.show_panel(self.panel_order[-1], report=True)
@@ -432,6 +462,45 @@ class ExoApp(App):
                 out = resp.result.get("output")
                 if out:
                     self.note(out if isinstance(out, str) else str(out))
+
+    def help_text(self) -> str:
+        lines: list[str] = []
+        for g in GROUPS:
+            lines.append(f"{g}:")
+            lines += [f"  /{n}  {d}" for n, (grp, d) in COMMANDS.items() if grp == g]
+            if g == "other":
+                lines += [f"  /{c['name']}  {c.get('description', '')}" for c in self.commands
+                          if c["name"] not in COMMANDS]
+        lines += ["keys: @path adds a file   !cmd runs a shell command   ctrl+p palette",
+                  "      ctrl+o tool output   ctrl+y accept  ctrl+e edit  ctrl+r reject"]
+        return "\n".join(lines)
+
+    async def restart(self) -> None:
+        from exo_tui import restart as rs
+        cmd = rs.restart_command(self.session)
+        if not rs.has_opener():
+            self.note("no terminal opener found; open a new tab and run: " + " ".join(cmd))
+            return
+        self.note("restarting in a new tab...")
+        rs.schedule_restart(cmd)
+        self.exit()
+
+    async def set_default(self, ref: str) -> None:
+        if not ref:
+            self.note("usage: /default <provider:model>")
+            return
+        if ref.startswith("-"):
+            self.note("not a model ref; use /default provider:model")
+            return
+        listed = await self.client.call(s.ModelsList())
+        old = [m["route"] for m in listed.get("models", []) if m.get("role") == "main"]
+        resp = await self.post(s.ModelsSet(model=ref))  # validates the ref and applies it now
+        if not resp.ok:
+            return
+        routes = [ref, *[r for r in old if r != ref]]
+        saved = await self.post(s.ConfigSet(key="models.roles.main", value=routes))
+        if saved.ok:
+            self.note(f"default model: {ref} (saved to config.json, fallbacks kept)")
 
     async def pick_session(self) -> None:
         rows = (await self.client.call(s.SessionList(limit=50)))["sessions"]
@@ -455,6 +524,9 @@ class ExoApp(App):
                     items.append((r["route"], r["route"]))
             self.push_screen(Palette(items, "models"), lambda v: v and self.run_worker(
                 self.set_model(v), exit_on_error=False))
+            return
+        if ref.startswith("-"):
+            self.note("not a model ref; use /model provider:model, or /default provider:model")
             return
         resp = await self.post(s.ModelsSet(model=ref, session=self.session))
         if resp.ok:

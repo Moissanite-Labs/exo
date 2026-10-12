@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 import sqlite3
 import threading
@@ -54,6 +55,23 @@ CREATE TABLE IF NOT EXISTS summaries (
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_hex(8)}"
+
+
+def canonical_cwd(path: str | None) -> str | None:
+    """Real path with each component spelled as it is on disk (fixes ``~/work`` vs ``~/Work``)."""
+    if not path:
+        return path
+    real = os.path.realpath(path)
+    try:
+        parts = Path(real).parts
+        cur = parts[0]
+        for part in parts[1:]:
+            names = os.listdir(cur)
+            match = part if part in names else next((n for n in names if n.lower() == part.lower()), part)
+            cur = os.path.join(cur, match)
+        return cur
+    except OSError:
+        return real
 
 
 def _fts_text(msg: Message) -> str:
@@ -107,6 +125,7 @@ class SessionStore:
                        cwd: str | None = None, parent: str | None = None, fork_seq: int | None = None,
                        id: str | None = None) -> SessionInfo:
         sid, ts = id or new_id("s"), now_ts()
+        cwd = canonical_cwd(cwd)
         self._q("INSERT INTO sessions (id, title, seat, model, cwd, parent, fork_seq, created, updated)"
                 " VALUES (?,?,?,?,?,?,?,?,?)", (sid, title, seat, model, cwd, parent, fork_seq, ts, ts))
         return self.get_session(sid)  # type: ignore[return-value]

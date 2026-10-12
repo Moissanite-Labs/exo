@@ -196,7 +196,7 @@ class Loop:
             await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
         if hasattr(self.context, "on_turn_complete"):
             await _maybe_await(self.context.on_turn_complete(session, result.usage))
-        info = self.store.update_session(session)
+        info = self.store.update_session(session, **({"model": self.model} if self.model else {}))
         await self._emit(ev.SessionUpdated(session=info), session)
         if self.on_turn_end is not None:
             try:

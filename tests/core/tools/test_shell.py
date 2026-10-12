@@ -71,3 +71,15 @@ def test_background_straggler_does_not_hang(tmp_path):
     t0 = time.monotonic()
     code, out, status = run_command("sleep 30 & echo done", str(tmp_path), timeout=20)
     assert status == "ok" and "done" in out and time.monotonic() - t0 < 6
+
+
+def test_bash_description_states_limits(reg):
+    from exo.core.tools.builtin.shell import MAX_TIMEOUT
+    spec = next(s for s in reg.schemas() if s["name"] == "bash")
+    assert f"max {MAX_TIMEOUT}; larger values are rejected" in spec["description"]
+    assert "macOS has no `timeout` command" in spec["description"]
+    assert "larger values are rejected" in spec["parameters"]["properties"]["timeout"]["description"]
+
+
+def test_bash_rejects_timeout_over_max(run):
+    assert run("bash", command="true", timeout=601).is_error

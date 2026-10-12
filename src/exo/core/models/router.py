@@ -145,7 +145,11 @@ class Router:
 
     def set_role(self, role: str, refs: list[str]) -> None:
         for ref in refs:
+            if not ref or ref.startswith("-") or any(c.isspace() for c in ref):
+                raise ValueError(f"bad model ref {ref!r}")
             route = Route.parse(ref)
+            if route.provider not in self.providers and route.provider not in self.instances:
+                raise ValueError(f"unknown provider {route.provider!r} in {ref!r}")
             if not self._allows(route.provider, role):
                 raise ValueError(f"provider {route.provider!r} cannot serve role {role!r}")
         self.roles[role] = list(refs)

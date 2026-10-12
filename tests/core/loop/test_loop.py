@@ -420,3 +420,17 @@ def test_usage_updated_model_names_the_route_that_served_after_fallback(tmp_path
     asyncio.run(go())
     usage = [e.body for e in store.events_since(0) if isinstance(e.body, ev.UsageUpdated)]
     assert usage and usage[-1].model == "b:small"
+
+
+def test_session_updated_publishes_model_in_use(tmp_path):
+    store, loop, seen = make(tmp_path, Script(reply("hi")), model="p:in-use")
+
+    async def go():
+        s = await loop.create_session(title="t", model="p:stale")
+        await loop.send(s.id, "hello")
+        return s.id
+
+    sid = run(go())
+    assert store.get_session(sid).model == "p:in-use"
+    last = [e for e in seen if e.type == "session.updated"][-1]
+    assert last.body.session.model == "p:in-use"
