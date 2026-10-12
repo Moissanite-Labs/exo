@@ -51,6 +51,7 @@ DEFAULT_STATE = os.environ.get("EXO_DRAFT_STATE", "awaiting principal review")
 # Embedded github-markdown-css (fetched from GitHub's public stylesheet).
 # MIT License — Copyright (c) 2017 Sindre Sorhus / GitHub Primer.
 # Snapshot embedded here so the renderer needs no network access.
+# Full notice: LICENSES/github-markdown-css-MIT.txt.
 # --------------------------------------------------------------------------
 GITHUB_MARKDOWN_CSS = """.markdown-body {
   --base-size-16: 1rem;
