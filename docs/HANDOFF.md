@@ -1,0 +1,30 @@
+# Handoffs (D-032)
+
+A handoff is a note that lets a fresh session pick up a workstream. In Exo the agent writes it, so it can say why
+choices were made, not only what changed.
+
+## `/handoff [path]`
+
+1. The TUI runs the built-in command `handoff_facts` (a `command.run`, no new protocol command). The core gathers
+   facts for the thread: the thread itself, git state of its folder, open findings and tasks, recent summaries,
+   and the last turns of the trace.
+2. The TUI sends one user turn that shows as `/handoff`. It tells the agent to load the `exo-handoff` skill
+   (`skills/exo-handoff/SKILL.md`) and to write the note with its normal write tool.
+3. The note goes to `~/Work/handoffs/<seat>-<date>.md`, or to the path you give (a folder gets `<seat>-<date>.md`
+   inside it). The write goes through the gate like any other write.
+4. The agent replies with the path and two lines of summary.
+
+The facts are capped at 14,000 characters. The agent can run `exo trace` for more.
+
+## Rules the skill sets
+
+The note keeps your own words for rulings and corrections, word for word. It is self-contained, so a new session
+needs nothing else. See the skill for the template.
+
+## Older module
+
+`src/exo/handoff.py` is the earlier file-based handoff API (`write_handoff`, `load_handoff`, `resume_text`) with
+pinned verbatim blocks. The `exo-context` plugin uses it for `/exo branch`, `/exo handoff` and `/exo resume`.
+The TUI `/handoff` command does not use it.
+
+Client code: `clients/tui/exo_tui/handoff.py`. Tests: `tests/clients/tui/test_handoff.py`.
