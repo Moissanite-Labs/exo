@@ -259,7 +259,7 @@ def call(p, name, **args):
 
 def test_tool_schemas(provider):
     names = [t["name"] for t in provider.get_tool_schemas()]
-    assert names == ["exo_recall", "exo_note", "exo_should_have_been", "exo_zoom", "exo_date"]
+    assert names == ["exo_recall", "exo_get", "exo_note", "exo_should_have_been", "exo_zoom", "exo_date"]
     for t in provider.get_tool_schemas():
         assert t["parameters"]["type"] == "object" and t["description"]
 
@@ -300,6 +300,31 @@ def test_exo_recall_zoom_date(provider, store):
     assert call(provider, "exo_date", id=0)["result"][:4].isdigit()
     assert "error" in call(provider, "exo_zoom", id="x", n=1)
     assert "error" in call(provider, "exo_recall", query="")
+
+
+def test_exo_get_reads_full_node(provider, store):
+    _populate(store, 3)
+    r = call(provider, "exo_get", id="work/deploy-1")
+    assert r["id"] == "work/deploy-1" and r["result"].startswith("---") and "Deploy staging first" in r["result"]
+    assert not r["truncated"]
+    b = call(provider, "exo_get", id="work/deploy-1", body_only=True)
+    assert b["result"].startswith("Deploy staging first") and "load_when" not in b["result"]
+    # the id recall prints is the id exo_get takes
+    rec = call(provider, "exo_recall", query="deploy staging", budget=400)
+    assert all("result" in call(provider, "exo_get", id=i) for i in rec["node_ids"])
+
+
+def test_exo_get_errors_and_cap(provider, store):
+    _populate(store, 3)
+    r = call(provider, "exo_get", id="work/deploy-99")
+    assert "error" in r and r["did_you_mean"]
+    assert "error" in call(provider, "exo_get", id="")
+    (store.root / "nodes" / "work" / "big.md").write_text(
+        "---\nid: work/big\ntitle: Big\ntype: rule\ndomain: work\nsummary: s\nload_when: x\nconfidence: high\n"
+        "stability: durable\nvalid_from: 2026-01-01\nsources: [test]\nlinks: []\n---\n" + "x" * 50000)
+    store.reload()
+    big = call(provider, "exo_get", id="work/big", body_only=True)
+    assert big["truncated"] and len(big["result"]) < 41000
 
 
 # --- compactor and real stores ----------------------------------------------------

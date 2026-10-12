@@ -15,7 +15,7 @@ The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It f
 | `on_pre_compress` | Finds rulings, corrections and open decisions with `exo.capture`. Writes `ruling`, `verdict` and `question` events, then returns a short block for the compressor to keep verbatim. Checkpoint API v2. |
 | `on_session_end` | A `note` event of type `consolidate_pending`. |
 
-Tools: `exo_recall(query, budget)`, `exo_note(text, kind)`, `exo_should_have_been(target, wanted, reason)`,
+Tools: `exo_recall(query, budget)`, `exo_get(id, body_only)` (a whole belief node, same store and access as recall; D-032), `exo_note(text, kind)`, `exo_should_have_been(target, wanted, reason)`,
 `exo_zoom(id, n)`, `exo_date(id)`.
 
 A correction becomes a `verdict` event that points at the agent output it judges. If that output is not

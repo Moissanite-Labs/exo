@@ -42,11 +42,12 @@ logger = logging.getLogger(__name__)
 PROVIDER_NAME = "exo-memory"
 NOTE_KINDS = ("note", "ruling", "question", "answer", "action", "artifact")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
-TOOLS_LINE = ("Memory tools: exo_recall(query, budget) for beliefs and past sessions; exo_note(text, kind) to log; "
+TOOLS_LINE = ("Memory tools: exo_recall(query, budget) for beliefs and past sessions; exo_get(id) reads a whole "
+              "belief node when recall shows only its summary; exo_note(text, kind) to log; "
               "exo_should_have_been(target, wanted, reason) when the principal corrects you; "
               "exo_zoom(id, n) and exo_date(id) open episodic lines.")
-CORE_TOOLS_LINE = ("Memory tools: exo_recall(query, budget) for beliefs and older details of your log; exo_note(text, "
-                   "kind) to log; exo_should_have_been(target, wanted, reason) when the principal corrects you; "
+CORE_TOOLS_LINE = ("Memory tools: exo_recall(query, budget) for beliefs and older details of your log; exo_get(id) "
+                   "reads a whole belief node when recall shows only its summary; exo_note(text, kind) to log; exo_should_have_been(target, wanted, reason) when the principal corrects you; "
                    "memory_zoom(start, n) opens your log.")
 
 RECALL_SCHEMA = {
@@ -58,6 +59,16 @@ RECALL_SCHEMA = {
         "budget": {"type": "integer", "description": "Token budget (default from config)."}},
         "required": ["query"]},
 }
+GET_SCHEMA = {
+    "name": "exo_get",
+    "description": ("Read one belief node in full by its id. Use it when exo_recall lists a node as "
+                    "'summary only; exo get <id>'. Same store and access as exo_recall."),
+    "parameters": {"type": "object", "properties": {
+        "id": {"type": "string", "description": "The node id, as exo_recall printed it (a path like domain/name)."},
+        "body_only": {"type": "boolean", "description": "Only the body, without the front matter (default false)."}},
+        "required": ["id"]},
+}
+GET_LIMIT = 40000  # characters; a node is a note, not a corpus
 NOTE_SCHEMA = {
     "name": "exo_note",
     "description": ("Append an event to the principal's signed ledger. Use for facts, rulings the principal "
@@ -644,7 +655,7 @@ class ExoMemoryProvider(MemoryProvider):
     # -- tools -------------------------------------------------------------------
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
-        tools = [RECALL_SCHEMA, NOTE_SCHEMA, SHB_SCHEMA]
+        tools = [RECALL_SCHEMA, GET_SCHEMA, NOTE_SCHEMA, SHB_SCHEMA]
         st = self._state()
         if st is not None and st.core_log is not None:
             return tools  # the host's memory_zoom opens the one log
@@ -667,6 +678,8 @@ class ExoMemoryProvider(MemoryProvider):
                 out = self._assemble(st, query, max(100, min(budget, 16000)))
                 return json.dumps({"result": out["text"] or "(nothing found)", "node_ids": out["node_ids"],
                                    "episodic_ids": out["episodic_ids"], "tokens": out["tokens"]})
+            if tool_name == "exo_get":
+                return self._get_node(st, args)
             if tool_name == "exo_note":
                 text = str(args.get("text") or "").strip()
                 kind = str(args.get("kind") or "note")
@@ -690,6 +703,24 @@ class ExoMemoryProvider(MemoryProvider):
         except Exception as exc:
             return json.dumps({"error": f"{tool_name} failed: {exc}"})
         return json.dumps({"error": f"unknown tool {tool_name}"})
+
+    def _get_node(self, st: _State, args: dict) -> str:
+        nid = str(args.get("id") or "").strip()
+        if not nid:
+            return json.dumps({"error": "exo_get needs an id"})
+        store = st.rt.store
+        if not store.exists():
+            return json.dumps({"error": "no principal store for this seat"})
+        if nid not in store.nodes:
+            store.reload()  # a node written since the store was last read
+        if nid not in store.nodes:
+            near = [i for i, _ in store.find(nid.split("/")[-1].replace("-", " "), n=5)]
+            return json.dumps({"error": f"no node {nid}", "did_you_mean": near})
+        body_only = bool(args.get("body_only"))
+        text = store.render(nid, body_only)
+        cut = len(text) > GET_LIMIT
+        return json.dumps({"id": nid, "result": text[:GET_LIMIT] + ("\n[cut]" if cut else ""),
+                           "body_only": body_only, "truncated": cut})
 
     def _should_have_been(self, st: _State, args: dict) -> str:
         target = str(args.get("target") or "").strip()
