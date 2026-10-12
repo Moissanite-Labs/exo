@@ -891,34 +891,58 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a thread, so the terminal keeps drawing.
 - **Docs:** user guide, UI, COMMANDS, WEB, JOBS, TRACE, ONBOARDING, the site, the whitepaper and the intro skill.
 
-
-## D-044 (2026-10-12) Taste baseline: ship a house taste, then fit the new user (Proposed)
-- **Status:** Proposed. Design in docs/TASTE-BASELINE.md; nothing built.
+## D-044 (2026-10-12) Taste baseline: ship a house taste, then fit the new user
+- **Status:** Accepted 2026-10-12, not built. Design in docs/TASTE-BASELINE.md.
 - **Ruling (principal, verbatim, 2026-10-12):** "the project should ship with my taste as a baseline because its a
   good starting point and its been finely tuned with a lot of hard work. then over time it should mould and readapt
   to the new user that it works with. perhaps an innate decay mechanism for older memories/learnings, perhaps
   stronger if large delta from new behaviours (but after a repeated reinforcement of new behaviours, not
   immediately), perhaps the decision model could play a role in this"
-- **Decision (proposed):** a scrubbed, versioned, read-only **house taste** pack (preference, rule, procedure and
-  value items about how work is done, policy defaults, a house soul, the skills pack) is exported from the
-  principal's store by `exo taste export-house`, which is reproducible and fails on any personal or internal name.
-  People, clients, history, quotes and evidence never ship (D-004). Lookups resolve per item: user ruling, pin,
-  learned item, then house item, each shown with its source. House items lose precedence slowly
-  (`max(0.3, 0.7 * 2^(-t/180))`) and never vanish. The delta rule: one signal changes nothing; 3 contradicting
-  signals from the user over 2 days within 30 days arm an item, which then fades by `2^(-(t - t_arm) * d / 7)`
-  with d the size of the gap, and the user's version replaces it once it leads by 0.15. Rulings win at once and
-  are never faded by behaviour. The decision model only classifies (contradict, refine, agree, unrelated) and
-  sizes the gap; it is capped, abstains below 0.6 confidence and never promotes. Only `author == principal`
-  signals count (D-040). Hysteresis: a 14-day cooldown and a question after two flips. `/taste` shows house,
-  learned, pending and overridden items with pin and reset. On the principal's own installs the house layer is
-  off and their store is never decayed by it.
+- **Rulings on the open questions (verbatim, 2026-10-12):** (1) "agreed with C, but users should have the ability
+  to toggle the choice presented in A in case they prefer silent adaption vs active control". (2) "should be even
+  slower actually. think about how change happens in a person, vs moods, swings, circumstances, etc. changes
+  matter but only if sustained over time. repitition also only matters if sustained." (3) "everything in A, safety
+  defaults should not be related to taste, C yes the values and worldview should carry but shift/adapt faster to
+  a new user on fresh install and/or detection of a strong/significant change because value/worldview alignment
+  is the most offputting factor a companion can have"
+- **Decision:** a scrubbed, versioned, read-only **house taste** pack is exported from the principal's store by
+  `exo taste export-house`, reproducible and failing on any personal or internal name. It holds method items
+  (writing and answer style, work method and verification), identity-free value and worldview items, a house soul
+  with no values or safety rules, and the list of shipped skills. People, clients, history, quotes and evidence
+  never ship (D-004). Lookups resolve per item: ruling, pin, learned (or scoped) item, then house item, each shown
+  with its source. House items lose precedence slowly (`max(0.3, 0.7 * 2^(-t/365))`) and never vanish.
+- **Method items change only on sustained change (ruling 2):** signals collapse into one episode per session or
+  day; a week counts when its episodes mostly go one way; a persistence score adds contradicting weeks and
+  subtracts agreeing ones. An item arms at 3 net weeks within 8, fades by `2^(-n * d / 4)` per further net week,
+  and swaps once below 0.3 with the user's version ahead by 0.15. A full swap takes 8 to 12 weeks of sustained
+  change. Moods and swings disarm with no residue; place- or task-bound patterns become scoped items; period-bound
+  ones (a deadline week) make nothing. 90 days quiet after a swap, undo or no.
+- **Adaptation mode (ruling 1):** `/taste mode ask|silent`, for inferred changes only. Ask: one proposal, no
+  answer means no change, never re-asked. Silent: the change happens, shows in `/taste` and the brief, and can be
+  undone. The principal defaults to ask and the shift rule runs on his own inferred items; new users default to
+  silent, because swaps are rare, earned and visible and early questions cost more than they save.
+- **Values (ruling 3):** retreat fast, adopt slow. On a fresh install (30 days and 20 sessions, at most 90) house
+  values start at 0.5 and step back on one clear signal; later, one strong signal or a stated opposing view
+  steps a value back at once. Stepped back means neutral, and never needs a yes. The user's own view is adopted
+  only after they state it and hold it for 4 net weeks within 12; adoption follows the mode. Value items pass a
+  tighter export check: no named people, groups, places, politics, religion or personal history; each value is
+  generalised to a principle and read by the principal before release.
+- **Safety defaults are not taste (ruling 3):** gate, approval, budget, posting and other policy defaults ship as
+  product policy in `templates/principal-store/policies/` (docs/GATE.md), change only by code change or the
+  user's explicit edit, and are never exported, weighted or decayed. Guarded items do not ship.
+- **Guards:** only `author == principal` signals count (D-040); pasted text, quoted views and role play are not the
+  user's view. The decision model only classifies (relation, delta, scope, voice), abstains below 0.6, is capped,
+  and never swaps, adopts or steps back.
 - **Why:** D-004 asks for both fit and replicability. A new user gets a tuned start instead of an empty one, and
-  the same learning loop that fits the principal then fits them.
+  the same learning loop that fits the principal then fits them, at the pace people actually change.
 - **Rejected:** shipping the principal's store as is (personal data, D-004); starting every user empty (wastes the
-  tuning); replacing on the first contradiction (noise and injected text would move taste); letting the decision
-  model promote (a classifier error would become a lesson); decaying gate policies (nothing learned may loosen a
-  gate, D-015).
-- **Waiting on the principal:** the three open questions at the end of docs/TASTE-BASELINE.md.
+  tuning); counting raw signals or swapping within weeks (moods would move taste); silent swaps for the principal
+  and turning the rule off for him (ruling 1); letting the decision model act (a classifier error would become a
+  lesson); shipping gate defaults as taste (ruling 3); adopting a value from behaviour alone (a guess; neutral is
+  the safe fallback).
+- **Open:** whether stances on contested political or religious questions may ever ship (docs/TASTE-BASELINE.md,
+  "Open question"). Proposed: never.
+
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
 - **Why:** the principal reported an approval card stuck on screen in the terminal and on the web with nothing pending in
   the core, a card the terminal could not answer, a web chat that stopped responding, and wanted to cancel a queued steer.
