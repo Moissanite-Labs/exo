@@ -36,11 +36,11 @@ def test_slash_opens_the_menu_and_filters(tmp_path):
         assert app.menu.display and app.sug.mode == "command"
         shown = [i.value for i in app.sug.items]
         assert all(n in shown for n in ("new", "model", "compact", "context", "help"))  # client plus core commands
-        await type_(app, pilot, "cmp")
+        await type_(app, pilot, "cmpa")
         assert [i.value for i in app.sug.items] == ["compact"]
         assert "/compact" in menu_text(app)
         await pilot.press("escape")
-        assert not app.menu.display and app.composer.text == "/cmp"  # esc closes, keeps the text
+        assert not app.menu.display and app.composer.text == "/cmpa"  # esc closes, keeps the text
 
     run(tmp_path, sc)
 

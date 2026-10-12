@@ -100,6 +100,19 @@ config key `guidance.enabled` is `false` (`GET /api/complete/commands` says so),
 The logic is `static/complete.js` (pure, tested in node against the Python engine); the drawing is `static/composer.js`.
 Screenshots: `docs/media/web-05-guidance.png`, `web-06-slash.png`, `web-07-files.png`.
 
+## Layout: inverse or classic (D-046)
+
+The chat has two layouts. **Inverse** (the experiment's default) puts the message box at the top, with the approval cards
+under it, then the thread with the newest item first and the status strip at the bottom; text inside one message reads
+top to bottom, and a thread opens on its newest item at the top (`docs/media/web-08-inverse.png`). **Classic** is the usual
+order, and a long thread now opens at its newest message at the bottom (`docs/media/web-09-classic-bottom.png`). Switch with
+the "Layout" button under the thread list or `/layout inverse|classic`; the choice is saved in this browser
+(`localStorage` key `xc-layout`, the only use of it, pinned by a test). The code is `static/layout.js` (pure, tested in node)
+and `chat.js`. To end the experiment change `DEFAULT_LAYOUT` in `layout.js` to `"classic"`; saved choices stay.
+Fix: the chat box had no fixed height (`flex: 1` in an auto column), so a long thread grew the page and opened at its top
+with the box off screen. It has a definite height now and the log scrolls inside it. Tests drive headless Chrome over
+DevTools (`tests/browser.py`, skipped when Chrome is missing). The page has no big composer pane; that is terminal only.
+
 ## Cost and jobs (D-032)
 
 Cost in the strip is the session total from `usage.updated`; each row of last calls shows that call's
@@ -132,6 +145,9 @@ streaming message never lost its caret and a tool line never left "running" unti
 keeps the old node first.
 
 ## Reproducing the screenshots
+
+The layout shots (`web-08`, `web-09`) come from `python scripts/promo_shots_web.py layout`, which drives Chrome over DevTools
+with `--use-mock-keychain --password-store=basic` so no keychain prompt appears.
 
 `python scripts/promo_shots_web.py` serves the static client over a stand-in source that replays protocol
 events for a scripted turn, and captures each state with headless Chrome. Nothing is captured from a live

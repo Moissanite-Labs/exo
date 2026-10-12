@@ -21,7 +21,11 @@ def test_key_field_is_a_password_input_that_is_not_saved():
 
 def test_no_local_storage_anywhere():
     for f in STATIC.glob("*.js"):
-        assert "localStorage" not in f.read_text(encoding="utf-8"), f.name
+        body = f.read_text(encoding="utf-8")
+        if f.name == "layout.js":  # D-046: the one exception, the layout choice. It never sees keys or text.
+            assert "setItem(KEY" in body.replace("(store || localStorage).setItem(KEY", "setItem(KEY") and 'const KEY = "xc-layout"' in body
+            continue
+        assert "localStorage" not in body, f.name
 
 
 def test_session_storage_only_for_the_token_in_provider_code():

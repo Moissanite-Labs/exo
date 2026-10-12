@@ -76,6 +76,23 @@ composer, the transcript or any log, and a key typed after `/providers add <name
 not echoed. After a change the client tells a running core to read keys again. At start, if no provider is ready,
 one note says to type `/providers`.
 
+## Focus, the big composer and the inverse layout (D-046)
+
+- **Focus follows you.** A click on the transcript or any plain surface returns focus to the composer, and a printable key
+  that arrives with focus on the transcript or nowhere is typed into it. The approval card, a panel, the completion menu
+  and input fields keep their own keys.
+- **Big composer.** `ctrl+g` or `/compose` grows the composer to most of the screen (`docs/media/tui-10-composer.png`):
+  a head line with word and line count and the keys, soft wrap, light markdown colour (headings, list marks, quotes,
+  fenced and inline code, bold), Enter for a new line, **`ctrl+s` to send** (`ctrl+enter` also, where the terminal reports
+  it), Esc to close with the draft kept (the menu and ghost text close first; Esc never stops a turn), `ctrl+l` line numbers,
+  `ctrl+t` or `/compose edit` for `$VISUAL`/`$EDITOR`, `/compose task` for the four headings. A long paste stays whole.
+  Slash, argument and `@` completion work as in the one-line composer; up and down move the caret and do not recall history.
+- **Inverse layout** (`docs/media/tui-11-inverse.png`): input under the brand bar, then the menu, approval card and activity
+  line, then the transcript with the newest item first. Text inside one message still reads top to bottom. A thread opens on
+  its newest item at the top. `/layout classic` restores the usual order (`docs/media/tui-12-classic-bottom.png`: a long
+  thread opens at the bottom). The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
+  Inverse is the default only for the experiment: set `DEFAULT_LAYOUT = "classic"` in `exo_tui/prefs.py` to flip it back.
+
 ## Switches
 
 - `EXO_REDUCED_MOTION=1`: no boot sequence, no spinner, packet, pulse, fade or caret blink. The state is still
@@ -87,7 +104,7 @@ one note says to type `/providers`.
 
 ## Screenshots
 
-The public set is in `docs/media/` (`tui-01-start.png` to `tui-09-guidance.png`): start, a turn with tools, an
+The public set is in `docs/media/` (`tui-01-start.png` to `tui-12-classic-bottom.png`): start, a turn with tools, an
 approval panel, the `/context` report, a background job, then the completion shots (`/co` menu with ghost text,
 `/model ` arguments, `@s` files, the guidance line). They come from `scripts/promo_shots.py`, which
 drives the app with Textual's pilot over an in-process core and a scripted model, with neutral demo data.

@@ -57,10 +57,12 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/handoff` | Ask the agent to write a handoff note for the next session. | optional path | `ExoApp.handoff`. The core gathers facts with the `handoff_facts` built-in. See `docs/HANDOFF.md`. |
 | `/intro` | Ask the agent for an orientation. | none | `ExoApp.intro` (an ordinary turn) |
 | `/tutorial` | Turn tips on or off, or show them again. | `on`, `off`, `reset`. None shows the state. | `ExoApp.tutorial_command` (`config.set` on `tutorial.enabled`) |
+| `/compose` | Open the big editor for a long prompt (also `ctrl+g`). Enter adds a line, `ctrl+s` or `ctrl+enter` sends, Esc closes and keeps the draft. | `task` adds Goal, Context, Constraints, Done when headings; `edit` opens `$VISUAL` or `$EDITOR`; `close`. None opens it. | `ExoApp.compose_command` (client only) |
+| `/layout` | `inverse` puts the input on top and the newest message under it; `classic` is the usual order. Saved. The web page runs it too. | `inverse`, `classic`. None shows the layout. | `ExoApp.layout_command`, `exo_tui/prefs.py` (web: `static/layout.js`) |
 | `/help` | List every command. | none | `ExoApp.help_text` |
 
 Not slash commands, but in the same composer: `@path` adds a file to the turn, `!cmd` asks the agent to run a shell
-command and show the output (both complete as you type, see "Completion and guidance"). Keys: ctrl+p palette, ctrl+o tool output, ctrl+y accept, ctrl+e edit, ctrl+r reject.
+command and show the output (both complete as you type, see "Completion and guidance"). Keys: ctrl+p palette, ctrl+o tool output, ctrl+y accept, ctrl+e edit, ctrl+r reject, ctrl+g big composer (inside it: ctrl+s send, ctrl+l line numbers, ctrl+t $EDITOR, Esc close).
 
 Anything else the TUI does not know goes to `command.run`. That is how `/context`, `/compact`, `/trace`, `/findings`
 and plugin commands work there.

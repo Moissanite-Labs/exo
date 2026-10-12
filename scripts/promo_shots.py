@@ -7,6 +7,7 @@ SVGs go to a temp dir, then scripts/svg_to_png.sh makes the PNGs. Not part of th
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import sys
 import tempfile
@@ -32,7 +33,8 @@ async def settle(pilot, secs: float = 0.3) -> None:
     await pilot.pause(secs)
 
 
-async def shoot(out: Path, name: str, body, *, boot: bool = False) -> None:
+async def shoot(out: Path, name: str, body, *, boot: bool = False, layout: str = "classic") -> None:
+    os.environ["EXO_LAYOUT"] = layout  # the older shots show the classic order; the D-046 shots say which they are
     tmp = Path(tempfile.mkdtemp(prefix="slugify"))
     subprocess.run(["git", "init", "-q", str(tmp)], check=True)  # a git cwd, so no "not inside a git repo" notice
     for rel in DEMO_FILES:  # neutral files for the @ menu
@@ -160,15 +162,46 @@ async def guidance_line(app, pilot, eng):
     await settle(pilot, 0.8)
 
 
-SHOTS = [("tui-01-start", empty), ("tui-02-turn", tools_running), ("tui-03-approval", approval),
-         ("tui-04-context", context), ("tui-05-job", job), ("tui-06-slash", slash_menu), ("tui-07-args", arg_menu),
-         ("tui-08-files", file_menu), ("tui-09-guidance", guidance_line)]
+async def composer_pane(app, pilot, eng):  # D-046
+    await a_turn(app, pilot, eng)
+    app.composer.focus()
+    await pilot.press("ctrl+g")
+    app.composer.text = ("## Goal\nMake slugify handle non-ASCII letters without dropping them.\n\n"
+                         "## Context\n- `src/slugify/core.py` strips anything outside a-z today\n"
+                         "- tests live in `tests/test_slugify.py`\n\n"
+                         "## Constraints\n- keep the public API as it is\n- no new dependencies\n\n"
+                         "## Done when\n- the failing test passes and a test covers German and Turkish input\n")
+    await settle(pilot, 0.5)
+
+
+async def inverse_turn(app, pilot, eng):
+    await tools_running(app, pilot, eng)
+
+
+async def long_thread(app, pilot, eng):
+    msgs = []
+    for i in range(1, 15):
+        msgs.append({"id": f"u{i}", "role": "user", "content": [{"type": "text", "text": f"step {i}: what changed in slugify?"}]})
+        msgs.append({"id": f"a{i}", "role": "assistant", "content": [{"type": "text", "text": f"Step {i} is done. The tests still pass."}]})
+    app.clear_transcript()
+    app.render_history(msgs)
+    await settle(pilot, 0.8)
+
+
+SHOTS = [("tui-01-start", empty, "classic"), ("tui-02-turn", tools_running, "classic"),
+         ("tui-03-approval", approval, "classic"), ("tui-04-context", context, "classic"), ("tui-05-job", job, "classic"),
+         ("tui-06-slash", slash_menu, "classic"), ("tui-07-args", arg_menu, "classic"),
+         ("tui-08-files", file_menu, "classic"), ("tui-09-guidance", guidance_line, "classic"),
+         ("tui-10-composer", composer_pane, "inverse"), ("tui-11-inverse", inverse_turn, "inverse"),
+         ("tui-12-classic-bottom", long_thread, "classic")]
 
 
 async def main(out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    for name, fn in SHOTS:
-        await shoot(out, name, fn)
+    only = sys.argv[2:]  # optional names, to redo one shot
+    for name, fn, layout in SHOTS:
+        if not only or name in only:
+            await shoot(out, name, fn, layout=layout)
 
 
 if __name__ == "__main__":

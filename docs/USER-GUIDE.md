@@ -47,6 +47,10 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `ctrl+p` | Opens the command palette. |
 | `ctrl+o` | Expands or hides tool output. |
 | `ctrl+y`, `ctrl+e`, `ctrl+r` | Accept, edit or reject the last answer. This is feedback the learning loop uses. |
+| `ctrl+g` or `/compose` | Opens the big editor for a long, structured prompt. Enter adds a line. **`ctrl+s` sends** (`ctrl+enter` too, on terminals that report it). `Esc` closes it and your draft stays. `ctrl+l` shows line numbers, `ctrl+t` edits in `$EDITOR`. `/compose task` starts you with Goal, Context, Constraints and Done when headings. Slash and `@` completion work inside it. |
+| `/layout inverse` or `classic` | Inverse puts the input on top and the newest message directly under it, so a thread opens on its latest. Classic is the usual order. Your choice is saved. |
+
+Click anywhere on the transcript and you are typing again; keys typed while nothing else has focus go to the composer.
 
 The screen shows the model that served each call, how full memory is, how much of the call came from cache, the cost,
 and the number of open findings. Screenshots are in `docs/ui/` (for example `docs/ui/01-empty.png`,

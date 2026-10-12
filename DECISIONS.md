@@ -921,3 +921,36 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   landed first answers "nothing queued" and is not removed twice. Esc is not used (D-043).
 - **Not changed:** the gate, approval identity (D-033, D-039) and the page token.
 - **Docs:** user guide, UI, COMMANDS, WEB, DEVELOPER-GUIDE, CORE counts, the intro skill.
+
+## D-046 (2026-10-12) Focus follows the user, a big composer pane, and an inverse layout (experiment)
+- **Why (A, verbatim):** "for the cli the user shouldnt have to click exactly inside the tiny text bar for them to start
+  prompting." And: "something like a composer built into the cli so write longer more structured prompts." And on a chat
+  that opened at its top: "instead of fixing it and flipping it, lets be creative. lets experiment with an inverse ui where
+  the text bar is at the top and text/reasoning lines appear from the top instead of the bottom, pushing text down."
+- **Focus (terminal):** a click on the transcript or any plain surface returns focus to the composer, and a printable key
+  that reaches the app with focus on the transcript (or nowhere) is typed into the composer. A focused panel, the
+  completion menu, an input field and the approval card keep their own keys.
+- **Composer pane (terminal only):** the same composer widget grows to most of the screen, so the D-037 menu, `@` files and
+  ghost text work unchanged and the draft is just the composer text: closing the pane cannot lose it. Open with `ctrl+g`
+  (ctrl+e was taken by "edit the last answer", and is cursor-to-end in a text area) or `/compose`. Enter adds a line,
+  `ctrl+s` or `ctrl+enter` sends (ctrl+enter only arrives on terminals that report it, so ctrl+s is the dependable key),
+  Esc closes (the menu and ghost text first; it never stops a turn, D-043). Header with words, lines and keys, soft wrap,
+  light markdown colour, `ctrl+l` line numbers, `ctrl+t` or `/compose edit` for `$VISUAL`/`$EDITOR`, `/compose task` for a
+  Goal / Context / Constraints / Done when scaffold. Up and down only move the caret there (history would eat the draft).
+  Rejected: a separate modal editor (would need a second completion path); ctrl+x ctrl+e (ctrl+x is cut).
+- **Inverse layout (experiment, both clients):** the box is at the top, messages stack newest first, a thread opens on
+  its newest item, which is at the top. Inside one message the text reads top to bottom. A tool line or system line is its
+  own item, so it goes above the message before it: newest first at item level, with the live streaming message directly
+  under the box while it grows. The recommendation to keep tool lines under the live message was not taken: it needs a
+  second rule for where "the current turn" ends, and item-level newest-first is one rule that can be explained in a line.
+  Terminal: `/layout inverse|classic`, saved in `$EXO_HOME/state/ui.json`, `EXO_LAYOUT` overrides for one run. Web: a
+  "Layout" button and `/layout`, saved in this browser (`localStorage`, key `xc-layout`; the one place the page uses it,
+  and a test pins that). The approval card, activity line and menu sit under the box.
+- **Default and how to flip it back:** inverse is the default for the experiment only. Terminal: `DEFAULT_LAYOUT` in
+  `clients/tui/exo_tui/prefs.py`. Web: `DEFAULT_LAYOUT` in `static/layout.js`. Change it to `"classic"`; anyone who chose a
+  layout keeps their choice. The older TUI tests pin classic through `tests/clients/tui/conftest.py`.
+- **Bug found and fixed (web classic):** `.xc-chat` was `flex: 1` in a column with no fixed height, so its own `height` was
+  ignored and a long thread grew the whole page: the log never scrolled and the box was off screen. It now has a definite
+  height, the log scrolls inside it and opens at its newest item. The terminal already opened at the bottom (a test says so).
+- **Not done:** a composer pane on the web page (the ask named the terminal); keeping tool lines under the live message.
+- **Docs:** `docs/UI.md`, `docs/ui/WEB.md`, `docs/COMMANDS.md`, `docs/USER-GUIDE.md`, the intro skill, `docs/media/README.md`.

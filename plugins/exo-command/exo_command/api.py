@@ -208,7 +208,8 @@ async def _schedule_edit(c, p, q, body):
 # ---------------------------------------------------------------- completion (D-037)
 WEB_COMMANDS = {"context": "what the next model call carries, part by part",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
-                "new": "start a new thread"}
+                "new": "start a new thread",
+                "layout": "inverse puts the box on top with the newest message under it; classic is the usual order"}
 _INDEXES: Dict[str, cm.FileIndex] = {}
 
 
