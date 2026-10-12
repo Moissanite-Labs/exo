@@ -1,0 +1,33 @@
+section: decision-rights
+node: work/decision-rights
+title: What the principal decides and what agents decide
+type: rule
+summary: Which decisions the principal keeps and which agents may make, from the interview.
+load_when: Before any decision about spend, naming, public output, people, or anything hard to undo.
+stability: durable
+order: 30
+questions:
+  - id: rights.keep
+    ask: Which decisions must always come back to you? For example spend, naming, hiring, public posts, deleting things.
+    why: The core of the gate policy.
+    covers: [rights.keep]
+    weight: 5
+    imagined: ["Anything with money", "Anything public", "Anything irreversible"]
+  - id: rights.delegate
+    ask: Which decisions can agents make on their own and just tell you afterwards?
+    why: Every decision you delegate saves an interruption.
+    covers: [rights.delegate]
+    weight: 5
+    imagined: ["Technical choices", "Scheduling", "Small purchases under a limit"]
+  - id: rights.spend
+    ask: What is the most an agent may spend without asking, per task and per month?
+    why: Sets the budget policy. A number is better than a feeling.
+    covers: [rights.spend]
+    weight: 4
+    imagined: ["Nothing without asking", "A small fixed amount", "Whatever the task needs within a monthly cap"]
+  - id: rights.conflict
+    ask: When two of your instructions conflict, which should win?
+    why: Agents meet conflicting rulings often; a default saves a question each time.
+    covers: [rights.conflict]
+    weight: 3
+    imagined: ["The newer one", "The safer one", "Ask me"]

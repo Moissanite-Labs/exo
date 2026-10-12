@@ -1,0 +1,368 @@
+#!/usr/bin/env bash
+# install.sh: install Exo for any user on macOS or Linux.
+#
+#   pinned Hermes Agent (scripts/pin-hermes.sh) + one venv for Hermes and Exo
+#   + Exo plugins in a Hermes home of their own + `exo init --interview`
+#
+# Usage: scripts/install.sh [options]
+#
+#   --dry-run            print every action, change nothing
+#   --exo-home DIR       Exo's home (default $EXO_HOME, else ~/.exo)
+#   --hermes-home DIR    HERMES_HOME to install plugins into. Default: a NEW $EXO_HOME/hermes-home.
+#                        An existing ~/.hermes is used only when passed here explicitly.
+#   --tag TAG            Hermes release tag (default: latest stable)
+#   --exo-source SRC     a local exo checkout or a git URL (default: the repo holding this script)
+#   --python PY          interpreter for the venv (default: newest python3.11+ on PATH)
+#   --plugins LIST       comma list of plugins to install (default: every plugins/*/plugin.yaml)
+#   --principal ID       principal id for the interview
+#   --answers FILE       answers YAML for a non-interactive interview
+#   --no-pin             do not pin Hermes (use an existing checkout, or skip Hermes entirely)
+#   --no-pip             do not create the venv or pip install anything
+#   --no-interview       do not offer the interview
+#   --strict-patches     fail when a patch does not apply, instead of skipping it
+#   --editable           pip install exo in editable mode (for development)
+#   -y, --yes            do not prompt
+#
+# Environment: EXO_HOME, EXO_HERMES_DIR, EXO_HERMES_HOME, EXO_PYTHON, EXO_PATCH_SKIP, and the
+# pin-hermes.sh variables. HERMES_HOME is ignored on purpose: it usually points at a live install.
+#
+# Idempotent: a second run with the same inputs only re-checks. Never touches ~/.hermes unless
+# --hermes-home names it.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+DRY=0 PIN=1 PIP=1 INTERVIEW=1 STRICT=0 EDITABLE=0 YES=0
+EXO_HOME_ARG="" HERMES_HOME_ARG="" HERMES_HOME_EXPLICIT=0
+TAG="${EXO_HERMES_TAG:-}" EXO_SOURCE="" PY="${EXO_PYTHON:-}" PLUGINS="" PRINCIPAL="" ANSWERS=""
+
+die() { echo "install: $*" >&2; exit 1; }
+say() { echo "install: $*"; }
+warn() { echo "install: WARNING: $*" >&2; }
+
+need_arg() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY=1 ;;
+    --exo-home) need_arg "$@"; EXO_HOME_ARG="$2"; shift ;;
+    --hermes-home) need_arg "$@"; HERMES_HOME_ARG="$2"; HERMES_HOME_EXPLICIT=1; shift ;;
+    --tag) need_arg "$@"; TAG="$2"; shift ;;
+    --exo-source) need_arg "$@"; EXO_SOURCE="$2"; shift ;;
+    --python) need_arg "$@"; PY="$2"; shift ;;
+    --plugins) need_arg "$@"; PLUGINS="$2"; shift ;;
+    --principal) need_arg "$@"; PRINCIPAL="$2"; shift ;;
+    --answers) need_arg "$@"; ANSWERS="$2"; shift ;;
+    --no-pin) PIN=0 ;;
+    --no-pip) PIP=0 ;;
+    --no-interview) INTERVIEW=0 ;;
+    --strict-patches) STRICT=1 ;;
+    --editable) EDITABLE=1 ;;
+    -y|--yes) YES=1 ;;
+    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown option $1 (see --help)" ;;
+  esac
+  shift
+done
+
+# --- helpers ------------------------------------------------------------------
+q() { printf '%q ' "$@"; }
+run() {  # print and (unless dry run) execute
+  echo "+ $(q "$@")"
+  [ "$DRY" -eq 1 ] || "$@"
+}
+expand() { case "$1" in "~") echo "$HOME" ;; "~/"*) echo "$HOME/${1#\~/}" ;; *) echo "$1" ;; esac; }
+# Absolute path without creating anything: resolve the deepest existing parent.
+abspath() {
+  local p rest=""
+  p="$(expand "$1")"
+  case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+  while [ ! -d "$p" ]; do
+    rest="/$(basename "$p")$rest"
+    p="$(dirname "$p")"
+  done
+  echo "$(cd "$p" && pwd -P)$rest"
+}
+write_if_changed() {  # PATH CONTENT: leave the file (and its mtime) alone when nothing changed
+  if [ -f "$1" ] && [ "$(cat "$1")" = "$2" ]; then return 0; fi
+  printf '%s\n' "$2" > "$1"
+}
+inside() {  # inside CHILD PARENT
+  case "$1/" in "$2"/*) return 0 ;; esac
+  return 1
+}
+
+# --- 1. platform, python, git ------------------------------------------------
+case "$(uname -s)" in
+  Darwin|Linux) ;;
+  *) die "unsupported OS $(uname -s): Exo installs on macOS and Linux" ;;
+esac
+command -v git >/dev/null || die "git not found; install git first"
+
+py_ok() { "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; }
+if [ -n "$PY" ]; then
+  command -v "$PY" >/dev/null || die "python not found: $PY"
+  py_ok "$PY" || die "$PY is older than Python 3.11"
+else
+  for cand in python3.14 python3.13 python3.12 python3.11 python3; do
+    if command -v "$cand" >/dev/null && py_ok "$cand"; then PY="$cand"; break; fi
+  done
+  [ -n "$PY" ] || die "Python 3.11 or newer not found; install it or pass --python"
+fi
+PY="$(command -v "$PY")"
+PYVER="$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+"$PY" -c 'import sys; sys.exit(0 if sys.version_info < (3, 15) else 1)' \
+  || warn "Python $PYVER is newer than Hermes supports (<3.15); pass --python python3.14"
+
+# --- 2. locations ----------------------------------------------------------
+EXO_HOME="$(abspath "${EXO_HOME_ARG:-${EXO_HOME:-$HOME/.exo}}")"
+EXO_HERMES_DIR="$(abspath "${EXO_HERMES_DIR:-$EXO_HOME/hermes}")"
+if [ "$HERMES_HOME_EXPLICIT" -eq 1 ]; then
+  TARGET_HOME="$(abspath "$HERMES_HOME_ARG")"
+else
+  TARGET_HOME="$(abspath "${EXO_HERMES_HOME:-$EXO_HOME/hermes-home}")"
+fi
+VENV="$(abspath "${EXO_VENV:-$EXO_HOME/venv}")"
+LIVE_HERMES="$(abspath "$HOME/.hermes")"
+
+if [ "$HERMES_HOME_EXPLICIT" -eq 0 ] && { inside "$TARGET_HOME" "$LIVE_HERMES" || inside "$LIVE_HERMES" "$TARGET_HOME"; }; then
+  die "refusing: $TARGET_HOME overlaps the live Hermes home $LIVE_HERMES. Pass --hermes-home explicitly to use it."
+fi
+for p in "$EXO_HOME" "$EXO_HERMES_DIR" "$VENV"; do
+  inside "$p" "$LIVE_HERMES" && die "refusing: $p is inside the live Hermes home $LIVE_HERMES"
+done
+
+# Exo source: a local checkout, or a git URL cloned into $EXO_HOME/src/exo.
+if [ -z "$EXO_SOURCE" ]; then EXO_SOURCE="$REPO_DIR"; fi
+case "$EXO_SOURCE" in
+  http://*|https://*|git@*|ssh://*|git+*)
+    EXO_URL="${EXO_SOURCE#git+}"
+    EXO_SRC="$EXO_HOME/src/exo" ;;
+  *)
+    EXO_URL=""
+    EXO_SRC="$(abspath "$EXO_SOURCE")"
+    [ -f "$EXO_SRC/pyproject.toml" ] && grep -q '^name = "exo"' "$EXO_SRC/pyproject.toml" \
+      || die "$EXO_SRC is not an exo checkout (no pyproject.toml naming exo)" ;;
+esac
+
+say "plan$([ "$DRY" -eq 1 ] && echo ' (dry run: nothing will change)')"
+cat <<EOF
+  python        $PY ($PYVER)
+  EXO_HOME      $EXO_HOME
+  exo source    ${EXO_URL:-$EXO_SRC}
+  hermes        $EXO_HERMES_DIR  (pin: $([ "$PIN" -eq 1 ] && echo "${TAG:-latest stable tag}" || echo skipped))
+  venv          $VENV  ($([ "$PIP" -eq 1 ] && echo "Hermes + exo" || echo skipped))
+  HERMES_HOME   $TARGET_HOME$([ "$HERMES_HOME_EXPLICIT" -eq 1 ] && echo '  (explicit)' || echo '  (new, Exo-owned)')
+EOF
+
+# --- 3. EXO_HOME ------------------------------------------------------------
+if [ ! -d "$EXO_HOME" ]; then run mkdir -p "$EXO_HOME"; fi
+run chmod 700 "$EXO_HOME"
+for d in keys principals bin; do
+  [ -d "$EXO_HOME/$d" ] || run mkdir -p "$EXO_HOME/$d"
+done
+
+if [ -n "$EXO_URL" ]; then
+  if [ -d "$EXO_SRC/.git" ]; then
+    run git -C "$EXO_SRC" pull -q --ff-only
+  else
+    run git clone -q --depth 1 "$EXO_URL" "$EXO_SRC"
+  fi
+fi
+
+# --- 4. pin Hermes ------------------------------------------------------------
+PIN_SKIP="${EXO_PATCH_SKIP:-}"
+pin_hermes() {
+  local log tries=0 failed
+  log="$(mktemp "${TMPDIR:-/tmp}/exo-pin.XXXXXX")"
+  while :; do
+    tries=$((tries + 1))
+    echo "+ EXO_HOME=$EXO_HOME EXO_HERMES_DIR=$EXO_HERMES_DIR EXO_PATCH_SKIP=$PIN_SKIP $EXO_SRC/scripts/pin-hermes.sh $TAG"
+    if EXO_HOME="$EXO_HOME" EXO_HERMES_DIR="$EXO_HERMES_DIR" EXO_PATCH_DIR="$EXO_SRC/patches" \
+       EXO_PATCH_SKIP="$PIN_SKIP" bash "$EXO_SRC/scripts/pin-hermes.sh" ${TAG:+"$TAG"} 2>"$log"; then
+      cat "$log" >&2; rm -f "$log"; return 0
+    fi
+    cat "$log" >&2
+    failed="$(sed -n 's/^pin-hermes: patch FAILED: //p' "$log" | head -n1)"
+    if [ -z "$failed" ] || [ "$STRICT" -eq 1 ] || [ "$tries" -gt 5 ]; then
+      rm -f "$log"; die "pin-hermes.sh failed$([ -n "$failed" ] && echo " on patch $failed (--strict-patches)")"
+    fi
+    warn "patch $failed does not apply to this tag; skipping it. PINNED records the skip."
+    case ",$PIN_SKIP," in *",$failed,"*) rm -f "$log"; die "patch $failed still fails after skipping it" ;; esac
+    PIN_SKIP="${PIN_SKIP:+$PIN_SKIP,}$failed"   # full file name: pin-hermes.sh matches it exactly
+  done
+}
+if [ "$PIN" -eq 1 ]; then
+  if [ "$DRY" -eq 1 ]; then
+    echo "+ EXO_HOME=$EXO_HOME EXO_HERMES_DIR=$EXO_HERMES_DIR EXO_PATCH_SKIP=$PIN_SKIP $EXO_SRC/scripts/pin-hermes.sh $TAG"
+    echo "  (a patch that does not apply is skipped and recorded in PINNED$([ "$STRICT" -eq 1 ] && echo '; --strict-patches: fail instead'))"
+  else
+    pin_hermes
+  fi
+fi
+HAVE_HERMES=0
+[ -f "$EXO_HERMES_DIR/pyproject.toml" ] && HAVE_HERMES=1
+[ "$DRY" -eq 1 ] && [ "$PIN" -eq 1 ] && HAVE_HERMES=1
+
+# --- 5. venv: Hermes + exo ------------------------------------------------------
+# Upstream's own setup (setup-hermes.sh / install.sh) is a pm/uv-managed environment that
+# installs into ~/.hermes. Exo needs a separate home, so it builds a plain venv and installs
+# the pinned checkout with pip. Hermes exact-pins its dependencies, so the result matches.
+VPY="$VENV/bin/python"
+if [ "$PIP" -eq 1 ]; then
+  if [ ! -x "$VPY" ]; then
+    run "$PY" -m venv "$VENV"
+  else
+    say "venv exists: $VENV"
+  fi
+  STAMP="$VENV/.exo-install-stamp"
+  want="hermes=$(sed -n 's/^patched_tree: //p' "$EXO_HERMES_DIR/PINNED" 2>/dev/null || echo none);"
+  want="${want}exo=$(git -C "$EXO_SRC" rev-parse HEAD 2>/dev/null || echo local)-$EDITABLE"
+  if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$want" ] && [ "$EDITABLE" -eq 0 ] && [ -z "$(git -C "$EXO_SRC" status --porcelain 2>/dev/null || echo dirty)" ]; then
+    say "Hermes and exo already installed at these versions"
+  else
+    run "$VPY" -m pip install -q --upgrade pip
+    if [ "$HAVE_HERMES" -eq 1 ]; then
+      run "$VPY" -m pip install -q -e "$EXO_HERMES_DIR"
+    else
+      warn "no Hermes checkout at $EXO_HERMES_DIR; installing exo only"
+    fi
+    if [ "$EDITABLE" -eq 1 ]; then
+      run "$VPY" -m pip install -q -e "$EXO_SRC"
+    else
+      run "$VPY" -m pip install -q "$EXO_SRC"
+    fi
+    if [ "$DRY" -eq 0 ]; then echo "$want" > "$STAMP"; else echo "+ write $STAMP"; fi
+  fi
+fi
+
+# --- 6. plugins into HERMES_HOME --------------------------------------------------
+SELECTED=()
+for d in "$EXO_SRC"/plugins/*/; do
+  [ -f "$d/plugin.yaml" ] || continue
+  name="$(basename "$d")"
+  if [ -n "$PLUGINS" ]; then
+    case ",$PLUGINS," in *",$name,"*) ;; *) continue ;; esac
+  fi
+  SELECTED+=("$name")
+done
+[ "${#SELECTED[@]}" -gt 0 ] || die "no plugins selected from $EXO_SRC/plugins"
+
+PDIR="$TARGET_HOME/plugins"
+[ -d "$TARGET_HOME" ] || run mkdir -p "$TARGET_HOME"
+[ -d "$PDIR" ] || run mkdir -p "$PDIR"
+MARK=".exo-managed"
+for name in "${SELECTED[@]}"; do
+  src="$EXO_SRC/plugins/$name" dst="$PDIR/$name"
+  if [ -e "$dst" ] && [ ! -f "$dst/$MARK" ]; then
+    die "refusing: $dst exists and was not installed by Exo. Move it away or pick another --hermes-home."
+  fi
+  if [ -f "$dst/$MARK" ] && diff -rq -x "$MARK" -x tests -x __pycache__ -x .pytest_cache "$src" "$dst" >/dev/null 2>&1; then
+    say "plugin $name is up to date"
+    continue
+  fi
+  [ -e "$dst" ] && run rm -rf "$dst"
+  run mkdir -p "$dst"
+  # copy without tests and caches
+  if [ "$DRY" -eq 1 ]; then
+    echo "+ copy $src -> $dst (without tests, caches)"
+  else
+    (cd "$src" && find . \( -name tests -o -name __pycache__ -o -name .pytest_cache \) -prune -o -type f -print) |
+      while IFS= read -r f; do
+        mkdir -p "$dst/$(dirname "$f")"
+        cp -p "$src/$f" "$dst/$f"
+      done
+  fi
+  if [ "$DRY" -eq 1 ]; then echo "+ write $dst/$MARK"; else echo "installed by exo scripts/install.sh from $src" > "$dst/$MARK"; fi
+done
+
+# Hermes plugins are opt-in. A config.yaml Exo creates enables them; an existing one is not edited.
+HCFG="$TARGET_HOME/config.yaml"
+enabled="$(IFS=,; echo "${SELECTED[*]}" | sed 's/,/, /g')"
+has() { case " ${SELECTED[*]} " in *" $1 "*) return 0 ;; esac; return 1; }
+if [ ! -f "$HCFG" ]; then
+  if [ "$DRY" -eq 1 ]; then
+    echo "+ write $HCFG (plugins.enabled: [$enabled])"
+  else
+    {
+      echo "# Written by exo scripts/install.sh. Edit freely; the installer never overwrites this file."
+      echo "plugins:"
+      echo "  enabled: [$enabled]"
+      has exo-memory && printf 'memory:\n  provider: exo-memory\n'
+      has exo-context && printf 'context:\n  engine: exo-context\n'
+    } > "$HCFG"
+  fi
+elif head -n1 "$HCFG" | grep -q '^# Written by exo scripts/install.sh'; then
+  say "kept $HCFG (written by an earlier Exo install; edit it by hand to change plugins)"
+else
+  say "kept existing $HCFG. To enable Exo, add to it:"
+  echo "    plugins: {enabled: [$enabled]}"
+  has exo-memory && echo "    memory: {provider: exo-memory}"
+  has exo-context && echo "    context: {engine: exo-context}"
+fi
+
+# --- 7. launchers and config.json ----------------------------------------------------
+# `hermes` alone would use ~/.hermes. exo-hermes always runs with Exo's HERMES_HOME.
+LAUNCH="$EXO_HOME/bin/exo-hermes"
+ENVSH="$EXO_HOME/env.sh"
+if [ "$DRY" -eq 1 ]; then
+  echo "+ write $LAUNCH (runs $VENV/bin/hermes with HERMES_HOME=$TARGET_HOME)"
+  echo "+ write $ENVSH"
+else
+  write_if_changed "$LAUNCH" "$(printf '%s\n' '#!/usr/bin/env bash' \
+    '# Written by exo scripts/install.sh. Runs the pinned Hermes with the Exo home.' \
+    "export EXO_HOME=\"$EXO_HOME\"" \
+    "export HERMES_HOME=\"$TARGET_HOME\"" \
+    "exec \"$VENV/bin/hermes\" \"\$@\"")"
+  chmod 755 "$LAUNCH"
+  write_if_changed "$ENVSH" "$(printf '%s\n' \
+    "# Written by exo scripts/install.sh. Source it to use Exo in this shell:  . \"$ENVSH\"" \
+    "export EXO_HOME=\"$EXO_HOME\"" \
+    "export PATH=\"$EXO_HOME/bin:$VENV/bin:\$PATH\"")"
+fi
+if [ -x "$VENV/bin/exo" ] && [ ! -e "$EXO_HOME/bin/exo" ]; then run ln -s "$VENV/bin/exo" "$EXO_HOME/bin/exo"; fi
+
+CFG_PY="$VPY"
+[ -x "$CFG_PY" ] && "$CFG_PY" -c 'import exo.config' 2>/dev/null || CFG_PY=""
+plugins_json="[$(printf '"%s",' "${SELECTED[@]}" | sed 's/,$//')]"
+set_cfg() {  # key json-value
+  if [ "$DRY" -eq 1 ]; then echo "+ config.json: $1 = $2"; return; fi
+  if [ -n "$CFG_PY" ]; then
+    EXO_HOME="$EXO_HOME" "$CFG_PY" -m exo.config set "$1" "$2"
+  else
+    EXO_HOME="$EXO_HOME" PYTHONPATH="$EXO_SRC/src" "$PY" -m exo.config set "$1" "$2"
+  fi
+}
+set_cfg hermes_dir "\"$EXO_HERMES_DIR\""
+set_cfg hermes_home "\"$TARGET_HOME\""
+set_cfg venv "\"$VENV\""
+set_cfg plugins "$plugins_json"
+if [ -n "$PIN_SKIP" ]; then set_cfg hermes_patch_skip "\"$PIN_SKIP\""; fi
+
+# --- 8. interview -------------------------------------------------------------------
+EXO_RUN=("$VPY" -m exo.onboard)
+[ -x "$VPY" ] || EXO_RUN=(env PYTHONPATH="$EXO_SRC/src" "$PY" -m exo.onboard)
+if [ "$INTERVIEW" -eq 1 ]; then
+  if [ -z "$PRINCIPAL" ] && [ "$YES" -eq 0 ] && [ -t 0 ] && [ "$DRY" -eq 0 ]; then
+    printf 'Create your principal store and run the onboarding interview now? [Y/n] '
+    read -r reply || reply=n
+    case "$reply" in n|N|no) INTERVIEW=0 ;; *)
+      printf 'Principal id (lowercase, for example your first name): '
+      read -r PRINCIPAL || PRINCIPAL="" ;;
+    esac
+  fi
+fi
+if [ "$INTERVIEW" -eq 1 ] && [ -n "$PRINCIPAL" ]; then
+  if [ -d "$EXO_HOME/principals/$PRINCIPAL" ]; then
+    say "principal store $PRINCIPAL exists; skipping init (run: exo interview --principal $PRINCIPAL)"
+  else
+    args=(init "$PRINCIPAL" --interview)
+    [ -n "$ANSWERS" ] && args+=(--answers "$(abspath "$ANSWERS")")
+    echo "+ EXO_HOME=$EXO_HOME $(q "${EXO_RUN[@]}" "${args[@]}")"
+    [ "$DRY" -eq 1 ] || EXO_HOME="$EXO_HOME" "${EXO_RUN[@]}" "${args[@]}"
+  fi
+elif [ "$INTERVIEW" -eq 1 ]; then
+  say "next: exo init <id> --interview   (or: exo import-store <path> --id <id>)"
+fi
+
+say "done$([ "$DRY" -eq 1 ] && echo ' (dry run)'). Start with:  . $ENVSH && exo-hermes"

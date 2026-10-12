@@ -1,0 +1,47 @@
+section: work
+node: work/projects
+title: What the principal is working on
+type: fact
+summary: The principal's current projects and priorities, from the onboarding interview.
+load_when: Planning, prioritising, or deciding which project a task belongs to.
+stability: volatile
+order: 20
+extra_nodes:
+  - id: systems/environment
+    title: The principal's tools and machines
+    type: fact
+    summary: The tools, accounts and machines the principal works in, from the onboarding interview.
+    load_when: Choosing where to run a task or which account or tool to use.
+    stability: volatile
+questions:
+  - id: work.projects
+    ask: What are the two or three projects that matter most to you right now?
+    why: Agents rank work and attention by these.
+    covers: [work.projects]
+    weight: 5
+    imagined: ["One big project", "Several small ones", "A product and a client engagement"]
+    followups:
+      - id: work.projects-done
+        ask: For the most important one, what does done look like this month?
+        covers: [work.projects-goal]
+        weight: 4
+        when: answered
+  - id: work.delegable
+    ask: Which recurring tasks in your week would you hand to an assistant tomorrow if you trusted it?
+    why: Finds the assistant-shaped holes in your week (principle 2).
+    covers: [work.delegable]
+    weight: 5
+    imagined: ["Email and scheduling", "Code and reviews", "Research and summaries"]
+  - id: work.keep
+    ask: Which parts of your work do you never want to delegate, even to a good agent?
+    why: Marks what stays yours.
+    covers: [work.keep]
+    weight: 4
+    imagined: ["Final decisions", "Client relationships", "Creative direction"]
+  - id: work.tools
+    ask: Which tools, accounts and machines do you work in every day?
+    why: Agents need to know where work happens. Do not type passwords or keys here.
+    covers: [work.tools]
+    weight: 3
+    node: systems/environment
+    imagined: ["Laptop plus cloud services", "Several machines", "Mostly phone"]

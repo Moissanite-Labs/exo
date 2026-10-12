@@ -1,0 +1,33 @@
+section: gates
+node: work/gates
+title: When agents act and when they ask
+type: rule
+summary: Actions the principal wants to approve first, and actions agents may just do, from the interview.
+load_when: Before any action that is public, costly, irreversible, or touches someone else.
+stability: durable
+order: 60
+questions:
+  - id: gates.public
+    ask: Should anything go public in your name without your approval? Posts, comments, emails to new people?
+    why: Public output is the hardest to take back.
+    covers: [gates.public]
+    weight: 5
+    imagined: ["Never without approval", "Routine replies are fine", "Only in my own repos"]
+  - id: gates.irreversible
+    ask: Which irreversible actions worry you most? For example deleting data, force pushes, payments, sending to clients.
+    why: These always wait for you.
+    covers: [gates.irreversible]
+    weight: 5
+    imagined: ["Deleting anything", "Money", "Messages to third parties"]
+  - id: gates.timeout
+    ask: If you do not answer an approval request, should the agent skip the action, wait, or do the safe default?
+    why: Sets what happens on silence.
+    covers: [gates.timeout]
+    weight: 3
+    imagined: ["Skip it", "Wait for me", "Do the safe default"]
+  - id: gates.interrupt
+    ask: How many times a day may agents interrupt you with a question?
+    why: Your attention is the scarcest resource (principle 3).
+    covers: [gates.interrupt]
+    weight: 4
+    imagined: ["Once or twice", "As needed", "Batch them into one message"]

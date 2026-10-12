@@ -1,0 +1,27 @@
+section: privacy
+node: person/privacy
+title: What stays private
+type: rule
+summary: Data the principal never wants read, stored, shared or sent out, from the onboarding interview.
+load_when: Before reading a new source, storing personal data, or sending anything to an outside service.
+stability: core
+order: 80
+questions:
+  - id: privacy.never-read
+    ask: Are there folders, accounts or sources agents must never read?
+    why: Hard exclusions for ingest and tools. Describe them; do not paste secrets.
+    covers: [privacy.never-read]
+    weight: 5
+    imagined: ["None", "A backup drive", "Personal messages"]
+  - id: privacy.third-parties
+    ask: How should agents treat other people who appear in your data, such as clients, family or colleagues?
+    why: Your consent covers your data, not theirs.
+    covers: [privacy.third-parties]
+    weight: 4
+    imagined: ["Never store their details", "Store work context only", "Ask each time"]
+  - id: privacy.external
+    ask: Which outside services may see your data, for example model providers or cloud storage?
+    why: Decides where compute may run (principle 18).
+    covers: [privacy.external]
+    weight: 4
+    imagined: ["Any major provider", "Only providers I already pay for", "Local only"]
