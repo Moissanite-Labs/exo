@@ -192,3 +192,46 @@ def test_skipped_spans_merge_once_the_view_is_over_budget():
     nodes = run(go())
     assert any(n.status == "skipped" and n.level == 0 for n in nodes)
     assert any(n.status == "done" and n.level >= 1 for n in nodes)  # merged spans got big enough to summarize
+
+
+def test_threads_of_one_agent_send_one_conversation_id():
+    store, ctx, prov, loop, _ = setup()
+    seen = []
+    orig = prov.stream
+
+    def stream(messages, tools, **opts):
+        seen.append(opts.get("session_id"))
+        return orig(messages, tools, **opts)
+    prov.stream = stream
+
+    async def go():
+        a = await loop.create_session(agent="razi")
+        b = await loop.create_session(agent="razi")
+        plain = await loop.create_session()
+        await loop.send(a.id, "one")
+        await loop.send(b.id, "two")
+        await loop.send(plain.id, "three")
+        return plain
+    plain = run(go())
+    assert seen[0] == seen[1] and seen[0].startswith("a_")  # providers key their prompt cache on it
+    assert seen[2] == plain.id
+
+
+def test_small_recent_spans_stay_out_of_the_cached_prefix():
+    """Spans too small to summarize stay in the recent part (thread tail and notes), so the system message,
+    the prompt-cache prefix, changes only when a real summary lands."""
+    store, ctx, prov, loop, _ = setup(leaf_size=2, tail_messages=2, min_compact_tokens=10**6)
+
+    async def go():
+        a = await loop.create_session(agent="razi", title="A")
+        b = await loop.create_session(agent="razi", title="B")
+        for i in range(4):
+            await loop.send(a.id, f"fact a{i}")
+            await loop.send(b.id, f"fact b{i}")
+        return a, b
+    a, b = run(go())
+    assert any(n.status == "skipped" for n in store.summaries("agent:razi"))
+    systems = {c[0].text() for c in prov.calls}
+    assert systems == {"SYS"}  # never moved, though leaves were cut
+    last = "\n".join(m.text() for m in prov.calls[-1])
+    assert "fact a0" in last and "fact a3" in last  # B still sees all of A's recent work

@@ -324,7 +324,10 @@ class Loop:
         opts = dict(self.provider_opts)
         if self.model:
             opts["model"] = self.model
-        opts["session_id"] = session  # providers that route or cache per conversation send it as a header
+        # providers that route or cache per conversation send it as a header; all threads of one agent are one
+        # conversation to them (D-028), so they share the provider's prompt cache
+        key = getattr(self.context, "cache_key", None)
+        opts["session_id"] = (key(session) if callable(key) else None) or session
         specs = self._specs()
         attempt, history, t0 = 0, [], time.monotonic()
         while True:

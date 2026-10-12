@@ -36,8 +36,9 @@ Everything stays in `sessions.sqlite`.
 Each model call is built fresh, in this order:
 
 1. **System message** (stable prefix): system prompt, memory provider block, then the agent's tree view
-   (all threads, oldest first). This is byte-identical for every thread of the agent until a new node
-   finishes, so the prompt cache is shared across windows and turns.
+   (all threads, oldest first). The view ends at the last summarized node: small spans after it (too
+   small to summarize, or a summary still running) stay in the recent part below. So the system message is
+   byte-identical for every thread of the agent until a real summary lands.
 2. **This thread's verbatim tail**: every message of the thread after the tree frontier, and at least its
    last `tail_messages`, widened back so it never starts with an orphan tool result. Context notes stored
    in the thread are part of it.
@@ -50,6 +51,12 @@ Each model call is built fresh, in this order:
    unstored message just before the turn's user message, so it never piles up in the thread. Before, it
    sat in the system message and changed every turn, which broke the cache for the whole prompt; now the
    prefix up to the previous turn stays cached.
+
+Providers that key routing and prompt caching on a conversation id (opencode Go's `x-opencode-session`)
+get one id per agent, not per thread, so every window reuses the same cached prefix.
+
+Tree upkeep reports each finished node as `memory.summarized` (level, start, end, tokens before and after).
+It is not a compaction of the live context, so it no longer shows as `context.compacted`.
 
 ## Concurrency
 
