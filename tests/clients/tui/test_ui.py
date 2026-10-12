@@ -92,10 +92,10 @@ def test_header_rule_chips_and_gauge():
 def test_status_strip_shows_fallback_gauge_cache_cost_findings(tmp_path):
     async def sc(app, pilot, client, eng):
         strip = app.query_one(StatusStrip)
-        strip.set(model="fake:y", requested="fake:x", ctx=50_000, window=200_000, cache=0.82, cost=0.14, findings=2)
+        strip.set(model="fake:y", requested="fake:x", ctx=50_000, window=200_000, cache=0.82, cost="$0.14", findings=2)
         text = strip.render().plain
         assert "MODEL fake:y ← fake:x" in text
-        assert "25%" in text and "CACHE 82%" in text and "$0.14" in text and "2 findings" in text
+        assert "COST $0.14" in text and "25%" in text and "CACHE 82%" in text and "$0.14" in text and "2 findings" in text
         strip.set(requested="fake:y")
         assert "←" not in strip.render().plain
         strip.set(cache=None, findings=1)
@@ -407,5 +407,39 @@ def test_approval_leaves_a_blank_row_above_the_wire(tmp_path):
         await until(lambda: app.card is not None, pilot)
         await pilot.pause(0.2)
         assert app.card.region.bottom < app.query_one("#activity").region.y  # a gap, not touching
+
+    run(tmp_path, sc)
+
+
+# ---------------------------------------------------------------- D-032: cost is unknown, never 0; jobs
+def test_cost_label_follows_the_unknown_never_zero_rule(tmp_path):
+    async def sc(app, pilot, client, eng):
+        assert app.cost_label() == "\u2013" and "COST \u2013" in app.strip.render().plain
+        eng.hub.publish(s.ModelCall(requested="fake:x", route="fake:x", usage=s.Usage(input_tokens=100, output_tokens=5)),
+                        app.session)
+        await until(lambda: app.calls_seen == 1, pilot)
+        assert app.cost_label() == "unknown" and "$0" not in app.status_text()
+        eng.hub.publish(s.ModelCall(requested="fake:x", route="fake:x",
+                                    usage=s.Usage(input_tokens=100, output_tokens=5, cost_usd=0.02)), app.session)
+        eng.hub.publish(s.UsageUpdated(usage=s.Usage(input_tokens=1), session_total=s.Usage(cost_usd=0.02),
+                                       model="fake:x"), app.session)
+        await until(lambda: app.cost == 0.02, pilot)
+        assert app.cost_label() == "$0.0200+"  # one call had no price
+        assert "$0.0200+" in app.status_text()
+
+    run(tmp_path, sc)
+
+
+def test_job_updated_is_one_cold_system_line(tmp_path):
+    async def sc(app, pilot, client, eng):
+        eng.hub.publish(s.JobUpdated(job_id="j_1", state="running", command="make"), app.session)
+        eng.hub.publish(s.JobUpdated(job_id="j_1", state="done", command="make", exit_code=0), app.session)
+        eng.hub.publish(s.JobUpdated(job_id="j_2", state="failed", command="npm test", exit_code=2), app.session)
+        await until(lambda: "j_2 failed" in app.transcript_text(), pilot)
+        await pilot.pause(0.1)
+        kinds = [w.kind for w in app.transcript.children if isinstance(w, Block) and w.text.startswith("job ")]
+        assert kinds == ["job", "job", "warn"]  # cold lines; a failure is warm
+        cold = [w for w in app.transcript.children if isinstance(w, Block) and w.kind == "job"][0]
+        assert plain(cold.shown).strip() == "job j_1 running: make" and th.COLD in str(cold.shown.style)
 
     run(tmp_path, sc)

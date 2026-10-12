@@ -19,6 +19,7 @@ from rich.theme import Theme as RichTheme
 
 from exo.config import exo_home
 from exo.core.types import ContentPart
+from exo.core.trace import money
 from exo.protocol import schema as s
 from exo_tui.onboarding import INTRO_PROMPT, Onboarding, load_catalog
 from exo_tui import theme as th
@@ -157,7 +158,9 @@ class ExoApp(App):
         self.model = ""
         self.window = DEFAULT_WINDOW
         self.ctx_tokens = 0
-        self.cost = 0.0
+        self.cost: float | None = None  # session USD from priced calls; None = no priced call (D-032: unknown, never 0)
+        self.calls_seen = 0  # model calls that used tokens, seen by this client
+        self.unpriced = 0  # of those, calls with no price
         self.findings = 0  # open harness findings (D-025), polled after each turn
         self.busy = False
         self.turn_t0 = 0.0  # when the running turn began; 0 once text or reasoning has streamed
@@ -245,11 +248,18 @@ class ExoApp(App):
         pct = min(999, round(100 * self.ctx_tokens / self.window)) if self.window else 0
         bug = f" · {self.findings} findings" if self.findings else ""
         cache = "" if self.cache_share is None else f" · cache {round(100 * self.cache_share)}%"
-        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}%{cache} · ${self.cost:.2f}{bug}"
+        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}%{cache} · {self.cost_label()}{bug}"
+
+    def cost_label(self) -> str:
+        """The D-032 rule, formatted by the same `money` /trace uses: "-" before any call, "unknown" when no call is
+        priced, "$x+" when some are not, never "$0.00" for an unpriced call."""
+        if self.cost is None:
+            return "unknown" if self.calls_seen else "\u2013"
+        return money(self.cost, self.unpriced)
 
     def refresh_status(self) -> None:
         self.strip.set(model=self.model, requested=self.requested, ctx=self.ctx_tokens,
-                                        window=self.window, cache=self.cache_share, cost=self.cost,
+                                        window=self.window, cache=self.cache_share, cost=self.cost_label(),
                                         findings=self.findings)
         self.brand.set(self.seat or "main", self.thread_label, self.busy)
         self.prompt.set_state(self.busy, bool(self.question))
@@ -281,8 +291,9 @@ class ExoApp(App):
         self.query_one("#activity", Static).update(line)
 
     def add(self, widget: Block | ToolBlock) -> None:
-        for w in self.query("#welcome, #hero"):
-            w.remove()
+        if not (isinstance(widget, Block) and widget.kind in ("note", "warn", "job", "memory")):
+            for w in self.query("#welcome, #hero"):  # a system line does not end the empty start; a message does
+                w.remove()
         self.transcript.mount(widget)
         self.transcript.scroll_end(animate=False)
 
@@ -466,6 +477,10 @@ class ExoApp(App):
                 self.model = self.served = b.route  # the route that served, not the one asked for
             if b.requested:
                 self.requested = b.requested
+            if b.usage is not None and (b.usage.input_tokens or b.usage.output_tokens or b.usage.cache_read_tokens
+                                        or b.usage.cache_write_tokens):
+                self.calls_seen += 1
+                self.unpriced += b.usage.cost_usd is None
             if b.usage is not None and (b.usage.input_tokens or b.usage.cache_read_tokens):
                 self.cache_share = self.cache_of(b.usage)
             if (b.requested and b.route and b.requested != b.route) or any(
@@ -482,10 +497,10 @@ class ExoApp(App):
             if b.direction == "out" or b.state in ("denied", "expired"):
                 self.note(f"peer {b.peer}: {b.state}" + (f" ({b.detail})" if b.detail else ""),
                           "warn" if b.state != "delivered" and b.state != "released" else "note")
-        elif isinstance(b, s.JobUpdated):  # D-032: plain lines, no styling
+        elif isinstance(b, s.JobUpdated):  # D-032: one system line per state change, cold; a bad ending is warm
             code = "" if b.exit_code is None else f", exit {b.exit_code}"
             self.note(f"job {b.job_id} {b.state}{code}: {b.command[:80]}" + (f" ({b.detail})" if b.detail and b.state != "running" else ""),
-                      "warn" if b.state in ("failed", "timeout", "lost") else "note")
+                      "warn" if b.state in ("failed", "timeout", "lost") else "job")
         elif isinstance(b, s.UiPanel):
             self.on_ui_panel(b)
         elif isinstance(b, s.TasteUpdated):
@@ -656,7 +671,7 @@ class ExoApp(App):
             if got.ok:
                 self.note(f"cwd: {(got.result.get('session') or {}).get('cwd') or '-'}")
         elif name == "usage":
-            self.note(f"model {self.model or '-'}  context {self.ctx_tokens} tokens  cost ${self.cost:.2f}")
+            self.note(f"model {self.model or '-'}  context {self.ctx_tokens} tokens  cost {self.cost_label()}")
         elif name == "default":
             await self.set_default(args)
         elif name == "new":

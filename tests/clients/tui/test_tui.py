@@ -82,7 +82,7 @@ def test_send_and_stream(tmp_path):
         assert "hello" in app.transcript_text()
         assert app.last_answer[1] == "Hello **there**, friend"
         assert app.status_text().startswith("tester · ")
-        assert "ctx" in app.status_text() and "$" in app.status_text()
+        assert "ctx" in app.status_text() and "unknown" in app.status_text()  # D-032: unpriced is unknown, never $0
 
     run(tmp_path, sc)
 
