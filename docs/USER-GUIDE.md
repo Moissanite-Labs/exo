@@ -41,7 +41,7 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
 | typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
-| `ctrl+g` | Puts the focus on an approval card, wherever you are. Your draft stays. |
+| `ctrl+f` | Puts the focus on an approval card, wherever you are. Your draft stays. |
 | `@path` | Adds that file to your message. |
 | `!command` | Asks the agent to run that shell command and show the output. |
 | `ctrl+p` | Opens the command palette. |
@@ -156,7 +156,7 @@ files (`policies/gates.yaml` in your store). When it asks, a panel shows what th
 In the terminal: `o` allows once, `a` then Enter allows always (or `A` at once), `d` denies. Esc never answers. The keys only
 act when the card has focus, and the card does not take focus while you have text in the composer or typed in the last
 second and a half, so a letter typed into a message never answers a gate. Press Tab, click the card, or press
-`ctrl+g` to move to it. A card goes away the moment the request is closed, whoever closed it, and also when you stop
+`ctrl+f` to move to it. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. On the web page: `y`, `a`, `n`, which are ignored while you type in a field. If you
 answer a card that was already closed, the page drops it and says so.

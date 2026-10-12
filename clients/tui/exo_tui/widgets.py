@@ -533,7 +533,7 @@ class ApprovalCard(Vertical, can_focus=True):
         else:
             out.append(chips(pairs))
             if not self.has_focus:
-                out.append(Text("tab, click or ctrl+g to answer; your typing is safe", style=rich_style("fg3")))
+                out.append(Text("tab, click or ctrl+f to answer; your typing is safe", style=rich_style("fg3")))
         return Group(*out)
 
     def compose(self) -> ComposeResult:

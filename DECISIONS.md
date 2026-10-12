@@ -904,8 +904,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   call are dropped), and the page replaces its cards with that list on each thread open and stream reconnect. A 404
   on answering also removes the card. A resolved id is remembered so a late replay cannot bring it back.
 - **Stuck card, terminal:** the window had no check against the core. It now asks `approvals.list` every 3 s while a
-  card is open and drops any it no longer holds. The card was reachable by Tab, but only that way: `ctrl+g` now moves
-  focus to it from anywhere and the card says "tab, click or ctrl+g". The shared-socket path as the principal (second
+  card is open and drops any it no longer holds. The card was reachable by Tab, but only that way: `ctrl+f` (first `ctrl+g`, moved when D-046 took it for the composer) now moves
+  focus to it from anywhere and the card says "tab, click or ctrl+f". The shared-socket path as the principal (second
   window, `X-Exo-Principal`) is covered by a test and works.
 - **Web chat stopped:** `/api/events` took `?since=` before `Last-Event-ID`. A browser that reconnects by itself repeats
   its first URL, so every dropped connection replayed the whole history from page load and `message.delta` text doubled.

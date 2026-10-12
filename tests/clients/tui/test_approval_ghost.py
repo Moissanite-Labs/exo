@@ -51,7 +51,7 @@ def test_card_is_reachable_by_tab_with_a_draft_in_the_composer(tmp_path):
 def test_card_has_a_key_that_works_from_the_composer(tmp_path):
     async def sc(app, pilot, client, eng):
         await ask_over_a_draft(app, pilot)
-        await pilot.press("ctrl+g")  # focus the card from anywhere
+        await pilot.press("ctrl+f")  # focus the card from anywhere
         await pilot.pause(0.05)
         assert app.card.has_focus
         await pilot.press("d")
@@ -127,7 +127,7 @@ def test_delivered_steer_is_no_longer_pending(tmp_path):
         await until(lambda: app.card is not None, pilot)
         await steer(app, pilot, "late word")
         await until(lambda: app.pending_steers, pilot)
-        await pilot.press("ctrl+g")
+        await pilot.press("ctrl+f")
         await pilot.press("o")  # let the tool run; the steer lands at the next tool boundary
         await until(lambda: not app.pending_steers and not app.busy, pilot)
         await steer(app, pilot, "/unsteer")
