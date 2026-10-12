@@ -21,3 +21,83 @@
 repo = "https://github.com/NousResearch/hermes-agent"
 license = "MIT"
 notice = "LICENSES/hermes-agent-MIT.txt"
+
+[[module]]
+exo = "src/exo/core/slots.py"
+mode = "lift"
+upstream = ["agent/memory_provider.py", "agent/context_engine.py"]
+commit = "dce1e9b37581dd62e480a9064dc04a709c2940d3"
+reconciled = "2026-10-11"
+changes = "Both slot bases in one file, Hermes method names and defaults kept. Dropped is_core_memory_provider, sanitize_memory_context and automatic_compaction_status_message (redaction and compression-marker imports); update_model resolves per-model thresholds inline; storage kwarg is exo_home; added Slots for exclusivity."
+
+[[module]]
+exo = "src/exo/core/context.py"
+mode = "lift"
+upstream = ["agent/context_compressor.py"]
+commit = "dce1e9b37581dd62e480a9064dc04a709c2940d3"
+reconciled = "2026-10-12"
+changes = "Only the summarizer prompt text is lifted (preamble, fresh and update framing, section template, closing), trimmed: no session-log, pruned-skills, focus-topic or no-user-turn variants; em dashes replaced with hyphens. The compressor, summary tree, lanes and settle logic are new code."
+
+[[module]]
+exo = "src/exo/core/models/base.py"
+mode = "lift"
+upstream = ["agent/transports/types.py", "agent/transports/base.py"]
+commit = "dce1e9b3758"
+reconciled = "2026-10-12"
+changes = "Kept the transport hook split and finish-reason mapping; types replaced by exo.core.types; added async httpx streaming, SSE parsing, error mapping and stream assembly."
+
+[[module]]
+exo = "src/exo/core/models/anthropic.py"
+mode = "lift"
+upstream = ["agent/anthropic_message_convert.py"]
+commit = "dce1e9b3758"
+reconciled = "2026-10-12"
+changes = "Kept tool id sanitizing, blank-text scrubbing, orphan tool block stripping, role merging, leading user turn, schema union removal, duplicate tool drop, thinking replay rules; dropped dict sidecars, Kimi/DeepSeek routes, screenshot eviction, Bedrock ids. Thinking params follow agent/anthropic_adapter.py effort maps. Streaming parse is new."
+
+[[module]]
+exo = "src/exo/core/models/openai_chat.py"
+mode = "lift"
+upstream = ["agent/transports/chat_completions.py"]
+commit = "dce1e9b3758"
+reconciled = "2026-10-12"
+changes = "Near-identity message and tool conversion, max_tokens and reasoning effort keys; dropped xAI, Gemini, Kimi, Moonshot quirks and cache-key routing. Streaming tool-call assembly is new."
+
+[[module]]
+exo = "src/exo/core/models/router.py"
+mode = "port"
+upstream = ["agent/auxiliary_client.py", "agent/credential_pool.py", "agent/credential_pool_model_cooldowns.py", "agent/fallback_cooldown.py"]
+commit = "dce1e9b3758"
+reconciled = "2026-10-12"
+changes = "Rewritten as one routing table (roles main, aux, decision) with fallback, cooldown TTLs and the PR #119652 lone-credential reprobe."
+
+[[watch]]
+upstream = ["plugins/model-providers/**", "agent/anthropic_adapter.py"]
+why = "New providers and model ids for catalog.toml; Anthropic thinking and effort rules."
+
+[[module]]
+exo = "src/exo/core/tools/builtin/fuzzy.py"
+mode = "lift"
+upstream = ["tools/fuzzy_match.py"]
+commit = "dce1e9b37581dd62e480a9064dc04a709c2940d3"
+reconciled = "2026-10-12"
+changes = "Strategy chain, escape-drift guards, reindent and Unicode preservation kept; metrics hook dropped; docstrings shortened."
+
+[[module]]
+exo = "src/exo/core/tools/builtin/patch.py"
+mode = "lift"
+upstream = ["tools/patch_parser.py"]
+commit = "dce1e9b37581dd62e480a9064dc04a709c2940d3"
+reconciled = "2026-10-12"
+changes = "V4A parser kept; validate and apply merged into one in-memory overlay simulation with all-or-nothing commit to disk; file_ops abstraction, LSP and lint hooks dropped."
+
+[[module]]
+exo = "src/exo/core/tools/builtin/shell.py"
+mode = "lift"
+upstream = ["tools/environments/local.py", "tools/environments/base.py"]
+commit = "dce1e9b37581dd62e480a9064dc04a709c2940d3"
+reconciled = "2026-10-12"
+changes = "Process-group TERM, grace wait on the group, KILL and the adaptive poll loop kept; psutil escapee sweep, PID-reuse fingerprint guard, snapshots, sudo and Windows paths dropped."
+
+[[watch]]
+upstream = ["tools/file_tools.py", "tools/file_operations.py", "tools/terminal_tool.py"]
+why = "Wrappers rewritten in Exo; watch for new edge-case fixes worth porting."
