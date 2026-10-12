@@ -87,7 +87,7 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 Events (21): the 20 from 5.2 plus `taste.updated` (D-012 inline taste).
 
 - `session.created` / `session.updated`: session: SessionInfo
-- `turn.started` TurnStarted: turn_id, model = ""
+- `turn.started` TurnStarted: turn_id, model = "", soul = ""
 - `turn.completed` TurnCompleted: turn_id, stop_reason = "end", usage?
 - `message.delta` MessageDelta: message_id, text
 - `message.completed` MessageCompleted: message: Message

@@ -379,6 +379,7 @@ class SessionUpdated:
 class TurnStarted:
     turn_id: str
     model: str = ""
+    soul: str = ""  # short hash of the seat's SOUL.md this turn ran under (it is re-read when the file changes)
 
 
 @event("turn.completed")

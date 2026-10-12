@@ -8,7 +8,9 @@ This is the one seat format. The role templates in `plugins/exo-orchestra/seats/
 it (see `plugins/exo-orchestra/SEATS.md`), and `/orchestra check <file>` validates a file against it.
 
 Where: `$EXO_HOME/seats/<name>.toml`, `<name>.json`, or `<name>/seat.toml` with a `SOUL.md` beside it
-(its text is added to the system prompt). A few shorter spellings are accepted (top-level `name`, `role`,
+(its text is added to the system prompt). The file is checked at the start of every turn (one stat, by
+mtime and size) and re-read when it changed, so an edit applies to the next turn with no restart. A file that cannot be
+read keeps the last good text. A few shorter spellings are accepted (top-level `name`, `role`,
 `toolsets`, `principal = "ada"`, `[plugins]` as a list); the examples below use the canonical ones. Keys the loader
 does not read are ignored.
 

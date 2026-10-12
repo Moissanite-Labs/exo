@@ -7,6 +7,8 @@ The loop: record, read, report, verify.
 - `model.call` (event): per model call, the role and route asked for, the route that served it, every attempt
   (`route`, `outcome` ok, timeout, error or fallback, short `error`, `ms`), time to first token, total time,
   tokens (cache reads and writes too), the estimated cost in USD, loop retries.
+- `turn.started.soul`: a short hash of the seat's `SOUL.md` text the turn ran under (empty without one), so the trace
+  shows which instructions a turn used after an edit.
 - `tool.completed`: `duration_ms` and `is_error` on every call.
 - `turn.completed.timing`: `wall_ms`, `model_ms`, `tool_ms` (without approval waits), `approval_ms`,
   `model_calls`, `fallbacks`, `tool_errors`. When Esc cuts a tool short, its time up to the interrupt counts in

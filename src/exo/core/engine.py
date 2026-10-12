@@ -16,6 +16,7 @@ Adapters kept here so the parts stay independent of each other:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import os
@@ -339,9 +340,11 @@ class CoreEngine:
         self.handoff_sources["jobs"] = self._open_jobs  # /handoff lists the agent's running background jobs
         self.mcp = McpManager({**(mcp or {}), **(seat.mcp if seat else {})}, env)
         self._started: asyncio.Future | None = None
-        system_prompt = "\n\n".join(p for p in (system_prompt, seat.soul if seat else "", self.skills.prompt(),
-                                                   CODE_FIND_LINE if self.registry.specs(names=["code_find"]) else "",
-                                                   STANDING_LINE if self.peer_cfg.enabled else "") if p)
+        self._prompt_head = system_prompt
+        self._prompt_tail = [self.skills.prompt(), CODE_FIND_LINE if self.registry.specs(names=["code_find"]) else "",
+                             STANDING_LINE if self.peer_cfg.enabled else ""]
+        self._soul_sig = self._soul_stat()
+        system_prompt = self._compose_prompt()
         slots = self.plugins.slots
         tree = AgentContext(self.store, DefaultCompressor(self.router.provider("aux")), **(tree_cfg or {}))
         agentlog.register_zoom(self.registry, self.log_view)
@@ -350,6 +353,7 @@ class CoreEngine:
                          tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
         self.loop.on_turn_end = self.observe_turn
+        self.loop.before_turn = self._refresh_soul
         self.loop.system_extra = self._tutorial_line
         signer = None
         if seat:  # receipts are signed with the seat key (made on first use, mode 0600)
@@ -363,6 +367,36 @@ class CoreEngine:
         self.agents.install()
         self.scheduler = Scheduler(self)
         self._schedule = schedule  # serve turns the cron loop on; tests and one-shot engines leave it off
+
+    def _compose_prompt(self) -> str:
+        return "\n\n".join(p for p in (self._prompt_head, self.seat.soul if self.seat else "", *self._prompt_tail) if p)
+
+    def _soul_stat(self) -> tuple[int, int] | None:
+        path = self.seat.soul_path if self.seat else ""
+        try:
+            st = os.stat(path) if path else None
+        except OSError:
+            return None
+        return (st.st_mtime_ns, st.st_size) if st else None
+
+    def _refresh_soul(self) -> str:
+        """Turn start: re-read the seat's SOUL.md if its mtime or size changed (one stat), and return the soul's
+        short hash for turn.started. An unreadable file keeps the last good text."""
+        seat = self.seat
+        if seat is None or not seat.soul_path:
+            return ""
+        sig = self._soul_stat()
+        if sig != self._soul_sig:
+            self._soul_sig = sig
+            try:
+                text = Path(seat.soul_path).read_text("utf-8").strip() if sig else ""
+            except (OSError, UnicodeDecodeError) as exc:
+                trace.report("soul reload", exc)
+                text = seat.soul
+            if text != seat.soul:
+                seat.soul = text
+                self.loop.system_prompt = self._compose_prompt()
+        return hashlib.sha1(seat.soul.encode()).hexdigest()[:8] if seat.soul else ""
 
     def _specs(self) -> list[ToolSpec]:
         """Specs the model sees: every toolset, or the seat's (``mcp`` matches every ``mcp:<server>``)."""

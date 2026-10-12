@@ -1909,6 +1909,10 @@
         "model": {
           "type": "string",
           "default": ""
+        },
+        "soul": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,
