@@ -32,6 +32,8 @@ COMMANDS = {
     "undo": ("session", "undo the last turn"),
     "clear": ("session", "clear the transcript view (history is kept)"),
     "cwd": ("session", "show this session's working folder"),
+    "context": ("session", "show what the next model call carries: each part with its tokens (read-only)"),
+    "compact": ("session", "summarize now what is eligible in this agent's memory, then show tokens before and after"),
     "restart": ("session", "reopen this session in a new terminal tab and exit this one"),
     "exit": ("session", "quit"),
     "quit": ("session", "same as /exit"),
@@ -488,7 +490,9 @@ class ExoApp(App):
         elif name == "panel":
             if self.panel_order:
                 self.show_panel(self.panel_order[-1], report=True)
-        else:
+        else:  # /context and /compact are core commands too (command.run); the core that holds the agent lock does the work
+            if name == "compact":
+                self.note("compacting...")
             resp = await self.post(s.CommandRun(name=name, args=args, session=self.session))
             if resp.ok:
                 out = resp.result.get("output")

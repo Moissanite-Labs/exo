@@ -314,6 +314,26 @@ def test_help_lists_every_registered_command(tmp_path):
     run(tmp_path, sc)
 
 
+def test_context_and_compact_commands(tmp_path):
+    from exo_tui.app import COMMANDS
+
+    async def sc(app, pilot, client, eng):
+        assert {"context", "compact"} <= set(COMMANDS)
+        await send(app, pilot, "/help")
+        await until(lambda: "/context" in app.transcript_text() and "/compact" in app.transcript_text(), pilot)
+        await send(app, pilot, "hello")
+        await until(lambda: "friend" in app.transcript_text(), pilot)
+        await send(app, pilot, "/context")
+        await until(lambda: "recent tail" in app.transcript_text(), pilot)
+        assert any(isinstance(b, s.CommandRun) and b.name == "context" and b.session == app.session for b in app.sent)
+        await send(app, pilot, "/compact")
+        await until(lambda: "Compacted:" in app.transcript_text(), pilot)
+        assert "compacting..." in app.transcript_text()
+        assert not any(isinstance(b, s.Peers) for b in app.sent)  # no new protocol command: command.run only
+
+    run(tmp_path, sc)
+
+
 def test_model_flag_text_is_rejected(tmp_path):
     async def sc(app, pilot, client, eng):
         before = app.model
