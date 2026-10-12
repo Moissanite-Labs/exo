@@ -209,7 +209,7 @@ class Delegator:
               "(?,?,?,?,?,?,?,?,?)", (b.id, parent or None, f"bus:{seat}", b.depth, b.goal[:80], "queued", line,
                                       s.now_ts(), s.now_ts()))
         try:
-            res = await asyncio.to_thread(cli.post_sym2p, [seat], line, "task", b.id)
+            res = await asyncio.to_thread(cli.post_sym2p, [seat], line, "directive", b.id)
         except Exception as exc:
             r = Receipt(id="r" + b.id[1:], thread=b.thread, brief=b.id, status="failed", role=b.role,
                         error_code="error", error=f"could not send to seat {seat}: {exc}", tier=b.tier)

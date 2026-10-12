@@ -289,14 +289,14 @@ configured runs every child on main and nothing breaks. Catalog defaults (Anthro
 
 - **Cross-seat delegation over the bus** (minimal send built; the receiving side is wave 4). Design:
   1. `delegate` takes an optional `seat` per task. With a seat, the delegator builds the same typed `Brief`,
-     posts it as a signed bus message (`kind = "task"`, `thread = brief id`, body a SYM-2P line, through
+     posts it as a signed bus message (`kind = "directive"`, `thread = brief id`, body a SYM-2P line, through
      `Client.post_sym2p`) and records the task as `queued` with `child = "bus:<seat>"`. It returns at once;
      nothing runs locally. A failed post marks the task failed with the reason.
   2. The sender signs with its seat key, `$EXO_HOME/keys/<seat>.key` (the same file the gate uses for its
      ledger). The relay checks the signature against the registry, so only registered seats can send.
-  3. The receiving seat (wave 4) reads `kind = "task"` messages from its inbox, decodes the brief, runs it
+  3. The receiving seat (wave 4) reads `kind = "directive"` messages from its inbox, decodes the brief, runs it
      through its own `Delegator` (its own limits, tiers and gate), and posts the `Receipt` line back in the
-     same thread with `kind = "receipt"`. The sender matches by thread and updates the task row.
+     same thread with `kind = "report"`. The sender matches by thread and updates the task row.
   4. Restart: remote tasks stay `queued` (local ones are marked failed), because the work lives elsewhere.
   5. Still open: format negotiation through the seat registry, receipt matching on the sender, a timeout
      for tasks that never answer, and usage from the remote receipt joining the parent's totals.
