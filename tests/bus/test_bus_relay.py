@@ -145,3 +145,18 @@ def test_checkpoint_tool_writes_signed_checkpoint(bus, tmp_path):
     assert not verify_checkpoint({**doc, "head": "0" * 64})
     assert http("GET", f"{bus.url}/v1/checkpoints")[1][0]["head"] == doc["head"]
     assert any("ots" in line or "OpenTimestamps" in line for line in lines)
+
+
+def test_the_relay_key_signs_only_marked_relay_posts_and_never_counts_as_the_seat(bus):
+    """D-040: an envelope signed with the relay key and posted over HTTP as a seat is refused. The relay's own MCP
+    posts carry a relay marker in attach, and a reader never attributes them to the seat."""
+    status, _, raw = bus.post("beta", "group", "pretending to be beta", key=bus.relay_key)
+    assert status == 401, raw
+    import asyncio
+    asyncio.run(bus.relay.compose_and_post("beta", "group", "composed by the relay"))
+    [msg] = bus.get("gamma", "/v1/messages")[1]
+    assert {"relay": {"composed_for": "beta"}} in msg["attach"]
+    cli = bus.client("gamma")
+    reg, head = cli.registry(), cli.head()
+    assert cli.signer_of(msg, reg, head["relay_pubkey"]) is None
+    assert cli.verify()["ok"] is True  # the log itself still verifies: the relay vouched for the post
