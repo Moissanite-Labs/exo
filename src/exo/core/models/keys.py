@@ -2,9 +2,9 @@
 
 Order, first hit wins:
   1. the environment variable named by the provider's ``key_env``;
-  2. the macOS Keychain, service ``exo``, account = the variable name;
-  3. ``~/.config/exo/keys.env`` (``NAME=value`` lines), refused with a warning
-     if its mode is looser than 0600.
+  2. the macOS Keychain (skipped on other systems), service ``exo``, account = the variable name;
+  3. ``~/.config/exo/keys.env`` (``NAME=value`` lines; path overridable with ``EXO_KEYS_FILE``),
+     refused with a warning if its mode is looser than 0600.
 
 Key values are never logged, printed or put in error text.
 """

@@ -40,7 +40,7 @@ ranked file list and verbatim excerpts. Use it for unfamiliar code and "where or
 - **Runner:** an installed `jg`, else `npx -y @dzhng/jevgrep@0.8.0`. Needs Node.js 22+. Checked once at
   startup. If Node 22+ or both runners are missing the tool is hidden, and `exo models` says why on its
   `code_find:` line.
-- **Backend:** TypeSafe Jev with the key Exo's jev provider uses (`TYPESAFE_API_KEY`: environment, Keychain
+- **Backend:** TypeSafe Jev with the key Exo's jev provider uses (`TYPESAFE_API_KEY`: environment, macOS Keychain
   service `exo`, or `~/.config/exo/keys.env`). If Jev fails or no key exists, local Laya through jg's custom
   endpoint (the same `/v1/systemone` API), when `providers.laya` is configured, on loopback, and listening.
   The first line of the result names the backend: `[code_find backend=jev duration_ms=15010]`. A fallback adds
