@@ -3,11 +3,12 @@
 import { h, api, short, when, partsText, tag, empty } from "./dom.js";
 import * as bus from "./bus.js";
 import { renderPanel } from "./panels.js";
+import { createHero } from "./hero.js";
 
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
-  let requested = "", ctxTokens = null, cacheShare = null;   // instruments from model.call and usage.updated
+  let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [];   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
 
   const listEl = h("div", { class: "xc-sessions" });
@@ -24,9 +25,15 @@ export function mount(root) {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
   });
   const newBtn = h("button", { class: "xc-btn xc-primary", onclick: () => create() }, "New thread");
+  const heroCanvas = h("canvas", { class: "xc-hero-canvas", "aria-hidden": "true" });
+  const heroText = h("div", { class: "xc-hero-text" });
+  const heroEl = h("div", { class: "xc-hero", "aria-hidden": "false" }, h("div", { class: "xc-hero-grid" }), heroCanvas, heroText);
+  const hero = createHero(heroCanvas);
+  let heroOn = false, heroTimer = 0;
+  const stage = h("div", { class: "xc-stage" }, heroEl, logEl);
   root.replaceChildren(h("div", { class: "xc-chat" },
     h("nav", { class: "xc-chat-left" }, newBtn, h("div", { class: "xc-label" }, "Threads"), listEl),
-    h("main", { class: "xc-chat-main" }, logEl, apprEl, statusEl, composer),
+    h("main", { class: "xc-chat-main" }, stage, apprEl, statusEl, composer),
     sideEl));
 
   // ---------------------------------------------------------------- items
@@ -78,7 +85,7 @@ export function mount(root) {
     if (!mine) return;
     switch (ev.type) {
       case "turn.started": busy = true; if (b.model) { model = b.model; requested = b.model; } drawStatus(); break;
-      case "turn.completed": busy = false; drawStatus(); break;
+      case "turn.completed": busy = false; drawStatus(); loadContext(); break;
       case "usage.updated": {
         if (b.session_total && b.session_total.cost_usd != null) cost = b.session_total.cost_usd;
         if (b.model && !model) model = b.model;
@@ -88,8 +95,11 @@ export function mount(root) {
         if (b.route) model = b.route;
         if (b.requested) requested = b.requested;
         if (b.usage) instruments(b.usage);
-        drawStatus(); break;
+        calls.unshift({ route: b.route || "", requested: b.requested || "", ttft: b.ttft_ms, ms: b.total_ms, cache: b.usage ? cacheOf(b.usage) : null, error: b.error });
+        calls = calls.slice(0, 6);
+        drawStatus(); drawSide(true); break;
       case "memory.summarized":
+        loadContext();
         sys("memory", "log " + b.start + "-" + b.end + " folded \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "context.compacted":
         sys("context", "compacted \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
@@ -139,6 +149,35 @@ export function mount(root) {
     const total = (u.input_tokens || 0) + (u.cache_read_tokens || 0) + (u.cache_write_tokens || 0);
     if (total > 0) { ctxTokens = total; cacheShare = (u.cache_read_tokens || 0) / total; }
   }
+  function cacheOf(u) {
+    const t = (u.input_tokens || 0) + (u.cache_read_tokens || 0) + (u.cache_write_tokens || 0);
+    return t > 0 ? (u.cache_read_tokens || 0) / t : null;
+  }
+  // /context and /findings are read-only reports the core answers itself; the numbers feed the instruments.
+  async function runCommand(name, args) {
+    const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(current) + "/command", { name, args: args || "" });
+    return d.output;
+  }
+  function parseContext(t) {
+    const n = (re) => { const m = re.exec(t); return m ? Number(m[1]) : 0; };
+    const nodes = /Tree nodes: (\d+) done, (\d+) pending/.exec(t);
+    return { system: n(/system\s+(\d+)/), tree: n(/summary tree\s+(\d+)/), notes: n(/other threads\s+(\d+)/), tail: n(/recent tail\s+(\d+)/), total: n(/total\s+(\d+)/),
+      summaries: n(/(\d+) summaries over/), nodes: n(/summaries over (\d+) nodes/), done: nodes ? +nodes[1] : 0, pending: nodes ? +nodes[2] : 0, log: n(/Log: (\d+) entries/), frontier: n(/summarized up to (\d+)/) };
+  }
+  async function loadContext() {
+    const id = current;
+    if (!id) return;
+    try {
+      const out = await runCommand("context");
+      if (id !== current || typeof out !== "string") return;
+      ctx = parseContext(out); ctxTokens = ctx.total || ctxTokens;
+      drawStatus(); drawSide(true); if (!items.length) drawHero();
+    } catch (e) { /* older core: the instruments fall back to what the events carry */ }
+    try {
+      const out = await runCommand("findings", "count");
+      if (id === current && out && typeof out.open === "number") { findings = out.open; drawStatus(); }
+    } catch (e) { /* no findings count */ }
+  }
   function sys(label, text, tone) { push({ kind: "sys", id: "sys" + items.length + "-" + Date.now(), label, text, tone }); }
 
   // ---------------------------------------------------------------- drawing
@@ -150,9 +189,32 @@ export function mount(root) {
     if (items.length === 1) { drawLog(); return; }
     logEl.appendChild(itemEl(it)); stick();
   }
+  function drawHero() {
+    const want = items.length === 0;
+    if (want) {
+      clearTimeout(heroTimer);
+      const s = sessions.find((x) => x.id === current);
+      const chip = (k, l) => h("span", { class: "xc-chipk" }, h("b", null, k), l);
+      const line = (k, v) => h("div", { class: "xc-hl" }, h("span", { class: "xc-i" }, k), h("span", { class: "xc-v" }, v));
+      heroText.replaceChildren(
+        h("div", { class: "xc-hero-title" }, "E X O"),
+        h("div", { class: "xc-hero-sub" }, current ? "ready \u00B7 nothing in this thread yet" : "no thread open \u00B7 pick one or start a new thread", h("span", { class: "xc-caret" })),
+        h("div", { class: "xc-hlines" },
+          line("agent", (s && (s.agent || s.seat)) || "exo"),
+          line("model", model || (s && s.model) || "not set"),
+          line("memory", ctx ? ctx.summaries + " summaries \u00B7 " + ctx.nodes + " nodes \u00B7 log " + ctx.log + " entries" : "reading\u2026")),
+        h("div", { class: "xc-chips" }, chip("\u21B5", "send"), chip("\u21E7\u21B5", "new line"), chip("/", "context \u00B7 findings \u00B7 trace"), chip("y n a", "approvals")));
+      heroEl.classList.remove("out"); heroEl.hidden = false;
+      if (!heroOn) { heroOn = true; hero.start(); }
+    } else if (heroOn) {
+      heroOn = false; heroEl.classList.add("out");
+      heroTimer = setTimeout(() => { heroEl.hidden = true; hero.stop(); }, 600);
+    }
+  }
   function redraw(it) { const old = it.el; if (old && old.isConnected) { old.replaceWith(itemEl(it)); } else drawLog(); }   // keep the old node: itemEl points it.el at the new one
   function drawLog() {
-    logEl.replaceChildren(...(items.length ? items.map(itemEl) : [h("div", { class: "xc-sysline xc-ready" }, current ? "ready \u00B7 nothing in this thread yet" : "no thread open \u00B7 pick one or start a new thread", h("span", { class: "xc-caret" }))]));
+    logEl.replaceChildren(...items.map(itemEl));
+    drawHero();
     logEl.scrollTop = logEl.scrollHeight;
   }
 
@@ -168,6 +230,8 @@ export function mount(root) {
     } else if (it.kind === "sys") {
       el = h("div", { class: "xc-msg xc-sysline" + (it.tone === "tip" ? " xc-tip" : "") + fresh },
         it.tone === "tip" ? "tip: " + it.text : [h("span", { class: "xc-k" }, it.label), " \u00B7 " + it.text]);
+    } else if (it.kind === "report") {
+      el = h("section", { class: "xc-msg xc-pn" + fresh }, h("div", { class: "xc-ph" }, it.title), h("pre", { class: "xc-report" }, it.text));
     } else if (it.kind === "peer") {
       el = h("section", { class: "xc-msg xc-pn xc-peer" + fresh },
         h("div", { class: "xc-ph" }, "Peer \u00B7 " + (it.sender || "unknown"), it.trust ? tag(it.trust) : null, it.mode ? tag(it.mode) : null),
@@ -222,6 +286,7 @@ export function mount(root) {
         h("span", { class: "xc-v" }, fmtTok(ctxTokens))));
     }
     if (cacheShare != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "cache"), h("span", { class: "xc-v" }, Math.round(cacheShare * 100) + "%")));
+    if (findings != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "findings"), h("span", { class: "xc-v" + (findings ? " xc-via" : "") }, String(findings))));
     if (cost != null) out.push(cell("cost", "$" + cost.toFixed(cost < 1 ? 3 : 2)));
     out.push(busy ? h("span", { class: "xc-wire", "aria-hidden": "true" }) : h("span", { class: "xc-spacer" }));
     if (notice) out.push(h("span", { class: "xc-flash" }, notice));
@@ -279,9 +344,30 @@ export function mount(root) {
   }
   document.addEventListener("keydown", onKey);
 
-  function drawSide() {
+  function gaugeRow(label, n, max, hot) {
+    return h("div", { class: "xc-gr" }, h("span", { class: "xc-i" }, label), h("span", { class: "xc-gauge" + (hot ? " hot" : "") }, h("i", { style: "width:" + Math.max(n ? 2 : 0, Math.min(100, Math.round(100 * n / max))) + "%" })), h("span", { class: "xc-v" }, fmtTok(n)));
+  }
+  function instrumentColumn() {
+    const mem = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Memory"));
+    if (ctx) {
+      const max = Math.max(ctx.total, 1);
+      mem.append(h("div", { class: "xc-big" }, h("span", null, fmtTok(ctx.total)), h("span", { class: "xc-i" }, "tokens on the next call")),
+        gaugeRow("system", ctx.system, max), gaugeRow("tree", ctx.tree, max), gaugeRow("threads", ctx.notes, max), gaugeRow("tail", ctx.tail, max),
+        h("div", { class: "xc-pm" }, "tree \u00B7 " + ctx.summaries + " summaries over " + ctx.nodes + " nodes" + (ctx.pending ? " \u00B7 " + ctx.pending + " pending" : "")),
+        h("div", { class: "xc-pm" }, "log \u00B7 " + ctx.log + " entries, folded up to " + ctx.frontier));
+    } else mem.append(h("div", { class: "xc-pm" }, ctxTokens != null ? fmtTok(ctxTokens) + " tokens on the last call" : "no report yet"));
+    const cl = h("section", { class: "xc-ins" }, h("div", { class: "xc-label" }, "Last calls"));
+    if (calls.length) calls.forEach((k) => cl.append(h("div", { class: "xc-call" + (k.error ? " xc-bad" : "") },
+      h("span", { class: "xc-v" }, short((k.route || k.requested || "no route").split(":").pop(), 22)),
+      h("span", { class: "xc-pm" }, [k.ttft != null ? "ttft " + k.ttft + "ms" : "", k.cache != null ? "cache " + Math.round(k.cache * 100) + "%" : ""].filter(Boolean).join(" \u00B7 ")),
+      k.requested && k.route && k.requested !== k.route ? h("span", { class: "xc-via" }, "\u2190 fallback") : null)));
+    else cl.append(h("div", { class: "xc-pm" }, "no calls yet in this thread"));
+    return [mem, cl];
+  }
+  function drawSide(onlyInstruments) {
     const mine = panelsOpen.filter((p) => !p.session || p.session === current);
-    sideEl.replaceChildren(...(mine.length ? mine.map((p) => { const n = renderPanel(p, { act: panelAct, dismiss: panelDismiss }); if (!seen.has(p.panel_id)) n.classList.add("xc-in"); return n; }) : [h("div", { class: "xc-dim xc-side-empty" }, "panels the model opens appear here")]));
+    if (onlyInstruments && mine.length) return;
+    sideEl.replaceChildren(...(mine.length ? mine.map((p) => { const n = renderPanel(p, { act: panelAct, dismiss: panelDismiss }); if (!seen.has(p.panel_id)) n.classList.add("xc-in"); return n; }) : instrumentColumn()));
     sideEl.classList.toggle("xc-has", mine.length > 0);
     for (const p of mine) if (!seen.has(p.panel_id)) { seen.add(p.panel_id); respondPanel(p, "opened", {}, true); }
   }
@@ -293,7 +379,7 @@ export function mount(root) {
   }
 
   async function open(id) {
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; flash("");
+    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
@@ -305,7 +391,7 @@ export function mount(root) {
       model = (d.session && d.session.model) || "";
     } catch (e) { fail(e); }
     loading = false;
-    drawLog(); drawStatus();
+    drawLog(); drawStatus(); loadContext();
     const buffered = pending; pending = [];
     buffered.forEach(handle);
     try {
@@ -326,6 +412,16 @@ export function mount(root) {
   async function send() {
     const text = input.value.trim();
     if (!text) return;
+    const slash = /^\/(context|findings|trace)\b\s*(.*)$/.exec(text);
+    if (slash && current) {
+      input.value = "";
+      try {
+        const out = await runCommand(slash[1], slash[2]);
+        if (slash[1] === "context" && typeof out === "string") { ctx = parseContext(out); ctxTokens = ctx.total || ctxTokens; drawStatus(); drawSide(true); }
+        push({ kind: "report", id: "rep" + Date.now(), title: slash[1] + (slash[1] === "context" ? " \u00B7 next call" : ""), text: typeof out === "string" ? out : JSON.stringify(out, null, 1) });
+      } catch (e) { fail(e); }
+      return;
+    }
     try {
       if (!current) {
         const d = await api("POST", "/api/chat/sessions", { title: short(text, 60) });
