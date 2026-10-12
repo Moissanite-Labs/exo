@@ -3,7 +3,7 @@
 
 Runs a real `exo serve` seat in a fresh temp EXO_HOME on OpenCode Go and checks: a diff panel, an edit
 verdict that reaches the ledger and the fast loop, a scheduled job, and a gated tool call whose decision
-is in the signed ledger. Real keys are read by Exo itself (env, Keychain service `exo`); this script never
+is in the signed ledger. Real keys are read by Exo itself (env, macOS Keychain service `exo`, or keys.env); this script never
 reads, prints or logs a key. ANTHROPIC_API_KEY is dropped from the server environment.
 
     .venv/bin/python scripts/accept_wave3.py [--keep] [--main REF] [--aux REF] [--fast REF]

@@ -1,5 +1,5 @@
 """Settings and shared state for the exo-bus plugin. Values come from the channel's own config, then
-the core key lookup (environment, Keychain, keys file; exo.core.models.keys)."""
+the core key lookup (environment, macOS Keychain (macOS only), keys file; exo.core.models.keys)."""
 from __future__ import annotations
 
 import json
