@@ -38,5 +38,5 @@ def main(argv: list[str] | None = None) -> int:
     if a.no_intro and not onb.onboarded:
         onb.mark_onboarded("skipped")
     intro = not a.no_intro and not os.environ.get("EXO_NO_INTRO")  # the env var skips without writing anything
-    ExoApp(client, session=a.session, resume=a.resume, seat=a.seat, title=a.title, auto_intro=intro).run()
+    ExoApp(client, session=a.session, resume=a.resume, seat=a.seat, title=a.title, auto_intro=intro, boot_anim=True).run()
     return 0
