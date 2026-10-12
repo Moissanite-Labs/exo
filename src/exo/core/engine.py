@@ -25,7 +25,8 @@ from typing import Any, Iterable
 
 from exo.core import trace
 from exo.core.agents import Delegator
-from exo.core.context import DefaultCompressor, TreeContext, _maybe_await
+from exo.core import agentlog
+from exo.core.context import AgentContext, DefaultCompressor, TreeContext, _maybe_await
 from exo.core.findings import Findings
 from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
@@ -203,6 +204,9 @@ class CoreEngine:
         self.store = SessionStore(self.home / "sessions.sqlite")
         self.hub = Hub(SqliteLog(self.store))
         self.seat = seat
+        self.agent = seat.name if seat else "default"  # one agent, one memory: every thread of this seat (D-028)
+        self.log_view = agentlog.AgentLogView(self.store, self.agent)
+        self._writer: Any = None  # the agent's writer lock, taken by claim_writer() (create() does)
         models = {**(models or {}), **(seat.models if seat else {})}
         self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env)
         self.registry = registry or default_registry()
@@ -241,7 +245,8 @@ class CoreEngine:
                                                    CODE_FIND_LINE if self.registry.specs(names=["code_find"]) else "",
                                                    STANDING_LINE if self.peer_cfg.enabled else "") if p)
         slots = self.plugins.slots
-        tree = TreeContext(self.store, DefaultCompressor(self.router.provider("aux")), **(tree_cfg or {}))
+        tree = AgentContext(self.store, DefaultCompressor(self.router.provider("aux")), **(tree_cfg or {}))
+        agentlog.register_zoom(self.registry, self.log_view)
         self.loop = Loop(self.store, self.router.provider("main"), bus=HubBus(self),  # type: ignore[arg-type]
                          context=ContextAdapter(tree, slots.context, slots.memory), memory=slots.memory,
                          tool_specs=self._specs, run_tool=self.run_tool,
@@ -266,7 +271,7 @@ class CoreEngine:
         if allow is None:
             return self.registry.specs()
         return [sp for sp in self.registry.specs() if sp.toolset in allow or sp.toolset.split(":")[0] in allow
-                or sp.toolset in ("skills", "harness", "peers")]
+                or sp.toolset in ("skills", "harness", "peers") or sp.name == agentlog.ZOOM.name]
 
     async def start(self) -> None:
         """Connect MCP servers once (idempotent; the first command triggers it)."""
@@ -305,7 +310,14 @@ class CoreEngine:
                 trace.report(f"channel {name} stop", exc)
             self._channels.pop(name, None)
 
+    def claim_writer(self) -> None:
+        """Become the one writer of this agent's log and tree (raises agentlog.WriterBusy if another process is)."""
+        if self._writer is None:
+            self._writer = agentlog.claim_writer(self.home, self.agent)
+
     async def close(self) -> None:
+        agentlog.release_writer(self._writer)
+        self._writer = None
         trace.remove_sink(self._on_harness_error)
         await self.stop_channels()
         await self.stop_peers()
@@ -327,8 +339,9 @@ class CoreEngine:
         for slot in (pm.slots.memory, pm.slots.context):
             if slot is None:
                 continue
-            if slot is pm.slots.memory:
-                _safe(slot, "initialize", "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo")
+            if slot is pm.slots.memory:  # agent_log: the one log, so the provider keeps no second one (D-028)
+                _safe(slot, "initialize", "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
+                      agent_log=self.log_view)
             for schema in _safe(slot, "get_tool_schemas") or []:
                 spec = ToolSpec(name=schema["name"], description=schema.get("description", ""),
                                 parameters=schema.get("parameters") or {"type": "object", "properties": {}},
@@ -440,8 +453,10 @@ class CoreEngine:
         return info
 
     async def _session_create(self, b: s.SessionCreate) -> dict[str, Any]:
+        if b.kind not in ("", "thread", "private"):
+            raise CommandFailed("bad_request", f"a client can start a thread or a private thread, not {b.kind!r}")
         info = await self.loop.create_session(title=b.title, seat=b.seat, model=b.model or self._main_ref(),
-                                              cwd=b.cwd or self.cwd)
+                                              cwd=b.cwd or self.cwd, agent=self.agent, kind=b.kind or "thread")
         return {"session": to_dict(info)}
 
     async def _session_list(self, b: s.SessionList) -> dict[str, Any]:
@@ -752,6 +767,7 @@ def create(seat: str | None = None) -> CoreEngine:
                       delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"),
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
                             if k in ("leaf_size", "tail_messages", "view_budget")})
+    eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is
     eng.peer_autostart = True
     if cfg.get("learn", {}).get("enabled", True) is not False:
         from exo import learn

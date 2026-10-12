@@ -333,7 +333,7 @@ class TreeContext:
                     source = "\n\n".join(render_message(m) for m in msgs)
                     extra = ""
                     if self.on_pre_compress is not None:
-                        extra = str(await _maybe_await(self.on_pre_compress(node.session, msgs)) or "")
+                        extra = str(await _maybe_await(self.on_pre_compress(self._hook_session(node.session), msgs)) or "")
                     text = "" if estimate_tokens(source) < self.min_compact_tokens else \
                         await self._summarize(node.session, source, extra=extra)
                 else:
@@ -359,7 +359,7 @@ class TreeContext:
                                     self._event_session(node.session))
             if self.on_compacted is not None:
                 try:
-                    await _maybe_await(self.on_compacted(node.session, node))
+                    await _maybe_await(self.on_compacted(self._hook_session(node.session), node))
                 except Exception:  # a plugin hook never breaks upkeep
                     pass
         if node.status in ("done", "skipped"):
@@ -374,6 +374,10 @@ class TreeContext:
         return self.store.last_seq(key)
 
     def _event_session(self, key: str) -> str | None:
+        return key
+
+    def _hook_session(self, key: str) -> str:
+        """The session id plugin hooks get for a tree (an agent tree: its most recently active thread)."""
         return key
 
     def _verbatim(self, node: SummaryNode, limit: int | None = None) -> str:
@@ -591,6 +595,13 @@ class AgentContext(TreeContext):
 
     def _event_session(self, key: str) -> str | None:
         return None if key.startswith("agent:") else key
+
+    def _hook_session(self, key: str) -> str:
+        if not key.startswith("agent:"):
+            return key
+        rows = self.store._q("SELECT session FROM messages WHERE agent=? AND pos IS NOT NULL ORDER BY pos DESC"
+                             " LIMIT 1", (key[6:],))
+        return rows[0]["session"] if rows else key
 
     def note(self, session: str) -> None:
         super().note(self._agent_key(session) or session)
