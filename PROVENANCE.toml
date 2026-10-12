@@ -101,3 +101,15 @@ changes = "Process-group TERM, grace wait on the group, KILL and the adaptive po
 [[watch]]
 upstream = ["tools/file_tools.py", "tools/file_operations.py", "tools/terminal_tool.py"]
 why = "Wrappers rewritten in Exo; watch for new edge-case fixes worth porting."
+
+[[module]]
+exo = "src/exo/core/agents/delegate.py"
+mode = "lift"
+upstream = ["tools/delegate_tool_progress.py", "tools/delegate_tool_toolsets.py", "tools/delegate_tool_config.py"]
+commit = "dce1e9b37581dd62e480a9064dc04a709c2940d3"
+reconciled = "2026-10-12"
+changes = "Only the child prompt wording (_COMPLETION_INSTRUCTIONS, trimmed: no workspace-path rule; _ORCHESTRATOR_BLOCK cut to three sentences), the DELEGATE_BLOCKED_TOOLS list (renamed for Exo tools) and the defaults MAX_DEPTH = 1 and 10 children per call are lifted. Child runs, toolset narrowing, limits, cancel propagation, the tasks table and the SYM-2P briefs and receipts are new code."
+
+[[watch]]
+upstream = ["tools/delegate_tool*.py", "tools/async_delegation*.py", "tools/subagent_worktree.py"]
+why = "Delegation edge cases (stalled barriers, child timeouts, worktree isolation) worth porting into exo.core.agents."

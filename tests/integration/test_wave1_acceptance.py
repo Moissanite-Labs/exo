@@ -181,11 +181,14 @@ CORE = ["src/exo/core", "src/exo/protocol", "src/exo/server", "src/exo/cli_chat.
 
 
 def test_core_line_budget():
-    """Check 6: the core stays under 8k lines (generated protocol files excluded)."""
+    """Check 6: the core stays under budget (generated protocol files excluded).
+
+    Wave 1 shipped under 8k. STANDALONE.md section 6 allows 15k by the end of wave 3; delegation (D-016)
+    is a wave 3 item, so the budget moved to 15k on 2026-10-12."""
     files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
              if "generated" not in p.parts]
     total = sum(len(p.read_text().splitlines()) for p in files)
-    assert total < 8000, total
+    assert total < 15000, total
 
 
 def test_dependencies_are_listed():

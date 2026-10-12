@@ -1110,6 +1110,10 @@
         "detail": {
           "type": "string",
           "default": ""
+        },
+        "packet": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,

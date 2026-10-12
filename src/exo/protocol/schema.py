@@ -407,7 +407,8 @@ class TaskUpdated:
     title: str = ""
     status: str = ""  # queued, running, done, failed, cancelled
     child_session: str | None = None
-    detail: str = ""
+    detail: str = ""  # plain English for people (docs/AGENT-WIRE.md)
+    packet: str = ""  # the SYM-2P brief or receipt line, for replay and audit; never shown raw
 
 
 @event("usage.updated")

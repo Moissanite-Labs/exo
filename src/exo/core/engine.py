@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
+from exo.core.agents import Delegator
 from exo.core.context import DefaultCompressor, TreeContext, _maybe_await
 from exo.core.loop import Loop
 from exo.core.models.fake import RuleFake
@@ -125,7 +126,8 @@ class CoreEngine:
     def __init__(self, home: str | os.PathLike, models: dict[str, Any] | None = None, *,
                  registry: Registry | None = None, plugins: PluginManager | None = None,
                  cwd: str | None = None, system_prompt: str = SYSTEM_PROMPT,
-                 env: dict[str, str] | None = None, **loop_kw: Any) -> None:
+                 env: dict[str, str] | None = None, delegation: dict[str, Any] | None = None,
+                 **loop_kw: Any) -> None:
         self.home = Path(home)
         self.cwd = cwd or os.getcwd()
         self.store = SessionStore(self.home / "sessions.sqlite")
@@ -144,6 +146,8 @@ class CoreEngine:
                          context=ContextAdapter(tree, slots.context), memory=slots.memory,
                          tool_specs=self.registry.specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
+        self.agents = Delegator(self, delegation)  # the delegate tool and the tasks table
+        self.agents.install()
 
     def _main_ref(self) -> str:
         chain = self.router.chain("main")
@@ -295,7 +299,10 @@ class CoreEngine:
 
     async def _turn_interrupt(self, b: s.TurnInterrupt) -> dict[str, Any]:
         self._info(b.session)
-        return {"interrupted": int(self.loop.interrupt(b.session))}
+        return {"interrupted": int(self.loop.interrupt(b.session) or self.agents.interrupt(b.session))}
+
+    async def _tasks_list(self, b: s.TasksList) -> dict[str, Any]:
+        return {"tasks": self.agents.list(b.session)}
 
     async def _approval_respond(self, b: s.ApprovalRespond) -> dict[str, Any]:
         fut, sid = self._approvals.get(b.request_id, (None, None))
@@ -350,7 +357,7 @@ def create() -> CoreEngine:
                        memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
     pm.load_all(enabled=cfg.data.get("core_plugins"))
     return CoreEngine(cfg.home, cfg.models(), plugins=pm, cwd=cfg.get("cwd"),
-                      system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT)
+                      system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT, delegation=cfg.get("delegation"))
 
 
 __all__ = ["ContextAdapter", "CoreEngine", "HubBus", "SqliteLog", "create"]
