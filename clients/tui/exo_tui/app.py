@@ -43,6 +43,7 @@ COMMANDS = {
     "panel": ("tools", "reopen the last panel"),
     "peers": ("tools", "list the other live sessions (Exo and Hermes) you can message"),
     "send": ("tools", "message another session yourself: /send <peer> <text>"),
+    "copy": ("other", "copy to the clipboard: /copy (last answer), /copy error, /copy all"),
     "help": ("other", "list every command"),
 }
 LOCAL_COMMANDS = {n: d for n, (_, d) in COMMANDS.items()}
@@ -485,6 +486,8 @@ class ExoApp(App):
             resp = await self.post(s.SessionUndo(session=self.session))
             if resp.ok:
                 await self.load_session(self.session)
+        elif name == "copy":
+            self.copy_command(args.strip())
         elif name == "help":
             self.note(self.help_text())
         elif name == "panel":
@@ -499,6 +502,35 @@ class ExoApp(App):
                 if out:
                     self.note(out if isinstance(out, str) else str(out))
 
+    def copy_to_clipboard(self, text: str) -> None:
+        """Textual only writes OSC 52, which macOS Terminal ignores; also hand the text to pbcopy."""
+        super().copy_to_clipboard(text)
+        import shutil
+        import subprocess
+        exe = shutil.which("pbcopy")
+        if exe:
+            try:
+                subprocess.run([exe], input=text.encode("utf-8"), timeout=3, check=False)
+            except Exception:
+                pass
+
+    def copy_command(self, what: str) -> None:
+        blocks = [w for w in self.transcript.children if isinstance(w, Block)]
+        if what in ("", "last"):
+            text, label = next((b.text for b in reversed(blocks) if b.kind == "assistant"), ""), "last answer"
+        elif what in ("error", "last-error"):
+            text, label = next((b.text for b in reversed(blocks) if b.kind == "error"), ""), "last error"
+        elif what == "all":
+            text, label = self.transcript_text(), "transcript"
+        else:
+            self.note("usage: /copy [last|error|all]", "warn")
+            return
+        if not text:
+            self.note(f"nothing to copy: no {label} yet", "warn")
+            return
+        self.copy_to_clipboard(text)
+        self.note(f"copied {label} ({len(text)} chars) to the clipboard")
+
     def help_text(self) -> str:
         lines: list[str] = []
         for g in GROUPS:
@@ -507,7 +539,9 @@ class ExoApp(App):
             if g == "other":
                 lines += [f"  /{c['name']}  {c.get('description', '')}" for c in self.commands
                           if c["name"] not in COMMANDS]
-        lines += ["keys: @path adds a file   !cmd runs a shell command   ctrl+p palette",
+        lines += ["copy: drag to select, then ctrl+c; or /copy, /copy error, /copy all",
+                  "      (Terminal.app has no OSC 52, so exo also uses pbcopy; iTerm2: hold Option to select natively)",
+                  "keys: @path adds a file   !cmd runs a shell command   ctrl+p palette",
                   "      ctrl+o tool output   ctrl+y accept  ctrl+e edit  ctrl+r reject"]
         return "\n".join(lines)
 
