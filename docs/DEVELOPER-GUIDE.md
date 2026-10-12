@@ -233,6 +233,42 @@ Check your prose before you commit docs:
 
     python3 skills/clean-writing/scripts/check-prose.py docs/YOUR-FILE.md
 
+### CI, lint, lockfile and the privacy deny-list (D-042)
+
+**CI.** `.github/workflows/ci.yml` runs on every push to main and every pull request. It runs the root suite and
+then each plugin suite on its own (from the plugin folder, because each has its own conftest), on macOS and Ubuntu,
+with Python 3.11 and 3.13. It also runs `pytest plugins` once, to prove the plugin tests collect together. Plugin
+test files need unique names (`test_<plugin>_...py`) because the plugin test folders are not packages.
+
+**Lint.** `ruff check` with the pyflakes rules only (`F`, set in `pyproject.toml`). CI runs it with `--exit-zero` for
+now, so findings show but do not fail the build: the tree still has unused imports (F401) that were not mass-fixed
+while several branches edit the same files. Keep new code clean. When the baseline is clean, drop `--exit-zero`.
+
+**Lockfile.** `uv.lock` pins every dependency, extras included. CI installs with `uv sync --frozen --all-extras`.
+After you change `dependencies` or an extra in `pyproject.toml`, run `uv lock` and commit the result. Declare every
+package the code imports directly, even when another dependency would bring it in. The terminal client in
+`clients/tui` does not depend on `exo` by name (that name is another project on PyPI): install the repo root first.
+
+**Privacy deny-list.** Rule D-004 says nothing in the package names the principal, so the names to refuse are not in
+the repo. Put one word or phrase per line (a `#` starts a comment) in `$EXO_PRIVACY_DENYLIST`, or in
+`~/.config/exo/privacy-denylist.txt`. Tests that need it (`exo.privacy.deny_regex()`) skip when the file is absent.
+The generic checks always run: no `/Users/<name>` path and no email address outside a short allowlist
+(`tests/test_privacy.py`, `exo.privacy`). The list is read when the test module is collected, because the repo
+conftest points HOME and `EXO_*` at a temp folder for each test. Never paste the real names into a commit message,
+an issue or a test.
+
+**Private notes live outside the repo.** The early inventory and the project brief are in the handoffs folder of the
+person who runs the project, not in `inventory/` or `docs/BRIEF.md`. The handoff folder defaults to
+`$EXO_HOME/handoffs`. Set `handoff_dir` in `config.json` (or `EXO_HANDOFF_DIR`) to put it elsewhere; the canary seat
+sets it to `~/Work/handoffs`.
+
+**Deploying the site.** `scripts/deploy-site.sh` reads the Vercel team id and slug from `EXO_VERCEL_TEAM` and
+`EXO_VERCEL_SCOPE`, and the token file from `EXO_DEPLOY_ENV`. Put them in the environment or in an untracked
+`~/.config/exo/deploy.conf`. It deploys from a copy outside git.
+
+**Before the repo goes public.** Git history still holds the files removed in D-042. Rewrite history first (for
+example with `git filter-repo`), then publish.
+
 ## 8. Decisions and the merge flow
 
 **`DECISIONS.md`.** Each significant choice gets a heading `## D-NNN (date) title`, in number order, newest last.
