@@ -8,6 +8,7 @@ from exo import privacy
 
 ROOT = Path(__file__).resolve().parents[1]
 DENY = privacy.deny_regex()          # read now: the conftest hides the real HOME during tests
+SELF = "tests/test_privacy.py"  # its teeth tests contain made-up paths and addresses
 SKIP_DIRS = ("patches/",)
 TEXT = {".py", ".md", ".toml", ".json", ".yaml", ".yml", ".txt", ".sh", ".html", ".css", ".js", ".ts", ".cfg"}
 
@@ -31,14 +32,14 @@ def test_generic_checks_have_teeth():
 
 
 def test_tracked_files_have_no_home_paths_or_emails():
-    hits = [f"{rel}: {f}" for rel, text in _tracked() for f in privacy.generic_findings(text)]
+    hits = [f"{rel}: {f}" for rel, text in _tracked() if rel != SELF for f in privacy.generic_findings(text)]
     assert not hits, "\n".join(hits[:40])
 
 
 def test_tracked_files_hold_no_denylisted_names():
     if DENY is None:
         pytest.skip("no privacy deny-list (set EXO_PRIVACY_DENYLIST or write ~/.config/exo/privacy-denylist.txt)")
-    skip = {"tests/test_privacy.py"}
+    skip = {SELF}
     hits = [f"{rel}:{n}" for rel, text in _tracked() if rel not in skip
             for n, line in enumerate(text.splitlines(), 1) if DENY.search(line)]
     # Report counts only, never the matched text.
