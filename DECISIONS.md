@@ -477,6 +477,25 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   would enter memory); tracking seen tips in the core (a second client would then show them again for no reason).
 - **Not done:** the web client has no tips; upgraders without the marker see the intro once (pass `--no-intro`).
 
+## D-031 (2026-10-12) UI/UX overhaul, terminal half: make the TUI look like the site's terminal figure
+- **Why (A, verbatim):** "UI/UX needs an overhaul. the project website at exo.askaconsult.com gives such a
+  futuristic feeling - our ui/ux should be deliver on it".
+- **Decision:** the language already exists on the site (`figure.term`, `style.css`), so the TUI takes it
+  as is instead of inventing one. Presentation only: no protocol or core change, 30 commands, same keys.
+  - A Textual theme from the site tokens (`exo_tui/theme.py`), with a test that fails if it drifts from `style.css`.
+  - Instruments: brand bar with a live dot, a status strip (served model and the fallback it took, memory gauge,
+    cache share, cost, findings), a wire with a travelling packet for data in flight.
+  - Restyled transcript, one-line tools with elapsed time, approval, taste, finding, peer and `/context` panels
+    with key chips, `memory.summarized` as a one-line cold event, tips, an empty-start card, a short skippable
+    boot sequence, a block caret and a visible steer state.
+  - `EXO_REDUCED_MOTION=1` turns motion off, `NO_COLOR` paints nothing. Details and screenshots: `docs/UI.md`.
+- **Calls made:** the boot sequence is opt-in (`boot_anim`, set only by the entry point) so tests and headless
+  runs never see it; "memory verified" is not claimed because the core sends no verification result, the line
+  says `ready`; the served route stays in the strip after `usage.updated` (which carries the requested route);
+  diff `+` and `-` keep the terminal's own green and red; the web client is a separate change.
+- **Not done:** a `[?] explain` key on approvals (it would be new behaviour); a visual check of `NO_COLOR` in a
+  real terminal (the SVG export cannot show the terminal's default colours).
+
 
 ## D-032 (2026-10-12) What exo-razi asked for: background jobs and principal capture (Part A); tools, trace and commands (Part B)
 - **Why (A asked exo-razi, the canary Exo agent, what it would want; the brief is ~/Work/handoffs/exo-razi-asks-brief.md):**
