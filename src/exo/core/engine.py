@@ -713,12 +713,13 @@ class CoreEngine:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None) -> Any:
-        """One turn with the lifecycle hooks around it (the learning loop listens on these)."""
+    async def _turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
+        """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
+        scheduler's per-run loop; it shares this engine's context and memory."""
         hooks = self.plugins.hooks
         await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
         try:
-            return await self.loop.send(b.session, b.text, list(b.parts), mode=b.mode, meta=meta)
+            return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode, meta=meta)
         finally:
             await hooks.afire("on_turn_end", session_id=b.session)
 

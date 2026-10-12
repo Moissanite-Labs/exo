@@ -263,3 +263,26 @@ async def test_unexpected_loop_exit_is_reported(tmp_path):
     await asyncio.sleep(0.05)
     assert any(b.where == "scheduler loop" and "loop bug" in b.message for b in bodies(eng, s.HarnessError))
     assert any("scheduler stopped" in n.text for n in bodies(eng, s.Notice))
+
+
+@aio
+async def test_scheduled_turn_uses_the_normal_turn_path(tmp_path):
+    eng = mk(tmp_path)
+    seen = []
+
+    class Memory:
+        def system_prompt_block(self):
+            return "MEMBLOCK"
+
+        def sync_turn(self, user, assistant, session_id=None):
+            seen.append(("sync", session_id))
+
+    eng.loop.memory = Memory()
+    eng.plugins.hooks.register("on_turn_start", lambda session_id, message: seen.append(("start", session_id)))
+    eng.plugins.hooks.register("on_turn_end", lambda session_id: seen.append(("end", session_id)))
+    sch = eng.scheduler = Scheduler(eng)
+    job = sch.add("every 1h", "make the report", title="R")
+    sch.launch(job)
+    await sch.wait()
+    child = next(t.child_session for t in bodies(eng, s.TaskUpdated) if t.child_session)
+    assert [k for k, sid in seen if sid == child] == ["start", "sync", "end"]  # hooks and memory, like any turn
