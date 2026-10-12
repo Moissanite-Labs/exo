@@ -51,6 +51,7 @@ def fakes(monkeypatch, tmp_path):
     monkeypatch.setattr(ps, "_run", lambda argv, stdin=None: subprocess.CompletedProcess(argv, 0, "", ""))
     monkeypatch.setattr(keys, "keychain_get", lambda name: None)
     monkeypatch.setattr(keys, "secret_service_get", lambda name: None)
+    monkeypatch.setenv("EXO_NO_SECRET_SERVICE", "1")  # the faked _run would report a removal on any Linux box with secret-tool
     monkeypatch.setattr(ps, "_http", lambda *a, **k: (401, None))
     for k in list(os.environ):
         if k.endswith(("_API_KEY", "_TOKEN")):

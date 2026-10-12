@@ -265,7 +265,8 @@ def remove_key(provider: str, *, router: Router | None = None, home: str | os.Pa
     for name in names:
         if sys.platform == "darwin" and not os.environ.get("EXO_NO_KEYCHAIN") and _keychain_delete(name):
             removed.append("keychain")
-        if sys.platform.startswith("linux") and shutil.which("secret-tool") and _secret_tool_delete(name):
+        if (sys.platform.startswith("linux") and shutil.which("secret-tool") and not os.environ.get("EXO_NO_SECRET_SERVICE")
+                and _secret_tool_delete(name)):
             removed.append("secret-service")
         if remove_from_keys_file(name):
             removed.append("file")
