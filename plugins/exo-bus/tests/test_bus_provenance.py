@@ -76,7 +76,8 @@ def test_a_bus_message_is_held_for_the_principal_and_never_a_principal_turn(rela
         sid = chan._by_chat["alpha"]
         assert eng.store.messages(sid) == []  # held: nothing reached the model
         from exo.server.app import Dispatcher
-        resp = await Dispatcher(eng).run(s.Command.of(s.ApprovalRespond(request_id=call.request_id, decision="allow")))
+        resp = await Dispatcher(eng, caller="principal:tui").run(  # D-039: the principal answers
+            s.Command.of(s.ApprovalRespond(request_id=call.request_id, decision="allow")))
         assert resp.ok
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and not eng.store.messages(sid):  # released in the background
