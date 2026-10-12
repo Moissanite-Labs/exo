@@ -183,6 +183,31 @@ def test_interrupt_during_tool_closes_calls(tmp_path):
     assert all(r.is_error for r in tool_msg.tool_results)
 
 
+def test_interrupted_tool_counts_its_time_up_to_the_interrupt(tmp_path):
+    """f_8e7f52cd: a tool cut short by Esc still spent the time; turn.slow subtracts tool time from wall."""
+    prov = Script(reply("", [ToolCall(id="a", name="pytest_run")]))
+
+    async def slow(call, ctx):
+        await asyncio.sleep(10)
+
+    store, loop, seen = make(tmp_path, prov, run_tool=slow)
+
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "go"))
+        while not any(e.type == "tool.started" for e in seen):
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.3)
+        loop.interrupt(s.id)
+        return await asyncio.wait_for(task, 2)
+
+    res = run(go())
+    assert res.stop_reason == "interrupted"
+    timing = next(e.body.timing for e in seen if e.type == "turn.completed")
+    assert 250 <= timing["tool_ms"] <= timing["wall_ms"]
+    assert timing["interrupted_tool"] == "pytest_run"
+
+
 def test_steer_injects_between_tool_rounds(tmp_path):
     async def held(call, ctx):
         await asyncio.sleep(0.05)
