@@ -38,7 +38,7 @@ COMMANDS = {
     "exit": ("session", "quit"),
     "quit": ("session", "same as /exit"),
     "model": ("model", "pick the model for this session; /model <ref> sets it"),
-    "default": ("model", "set the default model for new sessions: /default <ref> (same as /model default <ref>)"),
+    "default": ("model", "set the default model for new sessions: /default <ref>, or /default alone to pick (same as /model default)"),
     "usage": ("model", "show context size, cost and the model in use"),
     "panel": ("tools", "reopen the last panel"),
     "peers": ("tools", "list the other live sessions (Exo and Hermes) you can message"),
@@ -523,7 +523,7 @@ class ExoApp(App):
 
     async def set_default(self, ref: str) -> None:
         if not ref:
-            self.note("usage: /default <provider:model>")
+            await self.set_model("", default=True)  # same picker as /model, choosing the default
             return
         if ref.startswith("-"):
             self.note("not a model ref; use /default provider:model")
@@ -547,7 +547,7 @@ class ExoApp(App):
         self.push_screen(Palette(items, "threads"), lambda v: v and self.run_worker(
             self.load_session(v), exit_on_error=False))
 
-    async def set_model(self, ref: str) -> None:
+    async def set_model(self, ref: str, default: bool = False) -> None:
         if not ref:
             self.note("loading models...")
             res = await self.client.call(s.ModelsList())
@@ -560,8 +560,9 @@ class ExoApp(App):
                 if r["route"] not in seen:
                     seen.add(r["route"])
                     items.append((r["route"], r["route"]))
-            self.push_screen(Palette(items, "models"), lambda v: v and self.run_worker(
-                self.set_model(v), exit_on_error=False))
+            pick = self.set_default if default else self.set_model
+            self.push_screen(Palette(items, "default model (new sessions)" if default else "models"),
+                             lambda v: v and self.run_worker(pick(v), exit_on_error=False))
             return
         if ref.startswith("-"):
             self.note("not a model ref; use /model provider:model, or /default provider:model")
