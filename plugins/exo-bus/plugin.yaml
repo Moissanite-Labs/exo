@@ -13,8 +13,21 @@ provides_tools:
   - bus_inbox
   - bus_thread
   - bus_verify
+  - peers
+  - peer_send
+provides_hooks:
+  - on_session_start
+  - pre_llm_call
+  - post_llm_call
+  - on_session_end
+  - on_session_finalize
+  - pre_gateway_dispatch
 requires_env: []
 optional_env:
+  - name: EXO_PEERS
+    description: "Set to 1 to make this profile a peer: other agent sessions (Exo or Hermes) can list and message it. Off by default. See docs/PEERS.md."
+    prompt: "Enable peers"
+    password: false
   - name: EXO_BUS_URL
     description: "Relay base URL, for example http://127.0.0.1:8787. Tools and the platform stay off until this and EXO_BUS_SEAT are set."
     prompt: "Exo Bus relay URL"
