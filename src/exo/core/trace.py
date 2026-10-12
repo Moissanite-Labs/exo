@@ -140,10 +140,14 @@ class Thresholds:
     """Anomaly and verification limits. Config: the ``trace`` table of config.json; a seat's ``[trace]`` table
     in seat.toml overrides it key by key (D-032).
 
-    ``turn_wall_s`` limits what the harness owns: wall time minus tool time and approval waits (model plus
-    overhead). ``turn_total_wall_s`` is the separate, high cap on the whole turn, work included."""
+    ``turn_wall_s`` limits what the harness owns: wall time minus tool time, approval waits and model-call time
+    (the overhead). ``model_call_s`` limits one model call's total time (``model.slow``, a route's problem, not the
+    harness's); ``model_call_routes`` maps a ``provider:model`` to its own limit in seconds. ``turn_total_wall_s``
+    is the separate, high cap on the whole turn, work included."""
 
-    turn_wall_s: float = 60.0
+    turn_wall_s: float = 30.0
+    model_call_s: float = 60.0
+    model_call_routes: dict[str, float] = field(default_factory=dict)
     turn_total_wall_s: float = 1800.0
     model_wait_s: float = 30.0
     subagent_s: float = 90.0
@@ -154,7 +158,10 @@ class Thresholds:
     def of(cls, cfg: dict[str, Any] | None) -> Thresholds:
         out = cls()
         for k, v in (cfg or {}).items():
-            if hasattr(out, k) and isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            if k == "model_call_routes" and isinstance(v, dict):
+                out.model_call_routes = {str(r): float(x) for r, x in v.items()
+                                         if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0}
+            elif hasattr(out, k) and isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
                 setattr(out, k, type(getattr(out, k))(v))
         return out
 
@@ -249,12 +256,12 @@ class TurnTrace:
 
     @property
     def harness_ms(self) -> int:
-        """Wall time the harness owns: model plus overhead, without tool time or approval waits (D-032).
-        Uses the turn's timing summary when it has one; old sessions use the recorded tool durations
-        (which already include approval waits)."""
+        """Wall time the harness owns: overhead only, without tool time, approval waits or model-call time (D-032,
+        amended 2026-10-12). Uses the turn's timing summary when it has one; old sessions use the recorded tool
+        durations (which already include approval waits) and the recorded call durations."""
         if "tool_ms" in self.timing:
-            return int(max(0, self.wall_ms - self.timing["tool_ms"] - self.approval_ms))
-        return int(max(0, self.wall_ms - sum(t.ms for t in self.tools)))
+            return int(max(0, self.wall_ms - self.timing["tool_ms"] - self.approval_ms - self.timing.get("model_ms", 0)))
+        return int(max(0, self.wall_ms - sum(t.ms for t in self.tools) - sum(c.total_ms for c in self.calls)))
 
     def cost(self) -> tuple[float | None, int]:
         """(USD, calls with no price) over this turn and its subagent turns. USD is None when no call is priced."""
@@ -528,14 +535,14 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
         if not any(f.signature == sig for f in out):
             out.append(Flag(sig, sev, title, detail, t.session, t.turn_id, model))
 
-    if not child and t.harness_ms > th.turn_wall_s * 1000:  # the harness's share: work and approvals do not count
+    if not child and t.harness_ms > th.turn_wall_s * 1000:  # the harness's share: work, approvals, model time do not count
         slow = t.harness_ms > th.turn_wall_s * 5000
-        add("turn.slow", "bug" if slow else "papercut", f"Turn spent {_fmt_ms(t.harness_ms)} outside tools",
-            f"{_fmt_ms(t.harness_ms)} of {_fmt_ms(t.wall_ms)} wall was model and overhead; limit {th.turn_wall_s:g} s. "
-            f"model {_fmt_ms(t.timing.get('model_ms', 0))}, tools {_fmt_ms(t.timing.get('tool_ms', 0))}, "
-            f"approvals {_fmt_ms(t.approval_ms)}."
-            if t.timing else f"{_fmt_ms(t.harness_ms)} of {_fmt_ms(t.wall_ms)} wall was outside tools; limit "
-            f"{th.turn_wall_s:g} s (old session: no timing summary).")
+        add("turn.slow", "bug" if slow else "papercut", f"Harness overhead was {_fmt_ms(t.harness_ms)} in one turn",
+            f"{_fmt_ms(t.harness_ms)} of {_fmt_ms(t.wall_ms)} wall was neither tools, approvals nor model calls; "
+            f"limit {th.turn_wall_s:g} s. model {_fmt_ms(t.timing.get('model_ms', 0))}, "
+            f"tools {_fmt_ms(t.timing.get('tool_ms', 0))}, approvals {_fmt_ms(t.approval_ms)}."
+            if t.timing else f"{_fmt_ms(t.harness_ms)} of {_fmt_ms(t.wall_ms)} wall was outside tools and model calls; "
+            f"limit {th.turn_wall_s:g} s (old session: no timing summary).")
     if not child and t.wall_ms > th.turn_total_wall_s * 1000:
         add("turn.wall", "papercut", f"Turn ran {_fmt_ms(t.wall_ms)} in total",
             f"{_fmt_ms(t.wall_ms)} wall, work included; cap {th.turn_total_wall_s:g} s.")
@@ -545,6 +552,12 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
             add(f"model.wait:{c.route or t.shown}", "bug" if wait > th.model_wait_s * 5000 else "papercut",
                 f"Model waited {_fmt_ms(wait)} for the first token",
                 f"{c.route or t.shown}: {_fmt_ms(wait)} before output; limit {th.model_wait_s:g} s.")
+        for r, ms in ([(a["route"], a.get("ms", 0)) for a in c.attempts if a.get("outcome") != "timeout" and a.get("route")]
+                      or [(c.route or t.shown, c.total_ms)]):  # a slow route, whichever try it was
+            limit = th.model_call_routes.get(r, th.model_call_s)
+            if ms > limit * 1000:
+                add(f"model.slow:{r}", "bug" if ms > limit * 5000 else "papercut", f"{r} took {_fmt_ms(ms)} for one call",
+                    f"{r}: {_fmt_ms(ms)} in one model call; limit {limit:g} s. The route is slow, not the harness.")
         for a in c.attempts:
             if a.get("outcome") == "timeout":
                 add(f"model.timeout:{a['route']}", "bug", f"{a['route']} timed out",

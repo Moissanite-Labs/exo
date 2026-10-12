@@ -160,7 +160,7 @@ def test_old_session_is_derived_from_timestamps():
     store = SessionStore()
     old_session(store)
     (t,) = trace.build(store, "s1")
-    assert t.derived and t.wall_ms == 130_000 and t.harness_ms == 100_000 and len(t.calls) == 2
+    assert t.derived and t.wall_ms == 130_000 and t.harness_ms == 58_000 and len(t.calls) == 2
     assert t.calls[0].ttft_ms == 40_000 and t.calls[0].total_ms == 41_000
     assert t.tools[0].ms == 30_000 and t.tools[0].is_error
     assert (t.tokens_in, t.tokens_out) == (30, 5) and t.served == ["p:other"]
@@ -213,22 +213,42 @@ def sigs(t, **limits):
 
 
 def test_rule_turn_slow_and_threshold_from_config():
-    assert "turn.slow" not in sigs(tt(wall_ms=59_000))
-    assert "turn.slow" in sigs(tt(wall_ms=61_000))
-    assert "turn.slow" not in sigs(tt(wall_ms=61_000), turn_wall_s=120)
+    assert "turn.slow" not in sigs(tt(wall_ms=29_000))
+    assert "turn.slow" in sigs(tt(wall_ms=31_000))
+    assert "turn.slow" not in sigs(tt(wall_ms=31_000), turn_wall_s=120)
+    assert Thresholds().turn_wall_s == 30.0 and Thresholds().model_call_s == 60.0
 
 
 def test_turn_slow_measures_the_harness_not_the_work():
-    """D-032: wall minus tool time and approval waits. A long build or a slow human does not trip it."""
+    """D-032, amended: wall minus tool time, approval waits and model-call time. A long build, a slow human or a
+    slow provider does not trip it."""
     timing = {"wall_ms": 400_000, "tool_ms": 330_000, "approval_ms": 30_000, "model_ms": 30_000}
     assert "turn.slow" not in sigs(tt(wall_ms=400_000, timing=timing, approval_ms=30_000))
-    slow = {"wall_ms": 420_000, "tool_ms": 100_000, "approval_ms": 0, "model_ms": 300_000}
-    t = tt(wall_ms=420_000, timing=slow)
-    assert t.harness_ms == 320_000 and "turn.slow" in sigs(t)
+    slow_model = {"wall_ms": 170_000, "tool_ms": 10_000, "approval_ms": 0, "model_ms": 150_000}  # 6 slow calls
+    t = tt(wall_ms=170_000, timing=slow_model)
+    assert t.harness_ms == 10_000 and "turn.slow" not in sigs(t)
+    overhead = {"wall_ms": 420_000, "tool_ms": 100_000, "approval_ms": 0, "model_ms": 100_000}
+    t = tt(wall_ms=420_000, timing=overhead)
+    assert t.harness_ms == 220_000 and "turn.slow" in sigs(t)
     assert next(f for f in trace.detect(t, TH) if f.signature == "turn.slow").severity == "bug"  # 5x the limit
-    # no timing summary (old session): recorded tool durations stand in
-    assert tt(wall_ms=100_000, tools=[ToolRow("bash", ms=70_000)]).harness_ms == 30_000
+    # no timing summary (old session): recorded tool and call durations stand in
+    assert tt(wall_ms=100_000, tools=[ToolRow("bash", ms=40_000)], calls=[Call(total_ms=30_000)]).harness_ms == 30_000
     assert "turn.slow" not in sigs(tt(wall_ms=100_000, tools=[ToolRow("bash", ms=70_000)]))
+
+
+def test_rule_model_slow_flags_the_route_per_call():
+    fast = tt(calls=[Call(route="p:a", total_ms=25_000, attempts=[{"route": "p:a", "outcome": "ok", "ms": 25_000}])] * 6)
+    assert not any(x.startswith("model.slow") for x in sigs(fast))  # six 25 s calls: a normal turn
+    slow = tt(calls=[Call(route="p:b", total_ms=70_000, attempts=[{"route": "p:a", "outcome": "fallback", "ms": 3_000},
+                                                                   {"route": "p:b", "outcome": "ok", "ms": 67_000}])])
+    assert "model.slow:p:b" in sigs(slow) and "model.slow:p:a" not in sigs(slow)  # the slow try, not the whole call
+    assert "model.slow:p:b" not in sigs(slow, model_call_s=90)
+    assert "model.slow:p:b" not in sigs(slow, model_call_routes={"p:b": 120.0})  # per-route limit wins
+    assert "model.slow:p:a" not in sigs(tt(calls=[Call(route="p:a", total_ms=20_000)], derived=True))
+    big = tt(calls=[Call(route="p:a", total_ms=400_000)])  # no attempts recorded: the call total counts
+    f = next(f for f in trace.detect(big, TH) if f.signature == "model.slow:p:a")
+    assert f.severity == "bug" and "slow, not the harness" in f.detail
+    assert Thresholds.of({"model_call_s": 45, "model_call_routes": {"p:a": 200, "p:z": -1}}).model_call_routes == {"p:a": 200.0}
 
 
 def test_turn_total_wall_is_a_separate_high_cap():
@@ -243,10 +263,11 @@ def test_turn_total_wall_is_a_separate_high_cap():
 def test_seat_trace_table_overrides_config(tmp_path):
     from exo.core.seats import parse
 
-    seat = parse({"name": "canary", "trace": {"turn_wall_s": 5, "turn_total_wall_s": 99}})
-    assert seat.trace == {"turn_wall_s": 5, "turn_total_wall_s": 99}
-    eng = engine(tmp_path, seat=seat, trace_cfg={"turn_wall_s": 45, "model_wait_s": 12})
+    seat = parse({"name": "canary", "trace": {"turn_wall_s": 5, "turn_total_wall_s": 99, "model_call_s": 150}})
+    assert seat.trace == {"turn_wall_s": 5, "turn_total_wall_s": 99, "model_call_s": 150}
+    eng = engine(tmp_path, seat=seat, trace_cfg={"turn_wall_s": 45, "model_wait_s": 12, "model_call_s": 20})
     assert eng.thresholds.turn_wall_s == 5 and eng.thresholds.turn_total_wall_s == 99
+    assert eng.thresholds.model_call_s == 150  # the seat's limit for a model call wins too
     assert eng.thresholds.model_wait_s == 12  # keys the seat does not set fall back to config
     assert engine(tmp_path / "x", trace_cfg={"turn_wall_s": 45}).thresholds.turn_wall_s == 45
 
@@ -258,8 +279,8 @@ def test_cli_trace_reads_the_sessions_seat_thresholds(tmp_path, monkeypatch):
     (tmp_path / "seats").mkdir()
     (tmp_path / "seats" / "canary.toml").write_text("[trace]\nturn_wall_s = 7\n")
     assert trace_cmd._thresholds("canary").turn_wall_s == 7.0
-    assert trace_cmd._thresholds("nobody").turn_wall_s == 60.0
-    assert trace_cmd._thresholds(None).turn_wall_s == 60.0
+    assert trace_cmd._thresholds("nobody").turn_wall_s == 30.0
+    assert trace_cmd._thresholds(None).turn_wall_s == 30.0
 
 
 # ---------------------------------------------------------------- cost (D-032)

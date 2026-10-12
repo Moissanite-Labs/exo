@@ -44,7 +44,8 @@ rest fall back to config.json (`exo trace` reads the seat of the session it show
 
 | signature | fires when | default |
 |---|---|---|
-| `turn.slow` | the harness's share of a turn over the limit: wall time minus tool time and approval waits (model plus overhead). A long build or a slow human does not fire it. Old sessions without a timing summary use the recorded tool durations. Bug at 5 times the limit | 60 s (`turn_wall_s`) |
+| `turn.slow` | the harness's own overhead in a turn over the limit: wall time minus tool time, approval waits and model-call time. A long build, a slow human or a slow provider does not fire it. Old sessions without a timing summary use the recorded tool and call durations. Bug at 5 times the limit | 30 s (`turn_wall_s`) |
+| `model.slow:<route>` | one model call (one try on one route) took longer in total than the limit. It flags the route, not the harness. A try that timed out is `model.timeout` instead. Bug at 5 times the limit. A route can have its own limit in `model_call_routes`, for example `{"nous:stepfun/step-5-preview:free": 180}` | 60 s (`model_call_s`) |
 | `turn.wall` | total turn wall time, work included, over a separate high cap | 30 min (`turn_total_wall_s`) |
 | `model.wait:<route>` | time to first token over the limit | 30 s (`model_wait_s`) |
 | `model.fallback:<route>`, `model.timeout:<route>` | a try failed and the call moved on. If the failure opened the route's circuit breaker the flag says how long the route is skipped, and that attempt in `model.call` carries `cooldown_s` (config `[models.breaker]`: `failures`, `cooldown_s`, `max_cooldown_s`; see PROVIDERS.md) | any; breaker 2 failures, 10 min, up to 1 h |

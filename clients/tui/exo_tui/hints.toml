@@ -38,7 +38,7 @@ text = "The harness noticed something odd and filed a finding: slow turns, fallb
 then = "/findings"
 
 [long_turn]
-text = "That turn was slow. The trace shows where the time went: model, tools or approvals."
+text = "That turn spent a long time in the harness itself, outside tools, approvals and the model. The trace shows where it went."
 then = "/trace"
 
 [code_find]
