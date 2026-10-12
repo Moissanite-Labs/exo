@@ -33,6 +33,8 @@ class Block(Static):
             self.update(Text("> " + self.text, style="bold"))
         elif self.kind == "error":
             self.update(Text(self.text, style="red"))
+        elif self.kind == "peer":  # a message from another session: its own colour and a bar, never the user's style
+            self.update(Text("| " + self.text.replace("\n", "\n| "), style="cyan"))
         elif self.kind == "warn":
             self.update(Text(self.text, style="yellow"))
         else:

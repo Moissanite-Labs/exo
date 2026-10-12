@@ -39,6 +39,8 @@ COMMANDS = {
     "default": ("model", "set the default model for new sessions: /default <ref> (same as /model default <ref>)"),
     "usage": ("model", "show context size, cost and the model in use"),
     "panel": ("tools", "reopen the last panel"),
+    "peers": ("tools", "list the other live sessions (Exo and Hermes) you can message"),
+    "send": ("tools", "message another session yourself: /send <peer> <text>"),
     "help": ("other", "list every command"),
 }
 LOCAL_COMMANDS = {n: d for n, (_, d) in COMMANDS.items()}
@@ -305,6 +307,12 @@ class ExoApp(App):
                 self.model = b.route  # the route that served, not the one asked for
         elif isinstance(b, s.TaskUpdated):
             self.agents[b.task_id] = b.status
+        elif isinstance(b, s.PeerMessage):  # D-026: a peer is not the user, so it gets its own block
+            self.add(Block(f"peer message from {b.sender} ({b.trust})\n{b.text}", "peer"))
+        elif isinstance(b, s.PeerDelivery):
+            if b.direction == "out" or b.state in ("denied", "expired"):
+                self.note(f"peer {b.peer}: {b.state}" + (f" ({b.detail})" if b.detail else ""),
+                          "warn" if b.state != "delivered" and b.state != "released" else "note")
         elif isinstance(b, s.UiPanel):
             self.on_ui_panel(b)
         elif isinstance(b, s.TasteUpdated):
@@ -333,7 +341,8 @@ class ExoApp(App):
         for m in messages:
             text = "".join(p.get("text", "") for p in m.get("content", []) if p.get("type") == "text")
             if m["role"] == "user" and text:
-                self.add(Block(text, "user"))
+                peer = (m.get("meta") or {}).get("peer")
+                self.add(Block(text, "peer") if peer else Block(text, "user"))
             elif m["role"] == "assistant":
                 if text:
                     self.add(Block(text, "assistant"))
@@ -423,6 +432,19 @@ class ExoApp(App):
             self.exit()
         elif name == "restart":
             await self.restart()
+        elif name == "peers":
+            resp = await self.post(s.Peers(action="list", session=self.session))
+            if resp.ok:
+                rows = resp.result.get("peers", [])
+                self.note("\n".join([f"you are {resp.result.get('me')}; {len(rows)} peer(s)"] + [
+                    f"  {r['name']}  [{r['platform']}, {r['state']}]  {r.get('cwd') or ''}  {r.get('title') or ''}"
+                    for r in rows] + [f"  held for you: {h['msg_id']} from {h['from']}" for h in resp.result.get("held", [])]))
+        elif name == "send":
+            to, _, text = args.partition(" ")
+            if not to or not text.strip():
+                self.note("usage: /send <peer> <text>  (see /peers)", "warn")
+            else:
+                await self.post(s.Peers(action="send", to=to, text=text.strip(), session=self.session, via="human"))
         elif name == "clear":
             self.clear_transcript()
         elif name == "cwd":
