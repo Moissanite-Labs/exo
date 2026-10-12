@@ -1,0 +1,185 @@
+"""The chat web API: plain routes over protocol commands. No HTTP in here, so tests call it directly.
+
+``dispatch(centre, method, path, query, body)`` returns ``(status, data)`` or ``None`` when the path is
+not one of these routes. Every write validates its input, then sends one protocol command through the
+centre's source. A core that does not handle a command yet answers 501.
+
+  GET  /api/chat/sessions                  session.list
+  POST /api/chat/sessions                  session.create        {title, seat, model, cwd}
+  GET  /api/chat/sessions/<id>             session.get           the transcript so far
+  POST /api/chat/sessions/<id>/send        turn.send             {text, mode}
+  POST /api/chat/sessions/<id>/interrupt   turn.interrupt
+  GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
+  POST /api/feedback                       feedback.send         {session, verdict, message_id, text}
+  POST /api/ui/respond                     ui.respond            {panel_id, action, value}
+  GET  /api/tasks                          tasks.list
+  GET  /api/schedule                       schedule.edit list
+  POST /api/schedule                       schedule.edit         {action, job_id, when, prompt, title, ...}
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, Optional, Tuple
+
+from exo.protocol import schema as s
+
+from .source import SourceError
+
+MAX_TEXT = 50_000
+MODES = ("send", "queue", "steer")
+VERDICTS = ("accept", "edit", "reject", "should_have_been")
+PANEL_ACTIONS = ("opened", "dismissed", "acted", "ignored")
+SCHEDULE_ACTIONS = ("list", "add", "remove", "pause", "resume", "run_now")
+TIERS = ("fast", "standard", "deep")
+
+Reply = Tuple[int, Dict[str, Any]]
+
+
+class BadRequest(Exception):
+    pass
+
+
+def _str(body: Dict[str, Any], key: str, required: bool = False, limit: int = 2000) -> str:
+    v = body.get(key)
+    if v is None or v == "":
+        if required:
+            raise BadRequest("{} is required".format(key))
+        return ""
+    if not isinstance(v, str):
+        raise BadRequest("{} must be text".format(key))
+    if len(v) > limit:
+        raise BadRequest("{} is too long".format(key))
+    return v
+
+
+def _opt(body: Dict[str, Any], key: str) -> Optional[str]:
+    return _str(body, key) or None
+
+
+def _choice(body: Dict[str, Any], key: str, allowed: tuple, default: Optional[str] = None) -> str:
+    v = body.get(key, default)
+    if v not in allowed:
+        raise BadRequest("{} must be one of {}".format(key, ", ".join(allowed)))
+    return v
+
+
+def error_reply(exc: Exception) -> Reply:
+    if isinstance(exc, BadRequest):
+        return 400, {"error": str(exc)}
+    if isinstance(exc, SourceError):
+        status = 404 if exc.code == "not_found" else 501 if exc.code in ("unsupported", "unknown_command") else 502
+        return status, {"error": exc.message, "code": exc.code}
+    return 502, {"error": "{}: {}".format(type(exc).__name__, exc)}
+
+
+async def dispatch(centre, method: str, path: str, q: Dict[str, Any], body: Dict[str, Any]) -> Optional[Reply]:
+    parts = [p for p in path.split("/") if p]            # ["api", ...]
+    if len(parts) < 2 or parts[0] != "api":
+        return None
+    handler = _route(method, parts[1:], "/".join(parts[1:]))
+    if handler is None:
+        return None
+    if handler is False:
+        return 405, {"error": "method not allowed"}
+    try:
+        return 200, await handler(centre, parts[1:], q, body)
+    except Exception as exc:
+        return error_reply(exc)
+
+
+def _route(method: str, p: list, key: str):
+    get, post = method == "GET", method == "POST"
+    table = {
+        "chat/sessions": (_sessions, _create),
+        "chat/panels": (_panels, None),
+        "feedback": (None, _feedback),
+        "ui/respond": (None, _ui_respond),
+        "tasks": (_tasks, None),
+        "schedule": (_schedule_list, _schedule_edit),
+    }
+    if key in table:
+        g, po = table[key]
+        return (g if get else po if post else None) or False
+    if len(p) == 3 and p[:2] == ["chat", "sessions"]:
+        return _transcript if get else False
+    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt"):
+        return (_send if p[3] == "send" else _interrupt) if post else False
+    return None
+
+
+async def _sessions(c, p, q, body):
+    try:
+        limit = min(int(q["limit"][0]), 500) if q.get("limit") else 100
+    except ValueError:
+        raise BadRequest("limit must be a number")
+    res = await c.source.call(s.SessionList(limit=limit))
+    return {"sessions": res.get("sessions") or []}
+
+
+async def _create(c, p, q, body):
+    res = await c.source.call(s.SessionCreate(title=_str(body, "title", limit=200), seat=_opt(body, "seat"),
+                                              model=_opt(body, "model"), cwd=_opt(body, "cwd")))
+    return {"session": res.get("session")}
+
+
+async def _transcript(c, p, q, body):
+    res = await c.source.call(s.SessionGet(session=p[2]))
+    return {"session": res.get("session"), "messages": res.get("messages") or [], "seq": c.state.seq}
+
+
+async def _send(c, p, q, body):
+    text = _str(body, "text", required=True, limit=MAX_TEXT)
+    mode = _choice(body, "mode", MODES, "send")
+    return await c.source.call(s.TurnSend(session=p[2], text=text, mode=mode))
+
+
+async def _interrupt(c, p, q, body):
+    return await c.source.call(s.TurnInterrupt(session=p[2]))
+
+
+async def _panels(c, p, q, body):
+    return {"panels": sorted(c.panels.values(), key=lambda x: x["seq"]), "seq": c.state.seq}
+
+
+async def _feedback(c, p, q, body):
+    verdict = _choice(body, "verdict", VERDICTS)
+    text = _str(body, "text", limit=MAX_TEXT)
+    if verdict in ("edit", "should_have_been") and not text.strip():
+        raise BadRequest("text is required for {}".format(verdict))
+    return await c.source.call(s.FeedbackSend(session=_str(body, "session", required=True),
+                                              verdict=verdict, message_id=_opt(body, "message_id"), text=text))
+
+
+async def _ui_respond(c, p, q, body):
+    value = body.get("value") or {}
+    if not isinstance(value, dict):
+        raise BadRequest("value must be an object")
+    action = _choice(body, "action", PANEL_ACTIONS)
+    pid = _str(body, "panel_id", required=True)
+    res = await c.source.call(s.UiRespond(panel_id=pid, action=action, value=value))
+    if action == "dismissed":
+        c.panels.pop(pid, None)
+    return res
+
+
+async def _tasks(c, p, q, body):
+    res = await c.source.call(s.TasksList(session=(q.get("session") or [None])[0]))
+    return {"tasks": res.get("tasks") or []}
+
+
+async def _schedule_list(c, p, q, body):
+    res = await c.source.call(s.ScheduleEdit(action="list"))
+    return {"jobs": res.get("jobs") or []}
+
+
+async def _schedule_edit(c, p, q, body):
+    action = _choice(body, "action", SCHEDULE_ACTIONS)
+    job = _opt(body, "job_id")
+    if action == "add":
+        _str(body, "when", required=True, limit=100)
+        _str(body, "prompt", required=True, limit=MAX_TEXT)
+    elif action != "list" and not job:
+        raise BadRequest("job_id is required for {}".format(action))
+    return await c.source.call(s.ScheduleEdit(
+        action=action, job_id=job, when=_str(body, "when", limit=100), prompt=_str(body, "prompt", limit=MAX_TEXT),
+        title=_str(body, "title", limit=200), seat=_opt(body, "seat"), tier=_choice(body, "tier", TIERS, "fast"),
+        deliver=_str(body, "deliver", limit=100) or "notice"))

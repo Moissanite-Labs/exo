@@ -138,7 +138,14 @@ CORRECTION_CUES: tuple[tuple[str, re.Pattern, float], ...] = tuple(
         ("not-what", r"\b(that'?s|this is) not (what|it|right)\b", 1.0),
         ("undo", r"\b(undo|revert|roll ?back|redo)\b", 0.75),
         ("too", r"\btoo (long|short|verbose|much|many|formal|wordy)\b", 0.75),
+        ("label", r"^\W*(important\s+)?corrections?\s*[:\-]", 1.5),
+        ("actually", r"^\W*actually\b\s*[,:]?\s*\S", 1.0),
+        ("not-x-y", r"^\W*not\s+(?!(?:sure|yet|now|bad|really|too|much|at all|only|just|quite|exactly)\b)"
+                    r"[^,.;:!?]{1,60},\s*\S", 1.0),
     ))
+
+# Shouted NOT is case sensitive: "use Y, NOT X" is a correction, "not" in running prose is not.
+CORRECTION_CUES += (("caps-not", re.compile(r"\bNOT\b"), 1.0),)
 
 RULING_CUES: tuple[tuple[str, re.Pattern, float], ...] = tuple(
     (n, re.compile(p, re.IGNORECASE), w) for n, p, w in (
@@ -229,7 +236,7 @@ def classify_sentence(text: str, *, after_agent: bool) -> tuple[str | None, floa
     # A general instruction beats an instance-level complaint: "don't ever X again" is a rule.
     if strong and (imperative or r_score >= 1.5):
         return RULING, r_score, r_cues + (["imperative"] if imperative else [])
-    if after_agent and c_score >= 1.0:
+    if (after_agent or "label" in c_cues) and c_score >= 1.0:
         return CORRECTION, c_score, c_cues
     if imperative and r_score >= 1.0:
         return RULING, r_score, r_cues + ["imperative"]

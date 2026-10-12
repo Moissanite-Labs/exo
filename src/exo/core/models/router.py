@@ -253,6 +253,7 @@ class Router:
                 started = True
             elif ev.kind in ("usage", "done"):
                 ev.usage = self.price(route, ev.usage)
+                ev.route = route.ref  # the route that served this call, after any fallback
                 if ev.kind == "done":
                     self.record_success(cred.id, route.model)
                     if ev.message is not None:

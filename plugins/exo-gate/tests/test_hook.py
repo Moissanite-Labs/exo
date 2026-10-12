@@ -148,10 +148,20 @@ def test_no_store_still_gates_with_defaults():
     assert call(ctx, "read_file", {"path": "x"}) is None
 
 
-def test_store_without_key_logs_only(example_store):
+def test_store_without_key_generates_the_seat_key_and_ledgers(example_store, tmp_path, monkeypatch):
+    import os
+    import stat
+    monkeypatch.setenv("EXO_SEAT", "scout")
     _, ctx = make_gate(example_store)
     assert call(ctx, "terminal", {"command": "ls"}) is None
-    assert not (example_store / "ledger.sqlite").exists()
+    key = tmp_path / "exo-home" / "keys" / "scout.key"
+    assert key.is_file() and stat.S_IMODE(os.stat(key).st_mode) == 0o600
+    evs = events(example_store)
+    assert evs and evs[-1]["body"]["tool"] == "terminal"
+    with Ledger(example_store / "ledger.sqlite") as led:
+        assert led.verify()["ok"]
+    seed = key.read_text().strip()
+    assert seed not in "".join(str(e) for e in evs)  # key material never lands in the ledger
 
 
 def test_bad_policy_file_falls_back_to_defaults(keyed_store):
@@ -274,3 +284,30 @@ def test_model_failure_keeps_the_rule_outcome(keyed_store):
 
 def test_decision_model_is_on_by_default():
     assert hook.resolve_settings(env={}).decision_model is True
+
+
+def test_decision_call_goes_to_jev_first_and_the_route_is_recorded(keyed_store):
+    store, key = keyed_store
+    calls = []
+    ctx = gated(store, key, decision_router("ask", calls))
+    r = call(ctx, "read_file", {"path": "x"})
+    assert r["action"] == "approve" and len(calls) == 1
+    assert str(calls[0].url).startswith("https://x/v1")  # the fake transport saw the jev call
+    dm = events(store)[-1]["body"]["decision_model"]
+    assert dm == {"verdict": "ask", "route": "jev:jev-latest", "source": "decision"}
+
+
+def test_fallback_route_is_recorded_when_jev_fails(keyed_store):
+    import httpx
+    from exo.core.models import Router
+
+    store, key = keyed_store
+
+    def handler(req):
+        return httpx.Response(500, json={"error": "down"})
+    router = Router(roles={"decision": ["jev:jev-latest"]}, env={},
+                    client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                    providers={"jev": {"transport": "decision", "base_url": "https://x/v1", "roles": ["decision"]}})
+    ctx = gated(store, key, router)
+    assert call(ctx, "read_file", {"path": "x"}) is None  # the model failed; the rule outcome stands
+    assert "decision_model" not in events(store)[-1]["body"]

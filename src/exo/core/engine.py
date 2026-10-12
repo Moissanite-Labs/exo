@@ -28,11 +28,13 @@ from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
 from exo.core.models.router import Router
 from exo.core.plugins import PluginManager
+from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
 from exo.core.seats import Seat, SeatError, list_seats
 from exo.core.seats import load as load_seat
-from exo.core.sessions import SessionStore
+from exo.core.sessions import SessionLocked, SessionStore
 from exo.core.skills import SkillIndex, pack_dir, register_skill_tool
+from exo.core.tools.builtin import ui as ui_tool
 from exo.core.tools.registry import Block, Registry, ToolContext, default_registry
 from exo.core.types import ContentPart, Message, ToolCall, ToolResult, ToolSpec, Usage, to_dict
 from exo.protocol import schema as s
@@ -176,7 +178,7 @@ class CoreEngine:
                  seat: Seat | None = None, skill_folders: Iterable[str | os.PathLike] | None = None,
                  mcp: dict[str, dict[str, Any]] | None = None,
                  channels: dict[str, dict[str, Any]] | None = None,
-                 tree_cfg: dict[str, Any] | None = None, **loop_kw: Any) -> None:
+                 tree_cfg: dict[str, Any] | None = None, schedule: bool = False, **loop_kw: Any) -> None:
         self.home = Path(home)
         self.cwd = cwd or os.getcwd()
         self.store = SessionStore(self.home / "sessions.sqlite")
@@ -201,6 +203,8 @@ class CoreEngine:
                                           if skill_folders is None else skill_folders, self.plugins.skills.values(),
                                           only=seat.skill_load if seat else None)
         register_skill_tool(self.registry, self.skills)
+        if self.registry.get("ui") is None:
+            ui_tool.register(self.registry, lambda body, sid: self.hub.publish(body, sid))  # D-014 panels
         self.mcp = McpManager({**(mcp or {}), **(seat.mcp if seat else {})}, env)
         self._started: asyncio.Future | None = None
         system_prompt = "\n\n".join(p for p in (system_prompt, seat.soul if seat else "", self.skills.prompt()) if p)
@@ -210,8 +214,18 @@ class CoreEngine:
                          context=ContextAdapter(tree, slots.context, slots.memory), memory=slots.memory,
                          tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
-        self.agents = Delegator(self, delegation)  # the delegate tool and the tasks table
+        signer = None
+        if seat:  # receipts are signed with the seat key (made on first use, mode 0600)
+            from exo import crypto
+            from exo.core.seats import ensure_key
+            try:
+                signer = crypto.Signer.from_file(seat.name, ensure_key(seat.key_path(self.home)))
+            except Exception:
+                signer = None
+        self.agents = Delegator(self, delegation, signer=signer)  # the delegate tool and the tasks table
         self.agents.install()
+        self.scheduler = Scheduler(self)
+        self._schedule = schedule  # serve turns the cron loop on; tests and one-shot engines leave it off
 
     def _specs(self) -> list[ToolSpec]:
         """Specs the model sees: every toolset, or the seat's (``mcp`` matches every ``mcp:<server>``)."""
@@ -225,6 +239,8 @@ class CoreEngine:
         """Connect MCP servers once (idempotent; the first command triggers it)."""
         if self._started is None:
             self._started = asyncio.ensure_future(self.mcp.start(self.registry))
+            if self._schedule:
+                self.scheduler.start()
         await asyncio.shield(self._started)
 
     async def start_channels(self, link: Any) -> dict[str, str | None]:
@@ -255,6 +271,7 @@ class CoreEngine:
 
     async def close(self) -> None:
         await self.stop_channels()
+        await self.scheduler.stop()
         if self._started is not None:
             await self.mcp.close()
             self._started = None
@@ -425,13 +442,34 @@ class CoreEngine:
 
     async def _turn_send(self, b: s.TurnSend) -> dict[str, Any]:
         self._info(b.session)
+        try:
+            self.store.assert_open(b.session)
+        except SessionLocked as exc:  # a finished child session takes no new turns
+            raise CommandFailed("session_locked", str(exc)) from None
         if b.mode == "steer" and self.loop.state(b.session).running:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer")
             return {"steered": True}
-        task = asyncio.create_task(self.loop.send(b.session, b.text, list(b.parts), mode=b.mode))
+        task = asyncio.create_task(self._turn(b))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return {"accepted": True}
+
+    async def _turn(self, b: s.TurnSend) -> Any:
+        """One turn with the lifecycle hooks around it (the learning loop listens on these)."""
+        hooks = self.plugins.hooks
+        await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
+        try:
+            return await self.loop.send(b.session, b.text, list(b.parts), mode=b.mode)
+        finally:
+            await hooks.afire("on_turn_end", session_id=b.session)
+
+    async def _feedback_send(self, b: s.FeedbackSend) -> dict[str, Any]:
+        from exo import learn  # outside the core; learning off just records nothing
+        return learn.handle_feedback(self, b)
+
+    async def _ui_respond(self, b: s.UiRespond) -> dict[str, Any]:
+        from exo import learn
+        return learn.handle_ui_respond(self, b)
 
     async def _turn_interrupt(self, b: s.TurnInterrupt) -> dict[str, Any]:
         self._info(b.session)
@@ -480,6 +518,12 @@ class CoreEngine:
             raise CommandFailed("not_found", f"no command /{b.name}")
         out = await _maybe_await(cmd.handler(b.args))
         return {"output": out if isinstance(out, (str, dict, list)) or out is None else str(out)}
+
+    async def _schedule_edit(self, b: s.ScheduleEdit) -> dict[str, Any]:
+        out = await handle_schedule_edit(self, b)
+        if "error" in out:
+            raise CommandFailed("bad_request", out["error"])
+        return out
 
     async def _skills_list(self, b: s.SkillsList) -> dict[str, Any]:
         return {"skills": self.skills.listing()}
@@ -532,11 +576,15 @@ def create(seat: str | None = None) -> CoreEngine:
     folders = [*(st.skill_folders if st else []), cfg.home / "skills"]
     if pack := pack_dir():
         folders.append(pack)
-    return CoreEngine(cfg.home, models, plugins=pm, cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
+    eng = CoreEngine(cfg.home, models, plugins=pm, cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
                       mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
-                      delegation=cfg.get("delegation"),
+                      delegation=cfg.get("delegation"), schedule=cfg.get("schedule", True) is not False,
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
                             if k in ("leaf_size", "tail_messages", "view_budget")})
+    if cfg.get("learn", {}).get("enabled", True) is not False:
+        from exo import learn
+        learn.attach(eng)
+    return eng
 
 
 __all__ = ["ContextAdapter", "CoreEngine", "HubBus", "SqliteLog", "create"]

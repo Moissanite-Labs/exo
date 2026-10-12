@@ -397,3 +397,26 @@ def test_summary_prompt_is_lifted_text():
     p = summary_prompt("X", 100, previous="P")
     assert "You are a summarization agent creating a context checkpoint" in p
     assert "PREVIOUS SUMMARY:\nP" in p and chr(0x2014) not in p
+
+
+def test_usage_updated_model_names_the_route_that_served_after_fallback(tmp_path):
+    import asyncio
+
+    from exo.core.loop import Loop
+    from exo.core.models import FakeProvider, Router
+    from exo.core.models.fake import rate_limited
+    from exo.core.sessions import SessionStore
+    from exo.protocol import schema as ev
+
+    router = Router(roles={"main": ["p:big", "b:small"]}, catalog={"providers": {}, "models": {}, "roles": {}},
+                    instances={"p": FakeProvider([rate_limited()], name="p"), "b": FakeProvider(["hi"], name="b")},
+                    env={})
+    store = SessionStore(tmp_path / "s.sqlite")
+    loop = Loop(store, router.provider("main"), model="p:big")
+
+    async def go():
+        info = await loop.create_session()
+        await loop.send(info.id, "hello")
+    asyncio.run(go())
+    usage = [e.body for e in store.events_since(0) if isinstance(e.body, ev.UsageUpdated)]
+    assert usage and usage[-1].model == "b:small"
