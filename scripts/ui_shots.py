@@ -7,6 +7,7 @@ Then convert with rsvg-convert, or any SVG renderer. Not part of the test suite.
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -28,6 +29,7 @@ async def settle(pilot, secs: float = 0.3) -> None:
 
 async def shoot(out: Path, name: str, body, *, boot: bool = False) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="exo-shot"))
+    subprocess.run(["git", "init", "-q", str(tmp)], check=True)  # a git cwd, so no "not inside a git repo" notice
     eng = CoreEngine(tmp / "home", {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
                      cwd=str(tmp), env={})
     app = ExoApp(LocalClient(eng), seat="exo-razi", home=str(tmp / "ui"), boot_anim=boot)

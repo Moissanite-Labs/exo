@@ -110,7 +110,7 @@ class Block(Static):
             t.append("tip", style=rich_style("cold", "italic"))
             t.append(f" {DOT} {body}")
             self.paint(t)
-        elif k == "memory":
+        elif k in ("memory", "job"):  # cold system one-liners
             self.paint(Text(self.text, style=rich_style("cold")))
         elif k == "warn":
             self.paint(Text(self.text, style=rich_style("accent2")))
@@ -294,7 +294,7 @@ class StatusStrip(Widget):
 
     def __init__(self) -> None:
         super().__init__(id="status")
-        self.d: dict[str, Any] = {"model": "", "requested": "", "ctx": 0, "window": 0, "cache": None, "cost": 0.0,
+        self.d: dict[str, Any] = {"model": "", "requested": "", "ctx": 0, "window": 0, "cache": None, "cost": "\u2013",
                                   "findings": 0}
 
     def set(self, **d: Any) -> None:
@@ -330,7 +330,7 @@ class StatusStrip(Widget):
             t.append("-" if d["cache"] is None else f"{round(100 * d['cache'])}%", style=rich_style("fg2"))
         sep()
         label("COST")
-        t.append(f"${d['cost']:.2f}", style=rich_style("fg2"))
+        t.append(str(d["cost"]), style=rich_style("accent2" if d["cost"] == "unknown" else "fg2"))
         if d["findings"]:
             sep()
             n = d["findings"]
