@@ -286,6 +286,8 @@ class Loop:
                 elif pe.kind == "reasoning" and pe.text:
                     s.reasoning.append(pe.text)
                     await self._emit(ev.ReasoningDelta(message_id=msg_id, text=pe.text), session)
+                elif pe.kind == "notice":
+                    await self._emit(ev.Notice(text=pe.text, level="warn"), session)
                 elif pe.kind == "tool_call" and pe.tool_call is not None:
                     s.calls.append(pe.tool_call)
                 elif pe.kind == "usage" and pe.usage is not None:

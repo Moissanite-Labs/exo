@@ -225,7 +225,8 @@ class Router:
         ``done`` or ``error``."""
         tried: list[str] = []
         last: ProviderEvent | None = None
-        for route in self.chain(role):
+        chain = self.chain(role)
+        for i, route in enumerate(chain):
             while (picked := self._pick(route, self.clock())) is not None:
                 cred, sole = picked
                 tried.append(route.ref)
@@ -235,6 +236,11 @@ class Router:
                 if not failed:
                     return
                 last = failed[0]
+                nxt = next((r for r in chain[i:] if self._pick(r, self.clock())), None)
+                if nxt is not None:  # tell the user why the wait ended and where the call goes next
+                    why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
+                           if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
+                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}")
         yield self._exhausted(role, tried, last)
 
     async def _attempt(self, route: Route, cred: Credential, sole: bool, messages: list[Message],

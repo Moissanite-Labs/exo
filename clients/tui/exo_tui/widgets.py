@@ -33,6 +33,8 @@ class Block(Static):
             self.update(Text("> " + self.text, style="bold"))
         elif self.kind == "error":
             self.update(Text(self.text, style="red"))
+        elif self.kind == "warn":
+            self.update(Text(self.text, style="yellow"))
         else:
             self.update(Text(self.text, style="dim"))
 
