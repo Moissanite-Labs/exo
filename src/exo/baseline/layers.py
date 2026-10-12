@@ -214,17 +214,19 @@ def resolve(house: Sequence[HouseItem], user: Sequence[UserItem], *, pins: set[s
 
     for h in house:
         matches = sorted((u for u in active if _matches(u, h)), key=lambda u: (-u.weight, u.id))
-        ruling = next((u for u in matches if u.source == "ruling"), None)
-        pinned_user = next((u for u in matches if u.id in pins), None)
+        # A user item already listed for an earlier house item is spent: it cannot win here too, so
+        # the house item falls through to the next unused match, or to itself, instead of vanishing.
+        avail = [u for u in matches if u.id not in used]
+        ruling = next((u for u in avail if u.source == "ruling"), None)
+        pinned_user = next((u for u in avail if u.id in pins), None)
         if ruling is not None:
             winner = ruling
         elif h.id in pins:
             winner = None
         else:
-            winner = pinned_user or (matches[0] if matches else None)
+            winner = pinned_user or (avail[0] if avail else None)
         if winner is not None:
-            if winner.id not in used:          # one learned item that covers two house items is listed once
-                out.append(from_user(winner, h))
+            out.append(from_user(winner, h))   # one user item that covers two house items is listed once
         elif h.id in pins:
             out.append(Entry(h.id, h.claim, "pinned", "[pinned]", start, h.cls, h.id))
         elif h.id not in offs:
