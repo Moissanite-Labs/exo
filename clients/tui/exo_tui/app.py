@@ -131,7 +131,7 @@ class ExoApp(App):
 
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
                  seat: str | None = None, title: str = "", home: str | None = None,
-                 auto_intro: bool = False, boot_anim: bool = False) -> None:
+                 auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False) -> None:
         super().__init__()
         self.motion = not th.reduced_motion()
         self.boot_anim = boot_anim and self.motion  # only the real entry point asks; never under reduced motion
@@ -188,6 +188,7 @@ class ExoApp(App):
         self.commands: list[dict[str, Any]] = []
         self.onb = Onboarding(home or exo_home())  # first run and seen hints (D-030)
         self.auto_intro = auto_intro  # only the real entry point turns this on; tests and daemons never do
+        self.provider_check = provider_check  # D-034 first-run note; the real entry point only, like auto_intro
         self.tutorial = False  # mirrors config tutorial.enabled
         self.hints = load_catalog()
         self.hint_budget = 1  # one tip per turn
@@ -371,7 +372,8 @@ class ExoApp(App):
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", "ready")
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
-            self.run_worker(self.first_run_providers(), exit_on_error=False)
+            if self.provider_check:
+                self.run_worker(self.first_run_providers(), exit_on_error=False)
             if self.auto_intro and not self.resume and not self.onb.onboarded:
                 await self.intro("first")
         except Exception as exc:
