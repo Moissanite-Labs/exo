@@ -41,11 +41,11 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-008 Waves of parallel agents | `docs/STANDALONE.md` §6 "Phased build plan" | n/a | §8 | WP §29 (stale) |
 | D-009 Exo is standalone, Hermes is a source | `docs/STANDALONE.md` §0 | n/a | §1 | WP §23 |
 | D-010 Standalone core, protocol first | `docs/STANDALONE.md` §5, `docs/CORE-V2-INTERFACES.md` | §2 | §2 | WP §10, §11 |
-| D-011 Store v2 | `docs/STORE-V2.md` §2 | MISSING (store commands) | MISSING | WP §18 (as designed) |
-| D-012 One learning loop | `docs/LEARNING.md` | §2 (accept, edit, reject keys) | MISSING | WP §6, §21 |
+| D-011 Store v2 | `docs/STORE-V2.md` §2 | §11 (store commands) | MISSING | WP §18 (as designed) |
+| D-012 One learning loop | `docs/LEARNING.md` | §2 (accept, edit, reject keys) | §9 "Work on the learning loop" | WP §6, §21 |
 | D-013 UniiChat context model in the core loop | `docs/MEMORY-MODEL.md` "Context assembly per turn" | §4 | §4 "Memory provider hooks" | WP §16 |
-| D-014 One surface, panels | `docs/PANELS.md`, `docs/UI.md` | §3 (`/panel`) | MISSING (how a tool opens a panel) | WP §22 (stale: says not built) |
-| D-015 Decision models | `docs/PROVIDERS.md` "Providers" | n/a | MISSING | WP §13 |
+| D-014 One surface, panels | `docs/PANELS.md`, `docs/UI.md` | §3 (`/panel`) | §9 "Open a panel from a tool" | WP §22 (stale: says not built) |
+| D-015 Decision models | `docs/PROVIDERS.md` "Providers" | n/a | §9 "Call a decision model" | WP §13 |
 | D-016 Agent wire, SYM-2P | `docs/AGENT-WIRE.md` | n/a | MISSING | MISSING |
 | D-017 Subagents on the cheapest model | `docs/AGENT-WIRE.md` "Model tiers" | MISSING | §5 (`[models] tier`) | MISSING |
 | D-018 Provider agnostic, user-chosen models | `docs/PROVIDERS.md` | §1, §3 (`/model`) | §5 | WP §12 |
@@ -64,7 +64,8 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-031 UI/UX overhaul, terminal half | `docs/UI.md`, `docs/ui/WEB.md` | §2 | §7 (colour token test) | MISSING |
 | D-032 Background jobs, principal capture, trace, commands | `docs/JOBS.md`, `docs/MEMORY-MODEL.md` "Principal capture is a mechanism", `docs/TRACE.md` "Cost", `docs/TOOLS.md`, `docs/HANDOFF.md`, `docs/SEATS.md` | §3, §4, §5, §9 | §4, §5 | MISSING |
 | D-033 Approvals bound to exact text, who approves, outbound scrub | `docs/GATE.md` | §6 | §3 | MISSING (WP §14.3 stale: "allow always" there is a plain rule key) |
-| Slash commands (the full list) | MISSING (code only: `COMMANDS` in `clients/tui/exo_tui/app.py`, and `_builtin_command` in `src/exo/core/engine.py`) | §3 | §2 "Extend through `command.run`" | WP §22 (the three prefixes only) |
+| Slash commands (the full list) | `docs/COMMANDS.md` Part 1 | §3 | §2 "Extend through `command.run`" | WP §22 (the three prefixes only) |
+| CLI commands (`exo ...`) | `docs/COMMANDS.md` Part 2 | §9 (trace), §11 (store and ledger) | §2 "Extend through `command.run` built-ins" | n/a |
 | Plugins, hooks and slots | `docs/STANDALONE.md` §4, `docs/CORE-V2-INTERFACES.md` | n/a | §4 | WP §17 |
 | Tools and the registry | `docs/TOOLS.md` | n/a | §3 | WP §14.1 |
 | Skills and MCP | `docs/SEATS.md` "Skills", "MCP" | n/a | §5, §6 | WP §17 (partial) |
@@ -73,12 +74,12 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Delegation and subagents | `docs/AGENT-WIRE.md` §6 | MISSING | MISSING | MISSING |
 | Scheduled jobs | `docs/SCHEDULE.md` | MISSING (no user entry point is documented yet) | MISSING | WP §28 (planned only) |
 | Handoff | `docs/HANDOFF.md` | §3 (`/handoff`) | n/a | MISSING |
-| Signed ledger, crypto and the principal store | `docs/CORE.md`, `docs/STORE-V2.md` | MISSING | MISSING | WP §18, §19 |
-| Retrieval | `docs/STORE-V2.md` §3, `docs/CORE.md` "Python API" | MISSING | MISSING | WP §20 |
-| Eval, ask queue, brief, consolidate | MISSING | MISSING | MISSING | WP §6, §21 |
+| Signed ledger, crypto and the principal store | `docs/CORE.md`, `docs/STORE-V2.md` | §11 | MISSING | WP §18, §19 |
+| Retrieval | `docs/STORE-V2.md` §3, `docs/CORE.md` "Python API" | §11 (`exo find`, `exo ctx`) | MISSING | WP §20 |
+| Eval, ask queue, brief, consolidate | `docs/TOOLS-CLI.md` | MISSING (a pointer in §11 only) | §9 "Work on the learning loop" (consolidate and proposals) | WP §6, §21 |
 | Installer | `docs/INSTALL.md` | §1 | n/a | n/a |
 | Web client (command centre) | `plugins/exo-command/README.md`, `docs/ui/WEB.md` | §2 | n/a | MISSING |
-| Bus (agent to agent relay) | `plugins/exo-bus/README.md` | MISSING | MISSING | WP §27 (named, not explained) |
+| Bus (agent to agent relay) | `plugins/exo-bus/README.md` | MISSING | §9 "Use the bus" | WP §27 (named, not explained) |
 | Upstream tracking (`exo upstream`) | `docs/PINNING.md`, `docs/STANDALONE.md` §3 | n/a | MISSING | WP §23 |
 
 ## Whitepaper gaps
@@ -97,25 +98,17 @@ The whitepaper pass is separate. It batches these per wave.
 
 ## Open gaps
 
-Technical docs filled in this pass: `docs/LEARNING.md` (D-012), `docs/SCHEDULE.md` (scheduled jobs) and
-`docs/HANDOFF.md` (`/handoff`). Still open:
+Technical docs filled so far: `docs/LEARNING.md` (D-012), `docs/SCHEDULE.md` (scheduled jobs), `docs/HANDOFF.md`
+(`/handoff`), `docs/COMMANDS.md` (every slash command and `exo` subcommand) and `docs/TOOLS-CLI.md` (`exo eval`,
+`ask`, `brief`, `consolidate`). `docs/CORE.md` and the protocol comments in `src/exo/protocol/schema.py` now state the
+real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Still open:
 
-1. **Slash command reference.** The list is in the user guide and in code. A technical page that says which
-   commands are client-side, core built-ins or plugin commands, with arguments, would help clients other than the TUI.
-2. **Store and ledger commands.** `exo init`, `find`, `get`, `ctx`, `links`, `lint`, `graph`, `index`, `log` and
-   `keygen` have no user-guide section. `docs/CORE.md` is dated (it says v0.1.0).
-3. **Eval, ask queue, brief and consolidate.** No technical doc for `exo eval`, `exo ask`, `exo brief` or
-   `exo consolidate`.
-4. **Delegation.** The `delegate` tool, its tiers and limits are in `docs/AGENT-WIRE.md` only. The user guide and
+1. **Delegation.** The `delegate` tool, its tiers and limits are in `docs/AGENT-WIRE.md` only. The user guide and
    developer guide have no section.
-5. **Scheduling from the user's side.** `schedule.edit` is a protocol command, and no client or tool entry point is
+2. **Scheduling from the user's side.** `schedule.edit` is a protocol command, and no client or tool entry point is
    documented. Find it, or build it, then add a user-guide section.
-6. **Panels from a tool.** The developer guide has no recipe for opening a `ui` panel from a tool (see
-   `docs/PANELS.md`).
-7. **Decision models in code.** No developer recipe for `ask_choice` and `ask_score` (see `docs/PROVIDERS.md`).
-8. **Bus.** The user and developer guides do not cover bus seats or the relay.
-9. **Learning loop for developers.** How to add a proposal type or a promotion rule is not written.
-10. **Stale reference pages.** `docs/CORE.md` and the protocol comments in `src/exo/protocol/schema.py` still
-    count commands and events from an earlier wave. `docs/STANDALONE.md` and `docs/WAVE-3.md` are plans, not
-    current descriptions.
-11. **D-027.** Reserved in D-026 and never written. If it is written, add its row here.
+3. **Bus for users.** The developer guide has a bus recipe (§9). The user guide does not cover bus seats or the relay.
+4. **Eval, ask queue, brief and consolidate for users.** Only a technical page exists. The user guide has a pointer.
+5. **Plans that read as descriptions.** `docs/STANDALONE.md` and `docs/WAVE-3.md` are plans, not current
+   descriptions. `docs/CORE-V2-INTERFACES.md` still says 25 commands and 21 events, which is the wave 2 shape.
+6. **D-027.** Reserved in D-026 and never written. If it is written, add its row here.

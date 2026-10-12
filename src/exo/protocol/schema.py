@@ -3,8 +3,9 @@
 Commands in, events out. One ordered event stream per server; every event has
 a ``seq`` so a client resumes with ``events.subscribe(since=seq)``.
 
-Wave 1 interface: fixed before the wave. Stdlib only. Rules:
+The interface started fixed at wave 1 and has grown additively since. Stdlib only. Rules:
 - At most 30 commands and under 30 event types (tests enforce the cap; D-026 used the last command slot).
+  Today there are 30 commands and 28 events. New features add fields or a ``command.run`` built-in, not a type.
 - Additive changes only within a protocol version: new optional fields with
   defaults, or new types. Never rename or remove.
 - Commands are strict: unknown type or unknown field is rejected.
@@ -97,7 +98,7 @@ class ErrorInfo:
     retryable: bool = False
 
 
-# ---------------------------------------------------------------- commands (25)
+# ---------------------------------------------------------------- commands (30, the cap)
 
 
 @command("hello")
@@ -358,7 +359,7 @@ class Peers:
     envelope: dict[str, Any] = field(default_factory=dict)  # deliver, receipt
 
 
-# ---------------------------------------------------------------- events (22)
+# ---------------------------------------------------------------- events (28, tests require fewer than 30)
 
 
 @event("session.created")
