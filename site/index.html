@@ -201,7 +201,7 @@
     <div class="stack reveal" role="img" aria-label="Exo architecture, from top to bottom: clients, protocol, core, learning loop, personal store, signed ledger.">
       <div class="stack__row stack__row--clients">
         <span class="stack__label">Clients</span>
-        <div class="chips"><span>Terminal</span><span>Web</span><span>Desktop</span><span>Chat channels</span><span>Device</span></div>
+        <div class="chips"><span>Terminal</span><span>Web</span><span>Desktop (planned)</span><span>Chat channels (planned)</span><span>Device (planned)</span></div>
       </div>
       <div class="stack__row stack__row--wire">
         <span class="stack__label">Protocol</span>
@@ -286,7 +286,7 @@
         <p class="part__why">Most assistants are tied to one app. Move to a phone or a new screen and you start again.</p>
         <p>Email solved this long ago. One mail server holds your inbox, and any mail app shows the same inbox, because they all speak the same standard.</p>
         <p>Exo's core, <code>exod</code>, is a small Python program that does the real work. It runs each turn, picks which model should answer (the model router), calls tools and keeps sessions.</p>
-        <p>The terminal, web, desktop, chat channels and a future device are clients: screens that talk to the core through one protocol. Everything that happens is sent as an event with a fixed shape and a number in sequence. A client that drops off asks for every event since the last number it saw, so nothing is lost. A cap on lines of code, checked by tests, keeps the core small enough to fit on a device.</p>
+        <p>The terminal and the web are clients today. Desktop, chat channels and a device are planned. Clients are screens that talk to the core through one protocol. Everything that happens is sent as an event with a fixed shape and a number in sequence. A client that drops off asks for every event since the last number it saw, so nothing is lost. A cap on lines of code, checked by tests, keeps the core small enough to fit on a device.</p>
       </article>
       <article class="part part--wide reveal">
         <p class="part__n">08</p>
@@ -363,8 +363,8 @@
       <p class="sec-num">07 / One surface</p>
       <h2 id="surface-title">Feels like a terminal. Summons an app when it helps.</h2>
       <p>Text is the fastest way to ask for work, but it is a poor way to review a change to a file or read a chart. Apps are good at those and slow at everything else. Most tools make you pick one, or ship a command-line tool and a separate app.</p>
-      <p>Exo ships one surface. The base is a calm prompt and transcript, like a terminal. Three prefixes and one menu are the whole learning curve: <code>/</code> runs a command, <code>@</code> attaches a file or note, <code>!</code> runs a system command, and <kbd>ctrl+p</kbd> opens a searchable list of every action.</p>
-      <p>Richer views are panels the model opens when they help: a diff viewer that shows what changed line by line, a task board, an approval card, a taste card, a session tree, a chart. Each client shows what it can. The web and desktop show full panels, the terminal shows a compact form, and a device can show a card or speak.</p>
+      <p>Exo ships one surface. The base is a calm prompt and transcript, like a terminal. Three prefixes and one palette get you started: <code>/</code> runs a command, <code>@</code> attaches a file or note, <code>!</code> runs a system command, and <kbd>ctrl+p</kbd> opens a searchable list of every action.</p>
+      <p>Richer views are panels the model opens when they help: a diff viewer that shows what changed line by line, a task board, an approval card, a taste card, a chart. Each client shows what it can. The web client shows full panels and the terminal shows a compact form. A planned device client could show a card or speak.</p>
       <p>You can always open or close a panel yourself. Those choices feed the learning loop too: a panel you ignore teaches as much as one you open.</p>
     </div>
     <figure class="term reveal" aria-label="Concept illustration of the Exo surface">
@@ -381,7 +381,7 @@
         <div class="t-panel t-panel--gate">
           <p class="t-panel__h">APPROVAL · public, irreversible</p>
           <p>Post release note to the project channel?</p>
-          <p class="t-panel__keys"><span>o</span> once <span>d</span> deny <span>?</span> explain</p>
+          <p class="t-panel__keys"><span>o</span> once <span>d</span> deny</p>
         </div>
         <p class="t-user t-cursor"><span class="t-p">›</span> <span class="caret"></span></p>
       </div>

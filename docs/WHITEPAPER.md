@@ -324,7 +324,7 @@ behind every screen, and a harness that measures itself. Part II covers each pie
 
 <!-- fig:layers -->
 ```
- Clients        terminal | web | desktop | chat channels | device
+ Clients        terminal | web | planned: desktop, chat channels, device
                          |   commands in, events out
  Protocol       one typed, numbered, replayable event stream
                          |
@@ -1390,7 +1390,7 @@ command-centre plugin (`exo web`), a plain line client (`exo chat`), the `ui` to
 **[designed, not built]**: a device client, and decision-model choice of when to offer a panel.
 
 Exo ships one surface instead of a command-line tool plus a separate app. The base is a terminal-like prompt
-and transcript. Three prefixes and one palette are the whole learning curve: `/` for commands, `@` to attach
+and transcript. Three prefixes and one palette get you started: `/` for commands, `@` to attach
 a file, `!` for a shell command, and `ctrl+p` for a fuzzy palette of everything else. Each tool call is one
 line with its elapsed time, and its full output is one key away.
 
@@ -1634,9 +1634,10 @@ If the network drops at step 7, the terminal reconnects with `events.subscribe` 
 
 ### 29. Built and tested
 
-Verified on 2026-10-12 by running `python -m pytest -q` from the repository root: **900 passed, 62
-skipped**, in about two minutes. All 62 skips are contract tests against a Hermes Agent checkout, which skip
-when no checkout is configured. Tests that live inside the plugin folders are not part of this default run.
+Checked by running `python -m pytest -q` from the repository root: **over a thousand tests pass**, in
+about two minutes. The skips are contract tests against a Hermes Agent checkout, which skip when no checkout
+is configured. Tests that live inside the plugin folders run as separate suites, one per plugin (see CI in
+`docs/DEVELOPER-GUIDE.md`). The exact count changes with every commit, so this page does not pin it.
 
 | Area | Tests collected | What they cover |
 |---|---|---|

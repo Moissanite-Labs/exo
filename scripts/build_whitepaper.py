@@ -546,7 +546,7 @@ PAGE = """<!doctype html>
         <div><dt>Version</dt><dd>0.2</dd></div>
         <div><dt>Date</dt><dd>October 2026</dd></div>
         <div><dt>Status</dt><dd>Early, in active build</dd></div>
-        <div><dt>Tests</dt><dd>900 passed, 62 skipped</dd></div>
+        <div><dt>Tests</dt><dd>over a thousand passing</dd></div>
       </dl>
       <div class="wp-note">
         <p>This paper keeps a strict line between what exists and what is planned. <span class="wp-badge wp-badge--built">built</span> means the code exists and is covered by tests that pass today. <span class="wp-badge wp-badge--plan">designed, not built</span> means a reviewed design with no working code yet. Part III lists both in full.</p>
