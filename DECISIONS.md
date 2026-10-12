@@ -92,7 +92,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Team6-era Hermes state DBs from the iCloud backup into A's private corpus.
 - **Left for A (irreversible or outward):** deleting the 32 GB quarantine; pruning ~70 stale branches on
   the forks; archiving protean-team and aska-digital/hermes-agent; disabling raptora's cron; confirming
-  who uses the abu-aska account. Batched in the phase report.
+  who uses the Linux seat's GitHub account. Batched in the phase report.
 - **Rejected:** carrying all 25 open core PRs (rebase cost, D-005); running optchat and exo-memory side by
   side (one provider slot); keeping protean-team-skills as a second source (drift).
 
@@ -296,12 +296,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 ## D-020 (2026-10-12) Exo OS: a new branch of Exo, design first
 - **A's ask:** "Exo OS. An OS form of the exo harness that replaces Omarchy entirely with an innovative
   AI-first operating system ... making it the foundation for the user's entire experience and
-  interaction with the digital realm". Built by saga-minar on charminar.
+  interaction with the digital realm". Built by a builder agent on the Linux test machine.
 - **Decision:** phase 0 is research and design only (BRIEF-07, folder `os/` on branch
   `exo-os/phase-0`): base system, shell, security, small hardware, roadmap and proposed decisions.
   Exo OS runs the same core and protocol as Exo; no fork.
-- **Lead call:** nothing on charminar's live OS changes in phase 0. It is Shahid's working machine
-  (CRM, WhatsApp, Jarvis). Where the OS first runs is A's call after the design.
+- **Lead call:** nothing on the Linux test machine's live OS changes in phase 0. It is someone's working machine
+  (CRM, messaging, assistants). Where the OS first runs is A's call after the design.
 
 ## D-021 (2026-10-12) Wave 2 closed
 - **Done:** the six plugins run on the Exo core (no Hermes imports in memory, context, gate, bus,
@@ -319,7 +319,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **TUI stack:** Textual (Python), not a spike first. Reasons: one language and one install with the core,
   stdio boundary, `textual serve` gives a browser mode for free, and the device horizon favours no Node
   runtime (research/UI.md 4.7). The protocol is the boundary, so a TS client can join later. Escape hatch:
-  if on charminar (low-power Linux) cold start is over 1.5 s or streaming a 2,000-message transcript
+  if on the low-power Linux test machine cold start is over 1.5 s or streaming a 2,000-message transcript
   stutters, spike Ink before wave 4.
 - **Protocol adds (29 of 30 commands, 22 of 30 events):** `feedback.send` (accept, edit, reject,
   should_have_been: the main learning signal), `ui.respond` (opened, dismissed, acted, ignored), `schedule.edit`
@@ -339,9 +339,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   model; an edit verdict produced 3 proposals through the fast loop; an every-1m job ran and reported;
   `rm -rf` asked, deny kept the folder, the gate decision is in the signed ledger and verifies; Jev answered
   3 of 4 gate calls; usage names the route that served.
-- **Linux audit:** saga-minar's fixes merged (#9 to #12, #14 to #16); Hermes is now opt-in in install.sh.
+- **Linux audit:** the Linux builder's fixes merged (#9 to #12, #14 to #16); Hermes is now opt-in in install.sh.
 - **Open:** the canary day (A, seat `canary`, launcher `exo-canary`, a copy of the principal store so the
-  real one is untouched); TUI footprint on charminar (#17, D-022 escape hatch); nightly learning trigger;
+  real one is untouched); TUI footprint on the Linux test machine (#17, D-022 escape hatch); nightly learning trigger;
   brief "learned" section; climb candidates beyond add and drop.
 
 ## D-024 (2026-10-12) Lean acceptance: continual feedback, not a day-long gate

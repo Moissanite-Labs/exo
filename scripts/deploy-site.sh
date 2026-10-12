@@ -1,20 +1,31 @@
 #!/bin/bash
 # Deploy site/ to exo.askaconsult.com (Vercel project exo-site, DNS on Cloudflare).
 # Tokens are read from the environment or a local env file and never printed.
+# Nothing machine-specific lives here. Set these in the environment, or in an untracked config file
+# (default ~/.config/exo/deploy.conf, override with EXO_DEPLOY_CONF; plain KEY=value lines):
+#   EXO_VERCEL_TEAM   Vercel team id (team_...)
+#   EXO_VERCEL_SCOPE  Vercel team slug
+#   EXO_DEPLOY_ENV    path to an env file that holds VERCEL_TOKEN and CF_API_TOKEN
 set -u
-# Tokens come from the environment first, then from a local hermes profile env file.
-ENVFILE="${EXO_DEPLOY_ENV:-$HOME/.hermes/profiles/shaka/.env}"
+CONF="${EXO_DEPLOY_CONF:-$HOME/.config/exo/deploy.conf}"
+[ -r "$CONF" ] && while IFS='=' read -r k v; do
+  case "$k" in EXO_VERCEL_TEAM|EXO_VERCEL_SCOPE|EXO_DEPLOY_ENV) [ -z "${!k:-}" ] && export "$k=$(echo "$v" | tr -d "\"'")";; esac
+done < "$CONF"
+# Tokens come from the environment first, then from the env file named above (never printed).
+ENVFILE="${EXO_DEPLOY_ENV:-$HOME/.config/exo/deploy.env}"
 pick() { local v; eval "v=\${$1:-}"; [ -n "$v" ] && { echo "$v"; return; }
   [ -r "$ENVFILE" ] && grep -E "^$1=" "$ENVFILE" | head -1 | cut -d= -f2- | tr -d '"'"'"; }
 V=$(pick VERCEL_TOKEN); CF=$(pick CF_API_TOKEN)
 [ -n "$V" ] && [ -n "$CF" ] || { echo "deploy-site: set VERCEL_TOKEN and CF_API_TOKEN (or EXO_DEPLOY_ENV to an env file)" >&2; exit 1; }
-TEAM=team_FaoexnZzdTcrVOAXDutsVakN; P=exo-site; D=exo.askaconsult.com
+TEAM="${EXO_VERCEL_TEAM:-}"; SCOPE="${EXO_VERCEL_SCOPE:-}"
+[ -n "$TEAM" ] && [ -n "$SCOPE" ] || { echo "deploy-site: set EXO_VERCEL_TEAM and EXO_VERCEL_SCOPE (env or $CONF)" >&2; exit 1; }
+P=exo-site; D=exo.askaconsult.com
 vc() { curl -s -H "Authorization: Bearer $V" -H "Content-Type: application/json" "$@"; }
 cf() { curl -s -H "Authorization: Bearer $CF" -H "Content-Type: application/json" "$@"; }
 # Deploy from a copy outside git: Vercel reads the commit author and blocks emails that are not on the
-# team (this machine's git identity is a seat address, not A's Vercel login).
+# team (a machine's git identity is often not a Vercel team login).
 SRC="$(cd "$(dirname "$0")/../site" && pwd)"; W=$(mktemp -d); rsync -a --exclude _shots "$SRC/" "$W/"; cd "$W"
-npx -y vercel@latest deploy --prod --yes --token "$V" --scope a-4677s-projects --name $P 2>&1 | grep -v -i token | grep -E "Production|Aliased|Error|error" | head -5
+npx -y vercel@latest deploy --prod --yes --token "$V" --scope "$SCOPE" --name $P 2>&1 | grep -v -i token | grep -E "Production|Aliased|Error|error" | head -5
 [ "${1:-}" = "--redeploy" ] && exit 0
 vc -X PATCH "https://api.vercel.com/v9/projects/$P?teamId=$TEAM" -d '{"ssoProtection":null}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print("sso",d.get("ssoProtection"),d.get("error"))'
 R=$(vc -X POST "https://api.vercel.com/v10/projects/$P/domains?teamId=$TEAM" -d "{\"name\":\"$D\"}")

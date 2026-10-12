@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from exo import onboard as ob
+from exo import privacy
 from exo.config import Config
 from exo.ledger import Ledger
 from exo.store import PrincipalStore
@@ -25,6 +26,9 @@ ANSWERS = """answers:
 """
 
 
+DENY = privacy.deny_regex()  # untracked deny-list, None when absent
+
+
 def test_bank_is_generic_and_large_enough():
     bank = ob.load_bank()
     sections = {q.section for q in bank.questions}
@@ -33,8 +37,10 @@ def test_bank_is_generic_and_large_enough():
     total = len(bank.questions) + sum(len(q.followups) for q in bank.questions)
     assert total >= 20                          # principle 13: draft 20+ candidates
     for f in ob.bank_dir().glob("*.yaml"):
-        text = f.read_text().lower()
-        assert "hafiz" not in text and "ahraz" not in text
+        text = f.read_text()
+        assert not privacy.generic_findings(text)
+        if DENY:
+            assert not DENY.search(text), f.name
 
 
 def test_scoring_skips_known_and_spreads_sections():

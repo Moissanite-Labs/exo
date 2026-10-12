@@ -14,11 +14,11 @@ SKILLS = REPO / "skills"
 PLUGIN = REPO / "plugins" / "exo-orchestra"
 sys.path.insert(0, str(PLUGIN))
 
+from exo import privacy  # noqa: E402
 from exo_orchestra import orchestra  # noqa: E402
 
-DENY = ["Ahraz", "kethuda", "askaconsult", "orda", "proteus", "hazen", "leo", "frida", "mozi",
-        "shaka", "kindi", "saga-divan"]
-DENY_RE = re.compile(r"(?<!\w)(" + "|".join(re.escape(d) for d in DENY) + r")(?![\w])", re.I)
+# The real names live in an untracked file (exo.privacy); this suite skips the name check without it.
+DENY_RE = privacy.deny_regex(whole_word=True)
 # Explicit allowlist: files that explain provenance may name the source seats.
 ALLOWED = {PLUGIN / "PROVENANCE.md"}
 TEXT_SUFFIXES = {".md", ".py", ".json", ".jsonl", ".yaml", ".yml", ".txt", ".sh", ".html"}
@@ -148,22 +148,25 @@ def iter_text_files():
 
 
 def test_no_principal_names_outside_provenance_docs():
+    if DENY_RE is None:
+        pytest.skip("no privacy deny-list (EXO_PRIVACY_DENYLIST)")
     hits = []
     for p in iter_text_files():
         if p in ALLOWED:
             continue
         for n, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
             for m in DENY_RE.finditer(line):
-                hits.append(f"{p.relative_to(REPO)}:{n}: {m.group(0)}")
+                hits.append(f"{p.relative_to(REPO)}:{n}")
     assert not hits, "\n".join(hits[:50])
 
 
 def test_deny_list_has_teeth(tmp_path):
-    assert DENY_RE.search("ask Leo to review")
-    assert DENY_RE.search("seat saga-divan posted")
-    assert not DENY_RE.search("a leopard and a leotard")
-    assert not DENY_RE.search("the ordaprompt router")
+    deny = privacy.deny_regex(["leo", "saga-x"], whole_word=True)
+    assert deny.search("ask Leo to review")
+    assert deny.search("seat saga-x posted")
+    assert not deny.search("a leopard and a leotard")
+    assert not deny.search("the leoprompt router")
 
 
 def test_deny_list_catches_hyphenated_seat_names():
-    assert DENY_RE.search("route to protean-orda")
+    assert privacy.deny_regex(["orda"], whole_word=True).search("route to protean-orda")
