@@ -3,7 +3,8 @@
   exo init <id> [--from-template [PATH]] [--interview]   create a principal store
   exo interview                            ask the next onboarding questions
   exo import-store <path> [--id ID]        adopt an existing store (copied)
-  exo config [get|set ...]                 read or change config.json
+  exo config [get|set|roles ...]           read or change config.json; `roles` shows routes
+  exo models [--remote PROVIDER]           providers, keys found (yes/no), route per role
   exo serve | exo chat [--resume ID]       run the exod server; chat with it
   exo upstream report|mark|check|merge     track lifted Hermes modules
   exo find <words...> [-n 8]               ranked nodes
@@ -41,6 +42,7 @@ from .onboard import (register as register_onboard, add_init_args, cmd_init as o
                       cmd_interview, cmd_import_store, cmd_config)
 from .upstream import register as register_upstream, cmd_upstream  # noqa: F401
 from .cli_chat import register as register_chat
+from .models_cmd import register as register_models, cmd_models
 
 
 def key_path(name: str) -> Path:
@@ -238,6 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_onboard(sp, common)
     register_upstream(sp, common)
     register_chat(sp, common)
+    register_models(sp, common)
     p = sp.add_parser('wire', help='read agent wire packets (SYM-2P briefs and receipts) in plain English')
     p.add_argument('action', choices=['render', 'check'])
     p.add_argument('text', nargs='?', help='one packet line or JSON form; stdin (one per line) if absent')
@@ -252,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_import_store(a)
     if a.cmd == 'config':
         return cmd_config(a)
+    if a.cmd == 'models':
+        return cmd_models(a)
     if a.cmd == 'upstream':
         return cmd_upstream(a)
     if a.cmd in ('serve', 'chat'):
