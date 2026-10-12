@@ -20,6 +20,7 @@ DEFAULTS: dict[str, Any] = {
     "key_path": "",            # Ed25519 key; default <exo_home>/keys/<agent_id>.key
     "auto_keygen": True,       # create the agent key on first use if missing
     "pack_budget": 1500,       # tokens of PRINCIPAL.md in the system prompt
+    "taste_budget": 400,       # tokens of the taste block (house, learned, pins; D-044) in the system prompt; 0 = off
     "prefetch_budget": 1500,   # tokens of recall per turn
     "episodic_share": 0.4,     # share of the prefetch budget kept for episodic recall
     "episodic_hits": 5,        # keyword hits from the episodic log per recall
@@ -32,7 +33,7 @@ DEFAULTS: dict[str, Any] = {
 }
 
 ENV = {"exo_home": "EXO_HOME", "principal": "EXO_PRINCIPAL", "store_root": "EXO_STORE"}
-INTS = ("pack_budget", "prefetch_budget", "episodic_hits", "recent_skip", "view_chars", "capture_chars")
+INTS = ("pack_budget", "taste_budget", "prefetch_budget", "episodic_hits", "recent_skip", "view_chars", "capture_chars")
 BOOLS = ("auto_keygen", "compact_enabled", "capture_turns")
 SAFE_ID = re.compile(r"[^a-z0-9_-]+")
 PID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -120,6 +121,8 @@ SCHEMA = [
     {"key": "agent_id", "description": "Ledger author name for this agent's turns (default: agent identity)."},
     {"key": "pack_budget", "description": "Tokens of the principal pack in the system prompt.",
      "type": "integer", "default": 1500, "minimum": 200, "maximum": 8000, "step": 100},
+    {"key": "taste_budget", "description": "Tokens of the taste block in the system prompt (0 turns it off).",
+     "type": "integer", "default": 400, "minimum": 0, "maximum": 4000, "step": 100},
     {"key": "prefetch_budget", "description": "Tokens of recall injected per turn.",
      "type": "integer", "default": 1500, "minimum": 200, "maximum": 8000, "step": 100},
     {"key": "episodic_share", "description": "Share of the recall budget kept for past sessions (0 to 0.9).",

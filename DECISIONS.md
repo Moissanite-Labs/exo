@@ -892,7 +892,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Docs:** user guide, UI, COMMANDS, WEB, JOBS, TRACE, ONBOARDING, the site, the whitepaper and the intro skill.
 
 ## D-044 (2026-10-12) Taste baseline: ship a house taste, then fit the new user
-- **Status:** Accepted 2026-10-12, not built. Design in docs/TASTE-BASELINE.md.
+- **Status:** Accepted 2026-10-12. Design in docs/TASTE-BASELINE.md. **Wave 1 built** 2026-10-12 (layers and
+  export, `src/exo/baseline/`): the pack loader (a pack is used only once released, with every value and contested
+  item ticked by the principal), per-item lookup with source tags, house precedence, `exo taste`,
+  `exo taste export-house` with the privacy and value checks, `exo taste review`, and the taste block in the
+  prompt. The shipped pack is an empty 0.0.0 placeholder until the principal releases the first one. Waves 2 and 3
+  are not built.
 - **Contested questions (principal, verbatim, 2026-10-12):** "C ship the implications behind the world view and the
   kind of thinking behind it rather than specifics like religious prescriptions and border-based politics". Value
   items on contested questions ship as reasoning style and its implications only; no faith, nation, party or
@@ -944,8 +949,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   and turning the rule off for him (ruling 1); letting the decision model act (a classifier error would become a
   lesson); shipping gate defaults as taste (ruling 3); adopting a value from behaviour alone (a guess; neutral is
   the safe fallback).
-- **Open:** whether stances on contested political or religious questions may ever ship (docs/TASTE-BASELINE.md,
-  "Open question"). Proposed: never.
+- **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
 - **Why:** the principal reported an approval card stuck on screen in the terminal and on the web with nothing pending in

@@ -17,6 +17,8 @@
   exo trace [SESSION] [--last N] [--json]  how the harness performed; anomaly flags (D-025)
   exo memory [verify|threads]              each agent's one log and the signed ledger: check them, list threads
                                            (D-028, D-040)
+  exo taste [list|export-house|review]     the taste layers with a source on every item; build and
+                                           review the house taste pack (D-044)
   exo findings [add TITLE|fix ID --in SHA|export --md]  the harness's findings about itself
   exo upstream report|mark|check|merge     track lifted Hermes modules
   exo find <words...> [-n 8]               ranked nodes
@@ -61,6 +63,7 @@ from .providers_cmd import register as register_providers
 from .decide_cmd import register as register_decide, cmd_decide
 from .trace_cmd import register as register_trace, cmd_trace, cmd_findings
 from .memory_cmd import register as register_memory, cmd_memory
+from .baseline.cli import register as register_taste, cmd_taste
 
 
 def key_path(name: str) -> Path:
@@ -309,6 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_decide(sp, common)
     register_trace(sp, common)
     register_memory(sp, common)
+    register_taste(sp, common)
     p = sp.add_parser('web', add_help=False, help='serve the command centre web client (exo-command)')
     p.add_argument('rest', nargs=argparse.REMAINDER, help='passed to exo-command: --socket, --url, --port ...')
     sp.add_parser('stop', add_help=False, help='stop the background core that exo web / exo serve started')
@@ -395,6 +399,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_trace(a)
     if a.cmd == 'memory':
         return cmd_memory(a)
+    if a.cmd == 'taste':
+        return cmd_taste(a)
     if a.cmd == 'findings':
         return cmd_findings(a)
     if a.cmd == 'upstream':

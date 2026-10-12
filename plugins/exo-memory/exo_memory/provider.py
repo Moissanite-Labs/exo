@@ -387,7 +387,22 @@ class ExoMemoryProvider(MemoryProvider):
             raw = ""
         pack = trim_pack(raw, st.cfg["pack_budget"]) if raw.strip() else ""
         head = "# Principal pack (exo-memory)\n\n" + pack if pack else "# Principal pack (exo-memory)\n\n(empty store)"
-        return head + "\n\n" + (CORE_TOOLS_LINE if st.core_log is not None else TOOLS_LINE)
+        taste = self._taste_block(st)
+        tools = CORE_TOOLS_LINE if st.core_log is not None else TOOLS_LINE
+        return head + "\n\n" + (taste + "\n\n" if taste else "") + tools
+
+    @staticmethod
+    def _taste_block(st: _State) -> str:
+        """D-044: house, learned and pinned taste items with their source, by weight, under `taste_budget`.
+        Built with the pack, once per process, so the cached prefix stays stable. Never stops memory."""
+        if st.cfg.get("taste_budget", 0) <= 0:
+            return ""
+        try:
+            from exo.baseline import taste_block
+            return taste_block(st.rt.store, budget_tokens=st.cfg["taste_budget"])
+        except Exception as exc:
+            logger.warning("exo-memory: taste block skipped: %s", exc)
+            return ""
 
     def system_prompt_block(self) -> str:
         st = self._state()

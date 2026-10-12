@@ -139,6 +139,24 @@ Different seats are different agents. They share your store and talk through pee
 
 Details: `docs/MEMORY-MODEL.md`.
 
+### Taste
+
+Exo keeps your taste as items: how you like answers written, how work is checked, what matters to you. Each item
+the agent sees carries its source in brackets: `[house 1.3]` (the house taste that ships with Exo),
+`[learned 0.72, 5 weeks]` (learned from what you did, with its weight), `[you said, <date>]` (a ruling of yours),
+`[pinned]`. Your own items always win over house items. House items fade slowly over about 15 months but never
+vanish.
+
+- `exo taste` lists every item in use, and says whether the house taste is on. It is off when no house taste has
+  been released yet, on the install whose store the house taste came from, or when you start blank.
+- To start blank, add `taste:` with `house: off` under it to your store's `policies/consolidate.yaml`.
+- The taste block in the agent's system message is limited to 400 tokens (`taste_budget` in the `exo-memory`
+  config; 0 turns it off). Low-weight items drop out of the prompt first; they stay in `exo taste`.
+
+Safety settings (approvals, budget, posting rules) are not taste. They never come from the house taste and only
+change when you edit them. Changing taste slowly to fit you, and the `/taste` view, are still to come. Details:
+`docs/TASTE-BASELINE.md`.
+
 ## 5. Background jobs
 
 The agent can start a long command, such as a build or a test run, and keep working. It uses `bash` with

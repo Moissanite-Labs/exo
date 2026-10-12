@@ -1,6 +1,7 @@
 # Taste baseline: ship one person's taste, then fit the next person (D-044)
 
-Status: **Accepted, not built.** D-044, with the principal's rulings of 2026-10-12 (see "Rulings" at the end).
+Status: **Accepted; wave 1 built** (layers and export, see "Build status" below). Waves 2 and 3 are not built.
+D-044, with the principal's rulings of 2026-10-12 (see "Rulings" at the end).
 Builds on D-040 (author provenance), D-012 and D-022 (the learning loop), D-015 (decision models) and D-028
 (one continuous memory).
 
@@ -657,6 +658,54 @@ overridden lists, the `/intro` text, user guide and whitepaper sections. Tests: 
 "contradict" with low confidence adds nothing; a stub that says "opposite" at 0.7 confidence does not step a
 value back after the window; the cap holds; a classifier cannot cause a swap or adoption below the
 thresholds; `/taste` renders a pending line with the right weeks and estimate.
+
+## Build status
+
+**Wave 1 (layers and export): built 2026-10-12.** Code in `src/exo/baseline/`, tests in `tests/baseline/` and
+`plugins/exo-memory/tests/test_provider.py`.
+
+| Part | Where | Notes |
+|---|---|---|
+| Pack format, loader, release check | `baseline/pack.py` | A pack is used only when it is **final**: `RELEASE.json` names the manifest's sha256 and ticks every value and contested item, and every file matches the manifest. `$EXO_HOUSE_TASTE` points at another pack. |
+| Shipped pack | `baseline/house-taste/` | An empty placeholder, version 0.0.0, so the house layer is off everywhere until the principal exports, reviews and releases the first pack. No pack built from real data is in the repo. |
+| Layers and lookup | `baseline/layers.py` | Ruling, pin, learned (or scoped), house; every entry has a source tag. `P_base(t) = max(0.3, 0.7 * 2^(-t/365))`; house value items start at 0.5 inside the getting-to-know window. |
+| Privacy check | `baseline/privacy.py` | The general check, the store deny list and the value-domain check (section 1). |
+| Export | `baseline/export.py` | `exo taste export-house`. Writes nothing on any fail; byte-identical on rerun. |
+| Review and release | `baseline/review.py` | `exo taste review OUT --tick ID`, then `--final`. |
+| Prompt block | `plugins/exo-memory` | The taste block sits in the system message after the principal pack, under `taste_budget` (400 tokens; 0 turns it off). Built once per process. |
+| Listing | `baseline/cli.py` | `exo taste`: house on or off (and why), then each item with weight, class and source. The `/taste` view comes in wave 3. |
+
+How wave 1 settles details this page left open:
+
+- **What an item is made from.** One item per eligible node; the claim is the node's `summary`. The weight is the
+  highest noisy-or weight of the node's accepted beliefs, taken at the ledger head's time so that one snapshot
+  always selects the same items. A node with no belief in the ledger takes its confidence label (high 0.9, medium
+  0.6). A node tagged `worldview` is a value item; a node tagged `contested` is a contested-question item and gets
+  its own review page.
+- **The plain-word list.** Capitalised words are checked against `src/exo/baseline/plain-words.txt`, a short
+  shipped list, so the check gives the same answer on every machine. A word passes only when it is on the list or
+  in the source store's `policies/house-allow.txt`. The list is strict on purpose: an unknown word holds a method
+  item and fails a value item, and the fix is to reword or to allow the word knowingly.
+- **Hold.** A held item stays out of `items.jsonl` and is listed on the "Held" page of `review/REVIEW.md` with its
+  reason. A fail anywhere (any item, or the soul) stops the whole export.
+- **The decision-model pass.** `--decision` asks the `decision` role one yes or no question per item that passed
+  the rules. A yes holds the item. A value item is also held when the model cannot be asked. It is never asked
+  about an item the rules failed, so it cannot pass one.
+- **Review files.** `review/REVIEW.md` (pages: method, values, contested, held, dropped) and `review/ticks.json`
+  stay with the export and are never loaded. A tick is bound to the claim's hash.
+- **The principal's install.** The manifest's `source_id` is a hash of the source ledger's first event id: stable
+  for the life of the store, and it reveals nothing. A store whose own first event gives the same hash has the
+  house layer off. `taste: house: off` in `policies/consolidate.yaml` is "start blank".
+- **Install day and the window.** Day 0 is the store ledger's first event. Sessions are counted from
+  `session_start` notes.
+- **Pins and offs.** Read from `note` events of type `taste_pin`, `taste_unpin`, `taste_off` and `taste_on`,
+  counted only when the author is the principal (D-040). The commands that write them come with `/taste` in
+  wave 3.
+
+Not in wave 1: the first real pack (the principal runs the export on his own store, reads the review and
+ticks); publishing (a public act through the gate, as section 1 says); wiring the house soul into seats; the
+current scope (project or task kind) in the prompt block, which is unscoped for now; everything in waves 2
+and 3.
 
 ## Rulings (2026-10-12)
 

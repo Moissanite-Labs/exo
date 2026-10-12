@@ -6,3 +6,13 @@ similarity: 0.6                            # how alike two instructions must be 
 rule_of_three: 3                           # repeats before proposing to encode a rule
 target_overlap: 0.6
 stale_below: 0.2                           # report taste beliefs that faded below this weight
+# House taste (D-044, docs/TASTE-BASELINE.md section 10). Uncomment to change; defaults shown.
+# taste:
+#   house: on                  # off = start blank: no house taste items on this install
+#   baseline_start: 0.7        # a house item's precedence on install day
+#   baseline_half_life: 365    # days for that precedence to halve
+#   baseline_floor: 0.3        # it never falls below this
+#   value_window_start: 0.5    # house value items in the getting-to-know window
+#   value_window_days: 30      # the window lasts 30 days and 20 sessions, at most 90 days
+#   value_window_sessions: 20
+#   value_window_max_days: 90

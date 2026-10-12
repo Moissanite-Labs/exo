@@ -6,7 +6,7 @@ The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It f
 
 | Hook | Behaviour |
 |---|---|
-| `system_prompt_block` | The store's `PRINCIPAL.md`, curator comments removed, trimmed to `pack_budget` tokens, plus one line naming the tools. Built once per process, so the prompt cache holds. |
+| `system_prompt_block` | The store's `PRINCIPAL.md`, curator comments removed, trimmed to `pack_budget` tokens, then the taste block (D-044: house, learned and pinned taste items with their source, under `taste_budget` tokens; `docs/TASTE-BASELINE.md`), plus one line naming the tools. Built once per process, so the prompt cache holds. |
 | `prefetch` | Belief nodes from `exo.retrieve.assemble`, then episodic recall: keyword hits from the log and the summary view. Each section is labelled. The whole block stays under `prefetch_budget`. |
 | `on_turn_start`, `sync_turn` | `utterance` events in the ledger. User turns are authored by the principal, assistant turns by the agent id. The turn also goes to the episodic log. |
 | `on_memory_write` | A `note` event of type `memory_write`. |
@@ -62,6 +62,7 @@ Order, lowest first: defaults, environment, `<exo_home>/exo-memory/config.json`,
 | `store_root` | `EXO_STORE` | `<exo_home>/principals/<principal>` |
 | `agent_id` | | the seat identity, else `exo-memory` |
 | `pack_budget` | | 1500 tokens |
+| `taste_budget` | | 400 tokens (0 = no taste block) |
 | `prefetch_budget` | | 1500 tokens |
 | `episodic_share` | | 0.4 of the prefetch budget |
 | `compact_enabled` | | true. Uses the `aux` model role of the Exo router (`exo.core.models.router.aux_sync`). |

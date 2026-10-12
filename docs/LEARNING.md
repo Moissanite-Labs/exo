@@ -55,6 +55,16 @@ is not worse on held-out cases, and passes the gate. The night is capped by `cli
 
 Nothing calls `nightly` on a timer yet. D-023 lists the trigger as open.
 
+## The house taste (D-044)
+
+Learned beliefs are one layer of taste. A new install can also start from a house taste: a released, read-only
+pack of method and value items exported from the first user's store with every personal detail removed. Per item,
+a ruling wins, then a pin, then a learned belief that matches the house item, then the house item. Each item in the
+prompt shows its source. House items have no evidence; their precedence is `max(0.3, 0.7 * 2^(-t/365))` from
+install day. The house layer is off on the store it was exported from. Learning itself is unchanged: the loop
+never writes to the house pack, and nothing learned on one install flows back into it. Design and status:
+`docs/TASTE-BASELINE.md`; code: `src/exo/baseline/`.
+
 ## Where to look
 
 - Config: the `learn` table in `config.json` (defaults in `src/exo/learn/runtime.py`).

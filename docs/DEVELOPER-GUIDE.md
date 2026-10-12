@@ -1,7 +1,7 @@
 # Exo developer guide
 
 This guide shows you how to extend Exo: add a tool, a plugin, a seat, a skill, a built-in command, and how to test
-and land the change. Section 9 has short recipes: panels from a tool, decision models, the bus and the learning loop. It says where to look and what rule to follow. It does not repeat the reference pages. The map
+and land the change. Section 9 has short recipes: panels from a tool, decision models, the bus, the learning loop and the house taste. It says where to look and what rule to follow. It does not repeat the reference pages. The map
 of all docs is `docs/DOCS-MAP.md`. Users read `docs/USER-GUIDE.md`.
 
 ## The docs rule
@@ -27,6 +27,7 @@ the map links a file that does not exist.
 | `src/exo/server/` | The server that carries the protocol (Unix socket, TCP with a token, or stdio). |
 | `src/exo/*.py` | The generic mechanism: store, ledger, crypto, gate, capture, consolidate, eval, brief, onboard, CLI. |
 | `src/exo/learn/` | The learning loop (`docs/LEARNING.md`). |
+| `src/exo/baseline/` | The house taste (D-044): pack loader, taste layers, privacy check, `exo taste export-house` (`docs/TASTE-BASELINE.md`). |
 | `plugins/` | The six plugins: `exo-memory`, `exo-context`, `exo-gate`, `exo-bus`, `exo-command` (web), `exo-orchestra`. |
 | `clients/tui/` | The terminal client (Textual). |
 | `skills/` | The skill pack and `MANIFEST.json`. |
@@ -450,3 +451,23 @@ The protocol commands `feedback.send` and `ui.respond` reach the loop through `h
 `handle_ui_respond` in `learn/signals.py`.
 
 Run `tests/learn` after any change, and read `docs/LEARNING.md` rule list again to be sure the page still matches.
+
+### Work on the house taste
+
+The design is `docs/TASTE-BASELINE.md`; its "Build status" says what is built. Code is in `src/exo/baseline/`.
+
+- **Lookup order** lives in `resolve` in `baseline/layers.py`: ruling, pin, learned (or scoped), house. Keep that
+  order; a new source goes into it, not around it. Every `Entry` must carry a source tag.
+- **The privacy check** is `baseline/privacy.py`. A new rule adds hits; it never removes one. Add the case to the
+  red table in `tests/baseline/test_privacy.py` first, and make sure the green table still passes. A word that is
+  ordinary English can go in `plain-words.txt`; never a name, place, nation, party or faith.
+- **The decision model** may only hold an export item (`export_house(..., judge=...)`). It is asked only about items
+  that passed every rule.
+- **Never run the export on a real store in tests**, and never commit a pack built from real data. The fixture
+  stores in `tests/baseline/conftest.py` are made up. Point `$EXO_HOUSE_TASTE` at a released fixture pack to test
+  the house layer.
+- **Release.** A pack loads only when final (`baseline/pack.py`, `release_problem`). Tests build one with
+  `export_house`, then `review.tick` on every value and contested item, then `review.finalise`.
+- Policy files are product policy, not taste. Nothing in `baseline/` exports them.
+
+Run `tests/baseline` and the `exo-memory` plugin suite after a change.
