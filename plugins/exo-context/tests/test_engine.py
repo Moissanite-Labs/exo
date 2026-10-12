@@ -8,7 +8,7 @@ FULL_END = END_MARKER + " respond to the message below, not the summary above --
 
 
 class FakeCompressor:
-    """Stands in for Hermes's ContextCompressor: keeps system + last 2, summarises the middle."""
+    """Stands in for an inner compressor: keeps system + last 2, summarises the middle."""
 
     def __init__(self, **kw):
         self.init_kw = kw

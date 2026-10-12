@@ -1,10 +1,18 @@
-"""The exo-gate hook: classify, decide, record, then let Hermes run, ask or block.
+"""The exo-gate hook: classify, decide, record, then let the core run, ask or block.
 
-Hermes contract (hermes_cli/plugins.py): a ``pre_tool_call`` callback returns
+Core contract (exo.core.engine, same names as Hermes): a ``pre_tool_call`` callback returns
 ``{"action": "block", "message": ...}`` to veto a call (the message becomes the tool result),
-``{"action": "approve", "message": ..., "rule_key": ...}`` to send it through the host's human
-approval gate (which uses whatever approval transport the profile selects and fails closed on
-timeout), or ``None`` to let it run. ``post_approval_response`` reports the human's choice.
+``{"action": "approve", "message": ..., "rule_key": ...}`` to ask the principal, or ``None`` to
+let it run. Asking is the protocol event ``approval.requested``; any client answers with
+``approval.respond``, and a call nobody answers never runs. ``post_approval_response`` reports
+the choice (once, always, deny).
+
+Risk: the core may pass ``risk`` (the tool registry's hint). When it does not, the gate looks the
+tool up itself. A tool the classifier does not know and the registry calls high risk is an ask,
+never an allow.
+
+Decision models (D-015): ``exo.core.models.decision.tighten_only`` is called when it exists, to
+make an outcome stricter. The gate keeps the stricter of the two, so a model never loosens it.
 
 Settings resolve in this order, first hit wins: explicit overrides, Hermes plugin settings
 (``plugins.entries.exo-gate.settings.<key>``), ``EXO_GATE_<KEY>`` env vars, defaults. Nothing
@@ -37,6 +45,7 @@ DEFAULTS: Dict[str, Any] = {
 _MAX_BODY_FILE = 256 * 1024
 # Tools that cannot change anything; on an internal error these still run.
 _SAFE_ON_ERROR = {k for k, v in gate.TOOLS.items() if v == "read"}
+_RANK = {o: i for i, o in enumerate(gate.OUTCOMES)}  # allow < log < ask < deny
 
 
 @dataclass
@@ -136,8 +145,10 @@ class LedgerSink:
 class Gate:
     """Holds settings, cached policies and the ledger sink; exposes the two hook callbacks."""
 
-    def __init__(self, settings: Settings, sink: LedgerSink | None = None):
+    def __init__(self, settings: Settings, sink: LedgerSink | None = None,
+                 risk_lookup: Callable[[str], Optional[str]] | None = None):
         self.settings = settings
+        self.risk_lookup = risk_lookup
         self.sink = sink if sink is not None else LedgerSink(settings)
         self._policies: Optional[dict] = None
         self._policy_stamp: tuple = ()
@@ -192,11 +203,39 @@ class Gate:
             return f"exo-gate:{c.category}:{digest}"
         return f"exo-gate:{c.category}:{c.target or tool}"
 
+    def _risk(self, tool: str, given: Any) -> str:
+        if given in ("low", "medium", "high"):
+            return str(given)
+        try:
+            return (self.risk_lookup(tool) if self.risk_lookup else None) or ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _tighten(d: gate.Decision, c: gate.Classification, risk: str) -> None:
+        """Seam for the decision model. May only raise the outcome, never lower it."""
+        try:
+            from exo.core.models import decision as dm
+            fn = getattr(dm, "tighten_only", None)
+        except ImportError:
+            fn = None
+        if fn is None:
+            return
+        try:
+            out = fn(d.outcome, {"classification": c.as_dict(), "risk": risk, "reason": d.reason})
+        except Exception:
+            logger.warning("exo-gate: decision model failed; keeping the rule outcome", exc_info=True)
+            return
+        out = getattr(out, "outcome", out)
+        if isinstance(out, str) and _RANK.get(out, -1) > _RANK[d.outcome]:
+            d.reason += f" (decision model tightened {d.outcome} to {out})"
+            d.outcome = out
+
     def pre_tool_call(self, tool_name: str = "", args: Any = None, session_id: str = "", task_id: str = "",
-                      tool_call_id: str = "", turn_id: str = "", **_: Any) -> Optional[dict]:
+                      tool_call_id: str = "", turn_id: str = "", risk: Any = None, **_: Any) -> Optional[dict]:
         args = args if isinstance(args, dict) else {}
         try:
-            return self._pre_tool_call(tool_name, args, session_id, tool_call_id)
+            return self._pre_tool_call(tool_name, args, session_id, tool_call_id, self._risk(tool_name, risk))
         except Exception as exc:
             logger.exception("exo-gate: internal error on %s", tool_name)
             if tool_name in _SAFE_ON_ERROR or self.settings.mode == "observe":
@@ -205,7 +244,8 @@ class Gate:
                                                     "Approve only if you expected this action. Default if no reply: skip.",
                     "rule_key": f"exo-gate:error:{tool_name}"}
 
-    def _pre_tool_call(self, tool: str, args: dict, session_id: str, tool_call_id: str) -> Optional[dict]:
+    def _pre_tool_call(self, tool: str, args: dict, session_id: str, tool_call_id: str,
+                       risk: str = "") -> Optional[dict]:
         c = gate.classify({"tool": tool, "args": args})
         self._load_body_file(c)
         pol = self.policies()
@@ -213,10 +253,14 @@ class Gate:
         d = gate.decide(c, pol, {"spent_today": self._spent.get(today, 0.0)})
         if self._policy_error:
             d.reason += f" (policy error, defaults used: {self._policy_error[:120]})"
+        if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
+            d.reason += f" (registry risk is high and {tool} is not a known tool)"
+            d.outcome = "ask"
+        self._tighten(d, c, risk)
         default = str(pol["gates"].get("ask_default") or "skip")
         body = {
             "gate": PLUGIN_ID, "phase": "decision", "tool": tool, "outcome": d.outcome,
-            "classification": c.as_dict(), "decision": d.as_dict(), "mode": self.settings.mode,
+            "classification": c.as_dict(), "decision": d.as_dict(), "mode": self.settings.mode, "risk": risk or None,
             "tool_call_id": tool_call_id or None,
             "args_sha256": hashlib.sha256(json.dumps(args, sort_keys=True, default=str).encode("utf-8")).hexdigest(),
         }
@@ -258,10 +302,29 @@ class Gate:
         return None
 
 
+def _risk_lookup_for(ctx) -> Callable[[str], Optional[str]]:
+    """Registry risk by tool name: plugin tools from the manager, then the built-in registry."""
+    builtin: dict = {}
+
+    def lookup(name: str) -> Optional[str]:
+        entry = (getattr(getattr(ctx, "manager", None), "tools", None) or {}).get(name)
+        if entry is not None:
+            return entry.spec.risk
+        if "reg" not in builtin:
+            try:
+                from exo.core.tools.registry import default_registry
+                builtin["reg"] = default_registry()
+            except Exception:
+                builtin["reg"] = None
+        tool = builtin["reg"].get(name) if builtin["reg"] else None
+        return tool.spec.risk if tool else None
+    return lookup
+
+
 def register(ctx) -> Gate:
-    """Hermes entry point: build the gate from plugin settings and register the hooks."""
+    """Plugin entry point: build the gate from plugin settings and register the hooks."""
     get_config = getattr(ctx, "get_config", None)
-    g = Gate(resolve_settings(get_config=get_config))
+    g = Gate(resolve_settings(get_config=get_config), risk_lookup=_risk_lookup_for(ctx))
     ctx.register_hook("pre_tool_call", g.pre_tool_call)
     ctx.register_hook("post_approval_response", g.post_approval_response)
     return g

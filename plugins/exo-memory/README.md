@@ -1,6 +1,6 @@
 # exo-memory
 
-The Exo memory provider for Hermes Agent. It fills the one memory-provider slot (D-007).
+The Exo memory provider for the Exo core (`exo.core.slots.MemoryProvider`). It fills the one memory-provider slot (D-007).
 
 ## What it does
 
@@ -11,6 +11,7 @@ The Exo memory provider for Hermes Agent. It fills the one memory-provider slot 
 | `on_turn_start`, `sync_turn` | `utterance` events in the ledger. User turns are authored by the principal, assistant turns by the agent id. The turn also goes to the episodic log. |
 | `on_memory_write` | A `note` event of type `memory_write`. |
 | `on_delegation` | An `action` event of type `delegation`, and a `work` line in the episodic log. |
+| `sync_turn` (capture) | The core has no pre-compress call, so each turn also runs `exo.capture` over a short window of recent turns and writes `ruling`, `verdict` and `question` events (config `capture_turns`). |
 | `on_pre_compress` | Finds rulings, corrections and open decisions with `exo.capture`. Writes `ruling`, `verdict` and `question` events, then returns a short block for the compressor to keep verbatim. Checkpoint API v2. |
 | `on_session_end` | A `note` event of type `consolidate_pending`. |
 
@@ -22,7 +23,7 @@ in the ledger yet, it is logged first.
 
 ## Where data lives
 
-Everything lives in the principal store. Nothing is written to HERMES_HOME except the plugin config.
+Everything lives in the principal store. Nothing is written to the Exo home except the plugin config and the signing key.
 
 - `<store>/ledger.sqlite`: the signed event log.
 - `<store>/episodic/`: the verbatim daily log, the summary tree and the view. It carries its own
@@ -32,26 +33,24 @@ Everything lives in the principal store. Nothing is written to HERMES_HOME excep
 
 ## Install
 
-1. Install the `exo` package into the Hermes environment.
-2. Copy this directory to `$HERMES_HOME/plugins/exo-memory/`.
-3. Set `memory.provider: exo-memory` and run `hermes memory setup`, or set `EXO_PRINCIPAL`.
+The Exo plugin loader finds this folder under `plugins/`. Select it with `memory_provider: exo-memory` in `$EXO_HOME/config.json` and set `EXO_PRINCIPAL` (or `plugin_config`).
 
 A store must exist first: `exo init <id>`.
 
 ## Config
 
-Order, lowest first: defaults, environment, `<hermes_home>/exo-memory/config.json`, constructor values.
+Order, lowest first: defaults, environment, `<exo_home>/exo-memory/config.json`, constructor values.
 
 | Key | Env | Default |
 |---|---|---|
 | `principal` | `EXO_PRINCIPAL` | none |
 | `exo_home` | `EXO_HOME` | `~/.exo` |
 | `store_root` | `EXO_STORE` | `<exo_home>/principals/<principal>` |
-| `agent_id` | | the Hermes agent identity, else `exo-memory` |
+| `agent_id` | | the seat identity, else `exo-memory` |
 | `pack_budget` | | 1500 tokens |
 | `prefetch_budget` | | 1500 tokens |
 | `episodic_share` | | 0.4 of the prefetch budget |
-| `compact_enabled` | | true. Needs an auxiliary model route for task `exo_memory_compact`. |
+| `compact_enabled` | | true. Uses the `aux` model role of the Exo router (`exo.ext.compat.aux_summarize`). |
 | `principal_user_ids` | | empty. When set, other human authors are logged as `user:<id>`. |
 
 See `exo_memory/config.py` for the rest.
@@ -62,8 +61,7 @@ See `exo_memory/config.py` for the rest.
 .venv/bin/python -m pytest plugins/exo-memory/tests
 ```
 
-The smoke test imports the real `MemoryProvider` ABC from a Hermes checkout, read-only
-(`HERMES_AGENT_DIR`, default `~/.hermes/hermes-agent`). It skips and says why when the import fails.
+The smoke test (`tests/test_core_smoke.py`) runs the provider on the Exo core with the fake model.
 One test copies an example store (`EXO_ACCEPTANCE_STORE`) to a temp dir and skips when there is none.
 
 ## Attribution

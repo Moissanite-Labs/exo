@@ -1,12 +1,11 @@
 name: exo-bus
 label: Exo Bus
-kind: platform
+kind: channel
 version: "0.1.0"
 description: >
-  Exo Bus (signed, hash-chained seat-to-seat messages; wire compatible with Divan Bus) for Hermes.
-  Tools let any profile post to and read the bus. The platform adapter routes bus messages
-  addressed to this profile's seat, its team or the group into the live gateway session, and sends
-  replies back as signed envelopes. SYM-2P bodies render as plain English.
+  Exo Bus (signed, hash-chained seat-to-seat messages; wire compatible with Divan Bus) for the Exo core.
+  Tools let any profile post to and read the bus. The Channel is a protocol client: it turns bus messages
+  addressed to this seat, its team or the group into turn.send, and posts the reply back as a signed envelope. SYM-2P bodies render as plain English.
 author: "Aska Digital"
 license: "MIT"
 provides_tools:
@@ -33,7 +32,7 @@ optional_env:
     prompt: "Exo Bus state directory"
     password: false
   - name: EXO_BUS_POLL_SECONDS
-    description: "Inbox poll interval for the platform adapter (default 5)."
+    description: "Inbox poll interval for the channel (default 5)."
     prompt: "Exo Bus poll seconds"
     password: false
   - name: EXO_BUS_HOME_CHANNEL

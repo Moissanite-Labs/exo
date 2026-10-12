@@ -211,10 +211,10 @@ def _coerce_capture(items: Any, kind: str) -> list[Signal]:
 def extract_rulings_and_corrections(messages: list[dict]) -> tuple[list[Signal], list[Signal]]:
     """Use exo.capture when present (the seam), else the local heuristics."""
     try:
-        from . import capture  # type: ignore[attr-defined]
-        rulings = _coerce_capture(capture.extract_rulings(messages), 'ruling')
-        corrections = _coerce_capture(capture.extract_corrections(messages), 'correction')
-        return rulings, corrections
+        from . import capture
+        found = capture.extract_signals(messages, skip=lambda m: is_summary_text(message_text(m)))
+        pick = lambda kind: [Signal(kind, x.text, x.index, _ts(messages[x.index])) for x in found if x.kind == kind]  # noqa: E731
+        return pick('ruling'), pick('correction')
     except Exception:
         return local_extract_rulings(messages), local_extract_corrections(messages)
 

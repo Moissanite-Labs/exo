@@ -6,14 +6,10 @@ import pytest
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 REPO_SRC = PLUGIN_DIR.parents[1] / "src"
-HERMES_DIR = Path(os.environ.get("HERMES_AGENT_DIR") or Path.home() / ".hermes" / "hermes-agent")
 
 for p in (str(PLUGIN_DIR), str(REPO_SRC)):
     if p not in sys.path:
         sys.path.insert(0, p)
-# Put Hermes on the path (read only) so the engine binds to the real ContextEngine ABC when present.
-if HERMES_DIR.is_dir() and str(HERMES_DIR) not in sys.path:
-    sys.path.append(str(HERMES_DIR))
 
 
 @pytest.fixture(autouse=True)

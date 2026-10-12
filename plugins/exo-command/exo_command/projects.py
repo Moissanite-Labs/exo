@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from .ro import ProfileDb, columns, ro, select_cols
+from exo.ingest.hermes_dashboard import ProfileDb, columns, ro, select_cols
 
 DAY = 86400.0
 
@@ -583,9 +583,49 @@ def _substantive(f: Fact, probes: Sequence[Probe]) -> Optional[float]:
 def board(profiles: Sequence[ProfileDb], *, generic_paths: Sequence[str] = (), window_days: int = 90,
           stall_days: float = 7, abandon_days: float = 60, now: Optional[float] = None,
           walkup: bool = True) -> dict:
+    """Board from Hermes databases (importer path). The live command centre uses ``board_from_facts``."""
     now = now if now is not None else time.time()
     rules = Rules(generic_paths)
     facts, probes, status = scan(profiles, rules, window_days=window_days, now=now, walkup=walkup)
+    return board_from_facts(facts, probes, status, rules, window_days=window_days, stall_days=stall_days,
+                            abandon_days=abandon_days, now=now)
+
+
+def facts_from_sessions(sessions: Iterable[dict], rules: Rules, *, walkup: bool = True) -> List[Fact]:
+    """Facts from Exo protocol session records (see ``state.State.session_records``).
+
+    A record has id, title, seat, model, cwd, parent, started_at, last_activity_at, message_count,
+    tool_call_count and ``subagent`` (True for a child session of a delegated task).
+    """
+    out: List[Fact] = []
+    for r in sessions:
+        cwd = r.get("cwd")
+        out.append(Fact(
+            profile=r.get("seat") or "main", session_id=str(r["id"]),
+            source="subagent" if r.get("subagent") else "exo", title=r.get("title") or "",
+            cwd=cwd, workspace_root=workspace_root(cwd, rules, walkup), git_repo_root=None,
+            started_at=_f(r.get("started_at")),
+            last_activity_at=_f(r.get("last_activity_at")) or _f(r.get("started_at")),
+            message_count=int(r.get("message_count") or 0), tool_call_count=int(r.get("tool_call_count") or 0),
+            parent_session_id=r.get("parent") or None, model=r.get("model"), chat_type=None,
+            display_name=None, title_source="exo" if r.get("title") else None))
+    return out
+
+
+def probes_from_sessions(sessions: Iterable[dict], rules: Rules) -> List[Probe]:
+    """Bounded probes: each record carries ``probe`` rows of (role, text, ts, position)."""
+    out: List[Probe] = []
+    for r in sessions:
+        ref = "{}/{}".format(r.get("seat") or "main", r["id"])
+        for role, text, ts, pos in r.get("probe") or []:
+            out.append(Probe(ref, role, str(text or "")[:600], _f(ts), pos))
+    return out
+
+
+def board_from_facts(facts: List[Fact], probes: List[Probe], status: List[dict], rules: Rules, *,
+                     window_days: int = 90, stall_days: float = 7, abandon_days: float = 60,
+                     now: Optional[float] = None) -> dict:
+    now = now if now is not None else time.time()
     noise = classify_noise(facts)
     keys = canonical_keys(facts, probes, rules)
     clusters = build_clusters(facts, keys, rules, noise)

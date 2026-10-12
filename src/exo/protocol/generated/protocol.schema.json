@@ -224,6 +224,10 @@
         "note": {
           "type": "string",
           "default": ""
+        },
+        "client": {
+          "type": "string",
+          "default": ""
         }
       },
       "additionalProperties": false,

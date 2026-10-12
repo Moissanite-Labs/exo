@@ -1,5 +1,5 @@
-"""Settings and shared state for the exo-bus plugin. Reads the profile's scoped secrets when the
-Hermes gateway is importable (multiplex safe), else the process environment."""
+"""Settings and shared state for the exo-bus plugin. Values come from the channel's own config, then
+the core key lookup (environment, Keychain, keys file; exo.core.models.keys)."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,9 @@ from pathlib import Path
 
 from exo.bus import Client
 from exo.bus.config import exo_home
+from exo.core.models.keys import lookup_key
 
+SECRET_NAMES = ()  # no bus setting is a secret (seat keys live in files); only these may hit the Keychain
 NAMES = ("URL", "SEAT", "KEYS_DIR", "STATE_DIR", "POLL_SECONDS", "HOME_CHANNEL")
 
 
@@ -16,12 +18,8 @@ def setting(name: str, extra: dict | None = None, default: str = "") -> str:
     """`extra[name.lower()]`, else EXO_BUS_<NAME>, else legacy DIVAN_<NAME>, else default."""
     if extra and extra.get(name.lower()):
         return str(extra[name.lower()])
-    try:
-        from gateway.platforms._shared import get_scoped_secret
-    except ImportError:
-        get_scoped_secret = None
     for key in (f"EXO_BUS_{name}", f"DIVAN_{name}"):
-        value = get_scoped_secret(key, "") if get_scoped_secret else os.environ.get(key, "")
+        value = lookup_key(key, sources=name in SECRET_NAMES)
         if value:
             return str(value).strip()
     return default

@@ -1,82 +1,46 @@
-"""ExoContextEngine: Hermes's default compressor, plus principal signals kept verbatim.
+"""ExoContextEngine: the Exo core's compressor, plus principal signals kept verbatim.
 
-The engine wraps; it does not summarise. On each compaction it:
+The engine wraps; it does not summarise. It does two jobs.
 
-1. extracts principal signals (rulings, corrections, open decisions) from the transcript,
-   including items carried in earlier pinned blocks, via `exo.handoff.extract_signals`;
-2. calls the inner compressor (Hermes's `ContextCompressor` by default) unchanged;
-3. writes a handoff file for the session;
-4. puts a `<exo-pinned>` block with those signals, verbatim, into the summary message the inner
-   compressor produced, just before its end marker.
+On the Exo core loop (``select_context`` on every turn):
+1. classifies the principal's messages with ``exo.capture`` and pins each ruling and correction
+   it sees, per session, on disk;
+2. when a pinned item is no longer verbatim in the prompt (the core's summary tree folded it away),
+   adds a ``<exo-pinned>`` block with it, word for word, to the system message;
+3. writes a handoff file whenever the summary tree has grown since the last turn.
 
-Everything the host reads or writes on a context engine (token counters, thresholds, compressor
-specific attributes such as `_micro_compact_enabled`) is forwarded to the inner compressor, so
-Hermes behaves as it does with the built-in engine.
+On a flat message list (``compress``, used by hosts and tools):
+1. extracts the signals, 2. calls the inner compressor (the core's default summarizer by default),
+3. writes a handoff, 4. puts the pinned block into the summary message, before its end marker.
+
+Everything a host reads or writes on a context engine (token counters, thresholds) is forwarded
+to the inner compressor.
 """
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 import os
+import re
 import weakref
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from exo import handoff as hf
+from exo.store import exo_home
 
-try:  # the real contract when running inside Hermes (or with hermes-agent on sys.path)
-    from agent.context_engine import ContextEngine
-    HAVE_HERMES = True
-except Exception:  # pragma: no cover - exercised only without Hermes on the path
-    from abc import ABC, abstractmethod
+from exo.core.context import VIEW_HEADER
+from exo.core.slots import ContextEngine
 
-    HAVE_HERMES = False
-
-    class ContextEngine(ABC):  # minimal stand-in with the same defaults
-        last_prompt_tokens = last_completion_tokens = last_total_tokens = 0
-        threshold_tokens = context_length = compression_count = 0
-        threshold_percent, protect_first_n, protect_last_n = 0.75, 3, 6
-        emit_automatic_compaction_status = True
-
-        @property
-        @abstractmethod
-        def name(self) -> str: ...
-
-        @abstractmethod
-        def update_from_response(self, usage): ...
-
-        @abstractmethod
-        def should_compress(self, prompt_tokens=None): ...
-
-        @abstractmethod
-        def compress(self, messages, current_tokens=None, focus_topic=None, force=False, memory_context=""): ...
-
-        def should_compress_info(self, prompt_tokens=None): return self.should_compress(prompt_tokens), None
-        def prune_tool_results_only(self, messages, current_tokens=None): return messages, 0
-        def select_context(self, request_messages, **kw): return None
-        def on_turn_complete(self, messages, usage=None, **kw): return None
-        def should_compress_preflight(self, messages): return False
-        def should_defer_preflight_to_real_usage(self, rough_tokens): return False
-        def get_automatic_compaction_status_message(self, *, phase, default_message, **c): return default_message
-        def has_content_to_compress(self, messages): return True
-        def on_session_start(self, session_id, **kw): return None
-        def on_session_end(self, session_id, messages): return None
-        def on_session_reset(self):
-            self.last_prompt_tokens = self.last_completion_tokens = self.last_total_tokens = 0
-            self.compression_count = 0
-        def get_tool_schemas(self): return []
-        def handle_tool_call(self, name, args, **kw): return '{"error": "unknown tool"}'
-        def get_status(self): return {"compression_count": self.compression_count}
-        def update_model(self, model, context_length, base_url="", api_key="", provider="", api_mode=""):
-            self.context_length = context_length
-            self.threshold_tokens = int(context_length * self.threshold_percent)
+from . import signals as sg
+from .inner import END_MARKER, SUMMARY_FLAG, SUMMARY_PREFIX, default_inner_factory
 
 logger = logging.getLogger(__name__)
 
 ENGINE_NAME = 'exo-context'
-SUMMARY_FLAG = '_compressed_summary'          # COMPRESSED_SUMMARY_METADATA_KEY in Hermes
-END_MARKER = '--- END OF CONTEXT SUMMARY'     # prefix of Hermes's _SUMMARY_END_MARKER
 
-# Attributes run_agent reads and writes directly on the engine: always the inner's values.
+# Attributes a host reads and writes directly on the engine: always the inner's values.
 _PROXY = ('last_prompt_tokens', 'last_completion_tokens', 'last_total_tokens', 'threshold_tokens',
           'context_length', 'compression_count', 'threshold_percent', 'protect_first_n', 'protect_last_n',
           'emit_automatic_compaction_status')
@@ -85,13 +49,6 @@ _DELEGATE = ('should_compress_info', 'prune_tool_results_only', 'should_compress
              'should_defer_preflight_to_real_usage', 'get_automatic_compaction_status_message',
              'has_content_to_compress', 'on_session_end', 'get_tool_schemas', 'handle_tool_call',
              'get_status')
-# Hermes `compression:` config keys that map one to one onto ContextCompressor kwargs.
-_CFG_MAP = {'threshold': 'threshold_percent', 'target_ratio': 'summary_target_ratio',
-            'protect_last_n': 'protect_last_n', 'protect_first_n': 'protect_first_n',
-            'tail_mode': 'tail_mode', 'min_tail_user_messages': 'min_tail_user_messages',
-            'abort_on_summary_failure': 'abort_on_summary_failure', 'threshold_tokens': 'threshold_tokens_cap',
-            'proactive_prune_tokens': 'proactive_prune_tokens'}
-
 _LIVE: Optional[weakref.ReferenceType] = None
 
 
@@ -103,32 +60,6 @@ def live_engine() -> Optional['ExoContextEngine']:
 def _set_live(engine: 'ExoContextEngine') -> None:
     global _LIVE
     _LIVE = weakref.ref(engine)
-
-
-def hermes_compression_kwargs() -> dict[str, Any]:
-    """Best effort: the user's Hermes `compression:` settings as ContextCompressor kwargs."""
-    try:
-        from hermes_cli.config import load_config
-        cfg = (load_config() or {}).get('compression') or {}
-    except Exception:
-        return {}
-    out = {}
-    for k, kw in _CFG_MAP.items():
-        if k in cfg and cfg[k] is not None:
-            out[kw] = cfg[k]
-    if isinstance(cfg.get('model_thresholds'), dict):
-        out['model_thresholds'] = dict(cfg['model_thresholds'])
-    return out
-
-
-def default_inner_factory(*, model: str, context_length: int, base_url: str = '', api_key: str = '',
-                          provider: str = '', api_mode: str = '', **kwargs: Any):
-    """Build Hermes's built-in ContextCompressor, honouring the user's compression config."""
-    from agent.context_compressor import ContextCompressor
-    cfg = {**hermes_compression_kwargs(), **kwargs}
-    cfg.setdefault('quiet_mode', True)
-    return ContextCompressor(model=model, base_url=base_url, api_key=api_key, provider=provider,
-                             api_mode=api_mode, config_context_length=context_length or None, **cfg)
 
 
 def _accepted_kwargs(fn: Callable, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -199,6 +130,8 @@ class ExoContextEngine(ContextEngine):
         d['_x_resume_block'] = ''
         d['_x_last_handoff'] = None
         d['_x_last_pinned'] = ''
+        d['_x_pins'] = {}
+        d['_x_seen_ranges'] = {}
 
     # --- attribute routing ---------------------------------------------------------
 
@@ -334,7 +267,8 @@ class ExoContextEngine(ContextEngine):
 
     def on_turn_complete(self, messages: list[dict[str, Any]], usage: dict[str, Any] | None = None,
                          **kwargs: Any) -> None:
-        self._x_messages = list(messages or [])
+        if messages:  # the core passes none; its snapshot is taken in select_context
+            self._x_messages = list(messages)
         _set_live(self)
         if self.inner is not None and hasattr(self.inner, 'on_turn_complete'):
             self.inner.on_turn_complete(messages, usage, **kwargs)
@@ -343,28 +277,110 @@ class ExoContextEngine(ContextEngine):
         selected = None
         if self.inner is not None and hasattr(self.inner, 'select_context'):
             selected = self.inner.select_context(request_messages, **kwargs)
-        block = self._x_resume_block
-        if not block:
-            return selected
         msgs = list(selected if selected is not None else request_messages)
+        pins = self._observe(msgs)
+        hidden = self._hidden(msgs, pins)
+        full = self._block_for(pins)
+        self._x_messages = list(msgs) + ([{'role': 'system', 'content': full}] if full else [])
+        self._maybe_handoff(msgs)
+        parts = [self._block_for(hidden, self._x_last_handoff) if hidden else '', self._x_resume_block]
+        extra = '\n\n'.join(p for p in parts if p)
+        if not extra:
+            return selected
+        self._x_last_pinned = extra
         if msgs and isinstance(msgs[0], dict) and msgs[0].get('role') == 'system':
             first = dict(msgs[0])
-            first['content'] = hf.content_text(first.get('content')) + '\n\n' + block
+            first['content'] = hf.content_text(first.get('content')) + '\n\n' + extra
             first.pop('api_content', None)
             msgs[0] = first
         else:
-            msgs.insert(0, {'role': 'system', 'content': block})
+            msgs.insert(0, {'role': 'system', 'content': extra})
         return msgs
+
+    # --- pins: rulings and corrections seen this session, kept verbatim ---------------
+
+    def _pin_file(self) -> Path:
+        sid = re.sub(r'[^A-Za-z0-9_.-]+', '_', self._x_session_id or 'default')
+        return exo_home() / 'context-pins' / f'{sid}.json'
+
+    def _load_pins(self) -> dict[str, list[str]]:
+        sid = self._x_session_id
+        pins = self._x_pins.get(sid)
+        if pins is None:
+            try:
+                data = json.loads(self._pin_file().read_text('utf-8'))
+                pins = {k: [str(t) for t in data.get(k, [])] for k in ('ruling', 'correction')}
+            except (OSError, ValueError, AttributeError):
+                pins = {'ruling': [], 'correction': []}
+            self._x_pins[sid] = pins
+        return pins
+
+    def _observe(self, msgs: list[dict[str, Any]]) -> dict[str, list[str]]:
+        """Add the rulings and corrections visible in `msgs` to this session's pins."""
+        pins = self._load_pins()
+        try:
+            rulings, corrections = sg.classified([m for m in msgs if isinstance(m, dict)])
+        except Exception as e:  # never block a turn on extraction
+            logger.warning('exo-context: signal extraction failed: %s', e)
+            return pins
+        changed = False
+        for kind, found in (('ruling', rulings), ('correction', corrections)):
+            have = {hf.Signal(kind, t).key() for t in pins[kind]}
+            for s in found:
+                if s.key() not in have:
+                    pins[kind].append(s.text)
+                    have.add(s.key())
+                    changed = True
+        if changed:
+            try:
+                path = self._pin_file()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(pins), encoding='utf-8')
+            except OSError as e:
+                logger.warning('exo-context: could not save pins: %s', e)
+        return pins
+
+    @staticmethod
+    def _hidden(msgs: list[dict[str, Any]], pins: dict[str, list[str]]) -> dict[str, list[str]]:
+        """The pins that no user message in `msgs` carries verbatim any more."""
+        seen = [hf.message_text(m) for m in msgs if isinstance(m, dict) and m.get('role') == 'user']
+        return {k: [t for t in items if not any(t.strip() in u for u in seen)] for k, items in pins.items()}
+
+    def _block_for(self, pins: dict[str, list[str]], path: Any = None) -> str:
+        sig = hf.Signals(rulings=[hf.Signal('ruling', t) for t in pins.get('ruling', [])],
+                         corrections=[hf.Signal('correction', t) for t in pins.get('correction', [])])
+        return hf.render_pinned_block(sig, path, self._x_pin_budget)
+
+    def _maybe_handoff(self, msgs: list[dict[str, Any]]) -> None:
+        """Write a handoff when the core's summary tree has grown since the last turn."""
+        if not self._x_write_handoffs or not msgs or msgs[0].get('role') != 'system':
+            return
+        text = hf.message_text(msgs[0])
+        if VIEW_HEADER not in text:
+            return
+        ranges = tuple(re.findall(r'^## Messages (\d+-\d+)\s*$', text, flags=re.M))
+        sid = self._x_session_id
+        if not ranges or ranges == self._x_seen_ranges.get(sid):
+            return
+        self._x_seen_ranges[sid] = ranges
+        try:
+            summary = text.split(VIEW_HEADER, 1)[1].strip()[:6000]
+            path = hf.write_handoff(self.topic, self._x_messages, self._x_store, self.handoff_dir,
+                                    session=sid or None, principal=self._x_principal, summary=summary,
+                                    signals=sg.extract(self._x_messages))
+            self._x_last_handoff = path
+        except Exception as e:
+            logger.warning('exo-context: handoff write failed: %s', e)
 
     # --- compaction --------------------------------------------------------------
 
     def compress(self, messages: list[dict[str, Any]], current_tokens: Optional[int] = None,
                  focus_topic: Optional[str] = None, force: bool = False, memory_context: str = '',
                  **kwargs: Any) -> list[dict[str, Any]]:
-        if self.inner is None:
-            raise RuntimeError('exo-context: no inner compressor yet (update_model was not called)')
+        if self.inner is None:  # the core never calls update_model: build the default inner now
+            self._build_inner(model='', context_length=0)
         try:
-            signals = hf.extract_signals(messages)
+            signals = sg.extract(messages)
         except Exception as e:  # never block compaction on extraction
             logger.warning('exo-context: signal extraction failed: %s', e)
             signals = None
@@ -414,12 +430,8 @@ class ExoContextEngine(ContextEngine):
     def _summary_body(text: str) -> str:
         cut = text.find(END_MARKER)
         body = text[:cut] if cut >= 0 else text
-        try:
-            from agent.context_compressor import SUMMARY_PREFIX
-            if body.lstrip().startswith(SUMMARY_PREFIX):
-                body = body.lstrip()[len(SUMMARY_PREFIX):]
-        except Exception:
-            pass
+        if body.lstrip().startswith(SUMMARY_PREFIX):
+            body = body.lstrip()[len(SUMMARY_PREFIX):]
         body = hf.strip_pinned(body)
         return body.strip()[:6000]
 

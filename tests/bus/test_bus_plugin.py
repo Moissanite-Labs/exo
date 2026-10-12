@@ -91,73 +91,59 @@ def test_tools_sym2p_post_renders_for_readers(bus, seat_env):
     assert "Scope:" in bus.client("gamma").text(env)
 
 
-def hermes_python():
-    d = Path(os.path.expanduser(os.environ.get("EXO_HERMES_DIR", "~/.hermes/hermes-agent")))
-    py = d / "venv" / "bin" / "python"
-    return (d, py) if (d / "gateway" / "platforms" / "base.py").exists() and py.exists() else (None, None)
+class StubLink:
+    """A protocol link that records commands and replays scripted events."""
+
+    def __init__(self):
+        self.calls = []
+        self.q = None
+
+    async def call(self, body):
+        self.calls.append(body)
+        if type(body).__name__ == "SessionCreate":
+            return {"session": {"id": f"s_{len(self.calls)}"}}
+        return {"accepted": True}
+
+    async def events(self, since=0, session=None):
+        import asyncio
+        self.q = self.q or asyncio.Queue()
+        while True:
+            yield await self.q.get()
 
 
-ADAPTER_SCRIPT = textwrap.dedent("""
-    import asyncio, json, sys
-    sys.path[:0] = [sys.argv[1], sys.argv[2], sys.argv[3]]
-    from gateway.config import PlatformConfig
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("exo_bus_plugin", sys.argv[3] + "/__init__.py",
-                                                  submodule_search_locations=[sys.argv[3]])
-    mod = importlib.util.module_from_spec(spec); sys.modules["exo_bus_plugin"] = mod; spec.loader.exec_module(mod)
-    from exo_bus_plugin.exo_bus_hermes.adapter import ExoBusAdapter, register_platform
-    extra = json.loads(sys.argv[4])
-    class Ctx:
-        tools, platforms = {}, {}
-        def register_tool(self, name, **kw): self.tools[name] = kw
-        def register_platform(self, name, label, adapter_factory, check_fn, validate_config=None,
-                              required_env=None, install_hint="", **kw):
-            # what PluginContext.register_platform does, minus the plugin manager bookkeeping
-            from gateway.platform_registry import PlatformEntry, platform_registry
-            entry = PlatformEntry(name=name, label=label, adapter_factory=adapter_factory, check_fn=check_fn,
-                                  validate_config=validate_config, required_env=required_env or [],
-                                  install_hint=install_hint, source="plugin", plugin_name="exo-bus", **kw)
-            platform_registry.register(entry)
-            self.platforms[name] = entry
-    ctx = Ctx(); mod.register(ctx)
-    assert ctx.platforms["exo_bus"].check_fn()
-    a = ExoBusAdapter(PlatformConfig(enabled=True, extra=extra))
-    got = []
-    async def capture(event): got.append((event.text, event.source.chat_id, event.source.chat_type,
-                                           event.source.user_id, event.source.thread_id))
-    a.handle_message = capture
-    async def main():
-        assert await a.connect()
-        await a.disconnect()
-        a._running = True
-        n = await a.poll_once()
-        again = await a.poll_once()
-        sent = await a.send(got[0][1], "reply from hermes")
-        return n, again, sent.success
-    n, again, ok = asyncio.run(main())
-    print(json.dumps({"platforms": list(ctx.platforms), "tools": sorted(ctx.tools), "got": got,
-                      "n": n, "again": again, "sent": ok}))
-""")
-
-
-@pytest.mark.skipif(hermes_python()[0] is None, reason="no Hermes checkout with a venv (set EXO_HERMES_DIR)")
-def test_platform_adapter_against_real_hermes(bus, tmp_path):
-    hermes_dir, py = hermes_python()
+def test_channel_routes_inbox_to_turns_and_replies_signed(bus, tmp_path):
+    import asyncio
+    from exo.protocol import schema as s
+    from exo.core.types import Message
     keys = tmp_path / "seat-keys"
     write_keys(keys, {"beta": bus.keys["beta"]})
     bus.post("gamma", "beta", "direct to beta", thread="d1")
     bus.post("delta", "team:core", "to the core team")
     bus.post("beta", "group", "my own message")
     extra = {"url": bus.url, "seat": "beta", "keys_dir": str(keys), "state_dir": str(tmp_path / "state")}
-    env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1", "HERMES_HOME": str(tmp_path / "hermes-home"),
-           "HOME": str(tmp_path / "home"), "EXO_HOME": str(tmp_path / "exo-home")}
-    r = subprocess.run([str(py), "-c", ADAPTER_SCRIPT, str(hermes_dir), str(REPO / "src"), str(PLUGIN),
-                        json.dumps(extra)], capture_output=True, text=True, env=env, timeout=120)
-    assert r.returncode == 0, r.stderr[-3000:]
-    out = json.loads(r.stdout.strip().splitlines()[-1])
-    assert out["platforms"] == ["exo_bus"] and "bus_post" in out["tools"]
-    assert out["n"] == 2 and out["again"] == 0 and out["sent"] is True
-    assert out["got"][0] == ["direct to beta", "gamma", "dm", "gamma", "d1"]
-    assert out["got"][1][1:3] == ["team:core", "group"]
+    from exo_bus_plugin.exo_bus_hermes.adapter import BusChannel, route
+    load_plugin()
+
+    async def main():
+        link = StubLink()
+        ch = BusChannel(link, extra)
+        assert await ch.start()
+        await asyncio.sleep(0.5)  # the poll loop picks the inbox up on start
+        n = len([c for c in link.calls if type(c).__name__ == "TurnSend"])
+        again = await ch.poll_once()  # nothing new: cursor and dedup hold
+        sessions = dict(ch._by_chat)
+        sid = sessions["gamma"]
+        ev = lambda body, seq: s.Event(seq=seq, type="x", body=body, session=sid)
+        await link.q.put(ev(s.MessageCompleted(message=Message.assistant("reply from exo")), 1))
+        await link.q.put(ev(s.TurnCompleted(turn_id="t1"), 2))
+        await asyncio.sleep(0.3)
+        await ch.stop()
+        return n, again, sessions, link.calls
+
+    n, again, sessions, calls = asyncio.run(main())
+    assert (n, again) == (2, 0) and set(sessions) == {"gamma", "team:core"}
+    sends = [c for c in calls if type(c).__name__ == "TurnSend"]
+    assert "direct to beta" in sends[0].text and "seat gamma" in sends[0].text
     reply = bus.client("gamma").inbox()[-1]
-    assert reply["body"] == "reply from hermes" and reply["from"] == "beta" and reply["thread"] == "d1"
+    assert reply["body"] == "reply from exo" and reply["from"] == "beta" and reply["thread"] == "d1"
+    assert route({"to": ["team:core"], "from": "delta"}, "beta") == ("team:core", "group")

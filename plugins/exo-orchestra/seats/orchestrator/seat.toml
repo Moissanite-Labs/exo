@@ -1,0 +1,24 @@
+# Exo seat template: orchestrator
+# No model or provider is named here on purpose (D-018). The seat asks for a tier (D-017);
+# the principal's router config decides which model serves it. See SEATS.md.
+schema = 1
+
+[seat]
+name = "{{seat_name}}"
+role = "orchestrator"
+description = "Runs the pipeline and hands work to specialist seats."
+stage = "start and end of the pipeline"
+soul = "SOUL.md"
+
+[principal]
+store = "{{principal_store}}"
+
+[models]
+tier = "deep"
+
+[tools]
+toolsets = ["fs", "search", "delegation", "memory", "skills"]
+
+[skills]
+pack = "{{exo_skills_dir}}"
+load = ["control-plane", "operating-doctrine", "council", "choreography", "clean-writing"]

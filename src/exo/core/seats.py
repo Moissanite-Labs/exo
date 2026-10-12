@@ -1,0 +1,138 @@
+"""Seats: a named configuration of one agent (docs/SEATS.md).
+
+A seat file lives at ``$EXO_HOME/seats/<name>.toml`` (or ``.json``), or ``<name>/seat.toml`` with a
+``SOUL.md`` beside it. Two spellings are accepted for each part so the orchestra templates and
+hand-written files both load::
+
+    name = "scout"                     # or [seat] name = ...; defaults to the file name
+    principal = "ada"                # or [principal] id = ..., store = ...
+    [models]  tier = "fast"            # a router role (fast, standard, deep): becomes the seat's main model
+              roles = {main = ["anthropic:x"]}    # plus any router config keys (providers, local, fake)
+    [tools]   toolsets = ["fs", "search", "skills"]   # or top-level toolsets; omit for every toolset
+    [skills]  folders = ["~/notes/skills"]   # also `pack`; `load = [names]` limits the index to those skills
+    [mcp.files]  command = "uvx"  args = ["server"]      # see core/mcp_client.py
+    [channels.bus]  seat = "scout"     # channels to run with the server, each with factory(link, **config)
+    [plugins] enabled = ["exo-memory"]  # or a top-level list; omit for the config.json default
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import tomllib
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+ROUTER_KEYS = ("roles", "providers", "fake", "local")
+
+
+class SeatError(ValueError):
+    pass
+
+
+def seats_dir(home: str | Path) -> Path:
+    return Path(home) / "seats"
+
+
+def _table(v: Any) -> dict:
+    return v if isinstance(v, dict) else {}
+
+
+def _strs(v: Any) -> list[str] | None:
+    return [str(x) for x in v] if isinstance(v, list) else None
+
+
+@dataclass
+class Seat:
+    name: str
+    role: str = ""
+    description: str = ""
+    principal: str | None = None
+    principal_store: str | None = None
+    tier: str | None = None
+    models: dict[str, Any] = field(default_factory=dict)  # router config overrides
+    toolsets: list[str] | None = None                       # None = every toolset
+    skill_folders: list[str] = field(default_factory=list)
+    skill_load: list[str] | None = None                     # None = every skill found
+    mcp: dict[str, dict[str, Any]] = field(default_factory=dict)
+    plugins: list[str] | None = None                        # None = the config.json default
+    channels: dict[str, dict[str, Any]] = field(default_factory=dict)  # enabled channels -> factory config
+    soul: str = ""
+    path: str = ""
+
+    def summary(self) -> dict[str, Any]:
+        d = asdict(self)
+        d.pop("soul"), d.pop("models")
+        return {**d, "has_soul": bool(self.soul)}
+
+
+def parse(data: dict[str, Any], name: str = "", path: str = "", soul: str = "") -> Seat:
+    head = _table(data.get("seat"))
+    nm = str(head.get("name") or data.get("name") or name)
+    if "{{" in nm or not ID_RE.match(nm):
+        raise SeatError(f"bad seat name {nm!r}: use lowercase letters, digits, - and _")
+    pr = data.get("principal")
+    pr_id = pr if isinstance(pr, str) else _table(pr).get("id")
+    models = _table(data.get("models"))
+    tools = _table(data.get("tools"))
+    skills = _table(data.get("skills"))
+    plugins = data.get("plugins")
+    mcp = _table(data.get("mcp"))
+    mcp = _table(mcp.get("servers")) if isinstance(mcp.get("servers"), dict) else mcp
+    ch = data.get("channels")
+    channels = {str(n): {} for n in ch} if isinstance(ch, list) else \
+        {k: (v if isinstance(v, dict) else {}) for k, v in _table(ch).items()}
+    folders = [*(_strs(skills.get("folders")) or []), *([str(skills["pack"])] if skills.get("pack") else [])]
+    return Seat(
+        name=nm, role=str(head.get("role") or data.get("role") or ""),
+        description=str(head.get("description") or data.get("description") or ""),
+        principal=str(pr_id) if pr_id else None, principal_store=_table(pr).get("store") or None,
+        tier=models.get("tier"), models={k: models[k] for k in ROUTER_KEYS if k in models},
+        toolsets=_strs(tools.get("toolsets")) if "toolsets" in tools else _strs(data.get("toolsets")),
+        skill_folders=folders, skill_load=_strs(skills.get("load")),
+        mcp={k: v for k, v in mcp.items() if isinstance(v, dict)},
+        plugins=_strs(plugins.get("enabled") if isinstance(plugins, dict) else plugins), channels=channels,
+        soul=soul, path=path)
+
+
+def _candidates(home: str | Path, name: str) -> list[Path]:
+    d = seats_dir(home)
+    return [d / f"{name}.toml", d / f"{name}.json", d / name / "seat.toml", d / name / "seat.json"]
+
+
+def _read(path: Path) -> dict[str, Any]:
+    try:
+        data = tomllib.loads(path.read_text("utf-8")) if path.suffix == ".toml" else json.loads(path.read_text("utf-8"))
+    except (tomllib.TOMLDecodeError, json.JSONDecodeError) as e:
+        raise SeatError(f"{path}: {e}") from e
+    if not isinstance(data, dict):
+        raise SeatError(f"{path}: top level must be a table")
+    return data
+
+
+def load(home: str | Path, name: str) -> Seat:
+    if not ID_RE.match(name or ""):
+        raise SeatError(f"bad seat name {name!r}")
+    for p in _candidates(home, name):
+        if p.is_file():
+            data = _read(p)
+            soul_file = p.parent / str(_table(data.get("seat")).get("soul") or "SOUL.md")
+            soul = soul_file.read_text("utf-8").strip() if p.name.startswith("seat.") and soul_file.is_file() else ""
+            return parse(data, name, str(p), soul)
+    raise SeatError(f"no seat {name!r} in {seats_dir(home)}")
+
+
+def list_seats(home: str | Path) -> list[dict[str, Any]]:
+    """Every seat file under ``$EXO_HOME/seats``, with a per-file ``error`` instead of a raise."""
+    d = seats_dir(home)
+    names = sorted({p.stem if p.is_file() else p.name for p in d.iterdir() if p.suffix in ("", ".toml", ".json")}
+                   if d.is_dir() else set())
+    out = []
+    for n in names:
+        try:
+            out.append(load(home, n).summary())
+        except SeatError as e:
+            out.append({"name": n, "error": str(e)})
+    return out

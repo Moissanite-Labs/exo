@@ -1,11 +1,11 @@
 import sqlite3
 
-from exo_command import costs
-from exo_command.ro import ProfileDb, discover_profiles
+from exo.ingest import hermes_dashboard as hd
+from exo.ingest.hermes_dashboard import ProfileDb, discover_profiles
 
 
 def test_cost_panel(world, now):
-    d = costs.per_session(discover_profiles(world["home"]), window_days=7, now=now)
+    d = hd.cost_per_session(discover_profiles(world["home"]), window_days=7, now=now)
     assert d["available"]
     top = d["top"][0]
     assert top["session_id"] == "b1" and top["cost_usd"] == 2.0 and top["estimated"] is False
@@ -25,5 +25,5 @@ def test_unavailable_on_schema_without_costs(tmp_path, now):
     c.execute("CREATE TABLE sessions (id TEXT, source TEXT, started_at REAL)")
     c.commit()
     c.close()
-    d = costs.per_session([ProfileDb("old", db)], now=now)
+    d = hd.cost_per_session([ProfileDb("old", db)], now=now)
     assert d["available"] is False and d["top"] == []

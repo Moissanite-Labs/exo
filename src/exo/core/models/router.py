@@ -326,9 +326,12 @@ class ModelError(RuntimeError):
 
 
 async def aux(router: Router, prompt: str | list[Message], *, system: str | None = None, role: str = "aux",
-              **opts: Any) -> str:
+              session_id: str | None = None, **opts: Any) -> str:
     """One-shot side call (titles, summaries, decisions): returns the text, raises ModelError.
-    ``role="decision"`` for cheap structured choices."""
+    ``role="decision"`` for cheap structured choices. Pass ``session_id`` for providers that require a
+    per-conversation header (their ``session_header``)."""
+    if session_id:
+        opts["session_id"] = session_id
     messages = [Message.user(prompt)] if isinstance(prompt, str) else list(prompt)
     if system:
         messages.insert(0, Message.system(system))
@@ -341,3 +344,19 @@ async def aux(router: Router, prompt: str | list[Message], *, system: str | None
         elif ev.kind == "done" and ev.message is not None and not text:
             text.append(ev.message.text())
     return "".join(text)
+
+
+_BG: dict[str, Any] = {}
+
+
+def aux_sync(router: Router, prompt: str | list[Message], *, timeout: float | None = 120.0, **kw: Any) -> str:
+    """Blocking ``aux`` for sync callers (plugin threads). Runs on one shared background event loop so the
+    router's HTTP clients stay bound to a single loop. Never call it from that loop."""
+    import asyncio
+    import threading
+
+    if "loop" not in _BG:
+        loop = asyncio.new_event_loop()
+        threading.Thread(target=loop.run_forever, name="exo-aux-loop", daemon=True).start()
+        _BG["loop"] = loop
+    return asyncio.run_coroutine_threadsafe(aux(router, prompt, **kw), _BG["loop"]).result(timeout)

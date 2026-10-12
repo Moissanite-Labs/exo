@@ -1,6 +1,6 @@
 name: exo-orchestra
-version: "0.1.0"
-description: "Exo orchestra. The Protean multi-agent system as a generic template: seven role profiles (mission control, orchestrator, researcher, architect, designer, builder, reviewer), the shared skill pack (control plane, doctrine, council, choreography, clean-writing gate, GitHub pack, SYM-2P), and an /orchestra command that lists roles and skills and renders a role profile. A principal's own agent names and rules live in the principal store, not here."
+version: "0.2.0"
+description: "Exo orchestra. The multi-agent system as a generic template: seven seat templates (mission control, orchestrator, researcher, architect, designer, builder, reviewer) in the documented seat format (SEATS.md), the shared skill pack (control plane, doctrine, council, choreography, clean-writing gate, GitHub pack, SYM-2P) loaded natively, and an /orchestra command that lists seats and skills and renders or checks a seat. A principal's own agent names and rules live in the principal store, not here."
 author: "Aska Digital"
 license: "MIT"
 provides_commands:
@@ -12,17 +12,9 @@ config_schema:
     description: "Skill pack directory. Empty: $EXO_SKILLS_DIR, else the repo's skills/ folder."
   register_skills:
     type: bool
-    default: false
-    description: "Also register every pack skill as a namespaced plugin skill (exo-orchestra:<name>). Off by default because profiles read the pack through skills.external_dirs, which keeps bare names."
-  role:
-    type: str
-    default: ""
-    description: "This profile's role (one of the seven templates). Informational."
-  seat:
-    type: str
-    default: ""
-    description: "This profile's seat name, as bound in the principal store agents/."
+    default: true
+    description: "Register every pack skill with the core as exo-orchestra:<name>. Set false to skip."
   principal_store:
     type: str
     default: ""
-    description: "Path to the principal store. Empty: $EXO_PRINCIPAL_STORE, else $EXO_HOME/principals/$EXO_PRINCIPAL."
+    description: "Path to the principal store, filled into rendered seats. Empty: $EXO_PRINCIPAL_STORE."

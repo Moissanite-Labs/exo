@@ -200,6 +200,12 @@ class PluginContext:
         self._undo: list[Callable[[], None]] = []
         self.registered: list[tuple[str, str]] = []
 
+    @property
+    def router(self) -> Any:
+        """The engine's model Router (``exo.core.models.router.aux_sync(ctx.router, ...)`` for a side call);
+        None until an engine owns the manager."""
+        return self.manager.router
+
     def _track(self, kind: str, name: str, undo: Callable[[], None]) -> None:
         self._undo.append(undo)
         self.registered.append((kind, name))
@@ -316,6 +322,7 @@ class PluginManager:
                  hooks: HookRegistry | None = None) -> None:
         self.config = dict(config or {})
         self.hooks = hooks or HookRegistry()
+        self.router: Any = None  # set by the engine: the model Router, for plugins that make side calls
         self.slots = Slots(memory_choice=memory_choice, context_choice=context_choice)
         self.tools: dict[str, ToolEntry] = {}
         self.commands: dict[str, CommandEntry] = {}

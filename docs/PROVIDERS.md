@@ -26,7 +26,8 @@ Keys are never printed or logged. Never paste one into chat.
 | openai | OPENAI_API_KEY | https://api.openai.com/v1 | works |
 | opencode-go | OPENCODE_GO_API_KEY | https://opencode.ai/zen/go/v1 | chat models only (see below) |
 | nous | NOUS_API_KEY | https://inference-api.nousresearch.com/v1 | off: not verified |
-| jev | TYPESAFE_API_KEY | https://api.typesafe.ai/v1 | decision role only; adapter is a stub |
+| jev | TYPESAFE_API_KEY | https://api.typesafe.ai/v1 | decision role only; works (opt-in) |
+| laya | none | http://127.0.0.1:8000/v1 | decision role only; local; needs `laya-serve` (see below) |
 | llamacpp, ollama, lmstudio, vllm | none | http://127.0.0.1 (ports 8080, 11434, 1234, 8000) | local |
 
 OpenCode Go: Exo uses its OpenAI-compatible endpoint (`/chat/completions`): GLM, Kimi, DeepSeek,
@@ -36,8 +37,34 @@ like `opencode-go:kimi-k3`.
 Nous Portal: the base URL is in Nous's Hermes docs, but they describe OAuth-minted tokens, and it is
 unclear whether a plain API key works. The entry is commented out in `catalog.toml` until checked.
 
-Jev returns probabilities, not text. Exo can hold the provider and key, but the adapter raises
-"not implemented" and the router falls through to the next route.
+Decision models (Jev, Laya) return probabilities, not text. They speak `POST {base_url}/systemone`
+with `state`, `model` and typed `questions` (choice, score, noul); the reply has `answers`. Docs:
+https://docs.typesafe.ai/api.md. Code: `exo/core/models/decision.py`. Use `ask_choice` and `ask_score`
+there; they go through the `decision` role. If the route is a chat model, the same call asks for a JSON
+answer and reports the pick as probability 1.0 with `source="generative"`. A decision model may only make
+a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:
+
+    exo decide "Is this safe to run?" --options safe,risky --state "rm -rf build/"
+
+Jev: set `TYPESAFE_API_KEY` (env, Keychain service `exo`, or keys.env). Opt in with
+`decision = ["laya:laya", "jev:jev-latest"]` or `["jev:jev-latest"]` in `[models.roles]`.
+Shapes were checked live on 2026-10-11 (7 calls). Score levels count from 0; a score can fall between
+levels (1.43). Errors: 401 and 422 are not retryable; 429, 529, 5xx and network errors are.
+
+Laya (local, Apache 2.0, https://github.com/NandhaKishorM/laya): the catalog entry is on by default as
+the `decision` route, but Laya is not installed on this Mac today, so the route fails fast and the
+role falls back to aux, then main. It is an encoder model, so llama.cpp and Ollama cannot serve it (no
+GGUF); it needs its own server. To turn it on:
+
+    pip install "laya[serve]"          # pulls torch; the install is several GB
+    LAYA_PORT=8000 laya-serve          # default bind 0.0.0.0:8000; set LAYA_HOST=127.0.0.1 to keep it local
+
+Weights download from Hugging Face on first use: about 0.65 GB (`laya-multilingual`) or 0.81 GB
+(`laya`, English) each, about 2.3 GB for all three. Device is picked in the order CUDA, MPS, XPU, CPU,
+so Apple silicon uses MPS. Model ids: `laya`, `laya-multilingual`, `laya-typed-decisions`. Base Laya is weak
+zero-shot and over-confident (research/DECISION-MODELS.md); do not gate on its raw numbers. It was not
+installed or downloaded here because torch plus weights is over 2 GB. If port 8000 clashes with vLLM,
+set `LAYA_PORT` and override `base_url` under `[models.providers.laya]`.
 
 Add or change a provider in config under `[models.providers.NAME]` with `transport`, `base_url`,
 `key_env`.
@@ -51,7 +78,7 @@ Override any role in `[models.roles]` in your config.
 |---|---|---|
 | main | Anthropic Opus 5.5, then OpenRouter | none |
 | aux | Haiku 5.5 | main |
-| decision | empty (local Laya is the planned default; until its adapter lands it uses aux) | aux, then main |
+| decision | local Laya (`laya:laya`); Jev is opt-in | aux, then main |
 | eval | empty, which means the `main` route | main |
 | fast, standard, deep | Haiku, Sonnet, Opus | standard, then main |
 

@@ -1,9 +1,9 @@
 name: exo-memory
-version: 0.1.0
+version: 0.2.0
 description: "Exo memory provider: principal pack in the system prompt, belief and episodic recall per turn, signed ledger capture of turns, rulings and corrections."
 kind: exclusive
 platforms: [linux, macos]
 author: aska-digital
 license: MIT
 tags: [memory-provider, local-first, exo]
-# Needs the exo package (>=0.1.0) importable in the Hermes environment.
+# Runs on the Exo core (exo.core.slots.MemoryProvider).

@@ -148,6 +148,13 @@ class MemoryProvider(ABC):
         """Insights from messages about to be compacted, fed into the summary prompt."""
         return ""
 
+    def checkpoint(self, *, session_id: str = "", messages: list[dict[str, Any]] | None = None,
+                   reason: str = "turn") -> None:
+        """Optional save point. ``reason="turn"``: after every turn, ``messages`` is the recent transcript.
+        ``reason="pre_compress"``: just before a block of ``messages`` is summarized and left out of context.
+        Also optional: ``on_compacted(session, node)``, after a summary node is written (node has id, level,
+        start, end, text). Unaccepted keyword arguments are dropped, so declare only what you use."""
+
     def on_delegation(self, task: str, result: str, *, child_session_id: str = "", **kwargs) -> None:
         """Parent-side observation of a finished delegation."""
 

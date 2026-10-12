@@ -1,4 +1,4 @@
-"""exo-memory: the Exo memory provider for Hermes Agent.
+"""exo-memory: the Exo memory provider for the Exo core.
 
 One provider slot holds three layers (ARCHITECTURE.md section 3):
 
@@ -8,7 +8,7 @@ One provider slot holds three layers (ARCHITECTURE.md section 3):
 - the signed ledger (exo.ledger): every turn, memory write, delegation, captured ruling and
   correction becomes an event.
 
-All state is per Hermes home (profile) and lives in the principal store, never in HERMES_HOME.
+All state is per Exo home (seat) and lives in the principal store.
 """
 from __future__ import annotations
 
@@ -22,15 +22,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional
 
-try:
-    from agent.memory_provider import MemoryProvider, RecallStatus
-except ImportError:  # outside Hermes (tests, tooling): a minimal stand-in base
-    from abc import ABC
-
-    class MemoryProvider(ABC):  # type: ignore[no-redef]
-        pre_compress_checkpoint_api_version = 1
-
-    RecallStatus = None  # type: ignore[assignment]
+from exo.core.slots import MemoryProvider, RecallStatus
 
 try:
     from exo import crypto
@@ -41,7 +33,7 @@ try:
     from exo.store import PrincipalStore
     _EXO_ERROR = ""
 except ImportError as exc:  # the plugin still loads and reports why it is unavailable
-    _EXO_ERROR = f"the exo package is not importable ({exc}); install it into the Hermes environment"
+    _EXO_ERROR = f"the exo package is not importable ({exc})"
 
 from . import config as C
 
@@ -89,29 +81,18 @@ def _h(text: str) -> str:
     return hashlib.sha256(normalize(text or "").encode("utf-8")).hexdigest()[:24]
 
 
-def _hermes_home_default() -> Optional[str]:
-    try:
-        from hermes_constants import get_hermes_home
-        return str(get_hermes_home())
-    except Exception:
-        return os.environ.get("HERMES_HOME")
+def _home_default() -> Optional[str]:
+    return os.environ.get("EXO_HOME") or None
 
 
 def _home_key(home: Optional[str] = None) -> Optional[str]:
-    try:
-        from hermes_constants import hermes_home_key
-        return hermes_home_key(home)
-    except Exception:
-        h = home or os.environ.get("HERMES_HOME")
-        return os.path.realpath(os.path.expanduser(h)) if h else None
+    h = home or os.environ.get("EXO_HOME")
+    return os.path.realpath(os.path.expanduser(h)) if h else None
 
 
 def _compaction_skip():
-    try:
-        from agent.context_compressor import is_compaction_summary_message
-        return is_compaction_summary_message
-    except Exception:
-        return None
+    from exo.ext.compat import is_compaction_summary_message
+    return is_compaction_summary_message
 
 
 def trim_pack(text: str, budget_tokens: int) -> str:
@@ -211,7 +192,7 @@ class _State:
 
 
 class ExoMemoryProvider(MemoryProvider):
-    """Hermes MemoryProvider backed by an Exo principal store."""
+    """Exo-core MemoryProvider backed by an Exo principal store."""
 
     pre_compress_checkpoint_api_version = 2  # captures land in the ledger before compression
 
@@ -228,7 +209,7 @@ class ExoMemoryProvider(MemoryProvider):
         return PROVIDER_NAME
 
     def _cfg(self, home: Optional[str] = None) -> dict:
-        return C.load(home or _hermes_home_default(), self._overrides)
+        return C.load(home or _home_default(), self._overrides)
 
     def _state(self, home: Optional[str] = None) -> Optional[_State]:
         key = _home_key(home)
@@ -270,7 +251,7 @@ class ExoMemoryProvider(MemoryProvider):
         except ValueError as exc:
             return str(exc)
         if root is None:
-            return "no principal configured: set EXO_PRINCIPAL (or EXO_STORE), or run hermes memory setup"
+            return "no principal configured: set EXO_PRINCIPAL (or EXO_STORE), or save a config with exo-memory"
         if not (root / "PRINCIPAL.md").is_file() and not (root / "nodes").is_dir():
             return f"no principal store at {root}: run exo init <id>"
         return ""
@@ -278,8 +259,8 @@ class ExoMemoryProvider(MemoryProvider):
     def get_config_schema(self) -> list[dict[str, Any]]:
         return [dict(f) for f in C.SCHEMA]
 
-    def save_config(self, values: dict[str, Any], hermes_home: str) -> None:
-        C.save(values, hermes_home)
+    def save_config(self, values: dict[str, Any], exo_home: str) -> None:
+        C.save(values, exo_home)
 
     def identity_signature(self) -> dict[str, Any]:
         try:
@@ -303,7 +284,7 @@ class ExoMemoryProvider(MemoryProvider):
     def initialize(self, session_id: str, **kwargs) -> None:
         if _EXO_ERROR:
             raise RuntimeError(_EXO_ERROR)
-        home = kwargs.get("hermes_home") or _hermes_home_default()
+        home = kwargs.get("exo_home") or kwargs.get("hermes_home") or _home_default()
         key = _home_key(home) or "default"
         with self._lock:
             st = self._states.get(key)
@@ -477,6 +458,22 @@ class ExoMemoryProvider(MemoryProvider):
                 sess["last_agent"] = ev["id"]
                 st.remember(assistant_content, ev["id"])
         self._log_episodic(st, sess, sid, user_content, assistant_content, messages)
+        self._capture_turn(st, sess, user_content, assistant_content, messages)
+
+    def _capture_turn(self, st: _State, sess: dict, user: str, assistant: str,
+                      messages: Optional[list[dict[str, Any]]]) -> None:
+        """Capture rulings and corrections as turns happen. The Exo core has no pre-compress
+        checkpoint, so each turn is scanned with a short window of earlier turns (a correction
+        needs the agent message it follows). Keys dedupe the overlap."""
+        recent = sess.setdefault("recent", [])
+        if messages:
+            window = [m for m in messages[-8:] if isinstance(m, dict)]
+        else:
+            window = recent + [m for m in ({"role": "user", "content": user},
+                                           {"role": "assistant", "content": assistant}) if (m["content"] or "").strip()]
+        sess["recent"] = window[-6:]
+        if st.cfg.get("capture_turns", True) and window:
+            self._safe(lambda: self._capture(st, window, "turn"))
 
     def _log_episodic(self, st: _State, sess: dict, sid: str, user: str, assistant: str,
                       messages: Optional[list[dict]]) -> None:
@@ -570,14 +567,19 @@ class ExoMemoryProvider(MemoryProvider):
         st = self._state()
         if st is None or not messages:
             return ""
-        strict = bool(kwargs.get("require_checkpoint"))
+        signals = self._capture(st, messages, "pre_compress", bool(kwargs.get("require_checkpoint")))
+        return render_block(signals, st.cfg["capture_chars"])
+
+    def _capture(self, st: _State, messages: list[dict[str, Any]], source: str, strict: bool = False) -> list:
+        """Extract rulings, corrections and open questions from `messages` and append the new
+        ones to the ledger. Returns every signal found (new or not)."""
         signals = extract_signals(messages, skip=_compaction_skip())
         from exo.capture import content_text
         for sig in signals:
             if sig.key in st.rt.capture_keys:
                 continue
             try:
-                kind, body = to_event(sig, source="pre_compress")
+                kind, body = to_event(sig, source=source)
                 src = content_text(messages[sig.index].get("content"))
                 refs = [st.utterances[_h(src)]] if _h(src) in st.utterances else []
                 if sig.kind == CORRECTION:
@@ -589,7 +591,7 @@ class ExoMemoryProvider(MemoryProvider):
                 if strict:
                     raise
                 logger.warning("exo-memory: capture write failed: %s", exc)
-        return render_block(signals, st.cfg["capture_chars"])
+        return signals
 
     def _target_event(self, st: _State, messages: list[dict], idx: Optional[int]) -> str:
         """Ledger id of the agent message a correction judges; logs it first when missing."""

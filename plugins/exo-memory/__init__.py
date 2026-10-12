@@ -1,8 +1,8 @@
-"""exo-memory: Hermes memory-provider plugin for Exo.
+"""exo-memory: memory-provider plugin for the Exo core.
 
-Drop this directory into ``$HERMES_HOME/plugins/exo-memory/`` (the Exo installer does it),
-install the ``exo`` package into the Hermes environment, and set ``memory.provider: exo-memory``.
-Uses the MemoryProvider contract only (agent/memory_provider.py); no Hermes core edits.
+The folder holds ``plugin.yaml`` and ``register(ctx)``; the Exo plugin loader imports it and the
+provider fills the memory slot (``exo.core.slots.MemoryProvider``). Config: ``plugin_config`` in
+``$EXO_HOME/config.json``, ``<exo_home>/exo-memory/config.json`` or ``EXO_PRINCIPAL`` / ``EXO_STORE``.
 """
 if __package__:
     from .exo_memory import ExoMemoryProvider, PROVIDER_NAME, register
@@ -14,4 +14,4 @@ else:  # imported as a plain module (pytest collects this directory as a package
     from exo_memory import ExoMemoryProvider, PROVIDER_NAME, register
 
 __all__ = ["ExoMemoryProvider", "PROVIDER_NAME", "register"]
-__version__ = "0.1.0"
+__version__ = "0.2.0"

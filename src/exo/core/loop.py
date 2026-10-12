@@ -173,6 +173,9 @@ class Loop:
                                           usage=result.usage), session)
         reply = result.message.text() if result.message else ""
         await self._memory("sync_turn", user.text(), reply, session_id=session)
+        if self.memory is not None and hasattr(self.memory, "checkpoint"):
+            recent = [{"role": m.role, "content": m.text()} for m in self.store.messages(session)[-40:]]
+            await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
         if hasattr(self.context, "on_turn_complete"):
             await _maybe_await(self.context.on_turn_complete(session, result.usage))
         info = self.store.update_session(session)

@@ -16,6 +16,7 @@ dashes replaced). The tree, lanes and settle logic are Exo's own.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import secrets
 from dataclasses import dataclass
@@ -155,6 +156,18 @@ def _cut(text: str, limit: int) -> str:
     return text[:limit] + f" ...[{len(text) - limit} chars cut]"
 
 
+def is_compaction_summary_message(msg: Any) -> bool:
+    """True for a message (a Message or an OpenAI-style dict) that carries the compaction view or a lifted summary."""
+    if isinstance(msg, Message):
+        text = msg.text()
+    else:
+        c = msg.get("content")
+        text = "\n".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in c) if isinstance(c, list) \
+            else ("" if c is None else str(c))
+    return any(m in text for m in (VIEW_HEADER, HISTORICAL_TASK_HEADING)) or \
+        text.lstrip().startswith(("[CONTEXT COMPACTION", "[Context summary"))
+
+
 def render_message(msg: Message, limit: int = 4000) -> str:
     """One message as labeled text for a summarizer or a view placeholder."""
     label = {"user": "USER", "assistant": "ASSISTANT", "tool": "TOOL", "system": "SYSTEM"}[msg.role]
@@ -194,9 +207,12 @@ class DefaultCompressor:
         self.retry_delay = retry_delay
         self.opts = opts
 
-    async def summarize(self, content: str, previous: str | None = None, extra: str = "") -> str:
+    async def summarize(self, content: str, previous: str | None = None, extra: str = "",
+                        session: str | None = None) -> str:
         prompt = summary_prompt(content, self.budget, previous, extra)
         opts = dict(self.opts)
+        if session:
+            opts["session_id"] = session  # providers that need a per-conversation header (session_header)
         if self.model:
             opts["model"] = self.model
         last_error = "no output"
@@ -271,6 +287,17 @@ class TreeContext:
         self._import_open.set()
         self._tasks: dict[str, dict[str, asyncio.Task]] = {}  # session -> node id -> task
         self.on_event: Callable[[Any, str], Awaitable[Any]] | None = None
+        # Optional hooks (sync or async). on_pre_compress(session, messages) may return extra text that
+        # is fed into the leaf summary prompt; on_compacted(session, node) fires after a node is summarized.
+        self.on_pre_compress: Callable[[str, list[Message]], Any] | None = None
+        self.on_compacted: Callable[[str, SummaryNode], Any] | None = None
+
+    async def _summarize(self, session: str, content: str, previous: str | None = None, extra: str = "") -> str:
+        """Call the compressor with the kwargs it accepts (session, extra); older compressors take neither."""
+        fn = self.compressor.summarize
+        params = inspect.signature(fn).parameters
+        kw = {k: v for k, v in (("session", session), ("extra", extra)) if v and k in params}
+        return await fn(content, previous=previous, **kw) if previous is not None else await fn(content, **kw)
 
     # ---- lanes
 
@@ -300,11 +327,14 @@ class TreeContext:
                 if node.level == 0:
                     msgs = self.store.messages(node.session, since=node.start - 1, upto=node.end)
                     source = "\n\n".join(render_message(m) for m in msgs)
-                    text = await self.compressor.summarize(source)
+                    extra = ""
+                    if self.on_pre_compress is not None:
+                        extra = str(await _maybe_await(self.on_pre_compress(node.session, msgs)) or "")
+                    text = await self._summarize(node.session, source, extra=extra)
                 else:
                     left, right = self._children(node)
                     source = left.text + right.text
-                    text = await self.compressor.summarize(right.text, previous=left.text)
+                    text = await self._summarize(node.session, right.text, previous=left.text)
                 node.text, node.status = text, "done"
             except asyncio.CancelledError:
                 raise
@@ -318,6 +348,11 @@ class TreeContext:
                 await self.on_event(ContextCompacted(before_tokens=estimate_tokens(source),
                                                      after_tokens=estimate_tokens(node.text),
                                                      summary_message_id=node.id), node.session)
+            if self.on_compacted is not None:
+                try:
+                    await _maybe_await(self.on_compacted(node.session, node))
+                except Exception:  # a plugin hook never breaks upkeep
+                    pass
             self._maybe_merge(node.session)
 
     def _children(self, node: SummaryNode) -> tuple[SummaryNode, SummaryNode]:

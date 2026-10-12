@@ -39,7 +39,7 @@ def test_principal_id_resolves_under_exo_home(tmp_path, monkeypatch):
     monkeypatch.setenv("EXO_PRINCIPAL", "pat")
     p = ExoMemoryProvider({"compact_enabled": False})
     assert p.is_available(), p.unavailable_reason()
-    p.initialize("s1", hermes_home=str(tmp_path / "hermes-home"))
+    p.initialize("s1", exo_home=str(tmp_path / "exo-home"))
     try:
         assert p._state().rt.root == (tmp_path / "exo-home" / "principals" / "pat").resolve()
         assert (tmp_path / "exo-home" / "keys" / "exo-memory.key").exists()
@@ -48,7 +48,7 @@ def test_principal_id_resolves_under_exo_home(tmp_path, monkeypatch):
 
 
 def test_config_round_trip(tmp_path):
-    home = tmp_path / "hermes-home"
+    home = tmp_path / "exo-home-cfg"
     p = ExoMemoryProvider()
     keys = {f["key"] for f in p.get_config_schema()}
     assert {"principal", "exo_home", "pack_budget", "prefetch_budget"} <= keys
@@ -95,10 +95,10 @@ def test_sync_turn_writes_utterances_and_episodic(provider, store, tmp_path):
     # the same message list again adds nothing to the episodic log
     provider.sync_turn("", "", session_id="s1", messages=msgs)
     assert len(epi) == 2
-    # the log lives in the store, never in HERMES_HOME
+    # the log lives in the store, never in the Exo home
     assert (store.root / "episodic" / "main").is_dir()
     assert (store.root / "episodic" / ".gitignore").read_text().strip().endswith("*")
-    assert not any("main" in d for _, d, _ in os.walk(tmp_path / "hermes-home"))
+    assert not any("main" in d for _, d, _ in os.walk(tmp_path / "exo-home"))
     assert provider._state().rt.ledger.verify()["ok"]
 
 

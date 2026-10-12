@@ -1,8 +1,8 @@
-from exo_command import kanban
+from exo.ingest import hermes_dashboard as hd
 
 
 def test_boards_columns_and_limits(world):
-    d = kanban.tasks(world["home"], done_limit=5)
+    d = hd.kanban_tasks(world["home"], done_limit=5)
     slugs = [b["slug"] for b in d["boards"]]
     assert slugs == ["default", "site"]
     default = d["boards"][0]
@@ -17,5 +17,5 @@ def test_boards_columns_and_limits(world):
 
 
 def test_no_boards(tmp_path):
-    d = kanban.tasks(tmp_path)
+    d = hd.kanban_tasks(tmp_path)
     assert d["boards"] == [] and d["open"] == 0
