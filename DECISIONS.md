@@ -1040,3 +1040,23 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   memory. Considered only through cryptographic or decentralized compute that keeps the operator blind.
 - **Own inference (later):** a keyless path where users never handle API keys, once funded.
 - **Rejected for now:** a hosted service that stores user keys on our servers.
+
+## D-051 (2026-10-12) muse-cli: a Muse Code subscription through the `muse` CLI
+- **Decision:** add a keyless provider `muse-cli` that runs `muse exec` as a subprocess, modelled on `claude-cli`.
+  Exo never reads, copies or stores the Muse token; the CLI owns it in the OS keychain. Status reads only the
+  non-secret `mechanism` and `subs_active` fields of `~/.config/muse/auth.json`. The test call is one tiny
+  `muse exec` prompt, mapped to the existing error classes plus a new one, `unsigned`.
+- **Why:** the subscription is reachable only through the vendor's login. A subprocess keeps the token out of Exo
+  and out of every log, which is the same line D-034 and D-039 draw for keys.
+- **Limits, accepted:** text only (a turn with tools is refused with status 501 so the router falls back), one
+  process per turn, no token stream, no usage counts, history flattened into one prompt. On macOS the binary must
+  be code-signed or its keychain write fails (`OSStatus -67068`); Exo detects this with `codesign -dv`.
+- **Locked down:** the run has no shell, no writes, no web tools and no session log, in an empty private workspace.
+  `META_API_KEY` is dropped from the child so the subscription, not an API account, is used.
+- **Gate:** `muse login`, `muse auth` and `muse logout` (any position) and `~/.config/muse/` are `credentials`:
+  always ask.
+- **Rejected:** reading the token from the keychain or `auth.json` and calling the API directly (Exo would hold a
+  vendor secret); passing `META_API_KEY` through (bills an API account, not the subscription).
+- **Revisit if:** `muse exec` gains a structured output or tool bridge, which could lift the text-only limit.
+- **Docs:** `docs/PROVIDERS.md` "Use a Muse Code subscription", `docs/GATE.md` "Muse CLI credentials",
+  `docs/DEVELOPER-GUIDE.md` "Add a CLI-backed provider", `docs/WHITEPAPER.md` §13.1, `docs/TOOLS.md`.
