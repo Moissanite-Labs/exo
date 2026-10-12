@@ -605,13 +605,25 @@ def _scalar(v: str) -> str:
     return s
 
 
-def event_ref(eid: str) -> str:
-    """`event:<id>`, shortened only if the hex happens to look like a phone number to the lint."""
-    for n in (64, 16, 12, 8):
-        ref = f"event:{eid[:n]}"
+def _leak_safe(prefix: str, ident: str, lengths: Sequence[int]) -> str:
+    """`prefix + ident`, cut to the longest listed length that the lint's LEAKS patterns accept.
+    Random hex ids sometimes contain a long digit run that reads as a phone number."""
+    for n in lengths:
+        ref = f"{prefix}{ident[:n]}"
         if not any(p.search(ref) for p in LEAKS):
             return ref
-    return f"event:{eid[:8]}"
+    return f"{prefix}{ident[:8]}"
+
+
+def event_ref(eid: str) -> str:
+    """`event:<id>`, shortened only if the hex happens to look like a phone number to the lint."""
+    return _leak_safe("event:", eid, (64, 16, 12, 8))
+
+
+def proposal_ref(pid: str) -> str:
+    """A proposal id for node text. Ids are `p-` + 12 hex of a hash, so a run of 11+ digits is
+    possible (about 1 in 300); cut it short. `proposal_accept` resolves unique prefixes."""
+    return _leak_safe("p-", pid[2:] if pid.startswith("p-") else pid, (12, 10, 8))
 
 
 def render_new_node(p: Proposal, links: Sequence[tuple[str, str]] = ()) -> str:
@@ -657,7 +669,7 @@ def _render_body(p: Proposal, heading: str | None = None) -> str:
     out.append("**How to apply.** Follow the claim in this kind of work and in nearby cases. "
                "If a case is unclear and hard to undo, ask one short numbered question.")
     if p.supersedes:
-        out.append(f"\nSupersedes the earlier belief {p.supersedes}.")
+        out.append(f"\nSupersedes the earlier belief {proposal_ref(p.supersedes)}.")
     return "\n".join(out)
 
 
@@ -680,7 +692,7 @@ def render_update(p: Proposal, old_text: str) -> str:
         fm[j:j] = new_src
     else:
         fm += ["sources:"] + new_src
-    section = _render_body(p, f"{p.title} ({p.created[:10]}, {p.id})")
+    section = _render_body(p, f"{p.title} ({p.created[:10]}, {proposal_ref(p.id)})")
     text = "\n".join(["---", *fm, "---", *body]).rstrip("\n") + "\n\n" + section + "\n"
     return text
 
