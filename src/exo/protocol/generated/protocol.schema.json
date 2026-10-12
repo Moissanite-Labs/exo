@@ -80,6 +80,15 @@
     },
     "taste.edit": {
       "$ref": "#/$defs/TasteEdit"
+    },
+    "feedback.send": {
+      "$ref": "#/$defs/FeedbackSend"
+    },
+    "ui.respond": {
+      "$ref": "#/$defs/UiRespond"
+    },
+    "schedule.edit": {
+      "$ref": "#/$defs/ScheduleEdit"
     }
   },
   "events": {
@@ -139,6 +148,9 @@
     },
     "taste.updated": {
       "$ref": "#/$defs/TasteUpdated"
+    },
+    "ui.panel": {
+      "$ref": "#/$defs/UiPanel"
     },
     "notice": {
       "$ref": "#/$defs/Notice"
@@ -577,6 +589,43 @@
       "additionalProperties": false,
       "description": "Stream events with seq > since. session=None means all sessions."
     },
+    "FeedbackSend": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "verdict": {
+          "enum": [
+            "accept",
+            "edit",
+            "reject",
+            "should_have_been"
+          ]
+        },
+        "message_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "text": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session",
+        "verdict"
+      ],
+      "description": "The principal's verdict on an answer: the learning loop's main signal (D-009, D-022). edit and should_have_been carry the better version in text."
+    },
     "HandoffWritten": {
       "type": "object",
       "properties": {
@@ -845,6 +894,72 @@
         "id"
       ],
       "description": "Server reply to one Command. ``result`` is command-specific JSON."
+    },
+    "ScheduleEdit": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "enum": [
+            "list",
+            "add",
+            "remove",
+            "pause",
+            "resume",
+            "run_now"
+          ]
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "when": {
+          "type": "string",
+          "default": ""
+        },
+        "prompt": {
+          "type": "string",
+          "default": ""
+        },
+        "title": {
+          "type": "string",
+          "default": ""
+        },
+        "seat": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tier": {
+          "enum": [
+            "fast",
+            "standard",
+            "deep"
+          ],
+          "default": "fast"
+        },
+        "deliver": {
+          "type": "string",
+          "default": "notice"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "action"
+      ],
+      "description": "Cron jobs. A run is a fresh session that reports through task.updated (D-022). when: a 5-field cron line (\"0 9 * * *\") or \"every <n>m|h|d\"."
     },
     "Search": {
       "type": "object",
@@ -1430,6 +1545,83 @@
       "required": [
         "turn_id"
       ]
+    },
+    "UiPanel": {
+      "type": "object",
+      "properties": {
+        "panel_id": {
+          "type": "string"
+        },
+        "action": {
+          "enum": [
+            "open",
+            "update",
+            "close"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "markdown",
+            "diff",
+            "table",
+            "tasks",
+            "approval",
+            "taste",
+            "choice",
+            "file",
+            "chart"
+          ],
+          "default": "markdown"
+        },
+        "title": {
+          "type": "string",
+          "default": ""
+        },
+        "text": {
+          "type": "string",
+          "default": ""
+        },
+        "data": {
+          "type": "object",
+          "default": {}
+        },
+        "reason": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "panel_id",
+        "action"
+      ],
+      "description": "A panel the model (via the ui tool) or a command opens beside the transcript (D-014). Every client renders what it can: full panel, compact text, or a link. data is kind-specific and plain JSON; text is the plain-English fallback every client must be able to show."
+    },
+    "UiRespond": {
+      "type": "object",
+      "properties": {
+        "panel_id": {
+          "type": "string"
+        },
+        "action": {
+          "enum": [
+            "opened",
+            "dismissed",
+            "acted",
+            "ignored"
+          ]
+        },
+        "value": {
+          "type": "object",
+          "default": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "panel_id",
+        "action"
+      ],
+      "description": "What the user did with a panel. Dismissed and ignored panels teach too (D-014)."
     },
     "Usage": {
       "type": "object",

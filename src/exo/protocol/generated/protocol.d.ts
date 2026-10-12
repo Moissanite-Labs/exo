@@ -100,6 +100,13 @@ export interface EventsSubscribe {
   session?: string | null;
 }
 
+export interface FeedbackSend {
+  session: string;
+  verdict: "accept" | "edit" | "reject" | "should_have_been";
+  message_id?: string | null;
+  text?: string;
+}
+
 export interface HandoffWritten {
   path: string;
   summary?: string;
@@ -165,6 +172,17 @@ export interface Response {
   ok?: boolean;
   result?: Record<string, unknown>;
   error?: ErrorInfo | null;
+}
+
+export interface ScheduleEdit {
+  action: "list" | "add" | "remove" | "pause" | "resume" | "run_now";
+  job_id?: string | null;
+  when?: string;
+  prompt?: string;
+  title?: string;
+  seat?: string | null;
+  tier?: "fast" | "standard" | "deep";
+  deliver?: string;
 }
 
 export interface Search {
@@ -313,6 +331,22 @@ export interface TurnStarted {
   model?: string;
 }
 
+export interface UiPanel {
+  panel_id: string;
+  action: "open" | "update" | "close";
+  kind?: "markdown" | "diff" | "table" | "tasks" | "approval" | "taste" | "choice" | "file" | "chart";
+  title?: string;
+  text?: string;
+  data?: Record<string, unknown>;
+  reason?: string;
+}
+
+export interface UiRespond {
+  panel_id: string;
+  action: "opened" | "dismissed" | "acted" | "ignored";
+  value?: Record<string, unknown>;
+}
+
 export interface Usage {
   input_tokens?: number;
   output_tokens?: number;
@@ -355,6 +389,9 @@ export interface CommandBodies {
   "seat.list": SeatList;
   "taste.list": TasteList;
   "taste.edit": TasteEdit;
+  "feedback.send": FeedbackSend;
+  "ui.respond": UiRespond;
+  "schedule.edit": ScheduleEdit;
 }
 export type CommandType = keyof CommandBodies;
 
@@ -378,6 +415,7 @@ export interface EventBodies {
   "usage.updated": UsageUpdated;
   "decision.queued": DecisionQueued;
   "taste.updated": TasteUpdated;
+  "ui.panel": UiPanel;
   "notice": Notice;
   "error": Error;
 }

@@ -292,7 +292,45 @@ class TasteEdit:
     text: str = ""
 
 
-# ---------------------------------------------------------------- events (21)
+@command("feedback.send")
+@dataclass
+class FeedbackSend:
+    """The principal's verdict on an answer: the learning loop's main signal (D-009, D-022).
+    edit and should_have_been carry the better version in text."""
+
+    session: str
+    verdict: Literal["accept", "edit", "reject", "should_have_been"]
+    message_id: str | None = None  # None = the last assistant message
+    text: str = ""
+
+
+@command("ui.respond")
+@dataclass
+class UiRespond:
+    """What the user did with a panel. Dismissed and ignored panels teach too (D-014)."""
+
+    panel_id: str
+    action: Literal["opened", "dismissed", "acted", "ignored"]
+    value: dict[str, Any] = field(default_factory=dict)  # e.g. {"choice": "b"} or {"line": 12, "comment": "..."}
+
+
+@command("schedule.edit")
+@dataclass
+class ScheduleEdit:
+    """Cron jobs. A run is a fresh session that reports through task.updated (D-022).
+    when: a 5-field cron line ("0 9 * * *") or "every <n>m|h|d"."""
+
+    action: Literal["list", "add", "remove", "pause", "resume", "run_now"]
+    job_id: str | None = None
+    when: str = ""
+    prompt: str = ""
+    title: str = ""
+    seat: str | None = None
+    tier: Literal["fast", "standard", "deep"] = "fast"
+    deliver: str = "notice"  # notice, or a channel id
+
+
+# ---------------------------------------------------------------- events (22)
 
 
 @event("session.created")
@@ -447,6 +485,22 @@ class TasteUpdated:
     action: Literal["add", "update", "remove"]
     text: str = ""
     path: str = ""
+
+
+@event("ui.panel")
+@dataclass
+class UiPanel:
+    """A panel the model (via the ui tool) or a command opens beside the transcript (D-014).
+    Every client renders what it can: full panel, compact text, or a link. data is kind-specific
+    and plain JSON; text is the plain-English fallback every client must be able to show."""
+
+    panel_id: str
+    action: Literal["open", "update", "close"]
+    kind: Literal["markdown", "diff", "table", "tasks", "approval", "taste", "choice", "file", "chart"] = "markdown"
+    title: str = ""
+    text: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+    reason: str = ""  # why it was opened, one line; feeds the learning loop
 
 
 @event("notice")
