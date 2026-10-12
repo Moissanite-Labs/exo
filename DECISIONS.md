@@ -441,3 +441,38 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   model also miscounted line numbers inside excerpts. Two questions is a weak sample.
 - **Next:** a native port (Python, Exo's own decision route, no Node) only if more measurement shows a win on
   larger or less tidy repos. **Not done:** per-call spend accounting, a jg result cache owned by Exo.
+
+
+## D-030 (2026-10-12) Onboarding: an agent-led /intro, and a tutorial mode of client-side tips
+- **Why (A, verbatim):** "want to add a tutorial mode that users can toggle, like the one many games have ... so
+  that when users are new to the software it guides them through things and gives little hints/explanations
+  about everything. i also think there should be a slash command like slash intro or something where the exo
+  agent gives the user an orientation of what the harness is, what features it has, how to use it, etc. because
+  theres a lot of new unique and unfamiliar aspects. for example many users will be used to having to manage
+  compaction manually or be aware of context limits. the slash intro orientation should also just automatically
+  trigger when a user runs the exo harness for the first time".
+- **Decision:** TUI, one skill and config only; the protocol stays at 30 commands.
+  - `/intro` sends a normal user turn (shown as "/intro"). The agent loads the `exo-intro` skill and gives a short,
+    staged, interactive orientation, tailored to what the user is used to, ending with `/tutorial`. The facts live
+    in `skills/exo-intro/SKILL.md`; a test requires every slash command in `/help` (TUI table and core commands)
+    to appear in it.
+  - First run: `$EXO_HOME/state/onboarding.json` has no `onboarded` value, so `exo-tui` runs `/intro` and turns
+    tutorial mode on. The marker is written when the intro turn starts (the `turn.started` event), not when it is
+    sent. Skips: `--no-intro` (also records the home as onboarded), `EXO_NO_INTRO=1` (no write), `--resume` and
+    `--session`. Only the `exo-tui` entry point asks for it (`ExoApp(auto_intro=True)`), so tests, `exo serve`
+    and headless runs never trigger it.
+  - Tutorial mode: `/tutorial on|off|reset`, saved as `tutorial.enabled` in config.json. Tips are in
+    `clients/tui/exo_tui/hints.toml`, drawn by the client as dim "tip:" lines: no model tokens, not in the
+    transcript the model sees, each once (seen list in onboarding.json), at most one per turn. 11 moments: first
+    message, first memory summary, first approval, first steer, first Esc, first fallback or route change, first
+    peer message, first `/new`, first finding, first slow turn (60 s, approval waits excluded), first `code_find`.
+  - While on, the core appends one line to the stable system text (`TUTORIAL_LINE`, last, after the memory block
+    and before the summary tree). Off, the text is byte-identical to before (tested); a toggle costs one cache miss.
+- **Calls made by the lead and by me:** content in a skill, not a canned screen, so the user can ask questions and
+  the text is reviewable; tips client side so they are free and cannot pollute memory; a tip that loses its turn
+  to another is not used up; the line sits after the memory block rather than after the tree because the tree
+  view is built by the context engine, and changing that would touch every caller for a once-per-toggle miss.
+  `--no-intro` writes the marker so an existing user is asked to skip once, not forever.
+- **Rejected:** a new protocol command for onboarding state (cap is full); model-written tips (cost, and they
+  would enter memory); tracking seen tips in the core (a second client would then show them again for no reason).
+- **Not done:** the web client has no tips; upgraders without the marker see the intro once (pass `--no-intro`).

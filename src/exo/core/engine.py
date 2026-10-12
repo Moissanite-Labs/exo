@@ -50,6 +50,10 @@ from exo.protocol import schema as s
 from exo.server.engine import CommandFailed, Hub
 
 _MISSING = object()
+TUTORIAL_LINE = (
+    "The user is new to Exo and has tutorial mode on. When an Exo concept they may not know comes up (memory "
+    "and the summary tree, threads, the approval gate, steering, model routes, peers, trace, findings), explain "
+    "it in one plain sentence the first time, then carry on. Do not lecture or repeat it.")
 CODE_FIND_LINE = ("Use code_find for unfamiliar code and behavior questions across many files; use grep or read_file "
                   "when you already know the symbol or path.")
 SYSTEM_PROMPT = ("You are Exo, a careful coding agent. Use the tools to read, edit and run "
@@ -291,6 +295,7 @@ class CoreEngine:
                          tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
         self.loop.on_turn_end = self.observe_turn
+        self.loop.system_extra = self._tutorial_line
         signer = None
         if seat:  # receipts are signed with the seat key (made on first use, mode 0600)
             from exo import crypto
@@ -787,6 +792,14 @@ class CoreEngine:
         return {"active": self.seat.name if self.seat else None, "seats": list_seats(self.home),
                 "mcp": self.mcp.status(),
                 "channels": {n: n in self._channels for n in self._channel_cfg}}
+
+    def _tutorial_line(self) -> str:
+        """D-030: one stable line while tutorial mode is on, appended after the rest of the stable system text.
+        Off, the system text is byte-identical to what it was before the mode existed."""
+        try:
+            return TUTORIAL_LINE if Config.load(self.home).get("tutorial.enabled") is True else ""
+        except ConfigError:
+            return ""
 
     async def _config_get(self, b: s.ConfigGet) -> dict[str, Any]:
         cfg = Config.load(self.home)

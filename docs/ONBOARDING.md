@@ -1,9 +1,50 @@
-# Onboarding a principal
+# Onboarding
+
+Two different things share this page: teaching a new user how Exo works (section 1, D-030), and giving a new
+principal a store (sections 2 and 3).
+
+## 1. Learning Exo: `/intro` and tutorial mode
+
+Exo has unfamiliar parts (one memory for all windows, no manual compaction, an approval gate, peers). Two
+tools teach them, both in the terminal client (`exo-tui`) and neither adds a protocol command.
+
+### `/intro`
+Sends a normal user turn (it shows as `/intro`). The agent loads the `exo-intro` skill
+(`skills/exo-intro/SKILL.md`, the facts it teaches from) and gives a short, staged orientation: an overview,
+a question about what you are used to (Claude Code, ChatGPT, Hermes), then topics you pick. It ends by
+mentioning `/tutorial`. It is a conversation, so ask anything. A test checks every slash command in `/help`
+appears in the skill, so the two cannot drift.
+
+### First run
+`$EXO_HOME/state/onboarding.json` holds `{"onboarded": <time>, "hints_seen": [...]}`. When `onboarded` is
+missing, `exo-tui` runs `/intro` at launch and turns tutorial mode on. The marker is written when the intro
+turn actually starts, so a crash before that shows the intro again next time. It does not run when you resume
+a session (`--resume`, `--session`), and never in tests, `exo serve` or headless runs, because only the
+`exo-tui` entry point asks for it.
+- `exo-tui --no-intro` skips it and records the home as onboarded.
+- `EXO_NO_INTRO=1` skips it for that launch and writes nothing.
+- Delete the file (or run `/tutorial reset` for tips only) to see it again.
+
+### Tutorial mode
+`/tutorial on|off|reset`; bare `/tutorial` shows the state. On or off is saved as `tutorial.enabled` in
+`$EXO_HOME/config.json`.
+- **Tips** come from `clients/tui/exo_tui/hints.toml`, one per moment, each shown once, at most one per turn.
+  They are dim "tip:" lines in the terminal only: the client draws them, so they cost no model tokens and
+  are never in the conversation the model sees. Seen tips are kept in `onboarding.json`; `/tutorial reset`
+  shows them again. A tip that loses its turn to another is not used up and appears at its next moment.
+- **Moments:** first message sent, first memory summary, first approval, first message typed while a turn runs,
+  first Esc, first model fallback, first peer message, first `/new`, first finding, first slow turn (a minute
+  or more not counting approvals), first `code_find`. Each tip names the command that goes deeper.
+- **The agent** also gets one line while the mode is on: the user is new, explain an unfamiliar Exo concept
+  in a sentence. It is appended last in the stable system text (after the prompt and memory block, before the
+  summary tree), so with the mode off the text is byte-identical to before and the prompt cache is untouched;
+  switching it on or off costs one cache miss.
+
+## 2. New store and interview
 
 Two ways in. A new user starts from an empty store and an interview. Someone with an existing
 hafiz-format store adopts it with `exo import-store`.
 
-## 1. New store and interview
 
 ```sh
 exo init sam --interview                       # ask on the terminal
@@ -100,7 +141,7 @@ questions:
 
 The bank is generic. It names no person, account or machine (D-004).
 
-## 2. Adopt an existing store
+## 3. Adopt an existing store
 
 ```sh
 exo import-store ~/hafiz --id a --activate
@@ -118,7 +159,7 @@ exo import-store ~/hafiz --id a --include-private --root /path/to/fresh/dir
 - Refuses a destination that exists and is not empty.
 - Prints the lint summary. This is how A's `~/hafiz` becomes principal store #1 (migration M1).
 
-## 3. Config
+## 4. Config
 
 `exo.config` owns `$EXO_HOME/config.json`: `principal`, `hermes_dir`, `hermes_home`, `venv`,
 `plugins`, `plugin_config.<plugin>`, `principals.<id>` (explicit store roots). Each value
@@ -136,7 +177,7 @@ cfg = Config.load()
 cfg.principal, cfg.hermes_home, cfg.plugin_config('exo-memory')
 ```
 
-## 4. Wiring into `exo.cli` (for the lead)
+## 5. Wiring into `exo.cli` (for the lead)
 
 Until this lands, `python -m exo.onboard init|interview|import-store|config ...` works on its
 own (the installer uses it). The patch to `src/exo/cli.py`:
@@ -166,7 +207,7 @@ own (the installer uses it). The patch to `src/exo/cli.py`:
 `onboard_init` without `--interview` does what `cmd_init` did, and also sets the active principal
 in `config.json` when none is set.
 
-## 5. One `/exo` command: `exo.dispatcher`
+## 6. One `/exo` command: `exo.dispatcher`
 
 Hermes gives each plugin its own slash commands. Exo plugins share one `/exo` instead.
 

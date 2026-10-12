@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 
@@ -15,6 +16,8 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--url", help="exod TCP URL")
     p.add_argument("--token-file", help="bearer token file for --url")
     p.add_argument("--title", default="", help="title for a new session")
+    p.add_argument("--no-intro", action="store_true",
+                   help="skip the first-run orientation (and do not offer it again on this EXO_HOME)")
     return p.parse_args(argv)
 
 
@@ -28,5 +31,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"exo-tui: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
-    ExoApp(client, session=a.session, resume=a.resume, seat=a.seat, title=a.title).run()
+    from exo.config import exo_home
+    from exo_tui.onboarding import Onboarding
+
+    onb = Onboarding(exo_home())
+    if a.no_intro and not onb.onboarded:
+        onb.mark_onboarded("skipped")
+    intro = not a.no_intro and not os.environ.get("EXO_NO_INTRO")  # the env var skips without writing anything
+    ExoApp(client, session=a.session, resume=a.resume, seat=a.seat, title=a.title, auto_intro=intro).run()
     return 0

@@ -25,6 +25,14 @@ Needs `git` and Python 3.11 or newer, on macOS or Linux (tested on Arch with Pyt
 This is the only install section. Options, what each step does, safety rules and re-runs are in
 `docs/INSTALL.md`. To add a model key, see `docs/PROVIDERS.md`.
 
+## First launch and learning Exo
+
+The first time `exo-tui` runs on an `EXO_HOME`, the agent gives you a short orientation (`/intro`) and turns on
+tutorial mode: small dim "tip:" lines the first time something comes up (the approval gate, typing to steer a
+running turn, a model fallback, and so on). `/intro` runs the orientation again any time. `/tutorial on`, `off`
+or `reset` controls the tips. Skip the first-run intro with `exo-tui --no-intro`. Details in
+`docs/ONBOARDING.md` (D-030).
+
 ## Two goals, held together
 
 - **Fit one person as closely as possible.** The first principal is Ahraz Arifuddin.
