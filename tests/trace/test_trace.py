@@ -153,14 +153,14 @@ def old_session(store: SessionStore, sid="s1"):
     put("2026-10-12T04:00:42.000Z", s.ToolStarted(call=call))
     put("2026-10-12T04:01:12.000Z", s.ToolCompleted(result=s.ToolResult.of_text("c1", "bad", True)))
     put("2026-10-12T04:01:13.000Z", s.UsageUpdated(usage=Usage(input_tokens=20, output_tokens=3), model="p:other"))
-    put("2026-10-12T04:01:20.000Z", s.TurnCompleted(turn_id="t1"))
+    put("2026-10-12T04:02:10.000Z", s.TurnCompleted(turn_id="t1"))  # 130 s wall, 30 s of it in a tool
 
 
 def test_old_session_is_derived_from_timestamps():
     store = SessionStore()
     old_session(store)
     (t,) = trace.build(store, "s1")
-    assert t.derived and t.wall_ms == 80_000 and len(t.calls) == 2
+    assert t.derived and t.wall_ms == 130_000 and t.harness_ms == 100_000 and len(t.calls) == 2
     assert t.calls[0].ttft_ms == 40_000 and t.calls[0].total_ms == 41_000
     assert t.tools[0].ms == 30_000 and t.tools[0].is_error
     assert (t.tokens_in, t.tokens_out) == (30, 5) and t.served == ["p:other"]
@@ -216,6 +216,116 @@ def test_rule_turn_slow_and_threshold_from_config():
     assert "turn.slow" not in sigs(tt(wall_ms=59_000))
     assert "turn.slow" in sigs(tt(wall_ms=61_000))
     assert "turn.slow" not in sigs(tt(wall_ms=61_000), turn_wall_s=120)
+
+
+def test_turn_slow_measures_the_harness_not_the_work():
+    """D-032: wall minus tool time and approval waits. A long build or a slow human does not trip it."""
+    timing = {"wall_ms": 400_000, "tool_ms": 330_000, "approval_ms": 30_000, "model_ms": 30_000}
+    assert "turn.slow" not in sigs(tt(wall_ms=400_000, timing=timing, approval_ms=30_000))
+    slow = {"wall_ms": 420_000, "tool_ms": 100_000, "approval_ms": 0, "model_ms": 300_000}
+    t = tt(wall_ms=420_000, timing=slow)
+    assert t.harness_ms == 320_000 and "turn.slow" in sigs(t)
+    assert next(f for f in trace.detect(t, TH) if f.signature == "turn.slow").severity == "bug"  # 5x the limit
+    # no timing summary (old session): recorded tool durations stand in
+    assert tt(wall_ms=100_000, tools=[ToolRow("bash", ms=70_000)]).harness_ms == 30_000
+    assert "turn.slow" not in sigs(tt(wall_ms=100_000, tools=[ToolRow("bash", ms=70_000)]))
+
+
+def test_turn_total_wall_is_a_separate_high_cap():
+    long = tt(wall_ms=2_000_000, timing={"wall_ms": 2_000_000, "tool_ms": 1_990_000, "approval_ms": 0})
+    got = sigs(long)
+    assert "turn.wall" in got and "turn.slow" not in got
+    assert "turn.wall" not in sigs(long, turn_total_wall_s=3600)
+    assert "turn.wall" not in sigs(tt(wall_ms=1_700_000, timing={"wall_ms": 1_700_000, "tool_ms": 1_700_000}))
+    assert Thresholds().turn_total_wall_s == 1800.0
+
+
+def test_seat_trace_table_overrides_config(tmp_path):
+    from exo.core.seats import parse
+
+    seat = parse({"name": "canary", "trace": {"turn_wall_s": 5, "turn_total_wall_s": 99}})
+    assert seat.trace == {"turn_wall_s": 5, "turn_total_wall_s": 99}
+    eng = engine(tmp_path, seat=seat, trace_cfg={"turn_wall_s": 45, "model_wait_s": 12})
+    assert eng.thresholds.turn_wall_s == 5 and eng.thresholds.turn_total_wall_s == 99
+    assert eng.thresholds.model_wait_s == 12  # keys the seat does not set fall back to config
+    assert engine(tmp_path / "x", trace_cfg={"turn_wall_s": 45}).thresholds.turn_wall_s == 45
+
+
+def test_cli_trace_reads_the_sessions_seat_thresholds(tmp_path, monkeypatch):
+    from exo import trace_cmd
+
+    monkeypatch.setenv("EXO_HOME", str(tmp_path))
+    (tmp_path / "seats").mkdir()
+    (tmp_path / "seats" / "canary.toml").write_text("[trace]\nturn_wall_s = 7\n")
+    assert trace_cmd._thresholds("canary").turn_wall_s == 7.0
+    assert trace_cmd._thresholds("nobody").turn_wall_s == 60.0
+    assert trace_cmd._thresholds(None).turn_wall_s == 60.0
+
+
+# ---------------------------------------------------------------- cost (D-032)
+
+
+def _usage_call(route, cost, tin=100, tout=10, **kw):
+    return Call(route=route, tokens_in=tin, tokens_out=tout, cost_usd=cost, **kw)
+
+
+def test_cost_sums_priced_calls_and_never_reports_zero_for_unpriced():
+    priced = tt(calls=[_usage_call("p:a", 0.01), _usage_call("p:a", 0.0025)])
+    assert priced.cost() == (0.0125, 0) and trace.money(*priced.cost()) == "$0.0125"
+    none = tt(calls=[_usage_call("p:a", None)])
+    assert none.cost() == (None, 1) and trace.money(*none.cost()) == "unknown"
+    mixed = tt(calls=[_usage_call("p:a", 0.02), _usage_call("p:b", None)])
+    assert mixed.cost() == (0.02, 1) and trace.money(*mixed.cost()) == "$0.0200+"
+    assert tt(calls=[]).cost() == (None, 0)  # no calls: unknown, not $0
+    failed = tt(calls=[Call(route="", error="boom")])  # used no tokens: not an unpriced call
+    assert failed.cost() == (None, 0)
+    assert trace.money(1.5) == "$1.50"
+
+
+def test_cost_includes_subagent_turns_and_shows_in_table_and_json():
+    kid = tt(calls=[_usage_call("p:k", 0.5)])
+    t = tt(calls=[_usage_call("p:a", 0.25, cache_read=900)], children=[kid], t0=1.0, wall_ms=1000)
+    assert t.summary()["cost_usd"] == 0.75 and t.summary()["cost"] == "$0.7500"
+    out = trace.table([t])
+    assert "cost" in out.splitlines()[0] and "$0.7500" in out
+    assert "calls in turn 1" in out and "cache r/w 900/0" in out
+    d = trace.as_dict("s", [t])["turns"][0]
+    assert d["cost_usd"] == 0.75 and {c["cost_usd"] for c in d["call_list"]} == {0.25, 0.5}
+    u = tt(calls=[_usage_call("p:a", None)], t0=1.0)
+    assert "unknown" in trace.table([u]) and trace.as_dict("s", [u])["turns"][0]["cost_usd"] is None
+
+
+def test_cost_flows_from_catalog_price_through_router_and_trace(tmp_path):
+    from exo.core.models.router import Route
+
+    r = Router.from_config({"models": {"p:m": {"input": 2.0, "output": 10.0, "cache_read": 0.2}}}, env={})
+    u = r.price(Route("p", "m"), Usage(input_tokens=1000, output_tokens=100, cache_read_tokens=5000))
+    assert u.cost_usd == pytest.approx((1000 * 2.0 + 100 * 10.0 + 5000 * 0.2) / 1e6)  # cache read priced as such
+    # OpenAI-style counts include the cached tokens in input_tokens: they are not charged twice
+    o = r.price(Route("p", "m"), Usage(input_tokens=6000, output_tokens=100, cache_read_tokens=5000), True)
+    assert o.cost_usd == pytest.approx(u.cost_usd)
+    assert r.price(Route("p", "nope"), Usage(input_tokens=5)).cost_usd is None  # no price: None, never 0
+
+
+def test_recorded_session_cost_in_exo_trace_tool(tmp_path):
+    eng = engine(tmp_path, [{"match": "go", "steps": ["ok"]}])
+    eng.router.models["fake:x"] = {"input": 1_000_000.0, "output": 0.0}  # $1 per token: easy to read
+
+    async def go():
+        info = await eng.loop.create_session(title="t")
+        await eng.loop.send(info.id, "go")
+        return info.id
+
+    sid = run(go())
+    out = eng.trace_text(sid, 5)
+    assert "$203.00" in out and "cache r/w 0/0  unknown" not in out
+    assert "calls in turn 1" in out
+    plain = engine(tmp_path / "np", [{"match": "go", "steps": ["ok"]}])
+    async def go2():
+        info = await plain.loop.create_session(title="t")
+        await plain.loop.send(info.id, "go")
+        return info.id
+    assert "cache r/w 0/0  unknown" in plain.trace_text(run(go2()), 5)
     assert Thresholds.of({"turn_wall_s": 5, "bogus": 1, "model_wait_s": -1}).turn_wall_s == 5.0
     assert Thresholds.of({"model_wait_s": -1}).model_wait_s == 30.0
 

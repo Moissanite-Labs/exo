@@ -30,21 +30,25 @@ REPORT = ToolSpec(
 TRACE = ToolSpec(
     name="exo_trace", toolset="harness", risk="low",
     description=("Read how the harness performed in this session: per turn wall time, the model route that served "
-                 "each call, fallbacks, tool calls and errors, tokens, and any anomaly flags. Also says which "
+                 "each call, fallbacks, tool calls and errors, tokens, estimated USD cost per turn and per call ('unknown' when "
+                 "a route has no price, never zero), and any anomaly flags. Also says which "
                  "model and route you are running on, and the harness version. Read only."),
     parameters={"type": "object", "properties": {
-        "last": {"type": "integer", "description": "Only the last N turns (default 10)."}}})
+        "last": {"type": "integer", "description": "Only the last N turns (default 10)."},
+        "calls": {"type": "boolean", "description": "List every model call of every shown turn with its cost "
+                                                    "(default: only the last turn's calls)."}}})
 
 
 def signature(title: str) -> str:
     return "agent:" + re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60]
 
 
-def register(reg: Registry, trace_text: Callable[[str | None, int], str],
+def register(reg: Registry, trace_text: Callable[..., str],
              report: Callable[..., dict[str, Any]]) -> None:
     def trace(args: dict[str, Any], ctx: ToolContext) -> str:
         last = args.get("last", 10)
-        return trace_text(ctx.session, last if isinstance(last, int) and last > 0 else 10)
+        return trace_text(ctx.session, last if isinstance(last, int) and last > 0 else 10,
+                          bool(args.get("calls")))
 
     def file(args: dict[str, Any], ctx: ToolContext) -> str:
         title = str(args.get("title") or "").strip()

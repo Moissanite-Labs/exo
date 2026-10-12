@@ -137,9 +137,14 @@ def at_or_after(running: str, fixed_in: str | None) -> bool:
 
 @dataclass
 class Thresholds:
-    """Anomaly and verification limits. Config: the ``trace`` table of config.json."""
+    """Anomaly and verification limits. Config: the ``trace`` table of config.json; a seat's ``[trace]`` table
+    in seat.toml overrides it key by key (D-032).
+
+    ``turn_wall_s`` limits what the harness owns: wall time minus tool time and approval waits (model plus
+    overhead). ``turn_total_wall_s`` is the separate, high cap on the whole turn, work included."""
 
     turn_wall_s: float = 60.0
+    turn_total_wall_s: float = 1800.0
     model_wait_s: float = 30.0
     subagent_s: float = 90.0
     verify_turns: int = 20
@@ -170,6 +175,14 @@ class Call:
     tokens_out: int = 0
     error: str = ""
     session: str = ""
+    cache_read: int = 0
+    cache_write: int = 0
+    cost_usd: float | None = None  # from the route's catalog price (or the provider's own figure); None = unknown
+
+    @property
+    def spent(self) -> bool:
+        """Did the call use tokens at all? A call that failed before any output costs nothing and is not 'unknown'."""
+        return bool(self.tokens_in or self.tokens_out or self.cache_read or self.cache_write)
 
 
 @dataclass
@@ -232,6 +245,21 @@ class TurnTrace:
     children: list[TurnTrace] = field(default_factory=list)
     flags: list[Flag] = field(default_factory=list)
 
+    @property
+    def harness_ms(self) -> int:
+        """Wall time the harness owns: model plus overhead, without tool time or approval waits (D-032).
+        Uses the turn's timing summary when it has one; old sessions use the recorded tool durations
+        (which already include approval waits)."""
+        if "tool_ms" in self.timing:
+            return int(max(0, self.wall_ms - self.timing["tool_ms"] - self.approval_ms))
+        return int(max(0, self.wall_ms - sum(t.ms for t in self.tools)))
+
+    def cost(self) -> tuple[float | None, int]:
+        """(USD, calls with no price) over this turn and its subagent turns. USD is None when no call is priced."""
+        calls = [c for x in self.everything() for c in x.calls if c.spent]
+        priced = [c.cost_usd for c in calls if c.cost_usd is not None]
+        return (round(sum(priced), 8) if priced else None), len(calls) - len(priced)
+
     def everything(self) -> list[TurnTrace]:
         return [self, *[x for c in self.children for x in c.everything()]]
 
@@ -246,13 +274,22 @@ class TurnTrace:
 
     def summary(self) -> dict[str, Any]:
         tools = self.all_tools()
-        return {"session": self.session, "turn": self.turn_id, "started": self.started, "wall_ms": self.wall_ms,
+        usd, unpriced = self.cost()
+        return {"cost_usd": usd, "cost": money(usd, unpriced), "unpriced_calls": unpriced,
+                "harness_ms": self.harness_ms, "session": self.session, "turn": self.turn_id, "started": self.started, "wall_ms": self.wall_ms,
                 "complete": self.complete, "stop_reason": self.stop_reason, "shown": self.shown,
                 "served": self.served_set(), "model_calls": sum(len(x.calls) for x in self.everything()),
                 "fallbacks": sum(x.fallbacks for x in self.everything()), "tool_calls": len(tools),
                 "tool_errors": sum(1 for t in tools if t.is_error), "tokens_in": self.tokens_in,
                 "tokens_out": self.tokens_out, "subagents": len(self.tasks), "derived": self.derived,
                 "timing": self.timing, "flags": [f.signature for f in self.flags]}
+
+
+def money(usd: float | None, unpriced: int = 0) -> str:
+    """'$0.0123'; '$0.0123+' when some calls had no price; 'unknown' (never '$0') when none did."""
+    if usd is None:
+        return "unknown"
+    return (f"${usd:.4f}" if usd < 1 else f"${usd:.2f}") + ("+" if unpriced else "")
 
 
 def _ms(ts: str) -> float:
@@ -319,7 +356,8 @@ class _Parse:
             u = b.usage
             self.recorded.append(Call(b.iteration, b.role, b.requested, b.route, list(b.attempts), b.ttft_ms,
                                       b.total_ms, u.input_tokens if u else 0, u.output_tokens if u else 0,
-                                      b.error, self.session))
+                                      b.error, self.session, u.cache_read_tokens if u else 0,
+                                      u.cache_write_tokens if u else 0, u.cost_usd if u else None))
         elif isinstance(b, ev.UsageUpdated):
             u = b.usage
             t.tokens_in += u.input_tokens
@@ -327,7 +365,8 @@ class _Parse:
             tries = self.pending + ([{"route": b.model, "outcome": "ok", "error": "", "ms": 0}] if self.pending else [])
             self.guess.append(Call(len(self.guess) + 1, "", t.shown, b.model, tries, int(self.first - self.mark)
                                    if self.first else None, int(max(0.0, ts - self.mark)), u.input_tokens,
-                                   u.output_tokens, "", self.session))
+                                   u.output_tokens, "", self.session, u.cache_read_tokens, u.cache_write_tokens,
+                                   u.cost_usd))
             self.pending = []
             if b.model and b.model not in t.served:
                 t.served.append(b.model)
@@ -458,12 +497,17 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
         if not any(f.signature == sig for f in out):
             out.append(Flag(sig, sev, title, detail, t.session, t.turn_id, model))
 
-    if not child and t.wall_ms > th.turn_wall_s * 1000:
-        slow = t.wall_ms > th.turn_wall_s * 5000
-        add("turn.slow", "bug" if slow else "papercut", f"Turn took {_fmt_ms(t.wall_ms)}",
-            f"{_fmt_ms(t.wall_ms)} wall; limit {th.turn_wall_s:g} s. model {_fmt_ms(t.timing.get('model_ms', 0))}, "
-            f"tools {_fmt_ms(t.timing.get('tool_ms', 0))}, approvals {_fmt_ms(t.approval_ms)}."
-            if t.timing else f"{_fmt_ms(t.wall_ms)} wall; limit {th.turn_wall_s:g} s (old session: no timing summary).")
+    if not child and t.harness_ms > th.turn_wall_s * 1000:  # the harness's share: work and approvals do not count
+        slow = t.harness_ms > th.turn_wall_s * 5000
+        add("turn.slow", "bug" if slow else "papercut", f"Turn spent {_fmt_ms(t.harness_ms)} outside tools",
+            f"{_fmt_ms(t.harness_ms)} of {_fmt_ms(t.wall_ms)} wall was model and overhead; limit {th.turn_wall_s:g} s. "
+            f"model {_fmt_ms(t.timing.get('model_ms', 0))}, tools {_fmt_ms(t.timing.get('tool_ms', 0))}, "
+            f"approvals {_fmt_ms(t.approval_ms)}."
+            if t.timing else f"{_fmt_ms(t.harness_ms)} of {_fmt_ms(t.wall_ms)} wall was outside tools; limit "
+            f"{th.turn_wall_s:g} s (old session: no timing summary).")
+    if not child and t.wall_ms > th.turn_total_wall_s * 1000:
+        add("turn.wall", "papercut", f"Turn ran {_fmt_ms(t.wall_ms)} in total",
+            f"{_fmt_ms(t.wall_ms)} wall, work included; cap {th.turn_total_wall_s:g} s.")
     for c in t.calls:
         wait = c.ttft_ms if c.ttft_ms is not None else (0 if t.derived else c.total_ms)
         if wait > th.model_wait_s * 1000:
@@ -519,9 +563,21 @@ def _k(n: int) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
-def table(turns: list[TurnTrace], title: str = "") -> str:
-    """The `exo trace` view: one row per turn, then the flags."""
-    head = ("  #  when        wall  model (served)                 calls  fb  tools  err  tokens in/out  flags")
+def _call_lines(t: TurnTrace, n: int) -> list[str]:
+    lines = [f"calls in turn {n}"]
+    for x in t.everything():
+        for c in x.calls:
+            cost = money(c.cost_usd) if c.spent else "-"
+            lines.append(f"  {c.iteration:>2}  {_short(c.route or c.requested):<28} {_fmt_ms(c.total_ms):>9}  "
+                         f"in {_k(c.tokens_in)} out {_k(c.tokens_out)} cache r/w {_k(c.cache_read)}/{_k(c.cache_write)}"
+                         f"  {cost}" + (f"  [{c.error[:60]}]" if c.error else ""))
+    return lines
+
+
+def table(turns: list[TurnTrace], title: str = "", calls: bool = False) -> str:
+    """The `exo trace` view: one row per turn, the calls of the last turn (all turns with ``calls``), then the flags.
+    Cost is an estimate from catalog prices; 'unknown' means no price, never zero."""
+    head = ("  #  when        wall  model (served)                 calls  fb  tools  err  tokens in/out      cost  flags")
     lines = [title, head] if title else [head]
     flags: list[Flag] = []
     for i, t in enumerate(turns, 1):
@@ -532,9 +588,13 @@ def table(turns: list[TurnTrace], title: str = "") -> str:
         end = "" if t.complete else "  (not finished)"
         lines.append(f"{i:3d}  {when}  {_fmt_ms(t.wall_ms):>10}  {served[:30]:<30} {s['model_calls']:>4}{mark} "
                      f"{s['fallbacks']:>3}  {s['tool_calls']:>5}  {s['tool_errors']:>3}  "
-                     f"{_k(t.tokens_in):>6}/{_k(t.tokens_out):<6}  {len(t.flags) or ''}{end}")
+                     f"{_k(t.tokens_in):>6}/{_k(t.tokens_out):<6} {s['cost']:>9}  {len(t.flags) or ''}{end}")
         flags += t.flags
-    lines.append("~ = derived from timestamps (session recorded before model.call events)")
+    lines.append("~ = derived from timestamps (session recorded before model.call events); "
+                 "cost = estimate from catalog prices, + = some calls unpriced, unknown = no price")
+    for i, t in enumerate(turns, 1):
+        if t.calls and (calls or t is turns[-1]):
+            lines += ["", *_call_lines(t, i)]
     if flags:
         lines.append("")
         lines.append("flags")
@@ -561,4 +621,9 @@ def peer_text(store: Any, session: str, last: int = 20) -> str:
 
 
 def as_dict(session: str, turns: list[TurnTrace]) -> dict[str, Any]:
-    return {"session": session, "turns": [t.summary() | {"flag_list": [vars(f) for f in t.flags]} for t in turns]}
+    return {"session": session, "turns": [t.summary() | {
+        "flag_list": [vars(f) for f in t.flags],
+        "call_list": [{"iteration": c.iteration, "route": c.route, "ms": c.total_ms, "tokens_in": c.tokens_in,
+                       "tokens_out": c.tokens_out, "cache_read": c.cache_read, "cache_write": c.cache_write,
+                       "cost_usd": c.cost_usd, "cost": money(c.cost_usd) if c.spent else "-", "error": c.error}
+                      for x in t.everything() for c in x.calls]} for t in turns]}

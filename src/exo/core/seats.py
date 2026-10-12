@@ -12,6 +12,8 @@ hand-written files both load::
     [skills]  folders = ["~/notes/skills"]   # also `pack`; `load = [names]` limits the index to those skills
     [mcp.files]  command = "uvx"  args = ["server"]      # see core/mcp_client.py
     [channels.bus]  seat = "scout"     # channels to run with the server, each with factory(link, **config)
+    [trace]   turn_wall_s = 90      # per-seat anomaly thresholds over config.json's [trace] (D-032)
+    [session] cwd = "~/Work/exo-live"   # where this seat's threads start (D-032)
     [peers]   wake = true  policy = {other = "hold"}   # peer messages (docs/PEERS.md)
     [jobs]    max_concurrent = 4  max_wall_s = 7200  wake = false   # background shell jobs (docs/JOBS.md)
     [plugins] enabled = ["exo-memory"]  # or a top-level list; omit for the config.json default
@@ -27,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-ROUTER_KEYS = ("roles", "providers", "fake", "local")
+ROUTER_KEYS = ("roles", "providers", "fake", "local", "models")
 
 
 class SeatError(ValueError):
@@ -82,6 +84,8 @@ class Seat:
     channels: dict[str, dict[str, Any]] = field(default_factory=dict)  # enabled channels -> factory config
     peers: dict[str, Any] = field(default_factory=dict)     # [peers]: policy, rules, wake, hold_minutes (D-026)
     jobs: dict[str, Any] = field(default_factory=dict)      # [jobs]: max_concurrent, max_wall_s, wake (D-032)
+    trace: dict[str, Any] = field(default_factory=dict)     # [trace]: threshold overrides (D-032)
+    cwd: str | None = None                                  # [session] cwd: default working directory (D-032)
     soul: str = ""
     path: str = ""
     key: str | None = None                                  # signing key file; default $EXO_HOME/keys/<name>.key
@@ -121,7 +125,8 @@ def parse(data: dict[str, Any], name: str = "", path: str = "", soul: str = "") 
         skill_folders=folders, skill_load=_strs(skills.get("load")),
         mcp={k: v for k, v in mcp.items() if isinstance(v, dict)},
         plugins=_strs(plugins.get("enabled") if isinstance(plugins, dict) else plugins), channels=channels,
-        peers=_table(data.get("peers")), jobs=_table(data.get("jobs")), soul=soul, path=path, key=str(head.get("key") or data.get("key") or "") or None)
+        peers=_table(data.get("peers")), jobs=_table(data.get("jobs")), trace=_table(data.get("trace")),
+        cwd=str(_table(data.get("session")).get("cwd") or data.get("cwd") or "") or None, soul=soul, path=path, key=str(head.get("key") or data.get("key") or "") or None)
 
 
 def _candidates(home: str | Path, name: str) -> list[Path]:

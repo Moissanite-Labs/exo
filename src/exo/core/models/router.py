@@ -120,9 +120,15 @@ class Router:
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any] | None, **kw: Any) -> Router:
-        """Build from the ``[models]`` table of Exo config: ``roles``, ``providers``."""
+        """Build from the ``[models]`` table of Exo config: ``roles``, ``providers``, and ``models`` (per
+        "provider:model" overrides of the catalog: ``input``, ``output``, ``cache_read``, ``cache_write`` USD per
+        million tokens, ``context``)."""
         config = config or {}
-        return cls(roles=config.get("roles"), providers=config.get("providers"), **kw)
+        r = cls(roles=config.get("roles"), providers=config.get("providers"), **kw)
+        for ref, info in (config.get("models") or {}).items():  # prices and limits per "provider:model" (D-032)
+            if isinstance(info, dict):
+                r.models[ref] = {**r.models.get(ref, {}), **info}
+        return r
 
     # --- resolution ----------------------------------------------------------
     def chain(self, role: str = "main") -> list[Route]:
@@ -221,12 +227,16 @@ class Router:
         self.cooldowns.pop(cred_id, None)
         self.cooldowns.pop(f"{cred_id}|{model}", None)
 
-    def price(self, route: Route, usage: Usage | None) -> Usage | None:
+    def price(self, route: Route, usage: Usage | None, input_includes_cache: bool = False) -> Usage | None:
+        """Fill ``cost_usd`` from the catalog price of the route that served the call (USD per million tokens).
+        None stays None when the route has no price (never 0). ``input_includes_cache``: the provider counts cached
+        tokens inside ``input_tokens`` (OpenAI style), so they are charged at the cache-read rate only."""
         info = self.models.get(route.ref)
         if usage is None or usage.cost_usd is not None or not info or "input" not in info:
             return usage
         inp = info["input"]
-        cost = (usage.input_tokens * inp + usage.output_tokens * info.get("output", 0)
+        fresh = usage.input_tokens - (usage.cache_read_tokens if input_includes_cache else 0)
+        cost = (max(fresh, 0) * inp + usage.output_tokens * info.get("output", 0)
                 + usage.cache_read_tokens * info.get("cache_read", inp * 0.1)
                 + usage.cache_write_tokens * info.get("cache_write", inp * 1.25)) / 1e6
         return Usage(**{**vars(usage), "cost_usd": round(cost, 8)})
@@ -294,7 +304,7 @@ class Router:
             if ev.kind in ("text", "reasoning", "tool_call"):
                 started = True
             elif ev.kind in ("usage", "done"):
-                ev.usage = self.price(route, ev.usage)
+                ev.usage = self.price(route, ev.usage, getattr(cred.provider, "input_includes_cache", False))
                 ev.route = route.ref  # the route that served this call, after any fallback
                 if ev.kind == "done":
                     note("ok")
