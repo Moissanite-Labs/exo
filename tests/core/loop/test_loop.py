@@ -451,6 +451,29 @@ def test_model_call_records_the_route_from_the_ok_attempt_when_unstamped(tmp_pat
     assert calls and calls[-1].route == "p:big"
 
 
+def test_model_call_with_real_router_success_on_first_attempt_sets_route(tmp_path):
+    """Live path: real Router, fake provider stream, no fallback. The stored and published model.call names the
+    serving route (field `route`; there is no field called `served` on the event)."""
+    from exo.core.models import FakeProvider, Router
+    from exo.protocol import schema as ev
+
+    router = Router(roles={"main": ["p:big"]}, catalog={"providers": {}, "models": {}, "roles": {}},
+                    instances={"p": FakeProvider(["hi"], name="p")}, env={})
+    store, loop, seen = make(tmp_path, router.provider("main"), model="p:big")
+
+    async def go():
+        info = await loop.create_session()
+        await loop.send(info.id, "hello")
+    run(go())
+    calls = [e.body for e in store.events_since(0) if isinstance(e.body, ev.ModelCall)]
+    assert calls and calls[-1].route == "p:big" and calls[-1].attempts[0]["outcome"] == "ok"
+    assert calls[-1].attempts[0]["route"] == "p:big"
+    stored = [e for e in store.events_since(0) if e.type == "model.call"][-1]
+    assert stored.body.route == "p:big"
+    published = [e for e in seen if e.type == "model.call"]
+    assert published and all(e.body.route == "p:big" for e in published)
+
+
 def test_compaction_skips_tiny_spans_and_summaries_that_do_not_shrink():
     from exo.core.context import TreeContext
 
