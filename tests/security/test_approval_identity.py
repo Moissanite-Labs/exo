@@ -115,8 +115,14 @@ def test_bash_tool_subprocess_cannot_answer_its_own_approval(tmp_path, sock_dir)
             async with Client(socket=str(sock), principal="tui") as me:
                 sid = (await me.call(s.SessionCreate()))["session"]["id"]
                 await me.call(s.TurnSend(session=sid, text="attack"))
+                # the gate asks before running a script (D-038); the user allows it once, so the attack runs
+                first = await _until(lambda: next((e.body for e in eng.hub.since(0)
+                                                   if isinstance(e.body, s.ApprovalRequested)), None))
+                if first.call and first.call.name == "bash":
+                    await me.call(s.ApprovalRespond(request_id=first.request_id, decision="allow", client="exo-tui"))
                 req = await _until(lambda: next((e.body for e in eng.hub.since(0)
-                                                 if isinstance(e.body, s.ApprovalRequested)), None))
+                                                 if isinstance(e.body, s.ApprovalRequested)
+                                                 and e.body.call and e.body.call.name == "send_message"), None))
                 await _until(out.exists)
                 await asyncio.sleep(0.1)
                 assert req.request_id in eng._approvals and not eng._approvals[req.request_id][0].done()
@@ -138,7 +144,7 @@ def test_bash_tool_subprocess_cannot_answer_its_own_approval(tmp_path, sock_dir)
         assert resp["ok"] is False and resp["error"]["code"] == "forbidden", (name, resp)
     assert sent == []  # denied by the principal, never approved by the tool
     resolved = [e.body for e in eng.hub.since(0) if isinstance(e.body, s.ApprovalResolved)]
-    assert resolved and {(r.decision, r.by) for r in resolved} == {("deny", "principal:tui")}
+    assert {(r.decision, r.by) for r in resolved if r.request_id == req.request_id} == {("deny", "principal:tui")}
     grants = asyncio.run(Dispatcher(eng).run(s.Command.of(s.CommandRun(name="grants", args=""))))
     assert grants.result["output"] == "no standing grants"
 
