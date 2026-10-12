@@ -41,12 +41,15 @@
     </a>
     <nav aria-label="Sections">
       <ul class="nav__links">
+        <li><a href="#today">Today</a></li>
         <li><a href="#vision">Vision</a></li>
         <li><a href="#system">System</a></li>
         <li><a href="#loop">Learning</a></li>
         <li><a href="#principles">Principles</a></li>
         <li><a href="#status">Status</a></li>
         <li><a href="#credits">Credits</a></li>
+        <li><a class="nav__page" href="cli/">Terminal</a></li>
+        <li><a class="nav__page" href="app/">Web app</a></li>
         <li><a class="nav__paper" href="whitepaper/">Whitepaper</a></li>
       </ul>
     </nav>
@@ -66,22 +69,51 @@
     <p class="hero__lede">Exo is one system for working well with models. It keeps a signed record of your work, builds a model of you from it, remembers what matters, learns your taste and grows with you. Built to fit one person deeply. Built to work for anyone.</p>
     <div class="hero__cta">
       <a class="btn btn--primary" href="#system">See how it works <span aria-hidden="true">→</span></a>
-      <a class="btn" href="whitepaper/">Read the whitepaper</a>
+      <a class="btn" href="cli/">Terminal</a>
+      <a class="btn" href="app/">Web app</a>
+      <a class="btn" href="whitepaper/">Whitepaper</a>
     </div>
     <dl class="readout" aria-label="Build status">
-      <div><dt>Wave 1</dt><dd><span class="led led--on"></span>Core skeleton built</dd></div>
-      <div><dt>Wave 2</dt><dd><span class="led led--next"></span>Re-home plugins: next</dd></div>
+      <div><dt>Waves 1 to 3</dt><dd><span class="led led--on"></span>Core, plugins, two clients</dd></div>
+      <div><dt>Wave 4</dt><dd><span class="led led--next"></span>Channels and cutover: next</dd></div>
       <div><dt>Horizon</dt><dd><span class="led"></span>Portable companion device</dd></div>
     </dl>
   </div>
   <div class="ticker" aria-hidden="true"><div class="ticker__track"></div></div>
 </section>
 
+<!-- TODAY -->
+<section class="section section--alt" id="today" aria-labelledby="today-title">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">01 / Working today</p>
+      <h2 id="today-title">One agent that remembers, watches itself and asks before it acts.</h2>
+      <p class="sec-lede">Exo runs now, in a terminal and in a browser, on the same core and the same memory. This is what is built and in daily use.</p>
+    </header>
+    <figure class="media reveal">
+      <img src="media/exo-session.svg" width="960" height="540" alt="An animated terminal session: a prompt, tool lines ticking in, an approval panel for a git push, a seat-signed answer, and the status strip." loading="lazy">
+      <figcaption>A turn, end to end: prompt, tools, an approval that is bound to the exact text, and the cost of the call.</figcaption>
+    </figure>
+    <div class="grid grid--3 feat">
+      <article class="card reveal"><p class="card__k">One agent, one memory</p><p>Windows, channels, scheduled runs and peer messages are threads of one agent with one append-only, hash-chained log and one summary tree. <code>/new</code> starts a thread, not a blank mind.</p></article>
+      <article class="card reveal"><p class="card__k">A harness that watches itself</p><p>Every model call records the route that served it, timing and cost. Eight anomaly rules turn that trace into findings. A finding marked fixed is measured again and reopens if it comes back.</p></article>
+      <article class="card reveal"><p class="card__k">Approvals tied to the exact text</p><p>For anything that posts, sends or pays, the gate hashes the exact text, target and arguments. Edit one character and it asks again. Seats sign their answers. Standing grants belong to the principal and expire.</p></article>
+      <article class="card reveal"><p class="card__k">Background jobs</p><p>A long build or test run does not hold the turn. It runs as a job that belongs to the agent. When it ends, the agent gets a notice in the thread that started it.</p></article>
+      <article class="card reveal"><p class="card__k">Peers</p><p>Sessions can message each other through one ingress path with a trust policy. A peer message is input, never consent, and it never looks like you.</p></article>
+      <article class="card reveal"><p class="card__k">Cost per turn</p><p>Timing and estimated cost for each turn and each call. A call Exo cannot price reads <em>unknown</em>, never zero.</p></article>
+    </div>
+    <div class="shots grid grid--2">
+      <a class="shot reveal" href="cli/"><img src="media/tui-02-turn.png" width="1939" height="1504" alt="The Exo terminal client during a turn with tool lines, a status strip and a memory gauge." loading="lazy"><span class="shot__k">Terminal client <b>→</b></span><span class="shot__t">Textual, no build step, draws the site's language in the terminal.</span></a>
+      <a class="shot reveal" href="app/"><img src="media/web-04-memory.png" width="1440" height="900" alt="The Exo web client with the transcript and the memory column on the right." loading="lazy"><span class="shot__k">Web app <b>→</b></span><span class="shot__t">Plain JavaScript on the same protocol, with a memory column.</span></a>
+    </div>
+  </div>
+</section>
+
 <!-- PROBLEM -->
 <section class="section" id="problem" aria-labelledby="problem-title">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">01 / The problem</p>
+      <p class="sec-num">02 / The problem</p>
       <h2 id="problem-title">Models get smarter every month. Working with them still feels like meeting a stranger every morning.</h2>
     </header>
     <div class="grid grid--4">
@@ -110,7 +142,7 @@
 <section class="section section--alt" id="vision" aria-labelledby="vision-title">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">02 / Vision</p>
+      <p class="sec-num">03 / Vision</p>
       <h2 id="vision-title">One system. Five jobs that are usually separate.</h2>
       <p class="sec-lede">A tailor does not make you a suit from a size chart. They measure you, cut, fit, and adjust over the years as you change. Exo does the same for models. It measures you through your own record of work, fits every model to you, and keeps adjusting. Today that work is spread across five kinds of tool. Exo puts them in one system, so each part can use what the others know.</p>
     </header>
@@ -143,7 +175,7 @@
 <section class="horizon" aria-labelledby="horizon-title">
   <div class="wrap horizon__in">
     <div>
-      <p class="sec-num">03 / Horizon</p>
+      <p class="sec-num">04 / Horizon</p>
       <h2 id="horizon-title">Later, a companion you can carry.</h2>
       <p>In a few years, Exo should live in a small portable device, something like a mini robot or a charm you wear, that grows and evolves with its user. We design for that now: the personal store is one portable folder, the core stays lean on purpose, and there is a small, local model path from day one.</p>
     </div>
@@ -160,7 +192,7 @@
 <section class="section" id="system" aria-labelledby="system-title">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">04 / How it works</p>
+      <p class="sec-num">05 / How it works</p>
       <h2 id="system-title">A signed record at the bottom. Everything else is a view you can rebuild.</h2>
       <p class="sec-lede">Read the stack from the bottom up. The ledger is a record of every event that can grow but never be edited. Your store holds what Exo has worked out about you from that record. The learning loop tests new lessons before they count.</p>
       <p class="sec-lede">The core does the work: it talks to models, runs tools and keeps sessions. At the top, every screen you use talks to the core in one shared format, called the protocol.</p>
@@ -272,7 +304,7 @@
 <section class="section section--alt" id="loop" aria-labelledby="loop-title">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">05 / The learning loop</p>
+      <p class="sec-num">06 / The learning loop</p>
       <h2 id="loop-title">It learns from you. Then it proves the lesson helps.</h2>
       <p class="sec-lede">Many assistants that "learn" save notes and hope they help. But a lesson can make things worse. "Keep it short" may improve your emails and ruin your contracts. Exo treats each lesson the way a cook treats a change to a recipe: make it both ways, taste blind, and keep the new version only if it wins.</p>
     </header>
@@ -328,7 +360,7 @@
 <section class="section" id="surface" aria-labelledby="surface-title">
   <div class="wrap surface">
     <div class="surface__text">
-      <p class="sec-num">06 / One surface</p>
+      <p class="sec-num">07 / One surface</p>
       <h2 id="surface-title">Feels like a terminal. Summons an app when it helps.</h2>
       <p>Text is the fastest way to ask for work, but it is a poor way to review a change to a file or read a chart. Apps are good at those and slow at everything else. Most tools make you pick one, or ship a command-line tool and a separate app.</p>
       <p>Exo ships one surface. The base is a calm prompt and transcript, like a terminal. Three prefixes and one menu are the whole learning curve: <code>/</code> runs a command, <code>@</code> attaches a file or note, <code>!</code> runs a system command, and <kbd>ctrl+p</kbd> opens a searchable list of every action.</p>
@@ -353,7 +385,7 @@
         </div>
         <p class="t-user t-cursor"><span class="t-p">›</span> <span class="caret"></span></p>
       </div>
-      <figcaption>Concept illustration. The terminal and web clients arrive in wave 3.</figcaption>
+      <figcaption>Illustration. The real clients are on the <a href="cli/">terminal</a> and <a href="app/">web app</a> pages.</figcaption>
     </figure>
   </div>
 </section>
@@ -362,7 +394,7 @@
 <section class="section section--alt" id="principles" aria-labelledby="principles-title">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">07 / Principles</p>
+      <p class="sec-num">08 / Principles</p>
       <h2 id="principles-title">The rules every design call answers to.</h2>
       <p class="sec-lede">Exo has eighteen principles, drawn from wide reading on personal software, human attention and automation. These nine carry the most weight.</p>
     </header>
@@ -384,14 +416,14 @@
 <section class="section" id="status" aria-labelledby="status-title">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">08 / Status and roadmap</p>
+      <p class="sec-num">09 / Status and roadmap</p>
       <h2 id="status-title">Early. In active build. Here is exactly where it stands.</h2>
-      <p class="sec-lede">Exo is not a product you can install today. It is being built in waves, each with a clear exit test. The wave 1 core is built. Wave 2 is next, and waves 3 to 5 are planned. This page will change as the work does.</p>
+      <p class="sec-lede">Exo is early, and it is not a product with a release yet. It is built in waves, each with a clear exit test. Waves 1 to 3 are built and one agent uses them every day. Wave 4 is next, and wave 5 is planned. This page will change as the work does.</p>
     </header>
 
     <div class="grid grid--2 built">
       <div class="reveal">
-        <p class="card__k"><span class="led led--on"></span>Built: wave 1, the core skeleton</p>
+        <p class="card__k"><span class="led led--on"></span>Built: the core and the plugins on it</p>
         <ul class="ticks">
           <li>Model router with fallback, for Anthropic and OpenAI-compatible APIs, including local models, plus a decision role</li>
           <li>Tool registry with file, search, patch and shell tools, and hooks that can block a call</li>
@@ -399,25 +431,29 @@
           <li>Plugin loader, and slots where memory and context plugins attach</li>
           <li>Provenance tracking for every module lifted from upstream</li>
           <li>The <code>exod</code> server with a replayable event stream, and a line client</li>
+          <li>One agent with one continuous memory, shared by every thread and window</li>
+          <li>Background jobs, peer messages, scheduled runs and subagents</li>
+          <li>A trace of every call, anomaly findings and re-verification</li>
+          <li>Approvals bound to the exact text, with signed seat answers and expiring grants</li>
         </ul>
       </div>
       <div class="reveal">
-        <p class="card__k"><span class="led led--on"></span>Built earlier, being moved onto the new core</p>
+        <p class="card__k"><span class="led led--on"></span>Built: clients and learning</p>
         <ul class="ticks">
-          <li>Signed, chained ledger and the personal store</li>
-          <li>Importers for Claude Code, Hermes, and claude.ai, ChatGPT and Grok exports</li>
-          <li>Turning corrections into reviewed belief proposals, and taste</li>
-          <li>Questions when Exo is unsure, the test on you, and a daily brief</li>
-          <li>Action gates, a signed message channel between agents, and an onboarding interview</li>
+          <li>A terminal client (<a href="cli/">exo-tui</a>) with a boot sequence, instruments and panels</li>
+          <li>A web client (<a href="app/">exo web</a>) with a memory column and approvals</li>
+          <li>The learning loop: capture, review, test on held-out cases, keep or drop</li>
+          <li>Signed, chained ledger and the personal store, with importers for common chat exports</li>
+          <li>An onboarding interview, and an agent-led first run with tips</li>
         </ul>
       </div>
     </div>
 
     <ol class="waves" aria-label="Five build waves">
       <li class="wave wave--done reveal"><p class="wave__n">Wave 1 · <b>Built</b></p><h3>Core skeleton</h3><p>Turn loop, model providers, tools, sessions, plugin slots, protocol server, provenance.</p></li>
-      <li class="wave wave--next reveal"><p class="wave__n">Wave 2 · <b>Next</b></p><h3>Re-home</h3><p>Memory, context, gates, command centre and agent messaging on the new core. Skills, and MCP, a standard way to plug in outside tools.</p></li>
-      <li class="wave reveal"><p class="wave__n">Wave 3 · Planned</p><h3>UI and learning</h3><p>Terminal and web clients, panels the model opens, the learning loop with hill-climbing tests.</p></li>
-      <li class="wave reveal"><p class="wave__n">Wave 4 · Planned</p><h3>Channels and cutover</h3><p>Chat channel adapters, history import, and existing agents moving over, each with a way back.</p></li>
+      <li class="wave wave--done reveal"><p class="wave__n">Wave 2 · <b>Built</b></p><h3>Re-home</h3><p>Memory, context, gates, command centre and agent messaging on the new core. Skills, and MCP, a standard way to plug in outside tools.</p></li>
+      <li class="wave wave--done reveal"><p class="wave__n">Wave 3 · <b>Built</b></p><h3>UI and learning</h3><p>Terminal and web clients, panels the model opens, the learning loop with hill-climbing tests. In daily use on one canary agent.</p></li>
+      <li class="wave wave--next reveal"><p class="wave__n">Wave 4 · <b>Next</b></p><h3>Channels and cutover</h3><p>Chat channel adapters, history import, and existing agents moving over, each with a way back.</p></li>
       <li class="wave reveal"><p class="wave__n">Wave 5 · Planned</p><h3>Device</h3><p>Size audit, small local models by default, the core on a small board, a thin device client.</p></li>
     </ol>
   </div>
@@ -427,7 +463,7 @@
 <section class="section section--alt" id="credits" aria-labelledby="credits-title">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">09 / Credits and inspirations</p>
+      <p class="sec-num">10 / Credits and inspirations</p>
       <h2 id="credits-title">Built on the shoulders of others. With thanks.</h2>
     </header>
     <ul class="credits">
@@ -467,7 +503,7 @@
 <footer class="foot">
   <div class="wrap foot__in">
     <a class="brand" href="#top"><svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg><span>EXO</span></a>
-    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a></p>
+    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a> · <a href="cli/">Terminal</a> · <a href="app/">Web app</a> · <a href="whitepaper/">Whitepaper</a></p>
     <p class="foot__small">Exo is early and in active development. This page describes the design as of October 2026 and will change.</p>
   </div>
 </footer>

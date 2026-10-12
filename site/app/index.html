@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exo web app: the same agent, in a browser</title>
+<meta name="description" content="The Exo web client shows the transcript, approvals and a memory column on the same core and the same memory as the terminal. Plain JavaScript, no build step.">
+<meta name="theme-color" content="#08090a">
+<link rel="canonical" href="https://exo.askaconsult.com/app/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Project Exo">
+<meta property="og:url" content="https://exo.askaconsult.com/app/">
+<meta property="og:title" content="Exo web app: the same agent, in a browser">
+<meta property="og:description" content="The Exo web client shows the transcript, approvals and a memory column on the same core and the same memory as the terminal. Plain JavaScript, no build step.">
+<meta property="og:image" content="https://exo.askaconsult.com/media/web-04-memory.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://exo.askaconsult.com/media/web-04-memory.png">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="stylesheet" href="../assets/style.css">
+<script>document.documentElement.classList.add("js")</script>
+<script src="../assets/main.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" id="top">
+  <div class="wrap nav__in">
+    <a class="brand" href="../" aria-label="Project Exo, home">
+      <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg>
+      <span>EXO</span>
+    </a>
+    <nav aria-label="Pages">
+      <ul class="nav__links">
+        <li><a href="../">Overview</a></li>
+        <li><a class="nav__page" href="../cli/">Terminal</a></li>
+        <li><a class="nav__page" href="../app/" aria-current="page">Web app</a></li>
+        <li><a class="nav__paper" href="../whitepaper/">Whitepaper</a></li>
+      </ul>
+    </nav>
+    <a class="btn btn--sm" href="https://github.com/aska-digital/exo" rel="noopener">Repository <span class="tag">private preview</span></a>
+  </div>
+</header>
+<main id="main">
+<section class="hero hero--sub" aria-labelledby="hero-title">
+  <canvas class="hero__canvas" aria-hidden="true"></canvas>
+  <div class="hero__grid" aria-hidden="true"></div>
+  <div class="wrap hero__in">
+    <p class="crumb"><a href="../">Project Exo</a> · Web app</p>
+    <h1 id="hero-title" class="hero__title">The same agent,<br>with the memory<br>in view.</h1>
+    <p class="hero__lede">The web client talks to the same core over the same protocol as the terminal. Open it next to the terminal and you see one agent, one thread, one memory. It adds a column that shows what the next call carries.</p>
+    <div class="hero__cta"><a class="btn btn--primary" href="#open">How to open it <span aria-hidden="true">→</span></a><a class="btn" href="#screens">Screenshots</a><a class="btn" href="../cli/">Terminal</a></div>
+  </div>
+</section>
+
+<section class="section" id="overview" aria-labelledby="overview-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">01 / Overview</p>
+      <h2 id="overview-t">A client, not a second system.</h2>
+      <p class="sec-lede">The web app is plain JavaScript served by a small plugin. It has no build step, no framework and no file from outside. It keeps no state that matters: every panel is drawn from a command answer or an event from the core. Close the tab and nothing is lost.</p>
+    </header>
+    <div class="grid grid--3 feat">
+      <article class="card reveal"><p class="card__k">Memory column</p><p>Tokens the next call carries, split into system, summary tree, other threads and tail. Tree nodes, log length and the fold frontier. Filled from <code>/context</code>.</p></article>
+      <article class="card reveal"><p class="card__k">Last calls</p><p>The route that served each call, time to first token, cache share and any fallback, with the cost of that call. A call that could not be priced reads <em>unknown</em>.</p></article>
+      <article class="card reveal"><p class="card__k">Approvals</p><p>An orange panel with <kbd>y</kbd> allow, <kbd>n</kbd> deny and <kbd>a</kbd> allow always, which work when the composer is not focused. Outward acts are bound to the exact text.</p></article>
+      <article class="card reveal"><p class="card__k">Quiet by design</p><p>Hairlines, mono capitals, orange for the one thing that needs you, cold blue for what the system knows. One dot pulses while a turn runs.</p></article>
+      <article class="card reveal"><p class="card__k">Reports in the thread</p><p>Type <code>/context</code>, <code>/findings</code> or <code>/trace</code> in the composer and the report appears in the transcript.</p></article>
+      <article class="card reveal"><p class="card__k">Motion on a budget</p><p>The start hero draws about 24 frames a second, stops when the tab is hidden and shows one still frame under reduced motion. Every animation respects <code>prefers-reduced-motion</code>.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="section section--alt" id="screens" aria-labelledby="screens-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">02 / Screenshots</p>
+      <h2 id="screens-t">Four states.</h2>
+      <p class="sec-lede">Same demo as the terminal page: an agent called <code>atlas</code> fixing a failing test. The text is scripted for the screenshot. The layout is the real client.</p>
+    </header>
+    <div class="gallery">
+      <figure class="reveal">
+        <div class="gallery__img"><img src="../media/web-01-start.png" width="1440" height="900" alt="The Exo web client on an empty thread, with the node-shell hero behind the brand block and the instrument column on the right." loading="lazy"></div>
+        <figcaption><p class="card__k">Start</p><h3>The empty thread</h3><p>The site hero sits behind a brand block with the agent, model, memory line and key hints. The instrument column on the right shows memory and the last calls.</p></figcaption>
+      </figure>
+      <figure class="reveal">
+        <div class="gallery__img"><img src="../media/web-02-turn.png" width="1440" height="900" alt="A turn in the web client with tool lines and a running tool." loading="lazy"></div>
+        <figcaption><p class="card__k">A turn</p><h3>Tools, with their time</h3><p>One dim line per tool. Click a line to open its arguments and output. The status strip carries state, served model, memory gauge, cache share and session cost.</p></figcaption>
+      </figure>
+      <figure class="reveal">
+        <div class="gallery__img"><img src="../media/web-03-approval.png" width="1440" height="900" alt="An approval panel in the web client." loading="lazy"></div>
+        <figcaption><p class="card__k">Gate</p><h3>An approval you can read</h3><p>The panel names the risk and shows the exact text. Answer with the buttons or with <kbd>y</kbd>, <kbd>n</kbd> and <kbd>a</kbd>.</p></figcaption>
+      </figure>
+      <figure class="reveal">
+        <div class="gallery__img"><img src="../media/web-04-memory.png" width="1440" height="900" alt="The web client with the memory column filled in." loading="lazy"></div>
+        <figcaption><p class="card__k">Memory</p><h3>What the next call carries</h3><p>The memory column splits the next call into system, tree, other threads and tail, and shows the log position and fold frontier. It is hidden below 1100 px.</p></figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="open" aria-labelledby="open-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">03 / How to open it</p>
+      <h2 id="open-t">Two commands.</h2>
+      <p class="sec-lede">Start the core, then start the client. It binds to <code>127.0.0.1</code> only. For a core on another machine, use <code>--url</code> and <code>--token-file</code>.</p>
+    </header>
+    <ol class="steps">
+      <li><h3>Install</h3><p>The same installer as the terminal client. Python 3.11 or newer.</p><div class="cmd"><span class="t-p">$</span> scripts/install.sh</div></li>
+      <li><h3>Start the core</h3><p>One process per agent. Terminal windows and the web app all join it.</p><div class="cmd"><span class="t-p">$</span> exo serve</div></li>
+      <li><h3>Open the app</h3><p>Then visit the address below.</p><div class="cmd"><span class="t-p">$</span> exo web<br><span class="c"># http://127.0.0.1:7342</span></div></li>
+    </ol>
+    <p class="note reveal" style="margin-top:28px">Prefer a terminal? <a href="../cli/">The terminal client</a> shows the same thread.</p>
+  </div>
+</section>
+</main>
+<footer class="foot">
+  <div class="wrap foot__in">
+    <a class="brand" href="../"><svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg><span>EXO</span></a>
+    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a> · <a href="../cli/">Terminal</a> · <a href="../app/">Web app</a> · <a href="../whitepaper/">Whitepaper</a></p>
+    <p class="foot__small">Exo is early and in active development. This page describes the design as of October 2026 and will change.</p>
+  </div>
+</footer>
+</body>
+</html>
