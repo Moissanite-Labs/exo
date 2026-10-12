@@ -141,6 +141,8 @@ def test_panel_diff_renders_and_dismiss_responds(tmp_path):
         styles = {str(sp.style) for sp in text.spans}
         assert "green" in styles and "red" in styles
         await pilot.press("escape")
+        if app.tip is not None or view.display and not any(b.action == "dismissed" for b in client.seen):
+            await pilot.press("escape")  # D-043: a guidance line, if one is up, goes first
         await until(lambda: any(isinstance(b, s.UiRespond) and b.action == "dismissed" for b in client.seen), pilot)
         assert not view.display
         assert [b.panel_id for b in client.seen] == ["p1", "p1"]

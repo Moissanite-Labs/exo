@@ -785,7 +785,7 @@ ledger.
 
 A build or a long test run should not hold a turn. With `background: true`, `bash` returns a job id at once
 and the agent carries on. Output goes to an owner-only log file that rotates at 5 MB. A job belongs to the
-agent, not to the turn: pressing Esc stops the turn, never the job. When the job ends, the core writes a
+agent, not to the turn: stopping the turn (ctrl+c or `/stop`) never stops the job. When the job ends, the core writes a
 short notice (exit code, time, the last lines of output, where the full log is) and sends it through the
 ingress path (section 12.7). It is steered into a running turn, queued for an idle one, or wakes the thread
 if the seat allows. The notice is framed as data from the harness. It is never the user, never counts as the

@@ -116,3 +116,4 @@ real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Still open:
    descriptions. `docs/CORE-V2-INTERFACES.md` still says 25 commands and 21 events, which is the wave 2 shape.
 6. **D-027.** Reserved in D-026 and never written. If it is written, add its row here.
 | D-041 Audit correctness fixes (partial text on error, truncated streams, undo and failed summaries, scheduler, bus directive kind, MCP names and cap) | `docs/CORE-V2-INTERFACES.md`, `docs/MEMORY-MODEL.md`, `docs/SCHEDULE.md`, `docs/SEATS.md` "MCP", `docs/TOOLS.md`, `docs/AGENT-WIRE.md` | n/a | n/a | WP §17.3 |
+| D-043 Esc never stops a turn; ctrl+c and `/stop` do; approval card keeps out of typing; failover off the event loop | `docs/USER-GUIDE.md` "Approvals", `docs/UI.md`, `docs/COMMANDS.md`, `docs/ui/WEB.md`, `skills/exo-intro/SKILL.md` | n/a | n/a | WP §12 |

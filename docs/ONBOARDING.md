@@ -33,7 +33,7 @@ a session (`--resume`, `--session`), and never in tests, `exo serve` or headless
   are never in the conversation the model sees. Seen tips are kept in `onboarding.json`; `/tutorial reset`
   shows them again. A tip that loses its turn to another is not used up and appears at its next moment.
 - **Moments:** first message sent, first memory summary, first approval, first message typed while a turn runs,
-  first Esc, first model fallback, first peer message, first `/new`, first finding, first slow turn (a minute
+  first stop (ctrl+c), first model fallback, first peer message, first `/new`, first finding, first slow turn (a minute
   or more not counting approvals), first `code_find`. Each tip names the command that goes deeper.
 - **The agent** also gets one line while the mode is on: the user is new, explain an unfamiliar Exo concept
   in a sentence. It is appended last in the stable system text (after the prompt and memory block, before the

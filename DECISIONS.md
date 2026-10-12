@@ -811,3 +811,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   refused, not replaced; remote descriptions are marked untrusted third-party text.
 - **Not done:** terminal event-loop blocking and approval focus (another branch); gate, approvals, capture and
   ledger items (other branches).
+
+## D-043 (2026-10-12) Esc never stops a turn; the approval card keeps out of your typing
+- **Why:** the principal ruled that Esc interrupting a turn is bad UI. It is too easy to hit by habit. Esc should be soft.
+- **Esc:** closes the completion menu or dismisses ghost text, then clears a guidance line, then leaves a panel,
+  otherwise nothing: no notice, no beep. On the approval card it does not deny. The web client never had an Esc stop.
+- **Stop:** ctrl+c while a turn runs (the composer text stays, a dim "stopped" line shows), `/stop`, and the web
+  Stop button. Idle ctrl+c is unchanged: Textual's hint that ctrl+q quits; a single press never quits. Typing while a
+  turn runs still steers.
+- **Approval card (client side only):** it does not take focus from a composer that has text or was typed in during
+  the last 1.5 s, and it claims focus later once the composer is empty and quiet. Single keys act only when the card
+  has focus. Allow always needs `a` then Enter, or `A`. This matches the web guard. The gate and approval identity
+  in the core are untouched.
+- **Failover:** `SharedClient._failover` runs the socket probe, the engine start and the wait for another window in
+  a thread, so the terminal keeps drawing.
+- **Docs:** user guide, UI, COMMANDS, WEB, JOBS, TRACE, ONBOARDING, the site, the whitepaper and the intro skill.

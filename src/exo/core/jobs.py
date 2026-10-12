@@ -415,7 +415,7 @@ JOB_OUTPUT = ToolSpec(
 JOB_KILL = ToolSpec(
     name="job_kill", toolset="shell", risk="medium",
     description=("Stop a running background job: its whole process group gets TERM, then KILL after a second. "
-                 "Pressing Esc stops a turn, never a job; this is the only way to stop one early."),
+                 "Stopping a turn never stops a job; this is the only way to stop one early."),
     parameters={"type": "object", "required": ["id"], "properties": {
         "id": {"type": "string", "description": "A running job's id from `jobs`."}}})
 

@@ -37,7 +37,8 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 
 | Key or prefix | Does |
 |---|---|
-| `Esc` | Interrupts the running turn. |
+| `ctrl+c` | Stops the running turn. Your draft stays. With nothing running it does nothing (`ctrl+q` quits). `/stop` does the same. |
+| `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
 | typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`. |
 | `@path` | Adds that file to your message. |
 | `!command` | Asks the agent to run that shell command and show the output. |
@@ -77,6 +78,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/context` | Show what the next model call carries, part by part, with token counts. Read-only. |
 | `/compact` | Summarize now what is eligible, then show tokens before and after. |
 | `/restart` | Reopen this session in a new terminal tab and exit this one. |
+| `/stop` | Stops the running turn. What was done is kept. |
 | `/exit`, `/quit` | Quit. |
 | `/model [ref]` | Pick the model for this session, or set it with a reference. `/model default <ref>` sets the default. |
 | `/default [ref]` | Set the default model for new sessions, or pick one. |
@@ -135,7 +137,7 @@ The agent can start a long command, such as a build or a test run, and keep work
 `background: true`, then `jobs`, `job_output` and `job_kill`. When the job ends, the thread gets a short notice with
 the exit code and the last lines of output. The notice is never from you and cannot approve anything.
 
-- Esc does not stop a job. Ending the core does.
+- Stopping a turn (ctrl+c or `/stop`) does not stop a job. Ending the core does.
 - Limits (four at a time, two hours each) are per seat. See `docs/JOBS.md`.
 
 ## 6. Approvals
@@ -143,7 +145,10 @@ the exit code and the last lines of output. The notice is never from you and can
 Some actions wait for you. The gate looks at each tool call and decides: allow, log, ask or deny, from your policy
 files (`policies/gates.yaml` in your store). When it asks, a panel shows what the agent wants to do and why.
 
-In the terminal: `o` allows once, `a` allows always, `d` denies. On the web page: `y`, `a`, `n`.
+In the terminal: `o` allows once, `a` then Enter allows always (or `A` at once), `d` denies. Esc never answers. The keys only
+act when the card has focus, and the card does not take focus while you have text in the composer or typed in the last
+second and a half, so a letter typed into a message never answers a gate. Press Tab to move to the card. On the web
+page: `y`, `a`, `n`, which are ignored while you type in a field.
 
 What the gate asks about, and why:
 
