@@ -8,16 +8,9 @@ or file from outside.
 
 ## Screens
 
-| State | File |
-| --- | --- |
-| Boot sequence (under 1 s, any key skips) | `web-boot.png` |
-| Empty start: the site's hero behind the brand block, instrument column on the right | `web-start.png` |
-| Empty start under reduced motion (one still frame) | `web-start-reduced.png` |
-| The `/context` report in the transcript, instruments filled | `web-context.png` |
-| A turn with tools running | `web-turn.png` |
-| An approval panel and a diff panel | `web-approval.png` |
-| A finished answer, memory event, peer and taste panels, tip | `web-answer.png` |
-| Narrow screen | `web-narrow.png` |
+The public set is in `docs/media/`: `web-01-start.png` (empty start: the site's hero behind the brand block,
+instrument column on the right), `web-02-turn.png` (a turn with tools running), `web-03-approval.png` (an
+approval panel) and `web-04-memory.png` (the memory column filled in). `scripts/promo_shots_web.py` makes them.
 
 ## What is where
 
@@ -78,8 +71,8 @@ keeps the old node first.
 
 ## Reproducing the screenshots
 
-Run `python -m exo_command` against a source, or use a fake source that replays protocol events (as
-`plugins/exo-command/tests/test_chat.py` does), and capture with a headless Chrome. The screenshots here came
-from such a replay of a scripted turn; nothing was captured from a live `~/.exo`.
+`python scripts/promo_shots_web.py` serves the static client over a stand-in source that replays protocol
+events for a scripted turn, and captures each state with headless Chrome. Nothing is captured from a live
+`~/.exo`. See `docs/media/README.md`.
 
 Source of the language: the Exo site, `site/`.
