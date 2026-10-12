@@ -1,5 +1,7 @@
 # Installing Exo
 
+The README has the short version (`## Install`). This page has the full detail.
+
 One script installs Exo for any user on macOS or Linux (D-004). It never touches an existing
 `~/.hermes` unless you name it.
 
