@@ -195,6 +195,7 @@ class ToolRow:
     error: str = ""
     session: str = ""
     masked: str = ""  # the "note: pipeline stage N exited C" line a bash result carried, if any
+    epoch: int = 0  # how many file-changing calls came before this one in the turn (a repeat across a change is a retest)
 
 
 @dataclass
@@ -321,6 +322,21 @@ def _canon_cmd(cmd: str) -> str:
     return re.sub(r"\s+", " ", cmd).strip()
 
 
+_FILE_TOOLS = frozenset({"write_file", "edit_file", "patch"})
+_BASH_WRITE = re.compile(
+    r"\bsed\s+(?:-\w+\s+)*-i|\btee\b|\bgit\s+(?:apply|checkout|restore|stash|reset|pull|merge|rebase|cherry-pick|am)\b"
+    r"|\bpatch\s|\b(?:mv|cp|rm|touch)\s|(?<![0-9&<>])>>?\s*(?!&|/dev/null)\S")
+
+
+def _changes_files(name: str, args: Any, error: bool) -> bool:
+    """Did this completed call (probably) change files? Then a later identical command is a retest, not a repeat."""
+    if error:
+        return False
+    if name in _FILE_TOOLS:
+        return True
+    return name == "bash" and isinstance(args, dict) and bool(_BASH_WRITE.search(str(args.get("command", ""))))
+
+
 def _args_key(args: Any) -> str:
     if isinstance(args, dict) and isinstance(args.get("command"), str):
         args = {"command": _canon_cmd(args["command"])}  # the timeout argument does not make it a different call
@@ -346,6 +362,7 @@ class _Parse:
         self.asks: dict[str, float] = {}
         self.fell = 0
         self.pending: list[dict[str, Any]] = []  # fallback notices waiting for the usage event of their call
+        self.epoch = 0  # file-changing calls so far this turn
         self.mark = 0.0  # when the model started waiting: turn start or the last tool/usage boundary
         self.first = 0.0  # first streamed text or reasoning since mark
 
@@ -355,6 +372,7 @@ class _Parse:
             self.cur = TurnTrace(self.session, b.turn_id, e.ts, ts, shown=b.model)
             self.turns.append(self.cur)
             self.recorded, self.guess, self.fell, self.mark, self.first, self.pending = [], [], 0, ts, 0.0, []
+            self.epoch = 0
             return
         t = self.cur
         if t is None:
@@ -394,7 +412,9 @@ class _Parse:
             t.tools.append(ToolRow(call.name if call else "?", b.result.call_id,
                                    _args_key(call.arguments) if call else "", b.duration_ms or int(ts - began), err,
                                    scrub(b.result.text(), 300) if err else "", self.session,
-                                   _masked(b.result.text()) if call and call.name == "bash" else ""))
+                                   _masked(b.result.text()) if call and call.name == "bash" else "", self.epoch))
+            if call and _changes_files(call.name, call.arguments, bool(err)):
+                self.epoch += 1
             self.mark, self.first = ts, 0.0
         elif isinstance(b, ev.ApprovalRequested):
             self.asks[b.request_id] = ts
@@ -540,8 +560,9 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
             add("shell.masked_exit", "papercut", "A pipeline failure was hidden by its last stage", tr.masked)
     seen: dict[tuple[str, str], int] = {}
     for tr in t.tools:
-        seen[(tr.name, tr.args_key)] = seen.get((tr.name, tr.args_key), 0) + 1
-    for (name, _), n in seen.items():
+        k = (tr.name, tr.args_key, tr.epoch)  # the same call after an edit is a retest: not a repeat
+        seen[k] = seen.get(k, 0) + 1
+    for (name, _, _), n in seen.items():
         if n > 1:
             slowest = max((x.ms for x in t.tools if x.name == name), default=0)
             add(f"tool.repeat:{name}", "papercut", f"Tool {name} ran the same call {n} times in one turn",
