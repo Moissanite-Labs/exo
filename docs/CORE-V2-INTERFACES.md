@@ -20,7 +20,7 @@ additively (new optional fields with defaults). Ask the lead before changing any
   low, toolset = "core".
 - `ProviderEvent` (tagged by `kind`): kind `text/reasoning/tool_call/usage/done/error`, text = "",
   tool_call?, usage?, stop_reason? (`end/tool_use/max_tokens/interrupted/error`), message?, error?,
-  retryable = False, status? (HTTP code).
+  retryable = False, status? (HTTP code), retry_after? (seconds, from the provider).
 - `Provider` (runtime-checkable Protocol): `name: str`;
   `stream(messages, tools, **opts) -> AsyncIterator[ProviderEvent]` (an async generator).
 

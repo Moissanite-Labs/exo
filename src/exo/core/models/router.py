@@ -215,7 +215,7 @@ class Router:
         started = False
         async for ev in cred.provider.stream(messages, tools, **{**opts, "model": route.model}):
             if ev.kind == "error":
-                retry_after = ev.message.meta.get("retry_after") if ev.message else None
+                retry_after = ev.retry_after
                 fallback = (ev.status not in NO_FALLBACK_STATUS) if ev.status is not None else ev.retryable
                 if fallback:
                     self.record_failure(cred.id, route.model, ev.status, retry_after, sole)

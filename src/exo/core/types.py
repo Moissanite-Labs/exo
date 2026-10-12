@@ -150,8 +150,8 @@ class ProviderEvent:
     usage      ``usage`` for the call (may arrive more than once; last one wins).
     done       last event. ``stop_reason`` set; ``message`` is the assembled
                assistant Message (with reasoning signatures intact).
-    error      ``error`` text; ``retryable`` and ``status`` (HTTP code if any)
-               let the router decide on fallback.
+    error      ``error`` text; ``retryable``, ``status`` (HTTP code if any) and
+               ``retry_after`` (seconds, if the provider said) drive router fallback.
     """
 
     kind: ProviderEventKind
@@ -163,6 +163,7 @@ class ProviderEvent:
     error: str | None = None
     retryable: bool = False
     status: int | None = None
+    retry_after: float | None = None  # seconds until the provider says to retry (error only)
 
 
 @runtime_checkable

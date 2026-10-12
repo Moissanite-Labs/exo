@@ -37,7 +37,7 @@ def test_http_429_maps_to_retryable_error_with_retry_after():
     assert [e.kind for e in events] == ["error"]
     ev = events[0]
     assert ev.status == 429 and ev.retryable and "slow down" in ev.error
-    assert ev.message.meta["retry_after"] == 30
+    assert ev.retry_after == 30
 
 
 def test_in_stream_overloaded_error_is_retryable():

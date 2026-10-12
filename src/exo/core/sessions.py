@@ -271,11 +271,20 @@ class SessionStore:
         ev.seq = self._tx(write)
         return ev
 
-    def events_since(self, since: int = 0, session: str | None = None, limit: int = 10000) -> list[Event]:
+    def write_event(self, ev: Event) -> None:
+        """Store an event that already has its ``seq`` (the server Hub numbers events)."""
+        self._tx(lambda db: db.execute("INSERT INTO events (seq, id, session, type, ts, body) VALUES"
+                                       " (?,?,?,?,?,?)", (ev.seq, ev.id, ev.session, ev.type, ev.ts,
+                                                          json.dumps(to_dict(ev.body), ensure_ascii=False))))
+
+    def events_since(self, since: int = 0, session: str | None = None, limit: int = 10000,
+                     with_global: bool = False) -> list[Event]:
+        """Events with seq > since; ``with_global`` also keeps session-less events."""
         if session is None:
             rows = self._q("SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?", (since, limit))
         else:
-            rows = self._q("SELECT * FROM events WHERE seq>? AND session=? ORDER BY seq LIMIT ?",
+            extra = " OR session IS NULL" if with_global else ""
+            rows = self._q(f"SELECT * FROM events WHERE seq>? AND (session=?{extra}) ORDER BY seq LIMIT ?",
                            (since, session, limit))
         out = []
         for r in rows:

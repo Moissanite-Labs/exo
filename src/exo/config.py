@@ -200,6 +200,33 @@ class Config:
         explicit = (self.data.get('principals') or {}).get(pid)
         return Path(explicit).expanduser() if explicit else self.home / 'principals' / pid
 
+    def models(self, env: dict | None = None) -> dict:
+        """The `models` table for the core Router, with a working default.
+
+        First hit wins: explicit `models.roles`; a scripted `models.fake`; a local
+        OpenAI-compatible server in `models.local` ({"base_url", "model"}); the catalog
+        (Anthropic) when ANTHROPIC_API_KEY is set; else the offline fake model.
+        Keys come from environment variables only; no credential file is read.
+        """
+        env = os.environ if env is None else env
+        m = copy.deepcopy(self.data.get('models') or {})
+        if m.get('roles'):
+            return m
+        fake = {'roles': {'main': ['fake:scripted'], 'aux': ['fake:scripted'], 'decision': []}}
+        if m.get('fake'):
+            return {**m, **fake}
+        local = m.get('local')
+        if isinstance(local, dict) and local.get('base_url') and local.get('model'):
+            prov = {'transport': 'openai', 'base_url': local['base_url'], 'local': True}
+            if local.get('key_env'):
+                prov['key_env'] = local['key_env']
+            ref = f"local:{local['model']}"
+            return {**m, 'providers': {**(m.get('providers') or {}), 'local': prov},
+                    'roles': {'main': [ref], 'aux': [ref], 'decision': []}}
+        if env.get('ANTHROPIC_API_KEY'):
+            return m
+        return {**m, **fake}
+
     def plugin_config(self, name: str) -> dict:
         return copy.deepcopy((self.data.get('plugin_config') or {}).get(name) or {})
 
