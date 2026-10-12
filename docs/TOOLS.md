@@ -29,10 +29,10 @@ A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_de
 a heuristic: a secret under an innocent name still passes, so keep keys in the key store. `EXO_HOME` stays: tools
 run `exo` commands, and the default path is no secret.
 
-Model providers read the real environment. The claude-cli provider does not pass it on: the `claude` child gets an
+Model providers read the real environment. The claude-cli and muse-cli providers do not pass it on: the child gets an
 explicit minimal set (`exo.envscrub.minimal_env`: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`,
 `TERM`, `TMPDIR`, `TZ`, `CLAUDE_CONFIG_DIR`, `XDG_*_HOME`, proxy variables and CA bundle paths) plus its fixed
-switches, and never an API key. MCP servers get the environment their own `env` table asks for (`${VAR}`
+switches, and never an API key (muse-cli also drops `META_API_KEY`). MCP servers get the environment their own `env` table asks for (`${VAR}`
 expansion), not this filter.
 
 ## Pipeline exit codes
