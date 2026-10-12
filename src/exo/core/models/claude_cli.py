@@ -93,12 +93,16 @@ def build_frames(messages: list[Message], names: set[str]) -> tuple[str, list[di
                         "input": tc.arguments} for tc in m.tool_calls]
         else:
             role, blocks = "user", _blocks(m)
-        if frames and frames[-1]["type"] == role == "user":
+        if not blocks:  # an empty frame (a tool message with no results, a blank turn) carries nothing
+            continue
+        if frames and frames[-1]["type"] == role:
             frames[-1]["message"]["content"].extend(blocks)
         else:
             frames.append({"type": role, "message": {"role": role, "content": blocks}})
-    if not frames or frames[-1]["type"] != "user" or not frames[-1]["message"]["content"]:
-        raise ValueError("history must end in a nonempty user or tool-result message")
+    if frames and frames[-1]["type"] == "assistant":  # a trailing assistant note: ask the model to go on
+        frames.append({"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "(continue)"}]}})
+    if not frames:
+        raise ValueError("history must contain at least one message")
     return "\n\n".join(system), frames
 
 

@@ -230,14 +230,30 @@ class ContextAdapter:
             return msgs
         if not out:
             return msgs
-        return [Message(role=d["role"], content=[ContentPart.of_text(str(d.get("content") or ""))])
-                for d in out if d.get("role") in ("system", "user", "assistant")]
+        return _apply_selection(msgs, flat, out)
 
     def on_turn_complete(self, session: str, usage: Usage) -> None:
         if self.plugin is not None:
             _safe(self.plugin, "update_from_response", _usage_dict(usage))
             _safe(self.plugin, "on_turn_complete", self.transcript(session), usage=_usage_dict(usage),
                   session_id=session)
+
+
+def _apply_selection(msgs: list[Message], flat: list[dict[str, Any]], out: list[dict[str, Any]]) -> list[Message]:
+    """Turn a ``select_context`` result back into messages. The hook sees text only, so a dict it passes through
+    unchanged maps back to the original Message (its tool calls and results survive); only changed or new dicts
+    (an injected system block, an edited turn) become plain text messages. A tool message it did not keep goes."""
+    out_msgs: list[Message] = []
+    at = 0
+    for d in out:
+        role = d.get("role")
+        hit = next((j for j in range(at, len(flat)) if flat[j]["role"] == role and flat[j]["content"] == (d.get("content") or "")), None)
+        if hit is not None:
+            out_msgs.append(msgs[hit])
+            at = hit + 1
+        elif role in ("system", "user", "assistant"):
+            out_msgs.append(Message(role=role, content=[ContentPart.of_text(str(d.get("content") or ""))]))
+    return out_msgs
 
 
 def _call(fn: Any, *args: Any, **kw: Any) -> Any:
