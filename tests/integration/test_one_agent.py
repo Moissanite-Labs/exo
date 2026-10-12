@@ -109,3 +109,19 @@ def test_memory_zoom_and_the_view_the_memory_provider_gets(tmp_path):
     assert hits and hits[0]["id"] == 1 and hits[0]["kind"] == "user"
     assert len(view) == 2 and view.date(1)
     assert "memory_zoom" in {sp.name for sp in eng._specs()}
+
+
+def test_exo_memory_verify_and_threads(tmp_path, monkeypatch, capsys):
+    from exo.cli import main
+    from exo.core.sessions import SessionStore
+    from exo.core.types import Message
+
+    st = SessionStore(tmp_path / "sessions.sqlite")
+    t = st.create_session(agent="razi", title="w1")
+    st.append_message(t.id, Message.user("hi"))
+    st.close()
+    monkeypatch.setenv("EXO_HOME", str(tmp_path))
+    assert main(["memory"]) == 0
+    assert "razi: 1 entries, ok" in capsys.readouterr().out
+    assert main(["memory", "threads", "--agent", "razi"]) == 0
+    assert t.id in capsys.readouterr().out
