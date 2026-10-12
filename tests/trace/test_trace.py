@@ -487,7 +487,7 @@ def test_agent_tools(tmp_path):
     assert call(eng, "exo_harness_report", {"title": "x", "detail": "d", "severity": "huge"}, sid).is_error
     assert call(eng, "exo_harness_report", {"title": "x"}, sid).is_error
     out = call(eng, "exo_trace", {}, sid).text()
-    assert "running on: fake:x" in out and "harness " in out and "open findings 1" in out
+    assert "running on: fake:x" in out and "harness " in out and "findings 1: 1 open, 0 fixed (awaiting re-verification)" in out
 
 
 def test_trace_tools_are_not_for_subagents_and_seats_keep_them(tmp_path):
@@ -524,7 +524,7 @@ def test_trace_and_findings_commands_and_client_error_report(tmp_path):
 
     out, n, names = run(go())
     assert "running on:" in out and "1 turns" not in out and "wall" in out
-    assert n == {"open": 1} and {"trace", "findings"} <= set(names)
+    assert n["open"] == 1 and n["by_state"]["open"] == 1 and {"trace", "findings"} <= set(names)
 
 
 # ---------------------------------------------------------------- CLI
@@ -639,3 +639,51 @@ def test_rerunning_tests_after_an_edit_is_not_a_repeat():
     assert "tool.repeat:bash" in _turn_with_calls([run_tests, ("bash", {"command": "ls 2>/dev/null"}), run_tests])
     # three runs with one edit between: the first two are one epoch, so they still count
     assert "tool.repeat:bash" in _turn_with_calls([run_tests, run_tests, ("edit_file", {"path": "a"}), run_tests])
+
+
+def test_findings_counts_by_state_reconcile_and_fixed_stay_listed():
+    f = fnd(version="abc1234")
+    a, b, c, d = (f.file(f"sig.{i}", f"Finding {i}", severity="bug")["id"] for i in range(4))
+    f.fix(b, "abc1234")
+    f.fix(c, "abc1234")
+    f.store._q("UPDATE findings SET status='verified' WHERE id=?", (c,))
+    f.store._q("UPDATE findings SET status='reopened' WHERE id=?", (d,))
+    assert f.counts() == {"open": 1, "fixed": 1, "verified": 1, "reopened": 1, "total": 4}
+    assert f.open_count() == 2  # open + reopened still need work
+    assert f.summary() == "findings 4: 1 open, 1 fixed (awaiting re-verification), 1 verified, 1 reopened"
+    text = f.text("all")
+    assert text.splitlines()[0] == f.summary() and f"fixed in abc1234" in text
+    assert len(f.list("all")) == 4 == len(f.list())  # nothing dropped
+    assert [r["id"] for r in f.list("fixed")] == [b]
+
+
+def test_findings_changes_since_last_view():
+    f = fnd(version="abc1234")
+    a = f.file("sig.a", "Alpha")["id"]
+    assert f.changes("cli", save=True) == []  # first view: no baseline
+    b = f.file("sig.b", "Beta")["id"]
+    f.fix(a, "abc1234")
+    moved = f.changes("cli")
+    assert any(m.startswith("open -> fixed") and a in m for m in moved) and any(m.startswith("new") and b in m for m in moved)
+    assert f.changes("cli") == moved  # peeking does not move the baseline
+    assert "since last view:" in f.text(viewer="cli")
+    assert f.changes("cli") == [] and f.changes("other") == []
+
+
+def test_cli_findings_status_all_and_trace_counts(tmp_path, monkeypatch, capsys):
+    from exo import cli
+
+    monkeypatch.setenv("EXO_HOME", str(tmp_path))
+    store = SessionStore(tmp_path / "sessions.sqlite")
+    old_session(store)
+    f = Findings(store, version="abc1234")
+    one = f.file("sig.one", "One", severity="bug")
+    f.file("sig.two", "Two", severity="bug")
+    f.fix(one["id"], "abc1234")
+    assert cli.main(["findings", "--status", "all"]) == 0
+    out = capsys.readouterr().out
+    assert "1 open, 1 fixed (awaiting re-verification)" in out and "fixed in abc1234" in out and out.count("sig.") == 2
+    assert cli.main(["trace", "s1"]) == 0
+    assert "findings 2:" in capsys.readouterr().out
+    assert cli.main(["trace", "s1", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["findings"]["fixed"] == 1

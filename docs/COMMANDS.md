@@ -72,7 +72,7 @@ All in `CoreEngine._builtin_command`, `src/exo/core/engine.py`.
 | `context` | Shows what the next model call for this thread carries, part by part, with token estimates. Read-only. | none | text (`context_text`) |
 | `compact` | Summarizes now what is eligible in this agent's memory, then shows tokens before and after. Fails with `busy` if a turn is running. | none | text (`compact_text`) |
 | `trace` | The model this session runs on, then the per-turn table: timing, route, estimated cost, flags. | a number N for the last N turns (default 10) | text (`trace_text`) |
-| `findings` | The harness's open findings. | `count` returns `{"open": N}`. Anything else returns the open list as text. | text or dict |
+| `findings` | The harness's findings by state. | `count` returns `{"open": N, "by_state": {open, fixed, verified, reopened, total}}` (`open` is what needs work: open plus reopened). Anything else returns text: the per-state summary, what changed since this session last looked, then every finding with its state and fixed-in commit. `open`, `fixed`, `verified` or `reopened` limits the list. | text or dict |
 | `handoff_facts` | The facts the agent needs to write a handoff: thread, git state of the folder, open findings and tasks, recent summaries, last turns. Reads only. | optional path | dict (`handoff_facts`) |
 | `harness_error` | A client reports an exception it caught, so the core files a finding. Not for people. | JSON with `where`, `message`, `error_type`, `traceback`. Plain text also works. | nothing |
 
@@ -187,7 +187,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
 | `exo trace [SESSION]` | The per-turn table for a session (default: the newest), with anomaly flags and peer traffic. | `--last N`, `--calls` list every model call with its cost, `--json` | `cmd_trace` in `src/exo/trace_cmd.py` |
-| `exo findings [list]` | What the harness found wrong with itself. | `--status` (`open`, `fixed`, `verified`, `reopened`), `--json` | `cmd_findings` |
+| `exo findings [list]` | What the harness found wrong with itself. | `--status` (`open`, `fixed`, `verified`, `reopened`, `all`; default all), `--json` | `cmd_findings` |
 | `exo findings add <title>` | Files a finding by hand. | `--severity bug\|papercut` (default `papercut`), `--signature S`, `--detail TEXT` | same |
 | `exo findings fix <id>` | Marks a finding fixed. Later turns re-measure it. | `--in SHA` (required) | same |
 | `exo findings export` | A digest for the developer session. | `--md` | same |

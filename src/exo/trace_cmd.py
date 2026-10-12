@@ -1,7 +1,7 @@
 """`exo trace` and `exo findings` (D-025): read how the harness performed, and the findings it kept.
 
     exo trace [SESSION] [--last N] [--json]       per-turn table and anomaly flags (default: newest session)
-    exo findings [--status open] [--json]         the findings store
+    exo findings [--status open|fixed|verified|reopened|all] [--json]   the findings store, counts per state on top
     exo findings fix ID --in SHA                  mark fixed; later turns re-measure it
     exo findings add TITLE [--severity bug|papercut] [--signature S] [--detail TEXT]  file one by hand
     exo findings export --md                      a digest for the developer session
@@ -49,7 +49,8 @@ def register(sp, common) -> None:
     p = sp.add_parser('findings', help='what the harness found wrong with itself')
     p.add_argument('action', nargs='?', default='list', choices=['list', 'fix', 'export', 'add'])
     p.add_argument('id', nargs='?', help='finding id (for fix) or title (for add)')
-    p.add_argument('--status', choices=['open', 'fixed', 'verified', 'reopened'])
+    p.add_argument('--status', choices=['open', 'fixed', 'verified', 'reopened', 'all'],
+                   help='default: all states (verified ones too)')
     p.add_argument('--in', dest='sha', metavar='SHA', help='commit the fix landed in (for fix)')
     p.add_argument('--md', action='store_true', help='markdown (for export)')
     p.add_argument('--severity', choices=['bug', 'papercut'], default='papercut', help='for add')
@@ -72,9 +73,13 @@ def cmd_trace(a) -> int:
         sys.exit(f'exo: no session {sid}')
     info = store.get_session(sid)
     turns = trace.build(store, sid, a.last, _thresholds(info.seat if info else None))
+    from .core.findings import Findings
+
+    fnd = Findings(store)
     if a.json:
-        print(json.dumps(trace.as_dict(sid, turns), indent=2))
+        print(json.dumps({**trace.as_dict(sid, turns), 'findings': fnd.counts()}, indent=2))
     else:
+        print(fnd.summary())
         print(trace.table(turns, f'session {sid} ({info.seat or "no seat"}, {len(turns)} turns shown)', a.calls))
         if peers := trace.peer_text(store, sid):
             print("\n" + peers)
@@ -107,5 +112,5 @@ def cmd_findings(a) -> int:
     elif a.json:
         print(json.dumps(fnd.list(a.status), indent=2))
     else:
-        print(fnd.text(a.status))
+        print(fnd.text(a.status, viewer='cli'))
     return 0

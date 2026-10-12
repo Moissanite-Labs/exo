@@ -169,6 +169,7 @@ class ExoApp(App):
         self.calls_seen = 0  # model calls that used tokens, seen by this client
         self.unpriced = 0  # of those, calls with no price
         self.findings = 0  # open harness findings (D-025), polled after each turn
+        self.finding_states = ""  # "3 open, 2 fixed": the same findings by state, for the notice
         self.busy = False
         self.turn_t0 = 0.0  # when the running turn began; 0 once text or reasoning has streamed
         self.expanded = False
@@ -412,12 +413,14 @@ class ExoApp(App):
         try:
             out = (await self.client.call(s.CommandRun(name="findings", args="count"))).get("output")
             before, self.findings = self.findings, int(out.get("open", 0)) if isinstance(out, dict) else 0
+            by = (out.get("by_state") or {}) if isinstance(out, dict) else {}
+            self.finding_states = ", ".join(f"{by[k]} {k}" for k in ("open", "fixed", "verified", "reopened") if by.get(k))
         except Exception:
             return
         if self.findings > before:
             self.close_cur()
             self.add(Block(f"{self.findings} open", "finding", head=f"{self.findings} open",
-                           body="The harness noticed something odd and filed it.", meta=f"/findings {th.DOT} /trace"))
+                           body="The harness noticed something odd and filed it." + (f" Now: {self.finding_states}." if self.finding_states else ""), meta=f"/findings {th.DOT} /trace"))
             self.hint("finding")
         self.refresh_status()
 

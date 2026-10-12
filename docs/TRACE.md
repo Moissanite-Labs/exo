@@ -72,7 +72,9 @@ is a git ancestor check on the source tree; when it cannot be told, the fix is a
 
 ## Commands
 - `exo trace [SESSION] [--last N] [--json]`
-- `exo findings [--status open] [--json]`
+- `exo findings [--status open|fixed|verified|reopened|all] [--json]` lists every state by default, each fixed one with the commit it was fixed in
 - `exo findings fix ID --in SHA`
 - `exo findings export --md` (digest for the developer, grouped by severity, newest first)
 - In the TUI: `/trace`, `/findings`; the status line shows the serving route and the open-findings count.
+
+The count reconciles by state. `exo trace`, `/trace` and `exo_trace` start with `findings 7: 3 open, 2 fixed (awaiting re-verification), 1 verified, 1 reopened` (`exo trace --json` has the same under `findings`). A finding that was fixed moves from open to fixed, so the open count drops without any being lost; `/findings` and `exo findings` list fixed and verified ones too, and say what moved since you last looked (`open -> fixed`, `new`). The status-line badge counts open plus reopened.
