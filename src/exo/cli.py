@@ -10,7 +10,7 @@
   exo web [--port N ...]                   the command centre web client (needs a running `exo serve`)
   exo tui [--resume] [--session ID] ...     the terminal client (pip install 'exo[tui]')
   exo trace [SESSION] [--last N] [--json]  how the harness performed; anomaly flags (D-025)
-  exo findings [fix ID --in SHA|export --md]  the harness's findings about itself
+  exo findings [add TITLE|fix ID --in SHA|export --md]  the harness's findings about itself
   exo upstream report|mark|check|merge     track lifted Hermes modules
   exo find <words...> [-n 8]               ranked nodes
   exo get <id> [--body-only]               print one node
@@ -277,6 +277,8 @@ def cmd_web(a) -> int:
 
 def cmd_tui(rest: list[str]) -> int:
     """Run exo_tui.main(). Installed with `exo[tui]`, or found in the source tree's clients/tui."""
+    from exo.core.tools.builtin.shell import raise_nofile_limit
+    raise_nofile_limit()  # the in-process core runs tools; macOS defaults to 256 open files
     try:
         import exo_tui
     except ImportError:

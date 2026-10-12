@@ -256,7 +256,7 @@ class SummaryNode:
     start: int
     end: int
     text: str = ""
-    status: str = "pending"  # pending, done, failed
+    status: str = "pending"  # pending, done, failed, skipped (not worth summarizing: stays verbatim)
     lane: str = "live"
 
 
@@ -273,7 +273,7 @@ class TreeContext:
 
     def __init__(self, store: Any, compressor: Any, *, leaf_size: int = 8, tail_messages: int = 12,
                  view_budget: int = 6000, live_parallel: int = 8, import_parallel: int = 2,
-                 settle_timeout: float = 60.0, render_limit: int = 2000):
+                 settle_timeout: float = 60.0, render_limit: int = 2000, min_compact_tokens: int = 1500):
         self.store = store
         self.compressor = compressor
         self.leaf_size = leaf_size
@@ -281,6 +281,7 @@ class TreeContext:
         self.view_budget = view_budget
         self.settle_timeout = settle_timeout
         self.render_limit = render_limit
+        self.min_compact_tokens = min_compact_tokens  # a span smaller than this is never summarized
         self._lanes = {"live": asyncio.Semaphore(live_parallel),
                        "import": asyncio.Semaphore(import_parallel)}
         self._import_open = asyncio.Event()
@@ -330,12 +331,16 @@ class TreeContext:
                     extra = ""
                     if self.on_pre_compress is not None:
                         extra = str(await _maybe_await(self.on_pre_compress(node.session, msgs)) or "")
-                    text = await self._summarize(node.session, source, extra=extra)
+                    text = "" if estimate_tokens(source) < self.min_compact_tokens else \
+                        await self._summarize(node.session, source, extra=extra)
                 else:
                     left, right = self._children(node)
                     source = left.text + right.text
-                    text = await self._summarize(node.session, right.text, previous=left.text)
-                node.text, node.status = text, "done"
+                    text = "" if estimate_tokens(source) < self.min_compact_tokens else \
+                        await self._summarize(node.session, right.text, previous=left.text)
+                # compact only when it shrinks: a too-small span or a summary not smaller than its source stays verbatim
+                node.text, node.status = (text, "done") if text and estimate_tokens(text) < estimate_tokens(source) \
+                    else ("", "skipped")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -459,7 +464,8 @@ class TreeContext:
             else:
                 msgs = self.store.messages(session, since=n.start - 1, upto=n.end)
                 body = "\n".join(render_message(m, self.render_limit) for m in msgs)
-                parts.append(f"## Messages {n.start}-{n.end} (verbatim, summary pending)\n{body}")
+                note = "verbatim" if n.status == "skipped" else "verbatim, summary pending"
+                parts.append(f"## Messages {n.start}-{n.end} ({note})\n{body}")
         tail = self.store.messages(session, since=frontier)
         lead = []
         while tail and tail[0].role == "tool":  # orphaned results: their call is in the view

@@ -54,7 +54,7 @@ def _engine(tmp_path, monkeypatch):
     rec = Recorder({"reply": "Understood."})
     eng.router.instances["fake"] = rec
     tree = eng.loop.context.tree
-    tree.leaf_size, tree.tail_messages = 2, 4  # compact early: a short session is enough
+    tree.leaf_size, tree.tail_messages, tree.min_compact_tokens = 2, 4, 0  # compact early: a short session is enough
     return eng, pm, rec
 
 

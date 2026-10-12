@@ -261,7 +261,7 @@ def test_fork_lineage_and_undo(tmp_path):
 
 def _tree_loop(tmp_path, summ, **kw):
     store = SessionStore(tmp_path / "s.sqlite")
-    ctx = TreeContext(store, DefaultCompressor(summ, retry_delay=0), leaf_size=2, tail_messages=2, **kw)
+    ctx = TreeContext(store, DefaultCompressor(summ, retry_delay=0), leaf_size=2, tail_messages=2, **{"min_compact_tokens": 0, **kw})
     prov = Script(default="ok")
     loop = Loop(store, prov, context=ctx, retry_delay=0)
     seen = []
@@ -434,3 +434,45 @@ def test_session_updated_publishes_model_in_use(tmp_path):
     assert store.get_session(sid).model == "p:in-use"
     last = [e for e in seen if e.type == "session.updated"][-1]
     assert last.body.session.model == "p:in-use"
+
+
+def test_model_call_records_the_route_from_the_ok_attempt_when_unstamped(tmp_path):
+    from exo.protocol import schema as ev
+
+    attempts = [{"route": "p:big", "outcome": "ok", "error": "", "ms": 1}]
+    done = ProviderEvent(kind="done", stop_reason="end", attempts=attempts)  # no route stamped on the event
+    store, loop, _ = make(tmp_path, Script([done]))
+
+    async def go():
+        s = await loop.create_session()
+        await loop.send(s.id, "hi")
+    run(go())
+    calls = [e.body for e in store.events_since(0) if isinstance(e.body, ev.ModelCall)]
+    assert calls and calls[-1].route == "p:big"
+
+
+def test_compaction_skips_tiny_spans_and_summaries_that_do_not_shrink():
+    from exo.core.context import TreeContext
+
+    async def fat(content, **kw):
+        return content + " and more words that make the summary larger than its source"
+
+    async def lean(content, **kw):
+        return "short"
+
+    def tree(summ, **kw):
+        store = SessionStore(":memory:")
+        s = store.create_session(title="t")
+        for i in range(6):
+            store.append_message(s.id, Message.user("word " * 900 if i < 5 else "tail"))
+        ctx = TreeContext(store, type("C", (), {"summarize": staticmethod(summ)})(), leaf_size=2, tail_messages=2, **kw)
+
+        async def go():
+            ctx.note(s.id)
+            await ctx.settle(s.id)
+            return [(n.status, n.text) for n in store.summaries(s.id)]
+        return run(go())
+
+    assert {st for st, _ in tree(lean, min_compact_tokens=100000)} == {"skipped"}  # too small to be worth it
+    assert {st for st, _ in tree(fat)} == {"skipped"}  # grew, so kept verbatim
+    assert {st for st, _ in tree(lean)} == {"done"}  # big enough and shrinks

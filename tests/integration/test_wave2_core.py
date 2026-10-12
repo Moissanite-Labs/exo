@@ -213,6 +213,7 @@ def test_context_and_memory_hooks_get_session_transcript_and_compaction(tmp_path
 
     async def main():
         d = Dispatcher(eng)
+        eng.loop.context.tree.min_compact_tokens = 0  # tiny test spans still compact
         sid = (await d.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
         for _ in range(12):
             await d.run(s.Command.of(s.TurnSend(session=sid, text="hello")))

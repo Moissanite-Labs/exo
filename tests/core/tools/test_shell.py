@@ -83,3 +83,37 @@ def test_bash_description_states_limits(reg):
 
 def test_bash_rejects_timeout_over_max(run):
     assert run("bash", command="true", timeout=601).is_error
+
+
+def test_tool_env_drops_bus_identity_and_secret_vars(monkeypatch):
+    from exo.core.tools.builtin.shell import run_command, tool_env
+
+    for k, v in {"EXO_BUS_URL": "http://x", "EXO_BUS_SEAT": "s", "EXO_BUS_KEYS_DIR": "/k", "EXO_KEYS_FILE": "/f",
+                 "EXO_API_TOKEN": "t", "EXO_HOME": "/h", "EXO_SEAT": "keep"}.items():
+        monkeypatch.setenv(k, v)
+    env = tool_env()
+    assert not [k for k in env if k.startswith("EXO_BUS_")] and "EXO_KEYS_FILE" not in env and "EXO_API_TOKEN" not in env
+    assert env["EXO_HOME"] == "/h" and env["EXO_SEAT"] == "keep" and env["TERM"] == "dumb"
+    code, out, _ = run_command("env", ".")
+    assert code == 0 and "EXO_BUS_URL" not in out and "EXO_BUS_SEAT" not in out and "EXO_KEYS_FILE" not in out
+
+
+def test_raise_nofile_limit_raises_soft_toward_hard_and_is_safe(monkeypatch):
+    import resource
+
+    from exo.core.tools.builtin import shell
+
+    calls = []
+    monkeypatch.setattr(resource, "getrlimit", lambda r: (256, resource.RLIM_INFINITY))
+    monkeypatch.setattr(resource, "setrlimit", lambda r, v: calls.append(v))
+    assert shell.raise_nofile_limit() == 10240 and calls == [(10240, resource.RLIM_INFINITY)]
+    monkeypatch.setattr(resource, "getrlimit", lambda r: (256, 4096))
+    assert shell.raise_nofile_limit() == 4096
+    monkeypatch.setattr(resource, "getrlimit", lambda r: (4096, 4096))
+    assert shell.raise_nofile_limit() is None  # already at the hard limit
+
+    def boom(r, v):
+        raise OSError("no")
+    monkeypatch.setattr(resource, "getrlimit", lambda r: (256, 4096))
+    monkeypatch.setattr(resource, "setrlimit", boom)
+    assert shell.raise_nofile_limit() is None
