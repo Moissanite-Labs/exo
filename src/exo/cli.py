@@ -76,7 +76,14 @@ def resolve_store(a) -> PrincipalStore:
     else:
         pid = a.principal or os.environ.get('EXO_PRINCIPAL')
         if not pid:
-            sys.exit('no active principal: pass --principal <id> or --root <dir>, or set EXO_PRINCIPAL')
+            try:
+                from .config import Config
+                pid = Config.load().principal
+            except Exception:
+                pid = None
+        if not pid:
+            sys.exit('no active principal: pass --principal <id> or --root <dir>, set EXO_PRINCIPAL, '
+                     'or `exo config set principal <id>`')
         store = PrincipalStore.for_principal(pid)
     if not store.exists():
         sys.exit(f'no principal store at {store.root}; run: exo init <id>')
