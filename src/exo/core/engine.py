@@ -501,10 +501,10 @@ class CoreEngine:
                 if key in self.approvals.always and not once:
                     continue
                 who: list[str] = []
-                bound = {k: v for k, v in (("approvers", [str(a) for a in verdict.get("approvers") or []]),
-                                           ("binding", str(verdict.get("binding") or ""))) if v}  # D-033
-                decision = await self.approvals.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
-                                          options=["allow", "deny"] if once else None, **bound)
+                decision = await self.approvals.ask(  # D-033: who may answer, and the exact text it binds to
+                    ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
+                    options=["allow", "deny"] if once else None, approvers=[str(a) for a in verdict.get("approvers") or []],
+                    binding=str(verdict.get("binding") or ""))
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
                 correlation = {"approval_key": verdict["approval_key"]} if verdict.get("approval_key") else {}
                 await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
