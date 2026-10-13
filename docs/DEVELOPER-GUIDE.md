@@ -553,5 +553,15 @@ The design is `docs/TASTE-BASELINE.md`; its "Build status" says what is built. C
 - **Release.** A pack loads only when final (`baseline/pack.py`, `release_problem`). Tests build one with
   `export_house`, then `review.tick` on every value and contested item, then `review.finalise`.
 - Policy files are product policy, not taste. Nothing in `baseline/` exports them.
+- **The sustained-change rule** is pure: `baseline/shift.py` (`episodes`, `weekly_record`, `persistence`,
+  `effective_weight`, `challenger_weight`, `ready_to_swap`, `scope_of`, and `replay` for one item). Never read the
+  clock or the ledger there. `baseline/adapt.py` reads the ledger and writes each outcome once (keyed by `key`);
+  `baseline/classify.py` turns the principal's events into `taste_signal` notes; `baseline/command.py` is `/taste`.
+  The worked examples in `docs/TASTE-BASELINE.md` are tests (`tests/baseline/test_shift.py`); a change that moves a
+  number must change the doc and the test together.
+- **The labeller** is a hook (`record_signals(labeller=...)`). It only classifies; the rule decides. Below
+  `min_confidence` its label is ignored. It is never given non-principal text (D-040).
+- **Writes from `/taste`** are notes authored `principal`, and only after the core checked the caller (D-052). The
+  replay ignores the same notes from any other author.
 
 Run `tests/baseline` and the `exo-memory` plugin suite after a change.

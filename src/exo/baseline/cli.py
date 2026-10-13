@@ -1,13 +1,16 @@
 """`exo taste` (D-044 wave 1).
 
     exo taste [list] [--root DIR | --principal ID] [--json]
-        the house layer's state (on, or off and why) and every active taste item with its weight and source
+        the mode, the house layer's state, then house, learned, pending, overridden and stepped-back items
+    exo taste show|why ID
+        one item, or the weeks and signals behind it
     exo taste export-house --store DIR --out DIR --version 1.3.0 [--check-only] [--soul FILE] [--decision]
         build the house pack from the principal's store; writes nothing if any privacy check fails
     exo taste review OUT [--tick ID ...] [--final]
         the principal's tick on each value and contested item, then the release
 
-The `/taste` view with mode, pending shifts and step backs comes in wave 3.
+Changing taste (mode, pin, off, undo, restore, reset, answering a proposal) is `/taste` in a client, where the
+core can check that the principal is the one asking (D-052). This command only reads.
 """
 from __future__ import annotations
 
@@ -18,8 +21,8 @@ from pathlib import Path
 
 def register(sp, common) -> None:
     p = sp.add_parser('taste', parents=[common], help='the taste layers: house, learned, pins (D-044)')
-    p.add_argument('action', nargs='?', default='list', choices=['list', 'export-house', 'review'])
-    p.add_argument('target', nargs='?', help='review: the export folder')
+    p.add_argument('action', nargs='?', default='list', choices=['list', 'show', 'why', 'mode', 'export-house', 'review'])
+    p.add_argument('target', nargs='?', help='review: the export folder; show, why: the item id')
     p.add_argument('--json', action='store_true', help='list: machine-readable output')
     p.add_argument('--store', help='export-house: the source (principal) store')
     p.add_argument('--out', help='export-house: the output folder')
@@ -38,13 +41,20 @@ def cmd_taste(a) -> int:
     if a.action == 'review':
         return _review(a)
     from ..cli import resolve_store
-    from .layers import render, view
-    v = view(resolve_store(a))
-    if a.json:
-        print(json.dumps({'house': {'on': v.house_on, 'reason': v.reason, 'version': v.pack.version},
+    from .command import TasteError, run
+    from .layers import view
+    store = resolve_store(a)
+    if a.json and a.action == 'list':
+        v = view(store)
+        print(json.dumps({'mode': v.state.mode if v.state else None,
+                          'house': {'on': v.house_on, 'reason': v.reason, 'version': v.pack.version},
                           'items': [e.__dict__ for e in v.entries]}, indent=2))
-    else:
-        print(render(v))
+        return 0
+    try:
+        print(run(store, f'{a.action} {a.target or ""}'.strip(), principal=False)['text'])
+    except TasteError as e:
+        print(f'exo taste: {e}', file=sys.stderr)
+        return 1
     return 0
 
 

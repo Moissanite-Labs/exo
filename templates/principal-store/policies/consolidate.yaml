@@ -6,8 +6,10 @@ similarity: 0.6                            # how alike two instructions must be 
 rule_of_three: 3                           # repeats before proposing to encode a rule
 target_overlap: 0.6
 stale_below: 0.2                           # report taste beliefs that faded below this weight
-# House taste (D-044, docs/TASTE-BASELINE.md section 10). Uncomment to change; defaults shown.
-# taste:
+# House taste and how it adapts to you (D-044, docs/TASTE-BASELINE.md section 10).
+taste:
+  mode: silent                 # silent: changes happen, then show in /taste and the brief; ask: each waits for a yes
+# More knobs: copy a line under taste: above to change it; defaults shown.
 #   house: on                  # off = start blank: no house taste items on this install
 #   baseline_start: 0.7        # a house item's precedence on install day
 #   baseline_half_life: 365    # days for that precedence to halve
@@ -16,3 +18,15 @@ stale_below: 0.2                           # report taste beliefs that faded bel
 #   value_window_days: 30      # the window lasts 30 days and 20 sessions, at most 90 days
 #   value_window_sessions: 20
 #   value_window_max_days: 90
+#   arm_weeks: 3               # net contradicting weeks to arm a shift
+#   arm_window_weeks: 8        # ... inside this many weeks
+#   fade_half_life_weeks: 4    # an armed item halves every 4 net weeks at full delta
+#   swap_below: 0.3            # swap only once the item is below this weight
+#   replace_margin: 0.15       # ... and your version leads by this much
+#   replace_min: 0.45          # ... and your version is at least this strong
+#   flip_cooldown: 90          # days quiet after a swap, an undo or a no
+#   max_flips: 2               # swaps in a year before Exo asks instead
+#   ask_quiet_after: 3         # unanswered proposals before the brief stops listing them
+#   min_confidence: 0.6        # the decision model's labels below this are ignored
+#   daily_cap: 50              # decision-model taste questions a day
+#   timezone: ""               # IANA name for weeks and days; empty = this machine's zone

@@ -922,8 +922,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   export, `src/exo/baseline/`): the pack loader (a pack is used only once released, with every value and contested
   item ticked by the principal), per-item lookup with source tags, house precedence, `exo taste`,
   `exo taste export-house` with the privacy and value checks, `exo taste review`, and the taste block in the
-  prompt. The shipped pack is an empty 0.0.0 placeholder until the principal releases the first one. Waves 2 and 3
-  are not built.
+  prompt. The shipped pack is an empty 0.0.0 placeholder until the principal releases the first one.
+  **Waves 2 and 3 built** 2026-10-13: the sustained-change rule and value step back as pure functions
+  (`baseline/shift.py`), signal labelling with a pluggable decision-model hook that is off without a `decision`
+  route (`baseline/classify.py`), the replay and its ledger outcomes (`baseline/adapt.py`), promotion rule 3 holding
+  inferred lessons that would replace existing taste, the brief's Taste section, and `/taste` with mode, pending,
+  overridden and stepped-back lists, pin, off, undo, restore and reset, as a `command.run` built-in in both clients.
+  Both worked examples are tests with the doc's numbers. Mode storage: D-072.
 - **Contested questions (principal, verbatim, 2026-10-12):** "C ship the implications behind the world view and the
   kind of thinking behind it rather than specifics like religious prescriptions and border-based politics". Value
   items on contested questions ship as reasoning style and its implications only; no faith, nation, party or
@@ -1246,3 +1251,21 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Limits:** child approvals shown in the parent, and `followup` or `resume`, are follow-ups. Typing straight into a
   child's session still steers it through `turn.send`; that path works but leaves no note on the receipt.
 - **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-072 (2026-10-13) Where the taste mode lives, and how the principal's install defaults to ask
+- **Why:** TASTE-BASELINE section 6 says the mode is stored in `policies/consolidate.yaml` and changing it is a
+  ledger row, and that the principal defaults to ask and new users to silent. Rewriting the user's yaml from a
+  command risks clobbering their comments and edits, and with only the empty placeholder pack shipped, the
+  principal's install cannot be told apart by the pack's source hash.
+- **Decision:** the newest `taste_mode` note written by the principal is the mode. Without one, `taste: mode` in
+  `policies/consolidate.yaml` is the default. Without that key, the mode is ask. The template store now ships
+  `taste: mode: silent`, so every store made by `exo init` from now on starts silent, and an older store without
+  the key, which is the principal's own, starts ask. A store whose first ledger event matches a released pack's
+  source is also ask. `/taste` never edits the yaml. Only the principal's notes count (D-052); the same note from
+  an agent is ignored.
+- **Rejected:** writing the yaml from `/taste mode` (edits a hand-kept file); a separate marker file for the
+  principal's install (one more thing to keep in step); defaulting every store without the key to silent (the
+  principal would get silent swaps, against ruling 1).
+- **Limit:** another older store made before this change also starts in ask. That is the safer mode; the first
+  run text names `/taste mode`.
+- **Docs:** `docs/TASTE-BASELINE.md` "Build status", `docs/USER-GUIDE.md` "Taste", `docs/COMMANDS.md`.

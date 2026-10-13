@@ -46,6 +46,7 @@ COMMANDS = {
     "sessions": ("session", "pick one of this agent's threads to switch to"),
     "resume": ("session", "same as /sessions"),
     "fork": ("session", "fork this session"),
+    "taste": ("session", "your taste: house, learned, pending, stepped back; /taste mode ask|silent, pin, off, undo, reset"),
     "rename": ("session", "give this thread a new title: /rename <title>; shows in /sessions"),
     "undo": ("session", "undo the last turn"),
     "clear": ("session", "clear the transcript view (history is kept)"),
@@ -1252,6 +1253,10 @@ class ExoApp(App):
             resp = await self.post(s.CommandRun(name="rename", args=args, session=self.session))
             if resp.ok:
                 self.note(f"renamed to: {resp.result['output']['session']['title']}")
+        elif name == "taste":
+            resp = await self.post(s.CommandRun(name="taste", args=args, session=self.session))
+            if resp.ok:
+                self.note((resp.result.get("output") or {}).get("text") or "taste: nothing to show")
         elif name == "fork":
             resp = await self.post(s.SessionFork(session=self.session, title=args))
             if resp.ok:
