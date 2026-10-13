@@ -10,6 +10,10 @@ is replayed as stream-json frames, so tool turns work.
 Differences from Hermes: no local admission relay (so no cache-breakpoint control and no upstream
 status capture, usage comes from the CLI's result line); native thinking blocks are not replayed;
 conflicting API credentials are stripped from the child's environment instead of refused.
+
+Compatibility evidence: ``tests/core/models/test_claude_cli.py`` pins a synthetic stream-json fixture contract
+(v1), including ``shouldQuery: false`` replay and ``error_max_turns`` with exit 1. It does not certify a real
+installed CLI version or authenticated wire exchange. See ``docs/PROVIDERS.md`` for the assumed envelopes.
 """
 
 from __future__ import annotations
@@ -21,13 +25,15 @@ import signal
 import stat
 import sys
 import tempfile
+from contextlib import aclosing
 from pathlib import Path
-from typing import Any, AsyncIterator, Mapping
+from typing import Any, AsyncGenerator, AsyncIterator, Mapping, cast
 
 import httpx
 
 from exo.core.models.base import StreamState, error_event
 from exo.core.models.anthropic import sanitize_tool_id
+from exo.core.trace import scrub
 from exo.core.types import Message, ProviderEvent, ToolCall, ToolSpec, Usage
 
 PREFIX = "mcp__hermes__"  # the inert server is named "hermes" so tool names match the proven plugin
@@ -41,6 +47,8 @@ NATIVE_ERROR_STATUS = {"rate_limit": 429, "billing_error": 402, "authentication_
                        "overloaded": 529, "server_error": 503}
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MCP_SERVER = Path(__file__).with_name("claude_cli_mcp.py")
+CLEANUP_TIMEOUT = 2.0
+STDERR_BYTES = 4096
 
 
 def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -134,6 +142,25 @@ def kill_group(proc: asyncio.subprocess.Process) -> None:
         pass
 
 
+async def exited(proc: asyncio.subprocess.Process) -> int:
+    """The leader's exit code. ``proc.wait()`` also waits for every pipe to close, so a descendant that keeps
+    stderr open would hold it until the read timeout; the return code is set as soon as the leader exits."""
+    while proc.returncode is None:
+        await asyncio.sleep(0.02)
+    return proc.returncode
+
+
+async def stop_group(proc: asyncio.subprocess.Process) -> None:
+    """The leader may have exited while a child still holds a pipe; always stop the owned group."""
+    kill_group(proc)
+    try:
+        await asyncio.wait_for(proc.wait(), CLEANUP_TIMEOUT)
+    except asyncio.TimeoutError:
+        # CPython's Process owns this transport, but typeshed does not expose the private attribute.
+        transport = cast(asyncio.SubprocessTransport, getattr(proc, "_transport"))
+        transport.close()  # bound cleanup if a detached descendant retains the captured pipes
+
+
 class ClaudeCliProvider:
     """Provider over a ``claude`` executable. ``command`` is its path; the model is an alias (sonnet, opus, haiku)."""
 
@@ -149,6 +176,16 @@ class ClaudeCliProvider:
         self._read = read_timeout or timeout
         if name:
             self.name = name
+
+    def _diagnostic(self, text: Any, limit: int = 300) -> str:
+        # Scrub token/header patterns and credentials already in the caller's environment. Do not read a key
+        # store just to redact diagnostics from a CLI that owns its own OAuth login.
+        from exo.envscrub import is_secret_name
+        from exo.core.models.keys import redact_secrets
+
+        env = os.environ if self.env is None else self.env
+        values = sorted((v for k, v in env.items() if v and is_secret_name(k)), key=len, reverse=True)
+        return scrub(redact_secrets(str(text), values=values), limit)
 
     async def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
         names = {t.name for t in tools or []}
@@ -192,15 +229,20 @@ class ClaudeCliProvider:
                     stderr=asyncio.subprocess.PIPE, env=env, cwd=workdir(), start_new_session=True,
                     limit=1 << 24)  # one stream-json line can carry a whole message
             except OSError as exc:
-                yield error_event(f"cannot run {self.command}: {exc}", None, retryable=True)
+                yield error_event(f"cannot run {self.command}: {self._diagnostic(exc)}", None, retryable=True)
                 return
+            terminal = None
             try:
-                async for ev in self._run(proc, frames, names, st):
-                    yield ev
+                async with aclosing(self._run(proc, frames, names, st)) as events:
+                    async for ev in events:
+                        if ev.kind in ("done", "error"):
+                            terminal = ev
+                            break
+                        yield ev
             finally:  # also runs on cancel (a stop) and on a closed generator: leave no claude behind
-                if proc.returncode is None:
-                    kill_group(proc)
-                    await asyncio.shield(proc.wait())
+                await asyncio.shield(stop_group(proc))
+            if terminal is not None:
+                yield terminal  # the router sees terminal output only after reader/process cleanup
 
     async def _read_line(self, proc: asyncio.subprocess.Process) -> bytes:
         """One stdout line; a stall longer than the read timeout raises TimeoutError (the clock restarts per line)."""
@@ -208,10 +250,33 @@ class ClaudeCliProvider:
         return await asyncio.wait_for(proc.stdout.readline(), self._read)
 
     async def _run(self, proc: asyncio.subprocess.Process, frames: list[dict[str, Any]], names: set[str],
-                   st: StreamState) -> AsyncIterator[ProviderEvent]:
+                   st: StreamState) -> AsyncGenerator[ProviderEvent, None]:
+        stderr = proc.stderr
+        assert stderr
+        tail = bytearray()
+
+        async def drain_stderr() -> None:
+            while chunk := await stderr.read(STDERR_BYTES):
+                tail.extend(chunk)
+                del tail[:-STDERR_BYTES]
+
+        stderr_task = asyncio.create_task(drain_stderr())
+        try:
+            async with aclosing(self._exchange(proc, frames, names, st, tail)) as events:
+                async for ev in events:
+                    yield ev
+        finally:
+            stderr_task.cancel()
+            await asyncio.gather(stderr_task, return_exceptions=True)
+
+    async def _exchange(self, proc: asyncio.subprocess.Process, frames: list[dict[str, Any]], names: set[str],
+                        st: StreamState, stderr_tail: bytearray) -> AsyncGenerator[ProviderEvent, None]:
         assert proc.stdin and proc.stdout and proc.stderr
-        stderr_task = asyncio.create_task(proc.stderr.read())  # drain so a chatty CLI cannot block
         timeout_msg = f"ReadTimeout: claude sent nothing for {self._read:.0f} s"
+
+        def tail() -> str:
+            text = self._diagnostic(stderr_tail.decode("utf-8", "replace").strip(), STDERR_BYTES)[-300:]
+            return f": {text}" if text else ""
 
         async def event() -> dict[str, Any] | None:
             while True:
@@ -219,9 +284,11 @@ class ClaudeCliProvider:
                 if not line:
                     return None
                 try:
-                    return json.loads(line)
+                    row = json.loads(line)
                 except ValueError:
                     continue  # a banner or stray print: not an event
+                if isinstance(row, dict):
+                    return row
 
         try:
             for i, frame in enumerate(frames):
@@ -266,25 +333,24 @@ class ClaudeCliProvider:
                     elif delta.get("type") == "thinking_delta" and (out := st.add_text("reasoning", delta.get("thinking", ""))):
                         yield out
         except asyncio.TimeoutError:
-            yield error_event(timeout_msg, None, retryable=True)
+            yield error_event(timeout_msg + tail(), None, retryable=True)
             return
         except (OSError, ConnectionError) as exc:
-            yield error_event(f"claude pipe failed: {exc}", None, retryable=True)
+            yield error_event(f"claude pipe failed: {self._diagnostic(exc)}" + tail(), None, retryable=True)
             return
         try:
-            rc = await asyncio.wait_for(proc.wait(), self._read)
+            rc = await asyncio.wait_for(exited(proc), self._read)
         except asyncio.TimeoutError:
-            yield error_event(timeout_msg, None, retryable=True)
+            yield error_event(timeout_msg + tail(), None, retryable=True)
             return
-        err_text = (await stderr_task).decode("utf-8", "replace").strip()
+        await asyncio.sleep(0)  # let the reader collect already-available bytes; never wait for a child's EOF
         if native_error is not None:
             status = NATIVE_ERROR_STATUS.get(str(native_code))
             hint = " (run `claude` and log in)" if status == 401 else ""
-            yield error_event(f"claude: {native_error[:500] or native_code}{hint}", status, retryable=True)
+            yield error_event(f"claude: {self._diagnostic(native_error or native_code, 500)}{hint}", status, retryable=True)
             return
         if len(results) != 1 or not assistants or not stopped:
-            tail = f": {err_text[-300:]}" if err_text else ""
-            yield error_event(f"claude exited {rc} with an incomplete response{tail}", None, retryable=True)
+            yield error_event(f"claude exited {rc} with an incomplete response" + tail(), None, retryable=True)
             return
         final = results[0]
         blocks = [b for a in assistants for b in a.get("content") or []]
@@ -294,7 +360,7 @@ class ClaudeCliProvider:
         boundary = bool(calls) and final.get("subtype") == "error_max_turns" and rc == 1
         if not boundary and (rc != 0 or final.get("is_error") or final.get("subtype") != "success"):
             yield error_event(f"claude request failed ({final.get('subtype')}, exit {rc})"
-                              + (f": {err_text[-300:]}" if err_text else ""), None, retryable=True)
+                              + tail(), None, retryable=True)
             return
         text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
         if text.startswith(emitted) and (rest := text[len(emitted):]):
