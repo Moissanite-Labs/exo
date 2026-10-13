@@ -15,7 +15,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   new `exo serve` default. `exo.core.engine:create` still works. No behaviour change.
 - Engine split, step 4 (#46, D-067): the counted core went from 15,986 to 14,812 lines. Dead code and duplicates went
   (about 300 lines), the peer transport moved to `exo.peers` and the scheduler to `exo.scheduler` (composition
-  attaches both), and open approvals moved to `ApprovalDesk`. No protocol, event or command changes.
+  attaches both), and open approvals moved to `ApprovalDesk`. No protocol, event or command changes. The core
+  line cap is now 15,000 (was 16,000).
 - Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.

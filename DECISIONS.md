@@ -1232,7 +1232,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   - The memory and context slot defaults that Exo never calls stay, because exo-context and exo-memory also run
     under Hermes, which does call them.
 - **Rejected:** removing `exo upstream merge` or echo engine commands (user-facing behaviour), moving trace
-  rendering out again (a view move, not a seam), raising or lowering the cap in this change.
+  rendering out again (a view move, not a seam), raising the cap.
+- **Budget (lead call, 2026-10-13):** the core cap goes from 16,000 to 15,000 lines to keep the gain
+  (`tests/integration/test_wave1_acceptance.py`). Step 4's completion criteria (private-state reads, inward product
+  imports) remain open under #46.
 - **Behaviour:** no protocol, event or command changes. D-033, D-038, D-039, D-040, D-045 and D-052 to D-054 checks
   run as before, and required-executor mode (#70) still fails closed. An engine built without composition no longer
   has peers or a scheduler: `peers` and `schedule.edit` answer `unsupported` there.

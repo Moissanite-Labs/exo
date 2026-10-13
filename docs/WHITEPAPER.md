@@ -346,7 +346,7 @@ to model providers). The HTTP server inside `exod` is written on the standard li
 no web framework. Storage is SQLite files and plain Markdown files.
 
 The core has a line budget. A test counts the lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`
-and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3. The budget is now 16,000 and the test fails above that. Today the count is about 15,836, so the next large addition must either remove something or argue for a higher budget. The budget exists so that growth is a decision, and so the core can
+and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3. The budget rose to 16,000 during the security wave. Engine split step 4 (D-067) brought the count to about 14,800 by deleting unused code and moving the peer transport and the scheduler out of the core, and the budget went back to 15,000. The test fails above that, so the next large addition must either remove something or argue for a higher budget. The budget exists so that growth is a decision, and so the core can
 later shrink onto a small device (section 27).
 
 Repository layout, in short:
@@ -1528,7 +1528,7 @@ store and grows with them. The near-term design rules that keep that path open:
 
 - **The store is one folder.** Pack, nodes, items, ledger and indexes are plain files and SQLite. Copy the
   folder and the person moves.
-- **The core stays small.** Under 16,000 lines (about 15,836 today), enforced by a test. Two runtime
+- **The core stays small.** Under 15,000 lines (about 14,800 today), enforced by a test. Two runtime
   dependencies. The terminal client is Python too, so the core and its main client need no Node, no browser
   engine and no containers. One optional tool, `code_find`, needs Node and hides itself when Node is
   missing. The planned idle memory target is under 80 MB **[not measured]**.
