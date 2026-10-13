@@ -44,6 +44,12 @@ def home():
     work.mkdir()
     (work / "notes.txt").write_text("hello world\n")
     (d / "config.json").write_text(json.dumps({"version": 1, "cwd": str(work), "models": {"fake": FAKE}}))
+    # This fixture exercises persistence with scripted tools, independently of gate policy.
+    plugin = d / "plugins" / "test-allow"
+    plugin.mkdir(parents=True)
+    (plugin / "plugin.yaml").write_text("name: test-allow\n")
+    (plugin / "__init__.py").write_text(
+        'def register(ctx):\n    ctx.register_hook("pre_tool_call", lambda **kw: None)\n')
     yield d
     shutil.rmtree(d, ignore_errors=True)
 

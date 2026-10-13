@@ -26,7 +26,9 @@ def run(coro):
 
 def engine(tmp_path, rules=None, **kw) -> CoreEngine:
     models = {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}, "fake": {"rules": rules or []}}
-    return CoreEngine(tmp_path / "home", models, cwd=str(tmp_path), env={}, **kw)
+    eng = CoreEngine(tmp_path / "home", models, cwd=str(tmp_path), env={}, **kw)
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
+    return eng
 
 
 def types(eng, sid=None):
