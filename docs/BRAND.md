@@ -109,9 +109,8 @@ Keep the stage meaning (more cells, more structure, a dimension, more light) so 
 
 - `site/brand/index.html`: the hero egg with a stage slider, and stages 0 to 3 side by side.
 - `site/brand/egg.html?stage=3&activity=0.7&hud=0`: full screen; `still=1` forces the reduced-motion frame.
-- The front page (`site/assets/main.js`): on the staging host the hero orb is replaced by the egg, with a small
-  "Preview" tag linking to the brand page. Anywhere else the live orb stays; `?egg` or `?egg=2` opts in, `?egg=off`
-  opts out on staging.
+- The front page (`site/assets/main.js`): the hero shows the egg on every host (D-049 accepted 2026-10-13). `?egg=2`
+  picks a stage and adds a small "Preview" tag linking to the brand page; `?egg=off` brings back the old orb.
 
 ## Terminal (proposal)
 

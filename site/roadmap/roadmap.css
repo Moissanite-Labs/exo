@@ -353,3 +353,22 @@
   .rm-pet { transition: none; }
 }
 .rm-fly > *, .rm-split > *, .rm-forge > *, .rm-sec > *, .rm-hatch > * { min-width: 0; }
+
+/* Links to where the site explains each item: quiet until hovered or focused */
+.rm-chip { position: relative; transition: border-color .2s, background-color .2s; }
+.rm-chip__a { color: inherit; text-decoration: none; }
+.rm-chip__a::after { content: ""; position: absolute; inset: -1px; }
+.rm-chip:hover, .rm-chip:focus-within { border-color: var(--accent); background: rgba(255, 91, 20, .07); }
+.rm-chip__a:focus-visible { outline: none; }
+.rm-chip__a:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 3px; }
+.rm-hl { color: inherit; text-decoration: none; background: linear-gradient(var(--accent), var(--accent)) 0 100% / 0 1px no-repeat; transition: background-size .28s ease, color .2s; }
+.rm-hl::after { content: " \2192"; content: " \2192" / ""; color: var(--accent); opacity: 0; transition: opacity .2s; }
+.rm-hl:hover, .rm-hl:focus-visible { background-size: 100% 1px; }
+.rm-hl:hover::after, .rm-hl:focus-visible::after { opacity: 1; }
+.rm-hl:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.rm-fly__a { cursor: pointer; outline: none; }
+.rm-fly__a:hover .rm-fly__node rect, .rm-fly__a:focus-visible .rm-fly__node rect { stroke: var(--accent); }
+.rm-fly__a:focus-visible .rm-fly__node rect { stroke-width: 3; }
+.rm-more { margin-top: clamp(32px, 4vw, 56px); }
+.rm-more h3 { font-size: 24px; margin-bottom: 16px; }
+@media (prefers-reduced-motion: reduce) { .rm-hl, .rm-hl::after, .rm-chip { transition: none; } }
