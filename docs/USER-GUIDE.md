@@ -85,6 +85,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
 | `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |
+| `/rename <title>` | Rename this thread. The new title shows in `/sessions`, `/resume` and the web thread list, where a double-click on a thread renames it too. |
 | `/undo` | Undo the last turn. |
 | `/clear` | Clear the transcript view. History is kept. |
 | `/cwd` | Show this thread's working folder. |
