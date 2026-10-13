@@ -279,6 +279,11 @@ Plugin suites are separate. They need a bus address that goes nowhere and a seat
 
 Run each plugin folder you changed: `plugins/<name>/tests`.
 
+One test is opt-in because it spends money and needs a logged-in CLI: `tests/core/models/test_claude_cli_real.py`
+(marker `real_claude`) runs one tiny real turn through the claude-cli provider, to catch a Claude CLI release that
+changes the stream-json envelope. It is skipped unless `EXO_TEST_REAL_CLAUDE=1` is set and `claude` is on PATH. Default
+runs and CI never run it.
+
 If you changed the protocol schema, also run `python -m exo.protocol.export --check`.
 
 Rules that tests enforce: the protocol caps, the core line budget, the TUI colour tokens against the site's
