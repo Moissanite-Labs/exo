@@ -118,7 +118,7 @@ X in orange (a cell cannot be half orange). Plain text in prose stays "Exo".
 | `app-icon.svg`, `app-icon-round.svg`, `app-icon-1024.png`, `icon-512.png`, `icon-192.png`, `apple-touch-icon.png` | App tiles on `#08090a`, the full mark. |
 | `nav-brand.html` | The nav fragment: the open wordmark at 24 px. The generator writes it between `<!-- exo-brand -->` markers in every page; `scripts/build_whitepaper.py` reads it. |
 | `story-1.svg` to `story-7.svg` | The brand page's construction, step by step, and the tiling. |
-| `tui-mark.{txt,html}`, `tui-wordmark.{txt,html}`, `tui-egg.{txt,html}` | Terminal marks. The `.html` twin wraps the orange cells in `<b>`. |
+| `tui-mark.{txt,html}`, `tui-wordmark.{txt,html}`, `tui-egg.{txt,html}` | Terminal marks. The `.html` twin wraps the orange cells in `<b>`. The client reads the mark and wordmark (D-062). |
 
 `site/og.png` (1200 × 630) is rendered from `og_html()` in the generator: the headline, the large mark and the wordmark.
 
@@ -203,5 +203,11 @@ Keep the stage meaning (more cells, more structure, a dimension, more light) so 
 ## Terminal
 
 `tui-mark.txt` (12 × 6 braille cells) is the small mark in braille: the square, the X and its twelve bisectors. `tui-wordmark.txt` is the label form as text, `3 X 0`. `tui-egg.txt` (14 × 7) is the stage-0 egg. Each
-has an `.html` twin with the orange cells (the V; the X) in `<b>`, which the terminal client's exosphere work reads
-so the terminal shows the same marks without drawing them by hand.
+has an `.html` twin with the orange cells (the V; the X) in `<b>`.
+
+The terminal client reads `tui-mark.html` and `tui-wordmark.html` at run time (`clients/tui/exo_tui/brand.py`; the
+`.txt` files are the fallback; an installed client uses copies packaged in `exo_tui/brand/`, kept identical by a test).
+The boot screen shows the mark and the wordmark; the brand bar and the empty-start card show the wordmark. The
+exosphere (x0, the egg at stage 0) is drawn by `exo_tui/exosphere.py` from the same geometry as `egg.js`: large on the
+start screen and small in the bottom-right corner for the whole session (D-062, `docs/UI.md`). `tui-egg.txt` stays as
+the original still proposal.

@@ -47,15 +47,21 @@ def test_typing_with_focus_on_the_transcript_goes_into_the_composer(tmp_path):
     run(tmp_path, sc)
 
 
-def test_a_panel_that_holds_focus_keeps_its_keys(tmp_path):
+def test_a_choice_that_holds_focus_keeps_its_keys(tmp_path):
+    """The choice card keeps arrows, digits and Enter; a letter is a message, so it goes to the composer (D-066)."""
     from exo.protocol import schema as s
+    from exo_tui.widgets import ChoiceCard
 
     async def sc(app, pilot, client, eng):
         eng.hub.publish(s.UiPanel(panel_id="p1", action="open", kind="choice", title="pick", text="",
                                   data={"options": [{"id": "a", "label": "alpha"}, {"id": "b", "label": "beta"}]}), app.session)
-        await until(lambda: app.focused is not None and app.focused.id == "panel-choices", pilot)
+        await until(lambda: isinstance(app.focused, ChoiceCard), pilot)
+        card = app.focused
+        await pilot.press("down")
+        assert card.sel == 1 and app.composer.text == ""
         await pilot.press("z")
-        assert app.composer.text == ""
+        assert app.composer.text == "z" and app.focused is app.composer
+        assert app.choice is card and not any(getattr(b, "action", "") == "acted" for b in client.seen)
 
     run(tmp_path, sc)
 

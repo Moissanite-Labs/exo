@@ -92,16 +92,24 @@ def _tasks(data: dict[str, Any], text: str) -> RenderableType:
     return out
 
 
+def choice_items(data: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """(id, label, description) from data.options; items are strings or {id, label, description}. The description
+    is optional and may also come as ``detail``, ``hint`` or ``desc``; it is "" when absent."""
+    out = []
+    opts = data.get("options") or data.get("choices") or []
+    for o in opts if isinstance(opts, list) else []:
+        if isinstance(o, dict):
+            oid = str(o.get("id", o.get("value", o.get("key", o.get("label", "")))))
+            desc = next((str(o[k]) for k in ("description", "detail", "hint", "desc") if o.get(k)), "")
+            out.append((oid, str(o.get("label") or o.get("text") or oid), desc))
+        else:
+            out.append((str(o), str(o), ""))
+    return out
+
+
 def choice_options(data: dict[str, Any]) -> list[tuple[str, str]]:
     """(id, label) pairs from data.options; items are strings or {id, label}."""
-    out = []
-    for o in data.get("options") or data.get("choices") or []:
-        if isinstance(o, dict):
-            oid = str(o.get("id", o.get("value", o.get("label", ""))))
-            out.append((oid, str(o.get("label", oid))))
-        else:
-            out.append((str(o), str(o)))
-    return out
+    return [(oid, label) for oid, label, _ in choice_items(data)]
 
 
 def _taste(data: dict[str, Any], text: str) -> RenderableType:

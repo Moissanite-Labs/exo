@@ -104,12 +104,6 @@
       "count": 2
     },
     {
-      "path": "clients/tui/exo_tui/hero.py",
-      "message": "Need type annotation for \"edges\" (hint: \"edges: set[<type>] = ...\")",
-      "code": "var-annotated",
-      "count": 1
-    },
-    {
       "path": "clients/tui/exo_tui/panels.py",
       "message": "Argument 1 to \"float\" has incompatible type \"Any | None\"; expected \"str | Buffer | SupportsFloat | SupportsIndex\"",
       "code": "arg-type",
