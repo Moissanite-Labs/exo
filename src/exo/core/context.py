@@ -203,6 +203,12 @@ async def _maybe_await(value: Any) -> Any:
 # ---------------------------------------------------------------- compressor
 
 
+class SummaryError(RuntimeError):
+    def __init__(self, message: str, *, retryable: bool = True):
+        super().__init__(message)
+        self.retryable = retryable
+
+
 class DefaultCompressor:
     """Summarizes text with any Provider, using the lifted prompt."""
 
@@ -246,7 +252,7 @@ class DefaultCompressor:
                 return out
             if not retryable:
                 break
-        raise RuntimeError(f"summary failed: {last_error}")
+        raise SummaryError(f"summary failed: {last_error}", retryable=retryable)
 
 
 # ---------------------------------------------------------------- tree
@@ -268,7 +274,7 @@ class SummaryNode:
     lane: str = "live"
     principal: int = 0  # leaves: principal messages in the span (D-032)
     captured: int = 0   # leaves: how many of them the principal store's capture hook took before summarizing
-    attempts: int = 0   # failed summary tries; at the cap the node is skipped and stays verbatim
+    attempts: int = 0   # failed tries; only non-retryable failures become permanently skipped
 
 
 Summarizer = Callable[..., Awaitable[str]]
@@ -331,8 +337,8 @@ class TreeContext:
         self.settle_timeout = settle_timeout
         self.render_limit = render_limit
         self.min_compact_tokens = min_compact_tokens  # a span smaller than this is never summarized
-        self.max_attempts = max_attempts  # a node whose summary fails this often is skipped: verbatim for good
-        self.retry_backoff = retry_backoff  # seconds before the second try; doubles each time
+        self.max_attempts = max_attempts  # cap for explicitly non-retryable failures
+        self.retry_backoff = retry_backoff  # doubles up to five minutes; transient outages remain eligible
         self._retry_at: dict[str, float] = {}  # failed node id -> monotonic time of its next try
         self._lanes = {"live": asyncio.Semaphore(live_parallel),
                        "import": asyncio.Semaphore(import_parallel)}
@@ -409,13 +415,20 @@ class TreeContext:
             except Exception as exc:
                 node.status, node.text = "failed", str(exc)
                 node.attempts += 1
-                if node.attempts >= self.max_attempts:  # give up: keep the span verbatim, say so once
+                transient = getattr(exc, "retryable", True)
+                if not transient and node.attempts >= self.max_attempts:
                     node.status, node.text = "skipped", ""
                     self._retry_at.pop(node.id, None)
                     trace.report("summary", f"summary node {node.start}-{node.end} of {node.session} cannot be summarized "
                                  f"after {node.attempts} tries, kept verbatim: {exc}", self._event_session(node.session))
                 else:
-                    self._retry_at[node.id] = time.monotonic() + self.retry_backoff * 2 ** (node.attempts - 1)
+                    delay = min(300.0, self.retry_backoff * 2 ** min(node.attempts - 1, 16))
+                    if transient:
+                        delay = max(1.0, delay)  # a zero/negative setting must not turn an outage into a hot loop
+                    self._retry_at[node.id] = time.monotonic() + delay
+                    if transient and node.attempts == 1:
+                        trace.report("summary", f"summary node {node.start}-{node.end} temporarily unavailable; "
+                                     f"kept verbatim, will retry: {exc}", self._event_session(node.session))
             if not self.store.has_summary(node.id):  # undo dropped this node while it ran: do not bring it back
                 return
             self.store.save_summary(node)
@@ -433,6 +446,7 @@ class TreeContext:
                 except Exception:  # a plugin hook never breaks upkeep
                     pass
         if node.status in ("done", "skipped"):
+            self._retry_at.pop(node.id, None)
             self._maybe_merge(node.session)
 
     async def _capture(self, node: SummaryNode, principal: list[Message], context: list[Message]) -> None:

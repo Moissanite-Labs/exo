@@ -115,3 +115,61 @@ def test_pre_hook_can_rewrite_args_and_post_hook_can_replace():
 def test_unknown_hook_point():
     with pytest.raises(ValueError):
         Registry().add_hook("on_whatever", lambda *a: None)
+
+
+@pytest.mark.parametrize("sync", [False, True])
+def test_aggregate_image_payload_cap_drops_whole_parts_with_marker(monkeypatch, sync):
+    import base64
+    from exo.core.tools import registry as mod
+    from exo.core.types import ContentPart
+
+    monkeypatch.setattr(mod, "MAX_RESULT_IMAGE_BYTES", 12)
+    a = base64.b64encode(b"abcdef").decode()  # eight bytes
+    b = base64.b64encode(b"ghijkl").decode()
+    c = base64.b64encode(b"mno").decode()  # the four-byte part still fits after dropping b
+    images = [ContentPart(type="image", data=x, mime="image/png") for x in (a, b, c)]
+    reg = Registry()
+    reg.tool("images", "fake images")(lambda args, ctx: ToolResult(call_id="c", content=images + [
+        ContentPart(type="image", url="data:image/png;base64," + a)]))
+    call = ToolCall(id="c", name="images")
+    result = reg.call_sync(call, ToolContext()) if sync else asyncio.run(reg.call(call, ToolContext()))
+    kept = [p for p in result.content if p.type == "image"]
+    assert [p.data for p in kept] == [a, c]
+    assert [base64.b64decode(p.data, validate=True) for p in kept] == [b"abcdef", b"mno"]
+    assert "omitted 2 image part(s)" in result.text() and "12 bytes" in result.text()
+    assert [p.data for p in images] == [a, b, c]  # no partial or corrupted base64
+
+
+def test_image_omission_marker_remains_visible_when_text_budget_is_full(monkeypatch):
+    from exo.core.tools import registry as mod
+    from exo.core.types import ContentPart
+
+    monkeypatch.setattr(mod, "MAX_RESULT_CHARS", 4)
+    monkeypatch.setattr(mod, "MAX_RESULT_IMAGE_BYTES", 4)
+    reg = Registry()
+    reg.tool("images", "fake result")(lambda args, ctx: ToolResult(call_id="c", content=[
+        ContentPart.of_text("abcdef"), ContentPart(type="image", data="abcdefgh")]))
+    result = reg.call_sync(ToolCall(id="c", name="images"), ToolContext())
+    assert result.text().startswith("abcd") and "omitted 1 image part(s)" in result.text()
+    assert not any(p.type == "image" for p in result.content)
+
+
+def test_oversized_image_fields_are_dropped_before_encoding(monkeypatch):
+    from exo.core.tools import registry as mod
+    from exo.core.types import ContentPart
+
+    class NoEncoding(str):
+        def encode(self, *args, **kwargs):
+            raise AssertionError("oversized input must not be copied to size it")
+
+    monkeypatch.setattr(mod, "MAX_RESULT_IMAGE_BYTES", 8)
+    reg = Registry()
+    reg.tool("images", "fake result")(lambda args, ctx: ToolResult(call_id="c", content=[
+        ContentPart(type="image", data=NoEncoding("a" * 100)),
+        ContentPart(type="image", url=NoEncoding("a" * 100)),
+        ContentPart(type="image", url="é" * 4),  # eight UTF-8 bytes fit exactly
+        ContentPart(type="image", data="AAAA")]))
+    result = reg.call_sync(ToolCall(id="c", name="images"), ToolContext())
+    assert not result.is_error
+    assert [p.url for p in result.content if p.type == "image"] == ["é" * 4]
+    assert "omitted 3 image part(s)" in result.text()
