@@ -329,9 +329,7 @@ class Registry:
             out.call_id = call.id
             return _cap_result(out)
         text = out if isinstance(out, str) else str(out)
-        if len(text) > MAX_RESULT_CHARS:
-            text = text[:MAX_RESULT_CHARS] + f"\n[truncated {len(text) - MAX_RESULT_CHARS} chars]"
-        return ToolResult.of_text(call.id, text)
+        return _cap_result(ToolResult.of_text(call.id, text))
 
     async def _post(self, call: ToolCall, result: ToolResult, ctx: ToolContext) -> ToolResult:
         for hook in list(self._hooks[POST_TOOL_CALL]):

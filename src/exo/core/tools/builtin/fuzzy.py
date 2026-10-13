@@ -20,10 +20,6 @@ from typing import Callable
 
 Span = tuple[int, int]
 
-IDENTICAL_STRINGS_ERROR = (
-    "No edit was applied because old_string and new_string are identical. "
-    "Provide the existing text in old_string and the changed text in new_string.")
-
 UNICODE_MAP = {
     "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
     "\u2014": "--", "\u2013": "-", "\u2026": "...", "\u00a0": " ", "\u2212": "-",
@@ -41,16 +37,13 @@ def _unicode_normalize(text: str) -> str:
 
 # ---------------------------------------------------------------- positions
 
-def _calculate_line_positions(lines: list[str], start: int, end: int, length: int) -> Span:
-    start_pos = sum(len(line) + 1 for line in lines[:start])
-    end_pos = sum(len(line) + 1 for line in lines[:end]) - 1
-    return start_pos, min(length, end_pos)
-
-
 def _window_spans(content: str, lines: list[str], n: int,
                   accept: Callable[[int], bool]) -> list[Span]:
-    return [_calculate_line_positions(lines, i, i + n, len(content))
-            for i in range(len(lines) - n + 1) if accept(i)]
+    def span(i: int) -> Span:
+        start = sum(len(line) + 1 for line in lines[:i])
+        end = sum(len(line) + 1 for line in lines[:i + n]) - 1
+        return start, min(len(content), end)
+    return [span(i) for i in range(len(lines) - n + 1) if accept(i)]
 
 
 def _match_transformed_lines(content: str, pattern: str,
@@ -259,7 +252,9 @@ def fuzzy_find_and_replace(content: str, old_string: str, new_string: str,
             "old_string is only whitespace. Provide non-blank text to match. "
             "Do not re-send this call unchanged.")
     if old_string == new_string:
-        return content, 0, None, IDENTICAL_STRINGS_ERROR
+        return content, 0, None, (
+            "No edit was applied because old_string and new_string are identical. "
+            "Provide the existing text in old_string and the changed text in new_string.")
 
     for name, strategy in STRATEGIES:
         matches = strategy(content, old_string)
@@ -441,8 +436,8 @@ def find_closest_lines(old_string: str, content: str, context: int = 2, limit: i
     return "\n---\n".join(parts)
 
 
-def format_no_match_hint(error: str | None, match_count: int, old_string: str, content: str) -> str:
-    if match_count != 0 or not error or not error.startswith("Could not find"):
+def format_no_match_hint(error: str | None, old_string: str, content: str) -> str:
+    if not error or not error.startswith("Could not find"):
         return ""
     hint = find_closest_lines(old_string, content)
     return "\n\nDid you mean one of these sections?\n" + hint if hint else ""
