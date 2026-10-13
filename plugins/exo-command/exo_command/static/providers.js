@@ -50,8 +50,10 @@ export function mount(root) {
     if (!body.key.trim()) { show(r.provider, "Paste a key first.", "bad"); return; }
     try {
       const d = await api("POST", "/api/providers/" + encodeURIComponent(r.provider) + "/key", body);
-      show(r.provider, "Stored in " + d.stored_in + "." + (d.shadowed_by_env ? " The env var " + d.var + " shadows it." : "") +
-        (d.core_reloaded ? "" : " The core was not told to reload; restart it to use the key."), "ok");
+      const warning = d.warning || (d.shadowed_by_env ? "The env var " + d.var + " shadows it." : "");
+      show(r.provider, "Stored in " + d.stored_in + ". Effective source: " + (d.effective_source || "not confirmed") + "." +
+        (warning ? " " + warning : "") +
+        (d.core_reloaded ? "" : " The core was not told to reload; restart it to refresh credentials."), warning ? "bad" : "ok");
     } catch (e) { show(r.provider, e.message, "bad"); }
     body.key = "";
     if (alive) load();
