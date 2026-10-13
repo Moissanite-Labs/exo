@@ -21,7 +21,7 @@ from typing import Any, Callable, Iterable, Sequence
 # name -> argument shape shown after the name. Descriptions live with each client's own table (the TUI COMMANDS
 # dict) and in commands.list; this table only adds the shape and the group for commands every client may meet.
 ARG_HINTS: dict[str, str] = {
-    "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "rename": "<title>", "undo": "", "clear": "",
+    "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "rename": "<title>", "taste": "[show|why|mode|yes|no|later|pin|unpin|off|on|undo|restore|reset] [id]", "undo": "", "clear": "",
     "cwd": "", "context": "", "compact": "", "restart": "", "stop": "[task]", "rounds": "[N|default]", "tasks": "", "open": "<task>", "steer": "<task> <text>", "unsteer": "", "exit": "", "quit": "",
     "model": "[default] <model>", "default": "[model]", "providers": "[add] [name]", "usage": "",
     "panel": "", "peers": "", "send": "<peer> <text>", "handoff": "[path]", "intro": "",
@@ -116,6 +116,11 @@ def plan(cmd: str, done: Sequence[str]) -> Slot | None:
         return Slot("[title]") if n == 0 else None
     elif cmd == "rename":
         return Slot("<title>") if n == 0 else None
+    elif cmd == "taste":
+        return Slot("[verb]", "", _c("show|one rule", "why|why a rule exists", "mode|ask or silent", "yes|accept a pending rule",
+                                     "no|decline a pending rule", "later|decide later", "pin|keep a rule", "unpin|release a pin",
+                                     "off|turn a rule off", "on|turn a rule on", "undo|undo a change", "restore|bring a rule back",
+                                     "reset|forget a rule")) if n == 0 else None
     elif cmd == "exo":
         if n == 0:
             return Slot("<subcommand>", "", _c("help|list the subcommands", "branch|write a handoff and a fresh-session line",

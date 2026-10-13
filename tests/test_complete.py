@@ -304,3 +304,9 @@ def test_short_desc_cuts_at_a_clause_or_a_word():
     long = "summarize now what is eligible in this agent's memory then show tokens before and after it ran"
     out = cm.short_desc(long)
     assert out.endswith("\u2026") and len(out) <= 65 and " " not in out[-3:] and long.startswith(out[:-1])
+
+
+def test_taste_is_a_listed_command_with_verbs():
+    assert "taste" in cm.ARG_HINTS
+    slot = cm.plan("taste", [])
+    assert slot is not None and "mode" in [v for v, _ in slot.choices]

@@ -117,11 +117,22 @@ Plugins add tools, slash commands, hooks, skills and memory or context engines. 
 `plugins/` and are switched on in `config.json`. `/help` shows the commands plugins add. Skills are
 smaller: a folder with a SKILL.md the agent loads when its description matches the task, like this one.
 
+## Taste
+
+Say this in about this many words: "Exo starts with a house taste: working habits and a few values tuned by its
+first user over many months, such as plain short writing and checking work before calling it done. It changes the
+way people do: slowly, and only when something lasts. If you keep doing something your own way for several weeks,
+it switches to your way and tells you. If one of its values does not sit right with you, say so: it will step back
+at once and stay neutral until it knows your view. By default these changes just happen and show in /taste; type
+`/taste mode ask` if you would rather approve each one." If the user would rather start blank, they add `taste:`
+with `house: off` under it in their store's `policies/consolidate.yaml`.
+
 ## Slash command index
 Every command `/help` lists, in one line each, so you can answer "what does /x do":
 - `/new`, `/sessions`, `/resume`, `/fork`, `/rename`, `/undo`, `/clear`, `/cwd`, `/restart`, `/exit`, `/quit`: threads
   and the window, above.
 - `/context`, `/compact`, `/usage`: memory and cost, above.
+- `/taste`: show what Exo has learned about how you like things done (house, learned, pending, stepped back); `/taste mode ask|silent`, `pin`, `off`, `undo`, `reset` change it.
 - `/copy` puts the last answer on the clipboard; `/copy error` the last error; `/copy all` the transcript.
 - `/compose` opens a big editor for a long prompt (ctrl+g too; ctrl+s sends, Esc closes and keeps the draft); `/compose task` adds Goal, Context, Constraints, Done when headings; `/compose edit` uses $EDITOR.
 - `/layout inverse` puts the input on top with the newest message under it; `/layout classic` is the usual order.

@@ -86,6 +86,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
 | `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |
+| `/taste [verb] [id]` | Your taste: the mode, then house, learned, pending, overridden and stepped-back items. `/taste mode ask` or `silent`, `/taste yes|no|later <id>` answers a proposal, `pin`, `off`, `undo`, `restore`, `reset <id>` change one item. Only you can change taste. |
 | `/rename <title>` | Rename this thread. The new title shows in `/sessions`, `/resume` and the web thread list, where a double-click on a thread renames it too. |
 | `/undo` | Undo the last turn. |
 | `/clear` | Clear the transcript view. History is kept. |
@@ -166,9 +167,33 @@ vanish.
 - The taste block in the agent's system message is limited to 400 tokens (`taste_budget` in the `exo-memory`
   config; 0 turns it off). Low-weight items drop out of the prompt first; they stay in `exo taste`.
 
+**How taste changes.** Exo changes the way people do: slowly, and only when something lasts. Your signals about
+one item in one session or one day count as one episode. A week counts when most of its episodes go one way. If
+you keep doing something your own way for three weeks within eight, the item starts to fade, and after about two
+to three months of you doing it your way it switches to your version. A mood, a bad week or a deadline leaves no
+trace. A habit you show only in one project or one kind of task becomes a version for that work only. Only your own
+words and actions count; text an agent, a tool, a peer or a web page wrote never does.
+
+**Values are different.** If one of the house values does not sit right with you, say so: it steps back at once
+and Exo stays neutral on that point (facts and the main views, no stance). It takes on your own view only after
+you have said it in your own words and held it for about four weeks.
+
+**Ask or silent.** In silent mode (the default for a new install) a change happens, shows in `/taste` and the
+next brief, and `/taste undo <id>` reverses it. In ask mode (`/taste mode ask`) Exo proposes each change once and
+waits for `/taste yes`, `no` or `later`; no answer means no change, and after three unanswered proposals they stop
+appearing in the brief and only wait in `/taste`. A step back never waits for a yes. Your rulings, pins and
+`off` apply at once in either mode.
+
+- `/taste` shows all of it; `/taste why <id>` shows the weeks and signals behind an item.
+- `/taste pin <id>` freezes an item; `/taste off <id>` turns a house item off; `/taste restore <id>` brings back an
+  overridden or stepped-back item; `/taste reset <id>` drops the learned version; `/taste reset all confirm`
+  drops every learned item (your rulings stay).
+- After a swap, an undo or a no, the item stays quiet for 90 days.
+- If no `decision` model route is configured, Exo matches signals by their words only, and a value then steps
+  back only after two weeks of disagreement, never on one remark.
+
 Safety settings (approvals, budget, posting rules) are not taste. They never come from the house taste and only
-change when you edit them. Changing taste slowly to fit you, and the `/taste` view, are still to come. Details:
-`docs/TASTE-BASELINE.md`.
+change when you edit them. Details: `docs/TASTE-BASELINE.md`.
 
 ## 5. Background jobs
 

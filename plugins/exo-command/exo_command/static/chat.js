@@ -529,6 +529,14 @@ export function mount(root) {
       if (!current) { flash("open a thread first for /rename"); return; }
       input.value = ""; help.sent(text); rename(current, command.args); return;
     }
+    if (command && command.name === "taste") {   // core command.run "taste"; the text is shown in the thread as a report
+      input.value = ""; help.sent(text);
+      try {
+        const d = await api("POST", "/api/taste", { args: command.args, session: current || undefined });
+        push({ kind: "report", id: "taste" + Date.now(), title: "taste", text: (d && d.text) || "taste: nothing to show" });
+      } catch (e) { fail(e); }
+      return;
+    }
     if (command && command.name === "new") { input.value = ""; help.sent(text); create(command.args); return; }
     if (command && command.name === "permissions") {   // D-065: the mode lives in the core; the banner follows it
       input.value = ""; help.sent(text);

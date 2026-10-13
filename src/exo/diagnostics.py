@@ -197,6 +197,12 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
     if b.name == "subagent":  # #97: list, open, send to and stop a running child; exo.subagents holds the rules
         from exo import subagents
         return await subagents.command(eng, b)
+    if b.name == "taste":  # D-044: /taste; reading is open, every write is the principal's only (D-052)
+        from exo.baseline import command as taste_cmd
+        try:
+            return await asyncio.to_thread(taste_cmd.engine_command, eng, b.args, is_principal(current_caller()))
+        except taste_cmd.TasteError as e:
+            raise CommandFailed(e.code, str(e)) from None
     if b.name == "rename":  # D-069: the session title, principal only (D-052); announced as session.updated
         if not b.session:
             raise CommandFailed("bad_request", "rename needs a session")
