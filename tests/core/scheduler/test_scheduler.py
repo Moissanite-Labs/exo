@@ -360,6 +360,9 @@ async def blocked_run(tmp_path, stage):
                     entered.set()
                     return {"action": "approve", "message": "may I run?", "rule_key": "scheduled-test"}
             eng.plugins.hooks.register("pre_tool_call", ask)
+        else:
+            # This fake tool must be explicitly permitted under the fail-closed execution gate.
+            eng.plugins.hooks.register("pre_tool_call", lambda **kw: {"action": "allow"})
     sch = eng.scheduler
     job = sch.add("every 1h", "report")
     sch.launch(job)
