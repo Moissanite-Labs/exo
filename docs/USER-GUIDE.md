@@ -174,13 +174,13 @@ the exit code and the last lines of output. The notice is never from you and can
 Some actions wait for you. The gate looks at each tool call and decides: allow, log, ask or deny, from your policy
 files (`policies/gates.yaml` in your store). When it asks, a panel shows what the agent wants to do and why.
 
-In the terminal: `o` allows once, `a` then Enter allows always (or `A` at once), `d` denies. Esc never answers. The keys only
-act when the card has focus, and the card does not take focus while you have text in the composer or typed in the last
-second and a half, so a letter typed into a message never answers a gate. Press Tab, click the card, or press
+Both clients use `o` to allow once, `a` to choose always, and `d` to deny with an optional note. Choosing always,
+including uppercase `A` or clicking Always, waits for a separate Enter or Confirm always button. Escape cancels;
+it never answers. The keys act only inside a deliberately focused card. Cards never take focus automatically,
+even when the composer is empty. Typing in an editable field cannot authorize. Press Tab, click the card, or press
 `ctrl+f` to move to it. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
-longer holds never stays on screen. On the web page: `y`, `a`, `n`, which are ignored while you type in a field. If you
-answer a card that was already closed, the page drops it and says so.
+longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
 What the gate asks about, and why:
 
