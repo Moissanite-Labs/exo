@@ -68,3 +68,45 @@ def test_fuzzy_replace_all_refuses_similarity_matches():
     content = "start\nalpha one\nend\nstart\nalpha two\nend\n"
     _new, n, _s, err = fuzzy_find_and_replace(content, "start\nalpha 1\nend", "X", replace_all=True)
     assert n == 0 and "approximate" in err
+
+
+def test_fuzzy_whitespace_drift_keeps_indentation():
+    # One stray double space in the file; the model's old_string has it collapsed, so only the
+    # whitespace-normalized strategy matches. The match starts after the indentation, and the
+    # replacement must keep the file's depth on every line.
+    content = "def f(a):\n    if a:\n        return  1\n        y = 3\n    x = 2\n"
+    new, n, strategy, err = fuzzy_find_and_replace(content, "if a:\n    return 1", "if a:\n    return 2")
+    assert err is None and n == 1 and strategy == "whitespace_normalized"
+    assert new == "def f(a):\n    if a:\n        return 2\n        y = 3\n    x = 2\n"
+    # Mid-line matches are not widened to the line start.
+    new, n, strategy, err = fuzzy_find_and_replace("x = foo(a,  b)\n", "foo(a, b)", "foo(a, c)")
+    assert err is None and strategy == "whitespace_normalized" and new == "x = foo(a, c)\n"
+
+
+def test_fuzzy_whitespace_spans_cover_the_pattern():
+    # Every span the whitespace-normalized strategy returns must normalize to the pattern; before,
+    # a span could start inside the blank run before the match.
+    import random
+    import re
+    from exo.core.tools.builtin.fuzzy import _strategy_whitespace_normalized
+
+    norm = lambda t: re.sub(r"[ \t]+", " ", t)
+    rng = random.Random(7)
+    words = ["foo", "bar", "x", "=", "(", ")", "if", "y"]
+    checked = 0
+    for _ in range(3000):
+        lines = []
+        for _ in range(rng.randint(2, 5)):
+            toks = [rng.choice(words) for _ in range(rng.randint(1, 4))]
+            lines.append(rng.choice(["", " ", "\t", "  "]) + rng.choice([" ", "  ", "\t"]).join(toks)
+                         + rng.choice(["", " ", "\t"]))
+        content = "\n".join(lines) + "\n"
+        s = rng.randint(0, len(content) - 2)
+        old = content[s:rng.randint(s + 1, len(content))]
+        if not old.strip():
+            continue
+        drifted = re.sub(r"[ \t]+", lambda m: rng.choice([" ", "  ", "\t"]), old)
+        for a, b in _strategy_whitespace_normalized(content, drifted):
+            assert norm(content[a:b]) == norm(drifted), (content, drifted, (a, b))
+            checked += 1
+    assert checked > 500
