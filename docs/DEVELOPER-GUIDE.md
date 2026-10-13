@@ -411,17 +411,12 @@ A decision model returns probabilities, not prose (`docs/PROVIDERS.md`). The cal
 `aux`, then `main`.
 
 ```python
-from exo.core.models.decision import ask_choice_result, ask_score, tighten_only, DecisionError
+from exo.core.models.decision import ask_choice_result, tighten_only, DecisionError
 
 res = await ask_choice_result(router, state, "How strictly should this call be gated?",
                               ["allow", "log", "ask", "deny"])
 res.choice, res.probabilities, res.source, res.route, res.confidence
 #   source is "decision" (a probability model) or "generative" (a chat model fallback, probability 1.0 on its pick)
-
-sc = await ask_score(router, state, "How risky is this?", ["harmless", "minor", "serious"])
-sc.score         # a level index counted from 0; it can fall between levels, such as 1.43. Use 2 to 10 levels.
-
-probs = await ask_choice(router, state, "Which fits?", ["a", "b"])   # just {option: probability}
 ```
 
 - `state` is the context the question is about. It can be a string or JSON. `router` comes from the plugin context
