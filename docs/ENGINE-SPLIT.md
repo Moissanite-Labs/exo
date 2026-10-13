@@ -83,11 +83,15 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
 
 ## Budget policy
 
-Recommendation pending review: retain the current 16,000-line acceptance ceiling while #46 is open.
-Do not raise it again to accommodate a
-wave or exclude existing counted modules to make a failing test pass. Step 4 brought the count under the historical
-15,000-line goal (14,812 at D-067), two thirds of it by moving two subsystems out through real seams. Whether to
-lower the ceiling to lock that in is part of the budget decision. This pass leaves it at 16,000.
+Decided 2026-10-13 (D-067): the acceptance ceiling is **15,000** counted lines
+(`tests/integration/test_wave1_acceptance.py`), down from 16,000. Step 4 brought the count under the historical
+15,000-line goal (14,812 at D-067), two thirds of it by moving two subsystems out through real seams, and the lower
+ceiling keeps that gain. Do not raise it again to accommodate a wave or exclude existing counted modules to make a
+failing test pass. A new core feature fits under 15,000 or comes with a cut or a seam.
+
+The ceiling is not the completion test for #46. Step 4's completion criteria still stand: private-state reads
+(`loop._state`, `store._q`, the tree's `_view` and `_agent_key`) and the inward product imports listed under
+"Progress" remain to be removed.
 
 Before changing the ceiling, decide whether total line count remains useful. If it is retired, replace it
 with enforceable import-direction and collaborator-interface checks, with explicit temporary exceptions

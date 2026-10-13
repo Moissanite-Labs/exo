@@ -286,7 +286,8 @@ runs and CI never run it.
 
 If you changed the protocol schema, also run `python -m exo.protocol.export --check`.
 
-Rules that tests enforce: the protocol caps, the core line budget, the TUI colour tokens against the site's
+Rules that tests enforce: the protocol caps, the core line budget (under 15,000 counted lines,
+`docs/ENGINE-SPLIT.md` "Budget policy"), the TUI colour tokens against the site's
 `style.css`, that every `/help` command appears in the intro skill, and the docs map (`tests/docs/test_docs_map.py`).
 Tests use fake models and no network. The conftest fixtures isolate `EXO_HOME`, the bus identity and the peers
 folder, so a test never reads your real setup. The root fixture also clears inherited `NO_COLOR` so terminal
