@@ -2,8 +2,8 @@
 
 Names follow Hermes's ``VALID_HOOKS`` where Exo has the same seam, so exo-gate's
 ``pre_tool_call`` and ``post_approval_response`` keep working. Callbacks get keyword
-arguments only. A failing callback is logged and skipped (fail open), except that a
-``pre_tool_call`` block decision is honoured by whoever reads the results.
+arguments only. A failing ``pre_tool_call`` callback returns a block verdict;
+other failing callbacks are logged and skipped (fail open).
 """
 
 from __future__ import annotations
@@ -76,7 +76,8 @@ class HookRegistry:
     def fire(self, name: str, **kwargs: Any) -> list[Any]:
         """Call every callback in order; return their non-None results.
 
-        Async callbacks are not awaited here (use ``afire``); they are closed and skipped.
+        Async callbacks are not awaited here (use ``afire``); they are closed and
+        skipped, with a block verdict for ``pre_tool_call``.
         """
         out = []
         for e in self.entries(name):
@@ -85,11 +86,17 @@ class HookRegistry:
             except Exception as exc:
                 logger.warning("hook %s from %s failed", name, e.plugin or "?", exc_info=True)
                 trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)
+                if name == "pre_tool_call":
+                    out.append({"action": "block", "message": "Tool approval hook failed; repair or reinstall "
+                                f"{e.plugin or 'the gate plugin'} before retrying."})
                 continue
             if inspect.isawaitable(r):
                 if hasattr(r, "close"):
                     r.close()
                 logger.warning("hook %s from %s is async; use afire", name, e.plugin or "?")
+                if name == "pre_tool_call":
+                    out.append({"action": "block", "message": "Tool approval hook requires async execution; "
+                                "use afire before executing tools."})
                 continue
             if r is not None:
                 out.append(r)
@@ -106,6 +113,9 @@ class HookRegistry:
             except Exception as exc:
                 logger.warning("hook %s from %s failed", name, e.plugin or "?", exc_info=True)
                 trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)
+                if name == "pre_tool_call":
+                    out.append({"action": "block", "message": "Tool approval hook failed; repair or reinstall "
+                                f"{e.plugin or 'the gate plugin'} before retrying."})
                 continue
             if r is not None:
                 out.append(r)
