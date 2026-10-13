@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
+import sqlite3
 from datetime import datetime
 
 import pytest
 
 from exo.core.engine import CoreEngine
 from exo.core.models.fake import FakeProvider
-from exo.core.scheduler import Scheduler, handle_schedule_edit, next_run, parse_cron
+from exo.core.models.fake import tool_turn
+from exo.core.scheduler import PROMPT, Scheduler, handle_schedule_edit, next_run, parse_cron
+from exo.core.seats import Seat
+from exo.core.types import ToolSpec
+from exo.core.agents.delegate import BLOCKED_TOOLS
 from exo.protocol import schema as s
 
 
@@ -130,6 +136,7 @@ async def test_failed_run_warns(tmp_path):
     assert bodies(eng, s.TaskUpdated)[-1].status == "failed"
     assert bodies(eng, s.Notice)[-1].level == "warn"
     assert sch.get(job["id"])["last_status"] == "failed"
+    assert not sch.loops
 
 
 @aio
@@ -286,3 +293,163 @@ async def test_scheduled_turn_uses_the_normal_turn_path(tmp_path):
     await sch.wait()
     child = next(t.child_session for t in bodies(eng, s.TaskUpdated) if t.child_session)
     assert [k for k, sid in seen if sid == child] == ["start", "sync", "end"]  # hooks and memory, like any turn
+
+
+@aio
+async def test_scheduled_prompt_refresh_matches_soul_trace_without_changing_main_prompt(tmp_path):
+    soul = tmp_path / "SOUL.md"
+    soul.write_text("Soul one")
+    seat = Seat(name="test-seat", soul="Soul one", soul_path=str(soul))
+    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
+                     seat=seat, cwd=str(tmp_path), env={})
+    provider = eng.loop.provider = FakeProvider(["report"], repeat=True)
+    sch = eng.scheduler
+    job = sch.add("every 1h", "report")
+    for text in ["Soul one", "Soul two changed", "Soul two changed"]:
+        soul.write_text(text)
+        sch.launch(job)
+        await sch.wait()
+        prompt = provider.calls[-1]["messages"][0].text()
+        started = bodies(eng, s.TurnStarted)[-1]
+        assert text in prompt and prompt.count(PROMPT) == 1
+        assert started.soul == hashlib.sha1(text.encode()).hexdigest()[:8]
+        assert eng.loop.system_prompt == eng._compose_prompt() and PROMPT not in eng.loop.system_prompt
+        assert not {t.name for t in provider.calls[-1]["tools"]} & BLOCKED_TOOLS
+        assert not sch.loops
+    assert "Soul one" not in provider.calls[-1]["messages"][0].text()
+    children = [t.child_session for t in bodies(eng, s.TaskUpdated) if t.status == "running"]
+    assert all(eng.store.messages(sid)[0].meta["author"] == "schedule" for sid in children)
+    interactive = await eng.loop.create_session(cwd=str(tmp_path))
+    await eng._turn(s.TurnSend(session=interactive.id, text="hello"))
+    assert "Soul two changed" in provider.calls[-1]["messages"][0].text()
+    assert PROMPT not in provider.calls[-1]["messages"][0].text()
+
+
+async def blocked_run(tmp_path, stage):
+    """One temporary scheduled turn blocked on fake model, async tool or real core approval future."""
+    eng = mk(tmp_path)
+    entered, closed = asyncio.Event(), asyncio.Event()
+    tool_ran = []
+
+    class BlockedProvider(FakeProvider):
+        async def stream(self, messages, tools, **opts):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+                async for ev in super().stream(messages, tools, **opts):
+                    yield ev
+            finally:
+                closed.set()
+
+    async def tool(args, ctx):
+        tool_ran.append(1)
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    if stage == "model":
+        eng.loop.provider = BlockedProvider(["never finished"])
+    else:
+        eng.registry.register(ToolSpec(name="scheduled_block", description="blocking fake tool", risk="low", toolset="test"), tool)
+        eng.loop.provider = FakeProvider([tool_turn("scheduled_block"), "never finished"])
+        if stage == "approval":
+            def ask(tool_name="", **kw):
+                if tool_name == "scheduled_block":
+                    entered.set()
+                    return {"action": "approve", "message": "may I run?", "rule_key": "scheduled-test"}
+            eng.plugins.hooks.register("pre_tool_call", ask)
+    sch = eng.scheduler
+    job = sch.add("every 1h", "report")
+    sch.launch(job)
+    await asyncio.wait_for(entered.wait(), 1)
+    if stage == "approval":
+        async def pending():
+            while not eng._approvals:
+                await asyncio.sleep(0)
+        await asyncio.wait_for(pending(), 1)
+    sid = next(t.child_session for t in bodies(eng, s.TaskUpdated) if t.status == "running")
+    return eng, sch, job, sid, closed, tool_ran
+
+
+@pytest.mark.parametrize("stage", ["model", "tool", "approval"])
+@pytest.mark.parametrize("cancel", [False, True])
+@aio
+async def test_scheduled_interrupt_and_task_cancellation_reap_all_work(tmp_path, stage, cancel):
+    eng, sch, job, sid, closed, tool_ran = await blocked_run(tmp_path, stage)
+    assert sid in sch.loops
+    if cancel:
+        sch.running[job["id"]].cancel()
+    else:
+        assert await eng._turn_interrupt(s.TurnInterrupt(session=sid)) == {"interrupted": 1}
+    await asyncio.wait_for(sch.wait(), 1)
+    assert not sch.loops and not sch.running
+    assert sch.get(job["id"])["last_status"] == "failed"
+    if stage == "approval":
+        assert not eng._approvals and not eng._open_approvals and not tool_ran
+        assert bodies(eng, s.ApprovalResolved)[-1].decision == "cancelled"
+    else:
+        assert closed.is_set()  # deleting the registry entry is insufficient if a model/tool worker survives
+    if not cancel:
+        assert bodies(eng, s.TurnCompleted)[-1].stop_reason == "interrupted"
+
+
+@aio
+async def test_interrupting_scheduled_child_does_not_interrupt_another_interactive_turn(tmp_path, monkeypatch):
+    eng = mk(tmp_path)
+    scheduled_entered, interactive_entered = asyncio.Event(), asyncio.Event()
+
+    class Blocked(FakeProvider):
+        def __init__(self, entered):
+            super().__init__(["never finished"])
+            self.entered = entered
+        async def stream(self, messages, tools, **opts):
+            self.entered.set()
+            await asyncio.Event().wait()
+            async for ev in super().stream(messages, tools, **opts):
+                yield ev
+
+    eng.loop.provider = Blocked(interactive_entered)
+    monkeypatch.setattr(eng.agents, "_route", lambda tier: (Blocked(scheduled_entered), "fake:scheduled"))
+    session = await eng.loop.create_session(cwd=str(tmp_path))
+    interactive = asyncio.create_task(eng._turn(s.TurnSend(session=session.id, text="hello")))
+    await asyncio.wait_for(interactive_entered.wait(), 1)
+    sch = eng.scheduler
+    sch.launch(sch.add("every 1h", "report"))
+    await asyncio.wait_for(scheduled_entered.wait(), 1)
+    child = next(t.child_session for t in bodies(eng, s.TaskUpdated) if t.status == "running")
+    assert await eng._turn_interrupt(s.TurnInterrupt(session=child)) == {"interrupted": 1}
+    await asyncio.wait_for(sch.wait(), 1)
+    assert not interactive.done() and eng.loop.state(session.id).running
+    assert await eng._turn_interrupt(s.TurnInterrupt(session=session.id)) == {"interrupted": 1}
+    assert (await asyncio.wait_for(interactive, 1)).stop_reason == "interrupted"
+
+
+@aio
+async def test_next_run_listing_error_is_reported_and_scheduler_survives(tmp_path, monkeypatch):
+    eng = mk(tmp_path)
+    sch = eng.scheduler
+    sch.error_pause = .01
+    calls, real = [], sch.list
+    def flaky_list():
+        calls.append(1)
+        if len(calls) == 2:  # after tick: this used to be outside the recovery try
+            raise sqlite3.OperationalError("temporary listing failure")
+        return real()
+    monkeypatch.setattr(sch, "list", flaky_list)
+    job = sch.add("every 1h", "report")
+    sch.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (sch.clock() - 1, job["id"]))
+    sch.db.commit()
+    sch.start()
+    try:
+        async def recovered():
+            while len(calls) < 4 or sch.get(job["id"])["last_status"] != "done":
+                await asyncio.sleep(.01)
+        await asyncio.wait_for(recovered(), 1)
+        assert not sch._main.done()
+        assert any(b.where == "scheduler tick" and "temporary listing failure" in b.message
+                   for b in bodies(eng, s.HarnessError))
+        assert not any(b.where == "scheduler loop" for b in bodies(eng, s.HarnessError))
+    finally:
+        await sch.stop()
