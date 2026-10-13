@@ -1214,7 +1214,6 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   suites; before and after screenshots from `scripts/shots_web_tabs.py`.
 - **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)".
 
-
 ## D-067 (2026-10-13) Engine split step 4: delete what is unused, move peers and the scheduler out of the core
 - **Why:** issue #46. The counted core sat about 24 lines under its 16,000-line cap, so every new core feature was
   blocked. The first pass of `docs/ENGINE-SPLIT.md` only moved the engine's diagnostics and factory, which the plan
@@ -1243,6 +1242,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   249 entries; no new ones), `python -m exo.protocol.export --check`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Progress", `docs/DEVELOPER-GUIDE.md` §1, `docs/CORE.md`, `docs/PEERS.md`,
   `docs/SCHEDULE.md`, `CHANGELOG.md`.
+
+## D-068 (2026-10-13) Turns do not wait for memory upkeep
+- **Why:** `build` waited up to `settle_timeout` (60 s) for pending summaries before every model call, so slow
+  bookkeeping delayed replies (issue #99).
+- **Decision:** build the prompt from ready summaries plus the verbatim tail and let summaries and merges finish in
+  the background. Only when that view would overflow `view_budget` does the turn wait, for `overflow_settle` (5 s)
+  at most. A summary node turns `done` in one step and `build` reads in one synchronous stretch, so a turn sees
+  either the old view or the merged one, never a mix. Logic is in `src/exo/turn_settle.py`, outside the counted core.
+- **Validation:** `tests/core/test_turn_settle.py`, `tests/core/loop/test_loop.py`.
+- **Docs:** `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep".
 
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It

@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable
 from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.types import Message, Provider
+from exo.turn_settle import settle_for_turn
 
 # ---------------------------------------------------------------- lifted prompt text
 
@@ -618,7 +619,7 @@ class TreeContext:
         """Fresh model input: system prompt with the view appended, then the verbatim tail."""
         self.note(session)
         if settle:
-            await self.settle(session)
+            await settle_for_turn(self, session)
         top = self._top(session)
         frontier = top[-1].end if top else 0
         parts = self._view_parts(top)
@@ -942,7 +943,7 @@ class AgentContext(TreeContext):
             return await super().build(session, system, settle)
         self.note(key)
         if settle:
-            await self.settle(key)
+            await settle_for_turn(self, key)
         top, frontier, parts = self._view(key)
         text = system
         if parts:
