@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from exo.core.private import private_file
 from exo.protocol import schema as s
 
 TOKEN_ENV = "EXOD_TOKEN"
@@ -111,7 +112,7 @@ def cmd_serve(a: Any, store: Any = None) -> int:
     from exo.ensure_core import pid_path
     pidfile = pid_path(socket.parent.parent) if socket == default_socket() else None
     if pidfile is not None:
-        pidfile.write_text(f"{os.getpid()}\n")
+        private_file(pidfile).write_text(f"{os.getpid()}\n")
     try:
         asyncio.run(main())
     finally:
