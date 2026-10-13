@@ -151,3 +151,55 @@ def test_scheduler_tools_use_broker(tmp_path):
             await engine.close()
 
     asyncio.run(main())
+
+
+def test_required_local_delegate_setup_has_no_workspace_execution(tmp_path, monkeypatch):
+    seen = []
+
+    class LocalDelegate(DenyBroker):
+        async def execute(self, request, tool, run_trusted):
+            seen.append(request.tool_name)
+            if request.tool_name == "delegate":
+                return await run_trusted()
+            return await super().execute(request, tool, run_trusted)
+
+    models = {"fake": {"rules": [{"match": "probe", "steps": [
+        {"tool": "bash", "args": {"command": "echo child"}}, "done"]}]},
+              "roles": {"main": ["fake:x"], "aux": ["fake:x"], "standard": ["fake:x"]}}
+    engine = CoreEngine(tmp_path / "home", models, executor=LocalDelegate(), executor_required=True,
+                        cwd=str(tmp_path))
+    monkeypatch.setattr("exo.core.workspace.git_facts", lambda *a: pytest.fail("delegate host workspace Git"))
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: pytest.fail("delegate setup host subprocess"))
+
+    async def main():
+        try:
+            result = await engine.run_tool(ToolCall("parent", "delegate", {
+                "goal": "probe __import__('os').system('touch /outside-marker')",
+                "context": '{"constructor": "eval", "code": "untrusted payload"}',
+                "tools": ["bash"]}), {})
+            assert not result.is_error
+            assert seen == ["delegate", "bash"]
+            assert "done" in result.text()
+        finally:
+            await engine.close()
+
+    asyncio.run(main())
+
+
+def test_required_remote_delegate_refuses_host_bus_connection(tmp_path, monkeypatch):
+    class LocalDelegate(DenyBroker):
+        async def execute(self, request, tool, run_trusted):
+            return await run_trusted()
+
+    engine = CoreEngine(tmp_path / "home", executor=LocalDelegate(), executor_required=True)
+    monkeypatch.setattr(engine.agents, "_remote", lambda *a: pytest.fail("host bus connection"))
+
+    async def main():
+        try:
+            result = await engine.run_tool(ToolCall("parent", "delegate", {"goal": "probe", "seat": "other"}), {})
+            assert result.is_error and "does not support remote delegation" in result.text()
+            assert engine.agents.list() == []
+        finally:
+            await engine.close()
+
+    asyncio.run(main())

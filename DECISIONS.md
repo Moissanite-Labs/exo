@@ -304,6 +304,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   freezes validated post-approval arguments and dispatches through its broker. Required mode refuses missing
   executors, unsupported MCP startup and failed required plugins. The OS supplies isolation and an audited
   trusted plugin inventory; imported Python code remains trusted. See `docs/EXECUTORS.md`.
+- **Workspace subprocess closure:** required mode omits host Git handoff facts and uses filesystem-only
+  completion, because workspace Git configuration can execute helpers. Cross-seat delegation requires a
+  separate broker capability; local child setup passes tools through the shared registry.
 - **Lead call:** nothing on the Linux test machine's live OS changes in phase 0. It is someone's working machine
   (CRM, messaging, assistants). Where the OS first runs is A's call after the design.
 

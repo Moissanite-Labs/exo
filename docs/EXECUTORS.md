@@ -51,6 +51,18 @@ Background bash arguments reach the broker before any host job starts. The
 broker must deny background mode until it has an isolated background worker.
 Existing job recovery marks interrupted jobs lost; it does not restart them.
 Scheduled turns and delegated turns use `CoreEngine.run_tool` and this registry.
+Local delegation setup encodes data and queries the engine store without running
+workspace commands. Required mode refuses cross-seat delegation unless the
+broker explicitly sets `supports_remote_delegation=True`, because that path
+opens a trusted host Bus connection.
+
+Required engines omit the Git portion of `/handoff` facts with an explicit
+unavailable note. Even read-only Git commands can execute a workspace's
+`core.fsmonitor` helper. File completion in a process with the required flag,
+or a `FileIndex(executor_required=True)`, uses a bounded filesystem listing
+without Git; that listing does not apply `.gitignore`. OS client launchers must
+export the required flag as well as the engine service. Git tool requests may
+still run inside an isolated worker according to the broker's policy.
 
 ## Startup and trusted code
 

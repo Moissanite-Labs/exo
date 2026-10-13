@@ -1,7 +1,6 @@
 """D-037: the completion engine. Ranking, argument slots, @ files, typo help, history ghost text, guidance rules."""
 from __future__ import annotations
 
-import os
 import subprocess
 
 import pytest
@@ -159,6 +158,18 @@ def test_at_without_git_walks_and_skips_dotfiles(tmp_path):
     got = [i.value for i in cm.FileIndex(tmp_path).query("")]
     assert got == ["@a/"]
     assert [i.value for i in cm.FileIndex(tmp_path).query("one")] == ["@a/one.txt"]
+
+
+@pytest.mark.parametrize("via_env", [True, False])
+def test_required_completion_never_runs_workspace_git(tmp_path, monkeypatch, via_env):
+    (tmp_path / "file.txt").write_text("x")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("[core]\nfsmonitor = /untrusted/helper\n")
+    if via_env:
+        monkeypatch.setenv("EXO_TOOL_EXECUTOR_REQUIRED", "1")
+    index = cm.FileIndex(tmp_path, executor_required=not via_env)
+    monkeypatch.setattr(cm.subprocess, "run", lambda *a, **kw: pytest.fail("host Git must not run"))
+    assert [item.value for item in index.query("")] == ["@file.txt"]
 
 
 def test_at_token_inside_a_sentence_completes_in_place(repo):

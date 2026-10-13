@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import subprocess
+import shlex
 from datetime import date
 from pathlib import Path
 
@@ -14,7 +15,7 @@ import pytest
 from exo.core import workspace
 from exo.core.engine import CoreEngine
 from exo.core.seats import parse
-from exo.core.types import ToolCall
+from exo.core.types import ToolCall, ToolResult
 from exo.protocol import schema as s
 
 
@@ -83,6 +84,36 @@ def test_git_facts(tmp_path):
     f = workspace.git_facts(r)
     assert f["branch"] == "main" and f["changed"] == ["?? b.txt"] and f["recent"][0].endswith("first commit")
     assert workspace.git_facts(tmp_path / "nowhere") == {"repo": None}
+
+
+def test_required_handoff_never_runs_workspace_fsmonitor(tmp_path):
+    r = repo(tmp_path / "workspace")
+    outside = tmp_path / "outside-marker"
+    hook = r / ".git" / "evil-fsmonitor"
+    hook.write_text(f"#!/bin/sh\nprintf exploited > {shlex.quote(str(outside))}\n")
+    hook.chmod(0o755)
+    git(r, "config", "core.fsmonitor", str(hook))
+    # Positive control: this Git build executes the writable workspace configuration.
+    workspace.git_facts(r)
+    assert outside.exists()
+    outside.unlink()
+
+    class Broker:
+        async def execute(self, request, tool, run_trusted):
+            return ToolResult.of_text(request.call_id, "denied", True)
+
+    eng = engine(tmp_path, cwd=str(r), executor=Broker(), executor_required=True)
+
+    async def go():
+        try:
+            info = await eng.loop.create_session(title="work", cwd=str(r))
+            facts = (await eng._command_run(s.CommandRun(name="handoff_facts", session=info.id)))["output"]
+            assert facts["git"]["repo"] is None and "isolated" in facts["git"]["unavailable"]
+            assert not outside.exists()
+        finally:
+            await eng.close()
+
+    run(go())
 
 
 def test_handoff_path(tmp_path, monkeypatch):
