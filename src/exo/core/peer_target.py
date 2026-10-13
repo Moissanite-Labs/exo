@@ -84,14 +84,6 @@ class EngineTarget(Target):
             return live[0]["id"]
         return None  # the caller creates one
 
-    async def ensure_session(self, ing: Ingress) -> str:
-        sid = self.pick_session(ing)
-        if sid:
-            return sid
-        info = await self.e.loop.create_session(title=f"peer:{ing.sender}", seat=self.e.seat.name if self.e.seat else None,
-                                                model=self.e._main_ref(), cwd=self.e.cwd)
-        return info.id
-
     def state(self, session: str) -> str:
         st = self.e.loop._state.get(session)
         return "running" if st is not None and st.running else "idle"
