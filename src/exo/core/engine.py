@@ -531,7 +531,7 @@ class CoreEngine:
                 "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low"}
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
-        if not self.plugins.hooks.has("pre_tool_call"):
+        if not self.executor_required and not self.plugins.hooks.has("pre_tool_call"):  # required: create() checks
             return Block("No tool approval gate is available. Reinstall Exo's plugins or enable exo-gate "
                          "in core_plugins (and the seat's plugins list), then restart Exo.")
         required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()

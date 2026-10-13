@@ -124,7 +124,7 @@ class HookRegistry:
                 trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)
                 if e.plugin in _fail_closed_plugins:
                     raise HookError("required security hook failed") from None
-                if name == "pre_tool_call":
+                if name == "pre_tool_call" and not _fail_closed_plugins:  # required mode: only the gate fails closed
                     out.append({"action": "block", "message": "Tool approval hook failed; repair or reinstall "
                                 f"{e.plugin or 'the gate plugin'} before retrying."})
                 continue
