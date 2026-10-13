@@ -1561,10 +1561,11 @@ class ExoApp(App):
             left.move_child(self.card, before=self.query_one("#activity"))
         left.set_class(self.inverse, "inverse")
         main = self.query_one("#main")  # the status strip goes with the input: top in inverse, bottom in classic
+        screen = main.screen  # the strip and #main are both children of the app's own screen
         if self.inverse:
-            main.parent.move_child(self.strip, before=main)
+            screen.move_child(self.strip, before=main)
         else:
-            main.parent.move_child(self.strip, after=main)
+            screen.move_child(self.strip, after=main)
         self.strip.set_class(self.inverse, "inverse")
 
     def apply_layout(self, name: str, save: bool = True) -> None:
