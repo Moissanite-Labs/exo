@@ -39,7 +39,7 @@ def test_ui_tool_emits_panel_and_turn_hooks_fire(tmp_path):
     eng = _eng(tmp_path, reg)
 
     async def main():
-        d = Dispatcher(eng)
+        d = Dispatcher(eng, caller="principal:tui")
         sid, _ = await _turn(d, eng, "panel please")
         panels = [ev for ev in eng.hub.since(0) if isinstance(ev.body, s.UiPanel)]
         assert len(panels) == 1 and panels[0].session == sid
@@ -74,7 +74,7 @@ def test_feedback_without_learning_store_is_harmless(tmp_path):
     eng = _eng(tmp_path)
 
     async def main():
-        d = Dispatcher(eng)
+        d = Dispatcher(eng, caller="principal:tui")
         sid, _ = await _turn(d, eng, "hi")
         r = await d.run(s.Command.of(s.FeedbackSend(session=sid, verdict="edit", text="better")))
         assert r.ok and r.result.get("recorded") is False

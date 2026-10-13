@@ -7,6 +7,35 @@ each call, records the decision in the signed ledger, and turns an ask into the 
 it, how long "always" lasts, and the sweep for internal names in outbound posts. D-038 made the
 shell classifier an allowlist and put the store itself behind the gate (see the last three sections).
 
+## Required executor audit
+
+With a required tool executor, the gate refuses execution unless its signed
+decision event was committed to the principal ledger. After a principal answers,
+the approval event must also commit before the broker or handler runs. Missing
+stores, unusable signing keys, failed writes and gate hook exceptions block with
+a generic error, including read tools and observe-mode exception fallbacks.
+Optional observer hook failures remain optional. Observe mode still asks, and
+`exo-gate` must load. Ordinary Exo retains its existing logging-only behavior
+when no ledger is available.
+
+Required mode blocks `gh --body-file` requests before inspecting the selected
+host path, including symlinks, even when body-file reading is disabled. The gate
+cannot approve unseen contents. Pass inline text for inspection; the executor
+then applies its own operation policy. Policy and grant files remain trusted
+configuration outside the worker's writable workspace.
+
+Concurrent identical requests keep separate approval tokens and audit
+references. The reusable rule key still scopes a standing grant; it does not
+identify a pending call. Required mode needs the exact per-call token when the
+engine reports an answer.
+
+Accepting changed policies commits the acceptance audit before replacing the
+pinned policy. Creating a required standing grant first commits an authorization
+event (`phase: grant`, `state: authorized`, `activation: pending`) and only then
+atomically writes the grant file. Audit failure leaves authority unchanged. A
+subsequent grant-file failure blocks the call; its audit describes authorization,
+not successful storage. These two stores do not form one atomic transaction.
+
 ## What an approval covers
 
 An outward act is a post, message, email, social post, payment or account action, or anything
@@ -192,3 +221,18 @@ later, it loads the new one, writes a `policy_change` ledger row with the files'
 decides each call under both. The stricter outcome wins. So a change can tighten at once and
 can never loosen until the principal runs `/gate accept` (ledger row `policy_accept`), or the
 core restarts. `/gate` says whether a change is waiting.
+
+## Principal authority for policy and settings changes
+
+`/gate accept` requires the live principal caller stamped by the transport. The check lives in the
+policy adoption method, so command aliases, whitespace and direct plugin calls cannot bypass it.
+An unstamped call is refused before reading changed policy files or recording acceptance. The ledger
+records the authenticated caller, including its client label. `/gate status` stays available locally.
+
+`config.set` and `models.set` also require principal authority. The web default-model route returns
+403 when the core refuses authority. It does not rewrite config through its offline fallback.
+TCP and stdio callers remain local even when they possess a transport bearer token.
+
+Two other body fields cannot claim the principal. `peers send` with `via="human"` from a non-principal caller
+goes out as `via="agent"`, so the receiving daemon gives it `same-principal` trust, not `principal`. `unsteer`
+from a non-principal caller can pull back only steers that the principal did not write.

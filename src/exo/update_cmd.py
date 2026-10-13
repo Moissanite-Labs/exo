@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from . import __version__
+from . import display_version
 
 Runner = Callable[[list[str]], subprocess.CompletedProcess]
 
@@ -44,7 +44,8 @@ def version_string() -> str:
     if root is None and read_install().get('checkout'):
         root = Path(read_install()['checkout'])  # a venv install made from a checkout
     sha = git_sha(root)
-    return f'{__version__} ({sha})' if sha else __version__
+    shown = display_version()
+    return f'{shown}, {sha}' if sha else shown
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -89,14 +90,14 @@ def _is_uv_tool() -> bool:
 
 def _remote_version(py: str, root: str | None) -> str:
     """Version of the install after the upgrade, asked of a fresh interpreter (this one is stale)."""
-    code = 'import exo; print(exo.__version__)'
+    code = 'import exo; print(exo.display_version())'
     try:
         r = subprocess.run([py, '-c', code], capture_output=True, text=True, timeout=30)
         v = r.stdout.strip() if r.returncode == 0 else '?'
     except (OSError, subprocess.SubprocessError):
         v = '?'
     sha = git_sha(Path(root)) if root else ''
-    return f'{v} ({sha})' if sha else v
+    return f'{v}, {sha}' if sha else v
 
 
 def self_check(py: str, run: Runner = _run) -> list[tuple[str, bool]]:

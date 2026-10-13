@@ -14,8 +14,6 @@ import os
 import sys
 from pathlib import Path
 
-from .. import crypto
-from ..ledger import Ledger
 from ..store import exo_home
 from . import ADAPTERS, ALIASES, ingest
 
@@ -38,8 +36,9 @@ def _key_path(a) -> Path:
 
 
 def cmd_ingest(a, store=None) -> int:
+    from exo.ledger_authority.factory import configured, open_writable_ledger
     kp = _key_path(a)
-    if not kp.exists():
+    if not configured() and not kp.exists():
         sys.exit(f'no key at {kp}; run: exo keygen {a.seat}')
     if a.ledger:
         ledger_path = Path(a.ledger)
@@ -53,7 +52,7 @@ def cmd_ingest(a, store=None) -> int:
         sys.exit('no principal author: pass --author NAME')
     if not Path(a.path).expanduser().exists():
         sys.exit(f'no source at {a.path}')
-    with Ledger(ledger_path, crypto.Signer.from_file(a.seat, kp)) as led:
+    with open_writable_ledger(ledger_path, a.seat, kp) as led:
         try:
             stats = ingest(a.kind, a.path, led, author, since=a.since)
         except (ValueError, FileNotFoundError, KeyError) as e:

@@ -2,6 +2,8 @@
 # Deploy site/ to staging (default) or production.
 #   scripts/deploy-site.sh              staging.exo.askaconsult.com  (Vercel project exo-site-staging, noindex)
 #   scripts/deploy-site.sh --prod       exo.askaconsult.com          (Vercel project exo-site; asks you to type "production")
+#   --version V  production needs site-vX.Y (refused if that tag exists); staging may give site-vX.Y-rc.N.
+#                The deployed commit is tagged V and the tag pushed. See docs/VERSIONING.md.
 #   --redeploy   deploy only, skip the project/domain/DNS setup;  --yes   skip the typed confirmation
 # DNS is on Cloudflare. Both targets deploy from a git-free copy of site/.
 # Tokens are read from the environment or a local env file and never printed.
@@ -23,9 +25,23 @@ V=$(pick VERCEL_TOKEN); CF=$(pick CF_API_TOKEN)
 [ -n "$V" ] && [ -n "$CF" ] || { echo "deploy-site: set VERCEL_TOKEN and CF_API_TOKEN (or EXO_DEPLOY_ENV to an env file)" >&2; exit 1; }
 TEAM="${EXO_VERCEL_TEAM:-}"; SCOPE="${EXO_VERCEL_SCOPE:-}"
 [ -n "$TEAM" ] && [ -n "$SCOPE" ] || { echo "deploy-site: set EXO_VERCEL_TEAM and EXO_VERCEL_SCOPE (env or $CONF)" >&2; exit 1; }
-PROD=0; REDEPLOY=0; YES=0
-for a in "$@"; do case "$a" in --prod) PROD=1;; --redeploy) REDEPLOY=1;; --yes) YES=1;;
-  *) echo "deploy-site: unknown option $a (use --prod, --redeploy, --yes)" >&2; exit 2;; esac; done
+PROD=0; REDEPLOY=0; YES=0; VER=""
+while [ $# -gt 0 ]; do case "$1" in --prod) PROD=1;; --redeploy) REDEPLOY=1;; --yes) YES=1;;
+  --version) [ $# -ge 2 ] || { echo "deploy-site: --version needs a value" >&2; exit 2; }; VER="$2"; shift;;
+  *) echo "deploy-site: unknown option $1 (use --prod, --redeploy, --yes, --version)" >&2; exit 2;; esac; shift; done
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+if [ $PROD = 1 ]; then
+  [ -n "$VER" ] || { echo "deploy-site: --prod needs --version site-vX.Y" >&2; exit 2; }
+  [[ "$VER" =~ ^site-v[0-9]+\.[0-9]+$ ]] || { echo "deploy-site: production version must look like site-vX.Y, got $VER" >&2; exit 2; }
+elif [ -n "$VER" ]; then
+  [[ "$VER" =~ ^site-v[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "deploy-site: staging version must look like site-vX.Y-rc.N, got $VER" >&2; exit 2; }
+fi
+if [ -n "$VER" ]; then
+  git -C "$REPO" fetch -q --tags 2>/dev/null
+  if git -C "$REPO" rev-parse -q --verify "refs/tags/$VER" >/dev/null || git -C "$REPO" ls-remote --exit-code --tags origin "refs/tags/$VER" >/dev/null 2>&1; then
+    echo "deploy-site: tag $VER already exists; versions are never reused" >&2; exit 1
+  fi
+fi
 if [ $PROD = 1 ]; then P=exo-site; D=exo.askaconsult.com; SUB=exo; TARGET=PRODUCTION
 else P=exo-site-staging; D=staging.exo.askaconsult.com; SUB=staging.exo; TARGET=staging; fi
 echo "deploy-site: target $TARGET ($D, Vercel project $P)"
@@ -37,12 +53,19 @@ vc() { curl -s -H "Authorization: Bearer $V" -H "Content-Type: application/json"
 cf() { curl -s -H "Authorization: Bearer $CF" -H "Content-Type: application/json" "$@"; }
 # Deploy from a copy outside git: Vercel reads the commit author and blocks emails that are not on the
 # team (a machine's git identity is often not a Vercel team login).
-SRC="$(cd "$(dirname "$0")/../site" && pwd)"; W=$(mktemp -d); rsync -a --exclude _shots "$SRC/" "$W/"; cd "$W"
+SRC="$REPO/site"; W=$(mktemp -d); rsync -a --exclude _shots "$SRC/" "$W/"
+# version.json at the site root, for the footer. Archive the outgoing production version before this step (docs/VERSIONING.md).
+COMMIT=$(git -C "$REPO" rev-parse HEAD); EXOV=$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO/pyproject.toml" | head -1)
+printf '{"site":"%s","exo":"%s","commit":"%s","date":"%s"}\n' "${VER:-unversioned}" "$EXOV" "${COMMIT:0:7}" "$(date -u +%Y-%m-%d)" > "$W/version.json"
+cd "$W"
 if [ $PROD = 0 ]; then  # staging is never indexed: robots.txt plus an X-Robots-Tag header on every response
   printf 'User-agent: *\nDisallow: /\n' > robots.txt
   printf '{"headers":[{"source":"/(.*)","headers":[{"key":"X-Robots-Tag","value":"noindex, nofollow"}]}]}\n' > vercel.json
 fi
 npx -y vercel@latest deploy --prod --yes --token "$V" --scope "$SCOPE" --name $P 2>&1 | grep -v -i token | grep -E "Production|Aliased|Error|error" | head -5
+if [ -n "$VER" ]; then  # tag the deployed commit and push the tag
+  git -C "$REPO" tag -a "$VER" "$COMMIT" -m "$VER ($TARGET deploy, exo $EXOV)" && git -C "$REPO" push -q origin "refs/tags/$VER" && echo "deploy-site: tagged $VER at ${COMMIT:0:7}"
+fi
 [ $REDEPLOY = 1 ] && exit 0
 vc -X PATCH "https://api.vercel.com/v9/projects/$P?teamId=$TEAM" -d '{"ssoProtection":null}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print("sso",d.get("ssoProtection"),d.get("error"))'
 R=$(vc -X POST "https://api.vercel.com/v10/projects/$P/domains?teamId=$TEAM" -d "{\"name\":\"$D\"}")

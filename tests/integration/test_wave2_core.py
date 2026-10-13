@@ -82,7 +82,7 @@ def test_config_get_set_refuse_secrets(tmp_path):
     eng = _eng(tmp_path)
 
     async def main():
-        d = Dispatcher(eng)
+        d = Dispatcher(eng, caller="principal:tui")
         ok = await d.run(s.Command.of(s.ConfigSet(key="cwd", value="/tmp/w")))
         assert ok.ok
         assert (await d.run(s.Command.of(s.ConfigGet(key="cwd")))).result["value"] == "/tmp/w"

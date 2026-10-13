@@ -1,7 +1,7 @@
 name: exo-bus
 label: Exo Bus
 kind: channel
-version: "0.1.0"
+version: "0.2.0"
 description: >
   Exo Bus (signed, hash-chained seat-to-seat messages; wire compatible with Divan Bus) for the Exo core.
   Tools let any profile post to and read the bus. The Channel is a protocol client: it turns bus messages

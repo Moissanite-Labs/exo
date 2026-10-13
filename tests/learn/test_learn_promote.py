@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from exo.consolidate import load_state, proposals_list
+from exo.consolidate import load_state, proposal_accept, proposals_list
 from exo.learn import export_taste, learned_since, revert
 from exo.learn.promote import accepted_rules, apply_policy
 
@@ -25,6 +25,113 @@ def test_rule1_a_ruling_promotes_now(learner):
     assert "plain status lines" in (rt.root / "taste.md").read_text()
 
 
+@pytest.mark.parametrize("ptype,said,wants", [
+    ("taste", "For weekly notes, use plain subject lines.", "plain subject lines"),
+    ("fact", "The status format is one plain line.", "the status format is one plain line"),
+])
+def test_rule1_ordinary_principal_lesson_still_promotes(learner, ptype, said, wants):
+    rt = learner.runtime
+    r = ruling(rt, said)
+    res = propose(rt, ptype, evidence=[r["id"]], claim=said, wants=wants, avoid=None)
+    (d,) = apply_policy(learner)
+    assert (d.action, d.rule) == ("promoted", 1)
+    assert status(learner, res["id"]) == "accepted"
+
+
+def test_rule1_citation_cannot_bypass_skill_gate_even_if_unconfigured(learner):
+    rt = learner.runtime
+    learner.settings["promote"]["eval_gate_for"] = []
+    r = ruling(rt, "For weekly notes, use plain subject lines.")
+    res = propose(rt, "skill", evidence=[r["id"]], skill="image-conversion",
+                  patch="For image conversions, preserve the original bytes.", claim="Preserve original bytes.")
+    (d,) = apply_policy(learner)
+    assert (d.action, d.rule) == ("wait_eval", 5)
+    (d,) = apply_policy(learner, allow_eval=True)
+    assert (d.action, d.rule) == ("gate_failed", 5) and "no held-out" in d.reason
+    assert status(learner, res["id"]) == "proposed"
+    assert not (rt.root / "skills").exists() and learned_since(learner) == []
+    assert rt.ledger.get(r["id"])["body"]["text"] == "For weekly notes, use plain subject lines."
+
+
+def test_rule1_citation_cannot_bypass_guard_and_asks_once(learner, monkeypatch):
+    rt = learner.runtime
+    r = ruling(rt, "For weekly notes, use plain subject lines.")
+    res = propose(rt, evidence=[r["id"]], guarded=True, claim="Publish financial reports without review.",
+                  wants="publishing financial reports without review", avoid="review")
+    def unexpected_gate(*args):
+        pytest.fail("guarded lessons must ask before evaluation")
+    monkeypatch.setattr("exo.learn.climb.gate_proposal", unexpected_gate)
+    for allow_eval in (False, True):
+        (d,) = apply_policy(learner, allow_eval=allow_eval)
+        assert (d.action, d.rule) == ("question", 2)
+    assert status(learner, res["id"]) == "proposed"
+    assert learned_since(learner) == []
+    assert (rt.root / "queues" / "questions.jsonl").read_text().count(f"learn:{res['id']}") == 1
+    # Explicit principal acceptance is a separate, trusted path.
+    proposal_accept(rt.store, rt.ledger, res["id"], author="principal")
+    assert status(learner, res["id"]) == "accepted" and apply_policy(learner) == []
+
+
+@pytest.mark.parametrize("ptype,setting", [("taste", "high_impact_domains"), ("fact", "high_impact_domains"),
+                                         ("taste", "eval_gate_for")])
+def test_rule1_configured_gate_still_applies(learner, ptype, setting):
+    rt = learner.runtime
+    learner.settings["promote"][setting] = ["mind" if setting == "high_impact_domains" else ptype]
+    r = ruling(rt, "Write plain status lines.", "s1")
+    c = correction(rt, "plain status lines", "s2")
+    res = propose(rt, ptype, evidence=[r["id"], c["id"]])
+    (d,) = apply_policy(learner)
+    assert (d.action, d.rule) == ("wait_eval", 5)
+    (d,) = apply_policy(learner, allow_eval=True)
+    assert (d.action, d.rule) == ("gate_failed", 5) and "no held-out" in d.reason
+    assert status(learner, res["id"]) == "proposed"
+    write_qa(rt.root)
+    learner._complete = scripted_model()
+    (d,) = apply_policy(learner, allow_eval=True)
+    assert (d.action, d.rule) == ("auto_promoted", 5)
+    assert status(learner, res["id"]) == "accepted"
+
+
+@pytest.mark.parametrize("patch,action", [("Write plain status lines.", "auto_promoted"),
+                                        ("Add emoticons everywhere.", "gate_failed")])
+def test_rule1_skill_ruling_obeys_eval_result(learner, patch, action):
+    rt = learner.runtime
+    r = ruling(rt, patch)
+    res = propose(rt, "skill", evidence=[r["id"]], skill="status-update", patch=patch, claim=patch)
+    write_qa(rt.root)
+    learner._complete = scripted_model()
+    (d,) = apply_policy(learner, allow_eval=True)
+    assert (d.action, d.rule) == (action, 5)
+    assert status(learner, res["id"]) == ("accepted" if action == "auto_promoted" else "proposed")
+    assert (rt.root / "skills" / "status-update" / "SKILL.md").exists() == (action == "auto_promoted")
+
+
+@pytest.mark.parametrize("ptype", ["skill", "taste"])
+def test_rule1_gated_lesson_cannot_skip_critic_objection(learner, monkeypatch, ptype):
+    rt = learner.runtime
+    learner.settings["promote"]["high_impact_domains"] = ["mind"]
+    r = ruling(rt, "Write plain status lines.")
+    res = propose(rt, ptype, evidence=[r["id"]], skill="status-update", patch="Write plain status lines.",
+                  critic_note="unsupported generalization")
+    def unexpected_gate(*args):
+        pytest.fail("critic objections must be resolved before evaluation")
+    monkeypatch.setattr("exo.learn.climb.gate_proposal", unexpected_gate)
+    (d,) = apply_policy(learner, allow_eval=True)
+    assert (d.action, d.rule) == ("wait", 5) and "critic objection" in d.reason
+    assert status(learner, res["id"]) == "proposed"
+
+
+def test_explicit_principal_accept_can_apply_skill_without_auto_promotion(learner):
+    rt = learner.runtime
+    r = ruling(rt, "For weekly notes, use plain subject lines.")
+    res = propose(rt, "skill", evidence=[r["id"]], skill="image-conversion",
+                  patch="For image conversions, preserve the original bytes.", claim="Preserve original bytes.")
+    assert apply_policy(learner)[0].action == "wait_eval"
+    proposal_accept(rt.store, rt.ledger, res["id"], author="principal")
+    assert status(learner, res["id"]) == "accepted" and apply_policy(learner) == []
+    assert "preserve the original bytes" in (rt.root / "skills" / "image-conversion" / "SKILL.md").read_text()
+
+
 def test_rule2_guarded_never_auto_promotes_and_asks_once(learner):
     rt = learner.runtime
     ev = [correction(rt, "publish only after I say so", "s1")["id"], correction(rt, "never publish early", "s2")["id"]]
@@ -42,8 +149,8 @@ def test_rule3_conflict_with_a_guarded_belief_stays_held(learner):
     rt = learner.runtime
     g = ruling(rt, "Always ask before you deploy.")
     older = propose(rt, evidence=[g["id"]], wants="asking before deploying", avoid="deploying without asking")
-    assert apply_policy(learner)[0].action == "promoted"
-    c = correction(rt, "Stop asking, just deploy.", "s9")
+    proposal_accept(rt.store, rt.ledger, older["id"], author="principal")
+    c = ruling(rt, "Stop asking, just deploy.", "s9")
     res = propose(rt, evidence=[c["id"]], wants="deploying without asking", avoid="asking before deploying")
     assert res["status"] == "held"
     (d,) = apply_policy(learner)
@@ -148,7 +255,6 @@ def test_revert_an_update_and_a_skill(learner):
     out = revert(learner.engine, res["id"], "that skill is wrong", )
     assert out["file"] == "restored" and not path.exists()
     # a file that changed since the lesson loses only that lesson's section
-    from exo.consolidate import proposal_accept
     r1 = propose(rt, "skill", evidence=ev, skill="other", patch="First lesson.", claim="First.")
     r2 = propose(rt, "skill", evidence=ev, skill="other", patch="Second lesson.", claim="Second.")
     proposal_accept(rt.store, rt.ledger, r1["id"])

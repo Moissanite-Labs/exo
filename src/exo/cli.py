@@ -46,7 +46,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, crypto
+from . import crypto, display_version
 from .ledger import KINDS, Ledger, LedgerError
 from .store import PrincipalStore, exo_home, principal_root
 from .ingest.cli import register as register_ingest, cmd_ingest  # noqa: F401  (dispatched via globals)
@@ -186,9 +186,16 @@ def cmd_keys(a) -> int:
 
 
 def cmd_log(a, store) -> int:
+    from .ledger_authority.factory import configured
+    if a.log_cmd == 'verify' and configured():
+        from .ledger_authority.verify import verify_configured
+        res = verify_configured(store.ledger_path)
+        print(json.dumps(res))
+        return 0 if res['ok'] else 1
     if a.log_cmd == 'append':
+        from .ledger_authority.factory import open_writable_ledger
         kp = Path(a.key) if a.key else key_path(a.author)
-        if not kp.exists():
+        if not configured() and not kp.exists():
             sys.exit(f'no key at {kp}; run: exo keygen {a.author}')
         if a.body is not None:
             try:
@@ -197,7 +204,7 @@ def cmd_log(a, store) -> int:
                 sys.exit(f'--body is not JSON: {e}')
         else:
             body = {'text': a.text if a.text is not None else sys.stdin.read()}
-        with Ledger(store.ledger_path, crypto.Signer.from_file(a.author, kp)) as led:
+        with open_writable_ledger(store.ledger_path, a.author, kp) as led:
             try:
                 ev = led.append(a.kind, body, a.author, session=a.session, refs=a.ref or ())
             except LedgerError as e:
@@ -251,7 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument('--root', help='store directory; overrides --principal')
 
     ap = argparse.ArgumentParser(prog='exo', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--version', action='version', version=f'exo {__version__}')
+    ap.add_argument('--version', action='version', version=f'exo {display_version()}')
     sp = ap.add_subparsers(dest='cmd', required=True)
 
     p = sp.add_parser('init', parents=[common], help='create an empty principal store')
