@@ -544,3 +544,26 @@ def test_live_verifier_fails_closed_when_head_keeps_changing(provisioned, tmp_pa
             verify_authority(ledger.path, reader)
         assert len(ledger) == 0
     assert count == 6
+
+
+def test_local_factory_tolerates_a_concurrent_first_keygen(tmp_path, monkeypatch):
+    """Two processes creating the same seat key at once: the loser uses the winner's key (as ensure_key did)."""
+    monkeypatch.delenv("EXO_LEDGER_AUTHORITY", raising=False)
+    monkeypatch.delenv("EXO_LEDGER_AUTHORITY_REQUIRED", raising=False)
+    key_path = tmp_path / "keys" / "seat.key"
+    real_save = crypto.save_key
+
+    def lose_race(key, path):
+        real_save(crypto.keygen(), path)  # the other process wins between exists() and O_EXCL
+        raise FileExistsError(path)
+
+    monkeypatch.setattr(crypto, "save_key", lose_race)
+    with open_writable_ledger(tmp_path / "ledger.sqlite", "seat", key_path, auto_keygen=True) as led:
+        assert led.append("note", {"text": "first"})["author"] == "seat"
+
+
+def test_local_factory_missing_key_without_keygen_names_the_fix(tmp_path, monkeypatch):
+    monkeypatch.delenv("EXO_LEDGER_AUTHORITY", raising=False)
+    monkeypatch.delenv("EXO_LEDGER_AUTHORITY_REQUIRED", raising=False)
+    with pytest.raises(RuntimeError, match="exo keygen seat"):
+        open_writable_ledger(tmp_path / "ledger.sqlite", "seat", tmp_path / "missing.key")

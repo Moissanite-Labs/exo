@@ -66,6 +66,11 @@ def open_writable_ledger(path, author, key_path=None, *, writer=None, auto_keyge
     if key_path is None:
         raise AuthorityError("local writable ledger requires an explicit key path")
     key_path = Path(key_path)
-    if auto_keygen and not key_path.exists():
-        crypto.save_key(crypto.keygen(), key_path)
+    if not key_path.exists():
+        if not auto_keygen:
+            raise RuntimeError(f"no signing key at {key_path}; run: exo keygen {author}")
+        try:
+            crypto.save_key(crypto.keygen(), key_path)
+        except FileExistsError:  # another process created it first; use that key
+            pass
     return Ledger(path, crypto.Signer.from_file(author, key_path))
