@@ -1,4 +1,5 @@
-"""Screenshots of the exosphere (D-062): the intro, a turn with the corner figure, approval, a narrow terminal.
+"""Screenshots of the exosphere (D-062): the intro, a turn with the corner figure, approval, a narrow terminal;
+and the choice card (D-066): a choice in both layouts, one waiting behind a draft, a question with options.
 
     .venv/bin/python scripts/exosphere_shots.py <out-dir> [names...]
 Uses the scripted demo of scripts/promo_shots.py (no network). SVGs, then scripts/svg_to_png.sh makes PNGs.
@@ -55,6 +56,38 @@ async def done_turn(app, pilot, eng):
     await ps.settle(pilot, 0.5)
 
 
+CHOICE = {"prompt": "The fix changes slug output for existing posts. How should I ship it?", "options": [
+    {"id": "flag", "label": "Behind a flag", "description": "old slugs stay; new posts get the fix"},
+    {"id": "migrate", "label": "Migrate all slugs", "description": "rewrites URLs, adds redirects"},
+    {"id": "new", "label": "Only new posts"},
+    {"id": "wait", "label": "Hold until review"}]}
+
+
+async def choice(app, pilot, eng):
+    await done_turn(app, pilot, eng)
+    await ps.settle(pilot, 1.6)  # the prompt was typed a moment ago: a fresh key keeps focus in the composer
+    ps.pub(eng, app, s.UiPanel(panel_id="p1", action="open", kind="choice", title="ship the slug fix",
+                               text="How should I ship it?", data=CHOICE))
+    await ps.settle(pilot, 2.0)  # past the fade-in
+    await pilot.press("down")
+
+
+async def choice_draft(app, pilot, eng):
+    await done_turn(app, pilot, eng)
+    await ps.type_in(app, pilot, "also check the RSS feed")
+    ps.pub(eng, app, s.UiPanel(panel_id="p1", action="open", kind="choice", title="ship the slug fix",
+                               text="How should I ship it?", data=CHOICE))
+    await ps.settle(pilot, 2.0)  # past the fade-in
+
+
+async def question(app, pilot, eng):
+    await done_turn(app, pilot, eng)
+    await ps.settle(pilot, 1.6)
+    ps.pub(eng, app, s.QuestionAsked(question_id="q1", text="Which Python versions should the test matrix cover?",
+                                     options=["3.11 only", "3.11 and 3.12", "3.10 to 3.13"]))
+    await ps.settle(pilot, 2.0)  # past the fade-in
+
+
 SHOTS = [
     ("exo-01-boot", boot, "inverse", (112, 42), True),
     ("exo-02-intro", ps.empty, "inverse", (112, 42), False),
@@ -65,6 +98,10 @@ SHOTS = [
     ("exo-07-done", done_turn, "classic", (112, 42), False),
     ("exo-08-menu", ps.slash_menu, "classic", (112, 42), False),
     ("exo-09-narrow", tool_turn, "classic", (84, 36), False),
+    ("choice-01-classic", choice, "classic", (112, 42), False),
+    ("choice-02-inverse", choice, "inverse", (112, 42), False),
+    ("choice-03-behind-draft", choice_draft, "classic", (112, 42), False),
+    ("choice-04-question", question, "inverse", (112, 42), False),
 ]
 
 

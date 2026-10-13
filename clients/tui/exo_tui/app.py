@@ -31,8 +31,9 @@ from exo_tui.exosphere import Exosphere
 from exo_tui.boot import STEPS as BOOT_STEPS
 from exo_tui.boot import BootScreen
 from exo_tui.providers import ProvidersScreen, refuse_key_in_composer
-from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, ComposeHeader, CompletionMenu,
-                             EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
+from exo_tui.panels import choice_items
+from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, ChoiceCard, Composer, ComposeHeader,
+                             CompletionMenu, EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
 CLIENT_ID = "exo-tui"
 DEFAULT_WINDOW = 0  # unknown until the core reports this model's capacity
@@ -150,7 +151,14 @@ class ExoApp(App):
     #panel.gate { border-left: outer $accent; }
     #panel-title { height: 1; }
     #panel-scroll { height: 1fr; }
-    #panel-choices { height: auto; max-height: 10; background: $surface; border: none; }
+    #choice { height: auto; border-left: outer $line-2; background: $surface; padding: 0 1; margin: 0 2 1 2; }
+    #choice:focus { border-left: outer $accent; }
+    #choice-list { height: auto; max-height: 10; margin: 1 0 0 0; background: $surface; scrollbar-size-vertical: 1;
+                   scrollbar-background: $surface; scrollbar-color: $line-2; }
+    #choice-head, #choice-foot, .choice-row { height: auto; background: $surface; }
+    #choice-foot { margin: 1 0 0 0; }
+    .choice-row.on { background: $panel; }
+    #left.sphere-flow #choice { padding: 0 {padc} 0 1; }
     OptionList { background: $surface; border: none; }
     OptionList > .option-list--option-highlighted { background: $accent; color: #0a0a0a; text-style: bold; }
     OptionList:focus > .option-list--option-highlighted { background: $accent; color: #0a0a0a; }
@@ -230,6 +238,8 @@ class ExoApp(App):
         self.tools: dict[str, ToolBlock] = {}
         self.approvals: list[s.ApprovalRequested] = []
         self.card: ApprovalCard | None = None
+        self.choices: list[dict[str, Any]] = []  # pending decisions (choice panels, questions with options), newest last
+        self.choice: ChoiceCard | None = None  # the card that shows the newest of them (D-066)
         self.reconcile_every = 3.0  # how often an open card is checked against the core's own list (D-045)
         self._reconciled = 0.0
         self.pending_steers: list[tuple[str, Block]] = []  # (message id, its transcript line) not yet delivered
@@ -646,8 +656,11 @@ class ExoApp(App):
             self.drop_pending_steer(b.message_id)
         elif isinstance(b, s.QuestionAsked):
             self.question = b.question_id
-            opts = f" [{' / '.join(b.options)}]" if b.options else ""
-            self.note(f"question: {b.text}{opts}  (type your answer)")
+            if b.options:  # the selector picks one; typing in the composer still answers in words
+                self.note(f"question: {b.text}")
+                self.offer_choice(("question", b.question_id), "", b.text, [(o, o, "") for o in b.options])
+            else:
+                self.note(f"question: {b.text}  (type your answer)")
         elif isinstance(b, s.UsageUpdated):
             u = b.usage
             self.ctx_tokens = u.input_tokens + u.cache_read_tokens + u.cache_write_tokens
@@ -1110,6 +1123,7 @@ class ExoApp(App):
         command = name in known or (bool(re.fullmatch(r"[a-z][a-z-]*", name)) and cm.closest(name, known))
         if self.question and not command:
             qid, self.question = self.question, None
+            self.withdraw_choice(("question", qid))
             self.add(Block(text, "user"))
             await self.post(s.QuestionAnswer(question_id=qid, answer=text))
             return
@@ -1120,12 +1134,16 @@ class ExoApp(App):
         if text.startswith("!"):
             cmd = text[1:].strip()
             send = f"Run this shell command with your shell tool and show me the output:\n{cmd}"
+        await self.send_text(shown, send, self.file_parts(text))
+
+    async def send_text(self, shown: str, send: str, parts: list[ContentPart] | None = None) -> None:
+        """Show a user line and send it: a new turn when idle, a steer while a turn runs."""
         steering = self.busy
         block = Block(shown, "user", steer=steering)
         self.add(block)
         self.hint("steer" if steering else "first_message")
         self.close_cur()
-        resp = await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
+        resp = await self.post(s.TurnSend(session=self.session, text=send, parts=parts or [],
                                           mode="steer" if steering else "send"))
         if steering and resp.ok and resp.result.get("message_id"):  # queued, not delivered: it can be pulled back
             self.pending_steers.append((resp.result["message_id"], block))
@@ -1597,12 +1615,19 @@ class ExoApp(App):
         self.query_one("#left").mount(self.card, before=self.query_one("#activity"))
 
     def action_answer_card(self) -> None:
-        """ctrl+f: put the focus on the approval card from anywhere; the draft in the composer stays as it is."""
-        if self.card is not None and not self.modal_open():
-            if self.card.noting:
-                self.card.query_one("#deny-note").focus()
-            else:
-                self.card.focus()
+        """ctrl+f: put the focus on the pending decision from anywhere: the approval card, then the choice card; a
+        second press moves to the other one. The draft in the composer stays as it is."""
+        if self.modal_open():
+            return
+        targets: list[Any] = [w for w in (self.card, self.choice) if w is not None and w.is_mounted]
+        if not targets:
+            return
+        here = next((i for i, w in enumerate(targets) if self.focused is w or w.has_focus_within), None)
+        t = targets[0] if here is None else targets[(here + 1) % len(targets)]
+        if isinstance(t, ApprovalCard) and t.noting:
+            t.query_one("#deny-note").focus()
+        else:
+            t.focus()
 
     async def reconcile_approvals(self) -> None:
         """D-045: the core's list is the truth. A card whose request the core no longer holds (a missed
@@ -1658,24 +1683,30 @@ class ExoApp(App):
             self.panel_order.append(b.panel_id)
         self.show_panel(b.panel_id, report=not known)
 
+    def is_choice(self, pid: str) -> bool:
+        kind, *_rest, data = self.panels[pid]
+        return kind == "choice" and bool(choice_items(data))
+
     def show_panel(self, pid: str, report: bool = False) -> None:
         kind, title, text, _reason, data = self.panels[pid]
-        view = self.query_one(PanelView)
-        view.show(pid, kind, title, text, data)
+        if self.is_choice(pid):  # a decision: a card in the chat column, not the side panel (D-066)
+            self.offer_choice(("panel", pid), title, str(data.get("prompt") or text), choice_items(data))
+        else:
+            self.query_one(PanelView).show(pid, kind, title, text, data)
         if report:
             self.respond_panel(pid, "opened")
-        if view.options:
-            view.query_one("#panel-choices").focus()
 
     def drop_panel(self, pid: str) -> None:
         self.panels.pop(pid, None)
         self.panel_touched.discard(pid)
         if pid in self.panel_order:
             self.panel_order.remove(pid)
+        self.withdraw_choice(("panel", pid))
         view = self.query_one(PanelView)
         if view.panel_id == pid:
-            if self.panel_order:
-                self.show_panel(self.panel_order[-1])
+            rest = [p for p in self.panel_order if not self.is_choice(p)]
+            if rest:
+                self.show_panel(rest[-1])
             else:
                 view.hide()
                 self.query_one(Composer).focus()
@@ -1686,9 +1717,88 @@ class ExoApp(App):
         self.run_worker(self.post(s.UiRespond(panel_id=pid, action=action, value=value or {})),
                         exit_on_error=False)
 
-    def on_panel_view_chose(self, msg: PanelView.Chose) -> None:
-        self.respond_panel(msg.panel_id, "acted", {"choice": msg.choice})
-        self.query_one(Composer).focus()
+    # ------------------------------------------------------------ choices (D-066)
+    def offer_choice(self, key: tuple[str, str], title: str, prompt: str, items: list[tuple[str, str, str]]) -> None:
+        """A decision the agent is waiting on. The newest shows as a card above the activity line; an update of the
+        same panel redraws it in place."""
+        for d in self.choices:
+            if d["key"] == key:
+                d.update(title=title, prompt=prompt, items=items)
+                self.choices.remove(d)
+                self.choices.append(d)
+                break
+        else:
+            self.choices.append({"key": key, "title": title, "prompt": prompt, "items": items})
+        self.show_choice()
+
+    def show_choice(self, focus: bool = False) -> None:
+        if not self.choices:
+            return
+        d = self.choices[-1]
+        if self.choice is not None and self.choice.key == d["key"]:
+            self.choice.update_choice(d["title"], d["prompt"], d["items"])
+            return
+        if self.choice is not None:  # an older choice steps back; it shows again once the newer one is answered
+            focus = focus or self.focused is self.choice
+            self.choice.remove()
+        card = self.choice = ChoiceCard(d["key"], d["title"], d["prompt"], d["items"])
+        card.force_focus = focus  # the card asks for focus once it is mounted (claim_choice_focus)
+        left = self.query_one("#left")
+        left.mount(card, before=self.card if self.card is not None else self.query_one("#activity"))
+        self.sphere.set_state(self.sphere_state())
+
+    def claim_choice_focus(self, card: ChoiceCard, force: bool = False) -> None:
+        """Focus goes to a new choice at once, unless the user is writing: a draft in the composer, a key in the last
+        1.5 s, the big editor, a modal, or focus on another card or field. Then the card says how to reach it."""
+        if card is not self.choice or self.modal_open():
+            return
+        f = self.focused
+        free = f is None or f is self.transcript or (f is self.composer and not self.composer_typed_recently())
+        if force or (free and not self.composing):
+            card.focus()
+
+    def withdraw_choice(self, key: tuple[str, str]) -> None:
+        """Forget a pending choice (answered, dismissed or closed by the agent) and show the next one, if any."""
+        self.choices = [d for d in self.choices if d["key"] != key]
+        if self.choice is None or self.choice.key != key:
+            return
+        had = self.focused is self.choice
+        self.choice.remove()
+        self.choice = None
+        if self.choices:
+            self.show_choice(focus=had)
+        elif had:
+            self.composer.focus()
+        self.sphere.set_state(self.sphere_state())
+
+    def on_choice_card_chose(self, msg: ChoiceCard.Chose) -> None:
+        """Send the pick once: the panel's ui.respond (a learning signal) and the label as your reply, so the agent
+        that asked hears it; a question gets question.answer."""
+        if not any(d["key"] == msg.key for d in self.choices):
+            return
+        self.withdraw_choice(msg.key)
+        kind, ident = msg.key
+        if kind == "panel":
+            self.respond_panel(ident, "acted", {"choice": msg.option_id})
+            self.drop_panel(ident)
+            self.run_worker(self.send_text(msg.label, msg.label), exit_on_error=False)
+        else:
+            if self.question == ident:
+                self.question = None
+            self.add(Block(msg.label, "user"))
+            self.run_worker(self.post(s.QuestionAnswer(question_id=ident, answer=msg.label)), exit_on_error=False)
+        self.sphere.set_state(self.sphere_state())
+
+    def on_choice_card_dismissed(self, msg: ChoiceCard.Dismissed) -> None:
+        kind, ident = msg.key
+        if kind == "panel":
+            if ident in self.panels:
+                self.respond_panel(ident, "dismissed")
+            self.drop_panel(ident)
+        else:
+            self.withdraw_choice(msg.key)
+            if self.question == ident:
+                self.note("the question is still open: type your answer", "hint")
 
     # ------------------------------------------------------------ layout (D-046)
     def arrange(self) -> None:
@@ -1707,6 +1817,8 @@ class ExoApp(App):
             prev = w
         if self.card is not None:  # the approval card stays right above the activity line (its own code mounts it so)
             left.move_child(self.card, before=self.query_one("#activity"))
+        if self.choice is not None:  # and a choice card right above that
+            left.move_child(self.choice, before=self.card if self.card is not None else self.query_one("#activity"))
         left.set_class(self.inverse, "inverse")
         main = self.query_one("#main")  # the status strip goes with the input: top in inverse, bottom in classic
         screen = main.screen  # the strip and #main are both children of the app's own screen
@@ -1748,7 +1860,7 @@ class ExoApp(App):
     def sphere_state(self) -> str:
         """The live state the corner figure shows, from what this client already knows. Waiting on the user (an
         approval or a question) outranks work in flight; "done" and "error" are passing beats (Exosphere.flash)."""
-        if self.approvals or self.card is not None or self.question:
+        if self.approvals or self.card is not None or self.question or self.choices:
             return "approval"
         if self.running_tools:
             return "tool"
@@ -1884,7 +1996,7 @@ class ExoApp(App):
             self.cheader.show(c, self.numbers)
 
     # ------------------------------------------------------------ focus follows the user
-    FOCUS_KEEP = (ApprovalCard, PanelView, Input, TextArea, OptionList)
+    FOCUS_KEEP = (ApprovalCard, ChoiceCard, PanelView, Input, TextArea, OptionList)
 
     def on_key(self, event: Any) -> None:
         """A printable key that reached the app with nothing to take it (focus on the transcript, or nowhere) goes into
@@ -1894,12 +2006,15 @@ class ExoApp(App):
         f = self.focused
         if f is not None and f is not self.transcript:
             return
+        self.type_into_composer(event.character)
+        event.stop()
+        event.prevent_default()
+
+    def type_into_composer(self, ch: str) -> None:
         c = self.composer
         c.focus()
         c.last_typed = time.monotonic()
-        c.insert(event.character)
-        event.stop()
-        event.prevent_default()
+        c.insert(ch)
 
     def on_click(self, event: Any) -> None:
         """A click on the transcript or any plain surface returns focus to the composer."""
@@ -1920,7 +2035,8 @@ class ExoApp(App):
         return len(self.screen_stack) > 1
 
     def action_escape(self) -> None:
-        """Esc is soft (D-043): a guidance line, then a panel, then nothing. It never stops a turn."""
+        """Esc is soft (D-043): a guidance line, then a panel, then a choice card, then nothing. It never stops a
+        turn."""
         view = self.query_one(PanelView)
         if self.composing:  # the pane closes first; the draft stays in the composer
             self.close_compose()
@@ -1931,6 +2047,8 @@ class ExoApp(App):
             pid = view.panel_id
             self.respond_panel(pid, "dismissed")
             self.drop_panel(pid)
+        elif self.choice is not None:
+            self.choice.leave()
 
     def stop_turn(self) -> None:
         """The deliberate stop: ctrl+c while a turn runs, or /stop. The composer text stays as it is."""

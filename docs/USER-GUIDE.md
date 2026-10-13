@@ -44,7 +44,7 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
 | typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
-| `ctrl+f` | Puts the focus on an approval card, wherever you are. Your draft stays. |
+| `ctrl+f` | Puts the focus on the pending decision, an approval card or a choice, wherever you are. Press again to move to the other one. Your draft stays. |
 | `@path` | Adds that file to your message. |
 | `!command` | Asks the agent to run that shell command and show the output. |
 | `ctrl+p` | Opens the command palette. |
@@ -197,6 +197,11 @@ even when the composer is empty. Typing in an editable field cannot authorize. P
 `ctrl+f` to move to it. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
+
+When the agent asks you to pick (a choice, or a question with options), the terminal shows a choice card in the same
+place. It takes the keyboard at once unless you are typing. Up and down move, `1` to `9` pick, Enter chooses, a click
+picks, Esc dismisses. Your pick goes to the agent as your reply. Letters go to the composer, so you can also answer in
+your own words.
 
 What the gate asks about, and why:
 

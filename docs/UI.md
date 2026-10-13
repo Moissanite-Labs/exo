@@ -45,7 +45,8 @@ the middle dot as separator come straight from the site.
    lines dim; tips as `tip · ...` in dim italic; `memory · log 1-16 folded · 1781 → 153 tok` as a cold line.
 3. Panels: approval (orange rule, `APPROVAL · <risk>`, key chips `[o] once [a] always [d] deny`; both `a` and `A` wait for Enter; the card never takes focus automatically and says "tab, click or ctrl+f to answer"; it is removed when the core closes the request, when the turn is stopped, and by a check against `approvals.list` every few seconds), taste,
    finding and `/context` report (cold rule), peer message (double cold rule, sender and trust in the header,
-   never styled as you). The side panel for `ui.panel` uses the same header and rule.
+   never styled as you). The side panel for `ui.panel` uses the same header and rule; a choice is a card in the chat
+   column instead (see "The choice card").
 4. Activity: a wire with a travelling packet and `waiting for <model> 12s`, `running tool`.
 5. Composer: block caret in the signal colour, placeholder hint, `steer ›` while busy, `answer ›` for a question. A steer sent mid-turn shows `steer queued ›` until it lands (its `message.completed`); `Up` in an empty composer or `/unsteer` sends `command.run unsteer` and puts the text back in the composer (D-045). Esc is not used for this.
    Under it, when you type `/`, `@` or `!`, the completion menu (D-037): a hairline above, mono rows, an orange rule on
@@ -84,7 +85,8 @@ one note says to type `/providers`.
 
 - **Focus follows you.** A click on the transcript or any plain surface returns focus to the composer, and a printable key
   that arrives with focus on the transcript or nowhere is typed into it. The approval card, a panel, the completion menu
-  and input fields keep their own keys.
+  and input fields keep their own keys. The choice card keeps its arrows, digits, Enter and Esc; any other printable key
+  goes to the composer (D-066).
 - **Big composer.** `ctrl+g` or `/compose` grows the composer to most of the screen (`docs/media/tui-10-composer.png`):
   a head line with word and line count and the keys, soft wrap, light markdown colour (headings, list marks, quotes,
   fenced and inline code, bold), Enter for a new line, **`ctrl+s` to send** (`ctrl+enter` also, where the terminal reports
@@ -96,6 +98,37 @@ one note says to type `/providers`.
   its newest item at the top. `/layout classic` restores the usual order with the status strip at the bottom
   (`docs/media/tui-12-classic-bottom.png`: a long thread opens at the bottom). `/layout` moves the strip live. The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
   Inverse is the default only for the experiment: set `DEFAULT_LAYOUT = "classic"` in `exo_tui/prefs.py` to flip it back.
+
+## The choice card (D-066)
+
+A decision the agent waits on: a `ui.panel` of kind `choice`, or a `question.asked` with options. It is a card in the
+chat column, in the same place as the approval card (above the activity line, under the input in inverse), not in
+the side panel: that is where the eye already is, the transcript keeps its width, and the exosphere corner and the
+D-046 layouts are unchanged (the card gets the same right padding as the approval card when the figure sits beside
+it). Shots: `~/Work/handoffs/exo-ecosystem/choice-shots/` (classic, inverse, behind a draft, a question), rendered
+by `scripts/exosphere_shots.py choice-01-classic ...`.
+
+- **Look.** Orange header rule `CHOICE · <title>` (`QUESTION` for a question), the prompt as plain text, a blank row,
+  then one row per option: its number, the label, and a dim description when `data.options[i].description` (or
+  `detail`, `hint`, `desc`) is set. The highlighted row has an orange `▌` marker, the number in orange, the label in
+  bold and a faint row tint; no inverse block. The left rule is grey until the card has focus, then orange. Footer
+  chips `[↑↓] move  [1-N] pick  [enter] choose  [esc] dismiss`; a question adds "or type your own answer".
+- **Focus.** The card takes focus when it arrives, unless you are writing: text in the composer, a key in the last
+  1.5 s, the big editor, a modal, or focus on another card or field. Then the marker is grey and the footer says
+  "ctrl+f, tab or click to choose; your typing is safe". `ctrl+f` goes to the pending decision: the approval card
+  first, then the choice; a second press moves to the other one.
+- **Keys.** Up and down move (Home and End jump), Enter chooses, `1` to `9` pick directly, a click on a row picks it,
+  Esc dismisses without choosing and never stops a turn (D-043). Any other printable key goes to the composer: typing
+  never picks by accident, and a free-text answer is one keystroke away.
+- **What is sent, once.** A panel choice sends `ui.respond` `acted` `{choice: id}` (the learning signal) and your
+  pick's label as your reply (`turn.send`; a steer if a turn is running), so the agent that asked hears it. A question
+  sends `question.answer`. The card closes and focus returns to the composer. Typing an answer and pressing Enter
+  answers a question the same way and closes its card. Esc on a panel choice sends `dismissed`; on a question it only
+  closes the card, and the question stays open for a typed answer.
+- **More than one.** The newest pending choice shows; an older one comes back when the newer one is answered. An agent
+  `update` redraws the card in place; `close` removes it (`ignored` if you never touched it).
+- **Reduced motion and `NO_COLOR`.** The card fades in like other panels, and not at all under
+  `EXO_REDUCED_MOTION`. Under `NO_COLOR` the marker, the bold label and the chips' brackets carry the highlight.
 
 ## The exosphere (D-062)
 

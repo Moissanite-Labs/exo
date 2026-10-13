@@ -1226,3 +1226,41 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   during a turn.
 - **Docs:** `docs/UI.md` "The exosphere", `docs/USER-GUIDE.md`, `docs/COMMANDS.md`, `docs/BRAND.md` "Terminal",
   `skills/exo-intro/SKILL.md`.
+
+## D-066 (2026-10-13) The choice card: a decision you can answer from the keyboard
+- **Why (A, verbatim):** "the choice selector UI/UX in the cli needs work. its not selecting the option so im stuck plus
+  it needs an overall redesign".
+- **Root cause.** A choice was an `OptionList` in the side panel. Picking sent only `ui.respond` `acted`, which the
+  core writes to the learning ledger and never gives to the agent. The agent, waiting for an answer, heard nothing, and
+  the panel stayed open with no change, so the pick looked ignored. Second, the list took focus on arrival even
+  mid-draft, and while it held focus letters were swallowed (D-046 lets a focused panel keep its keys). Focus itself
+  was not the failure: the old `show_panel` did focus the list, and arrows and Enter reached it.
+- **Decision.** A choice panel, and a `question.asked` with options, is a `ChoiceCard` in the chat column where the
+  approval card sits (above the activity line; under the input in inverse), not in the side panel. Reason: the eye is
+  already at the input, the transcript keeps its width, and the exosphere corner and D-046 layouts are unchanged (same
+  right padding as the approval card). Orange header rule, the prompt as plain text, numbered rows with an optional
+  description (`description`, `detail`, `hint` or `desc`), an orange `▌` marker and bold label for the highlight (no
+  inverse block), footer chips `[↑↓] move [1-N] pick [enter] choose [esc] dismiss`.
+- **Picking sends once.** A panel pick sends `ui.respond` `acted` `{choice: id}` and the label as your reply
+  (`turn.send`, a steer when a turn runs), so the agent hears it. A question sends `question.answer`. The card closes,
+  is dropped from `/panel`, and cannot send twice. Typing an answer to a question also closes its card.
+- **Focus.** It takes focus at once unless you are writing (composer text, a key in the last 1.5 s, the big editor, a
+  modal, focus on another card or field), the D-043 guard; then it says "ctrl+f, tab or click to choose". `ctrl+f`
+  now goes to the pending decision: the approval card first, then the choice, a second press to the other. Unlike the
+  approval card it may take focus by itself: a pick grants nothing, and letters on the card go to the composer, so
+  ordinary typing cannot pick. Only digits and Enter act. The remaining risk: a message that starts with a digit,
+  typed after the card took focus, picks; the orange rule and marker show where focus is.
+- **Keys.** Up and down, Home and End, Enter, `1` to `9`, a click, Esc dismisses (`dismissed` for a panel; a question
+  stays open for a typed answer). Esc never stops a turn (D-043).
+- **Palette.** Checked for the same problem: it was fine (its input keeps focus, arrows and Enter are bound on the
+  screen, a click selects). A test now holds that.
+- **Not changed.** The core: `ui.respond` stays a learning signal and the `ui` tool schema is unchanged. The web client
+  still sends only `ui.respond` for a choice, so the same "agent never hears it" gap exists there; left for a web
+  change.
+- **Numbering.** D-057 to D-064 are taken or held, D-065 by `feat/permissions-bypass`, so this is D-066.
+- **Validation.** `tests/clients/tui/test_choice.py` (12 tests: focus, arrows and Enter sending once, digits, click, Esc
+  without a stop, a draft not hijacked, `ctrl+f` to the choice and between cards, letters to the composer, a question
+  with options and a typed answer, update and close, the palette, `NO_COLOR` and reduced motion). Two older tests that
+  described the side-panel list were updated.
+- **Docs:** `docs/UI.md` "The choice card", `docs/PANELS.md`, `docs/USER-GUIDE.md` (keys table, approvals),
+  `skills/exo-intro/SKILL.md`.
