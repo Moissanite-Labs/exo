@@ -54,12 +54,12 @@ GENESIS = crypto.GENESIS
 
 def peers_dir(env: dict[str, str] | None = None) -> Path:
     """``$EXO_PEERS_DIR``, else ``$XDG_RUNTIME_DIR/exo/peers``, else ``~/.exo-peers``."""
-    env = os.environ if env is None else env
-    if env.get("EXO_PEERS_DIR"):
-        return Path(env["EXO_PEERS_DIR"]).expanduser()
-    if env.get("XDG_RUNTIME_DIR"):
-        return Path(env["XDG_RUNTIME_DIR"]) / "exo" / "peers"
-    return Path(env.get("HOME") or Path.home()) / ".exo-peers"
+    e = os.environ if env is None else env
+    if e.get("EXO_PEERS_DIR"):
+        return Path(e["EXO_PEERS_DIR"]).expanduser()
+    if e.get("XDG_RUNTIME_DIR"):
+        return Path(e["XDG_RUNTIME_DIR"]) / "exo" / "peers"
+    return Path(e.get("HOME") or Path.home()) / ".exo-peers"
 
 
 @dataclass
@@ -208,12 +208,12 @@ class BusLink:
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "BusLink | None":
-        env = os.environ if env is None else env
-        if not (env.get("EXO_BUS_URL") and env.get("EXO_BUS_SEAT")):
+        e = os.environ if env is None else env
+        if not (e.get("EXO_BUS_URL") and e.get("EXO_BUS_SEAT")):
             return None
         try:
             from exo.bus import Client
-            return cls(Client(env["EXO_BUS_URL"], env["EXO_BUS_SEAT"], timeout=3))
+            return cls(Client(e["EXO_BUS_URL"], e["EXO_BUS_SEAT"], timeout=3))
         except Exception as exc:
             trace.report("peers bus link", exc)
             return None
