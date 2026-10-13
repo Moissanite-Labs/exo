@@ -240,11 +240,17 @@ def _start_job(args: dict[str, Any], ctx: ToolContext, cwd: Any) -> str:
             "with other work. `jobs` lists jobs, `job_output` reads output.")
 
 
+def timeout_arg(args: dict[str, Any], check: bool = True) -> float:
+    """The ``timeout`` argument in seconds (default DEFAULT_TIMEOUT); rejected outside 1..MAX_TIMEOUT when ``check``."""
+    timeout = float(args.get("timeout") or DEFAULT_TIMEOUT)
+    if check and not 0 < timeout <= MAX_TIMEOUT:
+        raise ToolError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
+    return timeout
+
+
 def bash(args: dict[str, Any], ctx: ToolContext) -> str:
     background = args.get("background") is True
-    timeout = float(args.get("timeout") or DEFAULT_TIMEOUT)
-    if not background and not 0 < timeout <= MAX_TIMEOUT:
-        raise ToolError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
+    timeout = timeout_arg(args, check=not background)
     cwd = ctx.resolve(args.get("cwd") or ".")
     if not cwd.is_dir():
         raise ToolError(f"cwd is not a folder: {cwd}")
