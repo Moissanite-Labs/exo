@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 from exo.config import Config
@@ -21,10 +22,10 @@ from exo.core.skills import pack_dir
 from exo.core.tools.executor import ExecutorConfigurationError, load_executor
 
 
-def fitting_peers_dir(env: dict[str, str] | None = None) -> Path | None:
+def fitting_peers_dir(env: Mapping[str, str] | None = None) -> Path | None:
     """A short private peers folder when the default one would push ``exo-<pid>.sock`` past the Unix socket limit
     (a long ``HOME``); ``None`` when the default fits or the folder was named with ``EXO_PEERS_DIR``."""
-    env = os.environ if env is None else env
+    env = dict(os.environ if env is None else env)
     default = peers_dir(env)
     if env.get("EXO_PEERS_DIR") or len(os.fsencode(str(default / "exo-9999999.sock"))) < 104:
         return None
