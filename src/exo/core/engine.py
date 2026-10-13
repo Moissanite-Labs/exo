@@ -35,9 +35,8 @@ from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
 from exo.core.models.router import Router
 from exo.core import jobs as jobs_mod
-from exo.core import peer_target
-from exo.core.ingress import STANDING_LINE
-from exo.core.peers import PeerConfig
+from exo.core.peer_target import EngineTarget
+from exo.core.ingress import STANDING_LINE, PeerConfig
 from exo.core.plugins import PluginManager
 from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
@@ -240,7 +239,8 @@ class CoreEngine:
                  channels: dict[str, dict[str, Any]] | None = None,
                  tree_cfg: dict[str, Any] | None = None, schedule: bool = False,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
-                 jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None, **loop_kw: Any) -> None:
+                 jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None,
+                 attach_peers: Any = None, **loop_kw: Any) -> None:
         # Fail before opening stores, loading adapters or registering host handlers.
         required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
         if executor is not None:
@@ -291,9 +291,6 @@ class CoreEngine:
         trace.add_sink(self._on_harness_error)
         self.peer_cfg = PeerConfig.of({**(peers or {}), **(seat.peers if seat else {})})  # D-026
         self.peer_cfg_dir = peers_dir
-        self.peer_node: Any = None
-        self._peer_server: Any = None
-        self.peer_autostart = False  # create() turns it on: a real daemon or in-process TUI announces itself
         self._bridge_plugins()
         if seat and seat.tier and self.router.roles.get(seat.tier):
             self.router.set_role("main", list(self.router.roles[seat.tier]))
@@ -304,7 +301,8 @@ class CoreEngine:
         if self.registry.get("ui") is None:
             ui_tool.register(self.registry, lambda body, sid: self.hub.publish(body, sid))  # D-014 panels
         harness_tool.register(self.registry, self.trace_text, self.findings.file)  # D-025
-        peer_target.attach(self)  # D-026: peers and peer_send tools
+        self._peer_target = EngineTarget(self)  # peers, bus and job notices reach sessions through it
+        self.peers = attach_peers(self) if attach_peers else None  # D-026: exo.peers.PeerService, from exo.compose
         self.jobs = jobs_mod.attach(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
         self.handoff_sources["jobs"] = self._open_jobs  # /handoff lists the agent's running background jobs
         self.mcp = McpManager(mcp_cfg, env)
@@ -378,8 +376,8 @@ class CoreEngine:
     async def start(self) -> None:
         """Connect MCP servers once (idempotent; the first command triggers it)."""
         if self._started is None:
-            if self.peer_autostart:
-                await self.start_peers()
+            if self.peers is not None and self.peers.autostart:
+                await self.peers.start()
             if self._writer is not None:  # only the one writer may call a running job lost
                 await self.jobs.recover()
             self._started = asyncio.ensure_future(self._start_runtime())
@@ -438,7 +436,8 @@ class CoreEngine:
         self._writer = None
         trace.remove_sink(self._on_harness_error)
         await self.stop_channels()
-        await self.stop_peers()
+        if self.peers is not None:
+            await self.peers.stop()
         await self.jobs.close()  # jobs end with exod
         await self.scheduler.stop()
         if self._started is not None:
@@ -684,32 +683,6 @@ class CoreEngine:
 
     # ------------------------------------------------------------ peers (D-026)
 
-    async def start_peers(self, socket: str | os.PathLike | None = None) -> None:
-        """Write this daemon's presence file. ``socket`` is exod's own socket; without one (an in-process core)
-        the engine serves a small socket of its own in the peers directory."""
-        if self.peer_node is not None or not self.peer_cfg.enabled:
-            return
-        from exo.core.peers import peers_dir
-        from exo.server.app import Dispatcher, HttpServer
-        path = str(socket) if socket else ""
-        if not path:
-            d = Path(self.peer_cfg_dir or peers_dir())
-            path = str(d / f"exo-{os.getpid()}.sock")
-            self._peer_server = HttpServer(Dispatcher(self, self.hub))
-            await self._peer_server.start_unix(path)
-        node = peer_target.build_node(self, path)
-        self.peer_node = node
-        node.start()
-
-    async def stop_peers(self) -> None:
-        if self.peer_node is not None:
-            self.peer_node.stop()
-            await self.peer_node.path.close()
-            self.peer_node = None
-        if self._peer_server is not None:
-            await self._peer_server.close()
-            self._peer_server = None
-
     async def _peers(self, b: s.Peers) -> dict[str, Any]:
         if b.action == "bus":  # D-040: the bus channel's inbound path, whether or not peers are on
             from exo.bus.ingress import bus_ingress
@@ -717,22 +690,13 @@ class CoreEngine:
                 return await bus_ingress(self, b)
             except ValueError as exc:
                 raise CommandFailed("bad_request", str(exc)) from None
-        if self.peer_node is None and self.peer_autostart:
-            await self.start_peers()
-        node = self.peer_node
-        if node is None:
+        if self.peers is None or not await self.peers.ready():
             raise CommandFailed("unsupported", "peers are turned off for this seat")
+        if b.action == "send" and b.session:
+            self._info(b.session)
+        via = b.via if is_principal(current_caller()) else "agent"  # "human" is a body claim (D-039)
         try:
-            if b.action == "list":
-                return await node.list(b.session, b.local_only)
-            if b.action == "send":
-                if b.session:
-                    self._info(b.session)
-                via = b.via if is_principal(current_caller()) else "agent"  # "human" is a body claim (D-039)
-                return await node.send(b.to, b.text, b.session, via)
-            if b.action == "deliver":
-                return await node.deliver(b.envelope)
-            return await node.receipt(b.envelope)
+            return await self.peers.command(b, via)
         except ValueError as exc:
             raise CommandFailed("bad_request", str(exc)) from None
 

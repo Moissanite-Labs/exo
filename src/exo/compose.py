@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from exo import peers
 from exo.config import Config
 from exo.core.engine import SYSTEM_PROMPT, CoreEngine
 from exo.core.plugins import PluginManager
@@ -66,11 +67,12 @@ def create(seat: str | None = None) -> CoreEngine:
     eng = CoreEngine(cfg.home, models, plugins=pm, executor=executor, executor_required=executor_required,
                       cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
                       mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
-                      delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"), jobs=cfg.get("jobs"),
+                      delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"), jobs=cfg.get("jobs"), attach_peers=peers.attach,
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
                             if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")})
     eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is
-    eng.peer_autostart = True
+    if eng.peers is not None:
+        eng.peers.autostart = True
     if cfg.get("learn", {}).get("enabled", True) is not False:
         from exo import learn
         learn.attach(eng)

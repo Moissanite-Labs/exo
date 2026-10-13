@@ -34,9 +34,8 @@ from pathlib import Path
 from typing import Any
 
 from exo import crypto
-from exo.core.ingress import STANDING_LINE, Held, Ingress, Receipt, Target, frame
-from exo.core.peer_target import describe
-from exo.core.peers import BusLink, Directory, PeerConfig, PeerNode, peers_dir
+from exo.core.ingress import STANDING_LINE, Held, Ingress, PeerConfig, Receipt, Target, frame
+from exo.peers import BusLink, Directory, PeerNode, describe, peers_dir
 from exo.core.seats import ensure_key, key_path
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher, HttpServer
