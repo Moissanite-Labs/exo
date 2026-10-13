@@ -74,6 +74,8 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
   (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it.
+- **Thread list.** Double-click a thread to rename it (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
+  the core `rename` built-in, principal only (D-069).
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed

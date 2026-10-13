@@ -16,6 +16,7 @@ from exo.core import jobs as jobs_mod
 from exo.core import trace, workspace
 from exo.core.context import AgentContext, _maybe_await
 from exo.core.findings import STATUSES
+from exo.core.types import to_dict
 from exo.principal import current_caller, is_principal
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
@@ -191,6 +192,18 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         for m in gone:
             eng.hub.publish(s.SteerCancelled(message_id=m.id or "", text=m.text()), b.session)
         return {"cancelled": [{"id": m.id, "text": m.text()} for m in gone]}
+    if b.name == "rename":  # D-069: the session title, principal only (D-052); announced as session.updated
+        if not b.session:
+            raise CommandFailed("bad_request", "rename needs a session")
+        if not is_principal(current_caller()):
+            raise CommandFailed("forbidden", "only the principal can rename a session")
+        title = " ".join(b.args.split())[:200]
+        if not title:
+            raise CommandFailed("bad_request", "usage: /rename <title>")
+        eng._info(b.session)
+        info = eng.store.update_session(b.session, title=title)
+        eng.hub.publish(s.SessionUpdated(session=info), b.session)
+        return {"session": to_dict(info)}
     if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
         word, _, rest = b.args.strip().partition(" ")
         if word == "reload":
