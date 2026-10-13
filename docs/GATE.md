@@ -23,6 +23,18 @@ cannot approve unseen contents. Pass inline text for inspection; the executor
 then applies its own operation policy. Policy and grant files remain trusted
 configuration outside the worker's writable workspace.
 
+Concurrent identical requests keep separate approval tokens and audit
+references. The reusable rule key still scopes a standing grant; it does not
+identify a pending call. Required mode needs the exact per-call token when the
+engine reports an answer.
+
+Accepting changed policies commits the acceptance audit before replacing the
+pinned policy. Creating a required standing grant first commits an authorization
+event (`phase: grant`, `state: authorized`, `activation: pending`) and only then
+atomically writes the grant file. Audit failure leaves authority unchanged. A
+subsequent grant-file failure blocks the call; its audit describes authorization,
+not successful storage. These two stores do not form one atomic transaction.
+
 ## What an approval covers
 
 An outward act is a post, message, email, social post, payment or account action, or anything

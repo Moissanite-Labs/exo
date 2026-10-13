@@ -311,6 +311,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Missing stores/keys, failed audit writes and trusted gate hook exceptions block before the executor.
   Required mode refuses tool-selected body-file host reads, including symlinks; ordinary gate behavior
   remains compatible. See `docs/GATE.md` "Required executor audit".
+- **Approval and authority ordering:** pending approvals use unique call tokens separate from reusable
+  rule keys. Policy acceptance is audited before pinning; required grant authorization is audited before
+  persistence, with an explicit authorization-only record if persistence fails. Separate stores are not
+  claimed to activate atomically. Concurrent approvals retain the correct session and decision reference.
 - **Lead call:** nothing on the Linux test machine's live OS changes in phase 0. It is someone's working machine
   (CRM, messaging, assistants). Where the OS first runs is A's call after the design.
 
