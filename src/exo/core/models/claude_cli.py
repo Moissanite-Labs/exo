@@ -27,7 +27,7 @@ import sys
 import tempfile
 from contextlib import aclosing
 from pathlib import Path
-from typing import Any, AsyncIterator, Mapping
+from typing import Any, AsyncGenerator, AsyncIterator, Mapping, cast
 
 import httpx
 
@@ -148,7 +148,9 @@ async def stop_group(proc: asyncio.subprocess.Process) -> None:
     try:
         await asyncio.wait_for(proc.wait(), CLEANUP_TIMEOUT)
     except asyncio.TimeoutError:
-        proc._transport.close()  # bound cleanup if a detached descendant retains the captured pipes
+        # CPython's Process owns this transport, but typeshed does not expose the private attribute.
+        transport = cast(asyncio.SubprocessTransport, getattr(proc, "_transport"))
+        transport.close()  # bound cleanup if a detached descendant retains the captured pipes
 
 
 class ClaudeCliProvider:
@@ -240,12 +242,13 @@ class ClaudeCliProvider:
         return await asyncio.wait_for(proc.stdout.readline(), self._read)
 
     async def _run(self, proc: asyncio.subprocess.Process, frames: list[dict[str, Any]], names: set[str],
-                   st: StreamState) -> AsyncIterator[ProviderEvent]:
-        assert proc.stderr
+                   st: StreamState) -> AsyncGenerator[ProviderEvent, None]:
+        stderr = proc.stderr
+        assert stderr
         tail = bytearray()
 
         async def drain_stderr() -> None:
-            while chunk := await proc.stderr.read(STDERR_BYTES):
+            while chunk := await stderr.read(STDERR_BYTES):
                 tail.extend(chunk)
                 del tail[:-STDERR_BYTES]
 
@@ -259,7 +262,7 @@ class ClaudeCliProvider:
             await asyncio.gather(stderr_task, return_exceptions=True)
 
     async def _exchange(self, proc: asyncio.subprocess.Process, frames: list[dict[str, Any]], names: set[str],
-                        st: StreamState, stderr_tail: bytearray) -> AsyncIterator[ProviderEvent]:
+                        st: StreamState, stderr_tail: bytearray) -> AsyncGenerator[ProviderEvent, None]:
         assert proc.stdin and proc.stdout and proc.stderr
         timeout_msg = f"ReadTimeout: claude sent nothing for {self._read:.0f} s"
 

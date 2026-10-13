@@ -330,6 +330,22 @@ def test_cancelling_cli_stops_its_descendant(tmp_path):
                 pass
 
 
+def test_cleanup_timeout_closes_transport_when_pipe_stays_open(monkeypatch):
+    closed, killed = [], []
+    class Transport:
+        def close(self):
+            closed.append(True)
+    class Proc:
+        _transport = Transport()
+        async def wait(self):
+            await asyncio.Event().wait()
+    proc = Proc()
+    monkeypatch.setattr(claude_cli, "kill_group", lambda child: killed.append(child))
+    monkeypatch.setattr(claude_cli, "CLEANUP_TIMEOUT", .01)
+    asyncio.run(claude_cli.stop_group(proc))
+    assert killed == [proc] and closed == [True]
+
+
 async def _collect(stream):
     return [e async for e in stream]
 
