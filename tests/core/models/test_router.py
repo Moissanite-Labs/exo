@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 
 import pytest
 
@@ -109,6 +111,90 @@ def test_missing_key_skips_route_and_reports():
     r = Router(roles={"main": ["anthropic:claude-opus-5-5"]}, env={}, clock=Clock())
     ev = run(r)[-1]
     assert ev.kind == "error" and not ev.retryable and "key_env" in ev.error
+
+
+def test_slow_credential_lookup_keeps_event_loop_responsive(monkeypatch):
+    rec = Recorder((200, fixture_bytes("llamacpp_text_stream.sse"), {}))
+    r = Router(roles={"main": ["p:m"]}, catalog={}, env={}, client=rec.client(),
+               providers={"p": {"base_url": "https://example.invalid/v1", "key_env": ["K"]}})
+    loop_thread = threading.get_ident()
+
+    def key(_):
+        assert threading.get_ident() != loop_thread
+        time.sleep(.15)  # stands in for a slow Secret Service subprocess; never reads a real store
+        return "fake-key"
+
+    monkeypatch.setattr(r, "_key", key)
+
+    async def go():
+        beats = 0
+        running = True
+        async def heartbeat():
+            nonlocal beats
+            while running:
+                await asyncio.sleep(.01)
+                beats += 1
+        task = asyncio.create_task(heartbeat())
+        events = [e async for e in r.stream("main", [Message.user("hi")], [])]
+        running = False
+        await task
+        assert events[-1].kind == "done" and beats >= 5
+    asyncio.run(go())
+
+
+def test_success_does_not_resolve_unused_fallback_credentials(monkeypatch):
+    rec = Recorder((200, fixture_bytes("llamacpp_text_stream.sse"), {}))
+    r = Router(roles={"main": ["p:m", "unused:m"]}, catalog={}, env={}, client=rec.client(),
+               providers={p: {"base_url": "https://example.invalid/v1", "key_env": [k]}
+                          for p, k in [("p", "PRIMARY"), ("unused", "FALLBACK")]})
+    lookups = []
+    monkeypatch.setattr(r, "_key", lambda key: lookups.append(key) or "fake-key")
+    assert run(r)[-1].kind == "done"
+    assert lookups == ["PRIMARY"] and "unused" not in r._creds
+
+
+def test_concurrent_credential_resolution_shares_one_lookup(monkeypatch):
+    r = Router(catalog={}, env={}, providers={"p": {"base_url": "https://example.invalid", "key_env": ["K"]}})
+    calls = []
+    def key(_):
+        calls.append(1)
+        time.sleep(.1)
+        return "fake-key"
+    monkeypatch.setattr(r, "_key", key)
+
+    async def go():
+        creds = await asyncio.gather(*(asyncio.to_thread(r.credentials, "p") for _ in range(8)))
+        assert len(calls) == 1 and all(c is creds[0] for c in creds)
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("all_providers", [False, True])
+def test_reload_during_lookup_discards_the_old_generation(monkeypatch, all_providers):
+    r = Router(catalog={}, env={}, providers={"p": {"base_url": "https://example.invalid", "key_env": ["K"]}})
+    started, release = threading.Event(), threading.Event()
+    calls = []
+    def key(_):
+        calls.append(1)
+        if len(calls) == 1:
+            started.set()
+            assert release.wait(2)
+            return "old-key"
+        return "new-key"
+    monkeypatch.setattr(r, "_key", key)
+
+    async def go():
+        first = asyncio.create_task(asyncio.to_thread(r.credentials, "p"))
+        assert await asyncio.to_thread(started.wait, 1)
+        assert r.reload_credentials(None if all_providers else "p") == ["p"]
+        second = await asyncio.to_thread(r.credentials, "p")
+        release.set()
+        old_result = await first
+        assert second is old_result and second[0].key == "new-key"
+        assert r.credentials("p") is second and len(calls) == 2
+    try:
+        asyncio.run(go())
+    finally:
+        release.set()
 
 
 def test_decision_role_falls_back_to_aux_then_main():

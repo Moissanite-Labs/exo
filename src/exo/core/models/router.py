@@ -13,7 +13,10 @@ Keys: environment, then the macOS Keychain (macOS only), then ~/.config/exo/keys
 from __future__ import annotations
 
 import os
+import asyncio
+import concurrent.futures
 import shutil
+import threading
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -136,6 +139,9 @@ class Router:
         self.breaker_cooldown_s = float(b.get("cooldown_s") or BREAKER_COOLDOWN_S)
         self.breaker_max_s = max(self.breaker_cooldown_s, float(b.get("max_cooldown_s") or BREAKER_MAX_S))
         self._creds: dict[str, list[Credential]] = {}
+        self._cred_lock = threading.Lock()
+        self._cred_versions: dict[str, int] = {}
+        self._cred_pending: dict[tuple[str, int], concurrent.futures.Future] = {}
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any] | None, **kw: Any) -> Router:
@@ -187,8 +193,34 @@ class Router:
         self.set_role(role, [ref, *[r for r in self.roles.get(role, []) if r != ref]])
 
     def credentials(self, provider: str) -> list[Credential]:
-        if provider in self._creds:
-            return self._creds[provider]
+        """Synchronous cached lookup. Coordinate workers without holding a lock across secret-store I/O.
+        Reload advances a generation so an in-flight lookup cannot restore credentials that were invalidated."""
+        while True:
+            with self._cred_lock:
+                if provider in self._creds:
+                    return self._creds[provider]
+                version = self._cred_versions.get(provider, 0)
+                token = (provider, version)
+                owner = token not in self._cred_pending
+                pending = self._cred_pending.setdefault(token, concurrent.futures.Future())
+            if not owner:
+                pending.result()
+                continue
+            try:
+                creds = self._load_credentials(provider)
+            except BaseException as exc:
+                with self._cred_lock:
+                    self._cred_pending.pop(token, None)
+                    pending.set_exception(exc)
+                raise
+            with self._cred_lock:
+                if self._cred_versions.get(provider, 0) == version:
+                    self._creds[provider] = creds
+                self._cred_pending.pop(token, None)
+                pending.set_result(None)
+            # A reload during I/O discards this result and resolves the new generation.
+
+    def _load_credentials(self, provider: str) -> list[Credential]:
         creds: list[Credential] = []
         if provider in self.instances:
             creds = [Credential(provider, None, self.instances[provider])]
@@ -217,15 +249,18 @@ class Router:
                                  headers=spec.get("headers"), session_header=spec.get("session_header"),
                                  **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
                 creds.append(Credential(cid, key, prov))
-        self._creds[provider] = creds
         return creds
 
     def reload_credentials(self, provider: str | None = None) -> list[str]:
         """Forget cached credentials (and their cooldowns) so the next call reads keys again: after a key was
         added or removed with `exo providers`, the TUI or the web client (D-034). Returns the providers reset."""
-        names = [provider] if provider else list(self._creds)
+        with self._cred_lock:
+            names = [provider] if provider else list(dict.fromkeys([*self._creds,
+                                                                   *(n for n, _ in self._cred_pending)]))
+            for n in names:
+                self._cred_versions[n] = self._cred_versions.get(n, 0) + 1
+                self._creds.pop(n, None)
         for n in names:
-            self._creds.pop(n, None)
             for k in [k for k in self.cooldowns if k == n or k.startswith((n + "|", n + "#"))]:
                 self.cooldowns.pop(k, None)
             for k in [k for k in self.breakers if k.startswith(n + ":")]:
@@ -241,6 +276,13 @@ class Router:
 
     def _pick(self, route: Route, now: float) -> tuple[Credential, bool] | None:
         creds = self.credentials(route.provider)
+        return self._choose(route, now, creds)
+
+    async def _pick_async(self, route: Route) -> tuple[Credential, bool] | None:
+        creds = await asyncio.to_thread(self.credentials, route.provider)
+        return self._choose(route, self.clock(), creds)
+
+    def _choose(self, route: Route, now: float, creds: list[Credential]) -> tuple[Credential, bool] | None:
         for c in creds:
             if self._available(c.id, now) and self._available(f"{c.id}|{route.model}", now):
                 return c, len(creds) == 1
@@ -315,13 +357,23 @@ class Router:
         attempts: list[dict[str, Any]] = []  # every try, for the model.call record (D-025)
         last: ProviderEvent | None = None
         chain = self.chain(role)
-        usable = [r for r in chain if self._pick(r, self.clock()) is not None]
-        skip = {r.ref for r in usable if self.route_open(r.ref, self.clock())}
-        skip = set() if len(skip) == len(usable) else skip  # all cooling down: try them anyway
-        for i, route in enumerate(chain):
+        # Breaker state is cheap; resolve credentials only when reaching a route, off the event loop.
+        skip = {r.ref for r in chain if self.route_open(r.ref, self.clock())}
+        pending_routes, i = chain, 0
+        while True:
+            if i >= len(pending_routes):
+                if not tried and skip:
+                    # Preserve the existing all-open last resort without eagerly resolving fallback keys.
+                    pending_routes = [r for r in chain if r.ref in skip]
+                    skip.clear()
+                    i = 0
+                else:
+                    break
+            route = pending_routes[i]
+            i += 1
             if route.ref in skip:
                 continue
-            while (picked := self._pick(route, self.clock())) is not None:
+            while (picked := await self._pick_async(route)) is not None:
                 cred, sole = picked
                 tried.append(route.ref)
                 failed: list[ProviderEvent] = []
@@ -330,7 +382,11 @@ class Router:
                 if not failed:
                     return
                 last = failed[0]
-                nxt = next((r for r in chain[i:] if r.ref not in skip and self._pick(r, self.clock())), None)
+                nxt = None
+                for candidate in pending_routes[i - 1:]:
+                    if candidate.ref not in skip and await self._pick_async(candidate) is not None:
+                        nxt = candidate
+                        break
                 if nxt is None:
                     if attempts[-1]["outcome"] == "fallback":
                         attempts[-1]["outcome"] = "error"  # nothing left to fall back to
