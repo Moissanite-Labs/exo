@@ -363,6 +363,15 @@ Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). To releas
 `[X.Y.Z] (codename) - date` heading, run the suites (`tests/test_versioning.py` fails if they drift), merge, then tag
 main with an annotated `exo-vX.Y.Z`. Site deploys take `--version`; see `scripts/deploy-site.sh`.
 
+**Signing releases (D-073).** Users who set `update.require_signed` (`docs/INSTALL.md`) accept only commits signed
+by a key in `trust/allowed_signers`, in the format `ssh-keygen -Y verify` reads: `<principal> <key type> <public key>`,
+one per line (add `namespaces="git"` after the principal to limit the key to git). Sign the commits that land on
+main (`git config gpg.format ssh`, `git config user.signingkey ~/.ssh/<key>.pub`, `git config commit.gpgsign true`;
+for merges made on GitHub, use a merge you sign locally, since GitHub's web signature is not an SSH key). Also sign the
+tag, `git tag -s exo-vX.Y.Z`, for people who check it by hand. To change keys, add the new key in a commit signed by an
+old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the list. Never remove the
+old key from the list in the same commit that the old key must sign.
+
 ## 9. Recipes
 
 Short, working patterns for four things people ask about. Each one names the file to read next.
