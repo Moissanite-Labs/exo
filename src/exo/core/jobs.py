@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from exo.core.engine import CoreEngine
 
 ACTIVE = "running"
-ENDED = ("done", "failed", "killed", "timeout", "lost")
 KEEP_DAYS = 14
 
 
