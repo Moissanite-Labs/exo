@@ -1247,8 +1247,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Exo". Each repository event adds a small instant share at once: issue 1, pull request opened 1, review 1, merge 2,
   release 25 (at most one a week, validated by the act). The large share is validated XP, granted when x0 meditates
   (a maintainer-started batch review): issue fixed by a merged pull request ("Fixes #N") 4, pull request merged or
-  salvaged (`Salvaged-from: #N` in the landing pull request) 10, review marked meaningful by the reviewer bot (name
-  TBD) with a `rocket` reaction from the bot's own account id 4. Target 2^11 = 2,048. Instant XP is capped per
+  salvaged (`Salvaged-from: #N` in the landing pull request) 10, review marked meaningful by ion, the org's review bot with a `rocket` reaction from the bot's own account id 4. Target 2^11 = 2,048. Instant XP is capped per
   account (3 a day), excludes new accounts, has global caps (15 an hour, 60 a day) and fills at most 25 percent of the
   target, and is never taken back. The core team, founders and their agents count up to 40 XP a day and 25 percent of
   the target, instant and validated together, a cap rather than a discount. Agent issues, pull requests and reviews
