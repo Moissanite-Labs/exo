@@ -9,7 +9,9 @@ Hook points (names match the Hermes hooks Exo plugins already use):
 
 - ``pre_tool_call(call, spec, ctx)``: return ``Block(reason)`` (or a plain
   string reason) to stop the call; the model gets an error result with the
-  reason. Return ``None`` to allow. A hook may rewrite ``call.arguments``.
+  reason. Return ``None`` to allow. A hook may rewrite ``call.arguments``
+  (in required-executor mode the approved request is immutable: each hook
+  sees an independent copy and rewrites are rejected).
 - ``post_tool_call(call, result, ctx)``: return a ``ToolResult`` to replace the
   result, or ``None`` to keep it.
 
@@ -260,10 +262,24 @@ class Registry:
         if not tool.available():
             return ToolResult.of_text(call.id, f"Tool {call.name!r} is not available here",
                                       is_error=True)
+        required = self.executor_required
+        bound: ExecutionRequest | None = None
+        if required:
+            # Bind the immutable request before any hook runs: in required mode the
+            # approved request and the dispatched request must be the same object.
+            try:
+                bound = ExecutionRequest(call.id, call.name, call.arguments, ctx.cwd, ctx.session)
+            except (ValueError, TypeError):
+                bound = None  # validate_args below reports it as an error result
         identity = (call.id, call.name)
         for hook in list(self._hooks[PRE_TOOL_CALL]):
+            hook_call = call
+            if required and bound is not None:
+                # Each hook inspects an independent copy: one hook's rewrite must not
+                # change what the gate or a later hook sees.
+                hook_call = ToolCall(call.id, call.name, thaw_arguments(bound.arguments))
             try:
-                verdict = await _maybe_await(hook(call, tool.spec, ctx))
+                verdict = await _maybe_await(hook(hook_call, tool.spec, ctx))
             except Exception as exc:  # a broken hook fails closed
                 verdict = Block(f"pre_tool_call hook failed: {exc}")
             if isinstance(verdict, str):
@@ -271,9 +287,20 @@ class Registry:
             if isinstance(verdict, Block):
                 result = ToolResult.of_text(call.id, f"Blocked: {verdict.reason}", is_error=True)
                 return await self._post(call, result, ctx)
+            if required and bound is not None and (
+                    (hook_call.id, hook_call.name) != (call.id, call.name) or
+                    hook_call.arguments != thaw_arguments(bound.arguments)):
+                return await self._post(call, ToolResult.of_text(call.id,
+                    "Blocked: pre_tool_call hooks must not change the approved call identity or arguments",
+                    is_error=True), ctx)
         if (call.id, call.name) != identity:
             return await self._post(call, ToolResult.of_text(identity[0],
                 "Blocked: pre_tool_call hooks may rewrite arguments, not call identity", is_error=True), ctx)
+        if required and bound is not None and (
+                thaw_arguments(bound.arguments) != call.arguments or ctx.cwd != bound.cwd or
+                ctx.session != bound.session):
+            return await self._post(call, ToolResult.of_text(call.id,
+                "Blocked: the approved request changed during pre_tool_call hooks", is_error=True), ctx)
         err = validate_args(tool.spec.parameters, call.arguments)
         if err:
             return await self._post(call, ToolResult.of_text(
@@ -284,13 +311,17 @@ class Registry:
             result = await self._run(tool, call, ctx)
         return await self._post(call, result, ctx)
 
-    async def _execute(self, tool: Tool, call: ToolCall, ctx: ToolContext) -> ToolResult:
+    async def _execute(self, tool: Tool, call: ToolCall, ctx: ToolContext,
+                       bound: ExecutionRequest | None = None) -> ToolResult:
         """The broker is the only dispatch authority once configured or required."""
         call_id, tool_name = call.id, call.name
         try:
             if self.executor is None:
                 raise ToolError("Required tool executor is unavailable")
-            request = ExecutionRequest(call.id, call.name, call.arguments, ctx.cwd, ctx.session)
+            # Dispatch the request bound before hooks ran, never a fresh request built
+            # from values hooks may have changed.
+            request = bound if bound is not None else ExecutionRequest(
+                call.id, call.name, call.arguments, ctx.cwd, ctx.session)
             trusted_ctx = ToolContext(cwd=request.cwd, session=request.session, call_id=request.call_id,
                                      cancel=ctx.cancel, emit=ctx.emit, meta=dict(ctx.meta))
 

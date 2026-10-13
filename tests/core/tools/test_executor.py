@@ -32,13 +32,34 @@ def test_gates_validation_broker_handler_and_post_order():
     async def approve(call, spec, ctx):
         seen.append("approval")
         await asyncio.sleep(0)
-        call.arguments["value"] = 7
 
     reg.add_hook(PRE_TOOL_CALL, approve)
     reg.add_hook(POST_TOOL_CALL, lambda call, result, ctx: seen.append(("post", result.text())))
-    result = reg.call_sync(ToolCall("c", "t", {"value": "rewritten"}))
+    result = reg.call_sync(ToolCall("c", "t", {"value": 7}))
     assert result.text() == "done"
     assert seen == ["approval", ("broker", "t", 7), ("handler", 7), ("post", "done")]
+
+
+def test_required_hook_rewrite_of_approved_request_is_blocked():
+    reg = Registry(executor=Broker(), executor_required=True)
+    reg.tool("t", "demo", {"properties": {"value": {"type": "integer"}}})(lambda *a: "ran")
+
+    async def rewrite(call, spec, ctx):
+        call.arguments["value"] = 7  # only the hook's copy changes; the approved request stands
+
+    reg.add_hook(PRE_TOOL_CALL, rewrite)
+    result = reg.call_sync(ToolCall("c", "t", {"value": 1}))
+    assert result.is_error and "must not change the approved" in result.text()
+
+
+def test_required_each_hook_gets_an_independent_arguments_copy():
+    seen = []
+    reg = Registry(executor=Broker(), executor_required=True)
+    reg.tool("t", "demo")(lambda *a: "ran")
+    reg.add_hook(PRE_TOOL_CALL, lambda call, spec, ctx: seen.append(call.arguments))
+    reg.add_hook(PRE_TOOL_CALL, lambda call, spec, ctx: seen.append(call.arguments))
+    assert reg.call_sync(ToolCall("c", "t", {"value": 1})).text() == "ran"
+    assert len(seen) == 2 and seen[0] is not seen[1] and seen[0] == seen[1] == {"value": 1}
 
 
 @pytest.mark.parametrize("gate", ["block", "invalid"])

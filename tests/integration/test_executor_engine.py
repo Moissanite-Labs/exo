@@ -73,10 +73,12 @@ def test_secure_plugin_discovery_uses_only_executor_roots(tmp_path, monkeypatch)
     def load_all(self, **kw):
         seen.append(kw)
         self.plugins["exo-gate"] = LoadedPlugin(Manifest(name="exo-gate"), "audited")
+        self.hooks.register("pre_tool_call", lambda **kw: None, "exo-gate")
+        self.hooks.register("post_approval_response", lambda **kw: None, "exo-gate")
 
     monkeypatch.setattr(PluginManager, "load_all", load_all)
     engine = create()
-    assert seen == [{"dirs": broker.trusted_plugin_dirs, "enabled": None}]
+    assert seen == [{"dirs": broker.trusted_plugin_dirs, "enabled": None, "entry_points": False}]
     asyncio.run(engine.close())
 
 
@@ -217,3 +219,18 @@ def test_required_remote_delegate_refuses_host_bus_connection(tmp_path, monkeypa
             await engine.close()
 
     asyncio.run(main())
+
+
+def test_required_factory_rejects_gate_missing_approval_hook(monkeypatch):
+    broker = DenyBroker()
+    monkeypatch.setattr("exo.compose.load_executor", lambda: (broker, True))
+
+    def load_all(self, **kw):
+        from exo.core.plugins import LoadedPlugin, Manifest
+        self.plugins["exo-gate"] = LoadedPlugin(Manifest(name="exo-gate"), "audited")
+        self.hooks.register("pre_tool_call", lambda **kw: None, "exo-gate")
+        # post_approval_response missing: the gate cannot record approvals
+
+    monkeypatch.setattr(PluginManager, "load_all", load_all)
+    with pytest.raises(ExecutorConfigurationError, match="decision.*and.*approval"):
+        create()

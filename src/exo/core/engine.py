@@ -16,6 +16,7 @@ Adapters kept here so the parts stay independent of each other:
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import inspect
 import os
@@ -501,8 +502,15 @@ class CoreEngine:
             return Block("No tool approval gate is available. Reinstall Exo's plugins or enable exo-gate "
                          "in core_plugins (and the seat's plugins list), then restart Exo.")
         required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()
+        kw_factory = None
+        if self.executor_required:
+            # Each plugin inspects an independent copy of the arguments: a plugin that
+            # runs after the gate cannot change what the gate approved.
+            def kw_factory(entry, _args=call.arguments):
+                return {"args": copy.deepcopy(_args)}
         for verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
-                                                     **self._hook_kw(call, ctx)):
+                                                      kw_factory=kw_factory,
+                                                      **self._hook_kw(call, ctx)):
             if not isinstance(verdict, dict):
                 continue
             if verdict.get("action") == "block":

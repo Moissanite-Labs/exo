@@ -54,11 +54,19 @@ def create(seat: str | None = None) -> CoreEngine:
         required_plugins = tuple(dict.fromkeys(("exo-gate", *raw_required)))
         if enabled is not None and not set(required_plugins).issubset(enabled):
             raise ExecutorConfigurationError("plugin configuration disables a required executor plugin")
-    pm.load_all(dirs=plugin_dirs, enabled=enabled)
+    pm.load_all(dirs=plugin_dirs, enabled=enabled, entry_points=not executor_required)
     if executor_required:
         missing = [name for name in required_plugins if name not in pm.plugins or pm.plugins[name].error]
         if missing:
             raise ExecutorConfigurationError(f"required executor plugins failed to load: {', '.join(missing)}")
+        # The gate must supply both its decision hook and its approval hook: a gate that
+        # loaded but registered only one of them leaves approvals unenforced.
+        gate_hooks = {name: {e.plugin for e in pm.hooks.entries(name)}
+                      for name in ("pre_tool_call", "post_approval_response")}
+        if "exo-gate" not in gate_hooks["pre_tool_call"] or "exo-gate" not in gate_hooks["post_approval_response"]:
+            raise ExecutorConfigurationError(
+                "required executor mode needs exo-gate's decision (pre_tool_call) and "
+                "approval (post_approval_response) hooks")
     models = cfg.models()
     folders: list[str | os.PathLike[str]] = [*(st.skill_folders if st else []), cfg.home / "skills"]
     if pack := pack_dir():
