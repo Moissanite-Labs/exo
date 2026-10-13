@@ -8,15 +8,29 @@ required-executor mode, which demands exo-gate), then attaches product integrati
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 from exo.config import Config
 from exo.core.engine import SYSTEM_PROMPT, CoreEngine
+from exo.core.peers import peers_dir
 from exo.core.plugins import PluginManager
 from exo.core.seats import SeatError
 from exo.core.seats import load as load_seat
 from exo.core.skills import pack_dir
 from exo.core.tools.executor import ExecutorConfigurationError, load_executor
+
+
+def fitting_peers_dir(env: dict[str, str] | None = None) -> Path | None:
+    """A short private peers folder when the default one would push ``exo-<pid>.sock`` past the Unix socket limit
+    (a long ``HOME``); ``None`` when the default fits or the folder was named with ``EXO_PEERS_DIR``."""
+    env = os.environ if env is None else env
+    default = peers_dir(env)
+    if env.get("EXO_PEERS_DIR") or len(os.fsencode(str(default / "exo-9999999.sock"))) < 104:
+        return None
+    short = Path(tempfile.gettempdir()) / f"exo-{os.getuid()}" / "peers"  # shared by every window of this user
+    short.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return short
 
 
 def create(seat: str | None = None) -> CoreEngine:
@@ -71,6 +85,7 @@ def create(seat: str | None = None) -> CoreEngine:
                             if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")})
     eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is
     eng.peer_autostart = True
+    eng.peer_cfg_dir = eng.peer_cfg_dir or fitting_peers_dir()
     if cfg.get("learn", {}).get("enabled", True) is not False:
         from exo import learn
         learn.attach(eng)
