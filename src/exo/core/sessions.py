@@ -72,7 +72,8 @@ UPGRADES = (("sessions", "agent", "TEXT"), ("sessions", "kind", "TEXT NOT NULL D
             ("messages", "hidden", "INTEGER NOT NULL DEFAULT 0"),
             ("summaries", "principal", "INTEGER NOT NULL DEFAULT 0"),  # D-032: principal messages in a leaf
             ("summaries", "captured", "INTEGER NOT NULL DEFAULT 0"),   # ... and how many the capture hook took
-            ("summaries", "attempts", "INTEGER NOT NULL DEFAULT 0"))   # failed summary tries so far
+            ("summaries", "attempts", "INTEGER NOT NULL DEFAULT 0"),   # failed summary tries so far
+            ("findings", "quiet", "TEXT"))  # D-025: {"turns", "days"} quiet since the fix (fixed_turns is unused)
 LOGGED_KINDS = ("thread", "scheduled", "private")  # thread kinds whose messages enter the agent log
 SCHEMA_VERSION = 2
 
