@@ -16,6 +16,11 @@ choices were made, not only what changed.
 
 The facts are capped at 14,000 characters. The agent can run `exo trace` for more.
 
+An engine with a required tool executor omits Git facts and includes an explicit
+unavailable note. Workspace Git configuration can launch programs even for
+`git status`, so the host never collects these facts from a model-writable repo.
+Any Git inspection requested through a tool must run through the executor.
+
 ## Rules the skill sets
 
 The note keeps your own words for rulings and corrections, word for word. It is self-contained, so a new session

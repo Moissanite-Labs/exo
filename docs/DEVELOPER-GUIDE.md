@@ -132,6 +132,11 @@ the gate tests. Decide whether a subagent may use it: the blocked list is `BLOCK
 
 A plugin registers a tool with `ctx.register_tool(name, toolset, schema, handler, risk=...)`.
 
+Exo OS can require an installed execution broker after approvals and validation.
+New tools need an explicit broker decision before their handler may run;
+unsupported operations fail closed. The immutable request, installed entry point,
+trusted plugin inventory and host-code limits are in `docs/EXECUTORS.md`.
+
 ## 4. Add a plugin
 
 A plugin is a folder with `plugin.yaml`, an `__init__.py` that has `register(ctx)`, and a `tests/` folder.
@@ -161,6 +166,13 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 keyword arguments only. A failing callback is logged and skipped (it fails open), except that a `pre_tool_call`
 block is honoured. To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the
 principal, it returns `{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+Required-executor engines propagate failures of `exo-gate` in `pre_tool_call`
+and `post_approval_response`, blocking dispatch. The gate requires saved signed
+decision and approval events; ordinary optional hooks keep the behavior above.
+See `docs/GATE.md` "Required executor audit".
+The gate's approval verdict adds an `approval_key` for one pending call; the core
+passes it back to `post_approval_response`. Keep `rule_key` stable for grant
+scope and do not substitute it for this correlation token.
 
 **Memory provider hooks.** A memory provider is a subclass of `MemoryProvider` in `src/exo/core/slots.py`. Two
 methods matter for the principal's words:
