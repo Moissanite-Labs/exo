@@ -27,7 +27,11 @@ The TUI shows the plugin ones under `other` in `/help` and in its palette (ctrl+
 Any client can use categories 2 and 3 with no client code. Only category 1 is specific to the TUI. The line client
 `exo chat` has no client-side commands except `/quit` and `/exit`. It sends every other `/name args` line straight to
 `command.run`, so `/new` or `/model` there fail with `not_found`, while `/context` and `/grants` work.
-The web client (`exo web`) runs `/context`, `/findings` and `/trace` from its composer the same way.
+The web client (`exo web`) runs `/context`, `/findings`, `/trace`, `/new`, `/rename` and `/layout` from its composer
+(`WEB_COMMANDS` in `plugins/exo-command/exo_command/api.py`). The first three go to `command.run`. `/new` starts a thread
+and `/layout` is saved in the page. `/rename <title>` calls `POST /api/chat/sessions/<id>/rename`, which runs the
+`rename` built-in; double-clicking a thread title in the list renames it the same way. Any other line is sent to
+the agent as a message.
 
 ### Client commands (TUI)
 
@@ -43,7 +47,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/clear` | Clear the transcript view. History is kept. | none | `ExoApp.clear_transcript` |
 | `/cwd` | Show this session's working folder. | none | `session.get` |
 | `/restart` | Reopen this session in a new terminal tab and quit this one. | none | `ExoApp.restart`, `clients/tui/exo_tui/restart.py` |
-| `/stop` | Stop the running turn (same as ctrl+c). | none | `ExoApp.stop_turn` |
+| `/stop` | Stop the running turn (same as ctrl+c). With a task, stop that running subagent instead. | optional `<task>` | `ExoApp.stop_turn`; with a task, `ExoApp.subagent` (`command.run` built-in `subagent`) |
 | `/rename` | Give this thread a new title; it shows in `/sessions`, `/resume` and the web list. Principal only (D-069). | title | `command.run` built-in `rename` (`session.updated`) |
 | `/unsteer` | Pull your newest queued steer message back into the composer, if it has not landed yet (Up in an empty composer does the same). Never stops the turn. | none | `ExoApp.unsteer` (`command.run` built-in `unsteer`) |
 | `/exit` | Quit. | none | `ExoApp.slash` |
@@ -53,20 +57,27 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/providers` | Provider setup panel: status, masked key entry, test, remove, default. Client side; the key never reaches the composer, transcript or protocol. Sends `command.run providers reload <name>` after a change. | `add <name>` opens the key field; `<name>` selects that provider | `ProvidersScreen` in `clients/tui/exo_tui/providers.py`, engine `src/exo/providers_setup.py` |
 | `/usage` | Show context size, cost and the model in use. | none | `ExoApp.slash` (client state, no call) |
 | `/panel` | Reopen the last panel. | none | `ExoApp.show_panel` |
+| `/tasks` | List the subagents this session handed work to, with status (D-070). | none | `ExoApp.subagent` (`command.run` built-in `subagent`, verb `list`) |
+| `/open` | Watch a subagent's session, read only. Finished subagents stay locked. | `<task>`: a task id, a prefix of it, or the child's session id | `ExoApp.subagent` (verb `open`) |
+| `/steer` | Send a note to a running subagent. The parent's receipt records "steered by principal". | `<task> <text>` | `ExoApp.subagent` (verb `send`) |
 | `/peers` | List other live sessions you can message. | none | `peers` protocol command, `action="list"` |
 | `/send` | Message another session as yourself. | `<peer> <text>` | `peers` protocol command, `action="send"`, `via="human"` (honoured only from a principal connection; others send as `agent`) |
 | `/handoff` | Ask the agent to write a handoff note for the next session. | optional path | `ExoApp.handoff`. The core gathers facts with the `handoff_facts` built-in. See `docs/HANDOFF.md`. |
 | `/intro` | Ask the agent for an orientation. | none | `ExoApp.intro` (an ordinary turn) |
 | `/tutorial` | Turn tips on or off, or show them again. | `on`, `off`, `reset`. None shows the state. | `ExoApp.tutorial_command` (`config.set` on `tutorial.enabled`) |
+| `/copy` | Copy text to the clipboard. | `last` or none: the last answer. `error`: the last error. `all`: the whole transcript. | `ExoApp.copy_command` (client only) |
 | `/compose` | Open the big editor for a long prompt (also `ctrl+g`). Enter adds a line, `ctrl+s` or `ctrl+enter` sends, Esc closes and keeps the draft. | `task` adds Goal, Context, Constraints, Done when headings; `edit` opens `$VISUAL` or `$EDITOR`; `close`. None opens it. | `ExoApp.compose_command` (client only) |
 | `/layout` | `inverse` puts the input on top and the newest message under it; `classic` is the usual order. Saved. The web page runs it too. | `inverse`, `classic`. None shows the layout. | `ExoApp.layout_command`, `exo_tui/prefs.py` (web: `static/layout.js`) |
 | `/help` | List every command. | none | `ExoApp.help_text` |
 
 Not slash commands, but in the same composer: `@path` adds a file to the turn, `!cmd` asks the agent to run a shell
-command and show the output (both complete as you type, see "Completion and guidance"). Keys: ctrl+p palette, ctrl+o tool output, ctrl+y accept, ctrl+e edit, ctrl+r reject, ctrl+g big composer (inside it: ctrl+s send, ctrl+l line numbers, ctrl+t $EDITOR, Esc close).
+command and show the output (both complete as you type, see "Completion and guidance").
+
+Keys: ctrl+p palette, ctrl+o tool output, ctrl+y accept, ctrl+e edit, ctrl+r reject, ctrl+f put the focus on the approval card, ctrl+c stop a running turn (idle: a quit hint; with text selected: copy), F6 load 60 earlier messages when the transcript shows "N earlier messages" (scrolling to that end does the same), ctrl+g big composer (inside it: ctrl+s send, ctrl+l line numbers, ctrl+t $EDITOR, Esc close).
 
 Anything else the TUI does not know goes to `command.run`. That is how `/context`, `/compact`, `/trace`, `/findings`
-and plugin commands work there.
+and plugin commands work there. `/context` and `/compact` are also rows in the TUI `COMMANDS` table (so `/help` lists
+them), but the core answers them. The TUI asks `/context` for its `json` form to update the status line.
 
 ### Completion and guidance
 
@@ -97,7 +108,7 @@ a session, none while a turn runs, and a rule stops once you run its command. Ta
 `/tutorial off` (this also sets `guidance.enabled` to `false`; `/tutorial on` sets it back) or set that config key. It
 is the composer placeholder, so it never moves anything, and without a timer under `EXO_REDUCED_MOTION`.
 
-The web client has the same menu for the commands it runs (`/context`, `/findings`, `/trace`, `/new`), `@` files
+The web client has the same menu for the commands it runs (`/context`, `/findings`, `/trace`, `/new`, `/rename`, `/layout`), `@` files
 through `GET /api/complete/files`, ghost text, history for the page's life and the guidance line. See
 `docs/ui/WEB.md` "The composer".
 
@@ -107,16 +118,19 @@ All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._com
 
 | Name | What it does | Arguments | Returns |
 |---|---|---|---|
-| `context` | Shows what the next model call for this thread carries, part by part, with token estimates. Read-only. | none | text (`context_text`) |
+| `context` | Shows what the next model call for this thread carries, part by part, with token estimates. Read-only. | none, or `json` | text (`context_text`), or the report dict for `json` (`context_report`) |
 | `compact` | Summarizes now what is eligible in this agent's memory, then shows tokens before and after. Fails with `busy` if a turn is running. | none | text (`compact_text`) |
+| `rename` | Gives the thread a new title and announces `session.updated` (D-069). Principal only (D-052): any other caller gets `forbidden`. Extra spaces are squeezed and the title is cut at 200 characters. | the title (empty fails with `bad_request`) | dict: `{"session": ...}` |
+| `unsteer` | Cancels queued steer messages that have not landed yet and publishes `steer.cancelled` for each (D-045). | a message id, or none for the newest | dict: `{"cancelled": [{id, text}]}` |
+| `providers` | Provider status (D-034), as rows plus the main model's status. `reload` re-reads credentials after a client stored a key, and never carries a key. | none for status; `reload [name]` (an unknown name is `not_found`) | dict: `{"providers": [...], "main": ...}` or `{"reloaded": ...}` |
 | `trace` | The model this session runs on, then the per-turn table: timing, route, estimated cost, flags. | a number N for the last N turns (default 10) | text (`trace_text`) |
 | `findings` | The harness's findings by state. | `count` returns `{"open": N, "by_state": {open, fixed, verified, reopened, total}}` (`open` is what needs work: open plus reopened). Anything else returns text: the per-state summary, what changed since this session last looked, then every finding with its state and fixed-in commit. `open`, `fixed`, `verified` or `reopened` limits the list. | text or dict |
 | `handoff_facts` | The facts the agent needs to write a handoff: thread, git state of the folder, open findings and tasks, recent summaries, last turns. Reads only. | optional path | dict (`handoff_facts`) |
 | `subagent` | Inspect, steer and stop a subagent a session handed work to (D-070). The verb is the first word of the arguments; the task is a task id, a unique prefix of it, or the child's session id. Only the principal or the task's parent session may steer or stop; any other caller gets `forbidden`. A finished child answers `conflict`. No protocol command or event was added. | `list` (this session's tasks), `open <task>`, `send <task> <text>`, `stop <task>` | dict: `list` gives `{"tasks": [{task_id, parent, child_session, status, title, live}]}`; `open` gives the task row, `steerable`, the child's session and the tail of its messages; `send` gives `{steered, author}`; `stop` gives `{stopped}` |
 | `harness_error` | A client reports an exception it caught, so the core files a finding. Not for people. | JSON with `where`, `message`, `error_type`, `traceback`. Plain text also works. | nothing |
 
-Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `handoff_facts`, `harness_error` and `subagent` are
-for clients to call (`/tasks`, `/open`, `/steer` and `/stop <task>` in the TUI, the Tasks page on the web).
+Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `rename`, `unsteer`, `providers`,
+`handoff_facts`, `harness_error` and `subagent` are for clients to call (`/tasks`, `/open`, `/steer` and `/stop <task>` in the TUI, the Tasks page on the web).
 
 ### Plugin commands
 
@@ -213,7 +227,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 | `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`), prints `old -> new`, then a quick self-check (import, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing | `cmd_update` in `src/exo/update_cmd.py` |
 | `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
 | `exo stop` | Stops the background core (exod) that `exo web` or `exo serve` started. Reads `$EXO_HOME/run/exod.pid`. | none | `stop_core` in `src/exo/ensure_core.py` |
-| `exo web` | The command centre web client. Joins a running core (exod, or a terminal window's) or starts `exo serve` in the background (D-036). | `--socket`, `--url`, `--token-file`, `--host` (default 127.0.0.1), `--port` (default 7342) | `cmd_web` in `src/exo/cli.py`, `plugins/exo-command/exo_command/__main__.py` |
+| `exo web` | The command centre web client. Joins a running core (exod, or a terminal window's) or starts `exo serve` in the background (D-036). | `--socket`, `--url`, `--token-file`, `--host` (default 127.0.0.1), `--port` (default 7342), `--no-open` (do not open a browser tab) | `cmd_web` in `src/exo/cli.py`, `plugins/exo-command/exo_command/__main__.py` |
 
 ### Config, models and decisions
 
@@ -226,7 +240,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 | `exo config set <key> <value>` | Sets a key. The value is read as JSON when it parses, else kept as text. | `<key> <value>` | same |
 | `exo config unset <key>` | Removes a key. | `<key>` | same |
 | `exo models` | Providers, whether a key is found (yes or no, never the value), the route per role, and the `code_find` status. | `--remote PROVIDER` lists that provider's models over the network | `cmd_models` in `src/exo/models_cmd.py` |
-| `exo providers` | Provider setup (D-034): status table; `add NAME` (getpass, needs a terminal, never from argv), `test NAME`, `remove NAME`, `default REF`. | `--store keychain\|secret-service\|file` on add; `--yes` on remove; `--role` on default | `src/exo/providers_cmd.py`, `src/exo/providers_setup.py` |
+| `exo providers` | Provider setup (D-034): status table; `add NAME` (getpass, needs a terminal, never from argv), `test NAME`, `remove NAME`, `default REF`. | `--store keychain\|secret-service\|file` and `--no-test` (skip the live test) on add; `--yes` on remove; `--role` on default | `src/exo/providers_cmd.py`, `src/exo/providers_setup.py` |
 | `exo decide <question>` | Asks the decision model one question and prints the probability of each option and the route used. | `--options a,b,c` (required, at least two), `--state TEXT`, `--role ROLE` (default `decision`) | `cmd_decide` in `src/exo/decide_cmd.py` |
 
 ### How the harness is doing

@@ -526,7 +526,7 @@ PAGE = """<!doctype html>
       <svg class="wp-brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg>
       <span>EXO</span>
     </a>
-    <span class="wp-bar__doc">Whitepaper v0.2</span>
+    <span class="wp-bar__doc">Whitepaper v{version}</span>
     <a class="wp-bar__back" href="../roadmap/">Roadmap</a>
     <a class="wp-bar__back wp-bar__home" href="../">&larr; Back to the site</a>
   </div>
@@ -544,7 +544,7 @@ PAGE = """<!doctype html>
       <h1>Project Exo</h1>
       <p class="wp-sub">A personal system for working with models: a signed record, a portable store, one continuous memory, consent bound to exact text, lessons kept only when they prove themselves, and a harness that measures itself.</p>
       <dl class="wp-meta">
-        <div><dt>Version</dt><dd>0.2</dd></div>
+        <div><dt>Version</dt><dd>{version}</dd></div>
         <div><dt>Date</dt><dd>October 2026</dd></div>
         <div><dt>Status</dt><dd>Early, in active build</dd></div>
         <div><dt>Tests</dt><dd>over a thousand passing</dd></div>
@@ -567,7 +567,7 @@ PAGE = """<!doctype html>
     </article>
 
     <footer class="wp-foot">
-      <p>Project Exo whitepaper, version 0.2, October 2026. Aska Digital.</p>
+      <p>Project Exo whitepaper, version {version}, October 2026. Aska Digital.</p>
       <p><a href="../">&larr; Back to the Project Exo site</a> &nbsp;/&nbsp; <a href="#top-of-page" onclick="window.scrollTo(0,0);return false;">Top</a></p>
     </footer>
   </main>
@@ -585,7 +585,9 @@ def main():
             "turn from one continuous memory, a learning loop that keeps a lesson only if it scores better on "
             "held-out cases, approvals bound to exact text, a harness that traces and re-verifies itself, and one "
             "core daemon behind every screen. With an honest status of what is built.")
-    page = PAGE.replace("{desc}", esc(desc)).replace("{toc}", toc_html(toc)).replace("{body}", body)
+    version = re.search(r"^Version (\d+\.\d+)", md, re.M).group(1)  # the paper's header line is the source
+    page = PAGE.replace("{desc}", esc(desc)).replace("{version}", version).replace("{toc}", toc_html(toc))
+    page = page.replace("{body}", body)
     page = page.replace('<a href="#top-of-page" onclick="window.scrollTo(0,0);return false;">Top</a>',
                         '<a href="#wp-main">Top</a>')
     OUT.parent.mkdir(parents=True, exist_ok=True)
