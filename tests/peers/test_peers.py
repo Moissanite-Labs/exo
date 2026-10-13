@@ -63,6 +63,7 @@ class Daemon:
         home = run_dir / name
         self.eng = CoreEngine(home, {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(run_dir), env={},
                               seat=Seat(name=name, principal=principal), peers=peers or {}, peers_dir=run_dir / "peers")
+        self.eng.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
         self.fake = Scripted()
         self.eng.loop.provider = self.fake
         self.gate = asyncio.Event()

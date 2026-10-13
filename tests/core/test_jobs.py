@@ -50,6 +50,7 @@ class Scripted:
 def engine(tmp_path, jobs=None, first=None, seat=None):
     eng = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={}, seat=seat or Seat(name="tester"),
                      jobs={"wake": False, **(jobs or {})})
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     eng.loop.provider = Scripted(first)
     eng.gate = asyncio.Event()
 

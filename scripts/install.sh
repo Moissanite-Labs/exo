@@ -9,7 +9,7 @@
 #
 #   --dry-run            print every action, change nothing
 #   --exo-home DIR       Exo's home (default $EXO_HOME, else ~/.exo)
-#   --hermes-home DIR    HERMES_HOME to install plugins into. Default: a NEW $EXO_HOME/hermes-home.
+#   --hermes-home DIR    Also copy plugins to this HERMES_HOME. Default with --with-hermes: $EXO_HOME/hermes-home.
 #                        An existing ~/.hermes is used only when passed here explicitly.
 #   --with-hermes        also pin Hermes (scripts/pin-hermes.sh), install it in the venv, write the
 #                        exo-hermes launcher. Prints a warning summary of every patch that did not
@@ -173,7 +173,8 @@ cat <<EOF
   hermes        $([ "$WITH_HERMES" -eq 1 ] && echo "$EXO_HERMES_DIR  (pin: $([ "$PIN" -eq 1 ] && echo "${TAG:-latest stable tag}" || echo skipped))" || echo "not installed (pass --with-hermes to add it)")
   venv          $VENV  ($([ "$PIP" -eq 1 ] && echo "$([ "$WITH_HERMES" -eq 1 ] && echo 'Hermes + ')exo" || echo skipped))
   command       $BIN_DIR/exo  (link to $VENV/bin/exo)
-  plugin home   $TARGET_HOME$([ "$HERMES_HOME_EXPLICIT" -eq 1 ] && echo '  (explicit)' || echo '  (new, Exo-owned)')
+  core plugins  $EXO_HOME/plugins
+  Hermes home   $TARGET_HOME$([ "$HERMES_HOME_EXPLICIT" -eq 1 ] && echo '  (explicit)' || echo '  (optional, Exo-owned)')
 EOF
 
 # --- 3. EXO_HOME ------------------------------------------------------------
@@ -258,7 +259,7 @@ if [ "$PIP" -eq 1 ]; then
   fi
 fi
 
-# --- 6. plugins into HERMES_HOME --------------------------------------------------
+# --- 6. standalone plugins, plus Hermes plugins when requested --------------------
 SELECTED=()
 for d in "$EXO_SRC"/plugins/*/; do
   [ -f "$d/plugin.yaml" ] || continue
@@ -270,32 +271,38 @@ for d in "$EXO_SRC"/plugins/*/; do
 done
 [ "${#SELECTED[@]}" -gt 0 ] || die "no plugins selected from $EXO_SRC/plugins"
 
-PDIR="$TARGET_HOME/plugins"
-[ -d "$TARGET_HOME" ] || run mkdir -p "$TARGET_HOME"
-[ -d "$PDIR" ] || run mkdir -p "$PDIR"
+# The standalone core discovers EXO_HOME/plugins without launcher environment setup.
+PDIRS=("$EXO_HOME/plugins")
+if { [ "$WITH_HERMES" -eq 1 ] || [ "$HERMES_HOME_EXPLICIT" -eq 1 ] || [ -n "${EXO_HERMES_HOME:-}" ]; } \
+   && [ "$TARGET_HOME/plugins" != "$EXO_HOME/plugins" ]; then
+  PDIRS+=("$TARGET_HOME/plugins")
+fi
 MARK=".exo-managed"
-for name in "${SELECTED[@]}"; do
-  src="$EXO_SRC/plugins/$name" dst="$PDIR/$name"
-  if [ -e "$dst" ] && [ ! -f "$dst/$MARK" ]; then
-    die "refusing: $dst exists and was not installed by Exo. Move it away or pick another --hermes-home."
-  fi
-  if [ -f "$dst/$MARK" ] && diff -rq -x "$MARK" -x tests -x __pycache__ -x .pytest_cache "$src" "$dst" >/dev/null 2>&1; then
-    say "plugin $name is up to date"
-    continue
-  fi
-  [ -e "$dst" ] && run rm -rf "$dst"
-  run mkdir -p "$dst"
-  # copy without tests and caches
-  if [ "$DRY" -eq 1 ]; then
-    echo "+ copy $src -> $dst (without tests, caches)"
-  else
-    (cd "$src" && find . \( -name tests -o -name __pycache__ -o -name .pytest_cache \) -prune -o -type f -print) |
-      while IFS= read -r f; do
-        mkdir -p "$dst/$(dirname "$f")"
-        cp -p "$src/$f" "$dst/$f"
-      done
-  fi
-  if [ "$DRY" -eq 1 ]; then echo "+ write $dst/$MARK"; else echo "installed by exo scripts/install.sh from $src" > "$dst/$MARK"; fi
+for PDIR in "${PDIRS[@]}"; do
+  [ -d "$PDIR" ] || run mkdir -p "$PDIR"
+  for name in "${SELECTED[@]}"; do
+    src="$EXO_SRC/plugins/$name" dst="$PDIR/$name"
+    if [ -e "$dst" ] && [ ! -f "$dst/$MARK" ]; then
+      die "refusing: $dst exists and was not installed by Exo. Move it away or choose another install home."
+    fi
+    if [ -f "$dst/$MARK" ] && diff -rq -x "$MARK" -x tests -x __pycache__ -x .pytest_cache "$src" "$dst" >/dev/null 2>&1; then
+      say "plugin $name is up to date"
+      continue
+    fi
+    [ -e "$dst" ] && run rm -rf "$dst"
+    run mkdir -p "$dst"
+    # copy without tests and caches
+    if [ "$DRY" -eq 1 ]; then
+      echo "+ copy $src -> $dst (without tests, caches)"
+    else
+      (cd "$src" && find . \( -name tests -o -name __pycache__ -o -name .pytest_cache \) -prune -o -type f -print) |
+        while IFS= read -r f; do
+          mkdir -p "$dst/$(dirname "$f")"
+          cp -p "$src/$f" "$dst/$f"
+        done
+    fi
+    if [ "$DRY" -eq 1 ]; then echo "+ write $dst/$MARK"; else echo "installed by exo scripts/install.sh from $src" > "$dst/$MARK"; fi
+  done
 done
 
 # Hermes plugins are opt-in. A config.yaml Exo creates enables them; an existing one is not edited.

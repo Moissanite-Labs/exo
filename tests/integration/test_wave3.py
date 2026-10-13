@@ -15,6 +15,7 @@ MODELS = {"fake": {"rules": [{"match": "panel", "steps": [{"tool": "ui", "args":
 
 def _eng(tmp_path, register=None):
     pm = PluginManager()
+    pm.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     if register:
         pm._run_register(Manifest(name="t"), "dir", register)
     return CoreEngine(tmp_path / "home", MODELS, plugins=pm, cwd=str(tmp_path), env={})

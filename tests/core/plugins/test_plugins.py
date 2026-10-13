@@ -1,10 +1,11 @@
 import asyncio
+import ast
 import textwrap
 from pathlib import Path
 
 import pytest
 
-from exo.core.hooks import HookError, HookRegistry
+from exo.core.hooks import KNOWN_UNFIRED_HOOKS, HookError, HookRegistry, VALID_HOOKS
 from exo.core.plugins import PluginManager, discover
 from exo.core.slots import ContextEngine, MemoryProvider, SlotError, Slots, spawn_context_thread
 
@@ -217,8 +218,52 @@ def test_hooks_registry():
     assert len(h.entries("post_tool_call")) == 2 and h.names() == ["post_tool_call"]
 
 
-def test_existing_exo_plugins_load():
-    """The six Exo plugins' register(ctx) runs on this ctx unchanged (wave 2 is import changes)."""
+@pytest.mark.parametrize("name", sorted(KNOWN_UNFIRED_HOOKS))
+def test_known_unfired_hooks_are_rejected_by_default(name):
+    with pytest.raises(HookError, match="known but is not fired by the Exo core"):
+        HookRegistry().register(name, lambda **kw: None)
+
+
+def test_custom_hook_registry_can_supply_its_own_fire_site():
+    h = HookRegistry(valid={"pre_llm_call"})
+    h.register("pre_llm_call", lambda **kw: kw["text"])
+    assert h.fire("pre_llm_call", text="custom") == ["custom"]
+
+
+def test_default_supported_hooks_match_core_fire_sites():
+    source = (REPO / "src/exo/core/engine.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    fired = {
+        call.args[0].value
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr in {"fire", "afire"}
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+        and isinstance(call.args[0].value, str)
+    }
+    assert VALID_HOOKS == fired
+    assert not VALID_HOOKS & KNOWN_UNFIRED_HOOKS
+
+
+def test_plugin_context_rejects_a_known_unfired_hook_and_rolls_back(tmp_path):
+    body = '''
+def register(ctx):
+    ctx.register_command("before-hook", lambda: "registered")
+    ctx.register_hook("pre_llm_call", lambda **kw: None)
+'''
+    make_plugin(tmp_path, "bad-hook", body=body)
+
+    pm = PluginManager()
+    [rec] = pm.load_all(dirs=[tmp_path], entry_points=False)
+    assert not rec.ok and "known but is not fired by the Exo core" in rec.error
+    assert "before-hook" not in pm.commands
+
+
+def test_existing_exo_plugins_load_with_bus_peers_disabled(monkeypatch):
+    """The Exo plugins load with optional Hermes-only peer hooks disabled."""
+    monkeypatch.delenv("EXO_PEERS", raising=False)
     pm = PluginManager()
     recs = {r.manifest.name: r for r in pm.load_all(dirs=[REPO / "plugins"], entry_points=False)}
     assert set(recs) == {"exo-bus", "exo-command", "exo-context", "exo-gate", "exo-memory", "exo-orchestra"}
@@ -226,4 +271,5 @@ def test_existing_exo_plugins_load():
     assert pm.slots.memory.name == "exo-memory" and pm.slots.context.name == "exo-context"
     assert {"bus_post", "bus_inbox"} <= set(pm.tools)
     assert {"orchestra", "exo-command"} <= set(pm.commands)
+    assert not any(kind == "hook" for kind, _ in recs["exo-bus"].registered)
     assert pm.hooks.has("pre_tool_call") and pm.hooks.has("post_approval_response")
