@@ -186,8 +186,14 @@ def cmd_keys(a) -> int:
 
 
 def cmd_log(a, store) -> int:
+    from .ledger_authority.factory import configured
+    if a.log_cmd == 'verify' and configured():
+        from .ledger_authority.verify import verify_configured
+        res = verify_configured(store.ledger_path)
+        print(json.dumps(res))
+        return 0 if res['ok'] else 1
     if a.log_cmd == 'append':
-        from .ledger_authority.factory import configured, open_writable_ledger
+        from .ledger_authority.factory import open_writable_ledger
         kp = Path(a.key) if a.key else key_path(a.author)
         if not configured() and not kp.exists():
             sys.exit(f'no key at {kp}; run: exo keygen {a.author}')

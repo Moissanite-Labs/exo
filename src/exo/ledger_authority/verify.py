@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 
 from exo.ledger import COLS, _row
-from . import MAX_DOCUMENT, AuthorityError, validate_identity
+from . import MAX_BATCH, MAX_BATCH_BYTES, MAX_DOCUMENT, AuthorityError, AuthorityUnavailable, canonical, validate_identity, verify_checkpoint, verify_record
 from .projection import verify_projection
 
 
@@ -27,6 +27,10 @@ def verify_files(ledger_path: Path, identity_path: Path, checkpoints_path: Path)
             if len(raw) > MAX_DOCUMENT:
                 raise AuthorityError("checkpoint exceeds limit")
             checkpoints.append(json.loads(raw))
+    return verify_copy(ledger_path, identity, checkpoints)
+
+
+def verify_copy(ledger_path, identity, checkpoints):
     # Unlike Ledger construction, read-only verification neither creates a missing
     # database nor reinstalls triggers or changes the journal mode of an existing one.
     db = sqlite3.connect(Path(ledger_path).resolve().as_uri() + "?mode=ro", uri=True)
@@ -39,6 +43,55 @@ def verify_files(ledger_path: Path, identity_path: Path, checkpoints_path: Path)
         return verify_projection(ReadOnlyCopy(), identity, checkpoints)
     finally:
         db.close()
+
+
+def _verify_authority_once(ledger_path, authority):
+    """Inspect a copy against a captured authenticated service head, without repair.
+
+    The live signer is queried, but this is not an independently fresh witness
+    receipt. The prefix result intentionally retains ``fresh: false``.
+    """
+    identity = validate_identity(authority.identity)
+    latest, previous = authority.head(), authority.head(0)
+    verify_checkpoint(identity, latest)
+    verify_checkpoint(identity, previous)
+    if previous["seq"] != 0:
+        raise AuthorityError("authority did not return genesis")
+    checkpoints = [previous]
+    while previous["seq"] < latest["seq"]:
+        limit = min(MAX_BATCH, latest["seq"] - previous["seq"])
+        records = authority.read_since(previous["seq"], limit)
+        if not isinstance(records, list) or not 1 <= len(records) <= limit or len(canonical(records)) > MAX_BATCH_BYTES:
+            raise AuthorityError("invalid authority checkpoint replay")
+        for record in records:
+            verify_record(identity, record, previous)
+            previous = record["checkpoint"]
+            checkpoints.append(previous)
+    if canonical(previous) != canonical(latest):
+        raise AuthorityError("checkpoint replay differs from captured authority head")
+    result = verify_copy(ledger_path, identity, checkpoints)
+    return result, latest
+
+
+def verify_authority(ledger_path, authority):
+    # If another append commits while replay/copy inspection is in progress, a
+    # newer local copy must not be called divergent from the older captured head.
+    for _ in range(3):
+        result, captured = _verify_authority_once(ledger_path, authority)
+        after = authority.head()
+        verify_checkpoint(authority.identity, after)
+        if canonical(after) == canonical(captured):
+            result["authority_contacted"] = True
+            return result
+    raise AuthorityUnavailable("authority advanced during verification; retry with a stable head")
+
+
+def verify_configured(ledger_path):
+    from .factory import open_authority
+    try:
+        return verify_authority(ledger_path, open_authority(ledger_path))
+    except (AuthorityError, OSError, sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+        return {"ok": False, "state": "unverifiable", "error": str(exc), "fresh": False}
 
 
 def main(argv=None) -> int:
