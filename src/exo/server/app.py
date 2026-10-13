@@ -33,7 +33,7 @@ from exo.protocol import schema as s
 from exo import principal as pr
 from exo.server.engine import Closed, CommandFailed, Engine, Hub
 
-SERVER_CAPABILITIES = ["sse", "replay", "stdio"]
+SERVER_CAPABILITIES = ["sse", "replay", "stdio", "heartbeat"]
 HEARTBEAT = 15.0
 MAX_BODY = 8 * 1024 * 1024
 
@@ -81,8 +81,8 @@ class Dispatcher:
         if isinstance(body, s.Hello):
             if body.protocol != s.PROTOCOL_VERSION:
                 return _fail(cmd.id, "protocol_mismatch", f"server speaks {s.PROTOCOL_VERSION}, client {body.protocol}")
-            result = {"protocol": s.PROTOCOL_VERSION, "server": "exod",
-                      "capabilities": SERVER_CAPABILITIES, "seq": self.hub.seq}
+            result = {"protocol": s.PROTOCOL_VERSION, "server": "exod", "capabilities": SERVER_CAPABILITIES,
+                      "seq": self.hub.seq, "instance": self.hub.instance, "heartbeat": HEARTBEAT}
             return s.Response(id=cmd.id, result=result)
         if isinstance(body, s.EventsSubscribe):
             # Without a stream, subscribe is a one-shot replay; HTTP clients stream from GET /events.
@@ -133,7 +133,7 @@ class HttpServer:
         os.chmod(path, 0o600)
         self._unix_path = path
         if self.principal:
-            self._principal_token = pr.issue(path)
+            self._principal_token = pr.issue(path, self.dispatcher.hub.instance)
 
     async def start_tcp(self, host: str, port: int) -> int:
         if not self.token:
@@ -177,13 +177,13 @@ class HttpServer:
             writer.transport.abort()
             return
         self._writers.add(writer)
-        task = asyncio.create_task(self._client(reader, writer))
+        task = asyncio.create_task(self._client(reader, writer, pr.accepted(writer.get_extra_info("socket"))))
         self._streams.add(task)
         task.add_done_callback(self._streams.discard)
 
-    async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, peer: pr.Peer) -> None:
         try:
-            await self._request(reader, writer)
+            await self._request(reader, writer, peer)
         except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError):
             pass
         except asyncio.CancelledError:
@@ -197,7 +197,7 @@ class HttpServer:
             finally:
                 self._writers.discard(writer)
 
-    async def _request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, peer: pr.Peer) -> None:
         line = (await reader.readuntil(b"\r\n")).decode("latin-1").strip()
         method, target, _version = line.split(" ", 2)
         headers: dict[str, str] = {}
@@ -217,7 +217,7 @@ class HttpServer:
             if n > MAX_BODY:
                 return await self._json(writer, 413, {"error": "body too large"})
             raw = await reader.readexactly(n)
-            _cmd, resp = await self.dispatcher.dispatch(raw, self._caller(headers, writer))
+            _cmd, resp = await self.dispatcher.dispatch(raw, self._caller(headers, peer))
             return await self._send(writer, 200, resp.to_json().encode())
         if url.path == "/events" and method == "GET":
             q = parse_qs(url.query)
@@ -229,12 +229,12 @@ class HttpServer:
                                                   "seq": self.dispatcher.hub.seq})
         return await self._json(writer, 404, {"error": "not found"})
 
-    def _caller(self, headers: dict[str, str], writer: asyncio.StreamWriter) -> str:
-        """D-039: principal only on the Unix socket, with the credential, from a process outside the core's tree."""
+    def _caller(self, headers: dict[str, str], peer: pr.Peer) -> str:
+        """D-039, D-060: principal only on the Unix socket, with the credential, from this user's process outside
+        the core's tree, as the kernel named it when the connection was accepted (one request per connection)."""
         if self._unix_path is None or not self._principal_token:
             return pr.LOCAL
-        return pr.stamp(headers.get(pr.HEADER.lower()), self._principal_token, writer.get_extra_info("socket"),
-                        headers.get("x-exo-client", ""))
+        return pr.stamp(headers.get(pr.HEADER.lower()), self._principal_token, peer, headers.get("x-exo-client", ""))
 
     def _authorized(self, headers: dict[str, str]) -> bool:
         if not self.token:
@@ -254,7 +254,8 @@ class HttpServer:
 
     async def _sse(self, writer: asyncio.StreamWriter, since: int, session: str | None) -> None:
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
-                     b"Connection: close\r\n\r\n: exod\n\n")
+                     b"Connection: close\r\n\r\n" + f": exod instance={self.dispatcher.hub.instance} "
+                     f"heartbeat={self.heartbeat:g}\n\n".encode())
         await writer.drain()
         sub = self.dispatcher.hub.subscribe(since, session)
         try:

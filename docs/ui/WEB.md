@@ -31,8 +31,10 @@ header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, so a DN
 even the page. An Origin, when sent, must be that same host, and Sec-Fetch-Site must be same-origin or none. Only
 the page shell (`/`, `/static/`) loads without the token. Responses carry `Referrer-Policy: no-referrer`.
 
-The web process answers approvals as the principal: it reads the core's principal credential
-(`run/<socket>.principal.key`) on each request, so it re-joins a core that restarted with a new one. The optional
+The web process answers approvals as the principal: on each connection it checks with the kernel that the socket
+is served by the core named in its launch record (`run/<socket>.principal.key`), then sends that record's
+credential on that connection (D-060, `docs/GATE.md` "Unix peer authentication"). It re-joins a core that restarted
+with a new record, and refuses a socket that some other process serves. The optional
 ASGI app (`asgi.py`) is gone: it re-exposed the routes with no checks.
 
 The stream resumes through the core’s durable event log when its cursor has fallen outside the web event ring.

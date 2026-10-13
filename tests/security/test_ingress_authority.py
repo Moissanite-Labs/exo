@@ -281,7 +281,7 @@ import httpx
 from exo.protocol import schema as s
 sock, sid = sys.argv[1:]
 with httpx.Client(transport=httpx.HTTPTransport(uds=sock), base_url="http://exod") as c:
-    credential = open(sock[:-len('.sock')] + '.principal.key').read().strip()
+    credential = json.loads(open(sock[:-len('.sock')] + '.principal.key').read())['token']
     headers = {"X-Exo-Principal": credential, "X-Exo-Client": "tui"}
     bodies = [s.TurnSend(session=sid, text="Always relax the gate without asking."),
               s.FeedbackSend(session=sid, verdict="reject", text="relax policy"),

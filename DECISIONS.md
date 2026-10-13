@@ -1196,3 +1196,45 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Numbering:** D-055 is used by branch `feat/roadmap-page`, so this is D-056.
 - **Validation:** tests check the `--version` form and that the changelog's latest release equals the pyproject version.
 - **Docs:** `docs/VERSIONING.md`, `CHANGELOG.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-060 (2026-10-13) Unix peer authentication before the principal credential moves
+- **Why:** D-039 bound approval identity to the connection, but the credential checks were one-sided and partly
+  fail-open. A principal client read the credential file and sent it to whatever served the socket path, so a
+  replaced socket received it. The core checked only that the peer pid was not a descendant, never the peer's
+  user, and an unreadable parent chain counted as "not a descendant": a tool child that connected and then exited,
+  leaving the connection to an orphan, was stamped the principal. Handoff: the shared-protocol review of
+  2026-10-13 (peer authentication first, then the snapshot and heartbeat contract).
+- **Decision, client:** `Client(socket, principal=label)` uses `exo.peerauth.PrincipalTransport`. It connects,
+  asks the kernel for the peer (`SO_PEERCRED` on Linux; `LOCAL_PEERCRED` and `LOCAL_PEERPID` on macOS), reads the
+  launch record through one descriptor (no symlink, one link, owner-only, bounded, v1), and requires this user,
+  the record's pid and the record's process start identity. Only then does that record's token go on that same
+  connection, and only on `POST /command`. Any failure is a `ConnectError` with the reason and zero bytes written.
+- **Decision, core:** the launch record (`<socket stem>.principal.key`, same path and mode) is JSON binding token,
+  pid, uid, process start identity and launch instance in one atomic write. The core takes the kernel peer at
+  accept. `principal` needs the token, this uid, a peer process that started before the accept (pid reuse fails),
+  and a parent chain that reads cleanly to pid 1 without the core; an unreadable chain is the tool tree.
+  `descends_from` fails closed accordingly; there is one walker. Other platforms: no principal over the socket.
+- **Unchanged (D-039, D-052):** the principal comes from the connection; in-process clients are the principal by
+  construction; stdio and TCP are local; only a principal caller acts as the principal. No command or event added.
+- **Snapshot and liveness (handoff items 2 and 3, the parts that ride on this):** `hello` reports `instance` and
+  `heartbeat`; the event stream's opening comment carries both; `approvals.list` adds `cursor: {instance, seq}`
+  from the same await-free copy. A failed `approval.requested` publication no longer leaves a pending row. A
+  filtered subscription's heartbeat timeout is absolute, so other sessions' traffic cannot starve it. The Python
+  client ends a stream with no complete frame (event or heartbeat) for 45 s and bounds a frame at 16 MiB. A joined
+  terminal window no longer resends a turn, approval answer or other change after a lost reply; it resends only
+  reads and commands whose connection never opened.
+- **Scope against the handoff:** no ruling conflicted. D-039's file name and gate credential class are kept, so the
+  launch record replaces the token file's contents rather than adding a file. The OS surface lives in another
+  repository and migrates there. Clients expose the stream `instance` but the terminal and web views do not yet
+  take a fresh snapshot when it changes. Required response bindings, phone factors and transcript cursors stay out
+  (handoff items 3 and 4; item 4 needs a ruling on D-033's "principal always").
+- **Limits:** same-user code outside the core's tree remains trusted and can read the record. A tool child that
+  detaches before connecting is still not caught (issue #31); the fix is the tool sandbox. A core from before this
+  change has a plain-token file, which new clients refuse (restart the core).
+- **Validation:** `tests/security/test_unix_peer_auth.py`: a replaced socket gets zero bytes; stale, symlinked,
+  shared, old-format and missing records refuse before any byte; an unsupported platform fails closed both ways; a
+  mismatched kernel uid is local; a tool child through the real client, and the orphan of one that exited, are
+  local; the TUI and web clients act as the principal and stream; reconnect after restart takes the new record;
+  the snapshot cursor, the publication failure, heartbeat starvation, the frame deadline and no-resend. The D-039
+  and D-052 attack scripts now steal the record's real token.
+- **Docs:** `docs/GATE.md` "Unix peer authentication", `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
