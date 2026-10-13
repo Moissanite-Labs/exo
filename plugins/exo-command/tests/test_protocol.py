@@ -43,6 +43,7 @@ class Keyed:
 def make(tmp_path, rules):
     (tmp_path / ".git").mkdir(exist_ok=True)  # a repo: no cwd guard notice (D-032) among the events counted
     eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={})
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     eng.loop.provider = Keyed(rules)
     return eng, Dispatcher(eng)
 

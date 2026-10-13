@@ -43,7 +43,7 @@ it runs `uv tool upgrade exo`. `exo update --dry-run` prints the steps and chang
 | 2 | Creates `$EXO_HOME` (default `~/.exo`, mode 700) with `keys/`, `principals/` and `bin/`. |
 | 3 | Only with `--with-hermes`. Pins Hermes with `scripts/pin-hermes.sh` into `$EXO_HOME/hermes`: the latest stable tag, or `--tag`. If a patch does not apply to that tag, the installer skips it, warns, and retries. `PINNED` and `config.json` (`hermes_patch_skip`) record the skip. `--strict-patches` fails instead. At the end it prints a warning list of every patch that did not apply and exits 1. |
 | 4 | Creates a venv at `$EXO_HOME/venv` and pip installs the `exo` package with the terminal client (`exo[tui]`), then links `exo` into `~/.local/bin`. With `--with-hermes` it also installs the pinned Hermes checkout (editable). |
-| 5 | Copies the Exo plugins (every `plugins/*/plugin.yaml`, or `--plugins`) into `<HERMES_HOME>/plugins/`, without tests. Each copy carries a `.exo-managed` marker. A plugin folder without the marker is never overwritten. |
+| 5 | Copies the Exo plugins (every `plugins/*/plugin.yaml`, or `--plugins`) into `$EXO_HOME/plugins/`, where the standalone core discovers them, without tests. With `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME`, it also copies them into `<HERMES_HOME>/plugins/`. Each copy carries a `.exo-managed` marker. A plugin folder without the marker is never overwritten. |
 | 6 | Only with `--with-hermes`. Writes `<HERMES_HOME>/config.yaml` only if it does not exist: `plugins.enabled`, `memory.provider: exo-memory`, `context.engine: exo-context`. An existing file is left alone and the lines to add are printed. |
 | 7 | Writes `$EXO_HOME/env.sh` and `$EXO_HOME/config.json`. With `--with-hermes` it also writes `$EXO_HOME/bin/exo-hermes` (runs the pinned Hermes with Exo's `HERMES_HOME`). |
 | 8 | Offers `exo init <id> --interview`. With `--principal ID` it runs without asking; add `--answers FILE` for a scripted interview. |
@@ -54,7 +54,8 @@ it runs `uv tool upgrade exo`. `exo update --dry-run` prints the steps and chang
 |---|---|
 | `$EXO_HOME/hermes` | the pinned Hermes checkout (owned by `pin-hermes.sh`) |
 | `$EXO_HOME/venv` | Python for Hermes and Exo |
-| `$EXO_HOME/hermes-home` | the default `HERMES_HOME`: new, Exo-owned, separate from `~/.hermes` |
+| `$EXO_HOME/plugins` | plugins discovered by the standalone core |
+| `$EXO_HOME/hermes-home` | the default optional `HERMES_HOME`: Exo-owned, separate from `~/.hermes` |
 | `$EXO_HOME/principals/<id>` | principal stores |
 | `$EXO_HOME/keys` | signing keys (0600) |
 | `$EXO_HOME/config.json` | the shared config (`exo.config`) |
@@ -71,7 +72,7 @@ pinned checkout. Hermes exact-pins its dependencies, so the result matches upstr
 |---|---|
 | `--dry-run` | print every action; write nothing anywhere |
 | `--exo-home DIR` | Exo's home (default `$EXO_HOME`, else `~/.exo`) |
-| `--hermes-home DIR` | install plugins into this `HERMES_HOME`. The only way to use `~/.hermes`. |
+| `--hermes-home DIR` | also copy plugins into this `HERMES_HOME`. The only way to use `~/.hermes`. |
 | `--with-hermes` | also install Hermes and its patch queue (kept until the wave 4 cutover). Off by default. |
 | `--tag TAG` | Hermes release tag (needs `--with-hermes`) |
 | `--exo-source SRC` | a local exo checkout or a git URL (cloned into `$EXO_HOME/src/exo`) |
@@ -97,6 +98,10 @@ Use `--hermes-home` or `EXO_HERMES_HOME`.
   have not changed.
 - `pin-hermes.sh` has its own guards (see `PINNING.md`).
 
+The core refuses tool execution if no approval callback is registered, or if an approval callback fails.
+Re-run the installer to restore missing plugins. If `core_plugins` or a seat's plugins list limits what loads,
+include `exo-gate`, then restart Exo.
+
 ## Adopting an existing store
 
 ```sh
@@ -110,4 +115,6 @@ See `ONBOARDING.md`.
 
 `tests/install/` runs the script under `bash` with a fake `HOME`: the dry run writes nothing,
 the live-home guard holds, and a run with `--no-pin --no-pip` installs plugins, writes the
-config, runs a scripted interview and is idempotent. The tests never pin Hermes.
+config, runs a scripted interview and is idempotent. Installation smoke tests discover and load all six
+plugins from the standalone home, including the gate and command centre, with no `EXO_PLUGIN_DIRS` override.
+The tests never pin Hermes.

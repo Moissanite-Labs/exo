@@ -143,8 +143,10 @@ A plugin is a folder with `plugin.yaml`, an `__init__.py` that has `register(ctx
 The manifest needs a `name`. Other keys in use: `version`, `description`, `kind`, `hooks`, `config_schema` (with a
 default for each key), `tags`. Look at `plugins/exo-command/plugin.yaml` for a full one.
 
-Plugins are found in `$EXO_PLUGIN_DIRS`, then `$EXO_HOME/plugins`, then the repo's `plugins/`. A seat can limit the
-list with `[plugins] enabled`. A failed `register` is rolled back, so a half-loaded plugin leaves nothing behind.
+Plugin folders are found in `$EXO_PLUGIN_DIRS`, then `$EXO_HOME/plugins`; installed `exo.plugins` entry points
+also load. To use the repo's plugins during development, set `EXO_PLUGIN_DIRS` to its `plugins/` folder.
+A seat can limit the list with `[plugins] enabled`. A failed `register` is rolled back, so a half-loaded plugin
+leaves nothing behind.
 
 What `ctx` offers (`src/exo/core/plugins.py`):
 
@@ -159,13 +161,23 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 | `register_skill(name, path)` | Adds a skill file. |
 | `get_config(key, default)` | Reads a plugin setting. |
 
-**Hooks.** The names are in `VALID_HOOKS` in `src/exo/core/hooks.py`: `pre_tool_call`, `post_tool_call`,
-`transform_tool_result`, `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`,
-`on_session_end`, `on_session_reset`, `on_turn_start`, `on_turn_end`, `on_compaction`, `pre_approval_request`,
-`post_approval_response`, `pre_command`, `subagent_start`, `subagent_stop`, `on_skill_lifecycle`. Callbacks take
-keyword arguments only. A failing callback is logged and skipped (it fails open), except that a `pre_tool_call`
-block is honoured. To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the
-principal, it returns `{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+**Hooks.** `register_hook` accepts only the six names in `VALID_HOOKS` in `src/exo/core/hooks.py`, which the
+core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`,
+`on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. A failing callback is logged and
+skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
+tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
+To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
+`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+
+`KNOWN_UNFIRED_HOOKS` names hooks present in Hermes contracts or earlier Exo declarations that Exo does not
+fire: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`, `on_session_end`,
+`on_session_finalize`, `on_session_reset`, `on_compaction`, `pre_approval_request`, `pre_command`,
+`subagent_start`, `subagent_stop`, `on_skill_lifecycle`, `pre_auxiliary_call`, `post_auxiliary_call`,
+`pre_gateway_dispatch`, `kanban_task_completed`, and `kanban_task_blocked`. Default registration raises
+`HookError` instead of accepting a callback that would never run. A custom `HookRegistry(valid=...)` can define
+a separate fire surface for an isolated consumer; it does not add hooks to the Exo core. Hermes contract tests
+continue to check Hermes's own hook metadata.
+
 Required-executor engines propagate failures of `exo-gate` in `pre_tool_call`
 and `post_approval_response`, blocking dispatch. The gate requires saved signed
 decision and approval events; ordinary optional hooks keep the behavior above.
