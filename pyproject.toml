@@ -33,6 +33,9 @@ packages = ["src/exo", "clients/tui/exo_tui"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "real_claude: runs one real turn through the claude CLI; needs EXO_TEST_REAL_CLAUDE=1 and claude on PATH",
+]
 
 # Lint: pyflakes rules only (F). Findings fail CI.
 [tool.ruff]
