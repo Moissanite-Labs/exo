@@ -7,11 +7,12 @@ import asyncio
 import time
 
 import httpx
+import pytest
 
 from exo.protocol import schema as s
 from exo_tui import conn
 from exo_tui.widgets import ApprovalCard, Composer
-from test_tui import run, send, until
+from test_tui import pending_approval, run, send, until
 
 
 def interrupts(app):
@@ -83,7 +84,7 @@ def test_approval_card_does_not_take_a_typed_a(tmp_path):
         app.composer.focus()
         for ch in "ab":
             await pilot.press(ch)  # the user is typing a steer message when the card appears
-        await send_ask(app, pilot)
+        await send_ask(app, pilot, eng)
         assert not app.card.has_focus
         await pilot.press("a")
         await pilot.pause(0.1)
@@ -93,18 +94,19 @@ def test_approval_card_does_not_take_a_typed_a(tmp_path):
     run(tmp_path, sc)
 
 
-async def send_ask(app, pilot):
+async def send_ask(app, pilot, eng):
     from exo.protocol import schema as sc_
 
-    app.approvals.append(sc_.ApprovalRequested(request_id="r1", risk="medium", summary="run echo?",
-                                               options=["allow", "allow_always", "deny"]))
-    app.show_approval()
-    await pilot.pause(0.05)
+    pending_approval(eng, app.session, sc_.ApprovalRequested(request_id="r1", risk="medium", summary="run echo?",
+                                                            options=["allow", "allow_always", "deny"]))
+    await until(lambda: app.card is not None, pilot)
 
 
 def test_allow_always_needs_a_confirm(tmp_path):
     async def sc(app, pilot, client, eng):
-        await send_ask(app, pilot)
+        await send_ask(app, pilot, eng)
+        assert app.composer.has_focus
+        await pilot.press("ctrl+f")
         assert isinstance(app.card, ApprovalCard) and app.card.has_focus
         await pilot.press("a")
         await pilot.pause(0.05)
@@ -116,16 +118,71 @@ def test_allow_always_needs_a_confirm(tmp_path):
     run(tmp_path, sc)
 
 
-def test_shift_a_allows_always_at_once_and_esc_does_not_deny(tmp_path):
+def test_shift_a_also_requires_confirmation_and_esc_does_not_deny(tmp_path):
     async def sc(app, pilot, client, eng):
-        await send_ask(app, pilot)
+        await send_ask(app, pilot, eng)
+        await pilot.press("ctrl+f")
         await pilot.press("escape")
         await pilot.pause(0.1)
         assert app.card is not None and not [b for b in app.sent if isinstance(b, s.ApprovalRespond)]
+        await pilot.press("ctrl+f")
         await pilot.press("A")
+        assert app.card.confirming and not [b for b in app.sent if isinstance(b, s.ApprovalRespond)]
+        await pilot.press("enter")
         await until(lambda: [b for b in app.sent if isinstance(b, s.ApprovalRespond)], pilot)
         assert [b for b in app.sent if isinstance(b, s.ApprovalRespond)][0].decision == "allow_always"
 
+    run(tmp_path, sc)
+
+
+@pytest.mark.parametrize("text", ["Act now", "ok", "do it"])
+def test_ordinary_typing_after_send_never_answers_an_approval(tmp_path, text):
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "ask")
+        await until(lambda: app.card is not None, pilot)
+        assert app.composer.text == "" and app.composer.has_focus
+        app.reconcile_every = 0
+        await app.reconcile_approvals()  # the pending fake-core request survives normal synchronization
+        for ch in text:
+            await pilot.press("space" if ch == " " else ch)
+        assert app.composer.text == text and app.card is not None
+        await pilot.press("enter")
+        await pilot.pause(.1)
+        assert not [b for b in app.sent if isinstance(b, s.ApprovalRespond)]
+    run(tmp_path, sc)
+
+
+def test_confirmation_cancels_when_focus_returns_to_editable_composer(tmp_path):
+    async def sc(app, pilot, client, eng):
+        await send_ask(app, pilot, eng)
+        await pilot.press("ctrl+f", "a")
+        assert app.card.confirming
+        app.composer.focus()
+        await pilot.press("A")
+        assert not app.card.confirming and app.composer.text == "A"
+        assert not [b for b in app.sent if isinstance(b, s.ApprovalRespond)]
+        await pilot.press("ctrl+f", "enter")
+        assert not [b for b in app.sent if isinstance(b, s.ApprovalRespond)]
+    run(tmp_path, sc)
+
+
+def test_click_focus_and_deny_note_cancellation_restore_focus(tmp_path):
+    async def sc(app, pilot, client, eng):
+        await send_ask(app, pilot, eng)
+        assert app.composer.has_focus
+        await pilot.click("#approval-body")
+        assert app.card.has_focus
+        await pilot.press("escape")
+        assert app.composer.has_focus and app.card is not None
+        assert not [b for b in app.sent if isinstance(b, s.ApprovalRespond)]
+        await pilot.click("#approval-body")
+        await pilot.press("d", "A")  # uppercase A in the editable deny note never grants anything
+        assert not [b for b in app.sent if isinstance(b, s.ApprovalRespond)]
+        await pilot.press("escape")
+        assert app.card.has_focus and not app.card.noting
+        await pilot.press("o")
+        await until(lambda: [b for b in app.sent if isinstance(b, s.ApprovalRespond)], pilot)
+        assert app.composer.has_focus
     run(tmp_path, sc)
 
 

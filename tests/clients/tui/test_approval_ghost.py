@@ -7,18 +7,17 @@ import time
 
 from exo.protocol import schema as s
 from exo_tui.widgets import ApprovalCard, Composer
-from test_tui import run, send, until
+from test_tui import pending_approval, run, send, until
 
 
-async def ask_over_a_draft(app, pilot, draft="a draft"):
+async def ask_over_a_draft(app, pilot, eng, draft="a draft"):
     """A card that arrives while the user has a draft in the composer (a steer being typed)."""
     app.composer.focus()
     app.composer.text = draft
     app.composer.last_typed = time.monotonic()
-    app.approvals.append(s.ApprovalRequested(request_id="r1", risk="medium", summary="run echo?",
-                                             options=["allow", "allow_always", "deny"]))
-    app.show_approval()
-    await pilot.pause(0.05)
+    pending_approval(eng, app.session, s.ApprovalRequested(request_id="r1", risk="medium", summary="run echo?",
+                                                          options=["allow", "allow_always", "deny"]))
+    await until(lambda: app.card is not None, pilot)
     assert not app.card.has_focus  # a draft is never interrupted
 
 
@@ -33,7 +32,7 @@ def responds(app):
 
 def test_card_is_reachable_by_tab_with_a_draft_in_the_composer(tmp_path):
     async def sc(app, pilot, client, eng):
-        await ask_over_a_draft(app, pilot)
+        await ask_over_a_draft(app, pilot, eng)
         for _ in range(6):
             await pilot.press("tab")
             if app.card.has_focus:
@@ -50,7 +49,7 @@ def test_card_is_reachable_by_tab_with_a_draft_in_the_composer(tmp_path):
 
 def test_card_has_a_key_that_works_from_the_composer(tmp_path):
     async def sc(app, pilot, client, eng):
-        await ask_over_a_draft(app, pilot)
+        await ask_over_a_draft(app, pilot, eng)
         await pilot.press("ctrl+f")  # focus the card from anywhere
         await pilot.pause(0.05)
         assert app.card.has_focus
