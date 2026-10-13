@@ -1064,3 +1064,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Revisit if:** `muse exec` gains a structured output or tool bridge, which could lift the text-only limit.
 - **Docs:** `docs/PROVIDERS.md` "Use a Muse Code subscription", `docs/GATE.md` "Muse CLI credentials",
   `docs/DEVELOPER-GUIDE.md` "Add a CLI-backed provider", `docs/WHITEPAPER.md` §13.1, `docs/TOOLS.md`.
+
+## D-053 (2026-10-12) Verification isolates terminal preferences and documents current behavior
+- **Why:** the baseline root suite failed four TUI checks solely because the invoking terminal exported
+  `NO_COLOR`. Removing that variable made all four pass. Changing `TERM` did not. Product behavior was correct,
+  but the tests inherited an unrelated user's display preference.
+- **Decision:** the repository test fixture clears inherited `NO_COLOR`. Tests of no-colour mode set it explicitly.
+  The product continues to honor the user's setting. Existing tests cover both modes.
+- **Documentation corrections:** the approval focus shortcut is ctrl+f. Ctrl+g opens the composer. Undo hides log
+  entries and invalidates covering summaries, matching D-041 and the implementation.
+- **Docs:** `docs/DEVELOPER-GUIDE.md`, `docs/UI.md`, `docs/MEMORY-MODEL.md`.
