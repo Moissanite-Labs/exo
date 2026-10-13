@@ -172,6 +172,10 @@ def test_click_focus_and_deny_note_cancellation_restore_focus(tmp_path):
         assert app.composer.has_focus
         await pilot.click("#approval-body")
         assert app.card.has_focus
+        await pilot.press("escape")
+        assert app.composer.has_focus and app.card is not None
+        assert not [b for b in app.sent if isinstance(b, s.ApprovalRespond)]
+        await pilot.click("#approval-body")
         await pilot.press("d", "A")  # uppercase A in the editable deny note never grants anything
         assert not [b for b in app.sent if isinstance(b, s.ApprovalRespond)]
         await pilot.press("escape")
