@@ -1175,3 +1175,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   preserving staging's robots exclusion and noindex header. Production promotion remains separate under D-047.
 - **Docs:** `docs/SITE-STATUS.md`; `docs/DEVELOPER-GUIDE.md` "Deploying the site"; `site/roadmap/` and the landing and
   web-client pages. No user commands changed, so the user guide is unaffected. Whitepaper updates remain batched.
+
+## D-056 (2026-10-13) Versioning and naming
+- **Why:** versions, branches and documents had no common naming, so an iteration could not be found again. The
+  site had two ad hoc tags and Exo itself had no release tag.
+- **Decision:** Exo is SemVer below 1.0, tagged `exo-vX.Y.Z`, with a codename per MAJOR from the exopet line (0.x egg,
+  1.x cell, 2.x tile, 3.x cube, 4.x frame, then 4D and up) shown as `exo 0.2.0 (egg)`. Main becomes 0.2.0. The site
+  is `site-vMAJOR.MINOR`, archived before each production deploy, and the deploy script tags and writes
+  `version.json`. The whitepaper is `whitepaper-vX.Y`, the house taste pack `house-vX.Y.Z`. Decision numbers are never
+  reused. Branch prefixes are listed. `CHANGELOG.md` follows Keep a Changelog.
+- **Numbering:** D-055 is used by branch `feat/roadmap-page`, so this is D-056.
+- **Validation:** tests check the `--version` form and that the changelog's latest release equals the pyproject version.
+- **Docs:** `docs/VERSIONING.md`, `CHANGELOG.md`, `docs/DEVELOPER-GUIDE.md`.

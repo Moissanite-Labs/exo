@@ -131,3 +131,4 @@ real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Still open:
 | D-053 Hermetic terminal preferences and corrected approval and undo documentation | `docs/DEVELOPER-GUIDE.md`, `docs/UI.md`, `docs/MEMORY-MODEL.md` | n/a | n/a | n/a |
 | D-054 Mandatory learning checks precede ruling citations, with explicit acceptance separate | `docs/LEARNING.md`, `research/LEARNING-LOOP.md` | n/a | n/a | n/a |
 | D-055 Keep staging current with verified status; core engine, browser polish, then Electron desktop packaging | `docs/SITE-STATUS.md`, `DECISIONS.md` D-055, `site/roadmap/index.html`, `site/app/index.html` | n/a (no user commands changed) | "Deploying the site" | Batched; desktop delivery direction only |
+| D-056 Versioning and naming: SemVer with codenames, site and doc versions, tags, branches, changelog | `docs/VERSIONING.md`, `CHANGELOG.md`, `DECISIONS.md` | n/a | `docs/DEVELOPER-GUIDE.md` "Cutting a release" | n/a |

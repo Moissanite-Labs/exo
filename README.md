@@ -88,6 +88,11 @@ Commands you will use in the terminal (`/help` lists all): `/new`, `/sessions`, 
 `/context`, `/compact`, `/model`, `/default`, `/usage`, `/trace`, `/findings`, `/peers`, `/send`, `/handoff`,
 `/intro`, `/tutorial`.
 
+## Versions
+
+Exo 0.2.0 (egg). Each major version has a codename from the exopet line: egg, cell, tile, cube, frame, then 4D and up.
+See [`CHANGELOG.md`](CHANGELOG.md) and [`docs/VERSIONING.md`](docs/VERSIONING.md).
+
 ## Read on
 
 | | |
