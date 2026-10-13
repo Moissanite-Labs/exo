@@ -594,7 +594,7 @@ class ApprovalCard(Vertical, can_focus=True):
             box.focus()
         else:
             if k == "escape":
-                self.app.composer.focus()
+                self.app.query_one(Composer).focus()
                 event.stop()
             return  # esc included: it never answers for you
         event.stop()
