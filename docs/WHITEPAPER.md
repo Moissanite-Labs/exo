@@ -529,7 +529,9 @@ that the router can rotate through.
 A third kind of provider is a vendor's own command-line tool, run as a subprocess (`claude-cli`, `muse-cli`).
 It exists for subscriptions that can only be used through the vendor's login. The login token stays with the
 vendor's program, in the OS keychain, and Exo never touches it. The price is honest: one process per turn, no
-token stream, and for `muse-cli` no tool calls, so the router skips it when a turn needs tools.
+token stream. `muse-cli` also carries tools, through the vendor's `muse serve` protocol: Exo's tools are listed through an
+inert server, the model's call is caught and Exo runs it. The price is that tool results go back as quoted text in a
+fresh session each time, and each call pays the vendor's large system prompt in quota.
 
 #### 13.2 Roles
 

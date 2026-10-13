@@ -28,9 +28,10 @@ says so.
 
 What the test call is: OpenAI-style and local providers list their models (`GET /models`), Anthropic lists one
 model, a decision provider answers one yes or no question, `claude-cli` only checks the binary is on PATH, and
-`muse-cli` runs one tiny `muse exec` prompt (see "Use a Muse Code subscription").
+`muse-cli` runs one tiny `muse exec` prompt and checks the `muse serve` handshake (see "Use a Muse Code
+subscription").
 Errors come back as a class: `no_key`, `auth`, `billing`, `not_found`, `rate_limited`, `server`, `timeout`,
-`network`, `not_running`, `not_installed`, `unsigned`, `bad_response`, `http`, `error`. The last result is kept in
+`network`, `not_running`, `not_installed`, `unsigned`, `version_mismatch`, `bad_response`, `http`, `error`. The last result is kept in
 `$EXO_HOME/state/providers.json` (no secrets) and shows as `verified` or `failed: <class>`; a new key clears it.
 
 If no provider can serve the main role, `exo tui` and `exo web` say so and point here.
@@ -77,8 +78,8 @@ Set it up once, yourself, in a terminal:
 non-secret fields (`mechanism`, `subs_active`) from `~/.config/muse/auth.json` and nothing else in that file. It
 cannot see the keychain, so the test call is what proves the login works. Error classes from the test:
 `not_installed`, `no_key` (not logged in), `auth` (login rejected), `billing` (subscription not active),
-`rate_limited`, `timeout`, `network`, `unsigned` (a keychain write was refused, see below), `bad_response`,
-`error`.
+`rate_limited`, `timeout`, `network`, `unsigned` (a keychain write was refused, see below), `version_mismatch`
+(the serve route's pinned wire schema changed), `bad_response`, `error`.
 
 Models: `muse-spark-1.3` (the default), `muse-wonder-1.0` and `muse-wonder-full-1.0`, written
 `muse-cli:<model>`; Exo passes the model to `muse exec --model`. Reasoning effort uses the CLI's own scale
@@ -87,11 +88,30 @@ when a call asks for none it sends `low`, a quiet default for a one-shot call (t
 
 Limits, stated plainly:
 
-- **Text only.** `muse exec` runs its own agent. Exo cannot pass its tools to it or stream tool calls out of it.
-  A turn that carries Exo tools is refused and the router falls back to the next route, so `muse-cli` suits a role
-  without tools (for example `aux`) or a conversation where another route follows it.
-- **Slow start, no token stream.** Each turn is a new process. The answer arrives when the run ends. The history
-  is flattened into one prompt, and no token counts come back (usage shows as unknown).
+- **Two routes.** A turn with no Exo tools runs `muse exec`: one process per turn, the answer arrives when the run
+  ends (no token stream), history is flattened into one prompt, and no token counts come back. A turn with Exo
+  tools runs `muse serve`, Muse's protocol over stdio: Exo registers its tools as an inert MCP server, streams the
+  text, catches the model's tool call (the tool is never run by Muse), stops the turn and runs the tool itself,
+  as `claude-cli` does. Streaming, tool calls and usage work on this route.
+- **Tool results go back as text.** `muse serve` has no way to hand a tool result back to the model. So each
+  request starts a fresh, throwaway session and replays the whole history, tool calls and results included, as one
+  marked text block. The model reads the results as quoted text. Checked live: a second turn with a replayed
+  call and result was answered from the result, including a planted wrong value, which the model quoted and
+  questioned.
+- **Quota cost.** Muse's own system prompt is large: a trivial call measured about 23,000 input tokens with no
+  cache hits, and every tool round trip pays it again. Exo logs `inputTokens` for each call (logger `exo.muse`).
+  Keep Muse for work that needs it and put cheaper routes first for chatty tool loops.
+- **Pinned to one wire version.** The serve route checks the schema version and fingerprint Muse reports at
+  start-up. If a Muse update changes them, calls fail with the class `version_mismatch` (and the test call says
+  so) instead of misbehaving; tool-less calls on `muse exec` are unaffected. Review the pins in
+  `src/exo/core/models/muse_serve.py` after a Muse update.
+- **Parallel calls.** If Muse asks to run several Exo tools at once, Exo emits all of them and stops the turn
+  once. In the one live probe only the first call arrived before Muse paused for approval, so expect calls one at
+  a time; the model asks again for the rest after it sees the first result.
+- **Turn it off.** `[models] muse_serve = false` in Exo's config turns the serve route off. Tool turns are then
+  refused and the router falls back to the next route, as in the first version of this provider.
+- **Native Muse tools are denied.** On the serve route Exo cannot switch off Muse's web tools or reminder agents
+  (only `muse exec` can), so any approval for a tool that is not one of Exo's is denied.
 - **Signing is a troubleshooting note, not a requirement.** A working unsigned `muse` binary or launcher is
   fine, and Exo does not check or flag it. On some Macs an unsigned native binary cannot write the keychain at
   login and fails with `OSStatus -67068`. Only if a real call fails that way does Exo report the class

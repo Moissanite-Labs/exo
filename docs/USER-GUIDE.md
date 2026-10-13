@@ -20,7 +20,8 @@ type it after the command name. If no provider works, `exo` and `exo web` tell y
 the web route: `docs/PROVIDERS.md`.
 
 To use a Muse Code subscription instead of a key, run `muse login` yourself, then `exo providers test muse-cli`. If
-the test reports `unsigned`, see the signing note there. It is text only and has limits; they are listed in `docs/PROVIDERS.md` ("Use a Muse Code subscription").
+the test reports `unsigned`, see the signing note there. Exo tools work through it, with costs (about 23k input tokens per call, tool results replayed as text); they are
+listed in `docs/PROVIDERS.md` ("Use a Muse Code subscription"). `[models] muse_serve = false` turns the tool route off.
 
 Then start the terminal client by typing the command, in the folder you want to work in:
 

@@ -395,7 +395,14 @@ when a subscription is only reachable through the vendor's own login. The rules:
    `docs/PROVIDERS.md`. Refuse what you cannot carry with a status that lets the router fall back.
 5. Wire it in `catalog.toml` (`transport`), `Router.credentials`, `providers_setup.rows` and `test_provider`,
    and `models_cmd.available_models`. Map failures to the existing error classes, with fixed detail text.
-6. Test with a fake script on `PATH` (`tests/core/models/test_muse_cli.py`). No network, no real keychain.
+6. Test with a fake script on `PATH` (`tests/core/models/test_muse_cli.py`, and `test_muse_serve.py` for a fake
+   `muse serve` speaking JSON-RPC). No network, no real keychain.
+
+   For tools, `muse-cli` shows a second shape: the vendor CLI exposes a protocol (`muse serve`) where a client can
+   register an MCP server. Exo registers `claude_cli_mcp.py` (an inert server that lists Exo's tools and never runs
+   one), catches the model's tool call from the protocol's approval request, interrupts the turn, and runs the
+   tool itself. Pin the protocol's schema version and fail with a clear error class on a mismatch. Put a config
+   switch beside it (`[models] muse_serve`) so the route can be turned off.
 7. Add the vendor's login and logout commands to the gate's credential rules.
 
 ### Use the bus

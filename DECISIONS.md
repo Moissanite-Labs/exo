@@ -1049,8 +1049,19 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   keychain write error.
 - **Why:** the subscription is reachable only through the vendor's login. A subprocess keeps the token out of Exo
   and out of every log, which is the same line D-034 and D-039 draw for keys.
-- **Limits, accepted:** text only (a turn with tools is refused with status 501 so the router falls back), one
-  process per turn, no token stream, no usage counts, history flattened into one prompt. A working unsigned
+- **Tools (added 2026-10-13):** a turn with Exo tools runs `muse serve` (MSP over stdio) with Exo's tools as an
+  inert MCP server, the same trick as `claude-cli`: the model's tool call arrives as an `approval/request`, Exo
+  records it, replies, sends one `turn/interrupt` (the inert tool never runs) and runs the tool itself. Text streams
+  as `item/delta`; usage comes from `session/tokenUsage`. One fresh `muse serve` process per request, killed
+  with its process group afterwards. Approvals for non-Exo tools are denied. `muse_serve = false` under `[models]`
+  turns the route off (then a tool turn is refused with status 501 and falls back).
+- **Limits, accepted:** tool-less turns use `muse exec`: one process per turn, no token stream, no usage counts,
+  history flattened into one prompt. On the serve route: there is no wire way to return a tool result, so the
+  flattened history, tool calls and results as marked text, is replayed into a fresh session every request
+  (verified live, including a planted wrong result); quota overhead of about 23k uncached input tokens per call
+  (logged); the route is pinned to wire schema version 1 and fingerprint `sha256:6de32db0...` and fails with
+  class `version_mismatch` otherwise; serve cannot disable web tools or reminder agents (native approvals are
+  denied); parallel calls are emitted together when Muse sends them, but live it sent one at a time. A working unsigned
   binary or launcher is fine and is never checked or flagged up front (verified live on `muse` 1.4.7). Only a real
   keychain failure (`OSStatus -67068`) makes Exo report `unsigned` and suggest ad-hoc signing of the native binary,
   `codesign --force --sign - <path>`; it is also a docs troubleshooting note. Signing and startup errors allow
@@ -1066,6 +1077,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   and `~/.config/muse/` are `credentials`: always ask, regardless of lowering policies or standing grants.
 - **Rejected:** reading the token from the keychain or `auth.json` and calling the API directly (Exo would hold a
   vendor secret); passing `META_API_KEY` through (bills an API account, not the subscription).
-- **Revisit if:** `muse exec` gains a structured output or tool bridge, which could lift the text-only limit.
+- **Revisit if:** `muse serve` gains a way to return a tool result (the replay and its token cost could go), or a
+  Muse update changes the schema fingerprint (review the pins).
 - **Docs:** `docs/PROVIDERS.md` "Use a Muse Code subscription", `docs/GATE.md` "Muse CLI credentials",
   `docs/DEVELOPER-GUIDE.md` "Add a CLI-backed provider", `docs/WHITEPAPER.md` §13.1, `docs/TOOLS.md`.

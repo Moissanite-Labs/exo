@@ -80,7 +80,9 @@ check are the guard.
 get a standing grant. The match is on the word anywhere after `muse`, so `muse --yolo login` is caught, and a
 prompt that is exactly one of these words over-asks, which is the safe side. `~/.config/muse/` is a secret-store
 path: reading or writing `auth.json` there is `credentials` too. Other `muse` commands are unknown programs and
-ask by default. Paths to the Muse executable and nested shell commands keep the credential classification;
+ask by default. The `muse-cli` provider's tool route does not give Muse any tools: Exo's tools are listed
+to the model through an inert MCP server, the model's call is caught, and Exo runs the tool through this gate as
+for any other provider. Approvals Muse raises for its own tools are denied. Paths to the Muse executable and nested shell commands keep the credential classification;
 lowering `opaque_exec` by policy or granting an opaque command cannot bypass the credential floor.
 Tests: `plugins/exo-gate/tests/test_credentials.py`.
 
