@@ -114,8 +114,8 @@ def _parse(claim: str):
 
 
 def neutralise(text: str, cls: str) -> str:
-    """The claim in neutral form. Value items are generalised: examples, "for example" tails and the
-    "because" clause go, so the principle travels and the story does not."""
+    """Apply limited mechanical cleanup to a claim. Value examples and the clause after "because" are removed;
+    first-person stories are not semantically rewritten and must be rephrased by the principal."""
     from ..consolidate import split_reason
     t = " ".join(str(text or "").split())
     t = re.sub(r"\b([Tt])he principal's\b", r"\1he user's", t)
