@@ -9,6 +9,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
 
 ### Changed
+- A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,
   `/findings`, handoff facts) moved to `exo.diagnostics`, and the engine factory moved to `exo.compose:create`, the
   new `exo serve` default. `exo.core.engine:create` still works. No behaviour change.

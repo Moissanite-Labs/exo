@@ -49,7 +49,7 @@ export const attachComposer=()=>({guideEl:h("div"),menuEl:h("div"),note(){},sent
 import assert from "node:assert/strict";
 globalThis.nodes=[]; globalThis.window={matchMedia:()=>({matches:true})};
 globalThis.document={getElementById:()=>null,addEventListener(){},removeEventListener(){}};
-globalThis.sessionStorage={getItem:()=>"tok"}; globalThis.requestAnimationFrame=f=>f();
+globalThis.sessionStorage={getItem:k=>k==="xc-token"?"tok":null,removeItem(){}}; globalThis.requestAnimationFrame=f=>f();
 let messages=[{id:"u1",role:"user",content:[{text:"hello"}]},{id:"a1",role:"assistant",content:[{text:"original answer"}]}], status="idle", hold=null, snapshotSeq=100;
 const requests=[];
 const report={schema_version:1,model:"fake:x",capacity:8192,text:"A report with no parseable token labels",tokens:{system:1,tree:2,notes:3,tail:4194,total:4200},tree:{summaries:1,nodes:2},nodes:{done:2,pending:0},log_entries:4,frontier:2};
@@ -109,7 +109,7 @@ def test_real_bus_gap_panel_race_and_expired_token(tmp_path):
 import assert from "node:assert/strict";
 const made=[];
 class ES { constructor(url){this.url=url;this.readyState=1;made.push(this);} close(){this.readyState=2;} addEventListener(t,f){this[t]=f;} }
-globalThis.EventSource=ES;globalThis.sessionStorage={getItem:()=>"tok"};
+globalThis.EventSource=ES;globalThis.sessionStorage={getItem:k=>k==="xc-token"?"tok":null,removeItem(){}};
 let resolvePanels, delayed=false, expired=false;
 globalThis.fetch=async path=>{
   if(expired)return {ok:false,status:403,json:async()=>({error:"expired"})};

@@ -192,6 +192,9 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         for m in gone:
             eng.hub.publish(s.SteerCancelled(message_id=m.id or "", text=m.text()), b.session)
         return {"cancelled": [{"id": m.id, "text": m.text()} for m in gone]}
+    if b.name == "subagent":  # #97: list, open, send to and stop a running child; exo.subagents holds the rules
+        from exo import subagents
+        return await subagents.command(eng, b)
     if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
         word, _, rest = b.args.strip().partition(" ")
         if word == "reload":
