@@ -87,7 +87,7 @@ After any change to the schema, regenerate the exports and commit them:
 ### Extend through `command.run` built-ins
 
 `command.run` takes `name`, `args` and `session`. The core answers a few names itself, in
-`CoreEngine._builtin_command` in `src/exo/core/engine.py`: `context`, `compact`, `trace`, `findings`,
+`builtin_command` in `src/exo/diagnostics.py`: `context`, `compact`, `trace`, `findings`,
 `handoff_facts`, `harness_error` and `unsteer` (pull a queued steer message back; args is its id, empty means the
 newest; publishes `steer.cancelled`, D-045). Anything else goes to a command a plugin registered. To add one:
 

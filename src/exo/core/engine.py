@@ -1,6 +1,6 @@
 """The real Engine behind exod: router, tools, loop, sessions and plugins wired together.
 
-``create()`` is the factory ``exo serve`` loads by default (``exo.core.engine:create``).
+``exo.compose.create()`` is the factory ``exo serve`` loads by default; it builds a ``CoreEngine``.
 Everything lives under ``$EXO_HOME``: ``config.json`` (models, plugins) and
 ``sessions.sqlite`` (messages and the event log, so events replay across restarts).
 
@@ -18,18 +18,17 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
-import json
 import os
 import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from exo import provenance
+from exo import diagnostics, provenance
 from exo.core import trace, workspace
 from exo.core.agents import Delegator
 from exo.core import agentlog
 from exo.core.context import AgentContext, DefaultCompressor, TreeContext, _maybe_await
-from exo.core.findings import STATUSES, Findings
+from exo.core.findings import Findings
 from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
@@ -44,10 +43,9 @@ from exo.config import Config, ConfigError, check_not_secret, redact
 from exo.gate import approver_allowed, approver_identity
 from exo.principal import current_caller, ingress_author, is_principal, principal_as, require_principal
 from exo.core.approvals import verify_approval
-from exo.core.seats import Seat, SeatError, list_seats
-from exo.core.seats import load as load_seat
+from exo.core.seats import Seat, list_seats
 from exo.core.sessions import SessionLocked, SessionStore
-from exo.core.skills import SkillIndex, pack_dir, register_skill_tool
+from exo.core.skills import SkillIndex, register_skill_tool
 from exo.core.tools.builtin import harness as harness_tool
 from exo.core.tools.builtin import ui as ui_tool
 from exo.core.tools.registry import Block, Registry, ToolContext, default_registry
@@ -99,53 +97,6 @@ def _usage_dict(u: Usage | None) -> dict[str, int]:
     u = u or Usage()
     return {"prompt_tokens": u.input_tokens, "completion_tokens": u.output_tokens,
             "total_tokens": u.input_tokens + u.output_tokens}
-
-
-def _tok(n: int) -> str:
-    return str(n)
-
-
-def render_context(r: dict[str, Any], tree: AgentContext) -> str:
-    t, tr, nodes = r["tokens"], r["tree"], r["nodes"]
-    levels = ", ".join(f"L{n}" for n in tr["levels"]) or "none"
-    note = f"{r['notes']['stored']} stored" + (", news from other threads waiting" if r["notes"]["unseen"] else "")
-    lines = [f"Next call for thread {r['thread'][-8:]} of agent {r['agent']} (estimates, about 4 characters per token):",
-             f"  system        {_tok(t['system']):>7}   prompt and memory block",
-             f"  summary tree  {_tok(t['tree']):>7}   {tr['summaries']} summaries over {tr['nodes']} nodes, levels {levels}"
-             + (f", log 1-{tr['covers'][1]}" if tr["covers"] else ""),
-             f"  other threads {_tok(t['notes']):>7}   {note}",
-             f"  recent tail   {_tok(t['tail']):>7}   {r['tail']['messages']} messages of this thread",
-             f"  total         {_tok(t['total']):>7}",
-             f"Tree nodes: {nodes['done']} done, {nodes['pending']} pending ({nodes['running']} running), "
-             f"{nodes['skipped']} skipped (kept verbatim: too small or not shorter), {nodes['failed']} failed.",
-             f"Log: {r['log_entries']} entries; summarized up to {r['frontier']}. /compact would fold "
-             f"{r['eligible']['leaves']} leaf chunk(s) now ({r['eligible']['leaves_after_tail_wait']} are due anyway; "
-             f"a chunk is {tree.leaf_size} entries, the tail wait is {tree.tail_messages}).",
-             _capture_line(r["capture"])]
-    return "\n".join(lines)
-
-
-def _capture_line(c: dict[str, Any]) -> str:
-    if not c["store"]:
-        return (f"Principal messages not yet captured: {c['uncaptured']} (no principal store is attached, so nothing "
-                "captures them; the log still holds them verbatim).")
-    return (f"Principal messages not yet captured: {c['uncaptured']} (a leaf offers its principal messages to the "
-            "principal store before it is summarized; /compact captures all of them first).")
-
-
-def render_compact(res: dict[str, Any]) -> str:
-    b, a, f = res["before"]["tokens"]["total"], res["after"]["tokens"]["total"], res["folded"]
-    cap = res["captured"]
-    lines = [f"Compacted: {len(f)} node(s) folded, {res['skipped']} left verbatim; context {b} to {a} tokens.",
-             f"Principal capture: {cap['taken']} message(s) captured first; {cap['uncaptured']} still not captured"
-             + ("." if cap["store"] else " (no principal store is attached).")]
-    lines += [f"  L{n['level']} log {n['start']}-{n['end']}: {n['before_tokens']} to {n['after_tokens']} tokens" for n in f]
-    if not f and not res["skipped"] and not res["failed"]:
-        lines.append("  nothing eligible: every full chunk is already summarized, or too small to be worth it")
-    lines += [f"  failed: {e}" for e in res["failed"]]
-    if not res["complete"]:
-        lines.append("  some summaries are still running; /context shows progress")
-    return "\n".join(lines)
 
 
 class ContextAdapter:
@@ -963,146 +914,24 @@ class CoreEngine:
         self.findings.sweep()
 
     def trace_text(self, session: str | None, last: int = 10, calls: bool = False) -> str:
-        """What ``exo_trace`` and ``/trace`` show: the model this session runs on, then the per-turn table."""
-        info = self.store.get_session(session) if session else None
-        calls = self.store._q("SELECT body FROM events WHERE session=? AND type='model.call' ORDER BY seq DESC LIMIT 1",
-                              (session,)) if session else []
-        served = (json.loads(calls[0]["body"]).get("route") if calls else "") or "no model call recorded yet"
-        head = [f"running on: {self.loop.model or '-'} (session model {info.model if info else '-'}, last call served "
-                f"by {served}); chain: {', '.join(r.ref for r in self.router.chain('main')) or '-'}",
-                f"harness {self.findings.version}; {self.findings.summary()}"]
-        if fixed := self.findings.list("fixed")[:5]:
-            head.append("fixed, awaiting re-verification: " + ", ".join(f"{r['id']} (in {r['fixed_in']})" for r in fixed))
-        if not session:
-            return "\n".join(head)
-        peers = trace.peer_text(self.store, session)
-        jobs = jobs_mod.job_text(self.store, session)
-        return "\n".join(head + ["", trace.table(trace.build(self.store, session, last, self.thresholds), calls=calls)]
-                         + (["", peers] if peers else []) + (["", jobs] if jobs else []))
-
-    def _agent_ctx(self, session: str | None) -> AgentContext:
-        tree = getattr(self.loop.context, "tree", self.loop.context)
-        if not session or self.store.get_session(session) is None:
-            raise CommandFailed("bad_request", "no thread to look at")
-        if not isinstance(tree, AgentContext) or tree._agent_key(session) is None:
-            raise CommandFailed("bad_request", "this thread has no shared memory (a subagent or plain session)")
-        return tree
+        """What ``exo_trace`` and ``/trace`` show (exo.diagnostics.trace_text)."""
+        return diagnostics.trace_text(self, session, last, calls)
 
     async def context_text(self, session: str | None) -> str:
-        """``/context``: what the next model call for this thread carries. Read-only."""
-        return (await self.context_report(session))["text"]
+        return await diagnostics.context_text(self, session)
 
     async def context_report(self, session: str | None) -> dict[str, Any]:
-        tree = self._agent_ctx(session)
-        r = tree.report(session, await self.loop.base_system())
-        assert session is not None  # _agent_ctx has validated the thread
-        info = self._info(session)
-        model = info.model or self.loop.model or ""
-        capacity = self.router.models.get(model, {}).get("context")
-        return {**r, "schema_version": 1, "model": model,
-                "capacity": capacity if isinstance(capacity, int) and capacity > 0 else None,
-                "text": render_context(r, tree)}
+        return await diagnostics.context_report(self, session)
 
     async def compact_text(self, session: str | None) -> str:
-        """``/compact``: summarize now what is eligible for this agent. Runs here, in the process that holds the
-        agent lock, so a joining window never writes the tree itself."""
-        tree = self._agent_ctx(session)
-        st = self.loop._state.get(session)
-        if st is not None and st.running:
-            raise CommandFailed("busy", "a turn is running in this thread; try again when it ends")
-        res = await tree.compact(session, await self.loop.base_system())
-        return render_compact(res)
+        return await diagnostics.compact_text(self, session)
 
     async def handoff_facts(self, session: str | None, path_arg: str = "") -> dict[str, Any]:
-        """What the agent needs to write a handoff (D-032, ``/handoff``): the thread, git state of its cwd, open
-        findings and tasks, recent summaries from the tree, the last turns of the trace, and one key per entry of
-        ``self.handoff_sources`` (``jobs`` today is empty; background jobs register themselves there).
-        Reads only; the agent writes the file through its normal write tool and the gate."""
-        info = self._info(session) if session else None
-        if info is None:
-            raise CommandFailed("bad_request", "no thread to hand off")
-        cwd = info.cwd or self.cwd
-        facts: dict[str, Any] = {
-            "date": time.strftime("%Y-%m-%d"), "seat": self.agent,
-            "path": str(workspace.handoff_path(self.agent, path_arg)),
-            "thread": {"id": info.id, "title": info.title, "model": info.model, "kind": info.kind,
-                       "cwd": cwd, "created": info.created,
-                       "user_turns": sum(1 for m in self.store.messages(info.id) if m.role == "user"
-                                         and not m.meta.get("note"))},
-            # Even read-only Git commands can execute workspace .git/config fsmonitor hooks.
-            "git": ({"repo": None, "unavailable": "Git facts unavailable: required executor has no isolated Git facts operation"}
-                    if self.executor_required else workspace.git_facts(cwd)),
-            "findings": [{"id": r["id"], "severity": r["severity"], "title": r["title"][:100]}
-                         for r in self.findings.list("open")[:10]],
-        }
-        latest: dict[str, dict[str, Any]] = {}
-        for e in self.store.events_since(0, info.id, limit=1 << 30):
-            if isinstance(e.body, s.TaskUpdated):
-                latest[e.body.task_id] = {"id": e.body.task_id, "title": e.body.title[:100], "status": e.body.status}
-        facts["tasks"] = [t for t in latest.values() if t["status"] in ("queued", "running")]
-        try:
-            tree = self._agent_ctx(info.id)
-            _, frontier, parts = tree._view(tree._agent_key(info.id))
-            facts["decisions"] = [p[:1500] for p in parts[-2:]]
-            facts["context"] = {"log_entries": tree._last(tree._agent_key(info.id)), "summarized_to": frontier}
-        except CommandFailed:
-            facts["decisions"] = []
-        facts["trace"] = self.trace_text(info.id, 3)
-        for key, fn in self.handoff_sources.items():
-            try:
-                facts[key] = await _maybe_await(fn(info.id))
-            except Exception as exc:  # a broken source must not block the handoff
-                trace.report(f"handoff source {key}", exc, info.id)
-                facts[key] = []
-        return facts
-
-    async def _builtin_command(self, b: s.CommandRun) -> Any:
-        if b.name == "context":
-            if b.args.strip() not in ("", "json"):
-                raise CommandFailed("bad_request", "usage: /context [json]")
-            return await self.context_report(b.session) if b.args.strip() == "json" else await self.context_text(b.session)
-        if b.name == "compact":
-            return await self.compact_text(b.session)
-        if b.name == "trace":
-            return self.trace_text(b.session, int(b.args) if b.args.strip().isdigit() else 10)
-        if b.name == "findings":
-            arg = b.args.strip()
-            if arg == "count":  # "open" is what needs work (open + reopened); by_state reconciles every finding
-                return {"open": self.findings.open_count(), "by_state": self.findings.counts()}
-            return self.findings.text(arg if arg in STATUSES else "all", viewer=b.session or "ui")
-        if b.name == "unsteer":  # D-045: pull a queued steer message back; args is its id, empty means the newest
-            if not b.session:
-                raise CommandFailed("bad_request", "unsteer needs a session")
-            gone = self.loop.unsteer(b.session, b.args.strip(), principal=is_principal(current_caller()))
-            for m in gone:
-                self.hub.publish(s.SteerCancelled(message_id=m.id or "", text=m.text()), b.session)
-            return {"cancelled": [{"id": m.id, "text": m.text()} for m in gone]}
-        if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
-            word, _, rest = b.args.strip().partition(" ")
-            if word == "reload":
-                name = rest.strip() or None
-                if name and name not in self.router.providers:
-                    raise CommandFailed("not_found", f"unknown provider {name!r}")
-                return {"reloaded": self.router.reload_credentials(name)}
-            from exo import providers_setup
-            table = await asyncio.to_thread(providers_setup.rows, self.router, self.home,
-                                           prober=providers_setup.probe)
-            return {"providers": table, "main": await self._main_status(table)}
-        if b.name == "handoff_facts":  # D-032: the facts /handoff gives the agent; the client sends the turn
-            return await self.handoff_facts(b.session, b.args)
-        if b.name == "harness_error":  # a client (the TUI) reporting an exception it caught
-            try:
-                d = json.loads(b.args)
-            except ValueError:
-                d = {"where": "client", "message": b.args}
-            trace.report(str(d.get("where") or "client"), str(d.get("message") or ""), b.session,
-                         error_type=str(d.get("error_type") or ""), tb=str(d.get("traceback") or ""))
-            return None
-        return _MISSING
+        return await diagnostics.handoff_facts(self, session, path_arg)
 
     async def _command_run(self, b: s.CommandRun) -> dict[str, Any]:
-        out = await self._builtin_command(b)
-        if out is not _MISSING:
+        out = await diagnostics.builtin_command(self, b)
+        if out is not diagnostics.MISSING:
             return {"output": out}
         cmd = self.plugins.commands.get(b.name)
         if cmd is None:
@@ -1157,61 +986,9 @@ class CoreEngine:
 
 
 def create(seat: str | None = None) -> CoreEngine:
-    """Factory for ``exo serve --engine exo.core.engine:create``: reads ``$EXO_HOME/config.json``.
-
-    ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
-    cfg = Config.load()
-    executor, executor_required = load_executor()  # required failures precede all plugin imports
-    st = None
-    if seat or os.environ.get("EXO_SEAT"):
-        try:
-            st = load_seat(cfg.home, seat or os.environ["EXO_SEAT"])
-        except SeatError as exc:
-            raise SystemExit(f"exo: {exc}") from None
-        if st.principal and not os.environ.get("EXO_PRINCIPAL"):
-            os.environ["EXO_PRINCIPAL"] = st.principal
-    pm = PluginManager(config=cfg.data.get("plugin_config") or {},
-                       memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
-    enabled = st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins")
-    plugin_dirs = None
-    if executor_required:
-        # The installed executor owns this trusted inventory; user discovery is disabled.
-        raw_dirs = getattr(executor, "trusted_plugin_dirs", ())
-        if not isinstance(raw_dirs, (tuple, list)):
-            raise ExecutorConfigurationError("executor trusted_plugin_dirs must be a tuple/list of absolute paths")
-        plugin_dirs = tuple(raw_dirs)
-        if not all(isinstance(path, str) and Path(path).is_absolute() for path in plugin_dirs):
-            raise ExecutorConfigurationError("executor trusted_plugin_dirs must contain absolute paths")
-        raw_required = getattr(executor, "required_plugins", ())
-        if not isinstance(raw_required, (tuple, list)):
-            raise ExecutorConfigurationError("executor required_plugins must be a tuple/list of plugin names")
-        if not all(isinstance(name, str) and name for name in raw_required):
-            raise ExecutorConfigurationError("executor required_plugins must contain plugin names")
-        # The gate supplies the committed decision/approval evidence required mode promises.
-        required_plugins = tuple(dict.fromkeys(("exo-gate", *raw_required)))
-        if enabled is not None and not set(required_plugins).issubset(enabled):
-            raise ExecutorConfigurationError("plugin configuration disables a required executor plugin")
-    pm.load_all(dirs=plugin_dirs, enabled=enabled)
-    if executor_required:
-        missing = [name for name in required_plugins if name not in pm.plugins or pm.plugins[name].error]
-        if missing:
-            raise ExecutorConfigurationError(f"required executor plugins failed to load: {', '.join(missing)}")
-    models = cfg.models()
-    folders = [*(st.skill_folders if st else []), cfg.home / "skills"]
-    if pack := pack_dir():
-        folders.append(pack)
-    eng = CoreEngine(cfg.home, models, plugins=pm, executor=executor, executor_required=executor_required,
-                      cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
-                      mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
-                      delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"), jobs=cfg.get("jobs"),
-                      tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
-                            if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")})
-    eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is
-    eng.peer_autostart = True
-    if cfg.get("learn", {}).get("enabled", True) is not False:
-        from exo import learn
-        learn.attach(eng)
-    return eng
+    """Compatibility path for ``--engine exo.core.engine:create``; the factory lives in ``exo.compose``."""
+    from exo.compose import create as compose
+    return compose(seat)
 
 
 __all__ = ["ContextAdapter", "CoreEngine", "HubBus", "SqliteLog", "create"]
