@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from exo.core.engine import CoreEngine, create
-from exo.core.plugins import Manifest, PluginManager
+from exo.core.plugins import LoadedPlugin, Manifest, PluginManager
 from exo.core.tools.executor import ExecutorConfigurationError
 from exo.core.types import ToolCall, ToolResult
 from exo.wire import Brief
@@ -68,7 +68,12 @@ def test_secure_plugin_discovery_uses_only_executor_roots(tmp_path, monkeypatch)
     broker.trusted_plugin_dirs = (str(tmp_path / "audited"),)
     monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
     seen = []
-    monkeypatch.setattr(PluginManager, "load_all", lambda self, **kw: seen.append(kw))
+
+    def load_all(self, **kw):
+        seen.append(kw)
+        self.plugins["exo-gate"] = LoadedPlugin(Manifest(name="exo-gate"), "audited")
+
+    monkeypatch.setattr(PluginManager, "load_all", load_all)
     engine = create()
     assert seen == [{"dirs": broker.trusted_plugin_dirs, "enabled": None}]
     asyncio.run(engine.close())
@@ -80,6 +85,14 @@ def test_missing_required_executor_plugin_refuses_factory(monkeypatch):
     monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
     monkeypatch.setattr(PluginManager, "load_all", lambda *args, **kw: [])
     with pytest.raises(ExecutorConfigurationError, match="required executor plugins failed"):
+        create()
+
+
+def test_required_factory_needs_gate_even_when_broker_omits_it(monkeypatch):
+    broker = DenyBroker()  # required_plugins = (): the gate is still compulsory
+    monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
+    monkeypatch.setattr(PluginManager, "load_all", lambda *args, **kw: [])
+    with pytest.raises(ExecutorConfigurationError, match="required executor plugins failed to load: exo-gate"):
         create()
 
 

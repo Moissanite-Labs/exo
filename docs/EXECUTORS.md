@@ -53,7 +53,7 @@ Missing stores, unusable keys, failed appends or missing event IDs block the cal
 with a generic error. Gate callback failures in these two phases propagate to
 the registry; optional observer hooks retain their existing failure behavior.
 The safe-read and observe-mode exception fallbacks cannot permit a failed
-required gate check.
+required gate check, and observe mode still asks before a required executor runs.
 
 Every gate approval carries a unique internal `approval_key`, separate from the
 reusable `rule_key` and content binding. The engine returns that token to the
@@ -103,8 +103,9 @@ Required mode disables user folder discovery (`EXO_PLUGIN_DIRS` and
 absolute paths, and `required_plugins`, a tuple of plugin names. The OS broker
 must verify ownership, permissions and symlinks for its trusted directories
 before returning them. Core loads only those directories plus installed plugin
-entry points. Disabling a required plugin in config, missing plugins, or failed
-required imports/registration abort startup. Executor loading happens before
+entry points. `exo-gate` is always required, whatever the broker lists, because
+it supplies the decision and approval evidence. Disabling a required plugin in
+config, missing plugins, or failed required imports/registration abort startup. Executor loading happens before
 any plugin import. Non-required mode keeps existing discovery behavior.
 
 This interface mediates model tool requests; it does not sandbox arbitrary

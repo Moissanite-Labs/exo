@@ -259,3 +259,33 @@ def test_identical_concurrent_approvals_keep_session_call_and_audit_refs(tmp_pat
         finally:
             await engine.close()
     asyncio.run(main())
+
+
+def test_required_observe_mode_still_asks_before_executor(tmp_path, monkeypatch):
+    """Observe mode logs instead of asking; a required executor still needs the principal's answer."""
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, observe=True)
+
+    async def main():
+        try:
+            dispatcher = Dispatcher(engine)
+            sid = (await dispatcher.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
+            task = asyncio.create_task(engine.run_tool(ToolCall("c", "bash", {"command": "rm -rf cache"}),
+                                                       {"session": sid}))
+            deadline = time.monotonic() + 5
+            while not engine._approvals and not task.done() and time.monotonic() < deadline:
+                await asyncio.sleep(0.001)
+            assert engine._approvals and not task.done(), "required mode must ask even in observe mode"
+            assert broker.seen == [] and ran == []
+            rid = next(iter(engine._approvals))
+            await dispatcher.run(s.Command.of(s.ApprovalRespond(request_id=rid, decision="deny")), "principal:tui")
+            result = await asyncio.wait_for(task, 5)
+            assert result.is_error and broker.seen == [] and ran == []
+        finally:
+            await engine.close()
+    asyncio.run(main())
+
+
+def test_ordinary_observe_mode_still_runs_without_asking(tmp_path, monkeypatch):
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, "ordinary", observe=True)
+    result = invoke(engine, ToolCall("c", "bash", {"command": "rm -rf cache"}))
+    assert not result.is_error and ran == [{"command": "rm -rf cache"}]

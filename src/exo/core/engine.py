@@ -1152,9 +1152,10 @@ def create(seat: str | None = None) -> CoreEngine:
         raw_required = getattr(executor, "required_plugins", ())
         if not isinstance(raw_required, (tuple, list)):
             raise ExecutorConfigurationError("executor required_plugins must be a tuple/list of plugin names")
-        required_plugins = tuple(raw_required)
-        if not all(isinstance(name, str) and name for name in required_plugins):
+        if not all(isinstance(name, str) and name for name in raw_required):
             raise ExecutorConfigurationError("executor required_plugins must contain plugin names")
+        # The gate supplies the committed decision/approval evidence required mode promises.
+        required_plugins = tuple(dict.fromkeys(("exo-gate", *raw_required)))
         if enabled is not None and not set(required_plugins).issubset(enabled):
             raise ExecutorConfigurationError("plugin configuration disables a required executor plugin")
     pm.load_all(dirs=plugin_dirs, enabled=enabled)
