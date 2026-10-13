@@ -9,6 +9,8 @@ It holds the machine-level choices the installer and the plugins share:
     plugins       the Exo plugins installed into hermes_home
     plugin_config per-plugin settings, keyed by plugin name
     principals    optional explicit store roots, keyed by principal id
+    update        `exo update` settings: `update.require_signed` (default false) refuses a target
+                  commit not signed by a key in the pinned trust list (docs/INSTALL.md, D-073)
 
 Resolution for each value, first hit wins: the environment, then the file, then the default.
 The environment never leaks into the file: `save()` writes only what was set on the object.
@@ -104,6 +106,7 @@ def _defaults(home: Path) -> dict[str, Any]:
         'plugins': list(DEFAULT_PLUGINS),
         'plugin_config': {},
         'principals': {},
+        'update': {'require_signed': False},
     }
 
 
