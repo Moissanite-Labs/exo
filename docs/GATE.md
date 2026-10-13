@@ -2258,3 +2258,72 @@ TCP and stdio callers remain local even when they possess a transport bearer tok
 Two other body fields cannot claim the principal. `peers send` with `via="human"` from a non-principal caller
 goes out as `via="agent"`, so the receiving daemon gives it `same-principal` trust, not `principal`. `unsteer`
 from a non-principal caller can pull back only steers that the principal did not write.
+
+## Bypass mode (D-065)
+
+Bypass is Exo's permissionless mode, like Claude Code's `--dangerously-skip-permissions`. While it is on, the gate
+auto-approves every call it would otherwise ask about, so the agent never stops to wait for you. Bypass
+auto-approves everything except changes to Exo's own records and reading secrets.
+
+**Turning it on.** Type `/permissions bypass` in the terminal client or the web page, or start the terminal client
+with `exo --skip-permissions` (`--dangerously-skip-permissions` is accepted too). The flag only makes the window
+send `/permissions bypass` once it has connected, so it works the same whether the window runs the core or joins
+one. `/permissions ask` turns asking back on, and so does the web banner's "Ask again" button. `/permissions` shows
+the mode and the counts.
+
+**Who can turn it on.** Only a principal connection (D-039, D-052): the terminal window, the web page, or a socket
+client holding the principal credential that is not a child of the core. A tool subprocess (even one holding the
+stolen credential), a channel, a peer, a bus message, a TCP or stdio client, and the agent itself are local callers
+and get `forbidden`. A message that says "/permissions bypass" is only text. Work the principal's command started
+(the agent's turn and its tools) does not keep the principal's standing once that command returns. Anyone may turn
+it off, because that only tightens. Every switch writes a ledger row (`phase: permissions`, with `mode`, `by` and
+`via`: `/permissions`, `launch flag` or `seat default`).
+
+**How long it lasts.** For this run of the core only. The state is in the gate's memory, never on disk. Every
+client of that core sees it. A restarted core starts in ask unless the flag is given again. A per-seat default
+exists: `[permissions] mode = "bypass"` in the seat file, read once when the core starts. A seat file is a store
+path, so writing one is `store_write` and asks you every time, even in bypass. Bypass can never make itself the
+default, and no policy file turns it on.
+
+**What still happens in bypass:**
+
+| Call | Without bypass | In bypass |
+|---|---|---|
+| Anything the policies say asks (a GitHub comment, `rm`, a network post, an unknown program, opaque code) | asks | runs; ledger row `decided_by: bypass` |
+| `store_write`: the policies, the ledger, `keys/`, the grants, seat files, the core sockets | asks the principal | asks the principal |
+| `credentials`: reading or filling a key, token or password | asks | asks |
+| A `deny` rule, or a decision-model deny | blocks | blocks |
+| A public post that breaks the posting rules (an internal name, a home path, a missing footer) | asks, with the fixes | held: the call fails with the fixes, so the agent rewrites the text and calls again |
+| A standing grant, `allow` or `log` | runs | runs |
+
+**Why that floor.** It is not about permission. It protects the record of what the agent did. If the agent could
+rewrite its own ledger, policies or grants while nobody is asked, the audit of a bypass session would be worthless,
+and it could make bypass permanent. Secrets stay asked because a key, once read, cannot be un-read, and the record
+cannot undo it. Deny rules are the principal's hard limits; Claude Code keeps deny rules in bypass too. Use a
+`deny` rule for anything that must never run, even in bypass. A post that breaks the posting rules is held rather
+than asked because nobody is there to answer, and a leaked internal name in a public repo cannot be taken back; the
+agent gets the list of fixes and goes on.
+
+**It is never silent.**
+
+- A banner: `permissions: bypass` with the auto-approved count, first in the terminal status line (a narrow window
+  cuts the other instruments, never this), and under the navigation on every web page. Both clients read
+  `/permissions json` every few seconds and after each turn.
+- Every auto-approved call has a ledger row: `outcome: allow`, `decision.rule: bypass`, `decided_by: bypass`,
+  `bypass: {would: ask, rule, reason}` (what the gate would have asked and why) and `call: {tool, args}`. The
+  arguments are recorded with obvious secrets redacted (`redacted` counts them) and cut at 8000 characters
+  (`truncated` gives the length); `args_sha256` still identifies the exact call. Held posts have `decided_by:
+  bypass` and `decision.rule: bypass_hold`. Floor calls that still asked carry `bypass: {floor: <category>}`.
+- `/permissions` gives the counts for this run: auto-approved, held, and still asked.
+
+**Exo OS.** With a required tool executor (D-020, #70) bypass is refused: `/permissions bypass` fails with
+`forbidden` and a seat default is ignored with a log line. Every call there must be decided and committed to the
+ledger before the broker runs it, and the installation exists to keep a person in that loop. If required mode
+starts after bypass was switched on, bypass is inert.
+
+**Not covered.** An internal gate error still falls back to asking (the gate could not classify the call, so it
+cannot know the call is off the floor). Bypass changes what the gate asks; it is not a sandbox, and the D-039 limit
+on same-user processes stands. Code: `plugins/exo-gate/exo_gate/permissions.py` and `Gate._bypass` in
+`plugins/exo-gate/exo_gate/hook.py`. Tests: `plugins/exo-gate/tests/test_bypass.py`,
+`tests/security/test_permissions_bypass.py`, `tests/clients/tui/test_permissions_banner.py`,
+`plugins/exo-command/tests/test_permissions_web.py`.
