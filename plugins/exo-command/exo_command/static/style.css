@@ -445,6 +445,12 @@ body { margin: 0; background: #08090a; }
 /* providers view and the chat setup banner */
 .xc-setup { display: flex; gap: 12px; align-items: center; padding: 6px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2); font: 11px var(--xc-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-3); }
 .xc-setup[hidden] { display: none; }
+/* D-065: the permissions bypass banner sits under the nav on every page while bypass is on */
+.xc-perm { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 6px 14px; border-bottom: 1px solid var(--accent); background: var(--bg-3); font: 11px var(--xc-mono); letter-spacing: .06em; color: var(--fg-2); }
+.xc-perm strong { color: var(--accent); text-transform: uppercase; letter-spacing: .14em; }
+.xc-perm-n { color: var(--accent-2); font-variant-numeric: tabular-nums; }
+.xc-perm .xc-btn { margin-left: auto; }
+.xc-perm[hidden] { display: none; }
 .xc-prov { max-width: 960px; width: 100%; margin: 0 auto; padding: 22px 18px 40px; display: flex; flex-direction: column; gap: 14px; }
 .xc-prov-lead { color: var(--fg-2); font-size: 13px; max-width: 70ch; }
 .xc-prov-list { border: 1px solid var(--line); background: var(--line); display: grid; gap: 1px; }

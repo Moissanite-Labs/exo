@@ -1310,6 +1310,43 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Docs:** `docs/CORE.md` "The turn loop", `docs/COMMANDS.md`, `docs/INSTALL.md`, `docs/SEATS.md`,
   `docs/DEVELOPER-GUIDE.md` "Updating a checkout", `docs/USER-GUIDE.md` §3 and §10.
 
+## D-065 (2026-10-13) Permissions bypass: a permissionless mode with a floor for Exo's own records
+- **Why (A):** "permissionless mode where the agent doesn't have to ask for permission, like Claude Code and Muse Code
+  have". Under the default-ask gate (D-038) a long task stops on every unknown program, script, delete and post.
+- **Decision:** a mode of the gate, `ask` (default) or `bypass`. In bypass an `ask` becomes `allow`, so the agent never
+  waits. Switched by the plugin command `/permissions bypass|ask` (no new protocol command or event), by the
+  terminal flag `exo --skip-permissions` (alias `--dangerously-skip-permissions`), which makes the window send
+  `/permissions bypass launch` after it connects, or by `[permissions] mode = "bypass"` in the seat file, read once
+  when the core starts.
+- **Who:** only a live principal connection turns it on (`require_principal`, D-039 and D-052). Local callers, tool
+  processes with the stolen credential, peers, bus messages, TCP and stdio, and work a principal command started are
+  refused. Turning it off is open to anyone: it only tightens. A seat file is a store path, so making bypass the
+  default is a `store_write` that asks the principal even in bypass. No policy file can turn it on.
+- **Floor:** `store_write` (policies, ledger, keys, grants, seat files, core sockets) and `credentials` still ask the
+  principal, every time. This protects the record of what the agent did, not permission: a bypass session whose
+  ledger and policies the agent could rewrite unasked has no audit, and could make itself permanent. Secrets stay
+  asked because a read key cannot be un-read. `deny` rules still block (as in Claude Code). A public post that breaks
+  the posting rules is held with its fixes and returned to the agent, since nobody is there to answer and a leaked
+  internal name cannot be taken back. The UI says: "bypass auto-approves everything except changes to Exo's own
+  records and reading secrets".
+- **Never silent:** a banner in the TUI status line and on every web page; each auto-approved call is a ledger row
+  with `decided_by: bypass`, the would-be ask and the call (secrets redacted, cut at 8000 characters, `args_sha256`
+  kept); each switch is a `permissions` row; `/permissions` shows auto-approved, held and still-asked counts.
+- **Scope:** this run of the core, in memory. A restart asks again unless the flag is given again.
+- **Exo OS:** refused with a required tool executor (D-020, #70). Every call there must be decided and committed
+  before the broker runs it; an unattended mode contradicts what that installation is for. Bypass switched on
+  before required mode starts is inert.
+- **Rejected:** a `config.json` default (config is not a store path, so a bypass session could write it and make
+  bypass permanent); honouring explicit `ask` rules in bypass, as Claude Code does (the example policy reserves
+  `delete`, so `rm` would still ask and A's ask would not be met; `deny` is the principal's tool for hard limits);
+  auto-approving the floor like Claude Code's protected paths (the ledger is the audit of the bypass session
+  itself); per-thread scope (plugin commands get no session, and two windows on one core would disagree about
+  what the gate does).
+- **Numbering:** D-057 to D-061 are on main or open PRs, D-062 and D-063 on local exosphere branches, and one more
+  is held by `fix/update-and-rounds`, so this is D-065.
+- **Docs:** `docs/GATE.md` "Bypass mode (D-065)", `docs/USER-GUIDE.md` §3 and §6, `docs/COMMANDS.md`,
+  `docs/SEATS.md`, `CHANGELOG.md`.
+
 ## D-066 (2026-10-13) The choice card: a decision you can answer from the keyboard
 - **Why (A, verbatim):** "the choice selector UI/UX in the cli needs work. its not selecting the option so im stuck plus
   it needs an overall redesign".

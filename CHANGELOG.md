@@ -10,6 +10,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - `/rounds [N|default]` sets this session's tool-round cap (principal only); seat `[loop] max_tool_rounds` and
   `EXO_MAX_TOOL_ROUNDS` set it for the core. A notice shows when a turn nears the cap (D-064).
 - At the cap, one last call with tools forced off ends the turn with done, open and next step (#93, D-064).
+- Permissions bypass (D-065): `exo --skip-permissions` or `/permissions bypass` stops approval asks for this run of
+  the core, except writes to Exo's own records and reading secrets. Principal only, refused under a required
+  executor, a banner in both clients, every auto-approved call in the ledger as `decided_by: bypass`.
 
 ### Changed
 - The tool-round cap per turn is 64, up from 24 (D-064).
