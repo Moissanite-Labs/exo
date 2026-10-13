@@ -7,7 +7,7 @@ Everything lives under ``$EXO_HOME``: ``config.json`` (models, plugins) and
 Adapters kept here so the parts stay independent of each other:
 - ``SqliteLog``: the server's EventLog over sessions.sqlite; the Hub numbers events.
 - ``HubBus``: the loop's event bus, publishing through the Hub (written before sent).
-- ``ContextAdapter``: the loop's context calls on top of TreeContext plus an optional
+- ``ContextAdapter``: the loop's context calls on top of AgentContext plus an optional
   Hermes-shaped ContextEngine plugin (select_context, update_from_response, on_turn_complete).
 - tool bridge: one ToolContext per call (cwd, cancel, emit) and the plugin hook names
   ``pre_tool_call`` / ``post_tool_call`` / ``transform_tool_result`` on Registry hooks.
@@ -27,7 +27,7 @@ from exo import diagnostics, provenance
 from exo.core import trace, workspace
 from exo.core.agents import Delegator
 from exo.core import agentlog
-from exo.core.context import AgentContext, DefaultCompressor, TreeContext
+from exo.core.context import AgentContext, DefaultCompressor
 from exo.core.hooks import accepted, maybe_await
 from exo.core.findings import Findings
 from exo.core.loop import Loop
@@ -98,11 +98,11 @@ def _usage_dict(u: Usage | None) -> dict[str, int]:
 
 
 class ContextAdapter:
-    """TreeContext for the loop, plus a plugin ContextEngine when one fills the slot."""
+    """The agent's AgentContext for the loop, plus a plugin ContextEngine when one fills the slot."""
 
     RECENT = 40  # messages of transcript handed to hooks that take one
 
-    def __init__(self, tree: TreeContext, plugin: Any = None, memory: Any = None) -> None:
+    def __init__(self, tree: AgentContext, plugin: Any = None, memory: Any = None) -> None:
         self.tree = tree
         self.plugin = plugin
         self.memory = memory
@@ -157,8 +157,7 @@ class ContextAdapter:
         self.tree.on_event = fn
 
     def cache_key(self, session: str) -> str:
-        key = getattr(self.tree, "cache_key", None)
-        return key(session) if callable(key) else session
+        return self.tree.cache_key(session)
 
     def note(self, session: str) -> None:
         self.tree.note(session)
@@ -167,12 +166,7 @@ class ContextAdapter:
             _safe(self.plugin, "on_session_start", session, platform="exo")
 
     async def build(self, session: str, system: str, **kw: Any) -> list[Message]:
-        if "recall" in inspect.signature(self.tree.build).parameters:
-            msgs = await self.tree.build(session, system, **kw)
-        else:  # a per-session tree: recall goes in the system message, as before D-028
-            recall = kw.get("recall") or ""
-            msgs = await self.tree.build(session, (system + "\n\n" if system else "") + "# Recalled memory\n" + recall
-                                         if recall else system)
+        msgs = await self.tree.build(session, system, **kw)  # AgentContext places recall itself (D-028)
         pick = getattr(self.plugin, "select_context", None)
         if pick is None:
             return msgs
@@ -655,14 +649,14 @@ class CoreEngine:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
-        task = asyncio.create_task(self.run_turn(b, meta))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._spawn_turn(b, meta)
         return {"accepted": True}
 
     def start_turn(self, session: str, text: str, meta: dict[str, Any] | None = None) -> None:
         """Start a turn in the background (a peer woke an idle session)."""
-        b = s.TurnSend(session=session, text=text)
+        self._spawn_turn(s.TurnSend(session=session, text=text), meta)
+
+    def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None) -> None:
         task = asyncio.create_task(self.run_turn(b, meta))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
