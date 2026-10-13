@@ -315,13 +315,12 @@ class CoreEngine:
         plugins.executor_required = required
         if required:
             gate = plugins.plugins.get("exo-gate")
-            roots = getattr(executor, "trusted_plugin_dirs", None)
-            if roots is not None and (not isinstance(roots, (tuple, list)) or not all(
-                    isinstance(p, str) and Path(p).is_absolute() for p in roots)):
+            roots = getattr(executor, "trusted_plugin_dirs", ())
+            if not isinstance(roots, (tuple, list)) or not all(
+                    isinstance(p, str) and Path(p).is_absolute() for p in roots):
                 raise ExecutorConfigurationError("executor trusted_plugin_dirs must contain absolute paths")
             if (gate is None or not gate.ok or gate.source != "dir" or gate.manifest.path is None
-                    or (roots is not None and not any(gate.manifest.path.resolve().is_relative_to(Path(p).resolve())
-                                                       for p in roots))
+                    or not any(gate.manifest.path.resolve().is_relative_to(Path(p).resolve()) for p in roots)
                     or any(not any(e.plugin == "exo-gate" for e in plugins.hooks.entries(point))
                            for point in ("pre_tool_call", "post_approval_response"))):
                 raise ExecutorConfigurationError("Required executor needs a trusted folder exo-gate with security hooks")
@@ -544,9 +543,10 @@ class CoreEngine:
                 "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low"}
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
-        required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()
+        bound_mode = self.registry.executor_required
+        required_hooks = frozenset({"exo-gate"}) if bound_mode else frozenset()
         for verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
-                                                     _isolate_arguments=self.executor_required,
+                                                     _isolate_arguments=bound_mode,
                                                      **self._hook_kw(call, ctx)):
             if not isinstance(verdict, dict):
                 continue
