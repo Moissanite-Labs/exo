@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from exo.core.hooks import maybe_await
 from exo.core.types import ContentPart, ToolCall, ToolResult, ToolSpec, to_dict
 from exo.core.tools.executor import (
     ExecutionBroker, ExecutionRequest, thaw_arguments, validate_executor,
@@ -170,10 +171,6 @@ def validate_args(schema: dict[str, Any], args: Any) -> str | None:
     return None
 
 
-async def _maybe_await(value: Any) -> Any:
-    return await value if inspect.isawaitable(value) else value
-
-
 class Registry:
     def __init__(self, *, executor: ExecutionBroker | None = None,
                  executor_required: bool = False) -> None:
@@ -263,7 +260,7 @@ class Registry:
         identity = (call.id, call.name)
         for hook in list(self._hooks[PRE_TOOL_CALL]):
             try:
-                verdict = await _maybe_await(hook(call, tool.spec, ctx))
+                verdict = await maybe_await(hook(call, tool.spec, ctx))
             except Exception as exc:  # a broken hook fails closed
                 verdict = Block(f"pre_tool_call hook failed: {exc}")
             if isinstance(verdict, str):
@@ -319,7 +316,7 @@ class Registry:
                 out = await tool.handler(args, ctx)
             else:
                 out = await asyncio.to_thread(tool.handler, args, ctx)
-                out = await _maybe_await(out)
+                out = await maybe_await(out)
         except asyncio.CancelledError:
             ctx.cancel.set()
             raise
@@ -339,7 +336,7 @@ class Registry:
     async def _post(self, call: ToolCall, result: ToolResult, ctx: ToolContext) -> ToolResult:
         for hook in list(self._hooks[POST_TOOL_CALL]):
             try:
-                replaced = await _maybe_await(hook(call, result, ctx))
+                replaced = await maybe_await(hook(call, result, ctx))
             except Exception:
                 continue  # post hooks observe; a failure must not lose the result
             if isinstance(replaced, ToolResult):

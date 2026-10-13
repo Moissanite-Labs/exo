@@ -16,12 +16,12 @@ body that tries to answer an approval, and the engine refuses ``approval.respond
 from __future__ import annotations
 
 import asyncio
-import inspect
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from exo.core.hooks import maybe_await
 from exo.core.sessions import new_id
 
 HOLD_SECONDS = 30 * 60
@@ -137,8 +137,7 @@ class Target:
 
 
 async def _call(fn: Callable[..., Any], *args: Any) -> Any:
-    out = fn(*args)
-    return await out if inspect.isawaitable(out) else out
+    return await maybe_await(fn(*args))
 
 
 class IngressPath:
