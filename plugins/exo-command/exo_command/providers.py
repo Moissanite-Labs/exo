@@ -136,7 +136,9 @@ async def handle(centre, method: str, path: str, body: Dict[str, Any],
         return 400, {"error": redact_secrets(str(e))}
     except ValueError as e:  # router validation: bad refs, unknown providers
         return 400, {"error": redact_secrets(str(e))[:300]}
-    except Exception as e:  # never the text: it could hold anything
+    except Exception as e:  # never echo an arbitrary failure message
+        if getattr(e, "code", "") == "forbidden":
+            return 403, {"error": "the core refused this change: principal authority is required"}
         return 500, {"error": "provider setup failed ({})".format(type(e).__name__)}
 
 
@@ -156,6 +158,8 @@ async def _default(centre, body: Dict[str, Any], router_factory: Callable[[], An
     except ps.SetupError:
         raise
     except Exception as e:
+        if getattr(e, "code", "") == "forbidden":
+            raise  # a refusal is never permission to edit the core config on disk
         if getattr(e, "code", "") in ("bad_model", "bad_request", "bad_config", "not_found"):
             raise ps.SetupError(getattr(e, "message", "") or "the core refused that model") from None
         router = await asyncio.to_thread(router_factory)  # core down: save it for the next start

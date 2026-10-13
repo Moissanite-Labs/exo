@@ -274,7 +274,7 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
         while (line := await lines()) is not None:
             if not line.strip():
                 continue
-            cmd, resp = await dispatcher.dispatch(line)
+            cmd, resp = await dispatcher.dispatch(line, caller=pr.LOCAL)
             if cmd is not None and isinstance(cmd.body, s.EventsSubscribe) and resp.ok:
                 if feed:
                     feed.cancel()
