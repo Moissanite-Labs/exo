@@ -47,7 +47,7 @@ TEST_TIMEOUT = 15.0
 CLI_TRANSPORTS = ("claude-cli", "muse-cli")  # keyless: the CLI's own login is the credential
 MUSE_TEST_TIMEOUT = 90.0  # a `muse exec` process start plus one model turn
 ERROR_CLASSES = ("no_key", "auth", "billing", "not_found", "rate_limited", "server", "timeout", "network",
-                 "not_running", "not_installed", "unsigned", "bad_response", "http", "error")
+                 "not_running", "not_installed", "unsigned", "version_mismatch", "bad_response", "http", "error")
 
 
 class SetupError(Exception):
@@ -467,6 +467,13 @@ def test_provider(provider: str, *, router: Router | None = None, home: str | os
         else:
             t0 = time.monotonic()
             out = muse_cli.probe(exe, router.env, max(timeout, MUSE_TEST_TIMEOUT))
+            if not out["error_class"] and spec.get("serve", True):  # the tool route: handshake only, no model call
+                import asyncio
+                from .core.models import muse_serve
+                why = asyncio.run(muse_serve.probe_handshake(exe, router.env))
+                if why:
+                    out = {"error_class": "version_mismatch" if why in ("schema changed", "unexpected server")
+                           else "error", "detail": f"tool route (muse serve) unusable: {why}"}
             res.update(latency_ms=int((time.monotonic() - t0) * 1000), ok=not out["error_class"], **out)
     else:
         names = key_vars(spec)

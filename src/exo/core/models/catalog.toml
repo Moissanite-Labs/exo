@@ -76,14 +76,15 @@ command = "claude"
 models = ["sonnet", "opus", "haiku"]
 
 # Muse Code subscription through the `muse` CLI (its own login, no key in Exo; META_API_KEY is dropped from
-# the subprocess). Available only when `muse` is on PATH. Text only: calls that carry Exo tools are refused
-# and the router falls back. One `muse exec` process per turn, so it is slower than an API route. On macOS the
-# native binary needs signing for keychain access; a shell launcher has unknown signing state and is allowed.
-# Model refs look like "muse-cli:default" (the CLI's own default).
+# the subprocess). Available only when `muse` is on PATH. Tool-less calls use `muse exec`; calls with Exo
+# tools use `muse serve` (tool results replayed as text, about 23k input tokens per call, pinned to one wire
+# schema; `[models] muse_serve = false` turns that route off). One process per turn, so it is slower than an API route. On macOS the
+# binary or launcher is never checked for signing; ad-hoc signing is only a fix if the keychain write fails.
+# Model refs look like "muse-cli:muse-spark-1.3" (the default). A subscription, so no per-token prices.
 [providers.muse-cli]
 transport = "muse-cli"
 command = "muse"
-models = ["default"]
+models = ["muse-spark-1.3", "muse-wonder-1.0", "muse-wonder-full-1.0"]
 
 # TypeSafe Jev: a decision model (probabilities, not text), so decision role only.
 # Verified https://docs.typesafe.ai/api.md : POST https://api.typesafe.ai/v1/systemone,

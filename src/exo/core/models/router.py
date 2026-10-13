@@ -145,6 +145,8 @@ class Router:
         ``context``)."""
         config = config or {}
         r = cls(roles=config.get("roles"), providers=config.get("providers"), breaker=config.get("breaker"), **kw)
+        if "muse_serve" in config:  # the muse-cli tool route (muse serve); false turns it off
+            r.providers["muse-cli"] = {**r.providers.get("muse-cli", {}), "serve": bool(config["muse_serve"])}
         for ref, info in (config.get("models") or {}).items():  # prices and limits per "provider:model" (D-032)
             if isinstance(info, dict):
                 r.models[ref] = {**r.models.get(ref, {}), **info}
@@ -203,7 +205,7 @@ class Router:
             # No key: the muse CLI's own login is the credential (D-051). Available only if the binary is on PATH.
             exe = shutil.which(spec.get("command", "muse"), path=self.env.get("PATH", ""))
             if exe:
-                prov = MuseCliProvider(exe, name=provider, env=self.env,
+                prov = MuseCliProvider(exe, name=provider, env=self.env, serve=bool(spec.get("serve", True)),
                                        **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
                 creds = [Credential(provider, None, prov)]
         elif (spec := self.providers.get(provider)) is not None:
