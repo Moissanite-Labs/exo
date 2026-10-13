@@ -1243,3 +1243,36 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   249 entries; no new ones), `python -m exo.protocol.export --check`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Progress", `docs/DEVELOPER-GUIDE.md` §1, `docs/CORE.md`, `docs/PEERS.md`,
   `docs/SCHEDULE.md`, `CHANGELOG.md`.
+
+## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
+- **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It
+  calls `update_session(title=...)` and announces the change with the existing `session.updated` event. The protocol
+  stays at its cap of 30 commands and 30 events. Only the principal may rename (D-052); anyone else gets `forbidden`.
+- **Why:** issue #98. Titles are what make `/sessions` and `/resume` scannable, and the title is already stored in SQLite.
+  A new command type would have broken the cap; the `unsteer` pattern (D-045) already shows the way.
+- **Clients:** the TUI has `/rename`; the web page has `/rename` and a double-click on a thread in the list
+  (`POST /api/chat/sessions/<id>/rename`). Auto-titling from the first message is out of scope.
+- **Numbering:** D-062 to D-068 may be held by open PRs, so this is D-069.
+- **Validation:** `tests/core/test_rename.py`, `plugins/exo-command/tests/test_ghost.py`.
+- **Docs:** `docs/COMMANDS.md`, `docs/USER-GUIDE.md`, `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-070 (2026-10-13) Inspect, steer and stop running subagents without a new protocol command (issue #97)
+- **Why:** a delegated child is a real session with a live loop, but the principal saw only the final receipt. A
+  child going wrong could be stopped only by stopping the parent.
+- **Decision:** one built-in `command.run` name, `subagent`, with verbs `list`, `open`, `send` and `stop`. The protocol
+  stays at its 30 commands and 30 events. The rules live in `src/exo/subagents.py`, outside the counted core. The core
+  hook is a `marks` dict on the `Delegator` and two lines in `_receipt`.
+- **Who may act (D-052):** the principal, or the task's parent session (a tool in that session calls
+  `subagents.steer(..., by=<parent id>)`). Local callers and other sessions get `forbidden`.
+- **Who wrote it (D-040):** a principal caller typed the note, so it is stored with author `principal`. The parent
+  session speaks as `delegate`. Neither path can write a message the principal did not type under the principal's name.
+- **Finished children:** a child that is done, failed or cancelled is locked. Steering or stopping it fails with
+  `conflict` and a message naming the status. Nothing is written.
+- **Receipt:** the child's receipt summary gets a line, `[steered by principal]` or `[stopped by parent]`, and a
+  `task.updated` event carries the same words while the child runs.
+- **Clients:** TUI `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>`; web Tasks cards (Open, Steer, Stop)
+  over `/api/tasks/<task>[/steer|/stop]`. `/open` reads the child with `session.get`, not `session.resume`, so a live
+  loop is never repaired mid-turn.
+- **Limits:** child approvals shown in the parent, and `followup` or `resume`, are follow-ups. Typing straight into a
+  child's session still steers it through `turn.send`; that path works but leaves no note on the receipt.
+- **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.

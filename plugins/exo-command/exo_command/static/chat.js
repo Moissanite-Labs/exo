@@ -371,7 +371,9 @@ export function mount(root) {
   function drawSessions() {
     const waiting = new Set(Object.values(approvals).map((a) => a.session));
     listEl.replaceChildren(...(sessions.length ? sessions.map((s) =>
-      h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id) },
+      h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id),
+        title: "Double-click to rename (also /rename <title>)",
+        ondblclick: () => { const t = window.prompt("Rename thread", s.title || ""); if (t !== null) rename(s.id, t); } },
         h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
         h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))))) : [empty("No threads yet.")]));
     drawWhere();
@@ -475,6 +477,16 @@ export function mount(root) {
     } catch (e) { /* approvals still arrive by event */ }
   }
 
+  // D-069: rename is command.run "rename" on the core (principal only); the session.updated event redraws the list
+  async function rename(id, title) {
+    title = (title || "").trim();
+    if (!id || !title) return;
+    try {
+      await api("POST", "/api/chat/sessions/" + encodeURIComponent(id) + "/rename", { title });
+      await refreshSessions();
+    } catch (e) { fail(e); }
+  }
+
   async function create(kind = "") {
     try {
       const d = await api("POST", "/api/chat/sessions", { kind });
@@ -501,6 +513,10 @@ export function mount(root) {
       else if (LAYOUTS.includes(lay[1].toLowerCase())) { switchLayout(lay[1].toLowerCase()); flash("layout: " + layout + " (saved)"); }
       else flash("usage: /layout inverse|classic");
       return;
+    }
+    if (command && command.name === "rename") {
+      if (!current) { flash("open a thread first for /rename"); return; }
+      input.value = ""; help.sent(text); rename(current, command.args); return;
     }
     if (command && command.name === "new") { input.value = ""; help.sent(text); create(command.args); return; }
     const slash = command && ["context", "findings", "trace"].includes(command.name) ? [null, command.name, command.args] : null;
@@ -590,6 +606,8 @@ export function mount(root) {
   });
   const off = () => { ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
-  refreshSessions().then(() => { if (!current && sessions.length) open(sessions[0].id); });
+  const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
+  sessionStorage.removeItem("xc-open");
+  refreshSessions().then(() => { if (!current && (asked || sessions.length)) open(asked || sessions[0].id); });
   return off;
 }

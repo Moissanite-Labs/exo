@@ -200,7 +200,8 @@ class CommandRun:
     (the command cap is full, so new ones go here, not in new command types): ``trace``, ``findings``,
     ``context`` (what the next model call for ``session`` carries, read-only) and ``compact`` (summarize now
     what is eligible in the agent's memory; runs in the core that holds the agent lock) and ``unsteer`` (pull
-    back a queued steer message before it is delivered: args is its id, empty means the newest, D-045)."""
+    back a queued steer message before it is delivered: args is its id, empty means the newest, D-045) and ``rename``
+    (set the session title to args, principal only, announced as ``session.updated``, D-069)."""
 
     name: str
     args: str = ""

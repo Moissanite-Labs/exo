@@ -142,6 +142,7 @@ class Delegator:
         self.allow: dict[str, set[str]] = {}  # child session -> tool names it may call
         self.loops: dict[str, Loop] = {}      # running child sessions
         self.over: set[str] = set()           # children stopped for their token budget
+        self.marks: dict[str, list[str]] = {}  # child -> "steered by ..." notes for its receipt (exo.subagents, #97)
         self.sems: dict[int, asyncio.Semaphore] = {}
         db = engine.store
         db._q(TABLE)
@@ -412,6 +413,7 @@ class Delegator:
         cap = self.limits.max_summary_chars
         if len(text) > cap:
             text = text[:cap] + f" [cut {len(text) - cap} chars]"
+        text += "".join(f"\n[{m}]" for m in self.marks.pop(sid, []))
         total = loop.state(sid).total if loop is not None and sid else Usage()
         return Receipt(id="r" + b.id[1:], thread=b.thread, brief=b.id, status=status, role=b.role, summary=text,
                        input_tokens=total.input_tokens, output_tokens=total.output_tokens,
