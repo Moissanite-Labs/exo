@@ -213,3 +213,49 @@ def test_required_body_file_blocks_without_host_read_even_when_inspection_disabl
     result = invoke(engine, ToolCall("c", "bash", {"command": command}))
     assert result.is_error and "OUTSIDE-CANARY" not in result.text()
     assert seen == [] and broker.seen == [] and ran == []
+
+
+@pytest.mark.parametrize("responses", [[("second", "allow"), ("first", "deny")],
+                                       [("second", "deny"), ("first", "allow")]])
+def test_identical_concurrent_approvals_keep_session_call_and_audit_refs(tmp_path, monkeypatch, responses):
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch)
+    tool = engine.registry.get("bash")
+    engine.registry.register(tool.spec, lambda args, ctx: ran.append(ctx.session) or "ran", replace=True)
+
+    async def main():
+        try:
+            dispatcher = Dispatcher(engine)
+            sessions = {}
+            tasks = {}
+            for call_id in ("first", "second"):
+                sessions[call_id] = (await dispatcher.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
+                tasks[call_id] = asyncio.create_task(engine.run_tool(
+                    ToolCall(call_id, "bash", {"command": "rm -rf cache"}), {"session": sessions[call_id]}))
+            deadline = time.monotonic() + 5
+            while len(engine._approvals) < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.001)
+            assert len(engine._approvals) == 2
+            requests = {request.call.id: rid for rid, request in engine._open_approvals.items()}
+            for call_id, response in responses:
+                result = await dispatcher.run(s.Command.of(s.ApprovalRespond(
+                    request_id=requests[call_id], decision=response)), "principal:tui")
+                assert result.ok
+                outcome = await asyncio.wait_for(tasks[call_id], 5)
+                assert outcome.is_error == (response == "deny")
+            events = list(gate.sink._open().iter(kind="action"))
+            decisions = {event["body"]["tool_call_id"]: event for event in events
+                         if event["body"]["phase"] == "decision"}
+            approvals = [event for event in events if event["body"]["phase"] == "approval"]
+            assert decisions["first"]["body"]["rule_key"] == decisions["second"]["body"]["rule_key"]
+            assert decisions["first"]["body"]["approval_key"] != decisions["second"]["body"]["approval_key"]
+            for event in approvals:
+                call_id = event["body"]["tool_call_id"]
+                assert event["session"] == sessions[call_id]
+                assert event["refs"] == [decisions[call_id]["id"]]
+                assert event["body"]["approval_key"] == decisions[call_id]["body"]["approval_key"]
+            allowed = next(call_id for call_id, response in responses if response == "allow")
+            assert ran == [sessions[allowed]] and broker.seen == ["bash"]
+            assert not gate._pending
+        finally:
+            await engine.close()
+    asyncio.run(main())

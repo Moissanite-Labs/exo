@@ -186,16 +186,26 @@ class GrantStore:
         return hit
 
     def add(self, category: str, target: str, binding: str, days: float, by: str, tool: str = "") -> Optional[dict]:
+        g = self.prepare(category, target, binding, days, by, tool)
+        if g is not None:
+            self.persist(g)
+        return g
+
+    def prepare(self, category: str, target: str, binding: str, days: float, by: str, tool: str = "") -> Optional[dict]:
+        """Build a grant candidate without activating or writing it."""
         if not self.path or category in gate.NO_GRANT or days <= 0:
             return None
         now = self.clock()
-        g = {"id": "g_" + secrets.token_hex(6), "rule": category, "target": _glob.escape(target or ""),
+        return {"id": "g_" + secrets.token_hex(6), "rule": category, "target": _glob.escape(target or ""),
              "binding": binding or "", "tool": tool, "by": by, "created": now, "expires": now + days * 86400}
+
+    def persist(self, grant: dict) -> None:
+        """Activate one already-authorized candidate with the atomic file replacement."""
+        now = self.clock()
         with self._lock:
             rows = [r for r in self._read() if float(r.get("expires") or 0) > now]  # drop expired ones
-            rows.append(g)
+            rows.append(dict(grant))
             self._write(rows)
-        return g
 
 
 class LedgerSink:
@@ -247,6 +257,15 @@ class GateAuditError(RuntimeError):
     """Required gate evidence was not committed; do not expose host error details."""
 
 
+@dataclass
+class PendingApproval:
+    decision_id: Optional[str]
+    session: Optional[str]
+    scope: dict
+    rule_key: str
+    call_id: str
+
+
 class Gate:
     """Holds settings, cached policies and the ledger sink; exposes the two hook callbacks."""
 
@@ -266,7 +285,7 @@ class Gate:
         self._changed: Optional[dict] = None       # D-038: files changed since; waits for /gate accept
         self._changed_stamp: tuple = ()
         self._changed_error = ""
-        self._pending: Dict[str, tuple[Optional[str], Optional[str], dict]] = {}
+        self._pending: Dict[str, PendingApproval] = {}
         self._spent: Dict[str, float] = {}
         self._lock = threading.Lock()
         self.grants = GrantStore(settings.grants_path)
@@ -344,11 +363,14 @@ class Gate:
     def accept_policies(self) -> str:
         """Adopt changed policy files only with live principal authority (``/gate accept``)."""
         by = require_principal("accept changed gate policies")
-        if self.changed_policies() is None:
+        candidate = self.changed_policies()
+        if candidate is None:
             return "policy unchanged since the session started"
-        self._policies, self._policy_error = self._changed, self._changed_error
-        self._policy_stamp, self._changed, self._changed_stamp = self._changed_stamp, None, ()
-        self._append({"gate": PLUGIN_ID, "phase": "policy_accept", "files": self._file_hashes(), "by": by})
+        stamp, error = self._changed_stamp, self._changed_error
+        self._append({"gate": PLUGIN_ID, "phase": "policy_accept", "files": self._file_hashes(), "by": by,
+                      "policy_sha256": hashlib.sha256(json.dumps(candidate, sort_keys=True).encode()).hexdigest()})
+        self._policies, self._policy_error = candidate, error
+        self._policy_stamp, self._changed, self._changed_stamp = stamp, None, ()
         return "accepted the changed policy files"
 
     # --- hooks ------------------------------------------------------------------------
@@ -513,13 +535,16 @@ class Gate:
             approvers = gate.approvers_for(c.category, pol.get("approvals"))
             # persist: this gate keeps "always" grants itself (scoped, expiring, in the store), so the
             # core must not also keep an unscoped one in memory.
-            result = {"action": "approve", "message": msg, "rule_key": key, "approvers": approvers,
+            approval_key = "a_" + secrets.token_hex(16)
+            result = {"action": "approve", "message": msg, "rule_key": key, "approval_key": approval_key,
+                      "approvers": approvers,
                       "persist": True}
             if binding:
                 result["binding"] = binding
             if c.category in gate.NO_GRANT:
                 result["once"] = True      # the core never stores an "always" for this (no standing allow)
             body["rule_key"] = key
+            body["approval_key"] = approval_key
             body["approvers"] = approvers
         if self.settings.mode == "observe" and c.category not in gate.NO_GRANT:  # enforced in every mode
             body["would"] = result["action"] if result else "run"
@@ -532,22 +557,35 @@ class Gate:
             with self._lock:
                 scope = {"rule": c.category, "target": c.target or tool, "binding": binding, "outward": outward,
                          "tool": tool}
-                self._pending["plugin_rule:" + result["rule_key"]] = (eid, session_id or None, scope)
+                self._pending[result["approval_key"]] = PendingApproval(
+                    eid, session_id or None, scope, "plugin_rule:" + result["rule_key"], tool_call_id)
                 if len(self._pending) > 500:
                     self._pending.pop(next(iter(self._pending)))
         return result
 
     def post_approval_response(self, pattern_key: str = "", choice: str = "", decided_by: str = "",
+                               approval_key: str = "", session_id: str = "",
                                **_: Any) -> None:
         with self._lock:
-            pending = self._pending.pop(pattern_key, None)
+            if not approval_key and not self.executor_required:
+                # Legacy hosts may omit correlation; never guess between identical pending calls.
+                matches = [key for key, value in self._pending.items() if value.rule_key == pattern_key]
+                if len(matches) == 1:
+                    approval_key = matches[0]
+            pending = self._pending.get(approval_key)
+            if pending is not None and (pending.rule_key != pattern_key
+                                       or (session_id and pending.session != session_id)):
+                pending = None
+            if pending is not None:
+                self._pending.pop(approval_key)
         if pending is None:
             if self.executor_required and pattern_key.startswith("plugin_rule:exo-gate:"):
                 raise GateAuditError("Required gate approval evidence is unavailable")
             return None
-        eid, session, scope = pending
+        eid, session, scope = pending.decision_id, pending.session, pending.scope
         body = {"gate": PLUGIN_ID, "phase": "approval", "choice": str(choice),
                 "approved": str(choice) in ("once", "session", "always"), "decided_by": str(decided_by or ""),
+                "approval_key": approval_key, "tool_call_id": pending.call_id or None,
                 "rule_key": pattern_key.split(":", 1)[-1]}
         aid = self._append(body, session=session, refs=(eid,) if eid else ())
         if str(choice) == "always":
@@ -571,9 +609,23 @@ class Gate:
             return
         approvals = self.policies().get("approvals") or {}
         days = float(approvals.get("outward_always_days" if scope.get("outward") else "always_days") or 0)
+        args = (str(scope.get("rule") or ""), str(scope.get("target") or ""),
+                str(scope.get("binding") or ""), days, by, str(scope.get("tool") or ""))
+        if self.executor_required:
+            candidate = self.grants.prepare(*args)
+            if candidate is None:
+                return
+            body = {"gate": PLUGIN_ID, "phase": "grant", "state": "authorized", "activation": "pending",
+                    "grant": candidate["id"], "rule": candidate["rule"], "target": candidate["target"],
+                    "binding": candidate["binding"] or None, "by": by, "expires": _iso(candidate["expires"])}
+            self._append(body, session=session, refs=(ref,) if ref else ())
+            try:
+                self.grants.persist(candidate)
+            except Exception:
+                raise GateAuditError("Required standing grant could not be saved") from None
+            return
         try:
-            g = self.grants.add(str(scope.get("rule") or ""), str(scope.get("target") or ""),
-                                str(scope.get("binding") or ""), days, by, str(scope.get("tool") or ""))
+            g = self.grants.add(*args)
         except Exception:
             logger.warning("exo-gate: could not save the standing grant", exc_info=True)
             return

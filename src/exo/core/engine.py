@@ -549,9 +549,11 @@ class CoreEngine:
                 decision = await self.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
                                           options=["allow", "deny"] if once else None, **bound)
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
+                correlation = {"approval_key": verdict["approval_key"]} if verdict.get("approval_key") else {}
                 await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
                                                _fail_closed_plugins=required_hooks,
-                                               decided_by=who[0] if who else "unknown", session_id=ctx.session or "")
+                                               decided_by=who[0] if who else "unknown", session_id=ctx.session or "",
+                                               **correlation)
                 if decision == "allow_always" and not once:
                     if not verdict.get("persist"):  # a plugin that sets persist keeps its own scoped grants (D-033)
                         self._always.add(key)

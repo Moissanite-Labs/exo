@@ -55,6 +55,20 @@ the registry; optional observer hooks retain their existing failure behavior.
 The safe-read and observe-mode exception fallbacks cannot permit a failed
 required gate check.
 
+Every gate approval carries a unique internal `approval_key`, separate from the
+reusable `rule_key` and content binding. The engine returns that token to the
+approval hook so concurrent identical calls retain their own session, call id
+and decision reference. Required mode refuses missing or mismatched tokens.
+Ordinary legacy hosts may omit the token only when one pending call matches.
+
+Policy acceptance is audited before the candidate replaces the pinned policy.
+A required standing grant is prepared without writing, then receives a signed
+`phase: grant`, `state: authorized`, `activation: pending` event before its file
+is atomically replaced. If auditing fails there is no new authority. If grant
+persistence fails, the call is blocked and the audit records authorization only;
+it does not claim successful activation. Audit and grant files are separate
+stores, so this ordering does not promise a cross-file atomic transaction.
+
 Required mode refuses `gh --body-file` inspection before touching the selected
 host path, including symlinks. Inline text can be checked without opening a file;
 an unseen body file cannot be approved by this gate. Policy, grant and scrub

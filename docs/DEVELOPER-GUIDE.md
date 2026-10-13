@@ -170,6 +170,9 @@ Required-executor engines propagate failures of `exo-gate` in `pre_tool_call`
 and `post_approval_response`, blocking dispatch. The gate requires saved signed
 decision and approval events; ordinary optional hooks keep the behavior above.
 See `docs/GATE.md` "Required executor audit".
+The gate's approval verdict adds an `approval_key` for one pending call; the core
+passes it back to `post_approval_response`. Keep `rule_key` stable for grant
+scope and do not substitute it for this correlation token.
 
 **Memory provider hooks.** A memory provider is a subclass of `MemoryProvider` in `src/exo/core/slots.py`. Two
 methods matter for the principal's words:
