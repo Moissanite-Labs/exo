@@ -3,7 +3,6 @@ import asyncio
 import json
 import os
 import stat
-import subprocess
 import sys
 import time
 
@@ -47,11 +46,6 @@ print("hi there")
 TOOL = ToolSpec(name="get_weather", description="weather", parameters={"type": "object", "properties": {}})
 
 
-@pytest.fixture(autouse=True)
-def signed(monkeypatch):
-    monkeypatch.setattr(muse_cli, "signature_state", lambda exe: "signed")
-
-
 def home_with_login(tmp_path, subs_active=True, mechanism="oauth"):
     home = tmp_path / "home"
     (home / ".config" / "muse").mkdir(parents=True, exist_ok=True)
@@ -71,7 +65,7 @@ def router(tmp_path, mode="ok", login=True, **env):
     (d / "fake.json").write_text(json.dumps({"mode": mode, "out": str(tmp_path / "out.json"),
                                              "pid": str(tmp_path / "pid")}))
     home = home_with_login(tmp_path) if login else tmp_path / "nohome"
-    return Router(roles={"main": ["muse-cli:default"]}, env={"PATH": str(d), "HOME": str(home), **env})
+    return Router(roles={"main": ["muse-cli:muse-spark-1.3"]}, env={"PATH": str(d), "HOME": str(home), **env})
 
 
 def run(r, messages, tools=()):
@@ -89,10 +83,12 @@ def test_success_argv_env_and_isolation(tmp_path):
     evs = run(r, [Message.system("be brief"), Message.user("hello")])
     assert "".join(e.text for e in evs if e.kind == "text") == "hi there"
     done = evs[-1]
-    assert done.kind == "done" and done.route == "muse-cli:default" and done.usage is None
+    assert done.kind == "done" and done.route == "muse-cli:muse-spark-1.3" and done.usage is None
     s = seen(tmp_path)
     a = s["argv"]
-    assert a[0] == "exec" and "--model" not in a  # "default" leaves the CLI's own default
+    assert a[0] == "exec"
+    assert a[a.index("--model") + 1] == "muse-spark-1.3"  # the catalog default is passed through
+    assert a[a.index("--reasoning-effort") + 1] == "low"  # quiet default for a one-shot call
     for flag in ("--no-session-log", "--disable-shell", "--disable-write", "--disable-web-tools"):
         assert flag in a
     assert a[a.index("--approval-mode") + 1] == "never"
@@ -108,18 +104,33 @@ def test_history_is_flattened_with_roles_and_model_passes_through(tmp_path):
     r = router(tmp_path)
     run(r, [Message.user("one"), Message.assistant("two"), Message.user("three")])
     assert seen(tmp_path)["prompt"] == "[user]\none\n\n[assistant]\ntwo\n\n[user]\nthree"
-    r.roles["main"] = ["muse-cli:m1"]
+    r.roles["main"] = ["muse-cli:muse-wonder-1.0"]
     run(r, [Message.user("x")])
     a = seen(tmp_path)["argv"]
-    assert a[a.index("--model") + 1] == "m1"
+    assert a[a.index("--model") + 1] == "muse-wonder-1.0"
+
+
+@pytest.mark.parametrize("asked,sent", [(None, "low"), ("high", "high"), ("xhigh", "xhigh"), ("ultra", "ultra"),
+                                        ("none", "none"), ("bogus", "low")])
+def test_reasoning_effort_maps_onto_the_cli_scale(tmp_path, asked, sent):
+    async def go():
+        prov = router(tmp_path).credentials("muse-cli")[0].provider
+        return [e async for e in prov.stream([Message.user("x")], [], **({"reasoning": asked} if asked else {}))]
+    asyncio.run(go())
+    a = seen(tmp_path)["argv"]
+    assert a[a.index("--reasoning-effort") + 1] == sent
+
+
+def test_cli_notices_on_stdout_are_dropped():
+    assert muse_cli.clean_output("muse: local session messaging disabled: session logging is required\nhi\n") == "hi"
 
 
 def test_tools_are_refused_and_the_router_falls_back(tmp_path):
     r = router(tmp_path)
-    r.roles["main"] = ["muse-cli:default", "b:m"]
+    r.roles["main"] = ["muse-cli:muse-spark-1.3", "b:m"]
     r.instances["b"] = FakeProvider(["fallback ok"], name="b")
     evs = run(r, [Message.user("hello")], [TOOL])
-    assert any(e.kind == "notice" and "muse-cli:default" in e.text for e in evs)
+    assert any(e.kind == "notice" and "muse-cli:muse-spark-1.3" in e.text for e in evs)
     assert evs[-1].kind == "done" and evs[-1].message.text() == "fallback ok"
     assert not (tmp_path / "out.json").exists()  # muse was never started
     end = run(router(tmp_path), [Message.user("hello")], [TOOL])[-1]
@@ -127,7 +138,7 @@ def test_tools_are_refused_and_the_router_falls_back(tmp_path):
 
 
 @pytest.mark.parametrize("mode,status,hint", [("login", 401, "muse login"), ("401", 401, "muse login"),
-                                              ("429", 429, ""), ("keychain", None, "codesign")])
+                                              ("429", 429, ""), ("keychain", None, "codesign --force --sign -")])
 def test_failures_are_classified_and_never_return_text(tmp_path, mode, status, hint):
     evs = run(router(tmp_path, mode), [Message.user("hi")])
     assert not [e for e in evs if e.kind == "text"]
@@ -144,27 +155,14 @@ def test_empty_output_is_an_error(tmp_path):
     assert end.kind == "error" and "nothing" in end.error
 
 
-def test_unsigned_binary_is_refused_with_the_fix(tmp_path, monkeypatch):
-    monkeypatch.setattr(muse_cli, "signature_state", lambda exe: "unsigned")
-    end = run(router(tmp_path), [Message.user("hi")])[-1]
-    assert end.kind == "error" and "codesign -s -" in end.error and end.retryable is False
-    assert not (tmp_path / "out.json").exists()
-
-
-def test_signature_state_reads_codesign(monkeypatch):
-    monkeypatch.undo()  # drop the autouse "signed" stub
-    out = {"rc": 1, "err": "x: code object is not signed at all"}
-    monkeypatch.setattr(muse_cli.sys, "platform", "darwin")
-    monkeypatch.setattr(muse_cli.shutil, "which", lambda n: "/usr/bin/codesign")
-    monkeypatch.setattr(muse_cli.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
-        a[0], out["rc"], "", out["err"]))
-    assert muse_cli.signature_state("/x/muse") == "unsigned"
-    out.update(rc=0, err="Identifier=muse")
-    assert muse_cli.signature_state("/x/muse") == "signed"
-    out.update(rc=1, err="something else")
-    assert muse_cli.signature_state("/x/muse") == "unknown"
-    monkeypatch.setattr(muse_cli.sys, "platform", "linux")
-    assert muse_cli.signature_state("/x/muse") == "unknown"
+def test_a_working_unsigned_binary_is_not_flagged(tmp_path):
+    """The fake script is unsigned. It works, so status, test call and chat all pass; signing is never mentioned."""
+    r = router(tmp_path)
+    assert row(r)["status"] == "installed"
+    res = ps.test_provider("muse-cli", router=r, save=False)
+    assert res["ok"] and "codesign" not in json.dumps(res)
+    evs = run(r, [Message.user("hi")])
+    assert evs[-1].kind == "done" and "codesign" not in json.dumps([e.text for e in evs])
 
 
 def test_login_state_reads_only_non_secret_fields(tmp_path):
@@ -185,7 +183,8 @@ def test_available_only_with_muse_on_path(tmp_path):
     assert not empty.credentials("muse-cli")
     r = router(tmp_path)
     assert r.credentials("muse-cli")
-    assert [m["route"] for m in available_models(r, tmp_path / "h") if m["provider"] == "muse-cli"] == ["muse-cli:default"]
+    assert [m["route"] for m in available_models(r, tmp_path / "h") if m["provider"] == "muse-cli"] == [
+        "muse-cli:muse-spark-1.3", "muse-cli:muse-wonder-1.0", "muse-cli:muse-wonder-full-1.0"]
     assert not [m for m in available_models(empty, tmp_path / "h") if m["provider"] == "muse-cli"]
 
 
@@ -273,6 +272,8 @@ def test_test_call_precondition_classes(tmp_path, exo_home, monkeypatch):
     home_with_login(tmp_path)
     monkeypatch.setattr(ps, "MUSE_TEST_TIMEOUT", 0.5)
     assert ps.test_provider("muse-cli", router=router(tmp_path, "sleep"), timeout=0.5)["error_class"] == "timeout"
-    monkeypatch.setattr(muse_cli, "signature_state", lambda exe: "unsigned")
-    res = ps.test_provider("muse-cli", router=router(tmp_path))
-    assert res["error_class"] == "unsigned" and "codesign -s -" in res["detail"]
+
+
+def test_keychain_failure_suggests_signing_in_the_test_call(tmp_path, exo_home):
+    res = ps.test_provider("muse-cli", router=router(tmp_path, "keychain"))
+    assert res["error_class"] == "unsigned" and "codesign --force --sign -" in res["detail"]

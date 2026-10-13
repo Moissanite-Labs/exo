@@ -1045,12 +1045,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Decision:** add a keyless provider `muse-cli` that runs `muse exec` as a subprocess, modelled on `claude-cli`.
   Exo never reads, copies or stores the Muse token; the CLI owns it in the OS keychain. Status reads only the
   non-secret `mechanism` and `subs_active` fields of `~/.config/muse/auth.json`. The test call is one tiny
-  `muse exec` prompt, mapped to the existing error classes plus a new one, `unsigned`.
+  `muse exec` prompt, mapped to the existing error classes plus a new one, `unsigned`, used only when a real call fails with a keychain
+  write error.
 - **Why:** the subscription is reachable only through the vendor's login. A subprocess keeps the token out of Exo
   and out of every log, which is the same line D-034 and D-039 draw for keys.
 - **Limits, accepted:** text only (a turn with tools is refused with status 501 so the router falls back), one
-  process per turn, no token stream, no usage counts, history flattened into one prompt. On macOS the binary must
-  be code-signed or its keychain write fails (`OSStatus -67068`); Exo detects this with `codesign -dv`.
+  process per turn, no token stream, no usage counts, history flattened into one prompt. A working unsigned binary is
+  fine and is never flagged (verified live on `muse` 1.4.7). Only a real keychain failure (`OSStatus -67068`) makes
+  Exo suggest ad-hoc signing, `codesign --force --sign - <path>`; it is also a docs troubleshooting note.
+- **Models and effort:** `muse-spark-1.3` (default), `muse-wonder-1.0`, `muse-wonder-full-1.0`, passed with
+  `--model`. Exo's reasoning level passes through on the CLI's scale; an unset level becomes `low` for a quiet
+  one-shot call. `--approval-mode never` is one of the documented values (`untrusted|on-request|never`).
 - **Locked down:** the run has no shell, no writes, no web tools and no session log, in an empty private workspace.
   `META_API_KEY` is dropped from the child so the subscription, not an API account, is used.
 - **Gate:** `muse login`, `muse auth` and `muse logout` (any position) and `~/.config/muse/` are `credentials`:

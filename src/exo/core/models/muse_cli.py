@@ -9,8 +9,9 @@ What this provider is not, said plainly:
   it, so a call that carries tools is refused (status 501) and the router falls back to the next route.
 - One process per turn, so every turn pays process start-up and a fresh session. History is flattened into one
   prompt. Output arrives when the run ends, not token by token.
-- On macOS the ``muse`` binary must be code-signed (ad-hoc is enough: ``codesign -s - <path>``). If it is not,
-  the keychain write at login, and the read at run time, fail. ``signature_state`` detects that.
+- On some macOS setups an unsigned ``muse`` binary cannot write the keychain at login (OSStatus -67068). A
+  working unsigned binary is fine and is never flagged. Only when a real failure shows that error does Exo
+  suggest ad-hoc signing (``codesign --force --sign - <path>``).
 - ``META_API_KEY`` is removed from the child's environment. It would override the account login and bill an API
   account instead of the subscription.
 
@@ -23,10 +24,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
@@ -39,7 +38,13 @@ from exo.core.types import Message, ProviderEvent, ToolSpec
 # Credentials and backend switches that would make the CLI bill an API account instead of the login.
 DROP_ENV = ("META_API_KEY",)
 PROBE_PROMPT = "Reply with the single word: ok"
-NOT_SIGNED = "not signed at all"
+DEFAULT_MODEL = "muse-spark-1.3"
+# The CLI's own scale (``muse exec --help``): none|minimal|low|medium|high|xhigh|max|ultra, its default is high.
+# Exo's levels are a subset with the same names, so they pass straight through. A one-shot call that does not ask
+# for a level gets "low": quiet and quick, and Exo does not pay for deep thinking nobody requested.
+EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+DEFAULT_EFFORT = "low"
+SIGN_FIX = "codesign --force --sign - "
 
 
 def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -70,24 +75,10 @@ def login_state(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     return {"logged_in": mechanism == "oauth", "subs_active": subs if isinstance(subs, bool) else None}
 
 
-def signature_state(exe: str) -> str:
-    """``"unsigned"``, ``"signed"`` or ``"unknown"``. Only macOS cares: an unsigned binary cannot write the
-    keychain (OSStatus -67068). Elsewhere, or if ``codesign`` cannot say, the answer is ``unknown``."""
-    if sys.platform != "darwin" or not shutil.which("codesign"):
-        return "unknown"
-    try:
-        r = subprocess.run(["codesign", "-dv", exe], capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    if r.returncode == 0:
-        return "signed"
-    return "unsigned" if NOT_SIGNED in (r.stderr or "") else "unknown"
-
-
 def classify_failure(returncode: int, stderr: str) -> str:
     """Map a failed ``muse exec`` to one of Exo's error classes. Looks at the text, never returns it."""
     low = (stderr or "").lower()
-    if "-67068" in low or "keychain" in low:
+    if "-67068" in low or "keychain" in low:  # the only case where signing is suggested (see module docstring)
         return "unsigned"
     if any(w in low for w in ("not logged in", "no credentials", "login required", "muse login")):
         return "no_key"
@@ -105,12 +96,10 @@ def classify_failure(returncode: int, stderr: str) -> str:
 def probe(exe: str, env: Mapping[str, str] | None = None, timeout: float = 60.0) -> dict[str, str]:
     """One tiny ``muse exec`` call for the provider test. Returns ``{"error_class", "detail"}``; an empty class
     means it worked. Details are fixed phrases, never CLI output."""
-    if signature_state(exe) == "unsigned":
-        return {"error_class": "unsigned",
-                "detail": f"the muse binary is not code-signed; run: codesign -s - {exe}"}
     with tempfile.TemporaryDirectory(prefix="muse-cli-") as tmp:
         argv = [exe, "exec", "--no-session-log", "--disable-shell", "--disable-write", "--disable-web-tools",
-                "--approval-mode", "never", "--workspace", tmp, "--prompt-file", _write(tmp, PROBE_PROMPT)]
+                "--approval-mode", "never", "--model", DEFAULT_MODEL, "--reasoning-effort", DEFAULT_EFFORT,
+                "--workspace", tmp, "--prompt-file", _write(tmp, PROBE_PROMPT)]
         try:
             r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=tmp,
                                env=child_env(env), stdin=subprocess.DEVNULL, start_new_session=True)
@@ -121,7 +110,7 @@ def probe(exe: str, env: Mapping[str, str] | None = None, timeout: float = 60.0)
     if r.returncode != 0:
         cls = classify_failure(r.returncode, r.stderr)
         return {"error_class": cls, "detail": {
-            "unsigned": f"the muse binary is not code-signed; run: codesign -s - {exe}",
+            "unsigned": f"keychain write refused (OSStatus -67068); try ad-hoc signing: {SIGN_FIX}{exe}",
             "no_key": "not logged in; run: muse login", "auth": "the Muse login was rejected; run: muse login",
             "billing": "the Muse subscription is not active", "rate_limited": "rate limited",
             "network": "could not connect"}.get(cls, f"muse exec exited {r.returncode}")}
@@ -135,6 +124,13 @@ def _write(tmp: str, text: str) -> str:
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     return path
+
+
+def clean_output(text: str) -> str:
+    """The answer from stdout. The CLI's own notices (``muse: ...``, for example "local session messaging
+    disabled", printed because ``--no-session-log`` is set) go to stderr and are harmless; a stray one on stdout
+    is dropped too."""
+    return "\n".join(ln for ln in text.splitlines() if not ln.startswith("muse: ")).strip()
 
 
 def build_prompt(messages: list[Message]) -> str:
@@ -181,22 +177,16 @@ class MuseCliProvider:
         except ValueError as exc:
             yield error_event(f"muse-cli: {exc}", 400, retryable=False)
             return
-        if signature_state(self.command) == "unsigned":
-            yield error_event(f"muse-cli: the muse binary is not code-signed; run: codesign -s - {self.command}",
-                              None, retryable=False)
-            return
         model = opts.get("model") or self.model
-        effort = {"ultra": "ultra"}.get(opts.get("reasoning"), opts.get("reasoning"))
+        if not model or model == "default":
+            model = DEFAULT_MODEL
+        effort = opts.get("reasoning") if opts.get("reasoning") in EFFORTS else DEFAULT_EFFORT
         st = StreamState()
         with tempfile.TemporaryDirectory(prefix="muse-cli-") as tmp:
             # An empty private workspace: the run has no files of Exo's or the user's to read.
             argv = [self.command, "exec", "--no-session-log", "--disable-shell", "--disable-write",
                     "--disable-web-tools", "--approval-mode", "never", "--workspace", tmp,
-                    "--prompt-file", _write(tmp, prompt)]
-            if model and model != "default":
-                argv += ["--model", str(model)]
-            if effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
-                argv += ["--reasoning-effort", effort]
+                    "--model", str(model), "--reasoning-effort", effort, "--prompt-file", _write(tmp, prompt)]
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
@@ -214,14 +204,14 @@ class MuseCliProvider:
                 if proc.returncode is None:
                     kill_group(proc)
                     await asyncio.shield(proc.wait())
-        text = out.decode("utf-8", "replace").strip()
+        text = clean_output(out.decode("utf-8", "replace"))
         if proc.returncode != 0:
             cls = classify_failure(proc.returncode, err.decode("utf-8", "replace"))
             status = {"auth": 401, "no_key": 401, "rate_limited": 429, "billing": 402}.get(cls)
             hint = " (run `muse login`)" if cls in ("auth", "no_key") else (
-                f" (run `codesign -s - {self.command}`)" if cls == "unsigned" else "")
+                f" (keychain write refused; try `{SIGN_FIX}{self.command}`)" if cls == "unsigned" else "")
             yield error_event(f"muse exec failed ({cls}, exit {proc.returncode}){hint}", status,
-                              retryable=cls not in ("unsigned",))
+                              retryable=cls != "unsigned")
             return
         if not text:
             yield error_event("muse exec printed nothing", None, retryable=True)

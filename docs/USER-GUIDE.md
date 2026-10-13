@@ -19,8 +19,8 @@ Or type `/providers` in the terminal client, or open the Providers tab in `exo w
 type it after the command name. If no provider works, `exo` and `exo web` tell you. Details and the security of
 the web route: `docs/PROVIDERS.md`.
 
-To use a Muse Code subscription instead of a key, run `muse login` yourself, then `exo providers test muse-cli`. It is
-text only and has limits; they are listed in `docs/PROVIDERS.md` ("Use a Muse Code subscription").
+To use a Muse Code subscription instead of a key, run `muse login` yourself, then `exo providers test muse-cli`. If
+the test reports `unsigned`, see the signing note there. It is text only and has limits; they are listed in `docs/PROVIDERS.md` ("Use a Muse Code subscription").
 
 Then start the terminal client by typing the command, in the folder you want to work in:
 

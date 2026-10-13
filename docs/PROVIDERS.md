@@ -71,13 +71,18 @@ Set it up once, yourself, in a terminal:
 
     muse login                      # browser sign-in
     exo providers test muse-cli     # one tiny muse exec call: ok, or an error class
-    exo providers default muse-cli:default
+    exo providers default muse-cli:muse-spark-1.3
 
 `exo providers` shows `not installed`, `not logged in` or `installed`. The `not logged in` check reads two
 non-secret fields (`mechanism`, `subs_active`) from `~/.config/muse/auth.json` and nothing else in that file. It
 cannot see the keychain, so the test call is what proves the login works. Error classes from the test:
 `not_installed`, `no_key` (not logged in), `auth` (login rejected), `billing` (subscription not active),
-`rate_limited`, `timeout`, `network`, `unsigned`, `bad_response`, `error`.
+`rate_limited`, `timeout`, `network`, `unsigned` (a keychain write was refused, see below), `bad_response`, `error`.
+
+Models: `muse-spark-1.3` (the default), `muse-wonder-1.0` and `muse-wonder-full-1.0`, written
+`muse-cli:<model>`; Exo passes the model to `muse exec --model`. Reasoning effort uses the CLI's own scale
+(`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`). Exo passes its level straight through, and
+when a call asks for none it sends `low`, a quiet default for a one-shot call (the CLI's own default is `high`).
 
 Limits, stated plainly:
 
@@ -86,12 +91,15 @@ Limits, stated plainly:
   without tools (for example `aux`) or a conversation where another route follows it.
 - **Slow start, no token stream.** Each turn is a new process. The answer arrives when the run ends. The history
   is flattened into one prompt, and no token counts come back (usage shows as unknown).
-- **The binary must stay code-signed on macOS.** An unsigned `muse` fails its keychain write at login
-  (`OSStatus -67068`). Ad-hoc signing is enough: `codesign -s - $(which muse)`. Exo checks this
-  (`codesign -dv`) and reports the class `unsigned` with that command. Updating `muse` can replace the binary
-  and drop the signature; sign again.
+- **Signing is a troubleshooting note, not a requirement.** A working unsigned `muse` binary is fine, and Exo
+  does not check or flag it. On some Macs an unsigned binary cannot write the keychain at login and fails with
+  `OSStatus -67068`. Only if a real call fails that way does Exo report the class `unsigned` and suggest ad-hoc
+  signing: `codesign --force --sign - $(which muse)`. Updating `muse` can replace the binary; sign again if the
+  error returns.
 - **Locked down.** The run gets no shell, no file writes, no web tools and no session log, with an empty private
-  directory as its workspace. `META_API_KEY` is removed from the child's environment so the subscription is what
+  directory as its workspace, and `--approval-mode never` (the CLI documents `untrusted`, `on-request` (default) and
+  `never`; Exo sets `never` because nothing can answer a prompt in a headless call). `--no-session-log` makes the
+  CLI print a harmless "local session messaging disabled" notice on stderr; Exo ignores it. `META_API_KEY` is removed from the child's environment so the subscription is what
   is used, never an API account. The child gets only the minimal environment (D-039).
 - **The agent cannot log in for you.** The gate treats `muse login`, `muse auth` and `muse logout` (also with
   flags before them) and any read or write of `~/.config/muse/` as `credentials`, which always asks.
