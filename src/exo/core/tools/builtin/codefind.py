@@ -141,8 +141,6 @@ def _run(argv: list[str], env: dict[str, str], cwd: str, timeout: float, stdin: 
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, start_new_session=True, text=True,
                             encoding="utf-8", errors="replace")
-    with contextlib.suppress(ProcessLookupError):
-        proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
     deadline, data, status = time.monotonic() + timeout, stdin, "ok"
     out = err = ""
     while True:
