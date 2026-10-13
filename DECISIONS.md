@@ -1238,3 +1238,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   suites; before and after screenshots from `scripts/shots_web_tabs.py`.
 - **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)".
 
+
+## D-063 (2026-10-13) The exosphere and its forms; the web app uses it
+- **Why:** Exo's graphic was called "the egg" everywhere, but it evolves; the web chat landing page also still drew
+  an older, separate orb (`hero.js`), so the app showed two different graphics of Exo.
+- **Decision (principal's ruling):** the **exosphere** is Exo's evolving 3D graphic. Its forms are **x0** (the egg),
+  then **x**, then **3xo**; later forms are still being named and the list stays open. The community exosphere on the
+  website is x0. In the web app every graphic of Exo is the one lattice engine (`site/brand/egg.js`): the chat
+  landing hero is the exosphere at x0, labelled `exosphere · x0 · level 0`, reacting to thinking, a tool running,
+  waiting on approval and done, and the Tasks empty state is x0 too. Presentation only: no protocol, token (D-039),
+  approval (D-045) or layout (D-046) change. Code names (`egg.js`, `ExoEgg`, `data-exo-egg`) are kept; renaming them
+  would break embeds for no gain.
+- **Numbering:** D-057 to D-060 are held by open PRs and D-061 is on main; D-062 is left for the CLI exosphere.
+- **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (the engine copy matches the site, is used by
+  the hero and Tasks only, the hero is x0 with the form table); plugin and root suites; screenshots at 1440 and 400.
+- **Docs:** `docs/BRAND.md` "The exosphere" and "Forms", `docs/ui/WEB.md` "Empty thread".
