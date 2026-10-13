@@ -111,6 +111,120 @@ def test_concurrent_process_connections_cannot_overreserve(tmp_path):
     assert sum(r[0] for r in rows(cfg)) == 4_000_000
 
 
+@pytest.mark.parametrize('mode', ['cap', 'error'])
+def test_concurrent_success_settles_after_global_freeze(tmp_path, mode):
+    cfg = policy(tmp_path)
+    if mode == 'cap': cfg['daily_usd'] = '.002'
+    seen = []
+
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def handle(req):
+            seen.append(req)
+            if len(seen) == 1:
+                entered.set()
+                await release.wait()
+                return response()
+            return httpx.Response(500)
+
+        r = router(cfg, handle)
+
+        async def consume(session):
+            return [e async for e in r.stream('main', [Message.user('hi')], [], session_id=session)]
+
+        successful = asyncio.create_task(consume('successful'))
+        await entered.wait()
+        try:
+            assert (await consume('stopped'))[-1].kind == 'error'
+            with sqlite3.connect(cfg['journal']) as db:
+                blocked = db.execute('SELECT blocked FROM identity').fetchone()[0]
+            assert blocked
+        finally:
+            release.set()
+        event = (await successful)[-1]
+        assert event.kind == 'done' and event.usage.cost_usd == .0002
+        with sqlite3.connect(cfg['journal']) as db:
+            assert db.execute('SELECT blocked FROM identity').fetchone()[0] == blocked
+            assert db.execute('SELECT session, actual FROM calls ORDER BY session').fetchall() == (
+                [('stopped', None), ('successful', 200_000)] if mode == 'error'
+                else [('successful', 200_000)])
+        with pytest.raises(SpendDenied, match=blocked): r.spend.check()
+        with pytest.raises(SpendDenied, match=blocked): SpendJournal(cfg)
+        assert (await consume('new'))[-1].kind == 'error'
+        assert len(seen) == (2 if mode == 'error' else 1)
+
+    asyncio.run(run())
+
+
+def test_settled_concurrent_tool_reply_cannot_run_after_global_freeze(tmp_path):
+    from exo.core.loop import Loop
+    from exo.core.sessions import SessionStore
+    from exo.core.types import ToolSpec
+    cfg = policy(tmp_path); cfg['daily_usd'] = '.002'
+    seen, tools = [], []
+
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def handle(req):
+            seen.append(req)
+            if len(seen) > 1:
+                return httpx.Response(500)
+            entered.set()
+            await release.wait()
+            return response(tool=True)
+
+        r = router(cfg, handle)
+        loop = Loop(SessionStore(tmp_path / 'sessions.sqlite'), r.provider(),
+                    tool_specs=[ToolSpec('run', 'run tool')], run_tool=lambda *args: tools.append(args), retry_delay=0)
+        session = await loop.create_session()
+        successful = asyncio.create_task(loop.send(session.id, 'do it'))
+        await entered.wait()
+        try:
+            stopped = [e async for e in r.stream('main', [Message.user('hi')], [])]
+            assert stopped[-1].kind == 'error'
+            with sqlite3.connect(cfg['journal']) as db:
+                blocked = db.execute('SELECT blocked FROM identity').fetchone()[0]
+        finally:
+            release.set()
+        result = await successful
+        assert rows(cfg) == [(2_000_000, 200_000)]
+        assert result.usage.cost_usd == .0002 and result.message.tool_calls
+        assert result.stop_reason == 'error' and 'Model spend stopped' in result.error
+        assert not tools and len(seen) == 1
+        with sqlite3.connect(cfg['journal']) as db:
+            assert db.execute('SELECT blocked FROM identity').fetchone()[0] == blocked
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('case', ['identity', 'clock', 'missing', 'settled', 'negative', 'overbound'])
+def test_frozen_settlement_keeps_identity_clock_and_reservation_checks(tmp_path, case):
+    cfg = policy(tmp_path)
+    now = [100]
+    j = SpendJournal(cfg, clock=lambda: now[0]); p = j.prices['test:m']
+    token = j.reserve('test:m', '', p.maximum(100), p)
+    if case == 'settled': j.settle(token, 200_000)
+    blocked = 'principal review required'
+    j.freeze(blocked)
+    original_rows = rows(cfg)
+    actual = 200_000
+    if case == 'identity':
+        with sqlite3.connect(cfg['journal']) as db:
+            db.execute("UPDATE identity SET principal='someone else'")
+    if case == 'clock': now[0] = 99
+    if case == 'missing': token = 'unknown reservation'
+    if case == 'negative': actual = -1
+    if case == 'overbound': actual = 2_000_001
+    reason = {'identity': 'journal identity mismatch', 'clock': 'clock moved backwards'}.get(
+        case, 'invalid model spend settlement')
+    with pytest.raises(SpendDenied, match=reason): j.settle(token, actual)
+    assert rows(cfg) == original_rows
+    with sqlite3.connect(cfg['journal']) as db:
+        assert db.execute('SELECT blocked, observed FROM identity').fetchone() == (blocked, 100)
+
+
 def test_pending_survives_restart_and_utc_rollover(tmp_path):
     cfg = policy(tmp_path); cfg['daily_usd'] = '.002'
     j = SpendJournal(cfg, clock=lambda: 0); p = j.prices['test:m']
