@@ -216,7 +216,9 @@ class ExoApp(App):
         self.hints = load_catalog()
         self.hint_budget = 1  # one tip per turn
         self.intro_after_providers = False  # a first run is waiting for a provider before it sends /intro
-        self.intro_pending = ""  # "first" or "manual" from sending /intro until its turn starts
+        self.intro_pending = ""  # "first" or "manual", retained until this intro turn completes
+        self.intro_turn = ""
+        self.intro_reply = False
         self.sent: list[Any] = []  # every command body this client sent, for tests and debugging
         self._dirty = False
         self.hist = cm.History.for_seat(home or exo_home(), seat)  # up-arrow and ghost text (D-037)
@@ -506,13 +508,13 @@ class ExoApp(App):
         b = ev.body
         if isinstance(b, s.TurnStarted):
             self.busy = True
-            if self.intro_pending:
-                self.intro_started()
             self.turn_t0 = time.monotonic()
             self.model = b.model or self.model
             self.requested, self.served = self.model, ""  # what this turn asked for; ModelCall says what served
             self.close_cur()
         elif isinstance(b, s.TurnCompleted):
+            if self.intro_turn and b.turn_id == self.intro_turn:
+                self.intro_completed(b.stop_reason)
             self.gstate.turns += 1
             self.gstate.long_turn = (b.timing.get("wall_ms", 0) - b.timing.get("tool_ms", 0)
                                      - b.timing.get("approval_ms", 0)) >= LONG_TURN_MS
@@ -540,6 +542,15 @@ class ExoApp(App):
             self.mark_dirty()
         elif isinstance(b, s.MessageCompleted):
             m = b.message
+            if (self.intro_pending and m.role == "user" and m.text() == INTRO_PROMPT
+                    and m.meta.get("author") == "principal"):
+                self.intro_turn = m.meta.get("turn_id") or ""
+                self.intro_reply = False
+            elif self.intro_turn and m.role == "assistant" and m.meta.get("turn_id") == self.intro_turn:
+                route = str(m.meta.get("model") or "")
+                provider, sep, model = route.partition(":")
+                self.intro_reply = bool(m.text().strip() and sep and model and provider and provider != "fake"
+                                        and not m.tool_calls and not m.meta.get("interrupted") and not m.meta.get("error"))
             if m.role == "user" and m.id:
                 self.steer_landed(m.id)
             if m.role == "assistant":
@@ -583,6 +594,8 @@ class ExoApp(App):
             if self.card is not None and self.card.req.request_id == b.request_id:
                 self.close_card()
         elif isinstance(b, s.SteerCancelled):
+            if self.intro_pending and b.text == INTRO_PROMPT:
+                self.intro_pending, self.intro_turn, self.intro_reply = "", "", False
             self.drop_pending_steer(b.message_id)
         elif isinstance(b, s.QuestionAsked):
             self.question = b.question_id
@@ -1196,17 +1209,32 @@ class ExoApp(App):
     # ------------------------------------------------------------ onboarding (D-030)
     async def intro(self, kind: str) -> None:
         """Send the orientation as a normal user turn. It shows as "/intro"; the agent gets the longer prompt."""
+        if self.intro_pending:
+            return
+        if self.provider_check and not await self.first_run_providers():
+            self.intro_after_providers = kind == "first" or not self.onb.onboarded
+            return
         self.add(Block("/intro", "user"))
         self.close_cur()
         self.intro_pending = kind
-        resp = await self.post(s.TurnSend(session=self.session, text=INTRO_PROMPT,
-                                          mode="steer" if self.busy else "send"))
+        self.intro_turn, self.intro_reply = "", False
+        try:
+            resp = await self.post(s.TurnSend(session=self.session, text=INTRO_PROMPT,
+                                              mode="steer" if self.busy else "send"))
+        except Exception:
+            self.intro_pending, self.intro_turn, self.intro_reply = "", "", False
+            self.note("Could not start orientation. /intro retries when the core is available.", "warn")
+            return
         if not resp.ok:
             self.intro_pending = ""  # the turn never started, so a first run stays un-onboarded
 
-    def intro_started(self) -> None:
-        """The intro turn began: only now is the home onboarded. A first run also turns tutorial mode on."""
+    def intro_completed(self, stop_reason: str) -> None:
+        """Only a successful real reply from this exact intro turn completes orientation."""
         kind, self.intro_pending = self.intro_pending, ""
+        success = stop_reason == "end" and self.intro_reply
+        self.intro_turn, self.intro_reply = "", False
+        if not success:
+            return
         self.onb.mark_onboarded()
         if kind == "first":
             self.run_worker(self.set_tutorial(True, quiet=True), exit_on_error=False)
@@ -1342,6 +1370,8 @@ class ExoApp(App):
         saved = await self.post(s.ConfigSet(key="models.roles.main", value=routes))
         if saved.ok:
             self.note(f"default model: {ref} (saved to config.json, fallbacks kept)")
+            if self.intro_after_providers:
+                await self.intro_when_ready()
 
     # ------------------------------------------------------------ providers (D-034)
     def open_providers(self, initial: str = "", add: bool = False) -> None:
@@ -1353,6 +1383,7 @@ class ExoApp(App):
         self.composer.focus()
         if isinstance(result, tuple) and result[0] == "default":
             self.run_worker(self.pick_provider_default(result[1]), exit_on_error=False)
+            return
         if self.intro_after_providers:
             self.run_worker(self.intro_when_ready(), exit_on_error=False)
 
@@ -1375,18 +1406,26 @@ class ExoApp(App):
         self.push_screen(Palette(items, f"default model: {provider}"),
                          lambda v: v and self.run_worker(self.set_default(v), exit_on_error=False))
 
-    async def first_run_providers(self) -> bool | None:
-        """No provider ready: one note says where to start, and the providers panel opens. Returns False when
-        none is ready, True when one is, None when the check failed (silent, then treated as ready)."""
+    async def first_run_providers(self, show_setup: bool = True) -> bool:
+        """Check the running core's main route; credentials alone cannot start orientation."""
         try:
-            from exo import providers_setup
-            ready = await asyncio.to_thread(providers_setup.any_ready)
+            result = await self.client.call(s.CommandRun(name="providers"))
+            state = (result.get("output") or {}).get("main") or {}
         except Exception:
-            return None
-        if not ready:
+            self.note("Could not check the main model route. /providers checks setup; /intro retries orientation.", "warn")
+            return False
+        if not state.get("ready"):
             try:
-                self.note("No model provider is set up yet. Type /providers to add a key.")
-                self.open_providers()
+                needs = state.get("needs_model") or []
+                if not needs and not show_setup:
+                    return False
+                if len(needs) == 1:
+                    self.note(f"{needs[0]} is set up; choose a default model before /intro.")
+                    await self.pick_provider_default(needs[0])
+                else:
+                    self.note("No model provider is set up yet. Type /providers to add a key." if not needs
+                              else "Choose a default main model in /providers before /intro.")
+                    self.open_providers()
             except Exception:  # the app closed while the check ran
                 pass
             return False
@@ -1395,10 +1434,9 @@ class ExoApp(App):
     async def intro_when_ready(self) -> None:
         """The panel closed on a first run: send the waiting /intro once a provider works."""
         try:
-            from exo import providers_setup
-            ready = await asyncio.to_thread(providers_setup.any_ready)
+            ready = await self.first_run_providers(show_setup=False)
         except Exception:
-            ready = True
+            ready = False
         if ready:
             self.intro_after_providers = False
             await self.intro("first")
