@@ -814,7 +814,8 @@ class CoreEngine:
 
     async def _turn_interrupt(self, b: s.TurnInterrupt) -> dict[str, Any]:
         self._info(b.session)
-        return {"interrupted": int(self.loop.interrupt(b.session) or self.agents.interrupt(b.session))}
+        return {"interrupted": int(self.loop.interrupt(b.session) or self.agents.interrupt(b.session)
+                                   or self.scheduler.interrupt(b.session))}
 
     async def _tasks_list(self, b: s.TasksList) -> dict[str, Any]:
         return {"tasks": self.agents.list(b.session)}
