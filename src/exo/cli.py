@@ -187,8 +187,9 @@ def cmd_keys(a) -> int:
 
 def cmd_log(a, store) -> int:
     if a.log_cmd == 'append':
+        from .ledger_authority.factory import configured, open_writable_ledger
         kp = Path(a.key) if a.key else key_path(a.author)
-        if not kp.exists():
+        if not configured() and not kp.exists():
             sys.exit(f'no key at {kp}; run: exo keygen {a.author}')
         if a.body is not None:
             try:
@@ -197,7 +198,7 @@ def cmd_log(a, store) -> int:
                 sys.exit(f'--body is not JSON: {e}')
         else:
             body = {'text': a.text if a.text is not None else sys.stdin.read()}
-        with Ledger(store.ledger_path, crypto.Signer.from_file(a.author, kp)) as led:
+        with open_writable_ledger(store.ledger_path, a.author, kp) as led:
             try:
                 ev = led.append(a.kind, body, a.author, session=a.session, refs=a.ref or ())
             except LedgerError as e:

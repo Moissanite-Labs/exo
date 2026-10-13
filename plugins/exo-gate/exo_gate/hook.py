@@ -228,12 +228,9 @@ class LedgerSink:
             logger.info("exo-gate: no principal store; decisions are logged only")
             return None
         try:
-            from exo.core.seats import ensure_key
-            if s.key_path and not s.key_path.is_file():
-                ensure_key(s.key_path)  # first use: generate the seat key (0600)
-            from exo import crypto
-            from exo.ledger import Ledger
-            self._ledger = Ledger(s.principal_store / "ledger.sqlite", crypto.Signer.from_file(s.author, s.key_path))
+            from exo.ledger_authority.factory import open_writable_ledger
+            self._ledger = open_writable_ledger(s.principal_store / "ledger.sqlite", s.author,
+                                                s.key_path, writer="exo-gate", auto_keygen=True)
         except Exception as exc:  # pragma: no cover - depends on the host
             logger.warning("exo-gate: cannot open ledger or key at %s: %s", s.key_path, exc)
             self._ledger = None
