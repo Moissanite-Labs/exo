@@ -5,6 +5,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Security
+- `$EXO_HOME/config.json` and `$EXO_HOME/update/` (the pinned trust list) are protected store paths (D-074). A write
+  to either from a tool asks the principal and no policy or standing grant lowers it. Before, a plain local write
+  could drop the gate plugin from `core_plugins` or point `exo update` at another interpreter without an ask.
+
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.

@@ -1300,3 +1300,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Limits:** trust on first use of the pin; SSH signatures only; commit signatures, not tags; `uv tool` installs
   cannot be verified. A key compromise needs the pin edited by hand.
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
+
+## D-074 (2026-10-13) `config.json` and the update trust pin are part of the protected store
+- **Why:** the 2026-10-13 review. D-038 protects `policies/`, `state/`, `keys/`, `run/`, `seats/` and the ledger, but
+  a write to `$EXO_HOME/config.json` was an ordinary `local_write` and ran with no ask under the default policy
+  (`write_file`, `cp`, `tee`, a redirection, `sed -i`). That file names the plugins the core loads, so a tool could
+  drop `exo-gate` from `core_plugins`, change the gate's own `plugin_config`, swap `models`, or point `install.venv`
+  at an interpreter that `exo update` then runs as the principal before any check. The same held for
+  `$EXO_HOME/update/allowed_signers`, the trust root for signed updates (D-073).
+- **Decision:** `$EXO_HOME/config.json` and `$EXO_HOME/update/` join the protected list. Any write is `store_write`:
+  it asks, no policy lowers it, no standing grant covers it, only the principal may answer, and observe mode enforces
+  it. Reads stay `read`. `exo config set` and `exo update --pin-trust` were already `opaque_exec`. Only the home's
+  own `config.json` counts; a project's `config.json` or one under `plugins/` is unchanged.
+- **Rejected:** moving these settings under `policies/` (a migration for every install, for the same effect); having
+  `exo update` validate the interpreter instead (it would still run whatever `models` and `core_plugins` say).
+- **Revisit if:** a tool needs to write `config.json` as part of normal work. None does today; the core writes it in
+  process.
+
