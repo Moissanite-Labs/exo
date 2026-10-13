@@ -1424,25 +1424,31 @@ def _glob_hits_secret(tok: str) -> bool:
 # absolute paths are also checked against EXO_HOME, its principal stores and EXO_PRINCIPAL_STORE.
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
+    r"\.exo/(update(/|$)|config\.json)|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
     r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
     r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
     r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
-_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats")
+# `config.json` names the plugins the core loads (the gate among them), the plugin config, the models and the
+# interpreter `exo update` runs; `update/` holds the pinned trust list (D-073). Both steer the gate or the
+# code that runs as the principal, so they are protected like the rest (D-074).
+_HOME_PROTECTED = ("policies", "state", "keys", "run", "seats", "update")
+_HOME_FILES = ("config.json",)
 _STORE_PROTECTED = ("policies", "state", "keys")
 
 
 def _store_roots() -> list[tuple[str, tuple, bool]]:
     """(root, protected top-level names, has principals/<name>/ stores below it)."""
-    roots = [(os.path.normpath(_exo_home()), _HOME_PROTECTED, True)]
+    roots: list[tuple[str, tuple, bool]] = [(os.path.normpath(_exo_home()), _HOME_PROTECTED, True)]
     if os.environ.get("EXO_PRINCIPAL_STORE"):
         roots.append((os.path.normpath(os.path.expanduser(os.environ["EXO_PRINCIPAL_STORE"])), _STORE_PROTECTED,
                       False))
     return roots
 
 
-def _protected_rel(parts: list[str], names: tuple) -> bool:
-    return bool(parts) and (parts[0] in names or parts[0].startswith(("ledger.sqlite", "schedule.sqlite")))
+def _protected_rel(parts: list[str], names: tuple, files: tuple = ()) -> bool:
+    return bool(parts) and (parts[0] in names or parts[0].startswith(("ledger.sqlite", "schedule.sqlite"))
+                            or (len(parts) == 1 and parts[0] in files))
 
 
 def is_store_path(path: str, ancestors: bool = False) -> bool:
@@ -1462,7 +1468,7 @@ def is_store_path(path: str, ancestors: bool = False) -> bool:
             if not p.startswith(r + "/"):
                 continue
             parts = p[len(r) + 1:].split("/")
-            if _protected_rel(parts, names):
+            if _protected_rel(parts, names, _HOME_FILES if principals else ()):
                 return True
             if principals and parts[0] == "principals":
                 if len(parts) <= 2 and ancestors:
