@@ -3,6 +3,7 @@
 Authors, by ingress path:
 
     principal          a person typing in one of this seat's own clients (turn.send)
+    local              a turn from an untrusted socket, TCP, stdio or unstamped caller
     agent              the model's own output
     tool               a tool result
     peer:<name>        another agent session (peers, D-026)
@@ -25,6 +26,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 PRINCIPAL = "principal"
+LOCAL = "local"
 AGENT = "agent"
 TOOL = "tool"
 JOB = "job"

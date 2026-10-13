@@ -522,10 +522,12 @@ def test_trace_tools_are_not_for_subagents_and_seats_keep_them(tmp_path):
 def test_principal_reject_files_a_finding_and_accept_does_not(tmp_path):
     eng = engine(tmp_path)
     sid = run(eng.loop.create_session(title="t")).id
-    run(eng._feedback_send(s.FeedbackSend(session=sid, verdict="accept")))
+    from exo.server.app import Dispatcher
+    d = Dispatcher(eng, caller="principal:tui")
+    run(d.run(s.Command.of(s.FeedbackSend(session=sid, verdict="accept"))))
     assert eng.findings.list() == []
-    run(eng._feedback_send(s.FeedbackSend(session=sid, verdict="reject", text="wrong file")))
-    run(eng._feedback_send(s.FeedbackSend(session=sid, verdict="should_have_been", text="use X")))
+    run(d.run(s.Command.of(s.FeedbackSend(session=sid, verdict="reject", text="wrong file"))))
+    run(d.run(s.Command.of(s.FeedbackSend(session=sid, verdict="should_have_been", text="use X"))))
     rows = eng.findings.list()
     assert len(rows) == 2 and {r["source"] for r in rows} == {"principal"}
 

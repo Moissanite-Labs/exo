@@ -8,7 +8,7 @@ The core never takes the answerer of an approval from the command body. The tran
   subprocess is one).
 - ``local``: anything else that reaches the socket (a tool subprocess, a channel link, another daemon), and every
   stdio or TCP connection. A local caller drives turns but answers approvals only as a seat, with a D-033
-  signature.
+  signature. A local turn is authored as local, never as the principal.
 
 The credential is a random token written per launch beside the socket (``run/exod.sock`` gives
 ``run/exod.principal.key``; mode 0600, in the 0700 run folder). The ``.key`` name puts it under the gate's
@@ -51,6 +51,20 @@ def current_caller() -> str:
 
 def is_principal(who: str) -> bool:
     return who == PRINCIPAL or who.startswith(PRINCIPAL + ":")
+
+
+def ingress_author() -> str:
+    """Snapshot a command's author while its transport caller is live."""
+    return PRINCIPAL if is_principal(current_caller()) else LOCAL
+
+
+def require_principal(operation: str) -> str:
+    """Require live transport authority before reading or mutating principal-owned state."""
+    who = current_caller()
+    if not is_principal(who):
+        from exo.server.engine import CommandFailed
+        raise CommandFailed("forbidden", f"only the principal can {operation}; use the Exo window or web page")
+    return who
 
 
 def principal_as(label: str = "") -> str:

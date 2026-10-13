@@ -1065,6 +1065,24 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Docs:** `docs/PROVIDERS.md` "Use a Muse Code subscription", `docs/GATE.md` "Muse CLI credentials",
   `docs/DEVELOPER-GUIDE.md` "Add a CLI-backed provider", `docs/WHITEPAPER.md` §13.1, `docs/TOOLS.md`.
 
+## D-052 (2026-10-12) Principal authority applies to messages, learning and settings
+- **Why:** an audit reproduced local callers submitting turns, steering, verdicts and panel actions that became
+  principal-authored learning evidence. The same callers could accept relaxed gate policies and change settings
+  or model routes. Approval answers already checked transport identity, but these adjacent operations did not.
+- **Decision:** snapshot the live transport caller when a turn or steer is accepted. Only a principal connection
+  produces principal-authored text. Local automation may still drive turns, with author `local`. Background turns
+  without an explicit author are system input. Feedback, panel responses, settings, model selection and gate
+  policy acceptance require a live principal caller. The policy adoption method checks authority itself, covering
+  command aliases and direct plugin callbacks. Its ledger record names the authenticated caller.
+- **Transport and clients:** stdio always stamps local, even if its dispatcher has an interactive default. The web
+  provider route returns 403 on a core authority refusal and cannot use its offline disk fallback to evade it.
+  Preference-pair context includes only principal-authored messages. No protocol command or event was added.
+- **Validation:** regression cases cover untrusted send and steer, feedback and panel actions, policy relaxation,
+  settings, aliases, direct calls, caller expiry, TCP, stdio, Unix sockets and a tool child holding the test
+  credential. Authenticated user operations remain covered by positive controls.
+- **Limits:** same-user processes still need an OS sandbox. Earlier misattributed messages are not rewritten.
+- **Docs:** `docs/GATE.md`, `docs/MEMORY-MODEL.md`.
+
 ## D-053 (2026-10-12) Verification isolates terminal preferences and documents current behavior
 - **Why:** the baseline root suite failed four TUI checks solely because the invoking terminal exported
   `NO_COLOR`. Removing that variable made all four pass. Changing `TERM` did not. Product behavior was correct,

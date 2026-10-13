@@ -192,3 +192,14 @@ later, it loads the new one, writes a `policy_change` ledger row with the files'
 decides each call under both. The stricter outcome wins. So a change can tighten at once and
 can never loosen until the principal runs `/gate accept` (ledger row `policy_accept`), or the
 core restarts. `/gate` says whether a change is waiting.
+
+## Principal authority for policy and settings changes
+
+`/gate accept` requires the live principal caller stamped by the transport. The check lives in the
+policy adoption method, so command aliases, whitespace and direct plugin calls cannot bypass it.
+An unstamped call is refused before reading changed policy files or recording acceptance. The ledger
+records the authenticated caller, including its client label. `/gate status` stays available locally.
+
+`config.set` and `models.set` also require principal authority. The web default-model route returns
+403 when the core refuses authority. It does not rewrite config through its offline fallback.
+TCP and stdio callers remain local even when they possess a transport bearer token.

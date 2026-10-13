@@ -53,7 +53,8 @@ def _answer_and_context(lr: Learner, session: str, message_id: str | None) -> tu
             break
     if idx is None:
         return "", "", message_id
-    context = next((m.text() for m in reversed(msgs[:idx]) if m.role == "user" and m.text().strip()), "")
+    context = next((m.text() for m in reversed(msgs[:idx]) if m.role == "user" and m.text().strip()
+                    and provenance.is_principal_author(provenance.author_of(m))), "")
     return msgs[idx].text(), context, msgs[idx].id
 
 

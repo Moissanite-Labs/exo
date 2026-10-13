@@ -42,7 +42,7 @@ from exo.core.plugins import PluginManager
 from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
 from exo.gate import approver_allowed, approver_identity
-from exo.principal import current_caller, is_principal, principal_as
+from exo.principal import current_caller, ingress_author, is_principal, principal_as, require_principal
 from exo.core.approvals import verify_approval
 from exo.core.seats import Seat, SeatError, list_seats
 from exo.core.seats import load as load_seat
@@ -64,10 +64,6 @@ CODE_FIND_LINE = ("Use code_find for unfamiliar code and behavior questions acro
                   "when you already know the symbol or path.")
 SYSTEM_PROMPT = ("You are Exo, a careful coding agent. Use the tools to read, edit and run "
                  "things in the working directory, then answer briefly.")
-
-# D-040: a turn.send from one of this seat's clients is the principal speaking. Every other way in (peers, the bus,
-# job notices, the scheduler, delegation) stamps its own author; see exo.provenance.
-PRINCIPAL_META = {"author": provenance.PRINCIPAL}
 
 
 class SqliteLog:
@@ -718,11 +714,12 @@ class CoreEngine:
             self.store.assert_open(b.session)
         except SessionLocked as exc:  # a finished child session takes no new turns
             raise CommandFailed("session_locked", str(exc)) from None
+        meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).running:
-            await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=PRINCIPAL_META)  # no await inside
+            await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
-        task = asyncio.create_task(self._turn(b, PRINCIPAL_META))
+        task = asyncio.create_task(self._turn(b, meta))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return {"accepted": True}
@@ -737,10 +734,14 @@ class CoreEngine:
     async def _turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
+        meta = dict(meta or {})
+        if not meta.get("author"):
+            meta["author"] = provenance.SYSTEM  # internal wakeups need an explicit source to speak for anyone
         hooks = self.plugins.hooks
         await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
         try:
-            return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode, meta=meta)
+            return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode,
+                                                 meta=meta)
         finally:
             await hooks.afire("on_turn_end", session_id=b.session)
 
@@ -798,6 +799,7 @@ class CoreEngine:
             raise CommandFailed("bad_request", str(exc)) from None
 
     async def _feedback_send(self, b: s.FeedbackSend) -> dict[str, Any]:
+        require_principal("send feedback")
         from exo import learn  # outside the core; learning off just records nothing
         out = learn.handle_feedback(self, b)
         if b.verdict in ("reject", "should_have_been"):  # the principal's own finding (D-025)
@@ -809,6 +811,7 @@ class CoreEngine:
         return out
 
     async def _ui_respond(self, b: s.UiRespond) -> dict[str, Any]:
+        require_principal("respond to a panel")
         from exo import learn
         return learn.handle_ui_respond(self, b)
 
@@ -866,6 +869,7 @@ class CoreEngine:
         return {"models": self.router.status(), "available": avail}
 
     async def _models_set(self, b: s.ModelsSet) -> dict[str, Any]:
+        require_principal("change models")
         try:
             self.router.prefer(b.role, b.model)  # the old routes stay as fallbacks
         except ValueError as exc:
@@ -1073,6 +1077,7 @@ class CoreEngine:
         return {"key": b.key, "value": redact(value, b.key.split(".")[-1])}
 
     async def _config_set(self, b: s.ConfigSet) -> dict[str, Any]:
+        require_principal("change settings")
         cfg = Config.load(self.home)
         try:
             if b.value is None:
