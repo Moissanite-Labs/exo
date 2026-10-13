@@ -86,14 +86,6 @@ def next_run(when: str, after: float) -> float:
     raise ValueError("this cron line never fires")
 
 
-class _Bus:
-    def __init__(self, engine: Any) -> None:
-        self.engine = engine
-
-    async def emit(self, body: Any, session: str | None = None) -> s.Event:
-        return self.engine.hub.publish(body, session)
-
-
 class Scheduler:
     def __init__(self, engine: Any, clock: Callable[[], float] = time.time) -> None:
         self.engine, self.clock = engine, clock
@@ -191,7 +183,7 @@ class Scheduler:
             # same turn path as every other turn (audit 2026-10-12): the engine's context tree and memory,
             # its soul refresh and system extras, and the turn hooks (through ``e._turn``). Only the model,
             # the narrowed toolset and the unattended-job prompt differ.
-            loop = Loop(e.store, provider, bus=_Bus(e), context=e.loop.context, memory=e.loop.memory,
+            loop = Loop(e.store, provider, bus=e.loop.bus, context=e.loop.context, memory=e.loop.memory,
                         tool_specs=lambda: e.registry.specs(names=names), run_tool=e.run_tool,
                         system_prompt="\n\n".join(p for p in (e.loop.system_prompt, PROMPT) if p), model=model,
                         max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
