@@ -20,8 +20,8 @@ A client reads the line and decides. Three things can answer:
    (`ctx.register_command` in `src/exo/core/plugins.py`) and calls the handler with the raw argument string. An
    unknown name fails with the error code `not_found`.
 
-`commands.list` returns the commands a client may offer: the four core ones below that are listed there (`context`,
-`compact`, `trace`, `findings`) plus every plugin command, each with a name, a description and an argument hint.
+`commands.list` returns the commands a client may offer: the five core ones below that are listed there (`context`,
+`compact`, `trace`, `findings`, `rounds`) plus every plugin command, each with a name, a description and an argument hint.
 The TUI shows the plugin ones under `other` in `/help` and in its palette (ctrl+p).
 
 Any client can use categories 2 and 3 with no client code. Only category 1 is specific to the TUI. The line client
@@ -44,6 +44,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/cwd` | Show this session's working folder. | none | `session.get` |
 | `/restart` | Reopen this session in a new terminal tab and quit this one. | none | `ExoApp.restart`, `clients/tui/exo_tui/restart.py` |
 | `/stop` | Stop the running turn (same as ctrl+c). | none | `ExoApp.stop_turn` |
+| `/rounds` | Show or set how many tool rounds one turn may run before it wraps up (D-064). The default is 64. Setting it is the principal's (D-052); it lasts for this session until the core restarts, and a running turn keeps the cap it started with. | none shows the cap; `N` (1 to 1000) sets it; `default` clears it | core built-in `rounds` (`src/exo/rounds.py`) |
 | `/unsteer` | Pull your newest queued steer message back into the composer, if it has not landed yet (Up in an empty composer does the same). Never stops the turn. | none | `ExoApp.unsteer` (`command.run` built-in `unsteer`) |
 | `/exit` | Quit. | none | `ExoApp.slash` |
 | `/quit` | Same as `/exit`. | none | same |
@@ -111,10 +112,11 @@ All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._com
 | `compact` | Summarizes now what is eligible in this agent's memory, then shows tokens before and after. Fails with `busy` if a turn is running. | none | text (`compact_text`) |
 | `trace` | The model this session runs on, then the per-turn table: timing, route, estimated cost, flags. | a number N for the last N turns (default 10) | text (`trace_text`) |
 | `findings` | The harness's findings by state. | `count` returns `{"open": N, "by_state": {open, fixed, verified, reopened, total}}` (`open` is what needs work: open plus reopened). Anything else returns text: the per-state summary, what changed since this session last looked, then every finding with its state and fixed-in commit. `open`, `fixed`, `verified` or `reopened` limits the list. | text or dict |
+| `rounds` | This session's tool-round cap (D-064). Anyone may read it; only a live principal caller may change it (`forbidden` otherwise). | none, `N` from 1 to 1000, or `default` | text (`exo.rounds.command`) |
 | `handoff_facts` | The facts the agent needs to write a handoff: thread, git state of the folder, open findings and tasks, recent summaries, last turns. Reads only. | optional path | dict (`handoff_facts`) |
 | `harness_error` | A client reports an exception it caught, so the core files a finding. Not for people. | JSON with `where`, `message`, `error_type`, `traceback`. Plain text also works. | nothing |
 
-Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `handoff_facts` and `harness_error` are
+Only `context`, `compact`, `trace`, `findings` and `rounds` appear in `commands.list`. `handoff_facts` and `harness_error` are
 for clients to call.
 
 ### Plugin commands
@@ -209,7 +211,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 | `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `main` and `cmd_tui` in `src/exo/cli.py` |
 | `exo resume` | Reopens the last session in the terminal client: `exo --resume`. Other flags pass through (`exo resume --seat X`). | same as `exo` | `main` in `src/exo/cli.py` |
 | `exo --version` | Package version, plus the git sha for a checkout install. | none | `version_string` in `src/exo/update_cmd.py` |
-| `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`), prints `old -> new`, then a quick self-check (import, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing | `cmd_update` in `src/exo/update_cmd.py` |
+| `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`; a detached checkout fetches and checks out the tracked remote branch instead of pulling, and rolls back if a later step fails), prints `old -> new`, then a quick self-check (import, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing. `--force` lets a detached checkout move to a target that does not contain its current commit (D-064). | `cmd_update` in `src/exo/update_cmd.py` |
 | `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
 | `exo stop` | Stops the background core (exod) that `exo web` or `exo serve` started. Reads `$EXO_HOME/run/exod.pid`. | none | `stop_core` in `src/exo/ensure_core.py` |
 | `exo web` | The command centre web client. Joins a running core (exod, or a terminal window's) or starts `exo serve` in the background (D-036). | `--socket`, `--url`, `--token-file`, `--host` (default 127.0.0.1), `--port` (default 7342) | `cmd_web` in `src/exo/cli.py`, `plugins/exo-command/exo_command/__main__.py` |

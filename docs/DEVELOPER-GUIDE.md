@@ -361,6 +361,22 @@ Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). To releas
 `[X.Y.Z] (codename) - date` heading, run the suites (`tests/test_versioning.py` fails if they drift), merge, then tag
 main with an annotated `exo-vX.Y.Z`. Site deploys take `--version`; see `scripts/deploy-site.sh`.
 
+### Updating a checkout (`exo update`)
+
+`src/exo/update_cmd.py` plans, preflights, then runs steps. The preflight runs before any fetch, pull or install and
+refuses: update-source environment variables (`PYTHONPATH`, `GIT_*`, `PIP_*`, `UV_*` and the rest of its list), a
+dirty tree or untracked files, ignored source files, a missing or symlinked installer, and a target Python with
+neither pip nor `uv pip`. Every git call disables fsmonitor and hooks.
+
+On a branch, step one is `git pull --ff-only`. A detached checkout cannot pull, so (D-064) the preflight records its
+commit and `_move_detached` replaces the pull: `git fetch origin`, resolve the target (the install record's `branch`,
+else `origin/HEAD`, else `origin/main`; a branch name that is not plain is refused before the fetch), refuse unless
+`git merge-base --is-ancestor HEAD <target>` holds or `--force` is given, then `git checkout --detach <target>`.
+The reinstall steps follow. If any of them fails, `_rollback` checks the old commit out again and prints
+`ROLLED BACK` (or `ROLLBACK FAILED` with the command to run by hand). Tests: `tests/test_update_cmd.py` (fake runner)
+and `tests/test_update_detached.py` (real temporary git repos, a detached clone, simulated pip). Never point a test
+at a live install.
+
 ## 9. Recipes
 
 Short, working patterns for four things people ask about. Each one names the file to read next.

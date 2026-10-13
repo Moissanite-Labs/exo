@@ -66,6 +66,10 @@ class _Stream:
     retries: int = 0
 
 
+WRAP_UP_PROMPT = ("[harness] You have used all {n} tool rounds for this turn; tools are now off. In a short reply: what "
+                  "you finished, what is still open, and the next step (the user can say 'continue' for fresh rounds).")
+
+
 class _SessionState:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
@@ -73,6 +77,7 @@ class _SessionState:
         self.steer: list[Message] = []
         self.running = False
         self.total = Usage()
+        self.rounds: int | None = None  # /rounds: this session's tool-round cap, set by the principal (D-064)
         self.stats: dict[str, int] = {}  # this turn's timing summary, filled as it runs (D-025)
 
 
@@ -81,8 +86,8 @@ class Loop:
                  context: Any = None, memory: Any = None,
                  tool_specs: Iterable[ToolSpec] | Callable[[], Iterable[ToolSpec]] = (),
                  run_tool: ToolRunner | None = None, system_prompt: str = "",
-                 model: str | None = None, max_iterations: int = 24, max_retries: int = 3,
-                 retry_delay: float = 0.5, provider_opts: dict[str, Any] | None = None):
+                 model: str | None = None, max_iterations: int = 64, max_retries: int = 3,
+                 retry_delay: float = 0.5, provider_opts: dict[str, Any] | None = None, wrap_up: bool = True):
         self.store = store
         self.provider = provider
         self.bus = bus or EventBus(store)
@@ -95,6 +100,7 @@ class Loop:
         self.system_prompt = system_prompt
         self.model = model
         self.max_iterations = max_iterations
+        self.wrap_up = wrap_up  # at the round cap, one call with tool use off to report progress and what remains
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.provider_opts = dict(provider_opts or {})
@@ -288,18 +294,15 @@ class Loop:
     async def _rounds(self, session: str, turn_id: str, user: Message, st: _SessionState,
                       result: TurnResult) -> None:
         system, recall = await self._system(session, user.text())
-        extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
-        for _ in range(self.max_iterations):
+        extra: dict[str, Any] = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
+        cap = st.rounds or self.max_iterations
+        for _ in range(cap):
             if hasattr(self.context, "note"):
                 await _maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)
             msg_id = new_id("m")
             stream = await self._call(session, messages, msg_id, st, result)
-            await self._record_call(session, stream, _, st)
-            if stream.usage is not None:
-                result.usage = result.usage + stream.usage
-                st.total = st.total + stream.usage
-                await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total, model=stream.route or self.model or ""), session)
+            await self._record_call(session, stream, _, st, result)
             if stream.error is not None:
                 result.stop_reason, result.error = "error", stream.error.error or "provider error"
                 if stream.text or stream.reasoning:  # the user saw this text: keep it, marked, like an interrupt
@@ -323,15 +326,29 @@ class Loop:
                     continue
                 return
             await self._tools(session, turn_id, reply.tool_calls, st)
+            if cap - _ - 1 == max(2, cap // 8):  # nearing the cap: say so once (D-064)
+                await self._emit(ev.Notice(text=f"tool round {_ + 1} of {cap}; /rounds N raises the cap"), session)
             if st.steer:
                 for m in st.steer:
                     await self._add(session, m, turn_id)
                 st.steer.clear()
         result.stop_reason = "max_iterations"
-        await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
-                                   level="warn"), session)
+        await self._emit(ev.Notice(text=f"stopped after {cap} tool rounds", level="warn"), session)
+        if not self.wrap_up:
+            return
+        # One last call that may not use tools, so the turn ends with an answer. The tool specs stay: the history
+        # holds tool blocks, and Anthropic rejects those without tool definitions. The prompt is never stored (D-064).
+        messages = [*await self.context.build(session, system, **extra), Message.user(WRAP_UP_PROMPT.format(n=cap))]
+        msg_id = new_id("m")
+        stream = await self._call(session, messages, msg_id, st, result, tool_choice="none")
+        await self._record_call(session, stream, cap, st, result)
+        if stream.error is None and (stream.text or stream.reasoning):  # any tool call in the reply is dropped
+            reply = self._assemble(_Stream(text=stream.text, reasoning=stream.reasoning), msg_id)
+            reply.meta["wrap_up"] = True
+            result.message = await self._add(session, reply, turn_id)
 
-    async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState) -> None:
+    async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState,
+                           result: TurnResult) -> None:
         """The model.call event (what was asked, who served, every attempt) and the turn's running totals."""
         role = self.provider.name.split(":", 1)[1] if self.provider.name.startswith("router:") else ""
         st.stats["model_calls"] += 1
@@ -345,6 +362,9 @@ class Loop:
             attempts=s.attempts, ttft_ms=s.first_ms, total_ms=s.total_ms, usage=s.usage,
             stop_reason=(s.done.stop_reason or "") if s.done is not None else "",
             error=trace.scrub(s.error.error, 300) if s.error is not None else "", retries=s.retries), session)
+        if s.usage is not None:
+            result.usage, st.total = result.usage + s.usage, st.total + s.usage
+            await self._emit(ev.UsageUpdated(usage=s.usage, session_total=st.total, model=s.route or self.model or ""), session)
 
     def _assemble(self, s: _Stream, msg_id: str) -> Message:
         msg = s.done.message if s.done is not None and s.done.message is not None else None
@@ -363,9 +383,9 @@ class Loop:
     # ---------------------------------------------------------------- provider call
 
     async def _call(self, session: str, messages: list[Message], msg_id: str, st: _SessionState,
-                    result: TurnResult) -> _Stream:
+                    result: TurnResult, **call_opts: Any) -> _Stream:
         """Stream one model call with retry. Retries only while nothing was shown."""
-        opts = dict(self.provider_opts)
+        opts = {**self.provider_opts, **call_opts}  # tool_choice="none": the wrap-up call
         if self.model:
             opts["model"] = self.model
         # providers that route or cache per conversation send it as a header; all threads of one agent are one

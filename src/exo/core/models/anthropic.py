@@ -259,8 +259,8 @@ class AnthropicProvider(HttpTransport):
         body: dict[str, Any] = {"model": model, "max_tokens": max_tokens, "messages": msgs, "stream": True}
         if system:
             body["system"] = system
-        if wire_tools:
-            body["tools"] = wire_tools
+        if wire_tools:  # tool_choice "none" keeps the definitions the history's tool blocks need (D-064)
+            body.update(tools=wire_tools, **({"tool_choice": {"type": "none"}} if opts.get("tool_choice") == "none" else {}))
         body.update(thinking_params(model, opts.get("reasoning"), max_tokens))
         if opts.get("temperature") is not None and (is_legacy(model) or any(s in model for s in _NO_XHIGH)):
             if "thinking" not in body:

@@ -1284,6 +1284,32 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the hero and Tasks only, the hero is x0 with the form table); plugin and root suites; screenshots at 1440 and 400.
 - **Docs:** `docs/BRAND.md` "The exosphere" and "Forms", `docs/ui/WEB.md` "Empty thread".
 
+## D-064 (2026-10-13) Detached-checkout updates, a configurable tool-round cap, and a valid wrap-up call
+- **Why:** three problems from live use. `exo update` ran `git pull --ff-only`, which fails on a detached checkout,
+  and a canary install is always detached (it is moved with `git checkout --detach`). The agent exo-razi kept
+  hitting the fixed cap of 24 tool rounds during real work. PR #93 ended a capped turn with one call that sent
+  `tools=[]` while the history still held `tool_use` and `tool_result` blocks. The Anthropic Messages API rejects
+  that request with a 400, and the fake provider in tests could not show it.
+- **Update:** a detached checkout fetches `origin` and moves to the tracked branch: the install record's `branch`,
+  else `origin/HEAD`, else `origin/main`. It moves only when the target contains the current commit, unless
+  `--force`. It checks the target out detached, runs the existing reinstall steps, and if any fails checks the old
+  commit out again and says `ROLLED BACK`. Every refusal of the #85 preflight still runs first, before the fetch.
+- **Cap:** the default is 64. First match wins: `/rounds N` for one session (principal only per D-052, until
+  the core restarts), `EXO_MAX_TOOL_ROUNDS`, the seat's `[loop] max_tool_rounds`, `config.json`
+  `loop.max_tool_rounds`. Values must be 1 to 1000. One notice shows the cap when a turn nears it.
+  Delegated sub-agents keep their own `max_turns` budget.
+- **Wrap-up (finishes #93):** the last call keeps the tool definitions and passes `tool_choice="none"`, which the
+  Anthropic, OpenAI-compatible and claude-cli providers send on the wire. Tool calls in the reply are dropped.
+- **Numbering:** D-057 to D-061 are taken or held (#107, #109, main), D-062 and D-063 by local branches, so this
+  is D-064.
+- **Validation:** `tests/test_update_detached.py` uses real temporary git repos. It covers the update, the
+  non-fast-forward refusal and `--force`, rollback on reinstall failure, and a dirty tree or hostile branch refused
+  before the fetch. `tests/core/loop/test_round_cap.py` uses a provider double that builds the real Anthropic body and
+  returns the API's 400 for tool blocks without tools. It also covers cap precedence, the `/rounds` principal check
+  and the near-cap notice. The wrap-up is not yet tested against the live Anthropic API.
+- **Docs:** `docs/CORE.md` "The turn loop", `docs/COMMANDS.md`, `docs/INSTALL.md`, `docs/SEATS.md`,
+  `docs/DEVELOPER-GUIDE.md` "Updating a checkout", `docs/USER-GUIDE.md` §3 and §10.
+
 ## D-066 (2026-10-13) The choice card: a decision you can answer from the keyboard
 - **Why (A, verbatim):** "the choice selector UI/UX in the cli needs work. its not selecting the option so im stuck plus
   it needs an overall redesign".
