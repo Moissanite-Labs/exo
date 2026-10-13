@@ -16,6 +16,7 @@ def _repo_hermetic_env(tmp_path_factory, monkeypatch):
     for k in list(os.environ):
         if k.startswith(_PREFIXES):
             monkeypatch.delenv(k)
+    monkeypatch.delenv("NO_COLOR", raising=False)
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))

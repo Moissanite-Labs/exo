@@ -8,7 +8,7 @@ from gate_fixtures import PLUGIN
 from exo import crypto
 from exo.ledger import Ledger
 from exo_gate import hook
-from exo_gate.hook import Gate, LedgerSink, resolve_settings
+from exo_gate.hook import resolve_settings
 
 FOOT = "> Posted with agent help, reviewed by a person."
 
@@ -205,10 +205,41 @@ def test_policy_change_mid_session_only_tightens_until_accepted(keyed_store):
     bodies = [e["body"] for e in events(store)]
     assert any(b.get("phase") == "policy_change" for b in bodies)
     assert "/gate accept" in bodies[-1]["decision"]["reason"]
-    assert hook.gate_command(g, "accept").startswith("accepted")
+    from exo import principal
+    token = principal.CALLER.set(principal.Caller("principal:tui"))
+    try:
+        assert hook.gate_command(g, "accept").startswith("accepted")
+    finally:
+        principal.CALLER.reset(token)
     assert call(ctx, "terminal", {"command": "rm -rf build"}) is None
     assert any(e["body"].get("phase") == "policy_accept" for e in events(store))
     assert hook.gate_command(g, "status").startswith("policy")
+
+
+def test_required_policy_accept_audit_failure_keeps_prior_active_policy(keyed_store, monkeypatch, request):
+    store, key = keyed_store
+    g, ctx = make_gate(store, key, decision_model=False)
+    g.required_getter = lambda: True
+    assert call(ctx, "terminal", {"command": "rm -rf build"})["action"] == "approve"
+    prior = g.policies()
+    p = store / "policies" / "gates.yaml"
+    loose = p.read_text().replace("  - delete\n", "").replace("vcs_merge: act", "vcs_merge: act\n  delete: act")
+    _bump(p, loose.replace("irreversible: {private: ask", "irreversible: {private: act"))
+    append = g.sink.append
+    def fail_accept(body, **kw):
+        return None if body.get("phase") == "policy_accept" else append(body, **kw)
+    monkeypatch.setattr(g.sink, "append", fail_accept)
+    from exo import principal
+    token = principal.CALLER.set(principal.Caller("principal:tui"))
+    request.addfinalizer(lambda: principal.CALLER.reset(token))
+    with pytest.raises(hook.GateAuditError):
+        g.accept_policies()
+    assert g.policies() is prior
+    assert call(ctx, "terminal", {"command": "rm -rf build"})["action"] == "approve"
+    assert not any(event["body"]["phase"] == "policy_accept" for event in events(store))
+    monkeypatch.setattr(g.sink, "append", append)
+    assert g.accept_policies().startswith("accepted")
+    assert call(ctx, "terminal", {"command": "rm -rf build"}) is None
 
 
 def test_internal_error_fails_closed_except_reads(keyed_store, monkeypatch):

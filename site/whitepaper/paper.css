@@ -57,6 +57,7 @@ html { scroll-behavior: smooth; scroll-padding-top: 76px; }
   font: 600 12px/1 var(--p-mono); letter-spacing: .1em; text-transform: uppercase;
   padding: 10px 14px; border: 1px solid var(--p-line-2);
 }
+.wp-bar__back + .wp-bar__home { margin-left: 0; }
 .wp-bar__back:hover { border-color: var(--p-acc); color: var(--p-fg) !important; background: var(--p-bg-3); }
 
 /* ---------- Layout ---------- */

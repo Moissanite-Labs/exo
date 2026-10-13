@@ -424,7 +424,7 @@ class QuestionQueue:
             ev: dict = {"op": "asked", "id": qid, "channel": channel or q.channel}
             if now is not None:
                 ev["ts"] = iso(now)
-            if self.ledger is not None and getattr(self.ledger, "signer", None) is not None:
+            if self.ledger is not None and self.ledger.writable:
                 lev = self.ledger.append("question", {"question": qid, "text": q.text, "node": q.node,
                                                       "channel": ev["channel"]}, author, session)
                 ev["ledger_id"] = lev["id"]
@@ -441,7 +441,7 @@ class QuestionQueue:
         if q is None:
             raise KeyError(qid)
         lev = None
-        if self.ledger is not None and getattr(self.ledger, "signer", None) is not None:
+        if self.ledger is not None and self.ledger.writable:
             refs = [q.question_ledger_id] if q.question_ledger_id and self.ledger.get(q.question_ledger_id) else []
             body = {"question": qid, "question_text": q.text, "text": text}
             if q.node:
@@ -634,24 +634,25 @@ def register(sp, common) -> None:
 
 
 def _open_ledger(store, author: str | None, key: str | None, required: bool = False):
-    from . import crypto
     from .ledger import Ledger
+    from .ledger_authority.factory import configured, open_writable_ledger
     from .store import exo_home
     kp = Path(key) if key else (exo_home() / "keys" / f"{author}.key" if author else None)
-    if kp is None or not kp.exists():
+    if not configured() and (kp is None or not kp.exists()):
         if required:
             raise SystemExit(f"no key at {kp}; run: exo keygen {author}")
         return Ledger(store.ledger_path) if Path(store.ledger_path).exists() else None
-    return Ledger(store.ledger_path, crypto.Signer.from_file(author or "agent", kp))
+    return open_writable_ledger(store.ledger_path, author or "agent", kp)
 
 
 def cmd_ask(a, store) -> int:
     import sys
+    from .ledger_authority.factory import configured
     c = a.ask_cmd
     led = None
     if c == "answer":
         led = _open_ledger(store, a.author, a.key, required=True)
-    elif c == "next" and a.mark and a.key:
+    elif c == "next" and a.mark and (a.key or configured()):
         led = _open_ledger(store, a.author, a.key)
     elif Path(store.ledger_path).exists():
         from .ledger import Ledger

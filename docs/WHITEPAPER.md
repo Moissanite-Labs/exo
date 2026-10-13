@@ -346,9 +346,7 @@ to model providers). The HTTP server inside `exod` is written on the standard li
 no web framework. Storage is SQLite files and plain Markdown files.
 
 The core has a line budget. A test counts the lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`
-and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3, and
-the test now fails above that. Today the count is 14,694, so the next large addition must either remove
-something or argue for a higher budget. The budget exists so that growth is a decision, and so the core can
+and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3. The budget is now 16,000 and the test fails above that. Today the count is about 15,836, so the next large addition must either remove something or argue for a higher budget. The budget exists so that growth is a decision, and so the core can
 later shrink onto a small device (section 27).
 
 Repository layout, in short:
@@ -663,14 +661,13 @@ typed-decisions set without fine-tuning. A gate cannot lean on that.
 
 So the default `decision` route is now Jev, then local Laya, then `aux`, then `main`. Jev is a hosted
 service, so it is used only when the user has set a TypeSafe key. Without one, the role falls through to
-Laya, and without Laya to the chat models, which answer the same typed question as JSON. Perplexity's
-pplx-decider and OpenAI's Decisions API were weighed too, and are not wired in. A hosted decision model sees the
+Laya, and without Laya to the chat models, which answer the same typed question as JSON. A hosted decision model sees the
 state it is asked about.
 
 Laya can take the default back. Exo plans to ship a fine-tuned version, "exo-decide", trained on a generic
 seed set and, per user, on that user's own verdicts. It becomes the default only if it beats Jev on a
 held-out set.
-Licence terms shape the data: TypeSafe's and OpenAI's terms forbid training other models on their outputs,
+Licence terms shape the data: TypeSafe's terms forbid training other models on its outputs,
 so those outputs are never training labels. Weights stay private until they beat base Laya and Jev on a
 held-out set. None of this is measured yet.
 
@@ -1528,7 +1525,7 @@ store and grows with them. The near-term design rules that keep that path open:
 
 - **The store is one folder.** Pack, nodes, items, ledger and indexes are plain files and SQLite. Copy the
   folder and the person moves.
-- **The core stays small.** Under 15,000 lines (14,694 today), enforced by a test. Two runtime
+- **The core stays small.** Under 16,000 lines (about 15,836 today), enforced by a test. Two runtime
   dependencies. The terminal client is Python too, so the core and its main client need no Node, no browser
   engine and no containers. One optional tool, `code_find`, needs Node and hides itself when Node is
   missing. The planned idle memory target is under 80 MB **[not measured]**.
@@ -1826,7 +1823,7 @@ why the ledger is kept in a form that could train a per-person adapter later.
 **DSPy.** For showing that prompts can be searched and improved against a metric. Exo's climb does the same
 with one readable change at a time.
 
-**Decision and embedding models.** TypeSafe (Jev), Convai Innovations (Laya), Perplexity, OpenAI, Google
+**Decision and embedding models.** TypeSafe (Jev), Convai Innovations (Laya), Google
 (EmbeddingGemma) and the Qwen team, whose public documentation informed sections 14 and 21.
 
 Exo's own earlier knowledge-base, ingest and team-memory systems contributed the store format, the router

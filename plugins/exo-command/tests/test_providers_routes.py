@@ -206,6 +206,29 @@ def test_add_test_remove_and_default_with_every_check_passing(caplog, capsys):
     assert sets[0].model == "openai:gpt-5" and sets[1].key == "models.roles.main"
 
 
+@pytest.mark.parametrize("denied", [s.ModelsSet, s.ConfigSet])
+def test_default_never_falls_back_after_core_refuses_authority(denied):
+    from exo.config import Config
+    from exo.server.engine import CommandFailed
+    cfg = Config.load()
+    cfg.set("models.roles.main", ["anthropic:claude-opus-5-5"])
+    cfg.save()
+    path = cfg.home / "config.json"
+    before = path.read_bytes()
+
+    class Refused(Src):
+        async def call(self, body):
+            if isinstance(body, denied):
+                raise CommandFailed("forbidden", "only the principal can change settings")
+            return await super().call(body)
+
+    async def go(web, port):
+        return await raw(port, "POST", "/api/providers/default", ok_headers(port), {"ref": "openai:gpt-5"})
+    status, data, _ = serve(go, Refused())
+    assert status == 403 and "principal" in data["error"]
+    assert path.read_bytes() == before
+
+
 def test_default_falls_back_to_config_when_the_core_is_down():
     class Down(Src):
         async def call(self, body):

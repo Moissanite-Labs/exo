@@ -36,6 +36,7 @@
         <li><a href="../">Overview</a></li>
         <li><a class="nav__page" href="../cli/">Terminal</a></li>
         <li><a class="nav__page" href="../app/" aria-current="page">Web app</a></li>
+        <li><a class="nav__page" href="../roadmap/">Roadmap</a></li>
         <li><a class="nav__paper" href="../whitepaper/">Whitepaper</a></li>
       </ul>
     </nav>
@@ -49,7 +50,7 @@
   <div class="wrap hero__in">
     <p class="crumb"><a href="../">Project Exo</a> · Web app</p>
     <h1 id="hero-title" class="hero__title">The same agent,<br>with the memory<br>in view.</h1>
-    <p class="hero__lede">The web client talks to the same core over the same protocol as the terminal. Open it next to the terminal and you see one agent, one thread, one memory. It adds a column that shows what the next call carries.</p>
+    <p class="hero__lede">The current web client runs in your local browser and talks to the same core over the same protocol as the terminal. Open it next to the terminal and you see one agent, one thread, one memory. It adds a column that shows what the next call carries.</p>
     <div class="hero__cta"><a class="btn btn--primary" href="#open">How to open it <span aria-hidden="true">→</span></a><a class="btn" href="#screens">Screenshots</a><a class="btn" href="../cli/">Terminal</a></div>
   </div>
 </section>
@@ -58,8 +59,9 @@
   <div class="wrap">
     <header class="sec-head">
       <p class="sec-num">01 / Overview</p>
-      <h2 id="overview-t">A client, not a second system.</h2>
-      <p class="sec-lede">The web app is plain JavaScript served by a small plugin. It has no build step, no framework and no file from outside. It keeps no state that matters: every panel is drawn from a command answer or an event from the core. Close the tab and nothing is lost.</p>
+      <h2 id="overview-t">One core, another view.</h2>
+      <p class="sec-lede">The web app is plain JavaScript served by a small plugin. It has no build step, no framework and no file from outside. Panels draw from command answers and core events, so completed work stays in the core when you close the tab. Copy any unsent draft before closing.</p>
+      <p class="sec-lede">Electron is the chosen future desktop package. It is not built yet, and comes last after core verification and browser workflow polish. <a href="../roadmap/#sequence">See the delivery order.</a></p>
     </header>
     <div class="grid grid--3 feat">
       <article class="card reveal"><p class="card__k">Memory column</p><p>Tokens the next call carries, split into system, summary tree, other threads and tail. Tree nodes, log length and the fold frontier. Filled from <code>/context</code>.</p></article>
@@ -119,7 +121,7 @@
 <footer class="foot">
   <div class="wrap foot__in">
     <a class="brand" href="../"><svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg><span>EXO</span></a>
-    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a> · <a href="../cli/">Terminal</a> · <a href="../app/">Web app</a> · <a href="../whitepaper/">Whitepaper</a></p>
+    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a> · <a href="../cli/">Terminal</a> · <a href="../app/">Web app</a> · <a href="../roadmap/">Roadmap</a> · <a href="../whitepaper/">Whitepaper</a></p>
     <p class="foot__small">Exo is early and in active development. This page describes the design as of October 2026 and will change.</p>
   </div>
 </footer>

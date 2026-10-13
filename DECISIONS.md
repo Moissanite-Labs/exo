@@ -300,6 +300,27 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Decision:** phase 0 is research and design only (BRIEF-07, folder `os/` on branch
   `exo-os/phase-0`): base system, shell, security, small hardware, roadmap and proposed decisions.
   Exo OS runs the same core and protocol as Exo; no fork.
+- **Shared executor interface (2026-10-12):** the core loads a named installed `exo.executors` factory,
+  freezes validated post-approval arguments and dispatches through its broker. Required mode refuses missing
+  executors, unsupported MCP startup and failed required plugins. The OS supplies isolation and an audited
+  trusted plugin inventory; imported Python code remains trusted. See `docs/EXECUTORS.md`.
+- **Workspace subprocess closure:** required mode omits host Git handoff facts and uses filesystem-only
+  completion, because workspace Git configuration can execute helpers. Cross-seat delegation requires a
+  separate broker capability; local child setup passes tools through the shared registry.
+- **Required gate audit (2026-10-13):** execution requires committed decision and approval evidence.
+  Missing stores/keys, failed audit writes and trusted gate hook exceptions block before the executor.
+  Required mode refuses tool-selected body-file host reads, including symlinks; ordinary gate behavior
+  remains compatible. See `docs/GATE.md` "Required executor audit".
+- **Approval and authority ordering:** pending approvals use unique call tokens separate from reusable
+  rule keys. Policy acceptance is audited before pinning; required grant authorization is audited before
+  persistence, with an explicit authorization-only record if persistence fails. Separate stores are not
+  claimed to activate atomically. Concurrent approvals retain the correct session and decision reference.
+- **Ledger authority (2026-10-13):** core writers open the ledger through one factory. With no authority
+  configured it is the D-040 local key path unchanged: pinned keys, head anchor, `exo log verify`. With
+  `EXO_LEDGER_AUTHORITY` set, an installed backend signs and commits each event and checkpoint before
+  replying; verification replays its pinned identity read-only and never falls back to local keys. Enabling
+  it on an existing store fails closed (unconfirmed local tail); there is no migration. An independent witness is future work. See
+  `docs/LEDGER-AUTHORITY.md`.
 - **Lead call:** nothing on the Linux test machine's live OS changes in phase 0. It is someone's working machine
   (CRM, messaging, assistants). Where the OS first runs is A's call after the design.
 
@@ -1027,6 +1048,30 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Revisit if:** the site gains a build step or more than one maintainer deploys, when CI should own promotion.
 - **Docs:** `docs/DEVELOPER-GUIDE.md` "Deploying the site".
 
+## D-049 (2026-10-12) Brand: the lattice egg and the X/V mark
+- **Status:** Accepted 2026-10-13 (the principal: "a work of beauty"). Proposed 2026-10-12, previewed on staging
+  only. On acceptance the lattice egg became the front-page default on every host (`?egg=off` keeps the old orb as an
+  escape hatch). The favicon, nav mark and og image still wait for their own change.
+- **Why (A, verbatim):** "what if in the logo and branding we made the top half of the x in exo orange so it also looks
+  like a v and center our branding around a continually evolving harness, ecosystem, etc." And: "i want the logo for exo
+  and all this to be based on my favourite geometric figure since childhood ... an alive evolving pulsing matrix of
+  information." The site orb was named "the perfect analogy for a digital egg".
+- **Decision:** one figure for everything: a square, its X, and the incentre of each triangle (credit: the
+  aska-digital/incentre-lattice research). The wordmark is "exo" with the x drawn as the square's diagonals at 45°; the
+  x's top half, which owns the crossing, is `#ff5b14` and reads as a V (exo, and also evo). The e and o are cut from
+  regular octagons, the octagon the tiled dots make. Pick: variant A, "facet"; C "seed" is the display form and D "caps"
+  the label form; B "round" is rejected (a second shape language, blurs first at 16 px). The mark is the drawing with the
+  V and the top dot (the seed) in orange; at 16 px only the X with its V remains.
+- **The egg:** `site/brand/egg.js` replaces the front-page orb's shell of nodes with the honeycomb the drawing makes in
+  3D and 4D. Cells pulse, packets of information travel the edges, and a heartbeat in the core sets the pace. One stage
+  parameter (0 egg, 1 hatchling, 2 lattice, 3 hyper, 4 spare) adds cells, structure, a dimension and brightness;
+  fractional stages blend. This is the hook the exopet evolution line can drive. API in `docs/BRAND.md`.
+- **Rejected:** a WebGL renderer (the lattice is at most about 2,000 lines; Canvas 2D costs under 1 ms a frame); a
+  Fibonacci-sphere shell (it is not the figure); replacing the favicon and nav mark now (they wait for acceptance).
+- **Open:** whether the terminal header takes the braille mark (`site/brand/tui-mark.txt`, a proposal only); the
+  migration of the nav mark, favicons and og image; the exopet mapping from its evolution line to stages.
+- **Docs:** `docs/BRAND.md`; assets generated by `scripts/brand_assets.py`.
+
 ## D-050 (2026-10-12) Consumer path: local first, desktop apps after the build settles
 - **Why:** the 2026-10-12 audit (item 10) asked for the consumer path to be decided before building toward it.
   The principal ruled on four options for how Exo reaches a new user and where their keys live.
@@ -1064,3 +1109,81 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Revisit if:** `muse exec` gains a structured output or tool bridge, which could lift the text-only limit.
 - **Docs:** `docs/PROVIDERS.md` "Use a Muse Code subscription", `docs/GATE.md` "Muse CLI credentials",
   `docs/DEVELOPER-GUIDE.md` "Add a CLI-backed provider", `docs/WHITEPAPER.md` §13.1, `docs/TOOLS.md`.
+
+## D-052 (2026-10-12) Principal authority applies to messages, learning and settings
+- **Why:** an audit reproduced local callers submitting turns, steering, verdicts and panel actions that became
+  principal-authored learning evidence. The same callers could accept relaxed gate policies and change settings
+  or model routes. Approval answers already checked transport identity, but these adjacent operations did not.
+- **Decision:** snapshot the live transport caller when a turn or steer is accepted. Only a principal connection
+  produces principal-authored text. Local automation may still drive turns, with author `local`. Background turns
+  without an explicit author are system input. Feedback, panel responses, settings, model selection and gate
+  policy acceptance require a live principal caller. The policy adoption method checks authority itself, covering
+  command aliases and direct plugin callbacks. Its ledger record names the authenticated caller.
+- **Transport and clients:** stdio always stamps local, even if its dispatcher has an interactive default. The web
+  provider route returns 403 on a core authority refusal and cannot use its offline disk fallback to evade it.
+  Preference-pair context includes only principal-authored messages. No protocol command or event was added.
+- **Peers and steers:** `peers send` with `via="human"` is a body claim. From a non-principal caller it is sent as
+  `via="agent"`, so the receiver never frames it as the principal typing in another client. `unsteer` from a
+  non-principal caller pulls back only non-principal steers; the principal's queued words stay.
+- **Validation:** regression cases cover untrusted send and steer, feedback and panel actions, policy relaxation,
+  settings, aliases, direct calls, caller expiry, TCP, stdio, Unix sockets and a tool child holding the test
+  credential. Authenticated user operations remain covered by positive controls.
+- **Limits:** same-user processes still need an OS sandbox. Earlier misattributed messages are not rewritten.
+- **Docs:** `docs/GATE.md`, `docs/MEMORY-MODEL.md`, `docs/COMMANDS.md`.
+
+## D-053 (2026-10-12) Verification isolates terminal preferences and documents current behavior
+- **Why:** the baseline root suite failed four TUI checks solely because the invoking terminal exported
+  `NO_COLOR`. Removing that variable made all four pass. Changing `TERM` did not. Product behavior was correct,
+  but the tests inherited an unrelated user's display preference.
+- **Decision:** the repository test fixture clears inherited `NO_COLOR`. Tests of no-colour mode set it explicitly.
+  The product continues to honor the user's setting. Existing tests cover both modes.
+- **Documentation corrections:** the approval focus shortcut is ctrl+f. Ctrl+g opens the composer. Undo hides log
+  entries and invalidates covering summaries, matching D-041 and the implementation.
+- **Docs:** `docs/DEVELOPER-GUIDE.md`, `docs/UI.md`, `docs/MEMORY-MODEL.md`.
+
+## D-054 (2026-10-12) Ruling citations do not waive mandatory learning checks
+- **Why:** the direct-ruling shortcut ran before the guarded-domain and evaluation rules. A reviewer could cite
+  a real but unrelated principal statement and install a derived skill or guarded lesson without those checks.
+- **Decision:** held conflicts, guarded proposals and mandatory evaluation checks run before the shortcut.
+  Skills always need evaluation, even if the configured type list omits them. Configured high-impact or gated
+  lessons retain their critic, evidence-weight and session-count requirements. Missing held-out cases cannot pass.
+  Rule numbers stay stable in the ledger. Ordinary unguarded taste and fact lessons retain the direct-ruling path.
+- **Principal control:** original rulings remain available in the ledger and context. Explicit acceptance of a
+  concrete proposal remains a separate path. A reviewer merely citing a ruling does not exercise that authority.
+- **Validation:** regressions prove unrelated ruling citations cannot bypass skill evaluation or guarded review,
+  and cover configured gates, evaluation success and failure, critic objections, held conflicts and direct acceptance.
+- **Limit:** citation authorship alone does not establish semantic support for an ordinary unguarded lesson.
+  Binding derived claims to the cited words still needs a separate design and evaluation.
+- **Docs:** `docs/LEARNING.md`, `research/LEARNING-LOOP.md`.
+
+## D-055 (2026-10-12) Keep staging current; package with Electron after the core and browser
+- **Why (A):** update the latest staging site as the work advances, improve it where useful, and eventually package
+  the browser client as an Electron desktop app. Packaging is the last step after polishing the core engine and codebase.
+- **Delivery order:** core verification and review, then browser workflow polish, then Electron packaging. The desktop
+  package is a chosen direction, not a built client. Its eventual checks include installation, core lifecycle, signing
+  and updates on the intended platforms. The roadmap gives the exit criteria for each stage.
+- **Evidence:** the site identifies the authority and learning fixes at `1532fa9` as in review in draft PR #57, with
+  links to the revision and CI results. A successful local installation does not make an unmerged change built on main.
+  The four existing roadmap states stay unchanged. House taste wave 1 is layers and export tooling; the shipped
+  `0.0.0` pack is empty. A curated pack and adaptation remain future work.
+- **Research:** AIOS and AI Legion are public references, not new dependencies. Frozen delegated permissions,
+  isolated tools with a credential broker, durable steerable work and shared budget admission are exploring directions.
+  Application authority checks are not described as OS isolation.
+- **Site:** preserve the latest staging design, keep mobile page navigation reachable, provide section jump links,
+  and show status in words as well as color. The lattice egg was a staging-only preview under D-049 until it was accepted on 2026-10-13.
+- **Deployment scope:** this instruction authorizes staging updates. Deploy to `exo-site-staging` from a git-free copy,
+  preserving staging's robots exclusion and noindex header. Production promotion remains separate under D-047.
+- **Docs:** `docs/SITE-STATUS.md`; `docs/DEVELOPER-GUIDE.md` "Deploying the site"; `site/roadmap/` and the landing and
+  web-client pages. No user commands changed, so the user guide is unaffected. Whitepaper updates remain batched.
+
+## D-056 (2026-10-13) Versioning and naming
+- **Why:** versions, branches and documents had no common naming, so an iteration could not be found again. The
+  site had two ad hoc tags and Exo itself had no release tag.
+- **Decision:** Exo is SemVer below 1.0, tagged `exo-vX.Y.Z`, with a codename per MAJOR from the exopet line (0.x egg,
+  1.x cell, 2.x tile, 3.x cube, 4.x frame, then 4D and up) shown as `exo 0.2.0 (egg)`. Main becomes 0.2.0. The site
+  is `site-vMAJOR.MINOR`, archived before each production deploy, and the deploy script tags and writes
+  `version.json`. The whitepaper is `whitepaper-vX.Y`, the house taste pack `house-vX.Y.Z`. Decision numbers are never
+  reused. Branch prefixes are listed. `CHANGELOG.md` follows Keep a Changelog.
+- **Numbering:** D-055 is used by branch `feat/roadmap-page`, so this is D-056.
+- **Validation:** tests check the `--version` form and that the changelog's latest release equals the pyproject version.
+- **Docs:** `docs/VERSIONING.md`, `CHANGELOG.md`, `docs/DEVELOPER-GUIDE.md`.

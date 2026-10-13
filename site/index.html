@@ -50,6 +50,7 @@
         <li><a href="#credits">Credits</a></li>
         <li><a class="nav__page" href="cli/">Terminal</a></li>
         <li><a class="nav__page" href="app/">Web app</a></li>
+        <li><a class="nav__page" href="roadmap/">Roadmap</a></li>
         <li><a class="nav__paper" href="whitepaper/">Whitepaper</a></li>
       </ul>
     </nav>
@@ -88,7 +89,7 @@
     <header class="sec-head">
       <p class="sec-num">01 / Working today</p>
       <h2 id="today-title">One agent that remembers, watches itself and asks before it acts.</h2>
-      <p class="sec-lede">Exo runs now, in a terminal and in a browser, on the same core and the same memory. This is what is built and in daily use.</p>
+      <p class="sec-lede">Exo runs now, in a terminal and in a local browser, on the same core and the same memory. This is what is built and in daily use. The delivery order is core verification, browser polish, then Electron desktop packaging. <a href="roadmap/#sequence">See the next steps and their exit criteria.</a></p>
     </header>
     <figure class="media reveal">
       <img src="media/exo-session.svg" width="960" height="540" alt="Hand-authored illustration of a terminal session: a prompt, tool lines, an example approval panel, a seat-signed answer, and the status strip." loading="lazy">
@@ -173,7 +174,7 @@
 </section>
 
 <!-- HORIZON -->
-<section class="horizon" aria-labelledby="horizon-title">
+<section class="horizon" id="companion" aria-labelledby="horizon-title">
   <div class="wrap horizon__in">
     <div>
       <p class="sec-num">04 / Horizon</p>
@@ -228,7 +229,7 @@
     </div>
 
     <div class="grid grid--2 parts">
-      <article class="part reveal">
+      <article class="part reveal" id="ledger">
         <p class="part__n">01</p>
         <h3>The signed ledger</h3>
         <p class="part__why">If a system's memory of you is a file it keeps rewriting, you cannot tell what changed, who changed it, or rebuild it later.</p>
@@ -265,7 +266,7 @@
         <p>Exo does that. Each turn, one message from you and one reply, is a new call to the model. Exo builds it from a summary tree: small groups of messages are summarised, then groups of summaries are summarised, like chapters under a table of contents.</p>
         <p>The latest messages go in word for word. The turn waits until the summaries are up to date, so nothing falls into a gap. Summaries are written in parallel, with live chat ahead of imported history.</p>
       </article>
-      <article class="part reveal">
+      <article class="part reveal" id="gates">
         <p class="part__n">05</p>
         <h3>Gates by reversibility and exposure</h3>
         <p class="part__why">Ask for approval on every step and people stop reading and approve everything. Ask for none and one bad step can cost a lot.</p>
@@ -279,7 +280,7 @@
         <p class="part__why">Many choices in a session are small: which tool, which model, which label, whether to open a panel. Asking a large model each time is slow and costly, and it answers in prose that then has to be read.</p>
         <p>A firm does not ask a senior partner which folder a letter goes in.</p>
         <p>Decision models are intended for choices with fixed options, such as which tool or panel fits a turn. A model scores the options, for example "tool A 0.82, tool B 0.11". The numbers estimate confidence; Exo can use them to choose or ask when confidence is low.</p>
-        <p>Today the gate uses the decision role to tighten its rule-based outcome, never to loosen it. The router tries TypeSafe Jev first when configured, then local Laya, before falling through to other routes. You can also call <code>exo decide</code> or use a decision model as an optional export judge. Perplexity's decider and OpenAI's Decisions API were considered but are not wired in; tool, model and panel selection through decision models remains a design direction.</p>
+        <p>Today the gate uses the decision role to tighten its rule-based outcome, never to loosen it. The router tries TypeSafe Jev first when configured, then local Laya, before falling through to other routes. You can also call <code>exo decide</code> or use a decision model as an optional export judge. Tool, model and panel selection through decision models remains a design direction.</p>
       </article>
       <article class="part reveal">
         <p class="part__n">07</p>
@@ -404,7 +405,7 @@
       <li class="reveal"><span class="pn">P02</span><h3>Amplify the person. Do not replace them.</h3><p>You decide what is worth doing. Agents decide how, inside your goals.</p></li>
       <li class="reveal"><span class="pn">P03</span><h3>Attention is the scarcest resource.</h3><p>The aim is not zero interruptions. It is zero wasted interruptions.</p></li>
       <li class="reveal"><span class="pn">P04</span><h3>Ask when unsure. Act when confident.</h3><p>And measure how unsure it is, instead of guessing.</p></li>
-      <li class="reveal"><span class="pn">P05</span><h3>Every correction sticks.</h3><p>A correction changes future behaviour the same day. Say it three times and Exo proposes a rule.</p></li>
+      <li class="reveal"><span class="pn">P05</span><h3>Corrections become evidence.</h3><p>A correction enters the signed record. Inferred lessons go through review and evaluation before they shape future behavior. You can inspect and undo accepted lessons.</p></li>
       <li class="reveal"><span class="pn">P10</span><h3>Content is data.</h3><p>Text Exo reads is material to work on, never an order to follow. Instructions come only from you, never from an email, a web page or a tool's output.</p></li>
       <li class="reveal"><span class="pn">P11</span><h3>Gate by reversibility and exposure.</h3><p>Not by step count. Fast where mistakes are cheap, careful where they are not.</p></li>
       <li class="reveal"><span class="pn">P12</span><h3>Test on one person, over time.</h3><p>Predict your next decision before you make it, and score the prediction.</p></li>
@@ -475,8 +476,6 @@
       <li class="reveal"><a href="https://uniichat.com" rel="noopener"><span class="credits__who">Victor Taelin, Higher Order Company</span><span class="credits__what">OptChat and UniiChat</span></a><p>The word-for-word log and summary tree, and a fresh call every turn. Exo reimplements the ideas, not the code.</p></li>
       <li class="reveal"><a href="https://typesafe.ai" rel="noopener"><span class="credits__who">TypeSafe</span><span class="credits__what">Jev</span></a><p>A hosted model for small, typed decisions. It is Exo's first configured decision route when credentials are available.</p></li>
       <li class="reveal"><a href="https://huggingface.co/convaiinnovations/laya" rel="noopener"><span class="credits__who">Convai Innovations</span><span class="credits__what">Laya</span></a><p>Open-weight, Apache 2.0, runs locally. Exo's configured fallback decision model.</p></li>
-      <li class="reveal"><a href="https://huggingface.co/perplexity-ai/pplx-decider-v1.1-27b" rel="noopener"><span class="credits__who">Perplexity</span><span class="credits__what">pplx-decider</span></a><p>A decision model considered for a future provider integration; it is not wired into Exo.</p></li>
-      <li class="reveal"><a href="https://developers.openai.com/api/docs/guides/decisions" rel="noopener"><span class="credits__who">OpenAI</span><span class="credits__what">Decisions API</span></a><p>A decision API considered for a future integration; it is not wired into Exo.</p></li>
       <li class="reveal"><a href="https://huggingface.co/google/embeddinggemma-300m" rel="noopener"><span class="credits__who">Google</span><span class="credits__what">EmbeddingGemma</span></a><p>A planned local embedding model; Exo does not yet run embedding search.</p></li>
       <li class="reveal"><a href="https://github.com/letta-ai/letta-code" rel="noopener"><span class="credits__who">Letta</span><span class="credits__what">Letta Code</span></a><p>Strong memory design ideas: memory blocks, memory kept in version control, and tidying memory while idle.</p></li>
       <li class="reveal"><a href="https://gwern.net/doc/sociology/technology/1983-bainbridge.pdf" rel="noopener"><span class="credits__who">Lisanne Bainbridge</span><span class="credits__what">"Ironies of Automation" (1983)</span></a><p>Why approve-every-step flows fail, and why Exo budgets your attention.</p></li>
@@ -504,7 +503,7 @@
 <footer class="foot">
   <div class="wrap foot__in">
     <a class="brand" href="#top"><svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg><span>EXO</span></a>
-    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a> · <a href="cli/">Terminal</a> · <a href="app/">Web app</a> · <a href="whitepaper/">Whitepaper</a></p>
+    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a> · <a href="cli/">Terminal</a> · <a href="app/">Web app</a> · <a href="roadmap/">Roadmap</a> · <a href="whitepaper/">Whitepaper</a></p>
     <p class="foot__small">Exo is early and in active development. This page describes the design as of October 2026 and will change.</p>
   </div>
 </footer>
