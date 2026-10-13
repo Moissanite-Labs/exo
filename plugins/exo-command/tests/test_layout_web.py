@@ -75,7 +75,8 @@ console.log(JSON.stringify({
     assert got["inv"] == [3, 2, 1] and got["cls"] == [1, 2, 3]
     assert got["homeInv"] == 0 and got["homeCls"] == 4300 and got["short"] == 0
     assert got["nearInv"] == [True, False] and got["nearCls"] == [True, False]
-    assert got["orderInv"][:3] == ["banner", "guide", "composer"] and got["orderInv"].index("stage") > got["orderInv"].index("composer")
+    assert got["orderInv"][:4] == ["banner", "status", "guide", "composer"] and got["orderInv"].index("stage") > got["orderInv"].index("composer")
+    assert got["orderCls"].index("status") > got["orderCls"].index("stage")
     assert got["orderCls"][-1] == "menu" and got["orderCls"].index("stage") < got["orderCls"].index("composer")
     assert sorted(got["orderInv"]) == sorted(got["orderCls"])
 

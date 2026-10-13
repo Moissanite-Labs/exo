@@ -102,8 +102,8 @@ Screenshots: `docs/media/web-05-guidance.png`, `web-06-slash.png`, `web-07-files
 
 ## Layout: inverse or classic (D-046)
 
-The chat has two layouts. **Inverse** (the experiment's default) puts the message box at the top, with the approval cards
-under it, then the thread with the newest item first and the status strip at the bottom; text inside one message reads
+The chat has two layouts. **Inverse** (the experiment's default) puts the status strip and then the message box at the top,
+with the approval cards under it, then the thread with the newest item first; classic keeps the strip under the thread; text inside one message reads
 top to bottom, and a thread opens on its newest item at the top (`docs/media/web-08-inverse.png`). **Classic** is the usual
 order, and a long thread now opens at its newest message at the bottom (`docs/media/web-09-classic-bottom.png`). Switch with
 the "Layout" button under the thread list or `/layout inverse|classic`; the choice is saved in this browser

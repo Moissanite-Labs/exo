@@ -505,6 +505,6 @@ body { margin: 0; background: #08090a; }
 .xc-chat-main.xc-inverse .xc-menu { border-top: 0; border-bottom: 1px solid var(--line); }
 .xc-chat-main.xc-inverse .xc-guide { padding-top: 8px; }
 .xc-chat-main.xc-inverse .xc-approvals { padding-top: 10px; }
-.xc-chat-main.xc-inverse .xc-strip { border-top: 1px solid var(--line); }
+.xc-chat-main.xc-inverse .xc-strip { border-top: 0; border-bottom: 1px solid var(--line); }
 .xc-layout { margin: auto 12px 0 12px; font-size: 10px; padding: 8px 10px; text-align: left; }
 .xc-chat-left > .xc-sessions { flex: 0 1 auto; }
