@@ -6,8 +6,7 @@ import subprocess
 
 from exo import complete as cm
 from exo.protocol import schema as s
-from exo_tui.app import ExoApp
-from exo_tui.widgets import IDLE_HINT, Composer
+from exo_tui.widgets import IDLE_HINT
 from test_tui import run, until
 
 

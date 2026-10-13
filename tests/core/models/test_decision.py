@@ -168,7 +168,6 @@ def test_default_catalog_routes_decision_to_jev_then_laya():
 
 
 def test_cli_decide(monkeypatch, capsys):
-    import exo.decide_cmd as dc
     r = router(lambda req: reply(CHOICE))
     monkeypatch.setattr("exo.models_cmd.build_router", lambda env=None: r)
     assert main(["decide", "risk?", "--options", "low,medium,high", "--state", "rm -rf build"]) == 0

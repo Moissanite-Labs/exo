@@ -10,14 +10,12 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from exo import crypto, provenance
 from exo.bus import wire
-from exo.core import trace
 from exo.core.ingress import STANDING_LINE, Held, Ingress, Receipt, Target, frame
-from exo.core.peers import BusLink, Directory, PeerConfig, PeerNode, peers_dir, short
+from exo.core.peers import BusLink, Directory, PeerNode, peers_dir, short
 from exo.core.seats import ensure_key, key_path
 from exo.core.tools.registry import ToolContext, ToolError
 from exo.core.types import ContentPart, Message, ToolSpec

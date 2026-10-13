@@ -20,9 +20,8 @@ import inspect
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
-from exo import gate
 from exo.core.sessions import new_id
 
 HOLD_SECONDS = 30 * 60

@@ -6,7 +6,6 @@ from __future__ import annotations
 import time
 
 from exo.protocol import schema as s
-from exo_tui.widgets import ApprovalCard, Composer
 from test_tui import run, send, until
 
 
