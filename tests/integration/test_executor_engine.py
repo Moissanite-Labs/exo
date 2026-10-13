@@ -67,7 +67,7 @@ def test_engine_main_child_and_background_share_broker(tmp_path, monkeypatch, tr
 def test_secure_plugin_discovery_uses_only_executor_roots(tmp_path, monkeypatch):
     broker = DenyBroker()
     broker.trusted_plugin_dirs = (str(tmp_path / "audited"),)
-    monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
+    monkeypatch.setattr("exo.application.load_executor", lambda: (broker, True))
     seen = []
 
     def load_all(self, **kw):
@@ -86,7 +86,7 @@ def test_secure_plugin_discovery_uses_only_executor_roots(tmp_path, monkeypatch)
 def test_missing_required_executor_plugin_refuses_factory(monkeypatch):
     broker = DenyBroker()
     broker.required_plugins = ("exo-gate",)
-    monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
+    monkeypatch.setattr("exo.application.load_executor", lambda: (broker, True))
     monkeypatch.setattr(PluginManager, "load_all", lambda *args, **kw: [])
     with pytest.raises(ExecutorConfigurationError, match="required executor plugins failed"):
         create()
@@ -94,7 +94,7 @@ def test_missing_required_executor_plugin_refuses_factory(monkeypatch):
 
 def test_required_factory_needs_gate_even_when_broker_omits_it(monkeypatch):
     broker = DenyBroker()  # required_plugins = (): the gate is still compulsory
-    monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
+    monkeypatch.setattr("exo.application.load_executor", lambda: (broker, True))
     monkeypatch.setattr(PluginManager, "load_all", lambda *args, **kw: [])
     with pytest.raises(ExecutorConfigurationError, match="required executor plugins failed to load: exo-gate"):
         create()
@@ -109,7 +109,7 @@ def test_required_factory_never_imports_ambient_gate_entry_point(monkeypatch):
             return lambda ctx: None
     broker = DenyBroker()
     broker.trusted_plugin_dirs = ()
-    monkeypatch.setattr('exo.core.engine.load_executor', lambda: (broker, True))
+    monkeypatch.setattr('exo.application.load_executor', lambda: (broker, True))
     monkeypatch.setattr('importlib.metadata.entry_points', lambda **kw: [AmbientGate()])
     with pytest.raises(ExecutorConfigurationError): create()
     assert not seen
@@ -198,7 +198,7 @@ def test_secure_config_cannot_disable_required_plugins(tmp_path, monkeypatch):
     monkeypatch.setenv("EXO_HOME", str(home))
     broker = DenyBroker()
     broker.required_plugins = ("exo-gate",)
-    monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
+    monkeypatch.setattr("exo.application.load_executor", lambda: (broker, True))
     monkeypatch.setattr(PluginManager, "load_all", lambda *args, **kw: pytest.fail("disabled gate imported"))
     with pytest.raises(ExecutorConfigurationError, match="disables a required"):
         create()

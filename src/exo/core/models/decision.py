@@ -247,9 +247,7 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any], kin
             try:
                 if getattr(cred.provider, "is_decision", False):
                     if router.spend_enforced:
-                        from exo.core.models.spend import SpendDenied
-                        if router.spend is not None:
-                            router.spend.freeze("typed decision pricing is unbounded")
+                        from exo.model_spend import SpendDenied
                         raise SpendDenied("typed decision pricing is unbounded; ask the principal to review the route")
                     reply = await cred.provider.decide(state, {"q": question}, model=route.model)
                     ans = reply.answers.get("q")
@@ -262,8 +260,7 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any], kin
                 return ans, "generative", route.ref
             except DecisionError as e:
                 if getattr(router, "spend", None) is not None:
-                    from exo.core.models.spend import SpendDenied
-                    router.spend.freeze("model decision failed; ask the principal to review")
+                    from exo.model_spend import SpendDenied
                     raise SpendDenied(str(e)) from e
                 last = e
                 if e.status in (400, 413, 422):  # the question itself is bad; another route will fail too
@@ -288,7 +285,7 @@ async def _generative(router: Any, route: Any, cred: Any, sole: bool, state: Any
             text.append(ev.text)
         elif ev.kind == "error":
             if getattr(router, "spend", None) is not None:
-                from exo.core.models.spend import SpendDenied
+                from exo.model_spend import SpendDenied
                 raise SpendDenied(ev.error or "model spend stopped")
             raise DecisionError(ev.error or "model error", ev.status, bool(ev.retryable), ev.retry_after)
         elif ev.kind == "done" and ev.message is not None and not text:

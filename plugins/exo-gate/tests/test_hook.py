@@ -426,7 +426,7 @@ def test_mode_is_read_once_at_load(keyed_store, monkeypatch):
 
 
 def test_spend_denial_never_falls_back_to_allow(keyed_store, monkeypatch):
-    from exo.core.models.spend import SpendDenied
+    from exo.model_spend import SpendDenied
     from exo.core.models import decision
     async def denied(*args, **kwargs):
         raise SpendDenied('principal model-spend cap reached')

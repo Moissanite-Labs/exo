@@ -11,7 +11,7 @@ import httpx
 import pytest
 
 from exo.core.models.router import Router, aux
-from exo.core.models.spend import SpendDenied, SpendJournal, configured
+from exo.model_spend import SpendDenied, SpendJournal, configured
 from exo.core.models.decision import ask_choice
 from exo.core.types import Message, Usage
 from .conftest import collect
@@ -102,6 +102,37 @@ def test_unbounded_requests_fail_before_http(tmp_path, change):
     assert ev[-1].kind == 'error' and not seen
 
 
+@pytest.mark.parametrize('change', ['unpriced', 'native', 'endpoint', 'wire_model', 'headers',
+                                  'image', 'max_output', 'invalid_output', 'cap'])
+def test_preflight_refusal_leaves_a_priced_route_usable(tmp_path, change):
+    from copy import deepcopy
+    from exo.core.types import ContentPart
+    cfg = policy(tmp_path)
+    cfg['routes']['bad:m'] = deepcopy(cfg['routes']['test:m'])
+    bad = cfg['routes']['bad:m']
+    if change == 'unpriced': del cfg['routes']['bad:m']
+    if change == 'native': bad['input_bound'] = 999
+    if change == 'endpoint': bad['base_url'] = 'https://elsewhere'
+    if change == 'wire_model': bad['model'] = 'different'
+    if change == 'cap': bad['output'] = 100
+    seen = []
+    r = router(cfg, lambda req: seen.append(req) or response())
+    r.providers['bad'] = {'transport': 'openai', 'base_url': 'https://api.openai.com/v1'}
+    if change == 'headers': r.providers['bad']['headers'] = {'x-beta': 'experimental'}
+    r.roles['bad'] = ['bad:m', 'test:m']
+    messages = [Message.user('hi')]
+    if change == 'image': messages = [Message(role='user', content=[ContentPart(type='image', url='https://image')])]
+    opts = {'max_tokens': 101} if change == 'max_output' else {'max_tokens': 0} if change == 'invalid_output' else {}
+    event = collect(r.stream('bad', messages, [], **opts))[-1]
+    assert event.kind == 'error' and not event.retryable
+    assert event.attempts == [{'route': 'bad:m', 'outcome': 'spend_refused'}]
+    assert event.error.startswith('Model request refused:')
+    assert not seen and not rows(cfg)  # no HTTP and no fallback for this request
+    assert r.spend.status()['stop_reason'] == ''
+    assert call(r)[-1].kind == 'done' and len(seen) == 1
+    assert rows(cfg) == [(2_000_000, 200_000)]
+
+
 def test_concurrent_process_connections_cannot_overreserve(tmp_path):
     cfg = policy(tmp_path)
     def take(_):
@@ -114,10 +145,9 @@ def test_concurrent_process_connections_cannot_overreserve(tmp_path):
     assert sum(r[0] for r in rows(cfg)) == 4_000_000
 
 
-@pytest.mark.parametrize('mode', ['cap', 'error'])
+@pytest.mark.parametrize('mode', ['manual', 'error'])
 def test_concurrent_success_settles_after_global_freeze(tmp_path, mode):
     cfg = policy(tmp_path)
-    if mode == 'cap': cfg['daily_usd'] = '.002'
     seen = []
 
     async def run():
@@ -139,6 +169,7 @@ def test_concurrent_success_settles_after_global_freeze(tmp_path, mode):
         successful = asyncio.create_task(consume('successful'))
         await entered.wait()
         try:
+            if mode == 'manual': r.spend.freeze('principal review required')
             assert (await consume('stopped'))[-1].kind == 'error'
             with sqlite3.connect(cfg['journal']) as db:
                 blocked = db.execute('SELECT blocked FROM identity').fetchone()[0]
@@ -187,6 +218,7 @@ def test_settled_concurrent_tool_reply_cannot_run_after_global_freeze(tmp_path):
         successful = asyncio.create_task(loop.send(session.id, 'do it'))
         await entered.wait()
         try:
+            r.spend.freeze('principal review required')
             stopped = [e async for e in r.stream('main', [Message.user('hi')], [])]
             assert stopped[-1].kind == 'error'
             with sqlite3.connect(cfg['journal']) as db:
@@ -257,7 +289,7 @@ def test_crash_hot_journal_recovers_committed_reservation_without_reseeding(tmp_
     cfg = policy(tmp_path)
     script = '''
 import json, os, sqlite3, sys
-from exo.core.models.spend import SpendJournal
+from exo.model_spend import SpendJournal
 config = json.load(sys.stdin)
 journal = SpendJournal(config, clock=lambda: 100)
 price = journal.prices['test:m']
@@ -357,7 +389,9 @@ def test_aux_and_generative_decisions_share_journal(tmp_path):
     assert len(rows(cfg)) == 1
     # Generative decision parses after admission; both calls remain accounted.
     with pytest.raises(Exception): asyncio.run(ask_choice(r, 's', 'q', ['a', 'b']))
-    assert len(rows(cfg)) >= 2
+    assert len(rows(cfg)) == 2 and all(actual is not None for _, actual in rows(cfg))
+    assert r.spend.status()['stop_reason'] == ''
+    assert call(r)[-1].kind == 'done'
 
 
 def test_typed_decision_and_live_setup_probe_refused(tmp_path):
@@ -368,7 +402,8 @@ def test_typed_decision_and_live_setup_probe_refused(tmp_path):
     r.roles['decision'] = ['typed:m']
     with pytest.raises(SpendDenied): asyncio.run(ask_choice(r, 's', 'q', ['a', 'b']))
     assert probe('test', router=r, save=False)['error_class'] == 'spend_boundary'
-    assert not seen
+    assert not seen and r.spend.status()['stop_reason'] == ''
+    assert call(r)[-1].kind == 'done'
 
 
 def test_cache_and_reasoning_bound_in_pinned_price(tmp_path):
@@ -397,7 +432,7 @@ def test_loop_denial_runs_zero_tools_and_does_not_retry(tmp_path, mode):
     result = asyncio.run(run())
     assert result.error and not tools and len(calls) == (0 if mode == 'cap' else 1)
     errors = [e for e in loop.store.events_since() if e.type == 'error']
-    assert errors and errors[-1].body.code == 'model_spend_stopped'
+    assert errors and errors[-1].body.code == ('model_spend_refused' if mode == 'cap' else 'model_spend_stopped')
 
 
 def test_background_summary_and_child_role_share_principal_cap(tmp_path):

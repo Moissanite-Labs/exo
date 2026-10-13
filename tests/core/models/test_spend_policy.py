@@ -16,10 +16,10 @@ import uuid
 import httpx
 import pytest
 
-from exo.core.models import spend_policy
+from exo.model_spend import policy as spend_policy
 from exo.core.models.fake import FakeProvider, RuleFake
 from exo.core.models.router import Router
-from exo.core.models.spend import SpendDenied, SpendJournal
+from exo.model_spend import SpendDenied, SpendJournal
 from exo.core.types import Message, ToolResult, ToolSpec
 from .conftest import collect
 
@@ -54,6 +54,27 @@ def run(router):
 
 def fake_router(fake=None, **kw):
     return Router(roles={'main': ['fake:m']}, catalog={}, env={}, instances={'fake': fake or RuleFake({'reply': 'offline'})}, **kw)
+
+
+def test_public_policy_decode_and_validation(protected):
+    from exo.model_spend import decode_policy, validate_policy
+    cfg, _ = protected
+    assert validate_policy(cfg) is cfg
+    assert decode_policy(json.dumps(cfg).encode()) == cfg
+    assert decode_policy(json.dumps(cfg)) == cfg
+    for raw in [json.dumps(cfg)[:-1] + ', "principal":"alice"}',
+                json.dumps({**cfg, 'unknown': True}), json.dumps({**cfg, 'daily_usd': 0}),
+                ' ' * 65537, b'\xff', json.dumps(cfg).encode('utf-16')]:
+        with pytest.raises(ValueError): decode_policy(raw)
+
+
+def test_public_accounting_import_has_no_core_dependency():
+    child = subprocess.run([sys.executable, '-c', '''
+import sys
+from exo.model_spend import SpendJournal, Price, decode_policy, validate_policy
+assert not any(name == "exo.core" or name.startswith("exo.core.") for name in sys.modules)
+'''], capture_output=True, text=True, timeout=10)
+    assert child.returncode == 0, child.stderr
 
 
 def test_root_floor_ignores_mutable_config_and_remains_pinned(protected, monkeypatch):
@@ -193,6 +214,8 @@ def test_zero_policy_rejects_every_nonbuiltin_transport_without_dispatch(protect
                         client=httpx.AsyncClient(transport=httpx.MockTransport(lambda req: seen.append(req))))
     assert run(router)[-1].kind == 'error' and not seen
     assert router.spend_status()['pending_count'] == 0
+    assert router.spend_status()['state'] == 'offline'
+    assert run(fake_router())[-1].kind == 'done'
 
 
 def test_required_policy_is_still_required_for_exact_offline_provider(monkeypatch):
