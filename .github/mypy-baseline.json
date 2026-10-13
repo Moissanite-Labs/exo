@@ -159,12 +159,6 @@
     },
     {
       "path": "clients/tui/exo_tui/widgets.py",
-      "message": "\"App[Any]\" has no attribute \"composer_typed_recently\"",
-      "code": "attr-defined",
-      "count": 2
-    },
-    {
-      "path": "clients/tui/exo_tui/widgets.py",
       "message": "\"App[Any]\" has no attribute \"edit_in_editor\"",
       "code": "attr-defined",
       "count": 1
