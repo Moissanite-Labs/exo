@@ -285,13 +285,31 @@ def descendant_cli(tmp_path, mode):
     return str(exe), childpid
 
 
-@pytest.mark.parametrize("mode", ["running", "exited", "failed"])
-def test_probe_stops_descendants_even_after_leader_exit(tmp_path, mode):
-    exe, childpid = descendant_cli(tmp_path, mode)
+def descendant_ready(path):
     try:
-        t0 = time.monotonic()
+        return bool(path.read_text())
+    except FileNotFoundError:
+        return False
+
+
+@pytest.mark.parametrize("mode", ["running", "exited", "failed"])
+def test_probe_stops_descendants_even_after_leader_exit(tmp_path, monkeypatch, mode):
+    exe, childpid = descendant_cli(tmp_path, mode)
+    create, ready_at = subprocess.Popen, []
+    def started(*args, **kwargs):
+        proc = create(*args, **kwargs)
+        deadline = time.monotonic() + 5
+        while not descendant_ready(childpid) or (mode != "running" and proc.poll() is None):
+            assert time.monotonic() < deadline, "fake CLI did not reach the cleanup scenario"
+            time.sleep(.01)
+        ready_at.append(time.monotonic())
+        return proc
+    # subprocess.run and probe's Popen both begin their communication timeout after construction. Wait for the
+    # actual child and requested leader state first: slow interpreter startup is not what this test measures.
+    monkeypatch.setattr(muse_cli.subprocess, "Popen", started)
+    try:
         res = muse_cli.probe(exe, {"HOME": str(tmp_path)}, timeout=.3)
-        assert time.monotonic() - t0 < 3
+        assert time.monotonic() - ready_at[0] < 3
         assert res["error_class"] == ("error" if mode == "failed" else "timeout")
         assert _wait_dead(int(childpid.read_text()))
     finally:
@@ -303,8 +321,17 @@ def test_probe_stops_descendants_even_after_leader_exit(tmp_path, mode):
 
 
 @pytest.mark.parametrize("mode", ["running", "exited", "failed"])
-def test_stream_stops_descendants_before_yielding_error(tmp_path, mode):
+def test_stream_stops_descendants_before_yielding_error(tmp_path, monkeypatch, mode):
     exe, childpid = descendant_cli(tmp_path, mode)
+    create = asyncio.create_subprocess_exec
+    async def started(*args, **kwargs):
+        proc = await create(*args, **kwargs)
+        async def ready():
+            while not descendant_ready(childpid) or (mode != "running" and proc.returncode is None):
+                await asyncio.sleep(.01)
+        await asyncio.wait_for(ready(), 5)
+        return proc
+    monkeypatch.setattr(muse_cli.asyncio, "create_subprocess_exec", started)
 
     async def go():
         provider = muse_cli.MuseCliProvider(exe, env={"HOME": str(tmp_path)}, read_timeout=.3)
