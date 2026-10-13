@@ -192,6 +192,9 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         for m in gone:
             eng.hub.publish(s.SteerCancelled(message_id=m.id or "", text=m.text()), b.session)
         return {"cancelled": [{"id": m.id, "text": m.text()} for m in gone]}
+    if b.name == "subagent":  # #97: list, open, send to and stop a running child; exo.subagents holds the rules
+        from exo import subagents
+        return await subagents.command(eng, b)
     if b.name == "rename":  # D-069: the session title, principal only (D-052); announced as session.updated
         if not b.session:
             raise CommandFailed("bad_request", "rename needs a session")
