@@ -818,7 +818,7 @@ class _Run:
         self.store, self.ledger = store, ledger
         self.reflector = reflector or RuleReflector()
         self.now = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        self.author = author or (ledger.signer.author if ledger.signer and ledger.signer.author else DEFAULT_AUTHOR)
+        self.author = author or (ledger.author or DEFAULT_AUTHOR)
         self.dry = dry_run
         self.policy = load_policy(store)
         self.state = load_state(ledger)
@@ -1226,7 +1226,7 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
     if status == "held":
         body["conflict_resolved_by"] = "direct accept"
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
-    ev = ledger.append("belief_accepted", body, author or (ledger.signer.author if ledger.signer else None) or "principal",
+    ev = ledger.append("belief_accepted", body, author or ledger.author or "principal",
                        refs=refs)
     pairs = store.root / PAIRS_FILE
     pairs.parent.mkdir(parents=True, exist_ok=True)
@@ -1249,7 +1249,7 @@ def proposal_reject(store: PrincipalStore, ledger: Ledger, pid: str, reason: str
         raise ConsolidateError(f"proposal {p.id} is already {status}")
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
     ev = ledger.append("note", {"type": "belief_rejected", "proposal_id": p.id, "reason": reason.strip()},
-                       author or (ledger.signer.author if ledger.signer else None) or "principal", refs=refs)
+                       author or ledger.author or "principal", refs=refs)
     _archive(store.root / "proposals", p.id)
     return {"proposal_id": p.id, "event": ev["id"]}
 
@@ -1442,7 +1442,7 @@ def _accept_skill(store: PrincipalStore, ledger: Ledger, st: State, p: Proposal,
     if status == "held":
         body["conflict_resolved_by"] = "direct accept"
     refs = [r for r in (st.beliefs[p.id].event_id,) if r]
-    ev = ledger.append("belief_accepted", body, author or (ledger.signer.author if ledger.signer else None)
+    ev = ledger.append("belief_accepted", body, author or ledger.author
                        or "principal", refs=refs)
     _archive(store.root / "proposals", p.id)
     _save_undo(store.root, p.id, path, old, new)
@@ -1528,7 +1528,7 @@ def proposal_revert(store: PrincipalStore, ledger: Ledger, pid: str, reason: str
     refs = [r for r in (st.beliefs[p.id].event_id, st.decided.get(p.id, {}).get("event")) if r]
     ev = ledger.append("note", {"type": "belief_rejected", "proposal_id": p.id, "reason": reason.strip(),
                                 "reverted": True, "file": file_state},
-                       author or (ledger.signer.author if ledger.signer else None) or "principal", refs=refs)
+                       author or ledger.author or "principal", refs=refs)
     res = {"proposal_id": p.id, "event": ev["id"], "file": file_state, "follow_up": None}
     if follow_up:
         want, avoid, why = parse_instruction(reason)
@@ -1561,14 +1561,14 @@ def register(sp, common) -> None:
 
 
 def _open_ledger(a, store: PrincipalStore, write: bool) -> Ledger:
-    from . import crypto
+    from .ledger_authority.factory import configured, open_writable_ledger
     from .store import exo_home
     if not write:
         return Ledger(store.ledger_path)
     kp = Path(a.key) if getattr(a, "key", None) else exo_home() / "keys" / f"{a.seat}.key"
-    if not kp.exists():
+    if not configured() and not kp.exists():
         sys.exit(f"no key at {kp}; run: exo keygen {a.seat}")
-    return Ledger(store.ledger_path, crypto.Signer.from_file(a.seat, kp))
+    return open_writable_ledger(store.ledger_path, a.seat, kp)
 
 
 def cmd_consolidate(a, store: PrincipalStore) -> int:
