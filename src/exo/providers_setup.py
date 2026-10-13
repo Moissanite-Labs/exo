@@ -47,7 +47,7 @@ TEST_TIMEOUT = 15.0
 CLI_TRANSPORTS = ("claude-cli", "muse-cli")  # keyless: the CLI's own login is the credential
 MUSE_TEST_TIMEOUT = 90.0  # a `muse exec` process start plus one model turn
 ERROR_CLASSES = ("no_key", "auth", "billing", "not_found", "rate_limited", "server", "timeout", "network",
-                 "not_running", "not_installed", "bad_response", "http", "error")
+                 "not_running", "not_installed", "unsigned", "bad_response", "http", "error")
 
 
 class SetupError(Exception):
