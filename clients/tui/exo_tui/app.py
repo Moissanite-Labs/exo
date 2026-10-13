@@ -182,6 +182,7 @@ class ExoApp(App):
         self.seat = seat
         self.title_arg = title
         self.model = ""
+        self.clipboard_verified = False
         self.window = DEFAULT_WINDOW
         self.ctx_tokens = 0
         self.cost: float | None = None  # session USD from priced calls; None = no priced call (D-032: unknown, never 0)
@@ -569,11 +570,15 @@ class ExoApp(App):
             if tb := self.tools.get(b.call_id):
                 tb.output += b.text
                 tb.flush()
+            else:
+                self.update_older_tool(b.call_id, b.text, append=True)
         elif isinstance(b, s.ToolCompleted):
             self.running_tools = max(0, self.running_tools - 1)
             if tb := self.tools.get(b.result.call_id):
                 tb.output = b.result.text() or tb.output
                 tb.finish("error" if b.result.is_error else "done", b.duration_ms / 1000 if b.duration_ms else None)
+            else:
+                self.update_older_tool(b.result.call_id, b.result.text(), status="error" if b.result.is_error else "done")
         elif isinstance(b, s.ApprovalRequested):
             self.approvals.append(b)
             self.show_approval()
@@ -679,13 +684,21 @@ class ExoApp(App):
                     self.last_answer = (m.get("id"), text)
                 for tc in m.get("tool_calls", []):
                     by_id[tc["id"]] = len(out)
-                    out.append(("tool", tc["id"], tc["name"], tc.get("arguments"), "done", ""))
+                    out.append(("tool", tc["id"], tc["name"], tc.get("arguments"), "running", ""))
             elif m["role"] == "tool":
                 for r in m.get("tool_results", []):
                     if (n := by_id.get(r["call_id"])) is not None:
                         out[n] = out[n][:4] + ("error" if r.get("is_error") else "done",
                                                "".join(p.get("text", "") for p in r.get("content", [])))
         return out
+
+    def update_older_tool(self, call_id: str, text: str, *, append: bool = False, status: str = "") -> None:
+        """Live tools beyond the mounted history window still update the stored transcript."""
+        for i, entry in enumerate(self.older):
+            if entry[0] == "tool" and entry[1] == call_id:
+                output = entry[5] + text if append else text or entry[5]
+                self.older[i] = entry[:4] + (status or entry[4], output)
+                return
 
     def widgets_for(self, entries: list[tuple]) -> list[Block | ToolBlock]:
         widgets: list[Block | ToolBlock] = []
@@ -1266,16 +1279,25 @@ class ExoApp(App):
         self.note(f"tip: {h['text']}{more}", "hint")
 
     def copy_to_clipboard(self, text: str) -> None:
-        """Textual only writes OSC 52, which macOS Terminal ignores; also hand the text to pbcopy."""
-        super().copy_to_clipboard(text)
+        """Try native helpers, retaining OSC52 as an explicitly unverified fallback."""
         import shutil
         import subprocess
-        exe = shutil.which("pbcopy")
-        if exe:
+
+        self.clipboard_verified = False
+        for name, flags in (("pbcopy", []), ("wl-copy", []), ("xclip", ["-selection", "clipboard"]),
+                            ("xsel", ["--clipboard", "--input"])):
+            exe = shutil.which(name)
+            if not exe:
+                continue
             try:
-                subprocess.run([exe], input=text.encode("utf-8"), timeout=3, check=False)
-            except Exception:
+                result = subprocess.run([exe, *flags], input=text.encode("utf-8"), timeout=3, check=False)
+                if result.returncode == 0:
+                    self.clipboard_verified = True
+                    return
+            except (OSError, subprocess.TimeoutExpired):
                 pass
+        super().copy_to_clipboard(text)
+
 
     def last_block(self, kind: str, blocks: list[Block]) -> str:
         """Newest text of a kind: mounted blocks first, then history that is not mounted yet."""
@@ -1300,7 +1322,8 @@ class ExoApp(App):
             self.note(f"nothing to copy: no {label} yet", "warn")
             return
         self.copy_to_clipboard(text)
-        self.note(f"copied {label} ({len(text)} chars) to the clipboard")
+        self.note(f"copied {label} ({len(text)} chars) to the clipboard" if self.clipboard_verified
+                  else f"sent {label} ({len(text)} chars) via OSC52; clipboard receipt cannot be verified")
 
     def help_text(self) -> str:
         lines: list[str] = []

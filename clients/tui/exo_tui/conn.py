@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from exo.protocol import schema as s
+from exo.ensure_core import START_TIMEOUT, startup_lock
 
 
 class LocalClient:
@@ -91,27 +92,28 @@ def _alive(path: Path) -> bool:
         sock.close()
 
 
-def _open(home: Path, agent: str, wait: float = 5.0) -> Any:
+def _open(home: Path, agent: str, wait: float = START_TIMEOUT) -> Any:
     """A protocol Client on the window that runs this agent, or a LocalClient that runs it here."""
     from exo.core.agentlog import WriterBusy, socket_path
     from exo.protocol.client import Client
     from exo.server.app import load_engine
 
-    path = socket_path(home, agent)
-    exod = home / "run" / "exod.sock"
-    for p in (exod, path):
-        if _alive(p):
-            return Client(socket=str(p), principal="tui")
-    try:
-        return LocalClient(load_engine("exo.core.engine:create"), serve=path)
-    except WriterBusy:  # another window is starting it: wait for its socket
-        end = time.monotonic() + wait
-        while time.monotonic() < end:
-            for p in (exod, path):
-                if _alive(p):
-                    return Client(socket=str(p), principal="tui")
-            time.sleep(0.05)
-        raise
+    with startup_lock(home, wait):
+        path = socket_path(home, agent)
+        exod = home / "run" / "exod.sock"
+        for p in (exod, path):
+            if _alive(p):
+                return Client(socket=str(p), principal="tui")
+        try:
+            return LocalClient(load_engine("exo.core.engine:create"), serve=path)
+        except WriterBusy:  # another window is starting it: wait for its socket
+            end = time.monotonic() + wait
+            while time.monotonic() < end:
+                for p in (exod, path):
+                    if _alive(p):
+                        return Client(socket=str(p), principal="tui")
+                time.sleep(0.05)
+            raise
 
 
 class SharedClient:

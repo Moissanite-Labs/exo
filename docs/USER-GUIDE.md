@@ -53,6 +53,9 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `ctrl+g` or `/compose` | Opens the big editor for a long, structured prompt. Enter adds a line. **`ctrl+s` sends** (`ctrl+enter` too, on terminals that report it). `Esc` closes it and your draft stays. `ctrl+l` shows line numbers, `ctrl+t` edits in `$EDITOR`. `/compose task` starts you with Goal, Context, Constraints and Done when headings. Slash and `@` completion work inside it. |
 | `/layout inverse` or `classic` | Inverse puts the input on top and the newest message directly under it, so a thread opens on its latest. Classic is the usual order. Your choice is saved. |
 
+`/copy` tries `pbcopy`, `wl-copy`, `xclip`, then `xsel` when available. Without a successful helper it sends OSC52
+and reports that clipboard receipt cannot be verified; a terminal can ignore that escape sequence.
+
 Click anywhere on the transcript and you are typing again; keys typed while nothing else has focus go to the composer.
 
 The screen shows the model that served each call, how full memory is, how much of the call came from cache, the cost,
@@ -131,7 +134,8 @@ Different seats are different agents. They share your store and talk through pee
 - A thread is a focus. `/new` starts one. Memory carries over.
 - The log keeps every word, word for word. Nothing is lost when the context is compacted.
 - Old parts of the log are folded into summaries so the model call stays small. This happens by itself.
-  `/compact` does it now.
+  `/compact` does it now. A temporary provider failure keeps those words verbatim and retries on later upkeep,
+  with delays up to five minutes. Only explicitly non-retryable summary failures reach the permanent attempt cap.
 - `/context` shows the parts of the next call: the system text, the summary tree, news from other threads, and this
   thread's recent messages.
 - Your rulings and corrections are kept verbatim in summaries and are copied to your principal store, so a
