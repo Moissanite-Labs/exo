@@ -78,8 +78,9 @@ peer client is refused. The system prompt carries a standing line saying the sam
   left). Events:
   `peer.message` and `peer.delivery`. Both land in the events table and in `exo trace`.
 - Code: `core/ingress.py` (one path for anything outside your keyboard: policy, hold, deliver, receipt; peers, job
-  notices and the bus channel use it, the scheduler and MCP Events can plug in later), `core/peers.py`,
-  `core/peer_target.py`, `bus/ingress.py`, `gate.decide_peer`. Every message delivered this way carries its author
+  notices and the bus channel use it, the scheduler and MCP Events can plug in later), `exo/peers.py` (the
+  transport and `PeerService`, outside the core since D-067), `core/peer_target.py` (`EngineTarget`, the engine's
+  ingress target), `bus/ingress.py`, `gate.decide_peer`. Every message delivered this way carries its author
   (`peer:<name>`, `bus:<seat>`, `job`; MEMORY-MODEL.md "Who wrote it").
 
 ## Hermes

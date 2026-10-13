@@ -12,6 +12,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,
   `/findings`, handoff facts) moved to `exo.diagnostics`, and the engine factory moved to `exo.compose:create`, the
   new `exo serve` default. `exo.core.engine:create` still works. No behaviour change.
+- Engine split, step 4 (#46, D-067): the counted core went from 15,951 to 14,777 lines. Dead code and duplicates went
+  (about 300 lines), the peer transport moved to `exo.peers` and the scheduler to `exo.scheduler` (composition
+  attaches both), and open approvals moved to `ApprovalDesk`. No protocol, event or command changes.
 
 ## [0.2.0] (egg) - 2026-10-13
 

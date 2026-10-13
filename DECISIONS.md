@@ -1214,3 +1214,32 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   suites; before and after screenshots from `scripts/shots_web_tabs.py`.
 - **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)".
 
+
+## D-067 (2026-10-13) Engine split step 4: delete what is unused, move peers and the scheduler out of the core
+- **Why:** issue #46. The counted core sat about 24 lines under its 16,000-line cap, so every new core feature was
+  blocked. The first pass of `docs/ENGINE-SPLIT.md` only moved the engine's diagnostics and factory, which the plan
+  itself says does not reduce code.
+- **Decision:** reduce the counted core by real cuts first, then by two seams the plan already names.
+  - Delete code that grep shows nothing outside tests uses, and collapse duplicates. Examples: the decision models'
+    score and noul asks, unreachable fuzzy strategies, a second `_maybe_await` and its inline copies, a copy of
+    `HubBus`, duplicated CLI provider process code, the per-session-tree branch the engine never takes, and 59
+    `@dataclass` lines the protocol decorators now apply.
+  - Open approvals become `ApprovalDesk` (`exo.core.approvals`), one record per request instead of five dicts.
+  - The peer transport moves to `exo.peers` (step 3's "peer transport"). The scheduler moves to `exo.scheduler`.
+    `exo.compose` attaches both (`attach_peers`, `attach_scheduler`) at the same point in construction as before,
+    so tool order and prompts do not change. `PeerConfig` and `EngineTarget` stay in the core, because bus ingress
+    and jobs use them.
+  - Members that the outside code needs get public names: `run_turn`, `channels`, `Delegator.route`.
+  - The memory and context slot defaults that Exo never calls stay, because exo-context and exo-memory also run
+    under Hermes, which does call them.
+- **Rejected:** removing `exo upstream merge` or echo engine commands (user-facing behaviour), moving trace
+  rendering out again (a view move, not a seam), raising or lowering the cap in this change.
+- **Behaviour:** no protocol, event or command changes. D-033, D-038, D-039, D-040, D-045 and D-052 to D-054 checks
+  run as before, and required-executor mode (#70) still fails closed. An engine built without composition no longer
+  has peers or a scheduler: `peers` and `schedule.edit` answer `unsupported` there.
+- **Numbers:** 15,951 counted lines before, 14,777 after: about 300 deleted, 561 moved with peers, about 320 moved
+  with the scheduler, 20 added by the approvals desk.
+- **Validation:** root suite (twice) and every plugin suite, `ruff check`, the mypy baseline (it shrank from 277 to
+  249 entries; no new ones), `python -m exo.protocol.export --check`.
+- **Docs:** `docs/ENGINE-SPLIT.md` "Progress", `docs/DEVELOPER-GUIDE.md` §1, `docs/CORE.md`, `docs/PEERS.md`,
+  `docs/SCHEDULE.md`, `CHANGELOG.md`.

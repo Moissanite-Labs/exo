@@ -22,7 +22,9 @@ the map links a file that does not exist.
 
 | Path | What lives there |
 |---|---|
-| `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, jobs, peers, scheduler, plugin loader. Small on purpose. |
+| `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, approvals, ingress, jobs, plugin loader. Small on purpose. |
+| `src/exo/compose.py` | Builds the engine `exo serve` runs and attaches what lives outside the core: peers, the scheduler, learning. |
+| `src/exo/peers.py`, `src/exo/scheduler.py` | The peer transport (D-026) and scheduled jobs (D-022), outside the core since D-067. |
 | `src/exo/protocol/` | The wire protocol: `schema.py` (commands and events), `client.py`, `export.py`, `generated/`. |
 | `src/exo/server/` | The server that carries the protocol (Unix socket, TCP with a token, or stdio). |
 | `src/exo/*.py` | The generic mechanism: store, ledger, crypto, gate, capture, consolidate, eval, brief, onboard, CLI. |
@@ -40,6 +42,25 @@ the map links a file that does not exist.
 **Core, plugins, clients.** The core does the work and holds the state. Plugins add tools, commands, hooks, a memory
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
 program's database. Nothing in the core may assume one person's names, accounts or machines (D-004).
+
+**The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
+commands. Its collaborators have small interfaces:
+
+- `engine.approvals` is an `ApprovalDesk` (`src/exo/core/approvals.py`): `ask`, `listing`, `respond` and
+  `announce_resolved`, one `Pending` record per open request. Code that needs a human answer calls
+  `engine.approvals.ask(...)`. A test that fakes an open request puts a `Pending` in `engine.approvals.open`.
+- `engine.peers` is the `PeerService` from `exo.peers`, or `None`. `exo.compose` passes
+  `attach_peers=exo.peers.attach`. A test that needs peers does the same, then calls `await engine.peers.start(sock)`.
+- `engine.scheduler` is the `Scheduler` from `exo.scheduler`, or `None`. `exo.compose` passes
+  `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`.
+- `engine.run_turn(body, meta)` runs one turn with the lifecycle hooks around it. Product code outside the core
+  (the scheduler) uses it, not the loop's private state.
+- A plugin callback that may be sync or async goes through `exo.core.hooks.maybe_await`. One that may not declare
+  every keyword goes through `exo.core.hooks.accepted`. Do not write a new copy of either.
+
+A new subsystem that is a product feature built on the engine (like the scheduler) goes outside `src/exo/core` and
+is attached by `exo.compose`, at the point in `CoreEngine.__init__` where its tools must register, so the tool order
+the model sees stays the same.
 
 ## 2. The protocol
 
