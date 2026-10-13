@@ -1,9 +1,11 @@
 """Real ephemeral loopback mTLS; no daemon or credentials survive these tests."""
 import contextlib
 import hashlib
+import json
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 
@@ -105,6 +107,40 @@ def test_reply_loss_commits_once_then_identical_retry(state, certificates):
             c.observe(checkpoint)
         receipt = c.observe(checkpoint)
         assert receipt == c.head() == state[1].lookup(1)
+
+
+@pytest.mark.parametrize("point,committed", [("before_commit", False), ("after_commit", True)])
+def test_abrupt_process_exit_recovers_prefix_then_identical_retry(state, certificates, point, committed):
+    checkpoint = append(state[0])
+    initial = state[1].head()
+    script = '''
+import json, os, sys
+from nacl.signing import SigningKey
+from exo import crypto
+from exo.ledger_authority.witness import WitnessJournal
+data = json.load(sys.stdin)
+def crash(point):
+    if point == data["point"]:
+        os._exit(73)
+journal = WitnessJournal(data["path"], data["identity"],
+                         SigningKey(crypto.unb64(data["key"])), fault=crash)
+journal.observe(data["checkpoint"])
+raise AssertionError("crash hook did not run")
+'''
+    proc = subprocess.run([sys.executable, "-c", script], input=json.dumps({
+        "path": str(state[1].path), "identity": state[2], "key": crypto.b64(bytes(state[6])),
+        "checkpoint": checkpoint, "point": point}), text=True, capture_output=True, timeout=10)
+    assert proc.returncode == 73, proc.stdout + proc.stderr
+    reopened = WitnessJournal(state[1].path, state[2], state[6])
+    assert reopened.head()["seq"] == int(committed)
+    assert reopened.lookup(0) == initial
+    reopened_state = (state[0], reopened, *state[2:])
+    with running(reopened_state, certificates) as server:
+        c = client(reopened_state, certificates, server)
+        assert c.head()["seq"] == int(committed)
+        receipt = c.observe(checkpoint, initial)
+        assert receipt == c.observe(checkpoint, initial) == c.head()
+        verify_receipt(state[2], checkpoint, receipt, c.pub, initial)
 
 
 def test_gap_fork_and_wrong_previous_receipt(state, certificates, tmp_path):
