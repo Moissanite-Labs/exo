@@ -546,7 +546,8 @@ class Gate:
             body["rule_key"] = key
             body["approval_key"] = approval_key
             body["approvers"] = approvers
-        if self.settings.mode == "observe" and c.category not in gate.NO_GRANT:  # enforced in every mode
+        # NO_GRANT is enforced in every mode; a required executor never runs an unanswered ask.
+        if self.settings.mode == "observe" and c.category not in gate.NO_GRANT and not self.executor_required:
             body["would"] = result["action"] if result else "run"
             result = None
         if d.outcome in ("allow", "log") and c.cost:
