@@ -199,6 +199,29 @@ def test_nonce_replay_wrong_identity_and_wrong_witness_key(state, certificates):
             wt.verify_head(changed, state[3], envelope, c.pub, nonce)
 
 
+@pytest.mark.parametrize("nonce", ["", "a" * 63, "A" * 64, "g" * 64, 0, True, [], {}])
+def test_query_head_rejects_invalid_nonce_before_network(state, certificates, monkeypatch, nonce):
+    endpoint = type("Endpoint", (), {"address": ("127.0.0.1", 1)})()
+    c = client(state, certificates, endpoint)
+    monkeypatch.setattr(c, "_request", lambda *args: pytest.fail("invalid nonce initiated network"))
+    with pytest.raises(AuthorityError, match="fresh nonce"):
+        c.query_head(nonce)
+
+
+def test_public_query_head_envelopes_fresh_defaults_and_legacy_head(state, certificates, monkeypatch):
+    with running(state, certificates) as server:
+        c = client(state, certificates, server)
+        first, second = c.query_head(), c.query_head()
+        assert first["nonce"] != second["nonce"]
+        assert wt.verify_head(state[2], state[3], first, c.pub, first["nonce"]) == c.head()
+        supplied = c.query_head("a" * 64)
+        assert supplied["nonce"] == "a" * 64
+        assert supplied["receipt"] == second["receipt"] == c.head()
+        monkeypatch.setattr(c, "_request", lambda *args: supplied)
+        with pytest.raises(AuthorityError, match="replayed"):
+            c.query_head("b" * 64)
+
+
 def test_missing_corrupt_state_and_changed_key_refuse_startup(state, certificates, tmp_path):
     with pytest.raises(AuthorityError):
         WitnessJournal(tmp_path / "absent.sqlite", state[2], state[6])
