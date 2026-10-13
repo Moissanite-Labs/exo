@@ -13,7 +13,7 @@ import pytest
 from exo.core.engine import CoreEngine
 from exo.core.models.fake import FakeProvider
 from exo.core.models.fake import tool_turn
-from exo.core.scheduler import PROMPT, Scheduler, handle_schedule_edit, next_run, parse_cron
+from exo.scheduler import PROMPT, Scheduler, next_run, parse_cron
 from exo.core.seats import Seat
 from exo.core.types import ToolSpec
 from exo.core.agents.delegate import BLOCKED_TOOLS
@@ -32,7 +32,8 @@ def ts(*a):
 
 
 def mk(tmp_path, script=None):
-    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={})
+    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={},
+                     attach_scheduler=Scheduler)
     eng.loop.provider = FakeProvider(script or ["the report"], repeat=True)
     return eng
 
@@ -107,9 +108,9 @@ def test_add_list_remove_and_due(tmp_path):
 @aio
 async def test_run_now_emits_task_and_notice(tmp_path):
     eng = mk(tmp_path)
-    r = await handle_schedule_edit(eng, {"action": "add", "when": "every 1h", "prompt": "make the report", "title": "Report"})
+    r = await eng.scheduler.edit({"action": "add", "when": "every 1h", "prompt": "make the report", "title": "Report"})
     jid = r["job"]["id"]
-    r = await handle_schedule_edit(eng, {"action": "run_now", "job_id": jid})
+    r = await eng.scheduler.edit({"action": "run_now", "job_id": jid})
     assert r["task_id"]
     await eng.scheduler.wait()
     ev = [t for t in bodies(eng, s.TaskUpdated) if t.task_id == r["task_id"]]
@@ -159,7 +160,7 @@ async def test_channel_delivery(tmp_path):
         async def deliver(self, text):
             got.append(text)
 
-    eng._channels["chat9"] = Chan()
+    eng.channels["chat9"] = Chan()
     sch = eng.scheduler = Scheduler(eng)
     sch.launch(sch.add("every 1h", "x", title="T", deliver="chat9"))
     await sch.wait()
@@ -171,13 +172,13 @@ async def test_pause_resume(tmp_path):
     eng, clk = mk(tmp_path), Clock(ts(2026, 10, 11, 8, 0))
     sch = eng.scheduler = Scheduler(eng, clk)
     jid = sch.add("every 10m", "x")["id"]
-    await handle_schedule_edit(eng, {"action": "pause", "job_id": jid})
+    await eng.scheduler.edit({"action": "pause", "job_id": jid})
     clk.t += 3600
     assert sch.due() == [] and await sch.tick() == []
-    r = await handle_schedule_edit(eng, {"action": "resume", "job_id": jid})
+    r = await eng.scheduler.edit({"action": "resume", "job_id": jid})
     assert not r["job"]["paused"] and r["job"]["next_run"] == clk.t + 600  # no catch-up for the paused time
     assert sch.due() == []
-    assert (await handle_schedule_edit(eng, {"action": "remove", "job_id": "nope"}))["error"]
+    assert (await eng.scheduler.edit({"action": "remove", "job_id": "nope"}))["error"]
 
 
 @aio
@@ -200,7 +201,7 @@ async def test_one_run_at_a_time(tmp_path):
     job = sch.add("every 1h", "x")
     assert sch.launch(job)
     assert sch.launch(job) is None
-    assert (await handle_schedule_edit(eng, {"action": "run_now", "job_id": job["id"]}))["error"]
+    assert (await eng.scheduler.edit({"action": "run_now", "job_id": job["id"]}))["error"]
     await sch.wait()
     assert sch.launch(job)
     await sch.wait()
@@ -225,8 +226,8 @@ async def test_start_stop_runs_due_job(tmp_path):
 @aio
 async def test_bad_action(tmp_path):
     eng = mk(tmp_path)
-    assert "error" in await handle_schedule_edit(eng, {"action": "dance"})
-    assert (await handle_schedule_edit(eng, s.ScheduleEdit(action="list")))["jobs"] == []
+    assert "error" in await eng.scheduler.edit({"action": "dance"})
+    assert (await eng.scheduler.edit(s.ScheduleEdit(action="list")))["jobs"] == []
 
 
 @aio
@@ -301,7 +302,7 @@ async def test_scheduled_prompt_refresh_matches_soul_trace_without_changing_main
     soul.write_text("Soul one")
     seat = Seat(name="test-seat", soul="Soul one", soul_path=str(soul))
     eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
-                     seat=seat, cwd=str(tmp_path), env={})
+                     seat=seat, cwd=str(tmp_path), env={}, attach_scheduler=Scheduler)
     provider = eng.loop.provider = FakeProvider(["report"], repeat=True)
     sch = eng.scheduler
     job = sch.add("every 1h", "report")
@@ -320,7 +321,7 @@ async def test_scheduled_prompt_refresh_matches_soul_trace_without_changing_main
     children = [t.child_session for t in bodies(eng, s.TaskUpdated) if t.status == "running"]
     assert all(eng.store.messages(sid)[0].meta["author"] == "schedule" for sid in children)
     interactive = await eng.loop.create_session(cwd=str(tmp_path))
-    await eng._turn(s.TurnSend(session=interactive.id, text="hello"))
+    await eng.run_turn(s.TurnSend(session=interactive.id, text="hello"))
     assert "Soul two changed" in provider.calls[-1]["messages"][0].text()
     assert PROMPT not in provider.calls[-1]["messages"][0].text()
 
@@ -369,7 +370,7 @@ async def blocked_run(tmp_path, stage):
     await asyncio.wait_for(entered.wait(), 1)
     if stage == "approval":
         async def pending():
-            while not eng._approvals:
+            while not eng.approvals.open:
                 await asyncio.sleep(0)
         await asyncio.wait_for(pending(), 1)
     sid = next(t.child_session for t in bodies(eng, s.TaskUpdated) if t.status == "running")
@@ -390,7 +391,7 @@ async def test_scheduled_interrupt_and_task_cancellation_reap_all_work(tmp_path,
     assert not sch.loops and not sch.running
     assert sch.get(job["id"])["last_status"] == "failed"
     if stage == "approval":
-        assert not eng._approvals and not eng._open_approvals and not tool_ran
+        assert not eng.approvals.open and not tool_ran
         assert bodies(eng, s.ApprovalResolved)[-1].decision == "cancelled"
     else:
         assert closed.is_set()  # deleting the registry entry is insufficient if a model/tool worker survives
@@ -414,9 +415,9 @@ async def test_interrupting_scheduled_child_does_not_interrupt_another_interacti
                 yield ev
 
     eng.loop.provider = Blocked(interactive_entered)
-    monkeypatch.setattr(eng.agents, "_route", lambda tier: (Blocked(scheduled_entered), "fake:scheduled"))
+    monkeypatch.setattr(eng.agents, "route", lambda tier: (Blocked(scheduled_entered), "fake:scheduled"))
     session = await eng.loop.create_session(cwd=str(tmp_path))
-    interactive = asyncio.create_task(eng._turn(s.TurnSend(session=session.id, text="hello")))
+    interactive = asyncio.create_task(eng.run_turn(s.TurnSend(session=session.id, text="hello")))
     await asyncio.wait_for(interactive_entered.wait(), 1)
     sch = eng.scheduler
     sch.launch(sch.add("every 1h", "report"))

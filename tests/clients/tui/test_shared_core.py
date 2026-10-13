@@ -65,7 +65,7 @@ def test_joined_window_answers_an_approval_as_principal_and_sees_it_close(home):
                     return
 
         w = asyncio.ensure_future(watch())
-        ask = asyncio.ensure_future(one.engine.ask(sid, "run it?", None))
+        ask = asyncio.ensure_future(one.engine.approvals.ask(sid, "run it?", None))
         for _ in range(100):
             rows = (await two.call(s.ApprovalsList()))["approvals"]
             if rows:

@@ -36,6 +36,22 @@ KNOWN_UNFIRED_HOOKS: frozenset[str] = frozenset({
 })
 
 
+async def maybe_await(value: Any) -> Any:
+    """A sync or async callback's result: awaited when it is awaitable, else as it is."""
+    return await value if inspect.isawaitable(value) else value
+
+
+def accepted(fn: Callable[..., Any], kw: dict[str, Any]) -> dict[str, Any]:
+    """The keyword arguments ``fn`` declares (all of them when it takes **kwargs, or has no signature)."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return kw
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kw
+    return {k: v for k, v in kw.items() if k in params}
+
+
 class HookError(ValueError):
     """Unknown hook name or a callback that is not callable."""
 
@@ -116,9 +132,7 @@ class HookRegistry:
         out = []
         for e in self.entries(name):
             try:
-                r = e.callback(**kwargs)
-                if inspect.isawaitable(r):
-                    r = await r
+                r = await maybe_await(e.callback(**kwargs))
             except Exception as exc:
                 logger.warning("hook %s from %s failed", name, e.plugin or "?", exc_info=True)
                 trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)

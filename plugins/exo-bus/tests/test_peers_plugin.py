@@ -12,6 +12,7 @@ from exo.core.engine import CoreEngine
 from exo.core.hooks import HookError, HookRegistry
 from exo.core.models.fake import FakeProvider
 from exo.core.seats import Seat
+from exo.peers import attach
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher, HttpServer
 from exo_bus_hermes import peers as hp
@@ -92,11 +93,12 @@ class Quiet:
 
 async def exo_daemon(d, peers=None):
     eng = CoreEngine(d / "exo", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(d), env={},
-                     seat=Seat(name="exo-test"), peers=peers or {}, peers_dir=d / "peers")
+                     seat=Seat(name="exo-test"), peers=peers or {}, peers_dir=d / "peers",
+                     attach_peers=attach)
     eng.loop.provider = Quiet()
     srv = HttpServer(Dispatcher(eng, eng.hub))
     await srv.start_unix(str(d / "exo.sock"))
-    await eng.start_peers(str(d / "exo.sock"))
+    await eng.peers.start(str(d / "exo.sock"))
     return eng, srv
 
 

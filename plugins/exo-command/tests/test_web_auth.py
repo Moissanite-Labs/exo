@@ -214,10 +214,10 @@ def test_page_answers_as_the_principal_and_reattaches_to_a_restarted_core(tmp_pa
 
     async def ask(text):
         sid = (await eng.handle(s.Command.of(s.SessionCreate()), eng.hub))["session"]["id"]
-        n = len(eng._approvals)
+        n = len(eng.approvals.open)
         await Dispatcher(eng).run(s.Command.of(s.TurnSend(session=sid, text=text)))
-        await _until(lambda: len(eng._approvals) > n)
-        return [rid for rid, (f, _) in eng._approvals.items() if not f.done()][-1]
+        await _until(lambda: len(eng.approvals.open) > n)
+        return [rid for rid, p in eng.approvals.open.items() if not p.future.done()][-1]
 
     async def go():
         srv, task = await serve()

@@ -15,21 +15,18 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from exo.core.private import private_file
+from exo.ensure_core import exod_socket, home_dir
 from exo.protocol import schema as s
 
 TOKEN_ENV = "EXOD_TOKEN"
 
 
-def run_dir() -> Path:
-    return Path(os.environ.get("EXO_HOME") or Path.home() / ".exo").expanduser() / "run"
-
-
 def default_socket() -> Path:
-    return run_dir() / "exod.sock"
+    return exod_socket(home_dir())
 
 
 def default_token_file() -> Path:
-    return run_dir() / "exod.token"
+    return default_socket().with_name("exod.token")
 
 
 def register(sp: Any, common: Any) -> None:

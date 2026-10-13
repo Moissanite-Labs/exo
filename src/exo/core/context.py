@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from exo.core import trace
+from exo.core.hooks import maybe_await
 from exo.core.types import Message, Provider
 from exo.turn_settle import settle_for_turn
 
@@ -195,10 +196,6 @@ def render_message(msg: Message, limit: int = 4000) -> str:
         flag = " error" if r.is_error else ""
         lines.append(f"[result {r.call_id}{flag}] {_cut(r.text(), limit // 2)}")
     return f"[{label}] " + "\n".join(lines)
-
-
-async def _maybe_await(value: Any) -> Any:
-    return await value if asyncio.iscoroutine(value) or isinstance(value, asyncio.Future) else value
 
 
 # ---------------------------------------------------------------- compressor
@@ -394,7 +391,7 @@ class TreeContext:
                     principal = [m for m in msgs if is_principal(m)]
                     extra = ""
                     if self.on_pre_compress is not None:
-                        extra = str(await _maybe_await(self.on_pre_compress(self._hook_session(node.session), msgs)) or "")
+                        extra = str(await maybe_await(self.on_pre_compress(self._hook_session(node.session), msgs)) or "")
                     await self._capture(node, principal, msgs)  # D-032: still before anything is summarized
                     text = "" if estimate_tokens(source) < self.min_compact_tokens else \
                         await self._summarize(node.session, source, extra=extra)
@@ -443,7 +440,7 @@ class TreeContext:
                                     self._event_session(node.session))
             if self.on_compacted is not None:
                 try:
-                    await _maybe_await(self.on_compacted(self._hook_session(node.session), node))
+                    await maybe_await(self.on_compacted(self._hook_session(node.session), node))
                 except Exception:  # a plugin hook never breaks upkeep
                     pass
         if node.status in ("done", "skipped"):
@@ -460,7 +457,7 @@ class TreeContext:
         if self.on_capture is None:
             return
         try:
-            took = await _maybe_await(self.on_capture(self._hook_session(node.session), context))
+            took = await maybe_await(self.on_capture(self._hook_session(node.session), context))
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -781,7 +778,7 @@ class AgentContext(TreeContext):
         taken = 0
         if todo and self.on_capture is not None:
             try:
-                ok = await _maybe_await(self.on_capture(self._hook_session(key), self._with_context(key, todo)))
+                ok = await maybe_await(self.on_capture(self._hook_session(key), self._with_context(key, todo)))
             except asyncio.CancelledError:
                 raise
             except Exception:
