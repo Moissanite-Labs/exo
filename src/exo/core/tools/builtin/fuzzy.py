@@ -61,14 +61,6 @@ def _match_transformed_lines(content: str, pattern: str,
     return _window_spans(content, lines, n, lambda i: transform(lines[i:i + n]) == pat)
 
 
-def _strip_boundary(lines: list[str]) -> list[str]:
-    lines = list(lines)
-    lines[0] = lines[0].strip()
-    if len(lines) > 1:
-        lines[-1] = lines[-1].strip()
-    return lines
-
-
 def _build_orig_to_norm_map(original: str) -> list[int]:
     """Original index to index in the Unicode-normalized string (plus end sentinel)."""
     result: list[int] = []
@@ -156,17 +148,9 @@ def _strategy_whitespace_normalized(content: str, pattern: str) -> list[Span]:
     return _map_normalized_positions(content, normalized, found) if found else []
 
 
-def _strategy_indentation_flexible(content: str, pattern: str) -> list[Span]:
-    return _match_transformed_lines(content, pattern, lambda ls: [x.lstrip() for x in ls])
-
-
 def _strategy_escape_normalized(content: str, pattern: str) -> list[Span]:
     unescaped = pattern.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
     return [] if unescaped == pattern else _strategy_exact(content, unescaped)
-
-
-def _strategy_trimmed_boundary(content: str, pattern: str) -> list[Span]:
-    return _match_transformed_lines(content, pattern, _strip_boundary)
 
 
 def _strategy_unicode_normalized(content: str, pattern: str) -> list[Span]:
@@ -227,9 +211,7 @@ STRATEGIES: list[tuple[str, Callable[[str, str], list[Span]]]] = [
     ("exact", _strategy_exact),
     ("line_trimmed", _strategy_line_trimmed),
     ("whitespace_normalized", _strategy_whitespace_normalized),
-    ("indentation_flexible", _strategy_indentation_flexible),
     ("escape_normalized", _strategy_escape_normalized),
-    ("trimmed_boundary", _strategy_trimmed_boundary),
     ("unicode_normalized", _strategy_unicode_normalized),
     ("block_anchor", _strategy_block_anchor),
     ("context_aware", _strategy_context_aware)]
