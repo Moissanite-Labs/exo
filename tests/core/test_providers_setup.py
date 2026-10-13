@@ -56,7 +56,7 @@ def test_keys_file_written_0600_atomically_and_keeps_other_lines(tmp_path):
     assert stat.S_IMODE(f.stat().st_mode) == 0o600
     lines = f.read_text().splitlines()
     assert lines == ["# mine", "OTHER=keep-this-value-1", f"OPENAI_API_KEY={FAKE}"]
-    assert [p.name for p in f.parent.iterdir()] == ["keys.env"]  # no temp file left
+    assert {p.name for p in f.parent.iterdir()} == {"keys.env", "keys.env.lock"}  # persistent lock, no temp file
 
 
 def test_keys_file_write_is_atomic_on_failure(monkeypatch):
@@ -70,7 +70,7 @@ def test_keys_file_write_is_atomic_on_failure(monkeypatch):
     with pytest.raises(OSError):
         ps.write_keys_file("B_API_KEY", FAKE)
     assert f.read_text() == before
-    assert [p.name for p in f.parent.iterdir()] == ["keys.env"]
+    assert {p.name for p in f.parent.iterdir()} == {"keys.env", "keys.env.lock"}
 
 
 def test_new_keys_file_and_folder_are_private():
@@ -83,7 +83,8 @@ def test_new_keys_file_and_folder_are_private():
 def test_set_key_file_store_redaction_learns_at_once_and_status_has_no_value(monkeypatch):
     keys._loaded.discard(FAKE)
     out = ps.set_key("openai", FAKE, router=router(), store="file")
-    assert out == {"provider": "openai", "var": "OPENAI_API_KEY", "stored_in": "file", "shadowed_by_env": False}
+    assert out == {"provider": "openai", "var": "OPENAI_API_KEY", "stored_in": "file", "shadowed_by_env": False,
+                   "effective_source": "file", "shadowed_by": None, "warning": ""}
     assert keys.redact_secrets(f"oops {FAKE} here") == "oops [redacted] here"
     assert FAKE in keys.known_secret_values()
     table = ps.rows(router(), probe_local=False)
