@@ -17,17 +17,13 @@ The existing four statuses remain in use. No status enum was added.
 | `exploring` | A research direction or idea under test |
 
 The tally counts only chips in the roadmap chart. Visible status text accompanies each chip so status
-does not depend on color or hover. Initial HTML totals are 8 built, 2 in progress, 3 designed and 16
+does not depend on color or hover. Initial HTML totals are 10 built, 1 in progress, 2 designed and 16
 exploring; the script recomputes those totals from the chart. Evidence panels and section badges are not
 additional initiatives.
 
 ## Evidence snapshot
 
-The roadmap's latest verified work panel is explicitly **in review**, not built on main. Core revision
-[`1532fa9`](https://github.com/aska-digital/exo/commit/1532fa9) passed CI, but [draft PR #57](https://github.com/aska-digital/exo/pull/57) is unmerged.
-Reported verification: root suite 1,311 to 1,312 passed and 73 to 74 skipped by platform; combined plugins 721 passed and 1 skipped (figures read from the CI run, not from a local run); all four CI
-test jobs (macOS/Linux, Python 3.11/3.13) and lint green.
-[CI evidence](https://github.com/aska-digital/exo/actions/runs/38344045444).
+The roadmap's latest verified work panel is **built**: the authority work (#57), required executor mode for Exo OS (#70) and the portable ledger authority (#80) are merged to main at `a0fc85e`. Local verification at that revision: root suite 1,485 passed and 65 skipped; six plugin suites 751 passed; core 15,836 lines under the 16,000 budget. Hosted CI was unavailable on 2026-10-13, so these are local runs; the panel links no CI run or private repository page.
 
 The panel explains application authority: local automation cannot speak as the user; feedback, settings
 and policy acceptance require the principal connection; derived lessons still require applicable review

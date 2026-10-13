@@ -87,25 +87,25 @@
       <p class="sec-lede">Strengthen the engine, polish the client people can use today, then package it. Electron is the chosen desktop direction. Packaging comes last, after the core and browser checks below hold.</p>
     </header>
     <ol class="rm-sequence" aria-label="Delivery stages and exit criteria">
-      <li><span class="rm-sequence__n">01 / Core engine</span><h3>Make the boundary dependable.</h3><p>Exit criteria: review and merge the authority changes; keep the root, plugin, lint and cross-platform CI checks green.</p><p class="rm-sequence__state">Working core · hardening in review</p></li>
+      <li><span class="rm-sequence__n">01 / Core engine</span><h3>Make the boundary dependable.</h3><p>Exit criteria: review and merge the authority changes; keep the root, plugin, lint and cross-platform CI checks green.</p><p class="rm-sequence__state">Working core · hardening merged</p></li>
       <li><span class="rm-sequence__n">02 / Browser experience</span><h3>Finish the daily workflow.</h3><p>Exit criteria: verify a turn, approval, memory view and reconnect end to end; check a 400px layout, keyboard use and reduced motion.</p><p class="rm-sequence__state">Local browser exists · polish next</p></li>
       <li><span class="rm-sequence__n">03 / Electron desktop</span><h3>Package the settled experience.</h3><p>Exit criteria: only after stages 1 and 2, verify installation, core startup and shutdown, signing and updates on the intended desktop platforms.</p><p class="rm-sequence__state">Chosen direction · not built · last</p></li>
     </ol>
 
     <article class="rm-evidence" id="verified" aria-labelledby="verified-t">
-      <div class="rm-evidence__head"><div><p class="card__k">Latest verified work · 12 October 2026</p><h3 id="verified-t">Authority follows the person.</h3></div><span class="rm-badge" data-s="progress">In review</span></div>
-      <p class="rm-evidence__scope">Revision <a href="https://github.com/aska-digital/exo/commit/1532fa9" rel="noopener"><code>1532fa9</code></a> passed the CI checks linked below. <a href="https://github.com/aska-digital/exo/pull/57" rel="noopener">Draft PR #57</a> is unmerged; these changes are not built on main.</p>
-      <dl class="rm-evidence__checks" aria-label="Verification results for revision 1532fa9">
-        <div><dt>Root suite</dt><dd>1,311 to 1,312 passed <span>73 to 74 skipped, by platform</span></dd></div>
-        <div><dt>Combined plugins</dt><dd>721 passed <span>1 skipped</span></dd></div>
-        <div><dt>CI and lint</dt><dd>All green <span>macOS + Linux · Python 3.11 + 3.13</span></dd></div>
+      <div class="rm-evidence__head"><div><p class="card__k">Latest verified work · 13 October 2026</p><h3 id="verified-t">Authority follows the person.</h3></div><span class="rm-badge" data-s="built">Built</span></div>
+      <p class="rm-evidence__scope">Merged to main at revision <code>a0fc85e</code> and running in daily use. The authority work, the required executor mode for Exo OS and the portable ledger authority each passed security review before merge.</p>
+      <dl class="rm-evidence__checks" aria-label="Verification results for revision a0fc85e">
+        <div><dt>Root suite</dt><dd>1,485 passed <span>65 skipped</span></dd></div>
+        <div><dt>Plugin suites</dt><dd>751 passed <span>six plugins</span></dd></div>
+        <div><dt>Core size</dt><dd>15,836 lines <span>under the 16,000 budget</span></dd></div>
       </dl>
       <ul class="rm-evidence__outcomes">
         <li>Local automation cannot speak as the user.</li>
         <li>Feedback, settings and policy acceptance require the principal's connection: the person responsible for the agent.</li>
         <li>A derived lesson cannot skip required review or evaluation by citing a user statement.</li>
       </ul>
-      <p class="rm-evidence__foot"><a href="https://github.com/aska-digital/exo/actions/runs/38344045444" rel="noopener">Inspect the four CI test jobs and lint <span aria-hidden="true">↗</span></a><span>These checks cover the application authority boundary. Isolated tool execution remains a research direction.</span></p>
+      <p class="rm-evidence__foot"><span>These checks cover the application authority boundary. Exo OS can now require every tool call to pass through an installed execution broker; the operating-system sandbox behind it is still being built.</span></p>
     </article>
     <nav class="rm-jump" aria-label="Roadmap sections">
       <span>Explore the roadmap</span>
@@ -160,15 +160,15 @@
     <header class="sec-head">
       <p class="sec-num">02 / Now, next, horizon</p>
       <h2 id="road-t">What is built, what is designed, what we are still testing.</h2>
-      <p class="sec-lede">Every initiative, placed by when it could land and marked by how far along it is. "Built" means tested and in daily use on main. "In progress" includes work being built or reviewed. "Designed" means written down and reviewed, with no code yet. "Exploring" means an idea under test. The chart counts initiatives; the evidence panel above reports an unmerged revision separately.</p>
+      <p class="sec-lede">Every initiative, placed by when it could land and marked by how far along it is. "Built" means tested and in daily use on main. "In progress" includes work being built or reviewed. "Designed" means written down and reviewed, with no code yet. "Exploring" means an idea under test. The chart counts initiatives; the evidence panel above reports the latest verified revision.</p>
     </header>
 
     <div class="rm-tally reveal" aria-label="Initiatives by status">
       <div class="rm-tally__bar"></div>
       <ul class="rm-tally__key">
-        <li><span class="led led--on"></span>Built <b data-count="built">8</b></li>
-        <li><span class="led led--next"></span>In progress <b data-count="progress">2</b></li>
-        <li><span class="led rm-led--designed"></span>Designed <b data-count="designed">3</b></li>
+        <li><span class="led led--on"></span>Built <b data-count="built">10</b></li>
+        <li><span class="led led--next"></span>In progress <b data-count="progress">1</b></li>
+        <li><span class="led rm-led--designed"></span>Designed <b data-count="designed">2</b></li>
         <li><span class="led rm-led--exploring"></span>Exploring <b data-count="exploring">16</b></li>
       </ul>
     </div>
@@ -186,9 +186,9 @@
           <p class="rm-chip" data-s="built"><a class="rm-chip__a" href="../whitepaper/#12-the-core-daemon-and-its-event-protocol">The core and its protocol</a><span class="rm-chip__status">Built</span></p>
           <p class="rm-chip" data-s="built"><a class="rm-chip__a" href="../#gates">The approval gate</a><span class="rm-chip__status">Built</span></p>
           <p class="rm-chip" data-s="built"><a class="rm-chip__a" href="../#ledger">The signed memory ledger</a><span class="rm-chip__status">Built</span></p>
+          <p class="rm-chip" data-s="built"><a class="rm-chip__a" href="#verified">Authority hardening</a><span class="rm-chip__status">Built</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Next">
-          <p class="rm-chip" data-s="progress"><a class="rm-chip__a" href="#verified">Authority hardening, PR #57 in review</a><span class="rm-chip__status">In progress</span></p>
           <p class="rm-chip" data-s="progress"><a class="rm-chip__a" href="#card-exo-os">Exo OS, phase 0 design</a><span class="rm-chip__status">In progress</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon">
@@ -238,7 +238,7 @@
         <span class="rm-road__lane" role="rowheader">Identity</span>
         <div class="rm-road__cell" role="cell" data-col="Now"></div>
         <div class="rm-road__cell" role="cell" data-col="Next">
-          <p class="rm-chip" data-s="designed"><a class="rm-chip__a" href="../brand/">The lattice brand</a><span class="rm-chip__status">Designed</span></p>
+          <p class="rm-chip" data-s="built"><a class="rm-chip__a" href="../brand/">The lattice brand</a><span class="rm-chip__status">Built</span></p>
           <p class="rm-chip" data-s="designed"><a class="rm-chip__a" href="#exopet">Exopet and the community hatch</a><span class="rm-chip__status">Designed</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon"></div>
