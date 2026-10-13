@@ -60,7 +60,12 @@ printf '{"site":"%s","exo":"%s","commit":"%s","date":"%s"}\n' "${VER:-unversione
 cd "$W"
 if [ $PROD = 0 ]; then  # staging is never indexed: robots.txt plus an X-Robots-Tag header on every response
   printf 'User-agent: *\nDisallow: /\n' > robots.txt
-  printf '{"headers":[{"source":"/(.*)","headers":[{"key":"X-Robots-Tag","value":"noindex, nofollow"}]}]}\n' > vercel.json
+  python3 - <<'PY'   # add the noindex header to site/vercel.json (which holds the x0 settle cron), keeping the rest
+import json, os
+c = json.load(open("vercel.json")) if os.path.exists("vercel.json") else {}
+c.setdefault("headers", []).append({"source": "/(.*)", "headers": [{"key": "X-Robots-Tag", "value": "noindex, nofollow"}]})
+json.dump(c, open("vercel.json", "w"))
+PY
 fi
 npx -y vercel@latest deploy --prod --yes --token "$V" --scope "$SCOPE" --name $P 2>&1 | grep -v -i token | grep -E "Production|Aliased|Error|error" | head -5
 if [ -n "$VER" ]; then  # tag the deployed commit and push the tag

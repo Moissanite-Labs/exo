@@ -1,0 +1,52 @@
+# x0-meditate: start or stop a meditation of x0, the community exosphere (docs/LIVE-EGG.md section 3.4, D-059).
+# Run by hand when the team sits down to review community work. Only people with write access can run it, and
+# every run is in the Actions log. The request is signed with HMAC-SHA256 under the target's meditate secret.
+#
+# Repository secrets (set by the principal; never in the repo):
+#   EGG_MEDITATE_SECRET_PRODUCTION   the same value as EGG_MEDITATE_SECRET in the Vercel project exo-site
+#   EGG_MEDITATE_SECRET_STAGING      the same value as EGG_MEDITATE_SECRET in the Vercel project exo-site-staging
+name: x0-meditate
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Which site's x0 meditates"
+        type: choice
+        options: [staging, production]
+        default: staging
+      action:
+        description: "start a meditation, or stop the running one early"
+        type: choice
+        options: [start, stop]
+        default: start
+
+permissions: {}
+
+concurrency:
+  group: x0-meditate-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  meditate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send the signed request
+        env:
+          TARGET: ${{ inputs.target }}
+          ACTION: ${{ inputs.action }}
+          SECRET_PRODUCTION: ${{ secrets.EGG_MEDITATE_SECRET_PRODUCTION }}
+          SECRET_STAGING: ${{ secrets.EGG_MEDITATE_SECRET_STAGING }}
+        run: |
+          set -euo pipefail
+          if [ "$TARGET" = production ]; then HOST=exo.askaconsult.com; SECRET="$SECRET_PRODUCTION"
+          else HOST=staging.exo.askaconsult.com; SECRET="$SECRET_STAGING"; fi
+          [ -n "$SECRET" ] || { echo "::error::the meditate secret for $TARGET is not set"; exit 1; }
+          case "$ACTION" in start|stop) ;; *) echo "::error::unknown action"; exit 1;; esac
+          BODY=$(printf '{"action":"%s","ts":%s,"nonce":"%s"}' "$ACTION" "$(date +%s)" "$(openssl rand -hex 16)")
+          SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= //')
+          CODE=$(curl -sS -o response.json -w '%{http_code}' -X POST "https://$HOST/api/egg/meditate" \
+            -H 'content-type: application/json' -H "x-egg-signature-256: sha256=$SIG" --data "$BODY")
+          echo "x0-meditate: $TARGET $ACTION -> HTTP $CODE $(cat response.json)"
+          case "$CODE" in 200) ;; 409) echo "::notice::nothing to do: $(cat response.json)";; *) exit 1;; esac

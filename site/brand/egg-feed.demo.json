@@ -1,157 +1,730 @@
-{
- "v": 1,
- "generated": "2026-10-13T12:00:04Z",
- "cursor": "demo",
- "poll_s": 20,
- "egg": {
-  "xp": 612,
-  "pending": 38,
-  "target": 2048,
-  "stage": 0.239,
-  "state": "filling",
-  "crack_at": null,
-  "hatch_at": null
+[
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:10:00Z",
+  "cursor": "demo0",
+  "poll_s": 10,
+  "egg": {
+   "xp": 1183,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.462,
+   "state": "filling",
+   "meditation": null,
+   "crack_at": null,
+   "hatch_at": null
+  },
+  "events": [
+   {
+    "id": "36686d88",
+    "t": "2026-10-20T14:00:00Z",
+    "type": "issue",
+    "level": 1,
+    "weight": 1
+   },
+   {
+    "id": "be77131f",
+    "t": "2026-10-20T14:25:00Z",
+    "type": "pr",
+    "level": 2,
+    "weight": 1
+   },
+   {
+    "id": "1184eb12",
+    "t": "2026-10-20T14:55:00Z",
+    "type": "issue",
+    "level": 1,
+    "weight": 1
+   },
+   {
+    "id": "e9b834ee",
+    "t": "2026-10-20T15:15:00Z",
+    "type": "review",
+    "level": 2,
+    "weight": 1
+   },
+   {
+    "id": "8d48ca64",
+    "t": "2026-10-20T15:55:00Z",
+    "type": "issue",
+    "level": 1,
+    "weight": 1
+   }
+  ]
  },
- "events": [
-  {
-   "id": "9f767c45",
-   "t": "2026-10-13T08:03:00Z",
-   "type": "issue",
-   "level": 1,
-   "weight": 1
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:10:10Z",
+  "cursor": "demo1",
+  "poll_s": 10,
+  "egg": {
+   "xp": 1184,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.463,
+   "state": "filling",
+   "meditation": null,
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "4164d839",
-   "t": "2026-10-13T08:32:00Z",
-   "type": "issue",
-   "level": 1,
-   "weight": 1
+  "events": [
+   {
+    "id": "40cd9396",
+    "t": "2026-10-20T16:10:00Z",
+    "type": "pr",
+    "level": 2,
+    "weight": 1
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:10:20Z",
+  "cursor": "demo2",
+  "poll_s": 10,
+  "egg": {
+   "xp": 1187,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.464,
+   "state": "filling",
+   "meditation": null,
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "bde5c099",
-   "t": "2026-10-13T09:03:00Z",
-   "type": "pr",
-   "level": 2,
-   "weight": 3
+  "events": [
+   {
+    "id": "59333d37",
+    "t": "2026-10-20T16:10:10Z",
+    "type": "issue",
+    "level": 1,
+    "weight": 1
+   },
+   {
+    "id": "417a7899",
+    "t": "2026-10-20T16:10:10Z",
+    "type": "review",
+    "level": 2,
+    "weight": 1
+   },
+   {
+    "id": "2e956c46",
+    "t": "2026-10-20T16:10:10Z",
+    "type": "issue",
+    "level": 1,
+    "weight": 1
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:10:30Z",
+  "cursor": "demo3",
+  "poll_s": 10,
+  "egg": {
+   "xp": 1189,
+   "pending": 14,
+   "target": 2048,
+   "stage": 0.464,
+   "state": "filling",
+   "meditation": null,
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "5bc8fbbc",
-   "t": "2026-10-13T09:32:00Z",
-   "type": "issue",
-   "level": 1,
-   "weight": 1
+  "events": [
+   {
+    "id": "fdd88fae",
+    "t": "2026-10-20T16:10:20Z",
+    "type": "merge",
+    "level": 3,
+    "weight": 2
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:10:40Z",
+  "cursor": "demo4",
+  "poll_s": 10,
+  "egg": {
+   "xp": 1191,
+   "pending": 14,
+   "target": 2048,
+   "stage": 0.465,
+   "state": "filling",
+   "meditation": null,
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "cb91ce37",
-   "t": "2026-10-13T10:03:00Z",
-   "type": "merge",
-   "level": 3,
-   "weight": 10
+  "events": [
+   {
+    "id": "2dc99a01",
+    "t": "2026-10-20T16:10:30Z",
+    "type": "issue",
+    "level": 1,
+    "weight": 1
+   },
+   {
+    "id": "81f47f76",
+    "t": "2026-10-20T16:10:30Z",
+    "type": "pr",
+    "level": 2,
+    "weight": 1
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:10:50Z",
+  "cursor": "demo5",
+  "poll_s": 10,
+  "egg": {
+   "xp": 1193,
+   "pending": 14,
+   "target": 2048,
+   "stage": 0.466,
+   "state": "filling",
+   "meditation": null,
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "b0c11fde",
-   "t": "2026-10-13T10:32:00Z",
-   "type": "issue",
-   "level": 1,
-   "weight": 1
+  "events": [
+   {
+    "id": "5eb8d55f",
+    "t": "2026-10-20T16:10:40Z",
+    "type": "review",
+    "level": 2,
+    "weight": 1
+   },
+   {
+    "id": "a3b78ec1",
+    "t": "2026-10-20T16:10:40Z",
+    "type": "issue",
+    "level": 1,
+    "weight": 1
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:00Z",
+  "cursor": "demo6",
+  "poll_s": 10,
+  "egg": {
+   "xp": 1195,
+   "pending": 32,
+   "target": 2048,
+   "stage": 0.467,
+   "state": "filling",
+   "meditation": null,
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "f1446bea",
-   "t": "2026-10-13T11:03:00Z",
-   "type": "pr",
-   "level": 2,
-   "weight": 3
+  "events": [
+   {
+    "id": "52b2fa2c",
+    "t": "2026-10-20T16:10:50Z",
+    "type": "merge",
+    "level": 3,
+    "weight": 2
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:10Z",
+  "cursor": "demo7",
+  "poll_s": 10,
+  "egg": {
+   "xp": 1221,
+   "pending": 32,
+   "target": 2048,
+   "stage": 0.477,
+   "state": "filling",
+   "meditation": null,
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "d76d4330",
-   "t": "2026-10-13T11:32:00Z",
-   "type": "pr",
-   "level": 2,
-   "weight": 3
+  "events": [
+   {
+    "id": "7f354603",
+    "t": "2026-10-20T16:11:00Z",
+    "type": "release",
+    "level": 4,
+    "weight": 25
+   },
+   {
+    "id": "746324e5",
+    "t": "2026-10-20T16:11:00Z",
+    "type": "issue",
+    "level": 1,
+    "weight": 1
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:20Z",
+  "cursor": "demo8",
+  "poll_s": 10,
+  "egg": {
+   "xp": 1223,
+   "pending": 42,
+   "target": 2048,
+   "stage": 0.478,
+   "state": "filling",
+   "meditation": null,
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "bd69fe29",
-   "t": "2026-10-13T12:03:00Z",
-   "type": "issue",
-   "level": 1,
-   "weight": 1
+  "events": [
+   {
+    "id": "2af4efc3",
+    "t": "2026-10-20T16:11:10Z",
+    "type": "merge",
+    "level": 3,
+    "weight": 2
+   },
+   {
+    "id": "3d1ff881",
+    "t": "2026-10-20T16:11:10Z",
+    "type": "review",
+    "level": 2,
+    "weight": 1
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:21Z",
+  "cursor": "demo9",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1223,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.478,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 0,
+    "progress": 0,
+    "gained": 0
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "a6eb8c9e",
-   "t": "2026-10-13T12:32:00Z",
-   "type": "merge",
-   "level": 3,
-   "weight": 10
+  "events": []
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:26Z",
+  "cursor": "demo10",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1233,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.482,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 1,
+    "progress": 0.125,
+    "gained": 10
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "ec1d7da0",
-   "t": "2026-10-13T13:03:00Z",
-   "type": "issue",
-   "level": 1,
-   "weight": 1
+  "events": [
+   {
+    "id": "d13589be",
+    "t": "2026-10-20T16:11:26Z",
+    "type": "validated",
+    "kind": "pr",
+    "level": 2,
+    "weight": 10
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:31Z",
+  "cursor": "demo11",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1233,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.482,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 1,
+    "progress": 0.125,
+    "gained": 10
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "87b0b125",
-   "t": "2026-10-13T13:32:00Z",
-   "type": "pr",
-   "level": 2,
-   "weight": 3
+  "events": []
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:36Z",
+  "cursor": "demo12",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1243,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.486,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 2,
+    "progress": 0.25,
+    "gained": 20
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "076ce2ef",
-   "t": "2026-10-13T14:03:00Z",
-   "type": "issue",
-   "level": 1,
-   "weight": 1
+  "events": [
+   {
+    "id": "ce2b8eb9",
+    "t": "2026-10-20T16:11:34Z",
+    "type": "validated",
+    "kind": "pr",
+    "level": 2,
+    "weight": 10
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:41Z",
+  "cursor": "demo13",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1243,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.486,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 2,
+    "progress": 0.25,
+    "gained": 20
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "d7210dff",
-   "t": "2026-10-13T14:32:00Z",
-   "type": "issue",
-   "level": 1,
-   "weight": 1
+  "events": []
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:46Z",
+  "cursor": "demo14",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1247,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.487,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 3,
+    "progress": 0.375,
+    "gained": 24
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "77330bdb",
-   "t": "2026-10-13T15:03:00Z",
-   "type": "release",
-   "level": 4,
-   "weight": 25
+  "events": [
+   {
+    "id": "9a094534",
+    "t": "2026-10-20T16:11:42Z",
+    "type": "validated",
+    "kind": "issue",
+    "level": 1,
+    "weight": 4
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:51Z",
+  "cursor": "demo15",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1251,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.489,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 4,
+    "progress": 0.5,
+    "gained": 28
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "c6a53877",
-   "t": "2026-10-13T15:32:00Z",
-   "type": "pr",
-   "level": 2,
-   "weight": 3
+  "events": [
+   {
+    "id": "0e0fa173",
+    "t": "2026-10-20T16:11:50Z",
+    "type": "validated",
+    "kind": "review",
+    "level": 2,
+    "weight": 4
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:11:56Z",
+  "cursor": "demo16",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1251,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.489,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 4,
+    "progress": 0.5,
+    "gained": 28
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "f17fd374",
-   "t": "2026-10-13T16:03:00Z",
-   "type": "issue",
-   "level": 1,
-   "weight": 1
+  "events": [
+   {
+    "id": "fca52ead",
+    "t": "2026-10-20T16:11:51Z",
+    "type": "issue",
+    "level": 1,
+    "weight": 1
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:12:01Z",
+  "cursor": "demo17",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1255,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.49,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 5,
+    "progress": 0.625,
+    "gained": 32
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "3fc1ea36",
-   "t": "2026-10-13T16:32:00Z",
-   "type": "merge",
-   "level": 3,
-   "weight": 10
+  "events": [
+   {
+    "id": "82f7622e",
+    "t": "2026-10-20T16:11:58Z",
+    "type": "validated",
+    "kind": "issue",
+    "level": 1,
+    "weight": 4
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:12:06Z",
+  "cursor": "demo18",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1259,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.492,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 6,
+    "progress": 0.75,
+    "gained": 36
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "a6233255",
-   "t": "2026-10-13T17:03:00Z",
-   "type": "pr",
-   "level": 2,
-   "weight": 3
+  "events": [
+   {
+    "id": "6f173014",
+    "t": "2026-10-20T16:12:06Z",
+    "type": "validated",
+    "kind": "issue",
+    "level": 1,
+    "weight": 4
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:12:11Z",
+  "cursor": "demo19",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1259,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.492,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 6,
+    "progress": 0.75,
+    "gained": 36
+   },
+   "crack_at": null,
+   "hatch_at": null
   },
-  {
-   "id": "0d464138",
-   "t": "2026-10-13T17:32:00Z",
-   "type": "issue",
-   "level": 1,
-   "weight": 1
-  }
- ]
-}
+  "events": []
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:12:16Z",
+  "cursor": "demo20",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1269,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.496,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 7,
+    "progress": 0.875,
+    "gained": 46
+   },
+   "crack_at": null,
+   "hatch_at": null
+  },
+  "events": [
+   {
+    "id": "03939304",
+    "t": "2026-10-20T16:12:14Z",
+    "type": "validated",
+    "kind": "pr",
+    "level": 2,
+    "weight": 10
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:12:21Z",
+  "cursor": "demo21",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1269,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.496,
+   "state": "meditating",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 7,
+    "progress": 0.875,
+    "gained": 46
+   },
+   "crack_at": null,
+   "hatch_at": null
+  },
+  "events": []
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:12:26Z",
+  "cursor": "demo22",
+  "poll_s": 5,
+  "egg": {
+   "xp": 1273,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.497,
+   "state": "waking",
+   "meditation": {
+    "started": "2026-10-20T16:11:20Z",
+    "ends": "2026-10-20T16:12:22Z",
+    "total": 8,
+    "done": 8,
+    "progress": 1,
+    "gained": 50
+   },
+   "crack_at": null,
+   "hatch_at": null
+  },
+  "events": [
+   {
+    "id": "9bed3234",
+    "t": "2026-10-20T16:12:22Z",
+    "type": "validated",
+    "kind": "review",
+    "level": 2,
+    "weight": 4
+   }
+  ]
+ },
+ {
+  "v": 2,
+  "generated": "2026-10-20T16:12:56Z",
+  "cursor": "demo23",
+  "poll_s": 10,
+  "egg": {
+   "xp": 1273,
+   "pending": 0,
+   "target": 2048,
+   "stage": 0.497,
+   "state": "filling",
+   "meditation": null,
+   "crack_at": null,
+   "hatch_at": null
+  },
+  "events": []
+ }
+]
