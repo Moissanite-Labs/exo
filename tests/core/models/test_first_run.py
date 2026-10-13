@@ -6,6 +6,7 @@ import threading
 import httpx
 import pytest
 
+from exo import principal as pr
 from exo import providers_setup as ps
 from exo.config import Config
 from exo.core.engine import CoreEngine
@@ -55,7 +56,11 @@ def test_key_only_real_http_route_and_model_selection(tmp_path, monkeypatch, pro
                 before = [ev async for ev in eng.router.stream("main", [Message.user("hello")], [])]
                 assert before[-1].kind == "error" and "/providers" in before[-1].error
                 assert not requests and not any(ev.kind == "text" for ev in before)
-                await eng._models_set(s.ModelsSet(model=f"{provider}:user-chosen-chat"))
+                caller = pr.CALLER.set(pr.Caller(pr.principal_as("tui")))  # choosing a model is the principal's (D-052)
+                try:
+                    await eng._models_set(s.ModelsSet(model=f"{provider}:user-chosen-chat"))
+                finally:
+                    pr.CALLER.reset(caller)
                 assert (await eng._main_status())["ready"]
             else:
                 assert state["ready"] and state["route"].startswith("openrouter:")
