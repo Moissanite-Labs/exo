@@ -465,12 +465,6 @@
     },
     {
       "path": "src/exo/core/loop.py",
-      "message": "Argument 3 to \"build\" of \"TreeContext\" has incompatible type \"**dict[str, str]\"; expected \"bool\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/loop.py",
       "message": "Incompatible types in assignment (expression has type \"str\", target has type \"int\")",
       "code": "assignment",
       "count": 1

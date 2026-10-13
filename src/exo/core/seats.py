@@ -18,6 +18,7 @@ hand-written files both load::
     [session] cwd = "~/Work/exo-live"   # where this seat's threads start (D-032)
     [peers]   wake = true  policy = {other = "hold"}   # peer messages (docs/PEERS.md)
     [jobs]    max_concurrent = 4  max_wall_s = 7200  wake = false   # background shell jobs (docs/JOBS.md)
+    [loop]    max_tool_rounds = 64   # tool rounds per turn; EXO_MAX_TOOL_ROUNDS and /rounds override (D-064)
     [plugins] enabled = ["exo-memory"]  # or a top-level list; omit for the config.json default
 """
 
@@ -89,6 +90,7 @@ class Seat:
     peers: dict[str, Any] = field(default_factory=dict)     # [peers]: policy, rules, wake, hold_minutes (D-026)
     jobs: dict[str, Any] = field(default_factory=dict)      # [jobs]: max_concurrent, max_wall_s, wake (D-032)
     trace: dict[str, Any] = field(default_factory=dict)     # [trace]: threshold overrides (D-032)
+    loop: dict[str, Any] = field(default_factory=dict)      # [loop]: max_tool_rounds (D-064)
     cwd: str | None = None                                  # [session] cwd: default working directory (D-032)
     soul: str = ""
     soul_path: str = ""                                     # the SOUL.md the text came from; re-read when it changes
@@ -130,7 +132,7 @@ def parse(data: dict[str, Any], name: str = "", path: str = "", soul: str = "") 
         env_allow=_strs(tools.get("env_allow")) or [], env_deny=_strs(tools.get("env_deny")) or [], skill_folders=folders, skill_load=_strs(skills.get("load")),
         mcp={k: v for k, v in mcp.items() if isinstance(v, dict)},
         plugins=_strs(plugins.get("enabled") if isinstance(plugins, dict) else plugins), channels=channels,
-        peers=_table(data.get("peers")), jobs=_table(data.get("jobs")), trace=_table(data.get("trace")),
+        peers=_table(data.get("peers")), jobs=_table(data.get("jobs")), trace=_table(data.get("trace")), loop=_table(data.get("loop")),
         cwd=str(_table(data.get("session")).get("cwd") or data.get("cwd") or "") or None, soul=soul, path=path, key=str(head.get("key") or data.get("key") or "") or None)
 
 

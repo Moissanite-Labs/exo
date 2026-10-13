@@ -53,6 +53,7 @@ COMMANDS = {
     "compact": ("session", "summarize now what is eligible in this agent's memory, then show tokens before and after"),
     "restart": ("session", "reopen this session in a new terminal tab and exit this one"),
     "stop": ("session", "stop the running turn (what was done is kept)"),
+    "rounds": ("session", "tool rounds per turn: /rounds shows the cap, /rounds N sets it for this session, /rounds default"),
     "unsteer": ("session", "pull your last queued steer message back into the composer, if it has not landed yet"),
     "exit": ("session", "quit"),
     "quit": ("session", "same as /exit"),

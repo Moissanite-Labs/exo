@@ -91,6 +91,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/compact` | Summarize now what is eligible, then show tokens before and after. |
 | `/restart` | Reopen this session in a new terminal tab and exit this one. |
 | `/stop` | Stops the running turn. What was done is kept. |
+| `/rounds [N]` | Show or set how many tool rounds one turn may run (default 64). `/rounds default` goes back to the default. |
 | `/exit`, `/quit` | Quit. |
 | `/model [ref]` | Pick the model for this session, or set it with a reference. `/model default <ref>` sets the default. |
 | `/default [ref]` | Set the default model for new sessions, or pick one. |
@@ -109,7 +110,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/help` | List every command. |
 
 Plugins add commands. They show in `/help` under `other`. `/exo` (the dispatcher) and `/orchestra` are examples when
-those plugins load. The core answers `/context`, `/compact`, `/trace` and `/findings` itself. `/grants` comes from
+those plugins load. The core answers `/context`, `/compact`, `/trace`, `/findings` and `/rounds` itself. `/grants` comes from
 the `exo-gate` plugin. The web client runs `/context`, `/findings` and `/trace` from its composer.
 
 ### Typing help
@@ -272,6 +273,8 @@ Details and the cost rules: `docs/TRACE.md`.
 | Learning does nothing | It needs a principal store. Without one it is off and says so once (`docs/LEARNING.md`). |
 | A peer message never arrived | It may be held. Look for an approval card. Held messages expire after 30 minutes (`docs/PEERS.md`). |
 | Memory looks wrong | Run `/context`, then `exo memory verify` to check the log's hash chain (`docs/MEMORY-MODEL.md`). |
+| The turn stopped with "stopped after 64 tool rounds" | Each turn has a tool-round cap. The agent's last reply says what is done, what is open and the next step; say "continue" to go on. Raise the cap with `/rounds N` for this session, `[loop] max_tool_rounds` in the seat, or `EXO_MAX_TOOL_ROUNDS`. |
+| `exo update` says "You are not currently on a branch" | That was an older Exo. Current `exo update` moves a detached checkout to its tracked remote branch (`docs/INSTALL.md`). |
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
 | The warning about "not inside a git repo" | The thread's folder is not a repo. Set `[session] cwd` in the seat, or `/cwd` to see where you are. |
 | The web page says "missing or wrong page token" | Open the link `exo web` printed this time. Each launch has a new token. |

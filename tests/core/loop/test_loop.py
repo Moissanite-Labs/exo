@@ -751,7 +751,7 @@ def test_round_cap_wraps_up_without_tools(tmp_path):
     s, res = run(go())
     assert res.stop_reason == "max_iterations"  # callers still see the cap
     assert res.message.text() == "did 3 rounds; next: finish X" and res.message.meta.get("wrap_up")
-    assert len(prov.calls) == 4 and seen_tools[-1] == [] and all(seen_tools[:3])
+    assert len(prov.calls) == 4 and all(seen_tools)  # specs stay on the wrap-up call (tool_choice none, D-064)
     assert "tool rounds" in prov.calls[-1][-1].text()  # transient prompt reached the model...
     assert not any("tool rounds" in m.text() for m in store.messages(s.id) if m.role == "user")  # ...not the store
 

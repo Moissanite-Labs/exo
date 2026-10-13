@@ -22,7 +22,7 @@ from typing import Any, Callable, Iterable, Sequence
 # dict) and in commands.list; this table only adds the shape and the group for commands every client may meet.
 ARG_HINTS: dict[str, str] = {
     "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "undo": "", "clear": "",
-    "cwd": "", "context": "", "compact": "", "restart": "", "stop": "", "unsteer": "", "exit": "", "quit": "",
+    "cwd": "", "context": "", "compact": "", "restart": "", "stop": "", "rounds": "[N|default]", "unsteer": "", "exit": "", "quit": "",
     "model": "[default] <model>", "default": "[model]", "providers": "[add] [name]", "usage": "",
     "panel": "", "peers": "", "send": "<peer> <text>", "handoff": "[path]", "intro": "",
     "tutorial": "[on|off|reset]", "copy": "[last|error|all]", "help": "",
@@ -71,6 +71,8 @@ def plan(cmd: str, done: Sequence[str]) -> Slot | None:
         return Slot("[model]", "models") if n == 0 else None
     elif cmd in ("resume", "sessions"):
         return Slot("[thread]", "threads") if n == 0 else None
+    elif cmd == "rounds":
+        return Slot("[N|default]", "", _c("default|back to the configured cap (64 unless set)")) if n == 0 else None
     elif cmd == "tutorial":
         return Slot("[on|off|reset]", "", _c("on|short tips the first time something comes up",
                                               "off|no tips, no guidance line", "reset|show every tip again")) if n == 0 else None
