@@ -61,6 +61,34 @@ No tool gives the model these functions. The gate classes `exo providers add|rem
 any shell or code that names `/api/providers` or `providers_setup`, and every Keychain read as `credentials`,
 which always asks you and never gets a standing grant (D-033). Keys are write-only: no code path returns one.
 
+## Claude CLI compatibility and cleanup (`claude-cli`)
+
+Exo's adapter assumes the stream-json envelopes pinned by the **synthetic fixture contract v1** in
+`tests/core/models/test_claude_cli.py`. These tests exercise Exo's parser and process handling; they do not
+certify an installed Claude CLI release or a real authenticated wire exchange. `exo providers test claude-cli`
+only checks that the command is on PATH. Command help is not evidence that history replay or tool boundaries work.
+
+The fixture contract is:
+
+- Input uses `user` and `assistant` frames with a `message` containing `role` and content blocks. Earlier user
+  frames carry `shouldQuery: false`; each must receive one `result` with `num_turns: 0` and no error before replay
+  continues. A history ending with an assistant gets an explicit `(continue)` user turn.
+- Output carries `stream_event` deltas (`text_delta`, `thinking_delta`) and `message_stop`, then assistant content
+  and one final `result`. Ordinary completion requires exit 0 and `subtype: success` with no error.
+- A tool boundary requires assistant `tool_use` blocks, `subtype: error_max_turns`, and exit 1. Only that
+  combination lets Exo execute the tools and continue its own loop; the limit's error flag may be true.
+- Usage is read from the final result when reported; absent counts stay unknown. The inert MCP bridge lists
+  tools but refuses to run them. Blank input is ignored, malformed JSON gets a JSON-RPC parse error, and valid
+  following requests continue to work.
+
+The CLI-specific replay and boundary assumptions still need an opt-in, isolated real-CLI contract check against
+a mocked local endpoint before any release can be called wire-verified. Default tests never use real OAuth,
+private auth files, or network models. This remaining compatibility scope is tracked in issue #47.
+
+Every stream exit cancels and awaits the stderr reader. It retains a bounded, scrubbed diagnostic tail rather
+than waiting for a descendant to close stderr. The adapter stops its process group even after the leader exits,
+and finishes cleanup before returning a terminal response to the router.
+
 ## Use a Muse Code subscription (`muse-cli`)
 
 `muse-cli` lets Exo use a Muse Code subscription by running the `muse` command-line tool. Exo does not hold a
