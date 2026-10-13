@@ -46,7 +46,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, crypto, display_version
+from . import crypto, display_version
 from .ledger import KINDS, Ledger, LedgerError
 from .store import PrincipalStore, exo_home, principal_root
 from .ingest.cli import register as register_ingest, cmd_ingest  # noqa: F401  (dispatched via globals)

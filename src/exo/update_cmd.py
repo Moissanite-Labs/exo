@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-from . import __version__, display_version
+from . import display_version
 
 Runner = Callable[[list[str]], subprocess.CompletedProcess]
 
