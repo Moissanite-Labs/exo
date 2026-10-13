@@ -15,7 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from .spend import Price, SpendDenied, _money
+from .billing import Price, SpendDenied, _money
 
 POLICY_ENV = "EXO_MODEL_SPEND_POLICY"
 MAX_BYTES = 65536
@@ -84,7 +84,8 @@ def _decimal(value):
     _money(value)
 
 
-def _validate(raw):
+def validate_policy(raw: Any) -> dict:
+    """Validate parsed protected policy data; return the same dictionary without mutation."""
     if not isinstance(raw, dict) or set(raw) != FIELDS:
         raise ValueError("invalid model-spend policy fields")
     if not isinstance(raw["principal"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", raw["principal"]):
@@ -107,6 +108,14 @@ def _validate(raw):
     return raw
 
 
+def decode_policy(data: bytes | str) -> dict:
+    """Decode bounded UTF-8 JSON, reject duplicates, and validate the full policy schema."""
+    if not isinstance(data, (bytes, str)) or len(data.encode() if isinstance(data, str) else data) > MAX_BYTES:
+        raise ValueError("model-spend policy is too large or is not JSON text")
+    return validate_policy(json.loads(data.decode("utf-8") if isinstance(data, bytes) else data,
+                                      object_pairs_hook=_pairs))
+
+
 def _freeze(raw):
     return MappingProxyType({key: _freeze(value) if isinstance(value, dict) else value for key, value in raw.items()})
 
@@ -122,7 +131,7 @@ def resolve_spend_policy(config=None, *, principal: str | None = None) -> Resolv
     source = os.environ.get(POLICY_ENV)
     if POLICY_ENV in os.environ:
         try:
-            config = _freeze(_validate(json.loads(_read(_absolute(source)), object_pairs_hook=_pairs)))
+            config = _freeze(decode_policy(_read(_absolute(source))))
         except (OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
             raise SpendDenied("protected model-spend policy is unavailable or invalid") from exc
     active = principal or os.environ.get("EXO_PRINCIPAL")

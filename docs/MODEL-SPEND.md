@@ -35,7 +35,7 @@ share both caps. This model-only budget is separate from the gate's tool-cost
 policy (`budget.yaml`); it does not claim combined purchase/tool/model accounting.
 
 A trusted operator first calls `SpendJournal.provision(path, principal)` from
-`exo.core.models.spend`. Provisioning creates the file exclusively with mode 0600
+`exo.model_spend`. Provisioning creates the file exclusively with mode 0600
 and returns a UUID to pin in policy. Its directory must already exist. Runtime
 opens SQLite with `mode=rw`; it never creates, migrates, resets, or replaces a
 missing journal. Example **synthetic test configuration**, not advertised prices:
@@ -147,8 +147,13 @@ completion period (one row, no double count within a month). The journal persist
 the latest observed UTC time and refuses backward movement; clock correction must
 precede resumption. Forward clock jumps are outside what local UTC can prove.
 
-A handled refusal or ambiguous failure persists a stop reason. Errors, cancellation,
-missing usage and invalid accounting retain the full reservation. Restart does
+A handled failure after reservation persists a stop reason. Provider errors, cancellation,
+missing usage and invalid accounting retain the full reservation. Knowable preflight
+errors, including unpriced routes, unsupported billing contracts, invalid request
+options and insufficient cap headroom, refuse only that request before HTTP; they
+do not freeze other routes. A later valid priced request can proceed without
+operator reconciliation. A malformed generative decision answer with fully settled
+usage also does not create accounting uncertainty. Restart does
 not clear them. Subsequent admission and loop tool boundaries check the stop.
 Already-running tools cannot be revoked by a concurrent background stop; already
 admitted model calls have their own reservations. Pending calls are never assumed
@@ -218,9 +223,9 @@ SpendJournal.operator_review(policy, settlements={reservation_id: "confirmed USD
 This explicit API records confirmed charges, retaining original reservations and
 prices. It refuses to resume while any uncertain calls remain. It can record a
 charge exceeding the old bound (a violated provider contract), but never raises
-the configured caps; further admission still checks all recorded charges. For a
-pre-send refusal with no pending reservations, `operator_review(policy,
-resume=True)` explicitly clears the stop after the underlying issue is corrected.
+the configured caps; further admission still checks all recorded charges.
+Pre-send configuration refusals do not set a stop and need no resume operation.
+An explicit operator `freeze(reason)` remains available for administrative stops.
 This low-level API is an operator procedure, not a finished budget-review UI.
 
 Policy edits require a principal/admin action and engine restart/revalidation.
@@ -231,3 +236,28 @@ OS service must own its environment and select the root-owned policy using
 `EXO_MODEL_SPEND_POLICY`. Runtime never provisions a missing policy or journal.
 OS first provisioning must be exclusive and limited to a demonstrably fresh store;
 missing/partial established state requires explicit administrator repair, not reseeding.
+
+
+## Public package and application boundary
+
+`exo.model_spend` owns optional durable accounting, native billing contracts and
+protected policy loading. It imports no core provider, loop or engine types;
+`Price.actual` accepts the structural `TokenUsage` interface. Administrators use
+`decode_policy(data: bytes | str)` for bounded JSON with duplicate-field rejection
+and full schema validation, or `validate_policy(raw)` for an already parsed dict.
+Both return validated dictionaries; validation alone cannot discover duplicates
+already discarded by another JSON parser. `resolve_spend_policy` additionally
+checks the root-controlled path and freezes the selected policy.
+
+The small `exo.core.models.spend.admitted_stream` adapter binds those APIs to exact
+installed provider types, reserves before dispatch and settles before exposing a
+completed model result. `spend_refused` attempt outcomes become the protocol error
+code `model_spend_refused`; retained uncertainty or an existing journal stop uses
+`spend_stopped` and `model_spend_stopped`. Both are nonretryable for that request.
+
+Application factory composition now lives in `exo.application.create`: config and
+seat selection, required executor/plugin inventory and product attachment. The
+existing `exo.core.engine:create` factory path delegates to it, preserving CLI and
+protocol startup. This is the construction step of the ENGINE-SPLIT direction;
+core engine lifecycle and turn orchestration remain in place. The counted core
+line-budget test and its 16,000-line threshold are unchanged.

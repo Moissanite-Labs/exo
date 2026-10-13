@@ -307,8 +307,9 @@ class Loop:
                     partial.meta["interrupted"] = True
                     partial.meta["error"] = trace.scrub(result.error, 300)
                     result.message = await self._add(session, partial, turn_id)
-                code = "model_spend_stopped" if any(a.get("outcome") == "spend_stopped"
-                    for a in stream.error.attempts) else "provider_error"
+                outcomes = {a.get("outcome") for a in stream.error.attempts}
+                code = ("model_spend_stopped" if "spend_stopped" in outcomes else
+                        "model_spend_refused" if "spend_refused" in outcomes else "provider_error")
                 await self._emit(ev.Error(code=code, message=result.error,
                                           retryable=stream.error.retryable), session)
                 return

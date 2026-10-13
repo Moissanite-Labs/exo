@@ -26,8 +26,9 @@ from exo.core.models.claude_cli import ClaudeCliProvider
 from exo.core.models.muse_cli import MuseCliProvider
 from exo.core.models.decision import DecisionProvider
 from exo.core.models.keys import lookup_key
-from exo.core.models.spend import SpendJournal, admitted_stream, configured
-from exo.core.models.spend_policy import POLICY_ENV, required as spend_required, resolve_spend_policy
+from exo.model_spend import SpendJournal, configured
+from exo.core.models.spend import admitted_stream
+from exo.model_spend import POLICY_ENV, required as spend_required, resolve_spend_policy
 from exo.core.models.openai_chat import OpenAIChatProvider
 from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
@@ -125,7 +126,7 @@ class Router:
         selection = resolve_spend_policy(spend_config if spend is None else {"principal": spend.principal},
                                          principal=principal)
         if selection.source is not None and spend is not None:
-            from exo.core.models.spend import SpendDenied
+            from exo.model_spend import SpendDenied
             raise SpendDenied("an injected journal cannot replace protected model-spend policy")
         self.spend = spend if spend is not None else configured(selection.config, required=selection.required)
         self._spend_required, self._spend_source = selection.required, selection.source
@@ -166,7 +167,7 @@ class Router:
         return self.spend is not None or self._spend_required or spend_required()
 
     def check_spend_policy(self) -> None:
-        from exo.core.models.spend import SpendDenied
+        from exo.model_spend import SpendDenied
         if POLICY_ENV in os.environ and os.environ[POLICY_ENV] != self._spend_source:
             raise SpendDenied("protected model-spend policy changed; restart the engine")
         if self.spend_enforced and self.spend is None:
@@ -386,7 +387,7 @@ class Router:
             self.check_spend_policy()
         except RuntimeError as exc:
             event = error_event(str(exc), None, retryable=False)
-            event.attempts = [{"route": route.ref, "outcome": "spend_stopped"}]
+            event.attempts = [{"route": route.ref, "outcome": "spend_refused"}]
             yield event
             return
         if self.spend is not None:
