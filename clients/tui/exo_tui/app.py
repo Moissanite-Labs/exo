@@ -1552,7 +1552,10 @@ class ExoApp(App):
     def action_answer_card(self) -> None:
         """ctrl+f: put the focus on the approval card from anywhere; the draft in the composer stays as it is."""
         if self.card is not None and not self.modal_open():
-            self.card.focus()
+            if self.card.noting:
+                self.card.query_one("#deny-note").focus()
+            else:
+                self.card.focus()
 
     async def reconcile_approvals(self) -> None:
         """D-045: the core's list is the truth. A card whose request the core no longer holds (a missed
@@ -1578,11 +1581,12 @@ class ExoApp(App):
             self.close_card()
 
     def close_card(self) -> None:
+        restore = self.card is not None and (self.focused is self.card or self.card.has_focus_within)
         if self.card is not None:
             self.card.remove()
             self.card = None
         self.show_approval()
-        if self.card is None:
+        if restore:
             self.query_one(Composer).focus()
 
     def on_approval_card_answered(self, msg: ApprovalCard.Answered) -> None:

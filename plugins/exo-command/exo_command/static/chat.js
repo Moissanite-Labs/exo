@@ -5,6 +5,7 @@ import * as bus from "./bus.js";
 import { renderPanel } from "./panels.js";
 import { createHero } from "./hero.js";
 import { attachComposer } from "./composer.js";
+import { attachApprovals } from "./approvals.js";
 import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOUTS } from "./layout.js";
 
 import { contextMetrics, mergeTranscript, slashInput, commandUsage } from "./chat_state.js";
@@ -32,6 +33,7 @@ export function mount(root) {
   const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn));
   const help = attachComposer({ input, composer, getSession: () => current,
     reducedMotion: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches });
+  const approvalView = attachApprovals({ root: apprEl, composer: input, answer });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     if (e.key === "ArrowUp" && !input.value && lastSteer() && !e.defaultPrevented) { e.preventDefault(); e.stopImmediatePropagation(); unsteer(lastSteer()); }
@@ -262,7 +264,7 @@ export function mount(root) {
           line("agent", (s && (s.agent || s.seat)) || "exo"),
           line("model", model || (s && s.model) || "not set"),
           line("memory", ctx ? ctx.summaries + " summaries \u00B7 " + ctx.nodes + " nodes \u00B7 log " + ctx.log + " entries" : "reading\u2026")),
-        h("div", { class: "xc-chips" }, chip("\u21B5", "send"), chip("\u21E7\u21B5", "new line"), chip("/", "context \u00B7 findings \u00B7 trace"), chip("y n a", "approvals")));
+          h("div", { class: "xc-chips" }, chip("\u21B5", "send"), chip("\u21E7\u21B5", "new line"), chip("/", "context \u00B7 findings \u00B7 trace"), chip("o a d", "approvals")));
       heroEl.classList.remove("out"); heroEl.hidden = false;
       if (!heroOn) { heroOn = true; hero.start(); }
     } else if (heroOn) {
@@ -375,35 +377,10 @@ export function mount(root) {
     drawWhere();
   }
 
-  const HOTKEYS = { allow: "y", deny: "n", allow_always: "a", always: "a" };
-  function keyFor(o, taken) {
-    let k = HOTKEYS[o] || o[0] || "?";
-    for (const c of o) { if (!taken.has(k)) break; k = c; }
-    taken.add(k);
-    return k;
-  }
   function drawApprovals() {
     const mine = Object.values(approvals).filter((a) => a.session === current);
-    apprEl.replaceChildren(...mine.map((a) => {
-      const taken = new Set();
-      const opts = (a.options || ["allow", "deny", "allow_always"]).map((o) => [o, keyFor(o, taken)]);
-      return h("article", { class: "xc-pn xc-gate xc-in xc-risk-" + a.risk, "data-approval": a.request_id },
-        h("div", { class: "xc-ph" }, "Approval \u00B7 " + (a.risk || "medium") + " risk"),
-        h("div", { class: "xc-pb" }, a.summary),
-        a.call ? h("div", { class: "xc-pm" }, a.call.name + " " + short(JSON.stringify(a.call.arguments || {}), 200)) : null,
-        h("div", { class: "xc-keys" }, opts.map(([o, k]) =>
-          h("button", { class: "xc-key" + (o === "allow" ? " xc-key-go" : ""), onclick: () => answer(a, o) }, h("b", null, k), o.replace("_", " ")))));
-    }));
-    apprEl.style.paddingBottom = mine.length ? "12px" : "";
+    approvalView.draw(mine);
   }
-  function onKey(e) {
-    if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || "")) return;
-    const a = Object.values(approvals).find((x) => x.session === current);
-    if (!a) return;
-    const taken = new Set();
-    for (const o of (a.options || ["allow", "deny", "allow_always"])) if (keyFor(o, taken) === e.key.toLowerCase()) { e.preventDefault(); answer(a, o); return; }
-  }
-  document.addEventListener("keydown", onKey);
 
   function gaugeRow(label, n, max, hot) {
     return h("div", { class: "xc-gr" }, h("span", { class: "xc-i" }, label), h("span", { class: "xc-gauge" + (hot ? " hot" : "") }, h("i", { style: "width:" + Math.max(n ? 2 : 0, Math.min(100, Math.round(100 * n / max))) + "%" })), h("span", { class: "xc-v" }, fmtTok(n)));
@@ -574,8 +551,8 @@ export function mount(root) {
     try { await api("POST", "/api/chat/sessions/" + encodeURIComponent(current) + "/interrupt", {}); } catch (e) { fail(e); }
   }
 
-  async function answer(a, decision) {
-    try { await api("POST", "/api/approvals/" + encodeURIComponent(a.request_id), { decision }); delete approvals[a.request_id]; gone.add(a.request_id); drawApprovals(); drawSessions(); }
+  async function answer(a, decision, note = "") {
+    try { await api("POST", "/api/approvals/" + encodeURIComponent(a.request_id), { decision, note }); delete approvals[a.request_id]; gone.add(a.request_id); drawApprovals(); drawSessions(); }
     catch (e) {
       if (e.status === 404) { delete approvals[a.request_id]; gone.add(a.request_id); drawApprovals(); drawSessions(); flash("that approval was already closed"); }   // the core no longer holds it
       else fail(e);
@@ -611,7 +588,7 @@ export function mount(root) {
   const offState = bus.onState((st) => {
     if (st.synced !== synced) { synced = st.synced; recover(); }
   });
-  const off = () => { ++snapshotGeneration; offBus(); offState(); help.stop(); document.removeEventListener("keydown", onKey); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  const off = () => { ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
   refreshSessions().then(() => { if (!current && sessions.length) open(sessions[0].id); });
   return off;

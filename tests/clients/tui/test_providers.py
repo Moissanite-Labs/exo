@@ -171,6 +171,37 @@ def test_key_error_shows_class_only(tmp_path, fakes, monkeypatch):
     run(tmp_path, sc)
 
 
+@pytest.mark.parametrize("effective,warning", [
+    ("file", ""),
+    ("keychain", "The keychain key still wins; the saved file key is shadowed. Update the effective key "
+     "with exo providers add openai --store keychain, or remove only that item, then restart Exo."),
+])
+def test_file_save_reports_actual_source_and_visible_warning(tmp_path, fakes, monkeypatch, effective, warning):
+    def save(provider, value, **kw):
+        return {"provider": provider, "var": "OPENAI_API_KEY", "stored_in": "file",
+                "effective_source": effective, "shadowed_by": effective if effective != "file" else None,
+                "shadowed_by_env": False, "warning": warning}
+
+    monkeypatch.setattr(ps, "set_key", save)
+
+    async def sc(app, pilot, client, eng):
+        scr = await open_panel(app, pilot)
+        await pilot.press("down", "a")
+        await until(lambda: isinstance(app.screen, KeyScreen), pilot)
+        key_text = " ".join(str(w.render()) for w in app.screen.query("Static"))
+        assert "owner-only keys.env" in key_text and "system key store" not in key_text
+        app.screen.query_one("Input").value = FAKE_KEY
+        await pilot.press("enter")
+        await until(lambda: "effective source:" in scr.plain, pilot)
+        assert "saved in file" in scr.plain and f"effective source: {effective}" in scr.plain
+        assert warning in scr.plain and not leaked(app, scr.plain)
+        if warning:
+            await pilot.pause(0.05)
+            assert scr.query_one("#prov-msg").size.height > 1
+
+    run(tmp_path, sc)
+
+
 def test_composer_key_is_refused(tmp_path, fakes):
     async def sc(app, pilot, client, eng):
         assert refuse_key_in_composer(f"/providers add openai {FAKE_KEY}")

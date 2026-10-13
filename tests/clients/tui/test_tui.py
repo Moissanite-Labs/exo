@@ -50,6 +50,14 @@ def make_engine(tmp_path) -> CoreEngine:
                       plugins=pm, cwd=str(tmp_path), env={})
 
 
+def pending_approval(eng, session, req):
+    """Synthetic presentation requests still exist in the fake core, so periodic reconciliation is real."""
+    eng._approvals[req.request_id] = (asyncio.get_running_loop().create_future(), session)
+    eng._open_approvals[req.request_id] = req
+    eng._approval_rules[req.request_id] = ([], "")
+    eng.hub.publish(req, session)
+
+
 async def until(cond, pilot, timeout=5.0):
     end = time.monotonic() + timeout
     while not cond():
@@ -105,6 +113,7 @@ def test_approval_card_allow_and_deny_note(tmp_path):
         await send(app, pilot, "ask")
         await until(lambda: app.card is not None, pilot)
         assert isinstance(app.card, ApprovalCard)
+        await pilot.press("ctrl+f")
         await pilot.press("o")
         await until(lambda: any(isinstance(b, s.ApprovalRespond) for b in app.sent), pilot)
         r = [b for b in app.sent if isinstance(b, s.ApprovalRespond)][0]
@@ -114,6 +123,7 @@ def test_approval_card_allow_and_deny_note(tmp_path):
 
         await send(app, pilot, "ask again")  # runs the same rule; "always" was not chosen
         await until(lambda: app.card is not None, pilot)
+        await pilot.press("ctrl+f")
         await pilot.press("d")
         await pilot.pause()
         for ch in "nope":
@@ -260,6 +270,7 @@ def test_fuzzy_and_tool_collapse(tmp_path):
     async def sc(app, pilot, client, eng):
         await send(app, pilot, "ask")
         await until(lambda: app.card is not None, pilot)
+        await pilot.press("ctrl+f")
         await pilot.press("o")
         await until(lambda: "after ask" in app.transcript_text(), pilot)
         tb = next(iter(app.tools.values()))

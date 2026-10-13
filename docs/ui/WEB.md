@@ -62,7 +62,12 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   1781 → 153 tok` and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic
   (a `notice` that starts with `tip`).
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
-  `[y] allow [n] deny [a] allow always`; the keys work when the composer is not focused. The page replaces its cards with the server's list on every thread open and every stream reconnect, and the server asks the core first, so a card the core no longer holds is dropped (D-045). Taste, diff and the
+  `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
+  automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
+  a focused button shortcut, or clicking Always) requires a separate Enter or Confirm always button; Escape,
+  another key, Cancel, or leaving the card cancels confirmation. Deny opens an optional note. The page reconciles
+  its cards with the server's list on every thread open and stream reconnect, and the server asks the core first,
+  so a card the core no longer holds is dropped (D-045). Taste, diff and the
   other panels are cold. A peer message has the sender in the header, a grey rule and the line "from another
   session, not from you": it never looks like the user. Panels and new transcript items reveal on arrival.
 - **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
