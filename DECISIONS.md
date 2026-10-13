@@ -1059,6 +1059,29 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Revisit if:** the site gains a build step or more than one maintainer deploys, when CI should own promotion.
 - **Docs:** `docs/DEVELOPER-GUIDE.md` "Deploying the site".
 
+## D-048 (2026-10-12) Exopet: Exo as a living lattice, hatched by the community
+- **Status:** Proposed 2026-10-12. Design in docs/EXOPET.md. Nothing built. D-047 is left for a parallel branch.
+- **Revised:** 2026-10-13 by D-058: the community egg grows from repository activity, not install reports.
+- **Why (principal, 2026-10-12):** bring the earlier pet experiments (EvoPet, TamaHermes) into Exo in its own look and
+  make them more: the first evolution unlocks only when the community together has earned enough XP, then Exo
+  hatches from its digital egg (the site orb); later users get personal evolution; a pet gallery; a skill to make a
+  pet from the user's direction with animations mapped to activity; the egg and forms grow out of the incentre
+  lattice, "an alive evolving pulsing matrix of information".
+- **Proposal:** the pet is Exo, drawn as the incentre lattice. Ten forms on EvoPet's 99-level ladder: egg, cell,
+  tile, cube, frame, then one per dimension from 4 to 8. XP is a versioned pure function of the verified ledger
+  (principal-authored, pinned keys, anchored), weighted toward teaching (verdicts, rulings, promoted lessons) over
+  volume, with a daily curve capped at 1,000 and one form per day. No care stats, needs, decay or notifications.
+  Community hatch at 2^20 XP from at least 256 installs with 3 reporting days each, a 24 hour crack phase, opt-in
+  daily reports carrying only a dedicated key, date, rounded XP and a signature, a three-route counter service, and
+  Merkle receipts. Learned items light cold-blue dots, house taste shows grey (D-044). No new protocol event: the
+  state comes from existing events, status from a `pet` built-in. A data-only `exopet.json` format, a gallery run as
+  an index repository with CI and signed packages, and an `exopet-create` skill.
+- **Rejected:** XP per token (rewards long, wasteful turns); a stored XP number (editable); care stats and
+  hibernation (guilt and nags in a work tool); a face (off the instrument look); a new protocol event (29 of 30 used);
+  pets as code (a gallery would run strangers' code); a server that sees ledgers (breaks local-first).
+- **Open:** six questions for the principal at the end of docs/EXOPET.md (hatch target, a slow community, the site
+  creature after the hatch, the counter's platform, default on or off, the founders' mark).
+
 ## D-049 (2026-10-12) Brand: the lattice egg and the X/V mark
 - **Status:** Accepted 2026-10-13 (the principal: "a work of beauty"). Proposed 2026-10-12, previewed on staging
   only. On acceptance the lattice egg became the front-page default on every host (`?egg=off` keeps the old orb as an
@@ -1225,6 +1248,72 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Numbering:** D-055 is used by branch `feat/roadmap-page`, so this is D-056.
 - **Validation:** tests check the `--version` form and that the changelog's latest release equals the pyproject version.
 - **Docs:** `docs/VERSIONING.md`, `CHANGELOG.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-057 (2026-10-13) Event-driven activation: triggers, masked connectors, a runs dashboard, root causes
+- **Status:** Proposed 2026-10-13. Design in docs/EVENT-ACTIVATION.md. Nothing built.
+- **Why (principal, 2026-10-13):** Railtown AI's platform (railtown.ai: build, feed, observe the agent) gave the idea
+  of agents started by events, not only by a person or a timer. Credited as the inspiration; none of its names are used.
+- **Proposal:** a trigger is a scheduled job with `on` (an event source) instead of `when`, managed by `schedule.edit`:
+  no new protocol command or event. Sources: a watched folder, a mailbox, a loopback-only signed webhook, a local git
+  repository, Exo OS system events. Connectors pass an allowlist of fields and mask sensitive values into placeholders
+  that resolve only at the gate. Trigger turns have author `trigger:<id>`, never the principal, and run as unattended
+  runs under the gate. Debounce, minimum gap, runs per hour and day, tokens per run, spend caps per trigger and for all
+  triggers, pause one, pause all, automatic pauses, a loop guard. A runs dashboard in the web client (`runs` built-in).
+  An automatic root-cause pass after a failed run files a finding that feeds the existing findings to issue to pull
+  request loop. An Exo SDK for third-party agents is on the roadmap only.
+- **Rejected:** a hosted event relay (breaks D-050); installing git hooks in the user's repositories (watching refs is
+  enough and changes nothing); letting the agent add its own triggers (it could widen its own reach).
+- **Open:** default limits, root-cause pass on or off by default, whether the agent may propose triggers.
+
+## D-058 (2026-10-13) Exopet: the community egg, x0, grows from repository activity
+- **Status:** Proposed 2026-10-13, revised the same day (instant and validated XP, the name x0, meditation). Revises
+  D-048 (Proposed). Design in docs/EXOPET.md section 3. Nothing built.
+- **Why (principal, 2026-10-13, verbatim):** "users personal exos can gain xp from and level up from their own usage.
+  however the community one, and the one that initially gates all users exo evolutions, should be pased on repo
+  activity ... xp scales with significance of event of repo." Revision: "a small part of the learning is instant ...
+  then whenever we start reviewing community contributions the exo, which we will start calling x0 ... will go into
+  "meditating" mode ... and during that process it gains addional xp for each contribution that was validated."
+- **Proposal:** personal XP is unchanged. The community egg is named x0 (read "x-o"); a person's own copy stays "your
+  Exo". Each repository event adds a small instant share at once: issue 1, pull request opened 1, review 1, merge 2,
+  release 25 (at most one a week, validated by the act). The large share is validated XP, granted when x0 meditates
+  (a maintainer-started batch review): issue fixed by a merged pull request ("Fixes #N") 4, pull request merged or
+  salvaged (`Salvaged-from: #N` in the landing pull request) 10, review marked meaningful by ion, the org's review bot with a `rocket` reaction from the bot's own account id 4. Target 2^11 = 2,048. Instant XP is capped per
+  account (3 a day), excludes new accounts, has global caps (15 an hour, 60 a day) and fills at most 25 percent of the
+  target, and is never taken back. The core team, founders and their agents count up to 40 XP a day and 25 percent of
+  the target, instant and validated together, a cap rather than a discount. Agent issues, pull requests and reviews
+  earn nothing until a pull request is merged. At least half of x0 comes from validated work and releases. Simulated
+  hatch with a weekly meditation: about 2 weeks after going public when busy, 6 weeks when steady, 5 months when quiet.
+- **Removes from D-048:** install reports, the counter service, counter keys, proof of work and Merkle receipts. No
+  install sends anything; clients read the public feed (D-059) at most once a day.
+- **Rejected:** a discount multiplier on the core (it still scales with agent volume); counting agent issues and pull
+  requests (cheap to make in bulk); counting stars, comments outside reviews or pushes (cheap, or already in merges);
+  a settle window that held all XP back for 7 days (a contributor saw nothing land); taking instant XP back on a void
+  (the fill would jump backwards; small caps bound it instead); trusting the reaction from any account or by login.
+
+## D-059 (2026-10-13) The live egg: x0 on the site reacts to repository events and meditates
+- **Status:** Proposed 2026-10-13, revised the same day (instant events, meditation, feed `v: 2`). Design in
+  docs/LIVE-EGG.md, interface first. Built locally on branch `feat/live-egg-v2` (site client and functions, not
+  deployed; docs/LIVE-EGG.md "Build status"); the decision stays Proposed until the principal accepts it.
+- **Why (principal, 2026-10-13):** "event triggered animation ... on the 3d egg that happens every time there's
+  activity on the github. different types and levels of animations for different types of events." Revision: "they
+  should be instant triggered so users can see the satisfaction of their contribution triggering an animation."
+- **Proposal:** a GitHub webhook calls a Vercel function on the site's host, which verifies the HMAC signature,
+  ignores bots, applies D-058 and appends to a public feed holding only event type, kind, time, level and nominal
+  weight, plus the community totals, the egg's stage and state. The page polls `GET /api/egg/feed` (`v: 2`, 5 second
+  edge cache, 10 second poll, an extra poll when the tab becomes visible) and calls `egg.event(type)` at once: an issue
+  a small pulse, a pull request a packet into the core, a review a packet across the lattice, a merge a bloom, a
+  release a growth flash. A maintainer starts a meditation by a signed `workflow_dispatch` (`x0-meditate`), with a
+  14-day backstop from the daily cron; the function reads the reviewer bot's `rocket` reactions with one read-only,
+  single-repository token, shuffles the validated items and schedules their absorbs. The feed then shows
+  `egg.state` `meditating` with progress and `validated` events (kind only), and the page calls `egg.meditate(true)`:
+  the lattice folds inward, dims and breathes slowly, each validated item travels into the core as a cold-blue glow
+  with the XP ticking up, then `waking` and `egg.meditate(false)`. Replay of the last 24 hours on open, queues that
+  fold bursts, stills and a text line under reduced motion, a per-address limit on reads. Staging and production have
+  their own store, secrets and webhook.
+- **Rejected:** reading the GitHub API from the page (private repo, and a token would be public); streaming (keeps a
+  function open per tab for a few events an hour); titles or authors in the feed while the repository is private;
+  a label as the meditation trigger (it sits on one item, not the batch); a fixed schedule as the trigger (it would
+  meditate when nobody reviewed anything).
 
 ## D-061 (2026-10-13) Web sub-pages to the site v2 standard
 - **Why:** the chat page and the site v2 (front page, roadmap) set a high bar; Tasks, Schedule, Command and Providers

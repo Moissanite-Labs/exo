@@ -349,7 +349,14 @@ sets it to `~/Work/handoffs`.
 
 **Deploying the site.** `scripts/deploy-site.sh` reads the Vercel team id and slug from `EXO_VERCEL_TEAM` and
 `EXO_VERCEL_SCOPE`, and the token file from `EXO_DEPLOY_ENV`. Put them in the environment or in an untracked
-`~/.config/exo/deploy.conf`. It deploys from a copy outside git.
+`~/.config/exo/deploy.conf`. It deploys from a copy outside git. Staging runs the live egg in demo mode by default (`?feed=off` turns it off); production shows no egg activity until `data-feed` names a real feed. See `docs/SITE-STATUS.md` "Live egg feed".
+
+**The x0 functions.** `site/api/egg/` holds the Vercel functions behind x0 (`webhook`, `feed`, `meditate`, `settle`;
+D-059, `docs/LIVE-EGG.md` section 3). Node, no packages; the deploy copies them with the rest of `site/`, and
+`site/vercel.json` adds the daily cron (the staging deploy merges its noindex header into that file). Run their tests
+and the client tests with `node --test tests/site_api/*.test.mjs tests/site_js/*.test.mjs`. Rebuild the demo feed from
+the real functions with `node scripts/make_egg_demo.mjs`. `node scripts/shots_egg_v2.mjs [url] [dir]` captures the
+meditation from a local preview over the DevTools protocol.
 
 Staging first (D-047). With no flag the script deploys to `staging.exo.askaconsult.com` (Vercel project
 `exo-site-staging`), which sends `X-Robots-Tag: noindex, nofollow` and serves a `robots.txt` that disallows everything.
