@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from exo import cli, update_cmd
+from exo import __version__, cli, update_cmd
 
 
 @pytest.fixture
@@ -54,7 +54,7 @@ def test_help_lists_both_and_exits(tui, capsys):
 def test_version(tui, capsys):
     assert cli.main(["--version"]) == 0 and tui == []
     out = capsys.readouterr().out.strip()
-    assert out.startswith("exo ") and update_cmd.__version__ in out
+    assert out.startswith("exo ") and __version__ in out
 
 
 def test_unknown_subcommand_is_an_error_not_a_tui(tui):
