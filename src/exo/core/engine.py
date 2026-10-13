@@ -994,7 +994,9 @@ class CoreEngine:
                        "cwd": cwd, "created": info.created,
                        "user_turns": sum(1 for m in self.store.messages(info.id) if m.role == "user"
                                          and not m.meta.get("note"))},
-            "git": workspace.git_facts(cwd),
+            # Even read-only Git commands can execute workspace .git/config fsmonitor hooks.
+            "git": ({"repo": None, "unavailable": "Git facts unavailable: required executor has no isolated Git facts operation"}
+                    if self.executor_required else workspace.git_facts(cwd)),
             "findings": [{"id": r["id"], "severity": r["severity"], "title": r["title"][:100]}
                          for r in self.findings.list("open")[:10]],
         }

@@ -50,7 +50,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-017 Subagents on the cheapest model | `docs/AGENT-WIRE.md` "Model tiers" | MISSING | §5 (`[models] tier`) | WP §8, §13.2, §16.1 |
 | D-018 Provider agnostic, user-chosen models | `docs/PROVIDERS.md` | §1, §3 (`/model`) | §5 | WP §13 |
 | D-019 Jev default decision model | `docs/PROVIDERS.md` "Providers" | n/a | n/a | WP §14.5 |
-| D-020 Exo OS | OS in `exo-os`; shared interface in `docs/EXECUTORS.md` | §6 (executor denial) | §3 (executor interface) | WP §27 (design branch, one paragraph) |
+| D-020 Exo OS | OS in `exo-os`; shared interface in `docs/EXECUTORS.md`, required handoff in `docs/HANDOFF.md` | §6 (executor denial) | §3 (executor interface) | WP §27 (design branch, one paragraph) |
 | D-021 Wave 2 closed | `docs/SEATS.md`, `docs/STANDALONE.md` §6 | §8 | §4, §5 | WP §18, §29, §31 |
 | D-022 Wave 3 plan | `docs/WAVE-3.md`, `docs/SCHEDULE.md` | §2 | §2 | WP §22, §24, §31, §32 |
 | D-023 Wave 3 built | `docs/WAVE-3.md` "Acceptance" | n/a | n/a | WP §22, §24, §29, §31 |

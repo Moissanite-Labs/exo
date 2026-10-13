@@ -180,21 +180,25 @@ class FileIndex:
     """Files under ``cwd`` for ``@``: git's own list (tracked plus untracked, minus .gitignore) when the folder is a
     repo, else a bounded walk. Secret stores are left out with ``exo.gate.is_sensitive_path``. Never reads a file."""
 
-    def __init__(self, cwd: str | os.PathLike, ttl: float = 5.0, cap: int = 6000) -> None:
+    def __init__(self, cwd: str | os.PathLike, ttl: float = 5.0, cap: int = 6000, *,
+                 executor_required: bool = False) -> None:
         self.cwd = Path(cwd)
         self.ttl, self.cap = ttl, cap
+        self.executor_required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
         self._at = 0.0
         self._files: list[str] = []
         self._dirs: list[str] = []
 
     def _list(self) -> list[str]:
-        try:
-            r = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-                               cwd=self.cwd, capture_output=True, timeout=3, check=False)
-            if r.returncode == 0:
-                return [p for p in r.stdout.decode("utf-8", "replace").split("\0") if p][: self.cap]
-        except (OSError, subprocess.SubprocessError):
-            pass
+        if not self.executor_required:
+            # Git configuration in a writable workspace can execute fsmonitor helpers.
+            try:
+                r = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                                   cwd=self.cwd, capture_output=True, timeout=3, check=False)
+                if r.returncode == 0:
+                    return [p for p in r.stdout.decode("utf-8", "replace").split("\0") if p][: self.cap]
+            except (OSError, subprocess.SubprocessError):
+                pass
         out: list[str] = []
         stack = [(self.cwd, 0)]
         while stack and len(out) < self.cap:

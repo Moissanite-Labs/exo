@@ -183,6 +183,9 @@ class Delegator:
             raise ToolError("Each task needs a non-empty goal.")
         if len(items) > lim.max_children:
             raise ToolError(f"At most {lim.max_children} tasks per call; got {len(items)}.")
+        if (self.engine.executor_required and any(it.get("seat") for it in items)
+                and getattr(self.engine.executor, "supports_remote_delegation", False) is not True):
+            raise ToolError("Required tool executor does not support remote delegation")
         briefs = [self._brief(parent, depth, it, ctx.cwd) for it in items]
         runs = [asyncio.ensure_future(self._remote(parent, b, str(it["seat"])) if it.get("seat")
                                       else self._attempts(parent, b)) for b, it in zip(briefs, items)]
