@@ -138,3 +138,4 @@ real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Still open:
 | Issue #48 long `HOME` no longer stops the core: the peer socket falls back to a short private folder | `docs/PEERS.md` "How it works" | n/a (no user commands changed) | n/a | n/a |
 | #100 Findings verify on eligible quiet turns or days of activity (D-025); trace lists open findings | `docs/TRACE.md` "Findings", `CHANGELOG.md` | n/a (no user commands changed) | n/a | n/a |
 | D-069 Session rename is a built-in `command.run`, principal only, announced as `session.updated` | `docs/COMMANDS.md`, `docs/ui/WEB.md`, `DECISIONS.md` D-069 | `docs/USER-GUIDE.md` `/rename` | `docs/DEVELOPER-GUIDE.md` built-in commands | n/a |
+| D-068 Turns build from ready summaries and do not wait for memory upkeep; short wait only on budget overflow | `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep", `DECISIONS.md` D-068 | n/a (no user commands changed) | n/a | n/a |
