@@ -66,7 +66,9 @@ def router(tmp_path, mode="ok", login=True, **env):
     (d / "fake.json").write_text(json.dumps({"mode": mode, "out": str(tmp_path / "out.json"),
                                              "pid": str(tmp_path / "pid")}))
     home = home_with_login(tmp_path) if login else tmp_path / "nohome"
-    return Router(roles={"main": ["muse-cli:muse-spark-1.3"]}, env={"PATH": str(d), "HOME": str(home), **env})
+    r = Router(roles={"main": ["muse-cli:muse-spark-1.3"]}, env={"PATH": str(d), "HOME": str(home), **env})
+    r.providers["muse-cli"] = {**r.providers["muse-cli"], "serve": False}  # these tests cover the exec path; see test_muse_serve.py
+    return r
 
 
 def run(r, messages, tools=()):
@@ -121,7 +123,7 @@ def test_tools_are_refused_and_the_router_falls_back(tmp_path):
     assert evs[-1].kind == "done" and evs[-1].message.text() == "fallback ok"
     assert not (tmp_path / "out.json").exists()  # muse was never started
     end = run(router(tmp_path), [Message.user("hello")], [TOOL])[-1]
-    assert end.kind == "error" and "text only" in end.error
+    assert end.kind == "error" and "muse_serve = false" in end.error
 
 
 @pytest.mark.parametrize("mode,status,hint", [("login", 401, "muse login"), ("401", 401, "muse login"),

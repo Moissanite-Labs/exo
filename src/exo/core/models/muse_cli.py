@@ -5,10 +5,13 @@ never reads, copies or stores it. Exo only starts ``muse exec`` and reads what i
 
 What this provider is not, said plainly:
 
-- Text only. ``muse exec`` runs its own agent loop. Exo cannot hand it Exo's tools or stream tool calls out of
-  it, so a call that carries tools is refused (status 501) and the router falls back to the next route.
-- One process per turn, so every turn pays process start-up and a fresh session. History is flattened into one
-  prompt. Output arrives when the run ends, not token by token.
+- Tool-less calls use ``muse exec``: one process per turn, history flattened into one prompt, the answer
+  arrives when the run ends (not token by token), no token counts.
+- Calls that carry Exo tools use ``muse serve`` (``muse_serve.py``): Exo's tools go in as an inert MCP server,
+  the model's tool call is intercepted and Exo runs the tool. Streaming and usage work. The costs are real:
+  tool results are replayed as quoted text in a fresh session each request, each call pays Muse's large system
+  prompt (about 23k input tokens, uncached), and the route is pinned to one wire schema version. If
+  ``[models] muse_serve = false``, a call with tools is refused (status 501) and the router falls back.
 - On some macOS setups an unsigned native ``muse`` cannot write the keychain at login (OSStatus -67068). A
   working unsigned binary or launcher is fine and is never checked or flagged up front. Only when a real call
   fails with that error does Exo report ``unsigned`` and suggest ad-hoc signing of the native binary
@@ -201,8 +204,9 @@ class MuseCliProvider:
 
     def __init__(self, command: str = "muse", *, name: str | None = None, model: str | None = None,
                  env: Mapping[str, str] | None = None, read_timeout: float | None = 300.0,
-                 timeout: float = 600.0) -> None:
+                 timeout: float = 600.0, serve: bool = True) -> None:
         self.command = command
+        self.serve = serve  # False: the tool route (muse serve) is off and a call with tools is refused
         self.model = model
         self.env = env
         self._timeout = httpx.Timeout(timeout, read=read_timeout or timeout)  # the router quotes ``_timeout.read``
@@ -211,18 +215,24 @@ class MuseCliProvider:
             self.name = name
 
     async def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
-        if tools:  # 501 is not in NO_FALLBACK_STATUS: the router moves to the next route
-            yield error_event("muse-cli is text only: it cannot carry Exo tools", 501, retryable=False)
+        model = opts.get("model") or self.model
+        if not model or model == "default":
+            model = DEFAULT_MODEL
+        effort = opts.get("reasoning") if opts.get("reasoning") in EFFORTS else DEFAULT_EFFORT
+        if tools:
+            if not self.serve:  # 501 is not in NO_FALLBACK_STATUS: the router moves to the next route
+                yield error_event("muse-cli: the tool route is off ([models] muse_serve = false)", 501, retryable=False)
+                return
+            from exo.core.models import muse_serve  # the tool route: muse serve with Exo's tools (D-051)
+            async for ev in muse_serve.run(self.command, self.env, messages, tools, model=str(model), effort=effort,
+                                           read=self._read):
+                yield ev
             return
         try:
             prompt = build_prompt(messages)
         except ValueError as exc:
             yield error_event(f"muse-cli: {exc}", 400, retryable=False)
             return
-        model = opts.get("model") or self.model
-        if not model or model == "default":
-            model = DEFAULT_MODEL
-        effort = opts.get("reasoning") if opts.get("reasoning") in EFFORTS else DEFAULT_EFFORT
         st = StreamState()
         with tempfile.TemporaryDirectory(prefix="muse-cli-") as tmp:
             # An empty private workspace: the run has no files of Exo's or the user's to read.
