@@ -86,6 +86,25 @@ def test_files_route_is_cwd_bounded_and_needs_a_session(repo):
     assert dispatch(Src(str(repo)), "/api/complete/files", {"session": ["nope"], "q": [""]})[1]["files"] == []
 
 
+def test_explicit_required_source_does_not_reuse_ordinary_file_index(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from exo_command.source import DispatcherSource
+    monkeypatch.delenv('EXO_TOOL_EXECUTOR_REQUIRED', raising=False)
+    (tmp_path / 'safe.txt').write_text('safe')
+    ordinary = Src(str(tmp_path))
+    ordinary.executor_required = False
+    api._INDEXES.clear()
+    query = {'session': ['s1'], 'q': ['']}
+    dispatch(ordinary, '/api/complete/files', query)
+    required = DispatcherSource(SimpleNamespace(engine=SimpleNamespace(executor_required=True)))
+    required.call = ordinary.call
+    def no_git(*args, **kw): raise AssertionError('completion executed host Git')
+    monkeypatch.setattr(api.cm.subprocess, 'run', no_git)
+    code, result = dispatch(required, '/api/complete/files', query)
+    assert code == 200 and [f['value'] for f in result['files']] == ['@safe.txt']
+    assert (str(tmp_path), True) in api._INDEXES
+
+
 def test_files_route_is_read_only(repo):
     c = CommandCentre(load_settings({}), Src(str(repo)))
     assert asyncio.run(api.dispatch(c, "POST", "/api/complete/files", {}, {}))[0] == 405
@@ -227,7 +246,6 @@ console.log(JSON.stringify({out, lines}));''')
 
 def test_escape_never_stops_a_turn_in_the_page():
     """D-043: the only Escape handler closes the completion menu; Stop is a button."""
-    from pathlib import Path
 
     static = Path(__file__).resolve().parents[1] / "exo_command" / "static"
     for js in static.glob("*.js"):

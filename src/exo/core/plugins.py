@@ -324,17 +324,26 @@ class PluginManager:
 
     def __init__(self, config: dict[str, dict[str, Any]] | None = None,
                  memory_choice: str | None = None, context_choice: str | None = None,
-                 hooks: HookRegistry | None = None) -> None:
+                 hooks: HookRegistry | None = None, executor_required: bool = False) -> None:
         self.config = dict(config or {})
         self.hooks = hooks or HookRegistry()
         self.router: Any = None  # set by the engine: the model Router, for plugins that make side calls
-        self.executor_required = False  # trusted engine mode, not tool arguments or plugin settings
+        self._executor_required = executor_required
         self.slots = Slots(memory_choice=memory_choice, context_choice=context_choice)
         self.tools: dict[str, ToolEntry] = {}
         self.commands: dict[str, CommandEntry] = {}
         self.channels: dict[str, ChannelEntry] = {}
         self.skills: dict[str, SkillEntry] = {}
         self.plugins: dict[str, LoadedPlugin] = {}
+
+    @property
+    def executor_required(self) -> bool:
+        return self._executor_required
+
+    @executor_required.setter
+    def executor_required(self, value: bool) -> None:
+        # A manager already attached to a required engine cannot downgrade its security hooks.
+        self._executor_required = self._executor_required or bool(value)
 
     def _run_register(self, manifest: Manifest, source: str, register: Any) -> LoadedPlugin:
         rec = LoadedPlugin(manifest, source)
