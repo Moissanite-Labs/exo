@@ -18,7 +18,7 @@ import sqlite3
 import time
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any, Callable, TypeAlias
 
 from exo.core import trace
 from exo.core.agents.delegate import BLOCKED_TOOLS
@@ -33,6 +33,9 @@ COLS = ("id", "title", "when", "prompt", "seat", "tier", "deliver", "paused", "l
 EVERY = re.compile(r"^every\s+(\d+)\s*([mhd])$", re.I)
 UNIT = {"m": 60, "h": 3600, "d": 86400}
 RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
+# Aliases: the method Scheduler.list shadows the builtin in the annotations that follow it.
+Jobs: TypeAlias = list[dict[str, Any]]
+Strs: TypeAlias = list[str]
 PROMPT = "You are running a scheduled job unattended. Do the task, then reply with a short plain-English result."
 
 
@@ -101,7 +104,8 @@ class Scheduler:
         self.db.commit()
         self.running: dict[str, asyncio.Task] = {}
         self.loops: dict[str, Loop] = {}  # scheduled child session -> live turn loop
-        self._wake, self._main = asyncio.Event(), None
+        self._wake = asyncio.Event()
+        self._main: asyncio.Future[None] | None = None
         self.error_pause = 5.0  # seconds to wait after a failed tick, so a persistent fault does not spin
 
     # ------------------------------------------------------------ jobs
@@ -145,11 +149,11 @@ class Scheduler:
 
     # ------------------------------------------------------------ running
 
-    def due(self, now: float | None = None) -> list[dict[str, Any]]:
+    def due(self, now: float | None = None) -> Jobs:
         now = self.clock() if now is None else now
         return [j for j in self.list() if not j["paused"] and j["next_run"] is not None and j["next_run"] <= now]
 
-    async def tick(self) -> list[str]:
+    async def tick(self) -> Strs:
         """Start every due job (once each, however many slots were missed); returns the job ids started."""
         started = []
         for job in self.due():
@@ -167,7 +171,7 @@ class Scheduler:
             return None
         task_id = new_id("t")
         t = self.running[job["id"]] = asyncio.ensure_future(self.run(job, task_id))
-        t.add_done_callback(lambda _t, j=job["id"]: self.running.pop(j, None))
+        t.add_done_callback(lambda _t: self.running.pop(job["id"], None))
         return task_id
 
     def _emit(self, job: dict[str, Any], task_id: str, status: str, detail: str, child: str | None = None) -> None:
@@ -299,7 +303,7 @@ class Scheduler:
 
 async def handle_schedule_edit(sch: Scheduler, body: Any) -> dict[str, Any]:
     """schedule.edit: list, add, remove, pause, resume, run_now (``Scheduler.edit``)."""
-    b = asdict(body) if is_dataclass(body) else dict(body)
+    b = asdict(body) if is_dataclass(body) and not isinstance(body, type) else dict(body)
     act = b.get("action")
     try:
         if act == "list":

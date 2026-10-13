@@ -548,42 +548,6 @@
       "count": 1
     },
     {
-      "path": "src/exo/core/scheduler.py",
-      "message": "\"None\" has no attribute \"add_done_callback\"",
-      "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "\"list?[dict[str, Any]]\" has no attribute \"__iter__\" (not iterable)",
-      "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "Argument 1 to \"asdict\" has incompatible type \"DataclassInstance | type[DataclassInstance]\"; expected \"DataclassInstance\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "Cannot infer type of lambda",
-      "code": "misc",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "Function \"exo.core.scheduler.Scheduler.list\" is not valid as a type",
-      "code": "valid-type",
-      "count": 2
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "Incompatible types in assignment (expression has type \"Task[None]\", variable has type \"None\")",
-      "code": "assignment",
-      "count": 1
-    },
-    {
       "path": "src/exo/core/sessions.py",
       "message": "Argument 3 to \"_chain\" has incompatible type \"Any | int | None\"; expected \"int\"",
       "code": "arg-type",
