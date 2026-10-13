@@ -1,6 +1,6 @@
 // exo-command web UI. Plain ES modules, no build step, no dependencies, no network beyond this server.
 // Chat is the default page; Tasks, Schedule and Command (the read-mostly overview) are the other views.
-import { h, api } from "./dom.js";
+import { h, api, token } from "./dom.js";
 import * as bus from "./bus.js";
 import * as chat from "./chat.js";
 import * as tasks from "./tasks.js";
@@ -16,10 +16,12 @@ function takeToken() {
   const parts = (location.hash || "").slice(1).split("&").filter(Boolean);
   const t = parts.find((x) => x.startsWith("token="));
   if (!t) return;
-  const value = decodeURIComponent(t.slice(6));
+  let value;
+  try { value = decodeURIComponent(t.slice(6)); } catch (e) { return false; }
   if (value) sessionStorage.setItem("xc-token", value);
   const view = parts.find((x) => !x.startsWith("token=")) || "chat";
   history.replaceState(null, "", location.pathname + location.search + "#" + view);
+  return !!value;
 }
 takeToken();
 const app = document.getElementById("app");
@@ -34,6 +36,10 @@ let unmount = null, current = null;
 const reduced = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function show(id) {
+  if (!token()) {
+    main.replaceChildren(h("p", { role: "status" }, "Open the complete link printed by exo web, including #token=… . The bare address has no page token."));
+    return;
+  }
   const v = VIEWS.find((x) => x[0] === id) || VIEWS[0];
   if (unmount) { try { unmount(); } catch (e) { console.error(e); } }
   current = v[0];
@@ -47,7 +53,7 @@ function show(id) {
 }
 
 bus.onState((s) => {
-  connText.textContent = s.connected ? "live" : s.denied ? "page link expired: reopen the link exo web printed" : "reconnecting";
+  connText.textContent = s.connected ? "live" : s.denied ? "page link expired: open the latest complete link printed by exo web" : !token() ? "page token missing" : "reconnecting";
   led.className = "xc-dot " + (s.connected ? "ok" : "");
 });
 
@@ -77,12 +83,17 @@ function boot(checks) {
 }
 
 app.replaceChildren(nav, main);
-boot([
+if (token()) boot([
   ["core", async () => ((await api("GET", "/api/health")).connected ? "connected" : null)],
   ["agent", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return s.length ? (s[0].agent || s[0].seat || "exo") + " · " + s.length + " thread" + (s.length > 1 ? "s" : "") : null; }],
   ["memory", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return s.length ? s.reduce((n, x) => n + (x.message_count || 0), 0) + " messages on record" : null; }],
   ["model route", async () => { const s = (await api("GET", "/api/chat/sessions")).sessions || []; return (s[0] && s[0].model) || null; }],
 ]);
-await bus.start();   // loads open panels, then follows the event stream
+if (token()) await bus.start();   // loads open panels, then follows the event stream
 show((location.hash || "").slice(1));
-window.addEventListener("hashchange", () => { const id = (location.hash || "").slice(1); if (id !== current) show(id); });
+window.addEventListener("hashchange", async () => {
+  const fresh = takeToken();
+  if (fresh) await bus.restart();
+  const id = (location.hash || "").slice(1);
+  if (fresh || id !== current) show(id);
+});

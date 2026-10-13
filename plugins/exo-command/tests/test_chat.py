@@ -254,6 +254,7 @@ def test_http_routes_origin_and_event_stream():
         await asyncio.wait_for(r.readuntil(b"\n\n"), 2)                 # headers + comment
         first = await asyncio.wait_for(r.readuntil(b"\n\n"), 2)
         assert first.startswith(b"id: 2\ndata: ")
+        assert (await asyncio.wait_for(r.readuntil(b"\n\n"), 2)).startswith(b"event: synced")
         c.record(ev(3, "message.delta", {"message_id": "m2", "text": "live"}, sid="s9"))
         c.record(ev(4, "message.delta", {"message_id": "m3", "text": "other"}, sid="s0"))
         c.record(ev(5, "task.updated", {"task_id": "t"}, sid=None))
@@ -299,7 +300,7 @@ def test_chat_through_a_real_core_streams_text():
         seen = []
         while "turn.completed" not in seen:
             frame = await asyncio.wait_for(r.readuntil(b"\n\n"), 5)
-            if b"data: " in frame:
+            if frame.startswith(b"id: "):
                 seen.append(json.loads(frame.split(b"data: ", 1)[1])["type"])
         assert "message.completed" in seen and "turn.started" in seen
         code, body = await http(port, "GET", "/api/chat/sessions/" + sid)
