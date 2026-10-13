@@ -713,18 +713,21 @@ it was slower and no more correct. A native version waits for a measured win on 
 
 #### 15.2 Hooks
 
-Named hook points let plugins watch and steer. The names follow Hermes so existing plugins keep working. The
-engine fires these today **[built]**:
+Named hook points let plugins watch and steer. Their names are familiar to Hermes plugin authors, but Exo
+accepts only hooks its core actually fires. These six are supported today **[built]**:
 
 - `pre_tool_call`: may return `block` (the model receives the reason as an error result) or `approve` (ask
   the person first).
 - `post_approval_response`: told what the person chose.
 - `post_tool_call`: sees the result.
 - `transform_tool_result`: may rewrite the result text.
+- `on_turn_start` and `on_turn_end`: bracket each turn.
 
-More names are reserved and validated (for model calls, turns, sessions, compaction, commands, subagents and
-skills) but not yet fired by the loop. A failing hook is logged and skipped, so one broken plugin never
-breaks a turn. A block decision is still honoured.
+Names declared in Hermes contracts or earlier Exo versions for model calls, session lifecycle, compaction,
+commands, subagents, gateway and auxiliary calls, kanban, and skills are known but not fired by Exo. The
+default registry rejects these registrations so plugins cannot silently subscribe to a hook that never runs.
+A failing supported hook is logged and skipped, so one broken plugin does not break a turn. A block decision
+is still honoured.
 
 #### 15.3 The approval flow
 
