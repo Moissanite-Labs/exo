@@ -47,7 +47,8 @@ function show(id) {
   where.textContent = "";
   dot.classList.remove("on");
   nav.replaceChildren(h("strong", { class: "xc-brand" }, dot, "E X O"), where,
-    ...VIEWS.map((x) => h("button", { class: x[0] === current ? "on" : "", role: "tab", onclick: () => show(x[0]) }, x[1])), conn);
+    ...VIEWS.map((x) => h("button", { class: x[0] === current ? "on" : "", role: "tab", "aria-selected": x[0] === current ? "true" : "false",
+      onclick: () => show(x[0]) }, x[1])), conn);
   main.replaceChildren();
   unmount = v[2].mount(main) || null;
 }
