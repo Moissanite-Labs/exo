@@ -151,13 +151,13 @@ def test_cancel_propagates_and_never_falls_back():
         reg.tool("t", "demo")(lambda *args: pytest.fail("handler ran"))
         ctx = ToolContext()
         task = asyncio.create_task(reg.call(ToolCall("c", "t"), ctx))
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 5)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await asyncio.wait_for(task, 5)
         assert ctx.cancel.is_set()
 
-    asyncio.run(main())
+    asyncio.run(asyncio.wait_for(main(), 5))
 
 
 def test_request_rejects_non_json_and_freezes_constructed_values():

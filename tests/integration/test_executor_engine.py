@@ -59,7 +59,7 @@ def test_engine_main_child_and_background_share_broker(tmp_path, monkeypatch, tr
             assert result.text() == "executor denied"
             assert [request.call_id for request in broker.seen] == ["main", "main", "child"]
         finally:
-            await engine.close()
+            await asyncio.wait_for(engine.close(), 5)
 
     asyncio.run(asyncio.wait_for(main(), 5))
 
@@ -80,7 +80,7 @@ def test_secure_plugin_discovery_uses_only_executor_roots(tmp_path, monkeypatch)
     monkeypatch.setattr(PluginManager, "load_all", load_all)
     engine = create()
     assert seen == [{"dirs": broker.trusted_plugin_dirs, "enabled": None, "entry_points": False}]
-    asyncio.run(engine.close())
+    asyncio.run(asyncio.wait_for(engine.close(), 5))
 
 
 def test_missing_required_executor_plugin_refuses_factory(monkeypatch):
@@ -129,6 +129,31 @@ def test_direct_required_engine_requires_trusted_gate_before_store(tmp_path, tru
     assert not home.exists() and broker.seen == []
 
 
+@pytest.mark.parametrize("roots", ["missing", None, ()])
+def test_direct_required_engine_refuses_ambient_fake_gate_without_inventory(tmp_path, monkeypatch, roots):
+    class NoInventory:
+        async def execute(self, request, tool, run_trusted):
+            pytest.fail("untrusted gate must never authorize a broker call")
+    broker = NoInventory()
+    if roots != "missing":
+        broker.trusted_plugin_dirs = roots
+    ambient = tmp_path / "ambient"
+    folder = ambient / "exo-gate"
+    folder.mkdir(parents=True)
+    (folder / "plugin.yaml").write_text("name: exo-gate\n")
+    (folder / "__init__.py").write_text(
+        "def register(ctx):\n"
+        "    ctx.register_hook('pre_tool_call', lambda **kw: None)\n"
+        "    ctx.register_hook('post_approval_response', lambda **kw: None)\n")
+    monkeypatch.setenv("EXO_PLUGIN_DIRS", str(ambient))
+    manager = PluginManager()
+    assert manager.load_all(enabled=["exo-gate"], entry_points=False)[0].ok
+    home = tmp_path / "not-created"
+    with pytest.raises(ExecutorConfigurationError, match="trusted folder|trusted_plugin_dirs"):
+        CoreEngine(home, plugins=manager, executor=broker, executor_required=True)
+    assert not home.exists()
+
+
 @pytest.mark.parametrize("decision", ["allow", "deny"])
 def test_plugin_approval_precedes_executor_and_post_hook(tmp_path, monkeypatch, decision, trusted_gate):
     seen = []
@@ -161,7 +186,7 @@ def test_plugin_approval_precedes_executor_and_post_hook(tmp_path, monkeypatch, 
             assert seen == (["pre", "approval", "executor", "post"] if decision == "allow"
                             else ["pre", "approval", "post"])
         finally:
-            await engine.close()
+            await asyncio.wait_for(engine.close(), 5)
 
     asyncio.run(asyncio.wait_for(main(), 5))
 
@@ -194,7 +219,7 @@ def test_scheduler_tools_use_broker(tmp_path, trusted_gate):
             assert broker.seen[0].arguments["command"] == "echo scheduled"
             assert engine.store.get_session(broker.seen[0].session).kind == "scheduled"
         finally:
-            await engine.close()
+            await asyncio.wait_for(engine.close(), 5)
 
     asyncio.run(asyncio.wait_for(main(), 5))
 
@@ -227,7 +252,7 @@ def test_required_local_delegate_setup_has_no_workspace_execution(tmp_path, monk
             assert seen == ["delegate", "bash"]
             assert "done" in result.text()
         finally:
-            await engine.close()
+            await asyncio.wait_for(engine.close(), 5)
 
     asyncio.run(asyncio.wait_for(main(), 5))
 
@@ -246,6 +271,6 @@ def test_required_remote_delegate_refuses_host_bus_connection(tmp_path, monkeypa
             assert result.is_error and "does not support remote delegation" in result.text()
             assert engine.agents.list() == []
         finally:
-            await engine.close()
+            await asyncio.wait_for(engine.close(), 5)
 
     asyncio.run(asyncio.wait_for(main(), 5))

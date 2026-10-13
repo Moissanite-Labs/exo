@@ -99,6 +99,8 @@ def test_required_handoff_never_runs_workspace_fsmonitor(tmp_path, trusted_gate)
     outside.unlink()
 
     class Broker:
+        trusted_plugin_dirs = (str(Path(__file__).resolve().parents[2] / "plugins"),)
+
         async def execute(self, request, tool, run_trusted):
             return ToolResult.of_text(request.call_id, "denied", True)
 
