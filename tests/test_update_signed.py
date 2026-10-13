@@ -17,9 +17,9 @@ def sh(cwd, *args):
 
 
 def keygen(path: Path) -> str:
-    r = sh(path.parent, KEYGEN, "-q", "-t", "ed25519", "-N", "", "-f", str(path), "-C", "t@example.test")
+    r = sh(path.parent, KEYGEN, "-q", "-t", "ed25519", "-N", "", "-f", str(path), "-C", "t@example.com")
     assert r.returncode == 0, r.stderr
-    return f"t@example.test {path.with_suffix('.pub').read_text().strip()}\n"
+    return f"t@example.com {path.with_suffix('.pub').read_text().strip()}\n"
 
 
 def commit(repo: Path, msg: str, key: Path | None, files: dict | None = None):
@@ -27,7 +27,7 @@ def commit(repo: Path, msg: str, key: Path | None, files: dict | None = None):
         (repo / name).parent.mkdir(parents=True, exist_ok=True)
         (repo / name).write_text(text)
     sh(repo, GIT, "add", "-A")
-    cfg = ["-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false"]
+    cfg = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
     if key:
         cfg += ["-c", "gpg.format=ssh", "-c", f"user.signingkey={key}"]
     r = sh(repo, GIT, *cfg, "commit", "-q", *(["-S"] if key else []), "-m", msg)
