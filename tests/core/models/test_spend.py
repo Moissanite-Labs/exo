@@ -102,7 +102,7 @@ def test_unbounded_requests_fail_before_http(tmp_path, change):
     assert ev[-1].kind == 'error' and not seen
 
 
-@pytest.mark.parametrize('change', ['unpriced', 'native', 'endpoint', 'wire_model', 'headers',
+@pytest.mark.parametrize('change', ['unpriced', 'native', 'endpoint', 'provider_endpoint', 'wire_model', 'headers',
                                   'image', 'max_output', 'invalid_output', 'cap'])
 def test_preflight_refusal_leaves_a_priced_route_usable(tmp_path, change):
     from copy import deepcopy
@@ -118,6 +118,7 @@ def test_preflight_refusal_leaves_a_priced_route_usable(tmp_path, change):
     seen = []
     r = router(cfg, lambda req: seen.append(req) or response())
     r.providers['bad'] = {'transport': 'openai', 'base_url': 'https://api.openai.com/v1'}
+    if change == 'provider_endpoint': r.providers['bad']['base_url'] = 'https://relay.invalid/v1'
     if change == 'headers': r.providers['bad']['headers'] = {'x-beta': 'experimental'}
     r.roles['bad'] = ['bad:m', 'test:m']
     messages = [Message.user('hi')]

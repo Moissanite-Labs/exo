@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from pathlib import Path
 
 import httpx
 import pytest
@@ -369,8 +370,11 @@ def test_stopped_protected_daemon_serves_status_and_saved_transcript(protected, 
     commands = [s.Command.of(s.ModelsList()), s.Command.of(s.SessionGet(session=session.id))]
     # Only root metadata is simulated. This launches the real CLI, factory and stdio
     # daemon in a fresh process; no stopped-journal constructor/status patch is used.
+    source = Path(__file__).resolve().parents[3] / 'src'
     script = '''
-import os, socket
+import os, socket, exo
+from pathlib import Path
+assert Path(exo.__file__).resolve() == Path(os.environ["EXO_TEST_SOURCE"]) / "exo" / "__init__.py"
 actual = os.fstat
 def metadata(fd):
     values = list(actual(fd))
@@ -384,7 +388,8 @@ socket.socket.connect = no_network
 from exo.cli import main
 raise SystemExit(main(["serve", "--stdio"]))
 '''
-    env = {'PATH': os.defpath, 'EXO_HOME': str(home), 'EXO_MODEL_SPEND_POLICY': str(policy_path),
+    env = {'PATH': os.defpath, 'PYTHONPATH': str(source), 'EXO_TEST_SOURCE': str(source),
+           'EXO_HOME': str(home), 'EXO_MODEL_SPEND_POLICY': str(policy_path),
            'EXO_MODEL_SPEND_REQUIRED': '1', 'EXO_NO_KEYCHAIN': '1', 'EXO_NO_SECRET_SERVICE': '1',
            'EXO_KEYS_FILE': str(tmp_path / 'no-keys'), 'EXO_PEERS_DIR': str(tmp_path / 'no-peers')}
     with tempfile.TemporaryDirectory(prefix='exo-spend-', dir='/tmp') as peers:
