@@ -27,7 +27,8 @@ from exo import diagnostics, provenance
 from exo.core import trace, workspace
 from exo.core.agents import Delegator
 from exo.core import agentlog
-from exo.core.context import AgentContext, DefaultCompressor, TreeContext, _maybe_await
+from exo.core.context import AgentContext, DefaultCompressor, TreeContext
+from exo.core.hooks import accepted, maybe_await
 from exo.core.findings import Findings
 from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
@@ -136,7 +137,7 @@ class ContextAdapter:
                 for m in msgs]  # a user message that is not the principal (peer, bus, job notice) says so
         try:
             out = _call(self.memory.capture_principal, flat, session_id=session, source="leaf")
-            out = await _maybe_await(out)
+            out = await maybe_await(out)
         except Exception as exc:
             trace.report(f"{type(self.memory).__name__}.capture_principal", exc, session)
             return False
@@ -179,7 +180,7 @@ class ContextAdapter:
             return msgs
         flat = [{"role": m.role, "content": m.text()} for m in msgs]
         try:
-            out = await _maybe_await(_call(pick, flat, conversation_messages=flat, budget_tokens=0,
+            out = await maybe_await(_call(pick, flat, conversation_messages=flat, budget_tokens=0,
                                            session_id=session))
         except Exception as exc:
             trace.report("context engine select_context", exc, session)
@@ -214,13 +215,7 @@ def _apply_selection(msgs: list[Message], flat: list[dict[str, Any]], out: list[
 
 def _call(fn: Any, *args: Any, **kw: Any) -> Any:
     """Call a plugin hook with the keyword arguments it accepts (all of them when it takes **kwargs)."""
-    try:
-        params = inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        return fn(*args, **kw)
-    if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
-        kw = {k: v for k, v in kw.items() if k in params}
-    return fn(*args, **kw)
+    return fn(*args, **accepted(fn, kw))
 
 
 def _safe(obj: Any, method: str, *args: Any, **kw: Any) -> Any:
@@ -416,8 +411,8 @@ class CoreEngine:
                 out[name] = None if entry else "no plugin registered this channel"
                 continue
             try:
-                chan = await _maybe_await(entry.factory(link, **(cfg or {})))
-                await _maybe_await(chan.start())
+                chan = await maybe_await(entry.factory(link, **(cfg or {})))
+                await maybe_await(chan.start())
                 self._channels[name] = chan
                 out[name] = None
             except Exception as exc:  # one bad channel never stops the server
@@ -428,7 +423,7 @@ class CoreEngine:
     async def stop_channels(self) -> None:
         for name, chan in list(self._channels.items()):
             try:
-                await _maybe_await(chan.stop())
+                await maybe_await(chan.stop())
             except Exception as exc:
                 trace.report(f"channel {name} stop", exc)
             self._channels.pop(name, None)
@@ -849,7 +844,7 @@ class CoreEngine:
         cmd = self.plugins.commands.get(b.name)
         if cmd is None:
             raise CommandFailed("not_found", f"no command /{b.name}")
-        out = await _maybe_await(cmd.handler(b.args))
+        out = await maybe_await(cmd.handler(b.args))
         return {"output": out if isinstance(out, (str, dict, list)) or out is None else str(out)}
 
     async def _schedule_edit(self, b: s.ScheduleEdit) -> dict[str, Any]:

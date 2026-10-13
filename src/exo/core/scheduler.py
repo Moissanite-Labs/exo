@@ -9,7 +9,6 @@ Runs missed while the engine was down happen once on start, not once per missed 
 from __future__ import annotations
 
 import asyncio
-import inspect
 import re
 import sqlite3
 import time
@@ -19,6 +18,7 @@ from typing import Any, Callable
 
 from exo.core import trace
 from exo.core.agents.delegate import BLOCKED_TOOLS
+from exo.core.hooks import maybe_await
 from exo.core.loop import Loop
 from exo.core.private import private_file
 from exo.core.models.router import TIERS
@@ -234,9 +234,7 @@ class Scheduler:
         chan = e._channels.get(to) if to != "notice" else None
         if chan is not None and hasattr(chan, "deliver"):
             try:
-                r = chan.deliver(msg)
-                if inspect.isawaitable(r):
-                    await r
+                await maybe_await(chan.deliver(msg))
                 return
             except Exception as exc:
                 e.hub.publish(s.Notice(text=f"Could not deliver to {to!r}: {exc}", level="warn"))

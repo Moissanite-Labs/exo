@@ -28,6 +28,7 @@ from typing import Any, Awaitable, Callable
 from exo import crypto, gate
 from exo.bus import wire
 from exo.core import trace
+from exo.core.hooks import maybe_await
 from exo.core.ingress import Ingress, IngressPath, Receipt, Target
 from exo.core.sessions import new_id
 from exo.protocol import schema as s
@@ -410,10 +411,9 @@ class PeerNode:
 
     async def _publish_out(self, session: str | None, r: dict[str, Any]) -> None:
         if self.emit_out is not None and session:
-            res = self.emit_out(session, s.PeerDelivery(msg_id=r["msg_id"], state=r["state"], peer=r.get("to", ""),
-                                                        direction="out", detail=r.get("detail", "")))
-            if asyncio.iscoroutine(res):
-                await res
+            await maybe_await(self.emit_out(session, s.PeerDelivery(msg_id=r["msg_id"], state=r["state"],
+                                                                    peer=r.get("to", ""), direction="out",
+                                                                    detail=r.get("detail", ""))))
 
     # ---------------------------------------------------------------- inbound
 
