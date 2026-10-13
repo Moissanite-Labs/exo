@@ -79,6 +79,8 @@ through to the client: `exo --resume` (or `exo resume`), `exo --seat NAME`, `exo
 For the web client, run `exo web` (it starts the shared core if none runs; `exo stop` ends it), then open
 `http://127.0.0.1:7342`. Options, what each install step does, safety rules and re-runs are in
 [`docs/INSTALL.md`](docs/INSTALL.md). To add a model key, see [`docs/PROVIDERS.md`](docs/PROVIDERS.md).
+Provider keys are read from the environment first, then the macOS Keychain or Linux Secret Service (when
+`secret-tool` is available), then a mode-0600 `keys.env` file. `EXO_KEYS_FILE` can point to another file.
 
 The first time `exo` runs on an `EXO_HOME`, the agent gives a short orientation (`/intro`) and turns on
 tutorial mode: small tips the first time something comes up. `/tutorial off` turns them off, and
