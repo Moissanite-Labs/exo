@@ -1420,7 +1420,8 @@ def _glob_hits_secret(tok: str) -> bool:
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
-    r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|ledger\.sqlite(-wal|-shm|-journal)?$|"
+    r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
+    r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
     r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
 _HOME_PROTECTED = ("policies", "state", "keys", "run", "seats")
 _STORE_PROTECTED = ("policies", "state", "keys")
@@ -1436,7 +1437,7 @@ def _store_roots() -> list[tuple[str, tuple, bool]]:
 
 
 def _protected_rel(parts: list[str], names: tuple) -> bool:
-    return bool(parts) and (parts[0] in names or parts[0].startswith("ledger.sqlite"))
+    return bool(parts) and (parts[0] in names or parts[0].startswith(("ledger.sqlite", "schedule.sqlite")))
 
 
 def is_store_path(path: str, ancestors: bool = False) -> bool:
