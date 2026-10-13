@@ -187,6 +187,11 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
+  `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
+  `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
+  delete is the more severe part and would otherwise set the card. The ledger view of a
+  classification (`as_dict`) leaves the parts out.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).

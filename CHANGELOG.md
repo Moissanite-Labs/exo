@@ -5,6 +5,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Security
+- A `deny` or `reserved` entry in `gates.yaml` now matches any simple command on a compound line, nested ones
+  included (D-075). Before, only the most severe part was checked, so `git push origin main && rm -rf build` asked
+  about the delete and ran the denied push on approval.
+
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
