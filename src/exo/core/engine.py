@@ -922,11 +922,12 @@ class CoreEngine:
         """After a turn: apply the anomaly rules (no model call), file findings, verify fixed ones."""
         if not self._trace_on:
             return
-        flags = trace.turn_flags(self.store, session, self.thresholds)
+        if (t := trace.last_turn(self.store, session)) is None:
+            return
+        flags = trace.detect(t, self.thresholds)
         for f in flags:
             self.findings.file_flag(f)
-        self.findings.verify_clean({f.signature for f in flags})
-        self.findings.sweep()
+        self.findings.observe(t, {f.signature for f in flags})
 
     def trace_text(self, session: str | None, last: int = 10, calls: bool = False) -> str:
         """What ``exo_trace`` and ``/trace`` show (exo.diagnostics.trace_text)."""

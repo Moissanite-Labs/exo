@@ -12,6 +12,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,
   `/findings`, handoff facts) moved to `exo.diagnostics`, and the engine factory moved to `exo.compose:create`, the
   new `exo serve` default. `exo.core.engine:create` still works. No behaviour change.
+- Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
+  (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
+  findings by default and counts the rest.
 
 ## [0.2.0] (egg) - 2026-10-13
 
