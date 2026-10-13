@@ -23,6 +23,7 @@ from typing import Any, AsyncIterator, Callable, Mapping
 from exo.core.models.anthropic import AnthropicProvider
 from exo.core.models.base import error_event
 from exo.core.models.claude_cli import ClaudeCliProvider
+from exo.core.models.muse_cli import MuseCliProvider
 from exo.core.models.decision import DecisionProvider
 from exo.core.models.keys import lookup_key
 from exo.core.models.openai_chat import OpenAIChatProvider
@@ -197,6 +198,13 @@ class Router:
             if exe:
                 prov = ClaudeCliProvider(exe, name=provider, env=self.env,
                                          **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
+                creds = [Credential(provider, None, prov)]
+        elif (spec := self.providers.get(provider)) is not None and spec.get("transport") == "muse-cli":
+            # No key: the muse CLI's own login is the credential (D-051). Available only if the binary is on PATH.
+            exe = shutil.which(spec.get("command", "muse"), path=self.env.get("PATH", ""))
+            if exe:
+                prov = MuseCliProvider(exe, name=provider, env=self.env,
+                                       **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
                 creds = [Credential(provider, None, prov)]
         elif (spec := self.providers.get(provider)) is not None:
             transport = TRANSPORTS[spec.get("transport", "openai")]

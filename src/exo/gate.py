@@ -955,6 +955,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if p.dynamic or (not p.quoted and (p.glob or re.search(r"\{[^}]*(,|\.\.)[^}]*\}", p.text))):
         return [_opaque(f"program name comes from a variable or command output ({p.text[:40]})", cmd)]
     prog = p.text
+    if prog.rsplit("/", 1)[-1] == "muse" and any(a in ("login", "auth", "logout") for a in argv[1:]):
+        # The credential floor applies to launchers named by path too, before opaque path handling can hide it.
+        return [_make("credentials", summary=f"muse {next(a for a in argv[1:] if a in ('login', 'auth', 'logout'))}",
+                      command=cmd)]
     if "/" in prog:
         if not _trusted_path(prog):
             return [_opaque(f"runs a program by path ({prog[:60]})", cmd, target=prog)]
@@ -1206,8 +1210,9 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
 def _combine(parts: list[Classification], cmd: str) -> Classification:
     """The most severe part, with every part's signals. A store write outranks everything but credentials."""
     signals = [s for p in parts for s in p.signals]
+    credentials = [p for p in parts if p.category == "credentials"]
     store = [p for p in parts if p.category == "store_write"]
-    c = store[0] if store else (_most_severe(parts) or _make("shell", command=cmd))
+    c = credentials[0] if credentials else (store[0] if store else (_most_severe(parts) or _make("shell", command=cmd)))
     c.signals = list(dict.fromkeys(c.signals + signals))
     return c
 
@@ -1323,7 +1328,7 @@ TOOLS: dict[str, str] = {
 # Segment patterns match at any depth; EXO_HOME and EXO_KEYS_FILE overrides are added by
 # is_sensitive_path() because they can sit anywhere.
 _SENSITIVE_PATH = re.compile(
-    r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
+    r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.config/muse|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
     r"credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|"
     r"keys\.env|\.config/exo/keys(\.env)?|\.exo/keys|\.divan/[^/]+\.key|auth\.json|"
     r"client_secret[^/]*\.json|\.unii/[^/]+/token|[^/]*token[^/]*\.(json|txt|pickle|ya?ml)|[^/]+\.token|"
