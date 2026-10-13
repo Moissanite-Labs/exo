@@ -95,7 +95,7 @@ def test_claude_cli_gets_an_explicit_minimal_env(monkeypatch):
 
 
 @pytest.mark.parametrize("name,value", [
-    ("REDIS_URL", "redis://:password@localhost/0"), ("MONGO_URI", "mongodb+srv://u:p@db.example/test"),
+    ("REDIS_URL", "redis://:password@127.0.0.1:6379/0"), ("MONGO_URI", "mongodb+srv://u:p@127.0.0.1/test"),
     ("MYSQL_PWD", "password"), ("DB_PASS", "password"), ("STRIPE_SK", "value"), ("TWILIO_AUTH", "value"),
     ("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T/B/secret"), ("NPM_CONFIG__AUTH", "value"),
     ("DOCKER_AUTH_CONFIG", '{"auths":{}}'), ("KUBECONFIG", "/private/kube"), ("PGPASSFILE", "/private/pgpass"),
@@ -103,7 +103,7 @@ def test_claude_cli_gets_an_explicit_minimal_env(monkeypatch):
     ("SERVICE_URL", "https://service.example/?access_token=secret"),
     ("SIGNED_URI", "https://service.example/?sig=secret"),
     ("FRAGMENT_URL", "https://service.example/#token=secret"),
-    ("SIGNED_URL", "https://service.example/?X-Amz-Credential=secret"), ("HTTPS_PROXY", "http://u:p@proxy.example"),
+    ("SIGNED_URL", "https://service.example/?X-Amz-Credential=secret"), ("HTTPS_PROXY", "http://u:p@127.0.0.1:8080"),
     ("ODD_URL", "redis://u:p@[malformed"), ("INNOCENT", "ghp_" + "a" * 30),
 ])
 def test_confirmed_credential_families_and_url_values(name, value):
@@ -116,4 +116,4 @@ def test_noncredential_urls_and_unknown_opaque_values_are_preserved():
     src = {"REDIS_URL": "redis://localhost:6379/0", "MONGO_URI": "mongodb://localhost/test",
            "DOCS_URL": "https://example.com/?page=1", "INNOCENT": "opaque-not-recognized"}
     assert envscrub.scrub_env(src) == src  # deliberate heuristic limit, not an arbitrary-secret guarantee
-    assert "HTTPS_PROXY" not in envscrub.minimal_env({"HTTPS_PROXY": "http://u:p@proxy"})
+    assert "HTTPS_PROXY" not in envscrub.minimal_env({"HTTPS_PROXY": "http://u:p@127.0.0.1:8080"})
