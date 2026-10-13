@@ -9,7 +9,7 @@ const ORDER = ["running", "queued", "failed", "done", "cancelled"];
 const FORM = { running: "run", queued: "queue", failed: "fail", done: "done", cancelled: "stop" };
 
 export function mount(root) {
-  const tasks = new Map();
+  const tasks = new Map(), notes = new Map(), drafts = new Map();   // notes: task id -> what the last steer or stop said (#97)
   let err = "", loaded = false, egg = null, eggEl = null;
   const body = h("div", { class: "xc-tasks" });
   const counts = h("div", { class: "xc-phead-read" });
@@ -25,6 +25,28 @@ export function mount(root) {
       if (!egg && window.ExoEgg && cv.isConnected) egg = window.ExoEgg.mount(cv, { stage: 0, activity: 0.25, seed: 7, spin: 0.6 });
     });
     return eggEl;
+  }
+
+  // A child session can be opened in Chat; a running one can be steered or stopped. The core allows the principal only
+  // and says why when it refuses (a finished child, a task that is not this page's to steer).
+  async function control(t, verb, text) {
+    try {
+      await api("POST", "/api/tasks/" + encodeURIComponent(t.task_id) + "/" + verb, verb === "steer" ? { text } : {});
+      notes.set(t.task_id, verb === "steer" ? "note sent" : "stop requested");
+    } catch (e) { notes.set(t.task_id, e.message); }
+    draw();
+  }
+  function controls(t) {
+    if (!t.child_session) return null;
+    const box = h("input", { class: "xc-input", type: "text", "aria-label": "Note to " + (t.title || t.task_id), placeholder: "note for this subagent", value: drafts.get(t.task_id) || "" });
+    box.addEventListener("input", () => drafts.set(t.task_id, box.value));   // a redraw on the next event keeps the draft
+    const steer = () => { const v = box.value.trim(); if (v) { drafts.delete(t.task_id); control(t, "steer", v); } };
+    box.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); steer(); } });
+    return h("div", { class: "xc-tcard-ctl" },
+      h("button", { class: "xc-btn", onclick: () => { sessionStorage.setItem("xc-open", t.child_session); location.hash = "#chat"; } }, "Open"),
+      t.status === "running" ? [box, h("button", { class: "xc-btn", onclick: steer }, "Steer"),
+        h("button", { class: "xc-btn", onclick: () => control(t, "stop") }, "Stop")] : null,
+      notes.has(t.task_id) ? h("span", { class: "xc-dim", role: "status" }, notes.get(t.task_id)) : null);
   }
 
   function draw() {
@@ -49,7 +71,7 @@ export function mount(root) {
           h("h3", { title: t.title || "" }, short(t.title || t.task_id, 120)),
           t.detail ? h("p", { class: "xc-tcard-detail" }, short(t.detail, 200)) : null,
           h("footer", { class: "xc-tcard-foot" }, h("code", null, short(t.task_id, 24)),
-            t.updated_at || t.finished_at ? h("span", null, ago(t.finished_at || t.updated_at)) : null))))))));
+            t.updated_at || t.finished_at ? h("span", null, ago(t.finished_at || t.updated_at)) : null), controls(t))))))));
     } else if (!loaded) {
       kids.push(h("div", { class: "xc-loading" }, "Reading tasks..."));
     } else if (!err) {
