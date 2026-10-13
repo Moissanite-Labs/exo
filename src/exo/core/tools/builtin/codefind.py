@@ -23,17 +23,16 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import urlparse
 
 from exo.core.models.keys import lookup_key
-from exo.core.tools.builtin.shell import kill_process_group
+from exo.core.tools.builtin.search import _root
+from exo.core.tools.builtin.shell import DEFAULT_TIMEOUT, MAX_TIMEOUT, kill_process_group, timeout_arg
 from exo.core.tools.registry import Registry, ToolContext, ToolError
 
 PACKAGE = "@dzhng/jevgrep@0.8.0"
 KEY_ENV = "TYPESAFE_API_KEY"
-DEFAULT_TIMEOUT = 120
-MAX_TIMEOUT = 600
 PAGE_CHARS = 20_000       # characters per page of output
 MAX_JG_BYTES = 256_000    # passed to jg --max-output-bytes
 MIN_FALLBACK_S = 10.0     # no point starting a second backend with less time than this
@@ -87,9 +86,10 @@ def _available() -> bool:
 
 # ------------------------------------------------------------------ backends
 
-class Backend:
-    def __init__(self, name: str, auth: list[str], secret: str) -> None:
-        self.name, self.auth, self.secret = name, auth, secret
+class Backend(NamedTuple):
+    name: str
+    auth: list[str]
+    secret: str
 
 
 def _laya_url() -> str | None:
@@ -173,8 +173,8 @@ def _child_env(cfg_home: str, allow: Any = (), deny: Any = ()) -> dict[str, str]
 
 
 def _search(runner: list[str], backend: Backend, question: str, root: Path, cwd: str, timeout: float,
-            cancel: threading.Event | None, meta: dict[str, Any] | None = None) -> tuple[str, int, str, str]:
-    """One backend: temp config, auth, search, cleanup. Returns (code, stdout, stderr, status)."""
+            cancel: threading.Event | None, meta: dict[str, Any] | None = None) -> tuple[int, str, str]:
+    """One backend: temp config, auth, search, cleanup. Returns (code, stdout, note)."""
     t0 = time.monotonic()
     cfg = tempfile.mkdtemp(prefix="exo-jg-")
     try:
@@ -182,11 +182,11 @@ def _search(runner: list[str], backend: Backend, question: str, root: Path, cwd:
         env = _child_env(cfg, (meta or {}).get("env_allow") or (), (meta or {}).get("env_deny") or ())
         code, out, err, status = _run([*runner, *backend.auth], env, cwd, min(timeout, 60), backend.secret, cancel)
         if code != 0:
-            return backend.name, code, out, _scrub(f"jg auth failed: {err or out}", [backend.secret])[:500]
+            return code, out, _scrub(f"jg auth failed: {err or out}", [backend.secret])[:500]
         left = max(1.0, timeout - (time.monotonic() - t0))
         code, out, err, status = _run([*runner, "--max-output-bytes", str(MAX_JG_BYTES), question, str(root)],
                                       env, cwd, left, None, cancel)
-        return backend.name, code, out, _scrub(err, [backend.secret]) if status == "ok" else status
+        return code, out, _scrub(err, [backend.secret]) if status == "ok" else status
     finally:
         shutil.rmtree(cfg, ignore_errors=True)
 
@@ -207,16 +207,12 @@ def code_find(args: dict[str, Any], ctx: ToolContext) -> str:
     question = str(args["question"]).strip().lstrip("-").strip()  # a leading dash would read as a flag
     if not question:
         raise ToolError("question must not be empty")
-    root = ctx.resolve(args.get("path") or ".")
-    if not root.exists():
-        raise ToolError(f"Path not found: {args.get('path')}")
+    root = _root(args, ctx)
     page = int(args.get("page") or 1)
     cache_key = (str(root), question)
     if page > 1 and cache_key in _pages:
         return _page(_pages[cache_key], page)
-    timeout = float(args.get("timeout") or DEFAULT_TIMEOUT)
-    if not 0 < timeout <= MAX_TIMEOUT:
-        raise ToolError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
+    timeout = timeout_arg(args)
     if _runner is None:
         raise ToolError(_why)
     backends = pick_backends()
@@ -231,13 +227,13 @@ def code_find(args: dict[str, Any], ctx: ToolContext) -> str:
             errors.append(f"{b.name}: skipped, {left:.0f}s left")
             break
         try:
-            name, code, out, note = _search(_runner, b, question, root, cwd, left, ctx.cancel, ctx.meta)
+            code, out, note = _search(_runner, b, question, root, cwd, left, ctx.cancel, ctx.meta)
         except OSError as exc:
             errors.append(f"{b.name}: could not start jg ({type(exc).__name__})")
             continue
         if code in (0, 2) and out.strip():
             ms = int((time.monotonic() - t0) * 1000)
-            head = f"[code_find backend={name} duration_ms={ms}" + (" incomplete" if code == 2 else "")
+            head = f"[code_find backend={b.name} duration_ms={ms}" + (" incomplete" if code == 2 else "")
             if errors:
                 head += " fallback_from=" + "; ".join(errors)
             _pages[cache_key] = out.rstrip()
@@ -246,7 +242,7 @@ def code_find(args: dict[str, Any], ctx: ToolContext) -> str:
             return f"{head}]\n{_page(_pages[cache_key], page)}"
         if code == 130:
             raise ToolError("code_find interrupted")
-        errors.append(f"{name}: {note or ('exit ' + str(code))}"[:300])
+        errors.append(f"{b.name}: {note or ('exit ' + str(code))}"[:300])
     ms = int((time.monotonic() - t0) * 1000)
     raise ToolError(f"code_find failed after {ms}ms ({'; '.join(errors)}). Use grep and read instead.")
 
