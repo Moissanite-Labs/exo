@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Exo brand: the lattice egg and the X/V mark (proposal)</title>
+<meta name="description" content="Proposal D-049: the Exo mark, wordmark and living egg, built from the incentre lattice.">
+<meta name="theme-color" content="#08090a">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="../assets/style.css">
+<style>
+  .b-hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); isolation: isolate; }
+  .b-hero canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; }
+  .b-hero .wrap { padding-block: clamp(64px, 11vh, 128px) clamp(72px, 12vh, 140px); }
+  .b-hero h1 { font-size: clamp(44px, 7vw, 104px); letter-spacing: -0.045em; max-width: 9ch; }
+  .b-hero p.lede { margin-top: 26px; max-width: 32em; color: var(--fg-2); font-size: clamp(17px, 1.4vw, 20px); text-shadow: 0 1px 14px rgba(8, 9, 10, .95); }
+  .b-hero .ctl { margin-top: 34px; display: flex; flex-wrap: wrap; gap: 18px 26px; align-items: center; font: 500 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3); }
+  .b-hero .ctl input { accent-color: var(--accent); width: 200px; vertical-align: middle; }
+  .b-hero .ctl b { color: var(--accent); font-weight: 600; }
+  .b-hero .ctl button { font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line-2); padding: 9px 12px; cursor: pointer; }
+  .b-hero .ctl button:hover { border-color: var(--accent); color: var(--accent); }
+  .prop { display: inline-block; margin-bottom: 22px; font: 500 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); border: 1px solid rgba(255, 91, 20, .5); padding: 6px 9px; }
+  .story { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .story figure { margin: 0; padding: 22px; display: flex; flex-direction: column; gap: 16px; }
+  .story img { width: 100%; height: 150px; object-fit: contain; }
+  .story figcaption, .cap { font: 500 12px/1.5 var(--mono); color: var(--fg-3); letter-spacing: .02em; }
+  .story figcaption b, .cap b { color: var(--fg); font-weight: 600; }
+  .rules { margin-top: 28px; display: grid; gap: 10px; max-width: 60em; color: var(--fg-2); padding-left: 1.1em; }
+  .rules li::marker { color: var(--accent); }
+  .variants { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .variant { padding: 26px; display: flex; flex-direction: column; gap: 18px; position: relative; }
+  .variant .big { height: 64px; width: auto; max-width: 100%; align-self: flex-start; }
+  .variant .light { background: #f4f2ec; padding: 14px; display: flex; gap: 16px; align-items: center; }
+  .variant .light img { height: 28px; width: auto; }
+  .variant .sizes { display: flex; gap: 18px; align-items: flex-end; }
+  .variant .sizes img { width: auto; image-rendering: auto; }
+  .variant h3 { font: 700 15px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+  .variant p { color: var(--fg-2); font-size: 15px; }
+  .pick { position: absolute; top: 22px; right: 22px; font: 600 10.5px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: #0a0a0a; background: var(--accent); padding: 5px 8px; }
+  .marks { display: grid; grid-template-columns: 1.2fr 1fr 1fr 1fr; }
+  .marks > div { padding: 26px; display: flex; flex-direction: column; gap: 16px; justify-content: space-between; }
+  .marks .tile { display: flex; gap: 18px; align-items: flex-end; flex-wrap: wrap; }
+  .marks .zoom { image-rendering: pixelated; }
+  .eggs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .eggs > div { padding: 0 0 18px; }
+  .eggs canvas { width: 100%; aspect-ratio: 1 / 1; display: block; }
+  .eggs .cap { padding: 0 20px; }
+  pre.code { margin: 28px 0 0; padding: 20px 22px; background: #050606; border: 1px solid var(--line-2); overflow: auto; font: 13px/1.6 var(--mono); color: var(--fg-2); }
+  pre.code i { color: var(--fg-3); font-style: normal; }
+  table.api { margin-top: 28px; border-collapse: collapse; width: 100%; font-size: 15px; color: var(--fg-2); }
+  table.api th, table.api td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.api th { font: 600 11px/1.2 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3); }
+  table.api td:first-child { font-family: var(--mono); color: var(--fg); white-space: nowrap; }
+  .swatches { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .swatches > div { padding: 18px; font: 500 12px/1.5 var(--mono); color: var(--fg-3); }
+  .swatches span { display: block; height: 64px; margin-bottom: 12px; border: 1px solid var(--line-2); }
+  .tui { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tui > div { padding: 26px; }
+  .tui pre { margin: 0 0 14px; padding: 18px 22px; background: #050606; border: 1px solid var(--line-2); font: 18px/1.05 var(--mono); color: var(--fg-2); }
+  .tui pre b { color: var(--accent); font-weight: 400; }
+  .prose { max-width: 46em; color: var(--fg-2); display: grid; gap: 14px; }
+  .prose a { color: var(--fg); text-decoration-color: var(--accent); text-underline-offset: 4px; }
+  @media (max-width: 1000px) {
+    .story { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .variants, .marks, .eggs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .swatches { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .tui { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav" id="top">
+  <div class="wrap nav__in">
+    <a class="brand" href="../" aria-label="Project Exo home"><img src="lockup-dark.svg" alt="exo" height="24" style="height:24px;width:auto"></a>
+    <nav aria-label="Sections">
+      <ul class="nav__links">
+        <li><a href="#drawing">Drawing</a></li>
+        <li><a href="#rule">X/V</a></li>
+        <li><a href="#wordmark">Wordmark</a></li>
+        <li><a href="#mark">Mark</a></li>
+        <li><a href="#egg">Egg</a></li>
+        <li><a href="#terminal">Terminal</a></li>
+        <li><a href="#credit">Credit</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="b-hero" aria-labelledby="t">
+  <canvas id="hero-egg" aria-hidden="true"></canvas>
+  <div class="wrap">
+    <span class="prop">Proposal · D-049 · not live</span>
+    <h1 id="t">An egg made of one drawing.</h1>
+    <p class="lede">Exo is a harness that keeps changing: it learns, grows and adds parts. Its mark is a square with an X and a dot in each triangle, the same distance from every side. The top of the X is orange, so it also reads as a V. Repeat the drawing and you get a lattice. Repeat it in more dimensions and the lattice keeps growing. The egg is that lattice, alive.</p>
+    <div class="ctl">
+      <label>Stage <input id="hs" type="range" min="0" max="3" step="0.05" value="0"> <b id="hsv">0 · egg</b></label>
+      <button type="button" id="hp">Send a pulse</button>
+      <a class="btn btn--sm" href="egg.html">Full screen</a>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="drawing" aria-labelledby="d-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">01 / The drawing</p>
+      <h2 id="d-t">A square, its X, and four dots.</h2>
+      <p class="sec-lede">Draw a square and both diagonals. The diagonals are an X, and they cut the square into four triangles. In each triangle, mark the one point that is the same distance from all three sides: its incentre. In a square of side 2 it sits √2 − 1 above the side, which is tan 22.5°. Join each dot to the corners of its triangle. Those three lines are where a fire lit on all three sides at once would meet.</p>
+      <p class="sec-lede">Tile the drawing and the dots of four neighbouring squares make a regular octagon: the 4.8.8 tiling. Lift it to a cube and the six dots make the truncated cubic honeycomb, with every edge the same length. The same rule works in every dimension: an n-dimensional cube has 2n dots, each touching 2n − 1 others. The mark, the wordmark and the egg all come from this one figure.</p>
+    </header>
+    <div class="grid story">
+      <figure><img src="story-1.svg" alt="A square with its two diagonals, an X."><figcaption><b>1. The X.</b> A square of side 2 and its diagonals: four right isosceles triangles.</figcaption></figure>
+      <figure><img src="story-2.svg" alt="The four incentres with their incircles and lines to the corners."><figcaption><b>2. The dots.</b> Each incentre, its circle, and its lines to the triangle's corners.</figcaption></figure>
+      <figure><img src="story-3.svg" alt="The top two half-diagonals in orange, forming a V, with the top dot in orange."><figcaption><b>3. The V.</b> The top triangle's two slanted sides are the X's top half. In orange they read as a V, with the top dot as its seed.</figcaption></figure>
+      <figure><img src="story-4.svg" alt="The drawing tiled; dots form regular octagons; one cell carries the orange V."><figcaption><b>4. The lattice.</b> Tiled, the dots make regular octagons (steel blue). The V is one cell of it.</figcaption></figure>
+      <figure><img src="story-5.svg" alt="The x of the wordmark: two 45 degree strokes, the top half orange."><figcaption><b>5. The x.</b> The same X, as a letter: strokes at 45°, the V on top.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="section section--alt" id="rule" aria-labelledby="r-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">02 / The X/V rule</p>
+      <h2 id="r-t">Exo, and also evo.</h2>
+      <p class="sec-lede">The x in exo is the drawing's X. Its top half is the brand orange, so the word also reads as evo: a harness, an ecosystem, always evolving. The rule is short so it holds at every size.</p>
+    </header>
+    <ol class="rules">
+      <li>The x is two strokes at exactly 45°, the square's diagonals. Nothing else in the mark is diagonal at another angle, except the thin incentre lines at 22.5° and 67.5°.</li>
+      <li>The V is the two upper arms, and it owns the crossing: the lower legs stop at the V's lower edges. On dark the legs are fg <code>#eceae4</code>; on light they are <code>#08090a</code>.</li>
+      <li>The V is always <code>#ff5b14</code> and nothing else in the wordmark is orange. In the mark, only the V and the top dot (the seed) are orange.</li>
+      <li>The e and the o are cut from regular octagons, the octagon the dots make. The side of a regular octagon of height h is h(√2 − 1): the incentre number again.</li>
+      <li>Never outline, stretch, rotate or recolour the V. In one-colour print, the V is solid and the legs are a 40% tint.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="section" id="wordmark" aria-labelledby="w-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">03 / Wordmark</p>
+      <h2 id="w-t">Four variants, one pick.</h2>
+      <p class="sec-lede">Each is shown at display size, on light, and at its real size of 32 and 16 pixels tall. The x-height is 20 units with a 4-unit stroke, so at 16 px the stroke is 3.2 px and the V still reads.</p>
+    </header>
+    <div class="grid variants">
+      <div class="variant"><span class="pick">Pick</span>
+        <img class="big" src="wordmark-facet-dark.svg" alt="exo, facet variant">
+        <h3>A · Facet</h3>
+        <p>Octagonal e and o, the octagon of the lattice. Every edge is at 0°, 45° or 90°, so it stays sharp on a pixel grid and matches the X. The e's terminal is cut at 45°, square to its stroke.</p>
+        <div class="light"><img src="wordmark-facet-light.svg" alt="exo, facet, on light"></div>
+        <div class="sizes"><img src="wordmark-facet-dark.svg" alt="" style="height:32px"><img src="wordmark-facet-dark.svg" alt="" style="height:16px"></div>
+      </div>
+      <div class="variant">
+        <img class="big" src="wordmark-round-dark.svg" alt="exo, round variant">
+        <h3>B · Round</h3>
+        <p>Circular e and o, the incircles. Softer and more familiar; the circles sit less well beside the sharp X, and at 16 px the round counters blur first.</p>
+        <div class="light"><img src="wordmark-round-light.svg" alt="exo, round, on light"></div>
+        <div class="sizes"><img src="wordmark-round-dark.svg" alt="" style="height:32px"><img src="wordmark-round-dark.svg" alt="" style="height:16px"></div>
+      </div>
+      <div class="variant">
+        <img class="big" src="wordmark-seed-dark.svg" alt="exo, seed variant">
+        <h3>C · Seed</h3>
+        <p>Facet, with the incentre of the V's triangle as an orange dot and a hairline between the V and the legs. Tells the whole story; for display sizes only (48 px and up).</p>
+        <div class="light"><img src="wordmark-seed-light.svg" alt="exo, seed, on light"></div>
+        <div class="sizes"><img src="wordmark-seed-dark.svg" alt="" style="height:32px"><img src="wordmark-seed-dark.svg" alt="" style="height:16px"></div>
+      </div>
+      <div class="variant">
+        <img class="big" src="wordmark-caps-dark.svg" alt="EXO, caps variant">
+        <h3>D · Caps</h3>
+        <p>Spaced capitals, matching the site's nav and the terminal's <code>E X O</code> brand bar. For labels and tight UI, not as the main mark.</p>
+        <div class="light"><img src="wordmark-caps-light.svg" alt="EXO, caps, on light"></div>
+        <div class="sizes"><img src="wordmark-caps-dark.svg" alt="" style="height:32px"><img src="wordmark-caps-dark.svg" alt="" style="height:16px"></div>
+      </div>
+    </div>
+    <p class="sec-lede" style="margin-top:28px"><b style="color:var(--fg)">Why A.</b> It is the only variant where every letter comes from the drawing: the X from the diagonals, the e and o from the lattice's octagon. It has the fewest angles (three), so it renders crisply at 16 px, and it pairs with the mark without a second shape language. C is its display form; D is its label form.</p>
+  </div>
+</section>
+
+<section class="section section--alt" id="mark" aria-labelledby="m-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">04 / Mark and icons</p>
+      <h2 id="m-t">The figure is the mark.</h2>
+      <p class="sec-lede">The mark is the drawing itself: the square, the X with its V, the four dots and their lines. The top dot sits inside the V, at the incentre of the V's triangle; it is the seed that the egg grows from. Below 32 px the lines and dots drop out and only the X with its V remains.</p>
+    </header>
+    <div class="grid marks">
+      <div><img src="mark.svg" alt="The Exo mark" width="220" height="220"><p class="cap"><b>Mark.</b> mark.svg, mark-light.svg</p></div>
+      <div><img src="mark-construction.svg" alt="The construction" width="180" height="180"><p class="cap"><b>Construction.</b> With incircles; for explaining, not as a logo.</p></div>
+      <div><div class="tile"><img src="app-icon-round.svg" alt="App icon" width="120" height="120"><img src="apple-touch-icon.png" alt="" width="60" height="60"></div><p class="cap"><b>App icon.</b> app-icon.svg (square, platforms round it), app-icon-1024.png, icon-512, icon-192, apple-touch-icon.</p></div>
+      <div><div class="tile"><img src="favicon-32.png" alt="" width="32" height="32"><img src="favicon-16.png" alt="" width="16" height="16"><img class="zoom" src="favicon-16.png" alt="16 px favicon, enlarged" width="64" height="64"></div><p class="cap"><b>Favicons.</b> favicon.svg and favicon-32 keep the square and dots; favicon-16 is the X alone (shown at 4× on the right).</p></div>
+    </div>
+    <div style="margin-top:40px;display:flex;gap:40px;flex-wrap:wrap;align-items:center">
+      <img src="lockup-dark.svg" alt="Lockup: mark and wordmark" style="height:56px;width:auto">
+      <div style="background:#f4f2ec;padding:16px 20px"><img src="lockup-light.svg" alt="Lockup on light" style="height:40px;width:auto"></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="egg" aria-labelledby="e-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">05 / The living egg</p>
+      <h2 id="e-t">A pulsing matrix of information.</h2>
+      <p class="sec-lede">The site's orb, rebuilt from the lattice. Each cell is one cube of the honeycomb, with its six incentre dots. Information moves as packets along the edges; a cell lights when one passes through it, and its lines to the centre glow. A heartbeat in the core sends packets out; more activity means a faster beat and more traffic. The stage adds cells, structure, a dimension and brightness. Fractional stages blend, so an evolution can be animated.</p>
+    </header>
+    <div class="grid eggs">
+      <div><canvas data-exo-egg data-stage="0" data-activity="0.5" aria-label="Stage 0, the egg"></canvas><p class="cap"><b>0 · Egg.</b> One cell, the yolk: six dots, an octahedron, the top dot orange. A closed shell made of the same honeycomb, one ring out.</p></div>
+      <div><canvas data-exo-egg data-stage="1" data-activity="0.55" aria-label="Stage 1, hatchling"></canvas><p class="cap"><b>1 · Hatchling.</b> The six face cells join; every new link is one edge of length 2(√2 − 1). The shell cracks and falls away.</p></div>
+      <div><canvas data-exo-egg data-stage="2" data-activity="0.6" aria-label="Stage 2, lattice"></canvas><p class="cap"><b>2 · Lattice.</b> Nineteen cells: the honeycomb as an orb. The first cube appears, with the drawing's lines inside it.</p></div>
+      <div><canvas data-exo-egg data-stage="3" data-activity="0.7" aria-label="Stage 3, hyper"></canvas><p class="cap"><b>3 · Hyper.</b> The fourth dimension unfolds out of the third: 33 cells of 8 dots, turning through the fourth axis. The new links are steel blue.</p></div>
+    </div>
+    <table class="api">
+      <thead><tr><th>Stage</th><th>Name</th><th>Dimension</th><th>Cells</th><th>Dots</th><th>Shell</th><th>Brightness</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>egg</td><td>3</td><td>1</td><td>6</td><td>closed</td><td>0.62</td></tr>
+        <tr><td>1</td><td>hatchling</td><td>3</td><td>7</td><td>42</td><td>cracking</td><td>0.74</td></tr>
+        <tr><td>2</td><td>lattice</td><td>3</td><td>19</td><td>114</td><td>gone</td><td>0.86</td></tr>
+        <tr><td>3</td><td>hyper</td><td>4</td><td>33</td><td>264</td><td>gone</td><td>1</td></tr>
+        <tr><td>4</td><td>spare</td><td>5</td><td>51</td><td>510</td><td>gone</td><td>1</td></tr>
+      </tbody>
+    </table>
+<pre class="code"><i>&lt;script src="/brand/egg.js"&gt;&lt;/script&gt;</i>
+var egg = ExoEgg.mount(canvas, { stage: 0, activity: 0.5 });
+egg.setStage(1.5);       <i>// 0..4, eases there; { immediate: true } jumps</i>
+egg.setActivity(0.8);    <i>// 0..1: heartbeat rate and traffic</i>
+egg.pulse(6);            <i>// send 6 packets out of the core, e.g. when a turn starts</i>
+egg.getStage(); egg.pause(); egg.resume(); egg.destroy();
+<i>// or with no script of your own:</i>
+<i>&lt;canvas data-exo-egg data-stage="2" data-activity="0.6"&gt;&lt;/canvas&gt;</i></pre>
+    <p class="sec-lede" style="margin-top:22px">Canvas 2D, no libraries, one 24 KB file (unminified). Under <code>prefers-reduced-motion</code> it draws one still frame with a lit path and never animates. It pauses off screen and in background tabs. The full API is in <code>docs/BRAND.md</code>.</p>
+  </div>
+</section>
+
+<section class="section section--alt" id="colour" aria-labelledby="c-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">06 / Colour</p>
+      <h2 id="c-t">The site's palette, unchanged.</h2>
+      <p class="sec-lede">Orange is the signal: the V, the seed, information in motion. Steel blue is system knowledge, and in the egg it marks the dimension that was added. Everything else is structure.</p>
+    </header>
+    <div class="grid swatches">
+      <div><span style="background:#08090a"></span>bg #08090a</div>
+      <div><span style="background:#eceae4"></span>fg #eceae4</div>
+      <div><span style="background:#8b8b86"></span>fg-3 #8b8b86</div>
+      <div><span style="background:#ff5b14"></span>accent #ff5b14 · the V</div>
+      <div><span style="background:#ff8a4c"></span>accent-2 #ff8a4c · packets</div>
+      <div><span style="background:#9fb4c4"></span>cold #9fb4c4 · new dimension</div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="terminal" aria-labelledby="tu-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">07 / Terminal (proposal)</p>
+      <h2 id="tu-t">The mark in braille.</h2>
+      <p class="sec-lede">A text-mode rendering for the terminal client's header, in braille cells like the current start motif (<code>exo_tui/hero.py</code>). Orange cells hold the V or the seed. Proposal only; the terminal client is unchanged.</p>
+    </header>
+    <div class="tui">
+      <div><pre aria-label="The mark in braille"><!-- tui-mark --><b>⢰</b><b>⢶</b><b>⢖</b><b>⣒</b>⠒⠒⠒⠒<b>⢒</b><b>⣒</b><b>⢶</b><b>⢶</b>
+⢸ <b>⠑</b><b>⢌</b><b>⠉</b><b>⠒</b><b>⠖</b><b>⠊</b><b>⢉</b><b>⠔</b><b>⠁</b>⢸
+⢸   <b>⠑</b><b>⢄</b><b>⢀</b><b>⠔</b><b>⠁</b>  ⢸
+⢸ ⠈⠁⢀⠔<b>⠑</b>⢄ ⠉ ⢸
+⢸ ⢀⠔⠁ ⡄ ⠑⢄ ⢸
+⢸⣔⣁⣀⣀⣀⣀⣀⣀⣀⣑⣼<!-- /tui-mark --></pre><p class="cap"><b>Mark,</b> 12 × 6 cells. site/brand/tui-mark.txt</p></div>
+      <div><pre aria-label="The egg in braille"><!-- tui-egg -->     ⡠⠤⠤⠤⣀
+   ⡰⠋    ⠈⠓⡀
+  ⡸   <b>⣠</b><b>⢦</b><b>⡀</b>  ⠹
+  ⡅ <b>⠘</b><b>⢿</b><b>⡞</b><b>⣋</b><b>⣿</b><b>⣄</b>  ⡇
+  ⠇  <b>⠈</b><b>⠻</b><b>⡽</b><b>⠊</b><b>⠉</b>  ⠇
+  ⠹⡄       ⡼⠁
+   ⠈⠓⠆⠤⠤⠄⠖⠋<!-- /tui-egg --></pre><p class="cap"><b>Egg, stage 0,</b> 14 × 7 cells: the yolk inside its shell. site/brand/tui-egg.txt</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="section section--alt" id="credit" aria-labelledby="cr-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">08 / Credit</p>
+      <h2 id="cr-t">Where the figure comes from.</h2>
+    </header>
+    <div class="prose">
+      <p>The drawing is a lattice figure. Its geometry is studied in the open research project <a href="https://aska-digital.github.io/incentre-lattice/" rel="noopener">Incentre lattice</a> (aska-digital/incentre-lattice), which this design follows for every number: the incentre height √2 − 1, the 4.8.8 tiling, the truncated cubic honeycomb and its n-dimensional form. The mark borrows the geometry, not that project's look: its colours and type stay its own.</p>
+      <p>The classical mathematics behind it is old and belongs to everyone: the incentre and the medial axis; the Wythoff construction (Wythoff, 1918) as developed by H. S. M. Coxeter; the uniform tilings and honeycombs.</p>
+      <p>The egg is a rework of the orb on the Exo front page, which was a shell of linked nodes around an orange core.</p>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot__in">
+    <img src="lockup-dark.svg" alt="exo" style="height:22px;width:auto">
+    <p>Brand proposal D-049 · <a href="../">Home</a> · <a href="egg.html">The egg, full screen</a></p>
+    <p class="foot__small">A proposal for review. Nothing on the live site has changed.</p>
+  </div>
+</footer>
+<script src="egg.js"></script>
+<script>
+  (function () {
+    var cv = document.getElementById("hero-egg"), names = ["egg", "hatchling", "lattice", "hyper", "spare"];
+    var egg = ExoEgg.mount(cv, { stage: 0, activity: 0.5, layout: function (W, H) {
+      var narrow = W < 760;
+      return { cx: narrow ? W * 0.5 : W * 0.72, cy: narrow ? H * 0.32 : H * 0.5, r: narrow ? Math.min(W, H) * 0.36 : Math.min(W * 0.28, H * 0.4) };
+    } });
+    var hs = document.getElementById("hs");
+    hs.addEventListener("input", function () {
+      egg.setStage(+hs.value);
+      document.getElementById("hsv").textContent = (+hs.value).toFixed(2).replace(/\.?0+$/, "") + " · " + names[Math.round(+hs.value)];
+    });
+    document.getElementById("hp").addEventListener("click", function () { egg.pulse(8); });
+  })();
+</script>
+</body>
+</html>

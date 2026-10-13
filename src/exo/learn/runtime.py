@@ -15,9 +15,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from exo import crypto
 from exo.config import Config, ConfigError
-from exo.ledger import Ledger
 from exo.store import PrincipalStore
 
 AGENT = "exo-learn"
@@ -101,10 +99,10 @@ class Runtime:
         self.agent = agent
         self.store = PrincipalStore(root)
         kp = self.home / "keys" / f"{agent}.key"
-        if not kp.exists():
-            crypto.save_key(crypto.keygen(), kp)
-        self.signer = crypto.Signer(agent, crypto.load_key(kp))
-        self.ledger = Ledger(self.store.ledger_path, self.signer)
+        from exo.ledger_authority.factory import open_writable_ledger
+        self.ledger = open_writable_ledger(self.store.ledger_path, agent, kp,
+                                           writer="exo-learn", auto_keygen=True)
+        self.signer = self.ledger.signer
         self.lock = threading.RLock()
 
     def close(self) -> None:

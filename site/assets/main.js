@@ -54,6 +54,33 @@
   /* ---------- Hero canvas: a shell of linked nodes around a core ---------- */
   var canvas = document.querySelector(".hero__canvas");
   if (!canvas || !canvas.getContext) return;
+
+  /* ---------- Hero: the lattice egg (D-049, accepted) ----------
+     The default everywhere. ?egg=2 picks a stage, ?egg=off brings back the old orb below. */
+  var eggQ = /[?&]egg(?:=([^&]*))?/.exec(location.search);
+  var eggOn = !(eggQ && eggQ[1] === "off");
+  if (eggOn) {
+    var stage = eggQ && eggQ[1] && !isNaN(+eggQ[1]) ? +eggQ[1] : 0;
+    var s = document.createElement("script");
+    var mainScript = document.querySelector('script[src$="assets/main.js"]');
+    var sitePath = new URL("../", mainScript.src).pathname;
+    s.src = sitePath + "brand/egg.js";
+    s.onload = function () {
+      window.exoEgg = window.ExoEgg.mount(canvas, { stage: stage, activity: 0.5, layout: function (W, H) {
+        var narrow = W < 760;
+        return { cx: narrow ? W * 0.78 : W * 0.72, cy: narrow ? H * 0.2 : H * 0.47,
+                 r: narrow ? Math.min(W, H) * 0.42 : Math.min(W * 0.3, H * 0.4) };
+      } });
+      if (eggQ) { // a stage preview asked for in the address: label it
+        var tag = document.createElement("a");
+        tag.className = "egg-tag"; tag.href = sitePath + "brand/";
+        tag.textContent = "Preview: the lattice egg, stage " + stage + " \u00b7 brand";
+        (canvas.parentNode.querySelector(".hero__in") || canvas.parentNode).appendChild(tag);
+      }
+    };
+    document.head.appendChild(s);
+    return;
+  }
   var ctx = canvas.getContext("2d");
   var W = 0, H = 0, dpr = 1, cx = 0, cy = 0, R = 0;
   var N = 220, pts = [], edges = [], pulses = [];

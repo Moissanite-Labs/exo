@@ -132,6 +132,11 @@ the gate tests. Decide whether a subagent may use it: the blocked list is `BLOCK
 
 A plugin registers a tool with `ctx.register_tool(name, toolset, schema, handler, risk=...)`.
 
+Exo OS can require an installed execution broker after approvals and validation.
+New tools need an explicit broker decision before their handler may run;
+unsupported operations fail closed. The immutable request, installed entry point,
+trusted plugin inventory and host-code limits are in `docs/EXECUTORS.md`.
+
 ## 4. Add a plugin
 
 A plugin is a folder with `plugin.yaml`, an `__init__.py` that has `register(ctx)`, and a `tests/` folder.
@@ -161,6 +166,13 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 keyword arguments only. A failing callback is logged and skipped (it fails open), except that a `pre_tool_call`
 block is honoured. To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the
 principal, it returns `{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+Required-executor engines propagate failures of `exo-gate` in `pre_tool_call`
+and `post_approval_response`, blocking dispatch. The gate requires saved signed
+decision and approval events; ordinary optional hooks keep the behavior above.
+See `docs/GATE.md` "Required executor audit".
+The gate's approval verdict adds an `approval_key` for one pending call; the core
+passes it back to `post_approval_response`. Keep `rule_key` stable for grant
+scope and do not substitute it for this correlation token.
 
 **Memory provider hooks.** A memory provider is a subclass of `MemoryProvider` in `src/exo/core/slots.py`. Two
 methods matter for the principal's words:
@@ -237,7 +249,8 @@ If you changed the protocol schema, also run `python -m exo.protocol.export --ch
 Rules that tests enforce: the protocol caps, the core line budget, the TUI colour tokens against the site's
 `style.css`, that every `/help` command appears in the intro skill, and the docs map (`tests/docs/test_docs_map.py`).
 Tests use fake models and no network. The conftest fixtures isolate `EXO_HOME`, the bus identity and the peers
-folder, so a test never reads your real setup.
+folder, so a test never reads your real setup. The root fixture also clears inherited `NO_COLOR` so terminal
+settings cannot change the expected TUI theme. Tests that need no-colour mode set `NO_COLOR` themselves.
 
 Check your prose before you commit docs:
 
@@ -282,6 +295,10 @@ Check the change there, then promote with `scripts/deploy-site.sh --prod`, which
 `production` when run interactively, and deploys to `exo.askaconsult.com` (project `exo-site`). `--yes` skips the
 prompt for scripted runs, `--redeploy` skips the project, domain and DNS setup. Both targets deploy from a git-free copy.
 
+Keep site claims tied to the revision that was checked. `docs/SITE-STATUS.md` records the roadmap status rules and
+current evidence snapshot. Unmerged work is in progress even when tested locally. D-055 sets the delivery order:
+core verification, browser workflow polish, then Electron desktop packaging.
+
 **Before the repo goes public.** Git history still holds the files removed in D-042. Rewrite history first (for
 example with `git filter-repo`), then publish.
 
@@ -303,6 +320,13 @@ heading, and the map says so.
    rights.
 
 Private data and secrets never go in the repo. The principal store is separate from this repository.
+
+### Cutting a release
+
+Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). To release Exo: bump the version in
+`pyproject.toml` and the files that section lists, move `[Unreleased]` in `CHANGELOG.md` under a new
+`[X.Y.Z] (codename) - date` heading, run the suites (`tests/test_versioning.py` fails if they drift), merge, then tag
+main with an annotated `exo-vX.Y.Z`. Site deploys take `--version`; see `scripts/deploy-site.sh`.
 
 ## 9. Recipes
 
