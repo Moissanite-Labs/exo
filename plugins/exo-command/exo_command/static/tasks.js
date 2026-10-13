@@ -2,7 +2,7 @@
 // Drawn like the site's roadmap grid (D-061): a status tally, then one hairline lane per status.
 import { h, api, short, ago, errorBox, pageHead, readout, pill, emptyState } from "./dom.js";
 import * as bus from "./bus.js";
-import "./egg.js";   // defines window.ExoEgg (copied from site/brand/egg.js); used once, in the empty state
+import "./egg.js";   // defines window.ExoEgg, the exosphere engine (copied from site/brand/egg.js)
 
 const ORDER = ["running", "queued", "failed", "done", "cancelled"];
 // status word -> the pill state, whose led form carries it without colour
@@ -16,7 +16,7 @@ export function mount(root) {
   root.replaceChildren(h("div", { class: "xc-pg" }, pageHead({ eyebrow: "02 / Tasks", title: "Tasks",
     lede: "Work the agents handed off, by status. It updates as each task moves.", aside: counts }), body));
 
-  // The empty state's mark: the egg at stage 0, a closed shell. Made once and kept, so redraws do not restart it.
+  // The empty state's mark: the exosphere at form x0 (stage 0), a closed shell. Made once and kept, so redraws do not restart it.
   function mark() {
     if (eggEl) return eggEl;
     const cv = h("canvas", { class: "xc-egg", "aria-hidden": "true" });

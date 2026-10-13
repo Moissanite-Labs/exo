@@ -44,6 +44,13 @@ export function mount(root) {
   const heroText = h("div", { class: "xc-hero-text" });
   const heroEl = h("div", { class: "xc-hero", "aria-hidden": "false" }, h("div", { class: "xc-hero-grid" }), heroCanvas, heroText);
   const hero = createHero(heroCanvas);
+  if (hero.label) heroEl.appendChild(h("div", { class: "xc-hero-form", title: "Exosphere, form " + hero.form.id + " (" + hero.form.note + ")" }, "exosphere \u00B7 " + hero.label));
+  // what the exosphere shows: the agent's state as the client already sees it
+  function heroSync(again) {
+    if (!hero.react) return;
+    const waiting = Object.values(approvals).some((a) => a.session === current);
+    hero.react(waiting ? "approval" : !busy ? "idle" : items.some((i) => i.kind === "tool" && i.status === "running") ? "tool" : "thinking", again);
+  }
   let heroOn = false, heroTimer = 0;
   const stage = h("div", { class: "xc-stage" }, heroEl, logEl);
   const setupBanner = h("div", { class: "xc-setup", hidden: true }, h("span", null, "No model provider is set up yet."),
@@ -129,7 +136,7 @@ export function mount(root) {
     switch (ev.type) {
       case "turn.started": busy = true; help.note({ busy: true }); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); break;
       case "turn.completed": {
-        busy = false; drawStatus(); loadContext();
+        busy = false; drawStatus(); if (hero.react) hero.react("done"); loadContext();
         const tm = b.timing || {};
         help.note({ busy: false, turns: items.filter((i) => i.kind === "user").length, longTurn: (tm.wall_ms || 0) - (tm.tool_ms || 0) - (tm.approval_ms || 0) >= 60000 });
         break;
@@ -164,7 +171,7 @@ export function mount(root) {
       case "taste.updated": push({ kind: "taste", id: "taste-" + b.rule_id + "-" + ev.seq, action: b.action, text: b.text, path: b.path }); break;
       case "message.delta": delta(b); break;
       case "message.completed": completed(b.message || {}); break;
-      case "tool.started": if (!find(b.call.id)) push({ kind: "tool", id: b.call.id, name: b.call.name, args: b.call.arguments || {}, output: "", status: "running", risk: b.risk }); break;
+      case "tool.started": if (!find(b.call.id)) push({ kind: "tool", id: b.call.id, name: b.call.name, args: b.call.arguments || {}, output: "", status: "running", risk: b.risk }); heroSync(true); break;
       case "tool.output": { const t = find(b.call_id); if (t && t.status === "running") { t.output += b.text; redraw(t); } break; }
       case "tool.completed": {
         const t = find(b.result.call_id);
@@ -353,6 +360,7 @@ export function mount(root) {
     out.push(busy ? h("span", { class: "xc-wire", "aria-hidden": "true" }) : h("span", { class: "xc-spacer" }));
     if (notice) out.push(h("span", { class: "xc-flash" }, notice));
     statusEl.replaceChildren(...out);
+    heroSync();
     stopBtn.disabled = !busy;
     promptEl.textContent = busy ? "steer \u203A" : "\u203A";
     composer.classList.toggle("xc-steer", busy);
@@ -380,6 +388,7 @@ export function mount(root) {
   function drawApprovals() {
     const mine = Object.values(approvals).filter((a) => a.session === current);
     approvalView.draw(mine);
+    heroSync();
   }
 
   function gaugeRow(label, n, max, hot) {

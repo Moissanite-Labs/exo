@@ -18,9 +18,16 @@ def test_egg_is_the_site_copy():
         assert text("egg.js") == SITE_EGG.read_text(encoding="utf-8")
 
 
-def test_egg_is_used_once():
-    users = [f.name for f in STATIC.glob("*.js") if f.name != "egg.js" and "egg.js" in f.read_text(encoding="utf-8")]
-    assert users == ["tasks.js"]
+def test_exosphere_engine_is_used_by_two_views():
+    """The Tasks empty state and the chat landing hero; every graphic of Exo in the app comes from the one engine."""
+    users = sorted(f.name for f in STATIC.glob("*.js") if f.name != "egg.js" and "egg.js" in f.read_text(encoding="utf-8"))
+    assert users == ["hero.js", "tasks.js"]
+
+
+def test_hero_is_the_exosphere_at_x0():
+    js = text("hero.js")
+    assert 'id: "x0", level: 0, stage: 0' in js and '{ id: "x", level:' in js and '{ id: "3xo", level:' in js
+    assert 'HERO_FORM = "x0"' in js and "window.ExoEgg" in js and "E.mount(" in js
 
 
 def test_every_sub_page_has_a_head_and_an_empty_state():

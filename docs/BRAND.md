@@ -4,6 +4,11 @@ Status: proposed (D-049). The brand page is `site/brand/index.html`; every asset
 `scripts/brand_assets.py` (`--png` also renders the PNG icons with headless Chrome). Until D-049 is accepted, the live
 site keeps its current nav mark, favicon and orb.
 
+**Naming (principal's ruling, D-063).** The **exosphere** is Exo's evolving 3D graphic. Its forms are **x0** (the egg),
+then **x**, then **3xo**. Later forms are still being named; this list stays open. The community exosphere on the
+website is x0. The engine file and its identifiers keep the old name (`site/brand/egg.js`, `ExoEgg`, `data-exo-egg`)
+so nothing that embeds them breaks; "egg" now means only the x0 form.
+
 ## The figure
 
 Everything comes from one drawing. Draw a square of side 2 and both diagonals: the diagonals are an X and cut the
@@ -51,15 +56,27 @@ Geometry (units, x-height 20): stroke 4, letter gap 3.2, the x is 20 + 2·(4/√
 Colours are the site's tokens, unchanged (`site/assets/style.css`): bg `#08090a`, fg `#eceae4`, fg-3 `#8b8b86`,
 accent `#ff5b14` (the V, the seed, the core), accent-2 `#ff8a4c` (packets), cold `#9fb4c4` (the added dimension).
 
-## The egg
+## The exosphere
 
-`site/brand/egg.js` draws the lattice as a living orb. No dependencies, Canvas 2D, one file. Under
+`site/brand/egg.js` draws the lattice as the exosphere, a living orb. No dependencies, Canvas 2D, one file. Under
 `prefers-reduced-motion` it draws one still frame (a lit path through a few cells) and never animates. It pauses when
 off screen or in a background tab. Measured cost: under 0.5 ms of script per frame at stage 4 (510 dots, 2,130 edges).
 
 What moves: packets of information travel along the edges, one hop at a time; a dot they reach lights orange and its
 cell glows, with its lines to the cell centre (the drawing's line to the centre). A heartbeat in the core cell sends
 packets out. Activity sets the beat rate and the background traffic.
+
+### Forms
+
+| Form | Level | Engine stage | Drawn as |
+|---|---|---|---|
+| x0 | 0 | 0 | the egg: one cell inside a closed shell |
+| x | 1 | 2 | the lattice (tentative mapping) |
+| 3xo | 2 | 3 | the fourth dimension unfolded (tentative mapping) |
+| (later forms) | TBD | TBD | still being named by the principal |
+
+The web app's form table is `FORMS` in `plugins/exo-command/exo_command/static/hero.js`; adding a form is one row.
+The chat landing page shows form x0 and labels it `exosphere · x0 · level 0`.
 
 ### Stages
 
@@ -107,9 +124,10 @@ Keep the stage meaning (more cells, more structure, a dimension, more light) so 
 
 ### Where it shows
 
-- `site/brand/index.html`: the hero egg with a stage slider, and stages 0 to 3 side by side.
+- The web app (`plugins/exo-command`): the chat landing hero and the Tasks empty state, both x0 (`docs/ui/WEB.md`).
+- `site/brand/index.html`: the hero exosphere with a stage slider, and stages 0 to 3 side by side.
 - `site/brand/egg.html?stage=3&activity=0.7&hud=0`: full screen; `still=1` forces the reduced-motion frame.
-- The front page (`site/assets/main.js`): the hero shows the egg on every host (D-049 accepted 2026-10-13). `?egg=2`
+- The front page (`site/assets/main.js`): the hero shows the exosphere on every host (D-049 accepted 2026-10-13). `?egg=2`
   picks a stage and adds a small "Preview" tag linking to the brand page; `?egg=off` brings back the old orb.
 
 ## Terminal (proposal)

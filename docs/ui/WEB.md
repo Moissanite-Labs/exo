@@ -84,12 +84,17 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 
 ## Empty thread and instrument column
 
-- An empty thread shows the site's hero: the masked hairline grid and the node shell around an orange core
-  (`hero.js`, ported from `site/assets/main.js`), behind a brand block (`E X O`, agent, model, memory line)
-  and key hints as chips. It fades out when the first item arrives. It draws about 24 frames a second with the
-  pixel ratio capped at 1.5, stops when the tab is hidden or the canvas is off screen, and draws one still
-  frame under reduced motion. Measured in headless Chrome on an idle empty thread: 1.7 percent main-thread
-  time with motion, 0.0 percent with reduced motion.
+- An empty thread shows the exosphere (Exo's evolving 3D graphic, `docs/BRAND.md` "The exosphere") at form x0,
+  with the masked hairline grid, behind a brand block (`E X O`, agent, model, memory line) and key hints as
+  chips. A small label under it names the form and level (`exosphere · x0 · level 0`). It fades out when the
+  first item arrives. `hero.js` mounts the lattice engine (`static/egg.js`, the byte copy of `site/brand/egg.js`)
+  and holds the form table (`FORMS`: x0, x, 3xo; later forms are TBD, add a row). The engine caps the pixel
+  ratio, pauses when the tab is hidden or the canvas is off screen, and draws one still frame under reduced
+  motion (the label stays). It reacts to what the client already sees: idle is a slow beat; thinking raises the
+  activity and sends a few packets; a tool running raises it more and sends a burst for each tool; waiting on an
+  approval drops it to near stillness (and, on an engine that has `meditate`, folds it inward); a turn done sends
+  one larger burst and settles back. If the engine has `signal`, tool and done use it instead of `pulse`. This is
+  presentation only: no protocol, token (D-039), approval (D-045) or layout (D-046) behaviour changes.
 - With no panel open, the right column is a quiet instrument column: memory (tokens on the next call split into
   system, tree, other threads and tail, tree nodes, log and fold frontier) and the last calls (served route,
   ttft, cache share, fallback). It is hidden under 1100 px. The memory numbers come from `/context`, read
@@ -159,8 +164,9 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   stop: dashed. on: filled orange. ok: filled green. known: tinted cold. pause: two bars. warn: half filled. alert:
   filled with a ring. Numbers are tabular.
 - **Tasks** reads like the roadmap chart: a tally bar with a key, then one hairline lane per status with cards whose
-  top rule repeats the state. Under 760px the lanes stack. The empty state shows the lattice egg at stage 0
-  (`static/egg.js`, a byte-for-byte copy of `site/brand/egg.js`, checked by a test); this is the only place it appears.
+  top rule repeats the state. Under 760px the lanes stack. The empty state shows the exosphere at form x0
+  (stage 0). The engine is `static/egg.js`, a byte-for-byte copy of `site/brand/egg.js` checked by a test; it is
+  used here and by the chat landing hero, and nowhere else. The file and the `ExoEgg` identifier keep their names.
 - **Schedule** shows each job as a card in a hairline grid: the clock line in mono, the title, the prompt, then next,
   last and tier as a readout (local date and time plus "in 2h"), and the actions. A paused job's top rule is dashed.
   The form sits beside the list, with labelled fields; under 1100px it follows the list.
