@@ -142,6 +142,14 @@ def kill_group(proc: asyncio.subprocess.Process) -> None:
         pass
 
 
+async def exited(proc: asyncio.subprocess.Process) -> int:
+    """The leader's exit code. ``proc.wait()`` also waits for every pipe to close, so a descendant that keeps
+    stderr open would hold it until the read timeout; the return code is set as soon as the leader exits."""
+    while proc.returncode is None:
+        await asyncio.sleep(0.02)
+    return proc.returncode
+
+
 async def stop_group(proc: asyncio.subprocess.Process) -> None:
     """The leader may have exited while a child still holds a pipe; always stop the owned group."""
     kill_group(proc)
@@ -331,7 +339,7 @@ class ClaudeCliProvider:
             yield error_event(f"claude pipe failed: {self._diagnostic(exc)}" + tail(), None, retryable=True)
             return
         try:
-            rc = await asyncio.wait_for(proc.wait(), self._read)
+            rc = await asyncio.wait_for(exited(proc), self._read)
         except asyncio.TimeoutError:
             yield error_event(timeout_msg + tail(), None, retryable=True)
             return

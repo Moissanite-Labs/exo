@@ -265,8 +265,9 @@ def test_stderr_reader_is_cancelled_and_awaited_on_every_exchange_exit(mode):
                               {"type": "result", "subtype": "success", "is_error": False}]
                     self.stdout.feed_data("".join(json.dumps(f) + "\n" for f in frames).encode())
                     self.stdout.feed_eof()
+            returncode = 0  # the leader has exited
             async def wait(self):
-                return 0
+                await asyncio.Event().wait()  # asyncio's wait() also waits for the pipe the descendant holds
         p = claude_cli.ClaudeCliProvider(env={}, read_timeout=.02 if mode == "timeout" else 5)
         frames = [{"type": "user", "message": {"role": "user", "content": []}}]
         stream = p._run(Proc(), frames, set(), StreamState())
