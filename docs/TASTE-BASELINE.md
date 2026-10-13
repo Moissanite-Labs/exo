@@ -172,8 +172,12 @@ step 3), every value item must also pass:
    principal to read. Publishing is a public, irreversible act, so it goes through the gate and needs the
    principal's approval each release.
 
-**Reproducible:** the same store snapshot and script version give byte-identical output. A test runs the
-export twice and compares bytes.
+**Reproducible:** byte-identical output requires the same store snapshot, exporter/runtime code and data,
+explicit export inputs, privacy-check inputs and results, checkout skill manifest, and (when `--decision` is
+used) the same decision-model results. Privacy inputs include the store's identity and allow lists, the
+configured Exo home, bus registry and internal-name sources, and the bundled model catalog. Only sorted
+skill names are serialized; an installed wheel without `skills/MANIFEST.json` records `skills: []`. With
+those inputs and results held fixed, a test runs the export twice and compares bytes.
 
 ## 2. Layers and how a lookup resolves
 
@@ -637,7 +641,8 @@ All in `policies/consolidate.yaml`, `taste:` table.
 **Wave 1: layers and export.**
 `src/exo/baseline/` (loader, read-only pack with method and value classes, resolution with provenance tags),
 `exo taste export-house` with the privacy check and the tighter value check, the taste block in the prompt,
-the first pack exported and reviewed. Tests: the export is byte-identical when run twice; a planted name,
+the first pack exported and reviewed. Tests: the export is byte-identical when run twice with the same
+snapshot, inputs, privacy-check results and checkout; a planted name,
 email, seat name, phone number or person node fails the check; for value items, a planted religion, party,
 nationality, place or "when I" line fails, and a capitalised unknown word fails rather than holds; excluded
 types, guarded items and policy files never appear; resolution order (ruling, pin, learned, scoped, house);
@@ -677,7 +682,7 @@ thresholds; `/taste` renders a pending line with the right weeks and estimate.
 | Shipped pack | `baseline/house-taste/` | An empty placeholder, version 0.0.0, so the house layer is off everywhere until the principal exports, reviews and releases the first pack. No pack built from real data is in the repo. |
 | Layers and lookup | `baseline/layers.py` | Ruling, pin, learned (or scoped), house; every entry has a source tag. `P_base(t) = max(0.3, 0.7 * 2^(-t/365))`; house value items start at 0.5 inside the getting-to-know window. |
 | Privacy check | `baseline/privacy.py` | The general check, the store deny list and the value-domain check (section 1). |
-| Export | `baseline/export.py` | `exo taste export-house`. Writes nothing on any fail; byte-identical on rerun. |
+| Export | `baseline/export.py` | `exo taste export-house`. Writes nothing on any fail; byte-identical when its source, code, explicit inputs, privacy-check results and skill manifest match. |
 | Review and release | `baseline/review.py` | `exo taste review OUT --tick ID`, then `--final`. |
 | Prompt block | `plugins/exo-memory` | The taste block sits in the system message after the principal pack, under `taste_budget` (400 tokens; 0 turns it off). Built once per process. |
 | Listing | `baseline/cli.py` | `exo taste`: house on or off (and why), then each item with weight, class and source. The `/taste` view comes in wave 3. |
