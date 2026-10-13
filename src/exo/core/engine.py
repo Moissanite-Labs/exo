@@ -470,7 +470,7 @@ class CoreEngine:
         for slot in (pm.slots.memory, pm.slots.context):
             if slot is None:
                 continue
-            if slot is pm.slots.memory:  # agent_log: the one log, so the provider keeps no second one (D-028)
+            if slot is pm.slots.memory:  # agent_log: the one log, so the provider keeps no second one (D-028), lazy start too
                 fn = getattr(slot, "initialize", None)
                 if fn is not None:
                     try:
@@ -484,8 +484,9 @@ class CoreEngine:
                 spec = ToolSpec(name=schema["name"], description=schema.get("description", ""),
                                 parameters=schema.get("parameters") or {"type": "object", "properties": {}},
                                 toolset="memory" if slot is pm.slots.memory else "context")
-                handler = (lambda o, n: lambda args, ctx: o.handle_tool_call(n, args, session_id=ctx.session))(
-                    slot, spec.name)
+                kw = {"exo_home": str(self.home), "agent_log": self.log_view} if slot is pm.slots.memory else {}
+                handler = (lambda o, n, kw: lambda args, ctx: o.handle_tool_call(n, args, session_id=ctx.session, **kw))(
+                    slot, spec.name, kw)
                 self.registry.register(spec, handler, replace=True)
         self.registry.add_hook("pre_tool_call", self._pre_hook)
         self.registry.add_hook("post_tool_call", self._post_hook)
