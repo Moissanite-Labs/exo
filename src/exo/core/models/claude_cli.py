@@ -32,7 +32,7 @@ from typing import Any, AsyncGenerator, AsyncIterator, Mapping, cast
 import httpx
 
 from exo.core.models.base import StreamState, error_event
-from exo.core.models.anthropic import sanitize_tool_id
+from exo.core.models.anthropic import normalize_schema, sanitize_tool_id
 from exo.core.trace import scrub
 from exo.core.types import Message, ProviderEvent, ToolCall, ToolSpec, Usage
 
@@ -59,15 +59,6 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
 
     out = {k: v for k, v in minimal_env(os.environ if env is None else env).items() if k not in DROP_ENV}
     out.update(CHILD_ENV)
-    return out
-
-
-def _schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Anthropic rejects top-level oneOf/allOf/anyOf and an object without properties."""
-    out = {k: v for k, v in (schema or {}).items() if k not in ("oneOf", "allOf", "anyOf")}
-    out.setdefault("type", "object")
-    if out["type"] == "object" and not isinstance(out.get("properties"), dict):
-        out["properties"] = {}
     return out
 
 
@@ -194,7 +185,7 @@ class ClaudeCliProvider:
         except ValueError as exc:
             yield error_event(f"claude-cli: {exc}", 400, retryable=False)
             return
-        manifest = [{"name": t.name, "description": t.description, "inputSchema": _schema(t.parameters)}
+        manifest = [{"name": t.name, "description": t.description, "inputSchema": normalize_schema(t.parameters)}
                     for t in tools or []]
         body: dict[str, Any] = {"tools": [{"name": PREFIX + t["name"], "description": t["description"],
                                            "input_schema": t["inputSchema"]} for t in manifest]}
