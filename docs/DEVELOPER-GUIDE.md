@@ -166,6 +166,10 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 keyword arguments only. A failing callback is logged and skipped (it fails open), except that a `pre_tool_call`
 block is honoured. To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the
 principal, it returns `{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+Required-executor engines propagate failures of `exo-gate` in `pre_tool_call`
+and `post_approval_response`, blocking dispatch. The gate requires saved signed
+decision and approval events; ordinary optional hooks keep the behavior above.
+See `docs/GATE.md` "Required executor audit".
 
 **Memory provider hooks.** A memory provider is a subclass of `MemoryProvider` in `src/exo/core/slots.py`. Two
 methods matter for the principal's words:
