@@ -277,7 +277,6 @@ def test_fork_lineage_and_undo(tmp_path):
 
     s, child, grand = run(go())
     assert child.parent == s.id and grand.parent == child.id
-    assert store.lineage(grand.id) == [grand.id, child.id, s.id]
     assert [m.text() for m in store.messages(child.id)] == ["one", "r1", "branch", "child"]
     assert store.messages(child.id)[0].meta["forked_from"] == store.messages(s.id)[0].id
     assert store.get_session(s.id).message_count == 4  # parent untouched

@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from exo.core import jobs as jobs_mod
 from exo.core import trace, workspace
-from exo.core.context import AgentContext, _maybe_await
+from exo.core.context import AgentContext
+from exo.core.hooks import maybe_await
 from exo.core.findings import STATUSES
 from exo.core.types import to_dict
 from exo.principal import current_caller, is_principal
@@ -166,7 +167,7 @@ async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = ""
     facts["trace"] = eng.trace_text(info.id, 3)
     for key, fn in eng.handoff_sources.items():
         try:
-            facts[key] = await _maybe_await(fn(info.id))
+            facts[key] = await maybe_await(fn(info.id))
         except Exception as exc:  # a broken source must not block the handoff
             trace.report(f"handoff source {key}", exc, info.id)
             facts[key] = []

@@ -4,7 +4,7 @@ import shutil
 import tempfile
 
 from exo.compose import fitting_peers_dir
-from exo.core.peers import peers_dir
+from exo.peers import peers_dir
 
 
 def _fits(d) -> bool:

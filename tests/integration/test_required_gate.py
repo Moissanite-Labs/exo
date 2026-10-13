@@ -93,10 +93,10 @@ async def approved_call(engine):
     sid = (await dispatcher.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
     task = asyncio.create_task(engine.run_tool(ToolCall("c", "bash", {"command": "rm -rf cache"}), {"session": sid}))
     deadline = time.monotonic() + 5
-    while not engine._approvals and not task.done() and time.monotonic() < deadline:
+    while not engine.approvals.open and not task.done() and time.monotonic() < deadline:
         await asyncio.sleep(0.001)
-    assert engine._approvals, "gate must record the decision before asking"
-    rid = next(iter(engine._approvals))
+    assert engine.approvals.open, "gate must record the decision before asking"
+    rid = next(iter(engine.approvals.open))
     response = await dispatcher.run(s.Command.of(s.ApprovalRespond(request_id=rid, decision="allow")), "principal:tui")
     assert response.ok
     return await asyncio.wait_for(task, 5)
@@ -232,10 +232,10 @@ def test_identical_concurrent_approvals_keep_session_call_and_audit_refs(tmp_pat
                 tasks[call_id] = asyncio.create_task(engine.run_tool(
                     ToolCall(call_id, "bash", {"command": "rm -rf cache"}), {"session": sessions[call_id]}))
             deadline = time.monotonic() + 5
-            while len(engine._approvals) < 2 and time.monotonic() < deadline:
+            while len(engine.approvals.open) < 2 and time.monotonic() < deadline:
                 await asyncio.sleep(0.001)
-            assert len(engine._approvals) == 2
-            requests = {request.call.id: rid for rid, request in engine._open_approvals.items()}
+            assert len(engine.approvals.open) == 2
+            requests = {p.request.call.id: rid for rid, p in engine.approvals.open.items()}
             for call_id, response in responses:
                 result = await dispatcher.run(s.Command.of(s.ApprovalRespond(
                     request_id=requests[call_id], decision=response)), "principal:tui")
@@ -272,11 +272,11 @@ def test_required_observe_mode_still_asks_before_executor(tmp_path, monkeypatch)
             task = asyncio.create_task(engine.run_tool(ToolCall("c", "bash", {"command": "rm -rf cache"}),
                                                        {"session": sid}))
             deadline = time.monotonic() + 5
-            while not engine._approvals and not task.done() and time.monotonic() < deadline:
+            while not engine.approvals.open and not task.done() and time.monotonic() < deadline:
                 await asyncio.sleep(0.001)
-            assert engine._approvals and not task.done(), "required mode must ask even in observe mode"
+            assert engine.approvals.open and not task.done(), "required mode must ask even in observe mode"
             assert broker.seen == [] and ran == []
-            rid = next(iter(engine._approvals))
+            rid = next(iter(engine.approvals.open))
             await dispatcher.run(s.Command.of(s.ApprovalRespond(request_id=rid, decision="deny")), "principal:tui")
             result = await asyncio.wait_for(task, 5)
             assert result.is_error and broker.seen == [] and ran == []
