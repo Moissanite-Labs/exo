@@ -76,13 +76,21 @@ class _SessionState:
         self.stats: dict[str, int] = {}  # this turn's timing summary, filled as it runs (D-025)
 
 
+WRAP_UP_PROMPT = (
+    "You have reached the tool round limit for this turn, so no more tool calls are available. "
+    "Write a short summary for the user: what you finished in this turn, what is still open, "
+    "and the next step to take."
+)
+
+
 class Loop:
     def __init__(self, store: SessionStore, provider: Provider, *, bus: EventBus | None = None,
                  context: Any = None, memory: Any = None,
                  tool_specs: Iterable[ToolSpec] | Callable[[], Iterable[ToolSpec]] = (),
                  run_tool: ToolRunner | None = None, system_prompt: str = "",
                  model: str | None = None, max_iterations: int = 24, max_retries: int = 3,
-                 retry_delay: float = 0.5, provider_opts: dict[str, Any] | None = None):
+                 retry_delay: float = 0.5, provider_opts: dict[str, Any] | None = None,
+                 wrap_up: bool = True):
         self.store = store
         self.provider = provider
         self.bus = bus or EventBus(store)
@@ -98,6 +106,7 @@ class Loop:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.provider_opts = dict(provider_opts or {})
+        self.wrap_up = wrap_up
         self.approval_ms: dict[str, int] = {}  # session -> time spent waiting on approvals; the engine adds to it
         self.on_turn_end: Callable[[str, str], Awaitable[None]] | None = None  # (session, turn_id), after the turn
         self.before_turn: Callable[[], str] | None = None  # runs at turn start; returns the soul tag for turn.started
@@ -330,6 +339,38 @@ class Loop:
         result.stop_reason = "max_iterations"
         await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
                                    level="warn"), session)
+        if self.wrap_up:
+            await self._wrap_up(session, turn_id, system, extra, st, result)
+
+    async def _wrap_up(self, session: str, turn_id: str, system: str, extra: dict[str, Any],
+                       st: _SessionState, result: TurnResult) -> None:
+        """One last tool-less model call so a capped turn ends with a summary, not silence.
+
+        The prompt is transient: it is sent to the model but never stored. The reply is stored
+        like any assistant message, so the user sees it and the next turn has the summary.
+        ``stop_reason`` stays ``max_iterations``."""
+        try:
+            prompt = Message(role="user", content=[ContentPart.of_text(WRAP_UP_PROMPT)])
+            prompt.meta["transient"] = True
+            messages = await self.context.build(session, system, **extra)
+            messages = [*messages, prompt]
+            msg_id = new_id("m")
+            stream = await self._call(session, messages, msg_id, st, result, specs=[])
+            await self._record_call(session, stream, self.max_iterations, st)
+            if stream.usage is not None:
+                result.usage = result.usage + stream.usage
+                st.total = st.total + stream.usage
+                await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total,
+                                                model=stream.route or self.model or ""), session)
+            if stream.error is not None:
+                return  # the cap notice already went out; a failed summary adds nothing
+            reply = self._assemble(stream, msg_id)
+            reply.tool_calls = []  # tools were off; never run a stray call from the summary
+            result.message = await self._add(session, reply, turn_id)
+        except _Interrupted:
+            raise
+        except Exception as exc:  # a failed summary never breaks the turn; the notice stands
+            await self._emit(trace.error_body("wrap-up", exc), session)
 
     async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState) -> None:
         """The model.call event (what was asked, who served, every attempt) and the turn's running totals."""
@@ -363,7 +404,7 @@ class Loop:
     # ---------------------------------------------------------------- provider call
 
     async def _call(self, session: str, messages: list[Message], msg_id: str, st: _SessionState,
-                    result: TurnResult) -> _Stream:
+                    result: TurnResult, specs: list[ToolSpec] | None = None) -> _Stream:
         """Stream one model call with retry. Retries only while nothing was shown."""
         opts = dict(self.provider_opts)
         if self.model:
@@ -372,7 +413,7 @@ class Loop:
         # conversation to them (D-028), so they share the provider's prompt cache
         key = getattr(self.context, "cache_key", None)
         opts["session_id"] = (key(session) if callable(key) else None) or session
-        specs = self._specs()
+        specs = self._specs() if specs is None else specs
         attempt, history, t0 = 0, [], time.monotonic()
         while True:
             s = _Stream(t0=t0)

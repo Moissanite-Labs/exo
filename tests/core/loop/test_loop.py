@@ -729,3 +729,46 @@ def test_transient_summary_zero_backoff_still_has_a_retry_floor(tmp_path, monkey
         await ctx.settle(session.id)
         assert comp.calls == 4
     run(go())
+
+
+def test_wrap_up_summarizes_capped_turn(tmp_path):
+    loop_call = [ToolCall(id="c", name="echo", arguments={})]
+    seen_tools = []
+
+    class Prov(Script):
+        async def stream(self, messages, tools, **opts):
+            seen_tools.append(list(tools))
+            async for pe in super().stream(messages, tools, **opts):
+                yield pe
+
+    prov = Prov(reply("", loop_call), reply("", loop_call), reply("summary text"))
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], run_tool=echo_tool, max_iterations=2)
+
+    async def go():
+        s = await loop.create_session()
+        res = await loop.send(s.id, "spin")
+        return s, res
+
+    s, res = run(go())
+    assert res.stop_reason == "max_iterations"
+    assert res.message.text() == "summary text"
+    assert len(prov.calls) == 3
+    assert seen_tools[2] == []  # the wrap-up call went out with tools off
+    assert prov.calls[2][-1].text().startswith("You have reached the tool round limit")
+    stored = store.messages(s.id)
+    assert stored[-1].role == "assistant" and stored[-1].text() == "summary text"
+    assert not any(m.text().startswith("You have reached the tool round limit") for m in stored)
+
+
+def test_wrap_up_disabled(tmp_path):
+    loop_call = [ToolCall(id="c", name="echo", arguments={})]
+    prov = Script(reply("", loop_call), reply("", loop_call))
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], run_tool=echo_tool,
+                             max_iterations=2, wrap_up=False)
+
+    async def go():
+        s = await loop.create_session()
+        return await loop.send(s.id, "spin")
+
+    assert run(go()).stop_reason == "max_iterations"
+    assert len(prov.calls) == 2
