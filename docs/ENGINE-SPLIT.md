@@ -42,13 +42,51 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
   `exo.core.engine:create` forwards to it. The engine keeps thin public methods (`trace_text`, `context_report`,
   `context_text`, `compact_text`, `handoff_facts`). Counted core lines: 16,023 before, 15,800 after. These modules
   still read private state (`loop._state`, `store._q`, tree `_view`), which step 1 replaces with public queries.
+- 2026-10-13, step 4 (D-067): counted core lines 15,951 before (main at `2c55d26`), 14,777 after, 1,174 fewer.
+  About 300 of those are code that is gone. The rest left the core through two seams. Every change is its own commit.
+  - **Deleted or collapsed** (about 300 lines):
+    - The decision models' score and noul asks and the `key_found` lookup, which nothing outside tests called.
+    - Two fuzzy edit strategies that `line_trimmed` always beat.
+    - The process-group stash and win32 branches (every spawn starts its own session).
+    - A second `_maybe_await`, five inline copies of it, and two copies of the plugin keyword filter, now
+      `hooks.maybe_await` and `hooks.accepted`.
+    - The scheduler's copy of `HubBus`.
+    - The CLI providers' duplicated process helpers and constructor (now `CliProvider`), and the router's per-CLI
+      credential branches.
+    - 59 `@dataclass` lines that the protocol decorators now apply.
+    - Dead helpers in `slots.py`, `sessions.py`, `peer_target.py`, `mcp_client.py` and `skills.py`.
+    - The engine's branch for a context tree without recall, which never ran.
+  - **Seam: open approvals** (`exo.core.approvals.ApprovalDesk`, in the core). The engine kept five parallel dicts
+    per request. The desk holds one record per request and owns ask, list, respond and close-once. The engine calls
+    `engine.approvals`. The D-033 and D-039 checks and the D-045 close are unchanged. This made the engine simpler,
+    not the core smaller (20 lines more).
+  - **Seam: peer transport** (`exo.peers`, out of the core, 561 lines). This is step 3's "peer transport" item. The
+    transport was already host-agnostic: the Hermes bus plugin runs `PeerNode` with no engine. `PeerService` owns
+    the node, the `peers` and `peer_send` tools and the in-process peer socket. The engine knows four calls
+    (`start`, `stop`, `ready`, `command`) on an object `exo.compose` passes in as `attach_peers`. It no longer
+    imports `exo.server.app`. `PeerConfig` (ingress policy, which bus ingress also reads) and `EngineTarget` (the
+    ingress target for peers, bus and jobs) stay in the core. Tests: `tests/peers`, `tests/contract/test_peers_hermes.py`,
+    the exo-bus plugin suite.
+  - **Seam: scheduler** (`exo.scheduler`, out of the core, about 320 lines). Scheduled jobs are a product feature
+    built on the engine's turn API, like `exo.learn`, which composition already attaches. The engine starts, stops
+    and interrupts the scheduler and forwards `schedule.edit`. It does not know about cron, `schedule.sqlite`, the
+    per-run loops or delivery. The members the scheduler uses became public (`run_turn`, `channels`,
+    `Delegator.route`). Tests: `tests/core/scheduler`.
+  - **Slot obligations reviewed, kept.** `update_from_response` is called (`ContextAdapter.on_turn_complete`), so the
+    audit's note that it never is was wrong. The memory and context base-class defaults that Exo itself never calls
+    stay: exo-context and exo-memory also run under Hermes, which calls them, and exo-context delegates to them.
+  - **Still open for #46.** Step 1: the engine, `peer_target`, `diagnostics`, `findings`, `jobs` and `delegate` still
+    read `loop._state`, `store._q` or tree `_view`/`_agent_key`. Inward imports left in the engine: `exo.principal`,
+    `exo.config`, `exo.provenance`, `exo.diagnostics` and lazy `exo.learn` and `exo.models_cmd` (the `exo.gate`
+    approver checks moved with the desk to `exo.core.approvals`). The budget decision below is still pending.
 
 ## Budget policy
 
 Recommendation pending review: retain the current 16,000-line acceptance ceiling while #46 is open.
 Do not raise it again to accommodate a
-wave or exclude existing counted modules to make a failing test pass. The historical 15,000-line goal is
-unmet; splitting one file is not evidence of meeting it.
+wave or exclude existing counted modules to make a failing test pass. Step 4 brought the count under the historical
+15,000-line goal (14,777 at D-067), two thirds of it by moving two subsystems out through real seams. Whether to
+lower the ceiling to lock that in is part of the budget decision. This pass leaves it at 16,000.
 
 Before changing the ceiling, decide whether total line count remains useful. If it is retired, replace it
 with enforceable import-direction and collaborator-interface checks, with explicit temporary exceptions
