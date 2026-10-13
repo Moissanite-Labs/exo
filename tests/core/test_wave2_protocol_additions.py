@@ -24,7 +24,7 @@ def test_session_list_status_approvals_list_and_usage_model(tmp_path):
         sid = (await call(s.SessionCreate(title="t")))["session"]["id"]
         assert [x["status"] for x in (await call(s.SessionList()))["sessions"]] == ["idle"]
         assert (await call(s.ApprovalsList()))["approvals"] == []
-        ask = asyncio.create_task(eng.ask(sid, "post it", risk="high"))
+        ask = asyncio.create_task(eng.approvals.ask(sid, "post it", risk="high"))
         await asyncio.sleep(0.01)
         [a] = (await call(s.ApprovalsList()))["approvals"]
         assert a["summary"] == "post it" and a["risk"] == "high" and a["session"] == sid

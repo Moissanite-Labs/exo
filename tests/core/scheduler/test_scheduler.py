@@ -369,7 +369,7 @@ async def blocked_run(tmp_path, stage):
     await asyncio.wait_for(entered.wait(), 1)
     if stage == "approval":
         async def pending():
-            while not eng._approvals:
+            while not eng.approvals.open:
                 await asyncio.sleep(0)
         await asyncio.wait_for(pending(), 1)
     sid = next(t.child_session for t in bodies(eng, s.TaskUpdated) if t.status == "running")
@@ -390,7 +390,7 @@ async def test_scheduled_interrupt_and_task_cancellation_reap_all_work(tmp_path,
     assert not sch.loops and not sch.running
     assert sch.get(job["id"])["last_status"] == "failed"
     if stage == "approval":
-        assert not eng._approvals and not eng._open_approvals and not tool_ran
+        assert not eng.approvals.open and not tool_ran
         assert bodies(eng, s.ApprovalResolved)[-1].decision == "cancelled"
     else:
         assert closed.is_set()  # deleting the registry entry is insufficient if a model/tool worker survives

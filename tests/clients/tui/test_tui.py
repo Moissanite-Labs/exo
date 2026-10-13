@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from exo.core.approvals import Pending
 from exo.core.engine import CoreEngine
 from exo.core.plugins import Manifest, PluginManager
 from exo.protocol import schema as s
@@ -52,9 +53,7 @@ def make_engine(tmp_path) -> CoreEngine:
 
 def pending_approval(eng, session, req):
     """Synthetic presentation requests still exist in the fake core, so periodic reconciliation is real."""
-    eng._approvals[req.request_id] = (asyncio.get_running_loop().create_future(), session)
-    eng._open_approvals[req.request_id] = req
-    eng._approval_rules[req.request_id] = ([], "")
+    eng.approvals.open[req.request_id] = Pending(asyncio.get_running_loop().create_future(), session, req)
     eng.hub.publish(req, session)
 
 

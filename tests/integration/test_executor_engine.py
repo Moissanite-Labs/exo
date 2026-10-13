@@ -120,7 +120,7 @@ def test_plugin_approval_precedes_executor_and_post_hook(tmp_path, monkeypatch, 
         await asyncio.sleep(0)
         return decision
 
-    monkeypatch.setattr(engine, "ask", ask)
+    monkeypatch.setattr(engine.approvals, "ask", ask)
 
     async def main():
         try:

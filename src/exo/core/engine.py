@@ -40,9 +40,8 @@ from exo.core.peers import PeerConfig
 from exo.core.plugins import PluginManager
 from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
-from exo.gate import approver_allowed, approver_identity
-from exo.principal import current_caller, ingress_author, is_principal, principal_as, require_principal
-from exo.core.approvals import verify_approval
+from exo.principal import current_caller, ingress_author, is_principal, require_principal
+from exo.core.approvals import ApprovalDesk
 from exo.core.seats import Seat, list_seats
 from exo.core.sessions import SessionLocked, SessionStore
 from exo.core.skills import SkillIndex, register_skill_tool
@@ -286,12 +285,7 @@ class CoreEngine:
         self.plugins = plugins or PluginManager()
         self.plugins.executor_required = required
         self.plugins.router = self.router  # plugins reach it as ctx.router
-        self._approvals: dict[str, tuple[asyncio.Future, str | None]] = {}
-        self._open_approvals: dict[str, s.ApprovalRequested] = {}  # what approvals.list shows
-        self._announced: set[str] = set()  # approval ids whose ApprovalResolved went out (D-045)
-        self._always: set[str] = set()
-        self._approval_rules: dict[str, tuple[list[str], str]] = {}  # rid -> (approvers, binding), D-033
-        self._deciders: dict[str, str] = {}
+        self.approvals = ApprovalDesk(lambda body, sid: self.hub.publish(body, sid), self._approval_waited)
         self._channels: dict[str, Any] = {}
         self._channel_cfg: dict[str, dict[str, Any]] = {**(channels or {}), **(seat.channels if seat else {})}
         self._tasks: set[asyncio.Task] = set()
@@ -510,12 +504,12 @@ class CoreEngine:
             if verdict.get("action") == "approve":
                 key = "plugin_rule:" + str(verdict.get("rule_key") or call.name)
                 once = bool(verdict.get("once"))  # e.g. credentials: asked every time, never a standing allow
-                if key in self._always and not once:
+                if key in self.approvals.always and not once:
                     continue
                 who: list[str] = []
                 bound = {k: v for k, v in (("approvers", [str(a) for a in verdict.get("approvers") or []]),
                                            ("binding", str(verdict.get("binding") or ""))) if v}  # D-033
-                decision = await self.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
+                decision = await self.approvals.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
                                           options=["allow", "deny"] if once else None, **bound)
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
                 correlation = {"approval_key": verdict["approval_key"]} if verdict.get("approval_key") else {}
@@ -525,7 +519,7 @@ class CoreEngine:
                                                **correlation)
                 if decision == "allow_always" and not once:
                     if not verdict.get("persist"):  # a plugin that sets persist keeps its own scoped grants (D-033)
-                        self._always.add(key)
+                        self.approvals.always.add(key)
                 elif decision != "allow":
                     return Block("the user denied this call")
         return None
@@ -591,52 +585,8 @@ class CoreEngine:
         if (note := workspace.cwd_notice(where, "bash")) and where.is_dir():
             self.hub.publish(s.Notice(text=note, level="warn"), session)
 
-    async def ask(self, session: str | None, summary: str, call: ToolCall | None = None,
-                  risk: str = "medium", decided_by: list[str] | None = None, options: list[str] | None = None,
-                  opened: list[str] | None = None, approvers: list[str] | None = None, binding: str = "") -> str:
-        """Publish an approval request and wait for ``approval.respond``.
-
-        ``decided_by`` (optional out list) receives the id of the client that answered. ``approvers`` limits who
-        may answer (``principal``, ``seat:<name>``; empty = any local client that is not a peer). ``binding`` is the
-        hash of the exact outbound text; an answer that names a different hash is refused (D-033)."""
-        rid, t0 = s.new_id("a"), time.monotonic()
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._approvals[rid] = (fut, session)
-        req = s.ApprovalRequested(request_id=rid, summary=summary, risk=risk, call=call)
-        if options:
-            req.options = list(options)
-        if approvers:
-            req.approvers = list(approvers)
-        if binding:
-            req.binding = binding
-        self._approval_rules[rid] = (list(approvers or []), binding)
-        if opened is not None:
-            opened.append(rid)
-        self._open_approvals[rid] = req
-        self.hub.publish(req, session)
-        answered = False
-        try:
-            decision = await fut
-            answered = True
-            if decided_by is not None:
-                decided_by.append(self._deciders.pop(rid, "unknown"))
-            return decision
-        finally:
-            if not answered:  # the turn was stopped or the ask cancelled: close the card in every client (D-045)
-                self.announce_resolved(rid, "cancelled", "core", session)
-            if session:  # the turn summary reports this apart from tool time
-                self.loop.approval_ms[session] = self.loop.approval_ms.get(session, 0) + int((time.monotonic() - t0) * 1000)
-            self._announced.discard(rid)
-            self._approvals.pop(rid, None)
-            self._open_approvals.pop(rid, None)
-            self._deciders.pop(rid, None)
-            self._approval_rules.pop(rid, None)
-
-    def announce_resolved(self, rid: str, decision: str, by: str, session: str | None) -> None:
-        """Tell every client an approval is closed, once per request."""
-        if rid not in self._announced:
-            self._announced.add(rid)
-            self.hub.publish(s.ApprovalResolved(request_id=rid, decision=decision, by=by), session)
+    def _approval_waited(self, session: str, ms: int) -> None:
+        self.loop.approval_ms[session] = self.loop.approval_ms.get(session, 0) + ms
 
     # ------------------------------------------------------------ dispatch
 
@@ -674,13 +624,7 @@ class CoreEngine:
         return {"sessions": rows}
 
     async def _approvals_list(self, b: s.ApprovalsList) -> dict[str, Any]:
-        out = []
-        for rid, req in self._open_approvals.items():
-            fut, sid = self._approvals.get(rid, (None, None))
-            if fut is None or fut.done() or (b.session and sid != b.session):
-                continue
-            out.append({**to_dict(req), "session": sid})
-        return {"approvals": out}
+        return {"approvals": self.approvals.listing(b.session)}
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
         info = self._info(b.session)
@@ -823,38 +767,7 @@ class CoreEngine:
         return {"tasks": self.agents.list(b.session)}
 
     async def _approval_respond(self, b: s.ApprovalRespond) -> dict[str, Any]:
-        """D-039: who answered comes from the connection, never from the body. A principal connection answers as
-        the principal (``client`` is only a display label). Any other connection answers only as a seat, with a
-        D-033 signature, and never with ``allow_always``."""
-        if (b.client or "").lower().startswith(("peer", "ingress")):  # D-026: input from outside is never consent
-            raise CommandFailed("forbidden", "a peer cannot answer an approval")
-        fut, sid = self._approvals.get(b.request_id, (None, None))
-        if fut is None or fut.done():
-            raise CommandFailed("not_found", f"no open approval {b.request_id}")
-        approvers, binding = self._approval_rules.get(b.request_id, ([], ""))
-        caller = current_caller()
-        if is_principal(caller):
-            ident = by = principal_as(caller.partition(":")[2] or b.client)
-        elif (b.client or "").strip().lower().startswith("seat:"):
-            ident = by = approver_identity(b.client)
-        else:
-            raise CommandFailed("forbidden", "this connection cannot answer approvals: answer in the Exo window or "
-                                             "the web page, or sign as a seat")
-        if not approver_allowed(ident, approvers):  # D-033: who may answer, by category
-            raise CommandFailed("forbidden", f"{approver_identity(ident)} may not answer this approval; "
-                                             f"it needs {' or '.join(approvers)}")
-        if b.binding and binding and b.binding != binding:
-            raise CommandFailed("stale", "the text changed after it was shown; read the new request and answer that")
-        if not is_principal(caller):  # D-033: a seat signs its answer; a seat never gives a standing grant
-            if not verify_approval(b.sig, b.request_id, b.decision, binding, ident[5:]):
-                raise CommandFailed("forbidden", f"{ident} must sign its answer with its seat key "
-                                                 "(request id, decision, binding)")
-            if b.decision == "allow_always":
-                raise CommandFailed("forbidden", "only the principal can give a standing grant; "
-                                                 "a seat approves one exact text with allow")
-        self._deciders[b.request_id] = by
-        fut.set_result(b.decision)
-        self.announce_resolved(b.request_id, b.decision, by, sid)
+        self.approvals.respond(b)
         return {}
 
     async def _search(self, b: s.Search) -> dict[str, Any]:
