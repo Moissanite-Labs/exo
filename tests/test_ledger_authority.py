@@ -567,3 +567,31 @@ def test_local_factory_missing_key_without_keygen_names_the_fix(tmp_path, monkey
     monkeypatch.delenv("EXO_LEDGER_AUTHORITY_REQUIRED", raising=False)
     with pytest.raises(RuntimeError, match="exo keygen seat"):
         open_writable_ledger(tmp_path / "ledger.sqlite", "seat", tmp_path / "missing.key")
+
+
+def test_base64_alias_of_checkpoint_key_is_rejected():
+    """Different Base64 text can decode to the same key when unused padding bits differ."""
+    from exo.ledger_authority import validate_identity
+    key = crypto.keygen()
+    canonical_pub = crypto.pubkey_b64(key)
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    last = canonical_pub[-2]
+    alt = next(c for c in alphabet
+               if c != last and (alphabet.index(c) >> 2) == (alphabet.index(last) >> 2))
+    aliased_pub = canonical_pub[:-2] + alt + "="
+    assert aliased_pub != canonical_pub
+    assert crypto.unb64(aliased_pub) == crypto.unb64(canonical_pub)
+    identity = {"version": 1, "stream_id": "TEST-stream", "checkpoint_pub": canonical_pub,
+                "writers": {"memory": {"pub": aliased_pub, "author": "memory", "authors": ["memory"]}}}
+    with pytest.raises(AuthorityError, match="must be separate"):
+        validate_identity(identity)
+
+
+def test_distinct_keys_still_pass_separation():
+    from exo.ledger_authority import validate_identity
+    checkpoint = crypto.keygen()
+    writer = crypto.keygen()
+    identity = {"version": 1, "stream_id": "TEST-stream", "checkpoint_pub": crypto.pubkey_b64(checkpoint),
+                "writers": {"memory": {"pub": crypto.pubkey_b64(writer), "author": "memory",
+                                       "authors": ["memory"]}}}
+    assert validate_identity(identity)["checkpoint_pub"] == crypto.pubkey_b64(checkpoint)
