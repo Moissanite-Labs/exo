@@ -1,7 +1,7 @@
 # The live egg: x0 reacts to repo activity (D-059)
 
-Status: **Proposed** (2026-10-13), revised the same day for instant events, the name x0 and meditation. Nothing here is
-built. D-059 in `DECISIONS.md`. The XP rules the feed applies are in `docs/EXOPET.md` section 3 (D-058). The egg
+Status: **Proposed** (2026-10-13), revised the same day for instant events, the name x0 and meditation. Built locally
+(branch `feat/live-egg-v2`, not deployed): the site side to `v: 2` and the functions; see "Build status" at the end. D-059 in `DECISIONS.md`. The XP rules the feed applies are in `docs/EXOPET.md` section 3 (D-058). The egg
 itself is `site/brand/egg.js` (`docs/BRAND.md`, D-049).
 
 The idea: the egg on the project site is the community egg, named **x0** (read "x-o", which sounds like "exo"). Each
@@ -405,3 +405,22 @@ brief.
    maintainer, a meditation start with a bad signature, an empty queue, and a stop.
 3. **Production.** Point the production webhook, check the feed and one meditation for a day on staging, then
    promote.
+
+## Build status
+
+Built on branch `feat/live-egg-v2`, not deployed. Nothing in section 1 changed.
+
+- **Site.** `site/brand/egg.js` (the event API, `egg.meditate`, `egg.meditating`, absorb glows, reduced-motion
+  stills), `site/brand/egg-feed.js` (the poll steps of section 1.3 in their order, `feed.poll()`, poll on visible,
+  stop after three 404s), `site/assets/activity.js` (legend, XP readout, the text line of section 2.4), and
+  `site/brand/egg-feed.demo.json`, recorded from the real functions by `scripts/make_egg_demo.mjs`.
+- **Functions.** Node, no packages, web-standard handlers in `site/api/egg/`: `webhook` (also served as `hook`),
+  `feed`, `meditate` and `settle`. The logic is in `site/api/_lib/egg/` (`engine.mjs` is pure). The store is one
+  key-value interface (`store.mjs`): a memory store for tests, and the Upstash Redis REST protocol for the Vercel
+  Marketplace's Redis (`KV_REST_API_URL` and `KV_REST_API_TOKEN`). The state is one JSON record written under a
+  short lock. `EGG_CORE_ACCOUNTS` takes account ids (or logins). An account whose age cannot be read earns no instant
+  XP. `site/vercel.json` holds the daily cron.
+- **Tests.** `node --test tests/site_api/*.test.mjs tests/site_js/*.test.mjs`.
+- **Going live** needs, per Vercel project: a Redis store, the secrets of section 3.1 plus `EGG_REPO_ID`, `EGG_REPO`,
+  `EGG_CORE_ACCOUNTS` and `EGG_REVIEWER_BOT_ID`; a repository webhook to `/api/egg/webhook`; the Actions secrets for
+  `x0-meditate`; and `data-feed` on the pages' `activity.js` tag (until then production makes no feed requests).

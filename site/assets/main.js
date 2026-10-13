@@ -57,7 +57,7 @@
 
   /* ---------- Hero: the lattice egg (D-049, accepted) ----------
      The default everywhere. ?egg=2 picks a stage, ?egg=off brings back the old orb below. */
-  var eggQ = /[?&]egg(?:=([^&]*))?/.exec(location.search);
+  var eggQ = /[?&]egg(?:=([^&]*))?(?:&|$)/.exec(location.search);   // "?egg", "?egg=2"; not "?egg-demo"
   var eggOn = !(eggQ && eggQ[1] === "off");
   if (eggOn) {
     var stage = eggQ && eggQ[1] && !isNaN(+eggQ[1]) ? +eggQ[1] : 0;
@@ -74,7 +74,7 @@
       if (eggQ) { // a stage preview asked for in the address: label it
         var tag = document.createElement("a");
         tag.className = "egg-tag"; tag.href = sitePath + "brand/";
-        tag.textContent = "Preview: the lattice egg, stage " + stage + " \u00b7 brand";
+        tag.textContent = "Preview: the exosphere, stage " + stage + " \u00b7 brand";
         (canvas.parentNode.querySelector(".hero__in") || canvas.parentNode).appendChild(tag);
       }
     };

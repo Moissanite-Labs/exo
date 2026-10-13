@@ -1287,7 +1287,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 
 ## D-059 (2026-10-13) The live egg: x0 on the site reacts to repository events and meditates
 - **Status:** Proposed 2026-10-13, revised the same day (instant events, meditation, feed `v: 2`). Design in
-  docs/LIVE-EGG.md, interface first. Nothing built.
+  docs/LIVE-EGG.md, interface first. Built locally on branch `feat/live-egg-v2` (site client and functions, not
+  deployed; docs/LIVE-EGG.md "Build status"); the decision stays Proposed until the principal accepts it.
 - **Why (principal, 2026-10-13):** "event triggered animation ... on the 3d egg that happens every time there's
   activity on the github. different types and levels of animations for different types of events." Revision: "they
   should be instant triggered so users can see the satisfaction of their contribution triggering an animation."

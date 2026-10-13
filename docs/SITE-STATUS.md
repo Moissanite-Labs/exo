@@ -49,18 +49,22 @@ the hero content and wraps within its width; it keeps its absolute placement on 
 
 ## Live egg feed
 
-The egg on the home page and the roadmap hero reacts to repository activity. The interface is the one in
-`docs/LIVE-EGG.md` section 1 (branch `design/event-activation`, D-059): `egg.event(type, {replay, weight})`,
-`egg.signal(level)`, `egg.queued()` and `ExoEgg.EVENTS` in `site/brand/egg.js`; the feed client `ExoEggFeed.connect`
-in `site/brand/egg-feed.js`; and the demo feed `site/brand/egg-feed.demo.json`. `egg.pulse(n)` is unchanged.
+x0, the community exosphere on the home page and the roadmap hero, reacts to repository activity. The interface is
+`docs/LIVE-EGG.md` section 1, feed `v: 2` (D-059): `egg.event(type, {replay, weight})` for `issue`, `pr`, `review`,
+`merge` and `release`; `egg.event("validated", {kind})`; `egg.meditate(on, {immediate})` and `egg.meditating()`;
+`egg.signal(level)`, `egg.queued()` and `ExoEgg.EVENTS` in `site/brand/egg.js`. The feed client is
+`ExoEggFeed.connect` in `site/brand/egg-feed.js`; the demo feed `site/brand/egg-feed.demo.json` is an array of
+responses recorded from the real functions, with a meditation of 8 validated items.
 
-Levels: `issue` 1 (a quick pulse at one node), `pr` 2 (a stronger pulse and a bright travelling packet), `merge` 3
-(a flash through the lattice, a brief rise in brightness and activity, a faster heartbeat for a few seconds),
-`release` 4 (a merge, a lift of the stage, a fainter second flash). Events play from a queue; replays play at 0.6
-strength and never bloom twice. With `prefers-reduced-motion` there is no motion, only a brief highlight.
+Each poll applies, in order: the stage, the start of a meditation (at once if the page opened mid-meditation), the new
+events, the wake, then the page's state callback. An issue is a beat, a pull request a packet into the core, a review
+a packet across the lattice, a merge a bloom, a release a growth flash. In meditation the lattice folds inward, dims
+and breathes; each validated contribution is a cold-blue glow travelling into the core, and the XP readout ticks up as
+it lands. With `prefers-reduced-motion` nothing moves; the text line under the legend says what happened.
 
-`site/assets/activity.js` is the page glue. `?feed=demo` (and by default on `staging.` hosts) reads the demo feed and
-loops it, and the page shows a "demo activity" label. `?feed=off` turns it off. Otherwise it polls `/api/egg/feed`
-(or the `data-feed` attribute); the legend appears only after a good poll, so production with no feed shows no
-animation and no label. The functions behind `/api/egg/feed` do not exist yet. The roadmap page keeps its
-scroll-driven stage and ignores the feed's `egg.stage`.
+`site/assets/activity.js` is the page glue. `?feed=demo` (and by default on `staging.` hosts) plays the demo feed in
+a loop at double speed, and the page shows a "demo activity" label. `?feed=off` turns it off. The live feed is opt-in:
+only `?feed=live` or a `data-feed` attribute on the script tag makes the page poll `/api/egg/feed`, so production
+makes no requests until the functions are live, and the client stops after three 404s in a row. The roadmap page
+keeps its scroll-driven stage and ignores the feed's `egg.stage`. The functions are built in `site/api/egg/` and not
+deployed (`docs/LIVE-EGG.md` "Build status").

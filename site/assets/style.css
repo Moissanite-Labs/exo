@@ -555,5 +555,8 @@ html { scroll-padding-top: 80px; }
 .egg-legend b { font: 500 12px/1 var(--mono); color: var(--fg); letter-spacing: .04em; }
 .egg-pips { display: block; width: 34px; height: 6px; background: linear-gradient(90deg, var(--accent) calc(var(--n) * 33.34%), var(--line-2) 0); -webkit-mask: repeating-linear-gradient(90deg, #000 0 10px, transparent 10px 12px); mask: repeating-linear-gradient(90deg, #000 0 10px, transparent 10px 12px); }
 @media (max-width: 560px) { .egg-legend li { grid-template-columns: 34px 1fr; } .egg-legend li span { grid-column: 2; margin-top: -4px; } }
-.egg-legend__live { margin: 10px 0 0; font: 400 12px/1.5 var(--mono); color: var(--fg-3); }
+.egg-pips--cold { background: linear-gradient(90deg, #b0d6f0 calc(var(--n) * 33.34%), var(--line-2) 0); }
+.egg-legend__xp { margin: 10px 0 0; font: 500 12px/1.5 var(--mono); letter-spacing: .04em; color: var(--fg); font-variant-numeric: tabular-nums; }
+.egg-legend__xp:empty { display: none; }
+.egg-legend__live { margin: 6px 0 0; font: 400 12px/1.5 var(--mono); color: var(--fg-3); }
 .egg-legend__live:empty { display: none; }
