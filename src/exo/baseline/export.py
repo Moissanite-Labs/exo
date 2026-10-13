@@ -16,7 +16,12 @@
 3. **Check.** `exo.baseline.privacy`: a fail anywhere means nothing is written. A hold keeps the item out
    and lists it in the review. An optional judge (the decision model) can only hold, never pass.
 4. **Write.** MANIFEST.json, items.jsonl, soul/house.md and review/REVIEW.md. No policy files, no
-   timestamps. The same store snapshot and script version give the same bytes.
+   timestamps. Byte-identical output requires the same store snapshot, exporter/runtime code and data,
+   requested pack version, supplied soul text, checkout skill manifest, privacy-check inputs and results,
+   and (when enabled) decision-model results. Privacy inputs include the store's identity and allow lists,
+   the configured Exo home, bus registry and internal-name sources, and the bundled model catalog. Only
+   sorted skill names are serialized; an installed wheel without `skills/MANIFEST.json` records an empty
+   list.
 
 Gate, approval, budget and posting defaults are product policy, not taste: nothing here reads them.
 """
