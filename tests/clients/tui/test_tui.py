@@ -163,8 +163,7 @@ def test_panel_choice_acts(tmp_path):
     async def sc(app, pilot, client, eng):
         data = {"options": [{"id": "a", "label": "Alpha"}, "beta"]}
         eng.hub.publish(s.UiPanel(panel_id="c1", action="open", kind="choice", text="pick", data=data), app.session)
-        view = app.query_one(PanelView)
-        await until(lambda: view.display and view.options, pilot)
+        await until(lambda: app.choice is not None and app.focused is app.choice, pilot)
         await pilot.press("down")
         await pilot.press("enter")
         await until(lambda: any(isinstance(b, s.UiRespond) and b.action == "acted" for b in client.seen), pilot)

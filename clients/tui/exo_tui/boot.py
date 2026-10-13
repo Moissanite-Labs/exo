@@ -1,4 +1,4 @@
-"""A short boot sequence: the brand, then four checks that go green as the real steps finish.
+"""A short boot sequence: the brand (mark and wordmark, read from the brand files), then four checks that go green as the real steps finish.
 
 Under a second on a healthy core, any key skips it, and it never runs under reduced motion
 (the app decides; see ExoApp.boot_anim). It reports real steps: a check turns ok only when
@@ -16,7 +16,8 @@ from textual.app import ComposeResult
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
-from exo_tui.hero import Hero, hero_rows
+from exo_tui.brand import mark as brand_mark
+from exo_tui.brand import wordmark
 from exo_tui.theme import DOT, rich_style
 
 STEPS = [("core", "connect"), ("agent", "open thread"), ("memory", "summary tree"), ("model", "route")]
@@ -32,10 +33,7 @@ class BootScreen(ModalScreen):
         self.closed = False
 
     def compose(self) -> ComposeResult:
-        rows = hero_rows(self.app.size.height)
-        if rows:
-            yield Hero(rows, id="boot-hero")
-        yield Static("", id="boot-art")
+        yield Static("", id="boot-art")  # the mark and the wordmark from the brand files; the egg waits on the start
 
     def on_mount(self) -> None:
         self.set_interval(0.05, self.draw)
@@ -46,8 +44,7 @@ class BootScreen(ModalScreen):
 
     def draw(self) -> None:
         age = time.monotonic() - self.t0
-        out = [Text.assemble(("◢ ", rich_style("accent")), ("E X O", rich_style("fg", "bold"))),
-               Text("a personal agent core", style=rich_style("fg3")), Text("")]
+        out = [brand_mark(), Text(""), wordmark(), Text("a personal agent core", style=rich_style("fg3")), Text("")]
         shown = int(age / STEP_GAP)
         finished = True
         for i, (key, what) in enumerate(STEPS):

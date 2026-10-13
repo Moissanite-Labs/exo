@@ -51,8 +51,9 @@ with `[session] cwd` in its seat.toml), `/restart` reopens in a new terminal tab
 - Type while it is running and your message steers it: it lands at the next tool round, and the agent
   changes course. Nothing is lost and you do not need to wait.
 - Press ctrl+c, or type `/stop`, to stop a running turn. With selected text ctrl+c copies it; while idle it shows the quit hint. Esc never stops a turn: it only closes a menu, clears a tip or leaves a panel.
+- One turn runs up to 64 tool rounds, then ends with a short summary of what is done, what is open and the next step. Say "continue" to go on, or type `/rounds N` to change the cap for this session.
 - A message typed while a turn runs is a steer. Until it lands you can pull it back: press Up in an empty box to return it to the composer for editing, or type `/unsteer`.
-- Press ctrl+f to focus a pending approval card so you can answer it without losing the composer draft. Press ctrl+g to open or close the big composer for a longer message.
+- Press ctrl+f to focus a pending approval card or choice so you can answer it without losing the composer draft. On a choice, up and down move, 1 to 9 pick, Enter chooses, Esc dismisses; the pick is sent to the agent as your reply. Press ctrl+g to open or close the big composer for a longer message.
 - `@path` attaches a file, `!command` runs a shell command through the agent, ctrl+p opens a palette of
   commands, ctrl+o expands tool output.
 - Typing `/` opens a menu of every command with its arguments; Tab completes. `/model `, `/resume ` and `@` list
@@ -124,6 +125,8 @@ Every command `/help` lists, in one line each, so you can answer "what does /x d
 - `/copy` puts the last answer on the clipboard; `/copy error` the last error; `/copy all` the transcript.
 - `/compose` opens a big editor for a long prompt (ctrl+g too; ctrl+s sends, Esc closes and keeps the draft); `/compose task` adds Goal, Context, Constraints, Done when headings; `/compose edit` uses $EDITOR.
 - `/layout inverse` puts the input on top with the newest message under it; `/layout classic` is the usual order.
+- `/exosphere on` or `off` shows or hides the exosphere, the small lattice figure in the bottom-right corner that moves
+  with what the agent is doing (on by default; it hides itself on terminals under 90 columns).
 - `/model`, `/default`: models, above.
 - `/providers` sets up a model key: add or replace it (typed in a hidden field), test it, remove it, pick the default.
 - `/panel` reopens the last panel (an approval or a choice the agent showed you).

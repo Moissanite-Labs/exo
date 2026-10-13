@@ -39,6 +39,12 @@ For a `uv tool install`, it runs `uv tool upgrade exo`. After installation a fre
 imports, the protocol export and `exo models`. `exo update --dry-run` only prints the plan: it runs no
 subprocesses, preflight probes, upgrades or checks.
 
+A detached checkout (one moved with `git checkout --detach`, as a canary install is) cannot pull. `exo update` then
+fetches `origin` and moves to the tracked branch: the install record's `branch` if one is set, else `origin/HEAD`,
+else `origin/main`. It moves only if the target contains the current commit (a fast-forward). `--force` overrides
+that. If the reinstall or installer step then fails, it checks the previous commit out again and prints
+`ROLLED BACK`. Packages a failed install step changed are not undone, so fix the cause and update again (D-064).
+
 After updating, finish active turns, close your clients, run `exo stop`, then reopen `exo` or `exo web`.
 The running shared core and clients retain their loaded code until restarted. The updater prints this
 instruction and leaves stopping the core to you.
@@ -57,8 +63,9 @@ pull, and a clean checkout does not prove its contents are safe. To authenticate
 `python -m exo.config set update.require_signed true`). When true, `exo update` fetches, then verifies the
 upstream tip with `git verify-commit` (SSH signatures, `ssh-keygen`) against a **pinned** signers file,
 `$EXO_HOME/update/allowed_signers`. Only if the signature is good does it run `git merge --ff-only <that sha>`
-and continue; otherwise it stops before changing the tree. It applies to checkout and installer installs, not
-`uv tool` installs. The project does not sign releases yet, so leave it off until it does.
+and continue; otherwise it stops before changing the tree. On a detached checkout the commit verified is the tracked
+remote branch it would move to, and only that commit is checked out; a later failed step still rolls back. It
+applies to checkout and installer installs, not `uv tool` installs. The project does not sign releases yet, so leave it off until it does.
 
 The pin is separate from the repo on purpose: a new commit that edits `trust/allowed_signers` cannot make
 itself trusted. You create it once with `exo update --pin-trust`, which copies `trust/allowed_signers` from

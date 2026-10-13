@@ -40,6 +40,7 @@ export const openPanels=()=>[]; export const lastSeq=()=>seq;
 export function emit(e){seq=e.seq;listener(e);} export function recover(){stateListener({synced:++synced});}
 ''')
     (tmp_path / "panels.mjs").write_text('export const renderPanel=()=>null;')
+    (tmp_path / "permissions.mjs").write_text('export const set=async()=>"",refresh=async()=>({}),current=()=>({}),describe=()=>"";')
     (tmp_path / "hero.mjs").write_text('export const createHero=()=>({start(){},stop(){}});')
     (tmp_path / "composer.mjs").write_text('''import {h} from "./dom.mjs";
 export const attachComposer=()=>({guideEl:h("div"),menuEl:h("div"),note(){},sent(){},stop(){},typo(t){return t.startsWith("/contex ")?{guess:"context",line:"/context"}:null;}});
@@ -148,18 +149,19 @@ export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove()
     (tmp_path / "bus.mjs").write_text('''export const onState=f=>{globalThis.state=f;f({connected:false});};export const start=async()=>{globalThis.started++;};export const restart=async()=>{globalThis.restarted++;};''')
     for name in ("chat", "tasks", "schedule", "command", "providers"):
         (tmp_path / f"{name}.mjs").write_text('export const mount=()=>{globalThis.mounted++;return ()=>{};};')
+    (tmp_path / "permissions.mjs").write_text('export const banner=()=>({hidden:true});export const start=()=>{globalThis.permStarted++;};')
     (tmp_path / "test.mjs").write_text('''
 import assert from "node:assert/strict";
 let stored={};globalThis.sessionStorage={getItem:k=>stored[k],setItem:(k,v)=>stored[k]=v};
 globalThis.location={hash:"",pathname:"/",search:""};globalThis.history={replaceState:(a,b,u)=>{location.hash=u.slice(u.indexOf("#"));}};
-globalThis.started=0;globalThis.restarted=0;globalThis.mounted=0;
+globalThis.started=0;globalThis.restarted=0;globalThis.mounted=0;globalThis.permStarted=0;
 const app={children:[],replaceChildren(...c){this.children=c;}}, handlers={};
 globalThis.document={getElementById:()=>app};globalThis.window={matchMedia:()=>({matches:true}),addEventListener:(t,f)=>handlers[t]=f};
 await import("./app.mjs");
-const main=app.children[1];assert.match(main.children[0].children.join(""),/bare address has no page token/);
-assert.equal(started,0);assert.equal(mounted,0);
+const main=app.children.at(-1);assert.match(main.children[0].children.join(""),/bare address has no page token/);
+assert.equal(started,0);assert.equal(mounted,0);assert.equal(permStarted,0);
 location.hash="#token=fresh%2Dtoken&chat";await handlers.hashchange();
-assert.equal(stored["xc-token"],"fresh-token");assert.equal(location.hash,"#chat");assert.equal(restarted,1);assert.equal(mounted,1);
+assert.equal(stored["xc-token"],"fresh-token");assert.equal(location.hash,"#chat");assert.equal(restarted,1);assert.equal(mounted,1);assert.equal(permStarted,1);
 assert.deepEqual(Object.keys(stored),["xc-token"]); // no permanent storage or extra credentials
 state({denied:true,connected:false});
 const nav=app.children[0], conn=nav.children.at(-1);assert.match(conn.children[1].textContent,/latest complete link/);

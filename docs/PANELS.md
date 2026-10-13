@@ -12,7 +12,7 @@ version, so a client that cannot draw the panel (a phone notice, a voice device)
 | diff | `{files: [{path, diff}]}` where `diff` is unified diff text |
 | table | `{columns: [str], rows: [[cell, ...]]}` |
 | tasks | `{tasks: [{title, status}]}` status: queued, running, done, failed |
-| choice | `{prompt, options: [{id, label}]}` |
+| choice | `{prompt, options: [{id, label, description?}]}` (description is optional) |
 | approval | `{request_id, summary}` |
 | taste | `{rules: [{rule_id, text, confidence}]}` |
 | file | `{path, content, language}` |
@@ -33,3 +33,6 @@ For `acted`, `value` is:
 | other | free form, for example `{line, comment}` on a diff |
 
 Every response is a learning signal: a dismissed or ignored panel teaches when not to open one.
+
+`ui.respond` goes to the learning ledger only; it does not reach the agent. So when you pick a choice, the terminal
+client also sends the option's label as your reply (D-066). The web client sends only `ui.respond` today.

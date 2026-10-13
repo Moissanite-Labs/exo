@@ -26,6 +26,33 @@ The package holds much more than these four. `exo.core` is the loop, engine, too
 `exo.brief` are the learning side (`docs/LEARNING.md`, `docs/TOOLS-CLI.md`). `exo.bus` is the signed relay between
 seats. `exo.gate` is the action gate (`docs/GATE.md`). `exo.ingest` imports past conversations.
 
+## The turn loop: tool-round cap and wrap-up (D-064)
+
+`exo.core.loop.Loop` runs one turn as rounds: a model call, then the tools it asked for, then the next call. A turn
+may run `max_iterations` rounds, 64 by default. The cap is chosen at turn start, first match wins:
+
+1. `/rounds N` for one session (`Loop.state(session).rounds`). Only a live principal caller may set it (D-052).
+   It lasts until the core restarts. `/rounds default` clears it.
+2. `EXO_MAX_TOOL_ROUNDS` in the core's environment.
+3. The seat's `[loop] max_tool_rounds`.
+4. `config.json` `loop.max_tool_rounds`.
+5. The `Loop` default, 64.
+
+`exo.compose.create` resolves 2 to 4 with `exo.rounds.configured` and passes `max_iterations` to the engine's loop;
+values outside 1 to 1000 are named on stderr and skipped. Scheduled jobs use the same cap. Delegated sub-agents keep
+their own `max_turns` budget (default 24).
+
+When a turn nears the cap (`max(2, cap // 8)` rounds left: after round 56 of 64), the loop emits one `notice`, "tool
+round N of CAP; /rounds N raises the cap". At the cap it emits "stopped after CAP tool rounds", then makes one more
+call, the wrap-up. That call adds a transient user prompt (never stored) asking for what is done, what is open and the
+next step. It keeps the tool definitions, because the history holds `tool_use` and `tool_result` blocks and the
+Anthropic Messages API rejects those without tools. Instead it passes `tool_choice="none"`: the Anthropic provider
+sends `{"type": "none"}`, OpenAI-compatible providers send `"none"`, and `claude-cli` merges `{"type": "none"}` into
+the CLI's request body. Providers without the option ignore it. Any tool call in the wrap-up reply is dropped. The
+reply is stored with `meta.wrap_up`, and the turn's `stop_reason` stays `max_iterations`. `Loop(wrap_up=False)` turns
+the call off. This path is tested against a provider double that builds the real Anthropic body and returns the
+API's 400 for tool blocks without tools (`tests/core/loop/test_round_cap.py`), not against the live API.
+
 ## The protocol in numbers
 
 `src/exo/protocol/schema.py` is the source of truth. It holds 30 commands (the cap, all used) and 29 event types (the

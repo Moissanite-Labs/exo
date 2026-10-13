@@ -58,7 +58,7 @@ code, kbd {
 }
 .nav__in { display: flex; align-items: center; gap: 28px; height: 60px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font: 800 17px/1 var(--mono); letter-spacing: .28em; }
-.brand__mark { width: 24px; height: 24px; color: var(--accent); }
+.brand__word { height: 24px; width: auto; display: block; flex: none; }  /* 3X0 with the mark as its X (docs/BRAND.md) */
 .nav nav { margin-left: auto; }
 .nav__links { display: flex; gap: 4px; list-style: none; margin: 0; padding: 0; }
 .nav__links a {

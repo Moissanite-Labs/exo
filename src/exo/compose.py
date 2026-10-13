@@ -11,6 +11,7 @@ import os
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from exo import peers
 from exo.config import Config
@@ -79,13 +80,17 @@ def create(seat: str | None = None) -> CoreEngine:
     folders: list[str | os.PathLike[str]] = [*(st.skill_folders if st else []), cfg.home / "skills"]
     if pack := pack_dir():
         folders.append(pack)
+    from exo import rounds
+    cap = rounds.configured(os.environ, st.loop if st else None, cfg.get("loop"))  # D-064
+    loop_kw: dict[str, Any] = {"max_iterations": cap} if cap else {}
     eng = CoreEngine(cfg.home, models, plugins=pm, executor=executor, executor_required=executor_required,
                       cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
                       mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
                       delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"), jobs=cfg.get("jobs"), attach_peers=peers.attach,
                       attach_scheduler=Scheduler,
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
-                            if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")})
+                            if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")},
+                      **loop_kw)
     eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is
     if eng.peers is not None:
         eng.peers.autostart = True

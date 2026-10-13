@@ -54,7 +54,16 @@ cwd = "~/Work/exo-live"       # where this seat's threads start; beats config.js
 
 [trace]                       # D-032: anomaly limits for this seat over config.json's [trace] (docs/TRACE.md)
 turn_wall_s = 90              # also model_call_s, model_call_routes, turn_total_wall_s, model_wait_s, subagent_s, verify_turns, verify_days
+
+[loop]                        # D-064: tool rounds one turn may run before it wraps up (default 64, 1 to 1000)
+max_tool_rounds = 96          # EXO_MAX_TOOL_ROUNDS beats this; /rounds N beats both for one session
+
+[permissions]                 # D-065: read once by the exo-gate plugin when the core starts
+mode = "bypass"               # start in permissions bypass (docs/GATE.md "Bypass mode"); omit or "ask" to ask
 ```
+
+A seat file is on the gate's store list, so the agent cannot write `[permissions]` without asking you, even in
+bypass. A required tool executor (Exo OS) ignores `mode = "bypass"`.
 
 When a thread starts, or a shell call works (its `cwd` argument or a leading `cd`) in a folder that is not inside
 a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.

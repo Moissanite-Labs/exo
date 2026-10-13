@@ -220,6 +220,9 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         table = await asyncio.to_thread(providers_setup.rows, eng.router, eng.home,
                                        prober=providers_setup.probe)
         return {"providers": table, "main": await eng._main_status(table)}
+    if b.name == "rounds":  # D-064: this session's tool-round cap; only the principal changes it
+        from exo import rounds
+        return rounds.command(eng, b.session, b.args)
     if b.name == "handoff_facts":  # D-032: the facts /handoff gives the agent; the client sends the turn
         return await eng.handoff_facts(b.session, b.args)
     if b.name == "harness_error":  # a client (the TUI) reporting an exception it caught

@@ -1,5 +1,6 @@
 // Renders one ui.panel payload. Every kind has a full form; anything unknown or malformed shows the
-// plain-text fallback (`text`), which every panel carries. `act(value)` sends ui.respond "acted".
+// plain-text fallback (`text`), which every panel carries. `act(value, label)` sends ui.respond "acted";
+// a choice also sends its label as the user's reply (chat.js pickChoice).
 import { h, empty, short } from "./dom.js";
 import { renderMarkdown } from "./markdown.js";
 
@@ -67,7 +68,7 @@ function choice(p, act) {
   if (!opts.length) return fallback(p);
   const q = (p.data || {}).prompt;
   return h("div", { class: "xc-stack" }, q ? h("div", null, q) : null,
-    h("div", { class: "xc-keys" }, opts.map((o, i) => chip(String(i + 1), o.label, () => act({ choice: o.key })))));
+    h("div", { class: "xc-keys" }, opts.map((o, i) => chip(String(i + 1), o.label, () => act({ choice: o.key }, o.label)))));
 }
 
 function approval(p, act) {
@@ -143,7 +144,7 @@ export function renderBody(p, act) {
 
 // A panel card: title, reason, body, and a dismiss button.
 export function renderPanel(p, handlers) {
-  const act = (value) => handlers.act(p, value);
+  const act = (value, label) => handlers.act(p, value, label);
   return h("section", { class: "xc-sidepanel", "data-panel": p.panel_id, "data-kind": p.kind },
     h("header", { class: "xc-sidehead" },
       h("h3", null, p.kind === "approval" ? "Approval \u00B7 " + (p.title || "") : (p.kind === "taste" ? "Taste \u00B7 " : "") + (p.title || p.kind)),

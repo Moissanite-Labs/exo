@@ -399,6 +399,26 @@ tag, `git tag -s exo-vX.Y.Z`, for people who check it by hand. To change keys, a
 old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the list. Never remove the
 old key from the list in the same commit that the old key must sign.
 
+### Updating a checkout (`exo update`)
+
+`src/exo/update_cmd.py` plans, preflights, then runs steps. The preflight runs before any fetch, pull or install and
+refuses: update-source environment variables (`PYTHONPATH`, `GIT_*`, `PIP_*`, `UV_*` and the rest of its list), a
+dirty tree or untracked files, ignored source files, a missing or symlinked installer, and a target Python with
+neither pip nor `uv pip`. Every git call disables fsmonitor and hooks.
+
+On a branch, step one is `git pull --ff-only`. A detached checkout cannot pull, so (D-064) the preflight records its
+commit and `_move_detached` replaces the pull: `git fetch origin`, resolve the target (the install record's `branch`,
+else `origin/HEAD`, else `origin/main`; a branch name that is not plain is refused before the fetch), refuse unless
+`git merge-base --is-ancestor HEAD <target>` holds or `--force` is given, then `git checkout --detach <target>`.
+The reinstall steps follow. If any of them fails, `_rollback` checks the old commit out again and prints
+`ROLLED BACK` (or `ROLLBACK FAILED` with the command to run by hand). With `update.require_signed` (D-073),
+`_require_signed` runs after the preflight and before any move: on a branch it verifies `@{u}` and turns the pull
+into `git merge --ff-only <sha>`; on a detached checkout it calls `_detached_target` (the one fetch and the target
+resolution `_move_detached` reuses) and verifies that exact sha, so nothing unverified is ever checked out. Tests: `tests/test_update_cmd.py` (fake runner),
+`tests/test_update_detached.py` (real temporary git repos, a detached clone, simulated pip),
+`tests/test_update_signed.py` and `tests/test_update_signed_detached.py` (both checks together, with rollback). Never point a test
+at a live install.
+
 ## 9. Recipes
 
 Short, working patterns for four things people ask about. Each one names the file to read next.

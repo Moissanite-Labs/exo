@@ -767,7 +767,8 @@ class CoreEngine:
         own = [{"name": "context", "description": "what the next model call carries: parts and token estimates", "args": ""},
                {"name": "compact", "description": "summarize now what is eligible in this agent's memory", "args": ""},
                {"name": "trace", "description": "how the harness performed this session", "args": "[last N turns]"},
-               {"name": "findings", "description": "harness findings by state", "args": ""}]
+               {"name": "findings", "description": "harness findings by state", "args": ""},
+               {"name": "rounds", "description": "this session's tool-round cap; principal sets it", "args": "[N|default]"}]
         return {"commands": own + [{"name": c.name, "description": c.description, "args": c.args_hint}
                                    for c in sorted(self.plugins.commands.values(), key=lambda c: c.name)]}
 

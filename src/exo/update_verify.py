@@ -52,15 +52,17 @@ def pin_trust(root, rev: str = 'HEAD', read=_out) -> int:
     return 0
 
 
-def verify_target(root, read=_out, fetch=None) -> str:
-    """Fetch, then verify the upstream tip against the pin. Returns its full sha or raises ValueError."""
+def verify_target(root, read=_out, fetch=None, ref: str | None = None) -> str:
+    """Fetch, then verify the upstream tip against the pin. Returns its full sha or raises ValueError.
+
+    With `ref` (a detached checkout's resolved target, D-064) the caller has fetched already: verify that commit."""
     pin = pin_file()
     if not pin.is_file():
         raise ValueError('update.require_signed is on but no trusted signers are pinned; review '
                          f'{TRUST_PATH} and run `exo update --pin-trust`')
-    if (fetch or read)(_git(root, 'fetch', '--quiet')).returncode:
+    if ref is None and (fetch or read)(_git(root, 'fetch', '--quiet')).returncode:
         raise ValueError('git fetch failed; nothing updated')
-    sha = read(_git(root, 'rev-parse', '--verify', '@{u}^{commit}'))
+    sha = read(_git(root, 'rev-parse', '--verify', f'{ref or "@{u}"}^{{commit}}'))
     if sha.returncode or not (sha.stdout or '').strip():
         raise ValueError('no upstream branch to verify; nothing updated')
     sha = sha.stdout.strip()

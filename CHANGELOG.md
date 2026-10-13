@@ -9,9 +9,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
+- `/rounds [N|default]` sets this session's tool-round cap (principal only); seat `[loop] max_tool_rounds` and
+  `EXO_MAX_TOOL_ROUNDS` set it for the core. A notice shows when a turn nears the cap (D-064).
+- At the cap, one last call with tools forced off ends the turn with done, open and next step (#93, D-064).
+- Permissions bypass (D-065): `exo --skip-permissions` or `/permissions bypass` stops approval asks for this run of
+  the core, except writes to Exo's own records and reading secrets. Principal only, refused under a required
+  executor, a banner in both clients, every auto-approved call in the ledger as `decided_by: bypass`.
 
 ### Changed
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).
+- The tool-round cap per turn is 64, up from 24 (D-064).
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,
   `/findings`, handoff facts) moved to `exo.diagnostics`, and the engine factory moved to `exo.compose:create`, the
   new `exo serve` default. `exo.core.engine:create` still works. No behaviour change.
@@ -22,6 +29,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
+
+### Fixed
+- `exo update` on a detached checkout fetches and moves to the tracked remote branch (fast-forward only unless
+  `--force`) instead of failing on `git pull`, and rolls back if the reinstall fails (D-064).
 
 ## [0.2.0] (egg) - 2026-10-13
 

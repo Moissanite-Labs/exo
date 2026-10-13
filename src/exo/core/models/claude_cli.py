@@ -209,6 +209,8 @@ class ClaudeCliProvider(CliProvider):
         body: dict[str, Any] = {"tools": [{"name": PREFIX + t["name"], "description": t["description"],
                                            "input_schema": t["inputSchema"]} for t in manifest]}
         env = child_env(self.env)
+        if opts.get("tool_choice") == "none" and body["tools"]:  # merged into the CLI's API request (D-064)
+            body["tool_choice"] = {"type": "none"}
         if opts.get("max_tokens"):
             body["max_tokens"] = int(opts["max_tokens"])
             env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(int(opts["max_tokens"]))

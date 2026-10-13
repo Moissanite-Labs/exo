@@ -12,6 +12,7 @@ const stateListeners = new Set();
 export function on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 export function onState(fn) { stateListeners.add(fn); fn(state); return () => stateListeners.delete(fn); }
 export function openPanels() { return panels.slice(); }
+export function forget(id) { panels = panels.filter((p) => p.panel_id !== id); }   // closed here; the core may not say so
 export function lastSeq() { return state.seq; }
 
 function setState(patch) { state = { ...state, ...patch }; stateListeners.forEach((f) => f(state)); }

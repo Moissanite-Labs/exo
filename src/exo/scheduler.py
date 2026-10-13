@@ -194,7 +194,7 @@ class Scheduler:
             loop = Loop(e.store, provider, bus=e.loop.bus, context=e.loop.context, memory=e.loop.memory,
                         tool_specs=lambda: e.registry.specs(names=names), run_tool=e.run_tool,
                         system_prompt="\n\n".join(p for p in (e.loop.system_prompt, PROMPT) if p), model=model,
-                        max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
+                        max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay, max_iterations=e.loop.max_iterations)
             loop.approval_ms, loop.on_turn_end = e.loop.approval_ms, e.observe_turn
 
             def refresh_prompt() -> str:
