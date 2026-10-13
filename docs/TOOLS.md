@@ -29,10 +29,10 @@ A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_de
 a heuristic: a secret under an innocent name still passes, so keep keys in the key store. `EXO_HOME` stays: tools
 run `exo` commands, and the default path is no secret.
 
-Model providers read the real environment. The claude-cli provider does not pass it on: the `claude` child gets an
+Model providers read the real environment. The claude-cli and muse-cli providers do not pass it on: the child gets an
 explicit minimal set (`exo.envscrub.minimal_env`: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`,
 `TERM`, `TMPDIR`, `TZ`, `CLAUDE_CONFIG_DIR`, `XDG_*_HOME`, proxy variables and CA bundle paths) plus its fixed
-switches, and never an API key. MCP servers get the environment their own `env` table asks for (`${VAR}`
+switches, and never an API key (muse-cli also drops `META_API_KEY`). MCP servers get the environment their own `env` table asks for (`${VAR}`
 expansion), not this filter.
 
 ## Pipeline exit codes
@@ -43,6 +43,13 @@ earlier stage failed with a code other than 141 (SIGPIPE) and the last stage suc
 `note: pipeline stage 1 exited 1 (only the last stage's code is reported as the result)`. Background jobs put the same
 line in the job's end notice. Only the command's last pipeline is checked, and a command that sets its own EXIT trap
 turns the note off. The trace rule `shell.masked_exit` (docs/TRACE.md) flags it.
+
+## Execution brokers (D-020)
+
+An installed broker can mediate every registered tool after pre-hooks and
+validation, including foreground/background bash and delegated or scheduled
+turns. Required mode refuses missing executors and unsupported MCP startup.
+The immutable request and trusted host-code boundary are in `docs/EXECUTORS.md`.
 
 ## Result cap (D-041)
 

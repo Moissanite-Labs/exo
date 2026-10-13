@@ -26,6 +26,7 @@ written by the principal); the commands that write them come with `/taste` in wa
 """
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -46,6 +47,7 @@ DEFAULTS = {
     "value_window_max_days": 90,
 }
 PIN_TYPES = ("taste_pin", "taste_unpin", "taste_off", "taste_on")
+log = logging.getLogger(__name__)
 
 
 def taste_policy(store: PrincipalStore | None) -> dict:
@@ -61,11 +63,13 @@ def taste_policy(store: PrincipalStore | None) -> dict:
         if isinstance(raw, Mapping):
             for k, v in raw.items():
                 if k == "house":
-                    pol["house"] = v not in (False, "off", "no", "false", 0)
+                    disabled = (v.strip().casefold() in {"off", "no", "false"}
+                                if isinstance(v, str) else v in (False, 0))
+                    pol["house"] = not disabled
                 elif k in DEFAULTS and isinstance(v, (int, float)):
                     pol[k] = v
                 elif k not in DEFAULTS:
-                    pol[k] = v
+                    log.warning("ignoring unknown taste policy key %r in %s", k, path)
     return pol
 
 
@@ -214,17 +218,19 @@ def resolve(house: Sequence[HouseItem], user: Sequence[UserItem], *, pins: set[s
 
     for h in house:
         matches = sorted((u for u in active if _matches(u, h)), key=lambda u: (-u.weight, u.id))
-        ruling = next((u for u in matches if u.source == "ruling"), None)
-        pinned_user = next((u for u in matches if u.id in pins), None)
+        # A user item already listed for an earlier house item is spent: it cannot win here too, so
+        # the house item falls through to the next unused match, or to itself, instead of vanishing.
+        avail = [u for u in matches if u.id not in used]
+        ruling = next((u for u in avail if u.source == "ruling"), None)
+        pinned_user = next((u for u in avail if u.id in pins), None)
         if ruling is not None:
             winner = ruling
         elif h.id in pins:
             winner = None
         else:
-            winner = pinned_user or (matches[0] if matches else None)
+            winner = pinned_user or (avail[0] if avail else None)
         if winner is not None:
-            if winner.id not in used:          # one learned item that covers two house items is listed once
-                out.append(from_user(winner, h))
+            out.append(from_user(winner, h))   # one user item that covers two house items is listed once
         elif h.id in pins:
             out.append(Entry(h.id, h.claim, "pinned", "[pinned]", start, h.cls, h.id))
         elif h.id not in offs:

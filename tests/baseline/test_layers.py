@@ -87,6 +87,21 @@ def test_signature_match_counts_as_an_override():
     assert e.id == "p-x" and e.house_id == "h-x"
 
 
+def test_house_item_survives_when_its_only_match_is_spent_elsewhere():
+    """One ruling whose signature matches two house items: the second house item falls back to itself
+    instead of vanishing from the list."""
+    sig = frozenset({"+table", "-bullet", "+grid"})
+    h1 = HouseItem("h-1", "method", "rule", "work", "Use tables, not bullets.", frozenset({"+table", "-bullet"}))
+    h2 = HouseItem("h-2", "method", "rule", "work", "Use grid tables for layouts.",
+                   frozenset({"+grid", "+table", "-bullet"}))
+    ruling = L.UserItem("p-r", "Always use grid tables.", sig, 0.9, "ruling",
+                        "2026-09-01T00:00:00Z", "2026-10-06T00:00:00Z")
+    got = {e.house_id or e.id: e for e in L.resolve([h1, h2], [ruling], weight_of=lambda h: 0.7, version="1.3")}
+    assert got["h-1"].id == "p-r"                # the ruling wins the first house item
+    assert got["h-2"].id == "h-2"                # the second house item is still listed, as itself
+    assert got["h-2"].tag == "[house 1.3]"
+
+
 def test_fresh_install_with_an_empty_store_runs_end_to_end_with_the_house_layer(principal_store, tmp_path,
                                                                                 monkeypatch):
     pack = released(principal_store, tmp_path / "pack")
@@ -128,6 +143,23 @@ def test_start_blank_turns_the_house_layer_off(principal_store, tmp_path):
     pol.write_text(pol.read_text() + "taste:\n  house: off\n")
     v = L.view(s, pack=pack)
     assert not v.house_on and "house: off" in v.reason and not v.entries
+
+
+@pytest.mark.parametrize("value", ['"Off"', '" OFF "', '"No"', '" FALSE "'])
+def test_house_policy_false_strings_are_trimmed_and_case_insensitive(principal_store, value):
+    pol = principal_store.root / "policies" / "consolidate.yaml"
+    pol.write_text(f"taste:\n  house: {value}\n")
+    assert L.taste_policy(principal_store)["house"] is False
+
+
+def test_unknown_taste_policy_key_warns_and_is_ignored(principal_store, caplog):
+    pol = principal_store.root / "policies" / "consolidate.yaml"
+    pol.write_text("taste:\n  half_life: 100\n  baseline_half_life: 180\n")
+    with caplog.at_level("WARNING", logger="exo.baseline.layers"):
+        got = L.taste_policy(principal_store)
+    assert got["baseline_half_life"] == 180
+    assert "half_life" not in got
+    assert "unknown taste policy key 'half_life'" in caplog.text
 
 
 def test_unreleased_pack_is_never_used(principal_store, tmp_path):

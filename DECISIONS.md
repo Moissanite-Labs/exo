@@ -300,6 +300,27 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Decision:** phase 0 is research and design only (BRIEF-07, folder `os/` on branch
   `exo-os/phase-0`): base system, shell, security, small hardware, roadmap and proposed decisions.
   Exo OS runs the same core and protocol as Exo; no fork.
+- **Shared executor interface (2026-10-12):** the core loads a named installed `exo.executors` factory,
+  freezes validated post-approval arguments and dispatches through its broker. Required mode refuses missing
+  executors, unsupported MCP startup and failed required plugins. The OS supplies isolation and an audited
+  trusted plugin inventory; imported Python code remains trusted. See `docs/EXECUTORS.md`.
+- **Workspace subprocess closure:** required mode omits host Git handoff facts and uses filesystem-only
+  completion, because workspace Git configuration can execute helpers. Cross-seat delegation requires a
+  separate broker capability; local child setup passes tools through the shared registry.
+- **Required gate audit (2026-10-13):** execution requires committed decision and approval evidence.
+  Missing stores/keys, failed audit writes and trusted gate hook exceptions block before the executor.
+  Required mode refuses tool-selected body-file host reads, including symlinks; ordinary gate behavior
+  remains compatible. See `docs/GATE.md` "Required executor audit".
+- **Approval and authority ordering:** pending approvals use unique call tokens separate from reusable
+  rule keys. Policy acceptance is audited before pinning; required grant authorization is audited before
+  persistence, with an explicit authorization-only record if persistence fails. Separate stores are not
+  claimed to activate atomically. Concurrent approvals retain the correct session and decision reference.
+- **Ledger authority (2026-10-13):** core writers open the ledger through one factory. With no authority
+  configured it is the D-040 local key path unchanged: pinned keys, head anchor, `exo log verify`. With
+  `EXO_LEDGER_AUTHORITY` set, an installed backend signs and commits each event and checkpoint before
+  replying; verification replays its pinned identity read-only and never falls back to local keys. Enabling
+  it on an existing store fails closed (unconfirmed local tail); there is no migration. An independent witness is future work. See
+  `docs/LEDGER-AUTHORITY.md`.
 - **Lead call:** nothing on the Linux test machine's live OS changes in phase 0. It is someone's working machine
   (CRM, messaging, assistants). Where the OS first runs is A's call after the design.
 
@@ -1063,6 +1084,76 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   memory. Considered only through cryptographic or decentralized compute that keeps the operator blind.
 - **Own inference (later):** a keyless path where users never handle API keys, once funded.
 - **Rejected for now:** a hosted service that stores user keys on our servers.
+
+## D-051 (2026-10-12) muse-cli: a Muse Code subscription through the `muse` CLI
+- **Decision:** add a keyless provider `muse-cli` that runs `muse exec` as a subprocess, modelled on `claude-cli`.
+  Exo never reads, copies or stores the Muse token; the CLI owns it in the OS keychain. Status reads only the
+  non-secret `mechanism` and `subs_active` fields of `~/.config/muse/auth.json`. The test call is one tiny
+  `muse exec` prompt, mapped to the existing error classes plus a new one, `unsigned`.
+- **Why:** the subscription is reachable only through the vendor's login. A subprocess keeps the token out of Exo
+  and out of every log, which is the same line D-034 and D-039 draw for keys.
+- **Limits, accepted:** text only (a turn with tools is refused with status 501 so the router falls back), one
+  process per turn, no token stream, no usage counts, history flattened into one prompt. On macOS native binaries
+  need signing for keychain access (`OSStatus -67068`). Exo checks native Mach-O commands with `codesign -dv`;
+  a shell launcher's signing state is unknown, and Exo lets it run without claiming its binary is verified.
+  An actual signing failure remains `unsigned`, and signing or startup errors allow router fallback.
+- **Locked down:** the run has no shell, no writes, no web tools, no reminder agents, no imported foreign
+  personal context and no session log, in a private temporary workspace. Timeout and stop clean the entire
+  process group, including descendants after leader exit, with bounded waits before returning an error.
+  `META_API_KEY` is dropped from the child so the subscription, not an API account, is used.
+- **Gate:** `muse login`, `muse auth` and `muse logout` (any position, executable paths and nested shells too)
+  and `~/.config/muse/` are `credentials`: always ask, regardless of lowering policies or standing grants.
+- **Rejected:** reading the token from the keychain or `auth.json` and calling the API directly (Exo would hold a
+  vendor secret); passing `META_API_KEY` through (bills an API account, not the subscription).
+- **Revisit if:** `muse exec` gains a structured output or tool bridge, which could lift the text-only limit.
+- **Docs:** `docs/PROVIDERS.md` "Use a Muse Code subscription", `docs/GATE.md` "Muse CLI credentials",
+  `docs/DEVELOPER-GUIDE.md` "Add a CLI-backed provider", `docs/WHITEPAPER.md` §13.1, `docs/TOOLS.md`.
+
+## D-052 (2026-10-12) Principal authority applies to messages, learning and settings
+- **Why:** an audit reproduced local callers submitting turns, steering, verdicts and panel actions that became
+  principal-authored learning evidence. The same callers could accept relaxed gate policies and change settings
+  or model routes. Approval answers already checked transport identity, but these adjacent operations did not.
+- **Decision:** snapshot the live transport caller when a turn or steer is accepted. Only a principal connection
+  produces principal-authored text. Local automation may still drive turns, with author `local`. Background turns
+  without an explicit author are system input. Feedback, panel responses, settings, model selection and gate
+  policy acceptance require a live principal caller. The policy adoption method checks authority itself, covering
+  command aliases and direct plugin callbacks. Its ledger record names the authenticated caller.
+- **Transport and clients:** stdio always stamps local, even if its dispatcher has an interactive default. The web
+  provider route returns 403 on a core authority refusal and cannot use its offline disk fallback to evade it.
+  Preference-pair context includes only principal-authored messages. No protocol command or event was added.
+- **Peers and steers:** `peers send` with `via="human"` is a body claim. From a non-principal caller it is sent as
+  `via="agent"`, so the receiver never frames it as the principal typing in another client. `unsteer` from a
+  non-principal caller pulls back only non-principal steers; the principal's queued words stay.
+- **Validation:** regression cases cover untrusted send and steer, feedback and panel actions, policy relaxation,
+  settings, aliases, direct calls, caller expiry, TCP, stdio, Unix sockets and a tool child holding the test
+  credential. Authenticated user operations remain covered by positive controls.
+- **Limits:** same-user processes still need an OS sandbox. Earlier misattributed messages are not rewritten.
+- **Docs:** `docs/GATE.md`, `docs/MEMORY-MODEL.md`, `docs/COMMANDS.md`.
+
+## D-053 (2026-10-12) Verification isolates terminal preferences and documents current behavior
+- **Why:** the baseline root suite failed four TUI checks solely because the invoking terminal exported
+  `NO_COLOR`. Removing that variable made all four pass. Changing `TERM` did not. Product behavior was correct,
+  but the tests inherited an unrelated user's display preference.
+- **Decision:** the repository test fixture clears inherited `NO_COLOR`. Tests of no-colour mode set it explicitly.
+  The product continues to honor the user's setting. Existing tests cover both modes.
+- **Documentation corrections:** the approval focus shortcut is ctrl+f. Ctrl+g opens the composer. Undo hides log
+  entries and invalidates covering summaries, matching D-041 and the implementation.
+- **Docs:** `docs/DEVELOPER-GUIDE.md`, `docs/UI.md`, `docs/MEMORY-MODEL.md`.
+
+## D-054 (2026-10-12) Ruling citations do not waive mandatory learning checks
+- **Why:** the direct-ruling shortcut ran before the guarded-domain and evaluation rules. A reviewer could cite
+  a real but unrelated principal statement and install a derived skill or guarded lesson without those checks.
+- **Decision:** held conflicts, guarded proposals and mandatory evaluation checks run before the shortcut.
+  Skills always need evaluation, even if the configured type list omits them. Configured high-impact or gated
+  lessons retain their critic, evidence-weight and session-count requirements. Missing held-out cases cannot pass.
+  Rule numbers stay stable in the ledger. Ordinary unguarded taste and fact lessons retain the direct-ruling path.
+- **Principal control:** original rulings remain available in the ledger and context. Explicit acceptance of a
+  concrete proposal remains a separate path. A reviewer merely citing a ruling does not exercise that authority.
+- **Validation:** regressions prove unrelated ruling citations cannot bypass skill evaluation or guarded review,
+  and cover configured gates, evaluation success and failure, critic objections, held conflicts and direct acceptance.
+- **Limit:** citation authorship alone does not establish semantic support for an ordinary unguarded lesson.
+  Binding derived claims to the cited words still needs a separate design and evaluation.
+- **Docs:** `docs/LEARNING.md`, `research/LEARNING-LOOP.md`.
 
 ## D-055 (2026-10-12) Keep staging current; package with Electron after the core and browser
 - **Why (A):** update the latest staging site as the work advances, improve it where useful, and eventually package

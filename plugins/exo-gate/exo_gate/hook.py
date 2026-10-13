@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
+from exo.principal import require_principal
 
 logger = logging.getLogger("exo_gate")
 
@@ -185,21 +186,32 @@ class GrantStore:
         return hit
 
     def add(self, category: str, target: str, binding: str, days: float, by: str, tool: str = "") -> Optional[dict]:
+        g = self.prepare(category, target, binding, days, by, tool)
+        if g is not None:
+            self.persist(g)
+        return g
+
+    def prepare(self, category: str, target: str, binding: str, days: float, by: str, tool: str = "") -> Optional[dict]:
+        """Build a grant candidate without activating or writing it."""
         if not self.path or category in gate.NO_GRANT or days <= 0:
             return None
         now = self.clock()
-        g = {"id": "g_" + secrets.token_hex(6), "rule": category, "target": _glob.escape(target or ""),
+        return {"id": "g_" + secrets.token_hex(6), "rule": category, "target": _glob.escape(target or ""),
              "binding": binding or "", "tool": tool, "by": by, "created": now, "expires": now + days * 86400}
+
+    def persist(self, grant: dict) -> None:
+        """Activate one already-authorized candidate with the atomic file replacement."""
+        now = self.clock()
         with self._lock:
             rows = [r for r in self._read() if float(r.get("expires") or 0) > now]  # drop expired ones
-            rows.append(g)
+            rows.append(dict(grant))
             self._write(rows)
-        return g
 
 
 class LedgerSink:
     """Appends `action` events to the principal's ledger. A no-op (plain logging) when no store
-    or no signing key is configured. Never raises into the tool call."""
+    or no signing key is configured. The required gate checks the returned event id
+    and refuses execution when opening or committing the audit fails."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -216,12 +228,9 @@ class LedgerSink:
             logger.info("exo-gate: no principal store; decisions are logged only")
             return None
         try:
-            from exo.core.seats import ensure_key
-            if s.key_path and not s.key_path.is_file():
-                ensure_key(s.key_path)  # first use: generate the seat key (0600)
-            from exo import crypto
-            from exo.ledger import Ledger
-            self._ledger = Ledger(s.principal_store / "ledger.sqlite", crypto.Signer.from_file(s.author, s.key_path))
+            from exo.ledger_authority.factory import open_writable_ledger
+            self._ledger = open_writable_ledger(s.principal_store / "ledger.sqlite", s.author,
+                                                s.key_path, writer="exo-gate", auto_keygen=True)
         except Exception as exc:  # pragma: no cover - depends on the host
             logger.warning("exo-gate: cannot open ledger or key at %s: %s", s.key_path, exc)
             self._ledger = None
@@ -241,15 +250,31 @@ class LedgerSink:
                 return None
 
 
+class GateAuditError(RuntimeError):
+    """Required gate evidence was not committed; do not expose host error details."""
+
+
+@dataclass
+class PendingApproval:
+    decision_id: Optional[str]
+    session: Optional[str]
+    scope: dict
+    rule_key: str
+    call_id: str
+
+
 class Gate:
     """Holds settings, cached policies and the ledger sink; exposes the two hook callbacks."""
 
     def __init__(self, settings: Settings, sink: LedgerSink | None = None,
                  risk_lookup: Callable[[str], Optional[str]] | None = None,
-                 router_getter: Callable[[], Any] | None = None):
+                 router_getter: Callable[[], Any] | None = None,
+                 required_getter: Callable[[], bool] | None = None):
         self.settings = settings
         self.router_getter = router_getter
         self.risk_lookup = risk_lookup
+        self._required_at_load = os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
+        self.required_getter = required_getter
         self.sink = sink if sink is not None else LedgerSink(settings)
         self._policies: Optional[dict] = None      # pinned: the policy in force for this session
         self._policy_stamp: tuple = ()
@@ -257,10 +282,25 @@ class Gate:
         self._changed: Optional[dict] = None       # D-038: files changed since; waits for /gate accept
         self._changed_stamp: tuple = ()
         self._changed_error = ""
-        self._pending: Dict[str, tuple[Optional[str], Optional[str], dict]] = {}
+        self._pending: Dict[str, PendingApproval] = {}
         self._spent: Dict[str, float] = {}
         self._lock = threading.Lock()
         self.grants = GrantStore(settings.grants_path)
+
+    @property
+    def executor_required(self) -> bool:
+        return self._required_at_load or bool(self.required_getter and self.required_getter())
+
+    def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
+        try:
+            eid = self.sink.append(body, **kwargs)
+        except Exception:
+            if self.executor_required:
+                raise GateAuditError("Required gate audit could not be saved") from None
+            raise
+        if self.executor_required and (not isinstance(eid, str) or not eid):
+            raise GateAuditError("Required gate audit could not be saved")
+        return eid
 
     # --- policies ---------------------------------------------------------------------
 
@@ -303,7 +343,7 @@ class Gate:
         if stamp != self._changed_stamp:
             self._changed, self._changed_error = self._load()
             self._changed_stamp = stamp
-            self.sink.append({"gate": PLUGIN_ID, "phase": "policy_change", "files": self._file_hashes(),
+            self._append({"gate": PLUGIN_ID, "phase": "policy_change", "files": self._file_hashes(),
                               "error": self._changed_error or None})
         return self._changed
 
@@ -317,18 +357,25 @@ class Gate:
                 out[p.name] = None
         return out
 
-    def accept_policies(self, by: str = "principal") -> str:
-        """Make the changed policy files the pinned policy (``/gate accept``)."""
-        if self.changed_policies() is None:
+    def accept_policies(self) -> str:
+        """Adopt changed policy files only with live principal authority (``/gate accept``)."""
+        by = require_principal("accept changed gate policies")
+        candidate = self.changed_policies()
+        if candidate is None:
             return "policy unchanged since the session started"
-        self._policies, self._policy_error = self._changed, self._changed_error
-        self._policy_stamp, self._changed, self._changed_stamp = self._changed_stamp, None, ()
-        self.sink.append({"gate": PLUGIN_ID, "phase": "policy_accept", "files": self._file_hashes(), "by": by})
+        stamp, error = self._changed_stamp, self._changed_error
+        self._append({"gate": PLUGIN_ID, "phase": "policy_accept", "files": self._file_hashes(), "by": by,
+                      "policy_sha256": hashlib.sha256(json.dumps(candidate, sort_keys=True).encode()).hexdigest()})
+        self._policies, self._policy_error = candidate, error
+        self._policy_stamp, self._changed, self._changed_stamp = stamp, None, ()
         return "accepted the changed policy files"
 
     # --- hooks ------------------------------------------------------------------------
 
     def _load_body_file(self, c: gate.Classification) -> None:
+        if c.text_file and self.executor_required:
+            # Tool-selected host paths, including symlinks, must never be read before the worker.
+            raise GateAuditError("Body-file inspection is unavailable with a required executor")
         if not (c.text_file and self.settings.read_body_files and not c.text):
             return
         try:
@@ -399,6 +446,8 @@ class Gate:
                     verdict = await self._verdict(d, c, risk_s, tool_name)  # (option, via) or None
             except Exception:
                 logger.exception("exo-gate: rules failed before the decision model on %s", tool_name)
+                if self.executor_required:
+                    return {"action": "block", "message": "Required gate checks failed"}
         return self.pre_tool_call(tool_name, args, session_id, task_id, tool_call_id, turn_id, risk,
                                   _verdict=verdict)
 
@@ -411,6 +460,8 @@ class Gate:
                                        _verdict)
         except Exception as exc:
             logger.exception("exo-gate: internal error on %s", tool_name)
+            if self.executor_required:
+                return {"action": "block", "message": "Required gate checks or audit failed"}
             secret = False
             try:
                 secret = bool(gate.args_sensitive(args))
@@ -481,41 +532,60 @@ class Gate:
             approvers = gate.approvers_for(c.category, pol.get("approvals"))
             # persist: this gate keeps "always" grants itself (scoped, expiring, in the store), so the
             # core must not also keep an unscoped one in memory.
-            result = {"action": "approve", "message": msg, "rule_key": key, "approvers": approvers,
+            approval_key = "a_" + secrets.token_hex(16)
+            result = {"action": "approve", "message": msg, "rule_key": key, "approval_key": approval_key,
+                      "approvers": approvers,
                       "persist": True}
             if binding:
                 result["binding"] = binding
             if c.category in gate.NO_GRANT:
                 result["once"] = True      # the core never stores an "always" for this (no standing allow)
             body["rule_key"] = key
+            body["approval_key"] = approval_key
             body["approvers"] = approvers
-        if self.settings.mode == "observe" and c.category not in gate.NO_GRANT:  # enforced in every mode
+        # NO_GRANT is enforced in every mode; a required executor never runs an unanswered ask.
+        if self.settings.mode == "observe" and c.category not in gate.NO_GRANT and not self.executor_required:
             body["would"] = result["action"] if result else "run"
             result = None
         if d.outcome in ("allow", "log") and c.cost:
             with self._lock:
                 self._spent[today] = self._spent.get(today, 0.0) + float(c.cost)
-        eid = self.sink.append(body, session=session_id)
+        eid = self._append(body, session=session_id)
         if result and result["action"] == "approve":
             with self._lock:
                 scope = {"rule": c.category, "target": c.target or tool, "binding": binding, "outward": outward,
                          "tool": tool}
-                self._pending["plugin_rule:" + result["rule_key"]] = (eid, session_id or None, scope)
+                self._pending[result["approval_key"]] = PendingApproval(
+                    eid, session_id or None, scope, "plugin_rule:" + result["rule_key"], tool_call_id)
                 if len(self._pending) > 500:
                     self._pending.pop(next(iter(self._pending)))
         return result
 
     def post_approval_response(self, pattern_key: str = "", choice: str = "", decided_by: str = "",
+                               approval_key: str = "", session_id: str = "",
                                **_: Any) -> None:
         with self._lock:
-            pending = self._pending.pop(pattern_key, None)
+            if not approval_key and not self.executor_required:
+                # Legacy hosts may omit correlation; never guess between identical pending calls.
+                matches = [key for key, value in self._pending.items() if value.rule_key == pattern_key]
+                if len(matches) == 1:
+                    approval_key = matches[0]
+            pending = self._pending.get(approval_key)
+            if pending is not None and (pending.rule_key != pattern_key
+                                       or (session_id and pending.session != session_id)):
+                pending = None
+            if pending is not None:
+                self._pending.pop(approval_key)
         if pending is None:
+            if self.executor_required and pattern_key.startswith("plugin_rule:exo-gate:"):
+                raise GateAuditError("Required gate approval evidence is unavailable")
             return None
-        eid, session, scope = pending
+        eid, session, scope = pending.decision_id, pending.session, pending.scope
         body = {"gate": PLUGIN_ID, "phase": "approval", "choice": str(choice),
                 "approved": str(choice) in ("once", "session", "always"), "decided_by": str(decided_by or ""),
+                "approval_key": approval_key, "tool_call_id": pending.call_id or None,
                 "rule_key": pattern_key.split(":", 1)[-1]}
-        aid = self.sink.append(body, session=session, refs=(eid,) if eid else ())
+        aid = self._append(body, session=session, refs=(eid,) if eid else ())
         if str(choice) == "always":
             self._add_grant(scope, str(decided_by or ""), session, aid or eid)
         return None
@@ -537,9 +607,23 @@ class Gate:
             return
         approvals = self.policies().get("approvals") or {}
         days = float(approvals.get("outward_always_days" if scope.get("outward") else "always_days") or 0)
+        args = (str(scope.get("rule") or ""), str(scope.get("target") or ""),
+                str(scope.get("binding") or ""), days, by, str(scope.get("tool") or ""))
+        if self.executor_required:
+            candidate = self.grants.prepare(*args)
+            if candidate is None:
+                return
+            body = {"gate": PLUGIN_ID, "phase": "grant", "state": "authorized", "activation": "pending",
+                    "grant": candidate["id"], "rule": candidate["rule"], "target": candidate["target"],
+                    "binding": candidate["binding"] or None, "by": by, "expires": _iso(candidate["expires"])}
+            self._append(body, session=session, refs=(ref,) if ref else ())
+            try:
+                self.grants.persist(candidate)
+            except Exception:
+                raise GateAuditError("Required standing grant could not be saved") from None
+            return
         try:
-            g = self.grants.add(str(scope.get("rule") or ""), str(scope.get("target") or ""),
-                                str(scope.get("binding") or ""), days, by, str(scope.get("tool") or ""))
+            g = self.grants.add(*args)
         except Exception:
             logger.warning("exo-gate: could not save the standing grant", exc_info=True)
             return
@@ -547,7 +631,7 @@ class Gate:
             return
         body = {"gate": PLUGIN_ID, "phase": "grant", "grant": g["id"], "rule": g["rule"], "target": g["target"],
                 "binding": g["binding"] or None, "by": by, "expires": _iso(g["expires"])}
-        self.sink.append(body, session=session, refs=(ref,) if ref else ())
+        self._append(body, session=session, refs=(ref,) if ref else ())
 
 
 def grants_command(g: "Gate", args: str = "") -> str:
@@ -559,7 +643,7 @@ def grants_command(g: "Gate", args: str = "") -> str:
         hit = g.grants.revoke(words[1])
         if hit is None:
             return f"no grant {words[1]}"
-        g.sink.append({"gate": PLUGIN_ID, "phase": "revoke", "grant": hit["id"], "rule": hit.get("rule"),
+        g._append({"gate": PLUGIN_ID, "phase": "revoke", "grant": hit["id"], "rule": hit.get("rule"),
                        "target": hit.get("target"), "binding": hit.get("binding") or None})
         return f"revoked {hit['id']}"
     if words and words[0] != "list":
@@ -620,7 +704,8 @@ def register(ctx) -> Gate:
     if callable(explicit):
         get_config = lambda key, default=None: explicit(key)  # noqa: E731
     g = Gate(resolve_settings(get_config=get_config), risk_lookup=_risk_lookup_for(ctx),
-             router_getter=lambda: getattr(ctx, "router", None))
+             router_getter=lambda: getattr(ctx, "router", None),
+             required_getter=lambda: bool(getattr(getattr(ctx, "manager", None), "executor_required", False)))
     ctx.register_hook("pre_tool_call", g.apre_tool_call)
     ctx.register_hook("post_approval_response", g.post_approval_response)
     reg_cmd = getattr(ctx, "register_command", None)

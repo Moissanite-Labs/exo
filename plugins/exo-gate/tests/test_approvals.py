@@ -91,6 +91,63 @@ def test_post_edited_after_approval_is_held_again(keyed_store):
     assert call(ctx, *post("Other text."))["action"] == "approve"   # once is once
 
 
+@pytest.mark.parametrize("failure", ["audit", "persistence"])
+def test_required_grant_failure_leaves_no_authority_after_restart(keyed_store, monkeypatch, failure):
+    store, key = keyed_store
+    g, ctx = make_gate(store, key)
+    g.required_getter = lambda: True
+    verdict = call(ctx, *post("Suggest a fix."))
+    if failure == "audit":
+        append = g.sink.append
+        def fail_grant(body, **kw):
+            return None if body.get("phase") == "grant" else append(body, **kw)
+        monkeypatch.setattr(g.sink, "append", fail_grant)
+    else:
+        def fail_write(rows):
+            raise OSError("grant persistence unavailable")
+        monkeypatch.setattr(g.grants, "_write", fail_write)
+    with pytest.raises(hook.GateAuditError):
+        g.post_approval_response(pattern_key="plugin_rule:" + verdict["rule_key"],
+                                 approval_key=verdict["approval_key"], choice="always", decided_by="principal:tui")
+    assert g.grants.list() == []
+    restarted = hook.GrantStore(g.grants.path)
+    assert restarted.list() == []
+    assert call(ctx, *post("Suggest a fix."))["action"] == "approve"
+    bodies = events(store)
+    assert any(body["phase"] == "approval" and body["approved"] for body in bodies)
+    grants = [body for body in bodies if body["phase"] == "grant"]
+    if failure == "audit":
+        assert grants == []
+    else:
+        assert len(grants) == 1 and grants[0]["state"] == "authorized" and grants[0]["activation"] == "pending"
+
+
+def test_required_audited_grant_keeps_scope_and_exact_binding(keyed_store):
+    g, ctx = make_gate(*keyed_store)
+    g.required_getter = lambda: True
+    verdict = call(ctx, *post("Suggest a fix."))
+    g.post_approval_response(pattern_key="plugin_rule:" + verdict["rule_key"], approval_key=verdict["approval_key"],
+                             choice="always", decided_by="principal:tui")
+    assert len(g.grants.list()) == 1
+    assert call(ctx, *post("Suggest a fix.")) is None
+    assert call(ctx, *post("Changed text."))["action"] == "approve"
+
+
+def test_required_approval_needs_exact_single_call_token(keyed_store):
+    g, ctx = make_gate(*keyed_store)
+    g.required_getter = lambda: True
+    first = call(ctx, *post("Suggest a fix."))
+    second = call(ctx, *post("Suggest a fix."))
+    assert first["rule_key"] == second["rule_key"] and first["approval_key"] != second["approval_key"]
+    with pytest.raises(hook.GateAuditError):
+        answer(ctx, first, "once")
+    assert len(g._pending) == 2
+    for verdict in (second, first):
+        g.post_approval_response(pattern_key="plugin_rule:" + verdict["rule_key"],
+                                 approval_key=verdict["approval_key"], choice="deny", decided_by="principal:tui")
+    assert not g._pending
+
+
 # --- who may approve ------------------------------------------------------------------------
 
 APPROVALS = """

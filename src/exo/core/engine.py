@@ -42,7 +42,7 @@ from exo.core.plugins import PluginManager
 from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
 from exo.gate import approver_allowed, approver_identity
-from exo.principal import current_caller, is_principal, principal_as
+from exo.principal import current_caller, ingress_author, is_principal, principal_as, require_principal
 from exo.core.approvals import verify_approval
 from exo.core.seats import Seat, SeatError, list_seats
 from exo.core.seats import load as load_seat
@@ -51,6 +51,9 @@ from exo.core.skills import SkillIndex, pack_dir, register_skill_tool
 from exo.core.tools.builtin import harness as harness_tool
 from exo.core.tools.builtin import ui as ui_tool
 from exo.core.tools.registry import Block, Registry, ToolContext, default_registry
+from exo.core.tools.executor import (
+    ExecutionBroker, ExecutorConfigurationError, load_executor, validate_executor,
+)
 from exo.core.types import ContentPart, Message, ToolCall, ToolResult, ToolSpec, Usage, to_dict
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed, Hub
@@ -64,10 +67,6 @@ CODE_FIND_LINE = ("Use code_find for unfamiliar code and behavior questions acro
                   "when you already know the symbol or path.")
 SYSTEM_PROMPT = ("You are Exo, a careful coding agent. Use the tools to read, edit and run "
                  "things in the working directory, then answer briefly.")
-
-# D-040: a turn.send from one of this seat's clients is the principal speaking. Every other way in (peers, the bus,
-# job notices, the scheduler, delegation) stamps its own author; see exo.provenance.
-PRINCIPAL_META = {"author": provenance.PRINCIPAL}
 
 
 class SqliteLog:
@@ -288,6 +287,7 @@ class CoreEngine:
 
     def __init__(self, home: str | os.PathLike, models: dict[str, Any] | None = None, *,
                  registry: Registry | None = None, plugins: PluginManager | None = None,
+                 executor: ExecutionBroker | None = None, executor_required: bool = False,
                  cwd: str | None = None, system_prompt: str = SYSTEM_PROMPT,
                  env: dict[str, str] | None = None, delegation: dict[str, Any] | None = None,
                  seat: Seat | None = None, skill_folders: Iterable[str | os.PathLike] | None = None,
@@ -296,6 +296,23 @@ class CoreEngine:
                  tree_cfg: dict[str, Any] | None = None, schedule: bool = False,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
                  jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None, **loop_kw: Any) -> None:
+        # Fail before opening stores, loading adapters or registering host handlers.
+        required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
+        if executor is not None:
+            executor = validate_executor(executor)
+        elif registry is not None and registry.executor is not None:
+            executor = validate_executor(registry.executor)
+        else:
+            executor, loaded_required = load_executor()
+            required = required or loaded_required
+        required = required or bool(registry and registry.executor_required)
+        if required and executor is None:
+            raise ExecutorConfigurationError("Required tool executor is unavailable")
+        mcp_cfg = {**(mcp or {}), **(seat.mcp if seat else {})}
+        if required and mcp_cfg and getattr(executor, "supports_mcp_startup", False) is not True:
+            raise ExecutorConfigurationError("Required tool executor does not support MCP transport startup")
+        self.executor = executor
+        self.executor_required = required
         self.home = Path(home)
         self.cwd_note = ""  # why the default cwd is not the one asked for (shown at session start)
         self.cwd = self._seat_cwd(seat) or cwd or os.getcwd()  # the seat's own folder beats the shared default
@@ -311,8 +328,11 @@ class CoreEngine:
         self._writer: Any = None  # the agent's writer lock, taken by claim_writer() (create() does)
         models = {**(models or {}), **(seat.models if seat else {})}
         self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env)
-        self.registry = registry or default_registry()
+        self.registry = registry or default_registry(executor=executor, executor_required=required)
+        self.registry.executor = executor
+        self.registry.executor_required = required or executor is not None
         self.plugins = plugins or PluginManager()
+        self.plugins.executor_required = required
         self.plugins.router = self.router  # plugins reach it as ctx.router
         self._approvals: dict[str, tuple[asyncio.Future, str | None]] = {}
         self._open_approvals: dict[str, s.ApprovalRequested] = {}  # what approvals.list shows
@@ -346,7 +366,7 @@ class CoreEngine:
         peer_target.attach(self)  # D-026: peers and peer_send tools
         self.jobs = jobs_mod.attach(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
         self.handoff_sources["jobs"] = self._open_jobs  # /handoff lists the agent's running background jobs
-        self.mcp = McpManager({**(mcp or {}), **(seat.mcp if seat else {})}, env)
+        self.mcp = McpManager(mcp_cfg, env)
         self._started: asyncio.Future | None = None
         self._prompt_head = system_prompt
         self._prompt_tail = [self.skills.prompt(), CODE_FIND_LINE if self.registry.specs(names=["code_find"]) else "",
@@ -511,7 +531,9 @@ class CoreEngine:
                 "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low"}
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
-        for verdict in await self.plugins.hooks.afire("pre_tool_call", **self._hook_kw(call, ctx)):
+        required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()
+        for verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
+                                                     **self._hook_kw(call, ctx)):
             if not isinstance(verdict, dict):
                 continue
             if verdict.get("action") == "block":
@@ -527,8 +549,11 @@ class CoreEngine:
                 decision = await self.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
                                           options=["allow", "deny"] if once else None, **bound)
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
+                correlation = {"approval_key": verdict["approval_key"]} if verdict.get("approval_key") else {}
                 await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
-                                               decided_by=who[0] if who else "unknown", session_id=ctx.session or "")
+                                               _fail_closed_plugins=required_hooks,
+                                               decided_by=who[0] if who else "unknown", session_id=ctx.session or "",
+                                               **correlation)
                 if decision == "allow_always" and not once:
                     if not verdict.get("persist"):  # a plugin that sets persist keeps its own scoped grants (D-033)
                         self._always.add(key)
@@ -718,11 +743,12 @@ class CoreEngine:
             self.store.assert_open(b.session)
         except SessionLocked as exc:  # a finished child session takes no new turns
             raise CommandFailed("session_locked", str(exc)) from None
+        meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).running:
-            await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=PRINCIPAL_META)  # no await inside
+            await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
-        task = asyncio.create_task(self._turn(b, PRINCIPAL_META))
+        task = asyncio.create_task(self._turn(b, meta))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return {"accepted": True}
@@ -737,10 +763,14 @@ class CoreEngine:
     async def _turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
+        meta = dict(meta or {})
+        if not meta.get("author"):
+            meta["author"] = provenance.SYSTEM  # internal wakeups need an explicit source to speak for anyone
         hooks = self.plugins.hooks
         await hooks.afire("on_turn_start", session_id=b.session, message=b.text)
         try:
-            return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode, meta=meta)
+            return await (loop or self.loop).send(b.session, b.text, list(b.parts), mode=b.mode,
+                                                 meta=meta)
         finally:
             await hooks.afire("on_turn_end", session_id=b.session)
 
@@ -790,7 +820,8 @@ class CoreEngine:
             if b.action == "send":
                 if b.session:
                     self._info(b.session)
-                return await node.send(b.to, b.text, b.session, b.via)
+                via = b.via if is_principal(current_caller()) else "agent"  # "human" is a body claim (D-039)
+                return await node.send(b.to, b.text, b.session, via)
             if b.action == "deliver":
                 return await node.deliver(b.envelope)
             return await node.receipt(b.envelope)
@@ -798,6 +829,7 @@ class CoreEngine:
             raise CommandFailed("bad_request", str(exc)) from None
 
     async def _feedback_send(self, b: s.FeedbackSend) -> dict[str, Any]:
+        require_principal("send feedback")
         from exo import learn  # outside the core; learning off just records nothing
         out = learn.handle_feedback(self, b)
         if b.verdict in ("reject", "should_have_been"):  # the principal's own finding (D-025)
@@ -809,6 +841,7 @@ class CoreEngine:
         return out
 
     async def _ui_respond(self, b: s.UiRespond) -> dict[str, Any]:
+        require_principal("respond to a panel")
         from exo import learn
         return learn.handle_ui_respond(self, b)
 
@@ -866,6 +899,7 @@ class CoreEngine:
         return {"models": self.router.status(), "available": avail}
 
     async def _models_set(self, b: s.ModelsSet) -> dict[str, Any]:
+        require_principal("change models")
         try:
             self.router.prefer(b.role, b.model)  # the old routes stay as fallbacks
         except ValueError as exc:
@@ -966,7 +1000,9 @@ class CoreEngine:
                        "cwd": cwd, "created": info.created,
                        "user_turns": sum(1 for m in self.store.messages(info.id) if m.role == "user"
                                          and not m.meta.get("note"))},
-            "git": workspace.git_facts(cwd),
+            # Even read-only Git commands can execute workspace .git/config fsmonitor hooks.
+            "git": ({"repo": None, "unavailable": "Git facts unavailable: required executor has no isolated Git facts operation"}
+                    if self.executor_required else workspace.git_facts(cwd)),
             "findings": [{"id": r["id"], "severity": r["severity"], "title": r["title"][:100]}
                          for r in self.findings.list("open")[:10]],
         }
@@ -1006,7 +1042,7 @@ class CoreEngine:
         if b.name == "unsteer":  # D-045: pull a queued steer message back; args is its id, empty means the newest
             if not b.session:
                 raise CommandFailed("bad_request", "unsteer needs a session")
-            gone = self.loop.unsteer(b.session, b.args.strip())
+            gone = self.loop.unsteer(b.session, b.args.strip(), principal=is_principal(current_caller()))
             for m in gone:
                 self.hub.publish(s.SteerCancelled(message_id=m.id or "", text=m.text()), b.session)
             return {"cancelled": [{"id": m.id, "text": m.text()} for m in gone]}
@@ -1073,6 +1109,7 @@ class CoreEngine:
         return {"key": b.key, "value": redact(value, b.key.split(".")[-1])}
 
     async def _config_set(self, b: s.ConfigSet) -> dict[str, Any]:
+        require_principal("change settings")
         cfg = Config.load(self.home)
         try:
             if b.value is None:
@@ -1091,6 +1128,7 @@ def create(seat: str | None = None) -> CoreEngine:
 
     ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
     cfg = Config.load()
+    executor, executor_required = load_executor()  # required failures precede all plugin imports
     st = None
     if seat or os.environ.get("EXO_SEAT"):
         try:
@@ -1101,12 +1139,36 @@ def create(seat: str | None = None) -> CoreEngine:
             os.environ["EXO_PRINCIPAL"] = st.principal
     pm = PluginManager(config=cfg.data.get("plugin_config") or {},
                        memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
-    pm.load_all(enabled=st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins"))
+    enabled = st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins")
+    plugin_dirs = None
+    if executor_required:
+        # The installed executor owns this trusted inventory; user discovery is disabled.
+        raw_dirs = getattr(executor, "trusted_plugin_dirs", ())
+        if not isinstance(raw_dirs, (tuple, list)):
+            raise ExecutorConfigurationError("executor trusted_plugin_dirs must be a tuple/list of absolute paths")
+        plugin_dirs = tuple(raw_dirs)
+        if not all(isinstance(path, str) and Path(path).is_absolute() for path in plugin_dirs):
+            raise ExecutorConfigurationError("executor trusted_plugin_dirs must contain absolute paths")
+        raw_required = getattr(executor, "required_plugins", ())
+        if not isinstance(raw_required, (tuple, list)):
+            raise ExecutorConfigurationError("executor required_plugins must be a tuple/list of plugin names")
+        if not all(isinstance(name, str) and name for name in raw_required):
+            raise ExecutorConfigurationError("executor required_plugins must contain plugin names")
+        # The gate supplies the committed decision/approval evidence required mode promises.
+        required_plugins = tuple(dict.fromkeys(("exo-gate", *raw_required)))
+        if enabled is not None and not set(required_plugins).issubset(enabled):
+            raise ExecutorConfigurationError("plugin configuration disables a required executor plugin")
+    pm.load_all(dirs=plugin_dirs, enabled=enabled)
+    if executor_required:
+        missing = [name for name in required_plugins if name not in pm.plugins or pm.plugins[name].error]
+        if missing:
+            raise ExecutorConfigurationError(f"required executor plugins failed to load: {', '.join(missing)}")
     models = cfg.models()
     folders = [*(st.skill_folders if st else []), cfg.home / "skills"]
     if pack := pack_dir():
         folders.append(pack)
-    eng = CoreEngine(cfg.home, models, plugins=pm, cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
+    eng = CoreEngine(cfg.home, models, plugins=pm, executor=executor, executor_required=executor_required,
+                      cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
                       mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
                       delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"), jobs=cfg.get("jobs"),
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()

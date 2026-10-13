@@ -1,14 +1,14 @@
 """Promotion policy (LEARNING-LOOP 5.6), revert (5.7) and the views rebuilt from the ledger (5.5).
 
-`apply_policy` walks the open proposals and applies the rules in order:
+`apply_policy` walks open proposals. Mandatory checks (rules 3, 2 and 5) precede the ruling shortcut:
 
-1. The principal said it (a ruling or an answer the principal wrote is among the evidence): promote now.
+1. For an ordinary unguarded, ungated lesson, a principal ruling or answer among the evidence promotes it now.
 2. Guarded (irreversible, public, financial, third party): never auto-promote. It becomes a question once.
 3. Conflict with an existing belief: stays held; consolidation already raised the question. Never silent.
 4. Taste or fact, not guarded, weight high, evidence from at least `min_sessions` different sessions, no critic
    objection: auto-promote, logged as `learn_promotion` for the brief.
-5. Skill patch: promote only if the eval gate passes. Without held-out cases it cannot pass, so it waits.
-   High-impact taste (domains listed in settings) takes the same gate.
+5. Skill patches and configured gated lessons must pass the eval gate, even with principal evidence.
+   Without held-out cases they cannot pass. Configured non-skill lessons also need high weight and enough sessions.
 6. Everything else stays a proposal. Medium weight is a hint; low waits. Open past `stale_days` with enough
    value of information, it becomes a question; otherwise it decays away.
 """
@@ -81,7 +81,7 @@ def _log(rt: Any, p: Proposal, rule: int, auto: bool, accepted: dict) -> None:
 
 
 def apply_policy(lr: Learner, *, allow_eval: bool = False, now: str | None = None) -> list[Decision]:
-    """Apply rules 1 to 6 to every open proposal. `allow_eval` lets rule 5 run the gate (the nightly loop);
+    """Apply promotion rules, with mandatory checks first. `allow_eval` lets rule 5 run the gate (the nightly loop);
     the fast loop passes False so it never runs an eval."""
     rt = lr.runtime
     if rt is None:
@@ -119,16 +119,13 @@ def apply_policy(lr: Learner, *, allow_eval: bool = False, now: str | None = Non
 def _decide(lr: Learner, p: Proposal, weight: float, held: bool, gated: bool, allow_eval: bool, cfg: dict,
             now: str) -> Decision:
     rt = lr.runtime
-    # Rule 1: the principal said it.
-    if principal_said(rt.ledger, p, provenance.principal_names(rt.store)) and not held:
-        return Decision(p.id, "promoted", 1, "the principal said it")
     # Rule 3 before rule 2 for a held proposal: the conflict already raised its question, so it only waits.
     if held:
         return Decision(p.id, "held", 3, "conflicts with an existing belief; waiting on the principal's answer")
     # Rule 2: guarded.
     if p.guarded:
         return Decision(p.id, "question", 2, "guarded: irreversible, public or financial")
-    # Rules 4 and 5.
+    # Rule 5 is mandatory for skill patches and configured gated lessons, including principal evidence.
     lab = taste.label(weight)
     n_sessions = len(sessions_of(rt.ledger, [e["id"] for e in p.evidence]))
     if p.ptype == "skill" or gated:
@@ -143,6 +140,10 @@ def _decide(lr: Learner, p: Proposal, weight: float, held: bool, gated: bool, al
         if g.get("pass"):
             return Decision(p.id, "auto_promoted", 5, "passed the eval gate")
         return Decision(p.id, "gate_failed", 5, g.get("reason") or "failed the eval gate", g.get("failures", []))
+    # Rule 1 only shortcuts ordinary lessons after the mandatory checks.
+    if principal_said(rt.ledger, p, provenance.principal_names(rt.store)):
+        return Decision(p.id, "promoted", 1, "the principal said it")
+    # Rule 4.
     if p.ptype in ("taste", "fact") and lab == "high" and n_sessions >= int(cfg["min_sessions"]) \
             and not p.critic_note:
         return Decision(p.id, "auto_promoted", 4, f"high weight, {n_sessions} sessions, no objection")
