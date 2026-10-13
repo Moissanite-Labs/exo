@@ -118,7 +118,7 @@ smaller: a folder with a SKILL.md the agent loads when its description matches t
 
 ## Slash command index
 Every command `/help` lists, in one line each, so you can answer "what does /x do":
-- `/new`, `/sessions`, `/resume`, `/fork`, `/undo`, `/clear`, `/cwd`, `/restart`, `/exit`, `/quit`: threads
+- `/new`, `/sessions`, `/resume`, `/fork`, `/rename`, `/undo`, `/clear`, `/cwd`, `/restart`, `/exit`, `/quit`: threads
   and the window, above.
 - `/context`, `/compact`, `/usage`: memory and cost, above.
 - `/copy` puts the last answer on the clipboard; `/copy error` the last error; `/copy all` the transcript.

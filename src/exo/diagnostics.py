@@ -16,6 +16,7 @@ from exo.core import jobs as jobs_mod
 from exo.core import trace, workspace
 from exo.core.context import AgentContext, _maybe_await
 from exo.core.findings import STATUSES
+from exo.core.types import to_dict
 from exo.principal import current_caller, is_principal
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
@@ -82,8 +83,9 @@ def trace_text(eng: CoreEngine, session: str | None, last: int = 10, calls: bool
     head = [f"running on: {eng.loop.model or '-'} (session model {info.model if info else '-'}, last call served "
             f"by {served}); chain: {', '.join(r.ref for r in eng.router.chain('main')) or '-'}",
             f"harness {eng.findings.version}; {eng.findings.summary()}"]
-    if fixed := eng.findings.list("fixed")[:5]:
-        head.append("fixed, awaiting re-verification: " + ", ".join(f"{r['id']} (in {r['fixed_in']})" for r in fixed))
+    open_rows = [r for r in eng.findings.list() if r["status"] in ("open", "reopened")][:5]
+    if open_rows:
+        head.append("open findings: " + ", ".join(f"{r['id']} {r['title'][:60]}" for r in open_rows))
     if not session:
         return "\n".join(head)
     peers = trace.peer_text(eng.store, session)
@@ -194,6 +196,18 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
     if b.name == "subagent":  # #97: list, open, send to and stop a running child; exo.subagents holds the rules
         from exo import subagents
         return await subagents.command(eng, b)
+    if b.name == "rename":  # D-069: the session title, principal only (D-052); announced as session.updated
+        if not b.session:
+            raise CommandFailed("bad_request", "rename needs a session")
+        if not is_principal(current_caller()):
+            raise CommandFailed("forbidden", "only the principal can rename a session")
+        title = " ".join(b.args.split())[:200]
+        if not title:
+            raise CommandFailed("bad_request", "usage: /rename <title>")
+        eng._info(b.session)
+        info = eng.store.update_session(b.session, title=title)
+        eng.hub.publish(s.SessionUpdated(session=info), b.session)
+        return {"session": to_dict(info)}
     if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
         word, _, rest = b.args.strip().partition(" ")
         if word == "reload":

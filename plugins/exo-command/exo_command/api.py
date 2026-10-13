@@ -10,6 +10,7 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/chat/sessions/<id>/send        turn.send             {text, mode}
   POST /api/chat/sessions/<id>/interrupt   turn.interrupt
   POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
+  POST /api/chat/sessions/<id>/rename      command.run rename     {title}; principal only (D-069)
   POST /api/chat/sessions/<id>/command     command.run           {name, args}; read-only names only
   GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
   POST /api/feedback                       feedback.send         {session, verdict, message_id, text}
@@ -121,8 +122,8 @@ def _route(method: str, p: list, key: str):
         return _task_open if get else False
     if len(p) == 3 and p[0] == "tasks" and p[2] in ("steer", "stop"):
         return ({"steer": _task_steer, "stop": _task_stop}[p[2]]) if post else False
-    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command", "unsteer"):
-        return ({"send": _send, "interrupt": _interrupt, "command": _command, "unsteer": _unsteer}[p[3]]) if post else False
+    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command", "unsteer", "rename"):
+        return ({"send": _send, "interrupt": _interrupt, "command": _command, "unsteer": _unsteer, "rename": _rename}[p[3]]) if post else False
     return None
 
 
@@ -162,6 +163,12 @@ async def _command(c, p, q, body):
 async def _unsteer(c, p, q, body):
     res = await c.source.call(s.CommandRun(name="unsteer", args=_str(body, "message_id", limit=80), session=p[2]))
     return res.get("output") or {"cancelled": []}
+
+
+async def _rename(c, p, q, body):
+    title = _str(body, "title", required=True, limit=200)
+    res = await c.source.call(s.CommandRun(name="rename", args=title, session=p[2]))
+    return res.get("output") or {}
 
 
 async def _interrupt(c, p, q, body):
@@ -242,7 +249,7 @@ async def _schedule_edit(c, p, q, body):
 # ---------------------------------------------------------------- completion (D-037)
 WEB_COMMANDS = {"context": "what the next model call carries, part by part",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
-                "new": "start a new thread",
+                "new": "start a new thread", "rename": "give this thread a new title",
                 "layout": "inverse puts the box on top with the newest message under it; classic is the usual order"}
 _INDEXES: Dict[str, cm.FileIndex] = {}
 

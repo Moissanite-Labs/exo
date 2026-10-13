@@ -1224,6 +1224,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** `tests/core/test_turn_settle.py`, `tests/core/loop/test_loop.py`.
 - **Docs:** `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep".
 
+## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
+- **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It
+  calls `update_session(title=...)` and announces the change with the existing `session.updated` event. The protocol
+  stays at its cap of 30 commands and 30 events. Only the principal may rename (D-052); anyone else gets `forbidden`.
+- **Why:** issue #98. Titles are what make `/sessions` and `/resume` scannable, and the title is already stored in SQLite.
+  A new command type would have broken the cap; the `unsteer` pattern (D-045) already shows the way.
+- **Clients:** the TUI has `/rename`; the web page has `/rename` and a double-click on a thread in the list
+  (`POST /api/chat/sessions/<id>/rename`). Auto-titling from the first message is out of scope.
+- **Numbering:** D-062 to D-068 may be held by open PRs, so this is D-069.
+- **Validation:** `tests/core/test_rename.py`, `plugins/exo-command/tests/test_ghost.py`.
+- **Docs:** `docs/COMMANDS.md`, `docs/USER-GUIDE.md`, `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
+
 ## D-070 (2026-10-13) Inspect, steer and stop running subagents without a new protocol command (issue #97)
 - **Why:** a delegated child is a real session with a live loop, but the principal saw only the final receipt. A
   child going wrong could be stopped only by stopping the parent.
