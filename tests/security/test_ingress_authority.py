@@ -316,3 +316,30 @@ with httpx.Client(transport=httpx.HTTPTransport(uds=sock), base_url="http://exod
             await srv.close()
             shutil.rmtree(sock_dir)
     asyncio.run(main())
+
+
+@pytest.mark.parametrize("by_id", [True, False])
+def test_local_caller_cannot_pull_back_a_principal_steer(learned_engine, by_id):
+    """D-045 lets the principal pull a queued steer back. A local caller may pull back its own, never the
+    principal's: removing the principal's words is acting for the principal."""
+    eng, _ = learned_engine
+
+    async def main():
+        tui, local = Dispatcher(eng, caller="principal:tui"), Dispatcher(eng, caller="local")
+        sid = (await tui.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
+        state = eng.loop.state(sid)
+        state.running = True
+        try:
+            mine = await tui.run(s.Command.of(s.TurnSend(session=sid, text="Stop, do not deploy.", mode="steer")))
+            mid = mine.result["message_id"]
+            got = await local.run(s.Command.of(s.CommandRun(name="unsteer", session=sid, args=mid if by_id else "")))
+            assert got.ok and got.result["output"]["cancelled"] == []
+            assert [m.id for m in state.steer] == [mid]
+            theirs = await local.run(s.Command.of(s.TurnSend(session=sid, text="carry on", mode="steer")))
+            got = await local.run(s.Command.of(s.CommandRun(name="unsteer", session=sid)))
+            assert [c["id"] for c in got.result["output"]["cancelled"]] == [theirs.result["message_id"]]
+            got = await tui.run(s.Command.of(s.CommandRun(name="unsteer", session=sid, args=mid if by_id else "")))
+            assert [c["id"] for c in got.result["output"]["cancelled"]] == [mid] and state.steer == []
+        finally:
+            state.running = False
+    asyncio.run(main())

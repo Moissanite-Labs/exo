@@ -1077,11 +1077,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Transport and clients:** stdio always stamps local, even if its dispatcher has an interactive default. The web
   provider route returns 403 on a core authority refusal and cannot use its offline disk fallback to evade it.
   Preference-pair context includes only principal-authored messages. No protocol command or event was added.
+- **Peers and steers:** `peers send` with `via="human"` is a body claim. From a non-principal caller it is sent as
+  `via="agent"`, so the receiver never frames it as the principal typing in another client. `unsteer` from a
+  non-principal caller pulls back only non-principal steers; the principal's queued words stay.
 - **Validation:** regression cases cover untrusted send and steer, feedback and panel actions, policy relaxation,
   settings, aliases, direct calls, caller expiry, TCP, stdio, Unix sockets and a tool child holding the test
   credential. Authenticated user operations remain covered by positive controls.
 - **Limits:** same-user processes still need an OS sandbox. Earlier misattributed messages are not rewritten.
-- **Docs:** `docs/GATE.md`, `docs/MEMORY-MODEL.md`.
+- **Docs:** `docs/GATE.md`, `docs/MEMORY-MODEL.md`, `docs/COMMANDS.md`.
 
 ## D-053 (2026-10-12) Verification isolates terminal preferences and documents current behavior
 - **Why:** the baseline root suite failed four TUI checks solely because the invoking terminal exported

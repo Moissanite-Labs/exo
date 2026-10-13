@@ -203,3 +203,7 @@ records the authenticated caller, including its client label. `/gate status` sta
 `config.set` and `models.set` also require principal authority. The web default-model route returns
 403 when the core refuses authority. It does not rewrite config through its offline fallback.
 TCP and stdio callers remain local even when they possess a transport bearer token.
+
+Two other body fields cannot claim the principal. `peers send` with `via="human"` from a non-principal caller
+goes out as `via="agent"`, so the receiving daemon gives it `same-principal` trust, not `principal`. `unsteer`
+from a non-principal caller can pull back only steers that the principal did not write.

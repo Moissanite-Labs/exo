@@ -53,7 +53,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/usage` | Show context size, cost and the model in use. | none | `ExoApp.slash` (client state, no call) |
 | `/panel` | Reopen the last panel. | none | `ExoApp.show_panel` |
 | `/peers` | List other live sessions you can message. | none | `peers` protocol command, `action="list"` |
-| `/send` | Message another session as yourself. | `<peer> <text>` | `peers` protocol command, `action="send"`, `via="human"` |
+| `/send` | Message another session as yourself. | `<peer> <text>` | `peers` protocol command, `action="send"`, `via="human"` (honoured only from a principal connection; others send as `agent`) |
 | `/handoff` | Ask the agent to write a handoff note for the next session. | optional path | `ExoApp.handoff`. The core gathers facts with the `handoff_facts` built-in. See `docs/HANDOFF.md`. |
 | `/intro` | Ask the agent for an orientation. | none | `ExoApp.intro` (an ordinary turn) |
 | `/tutorial` | Turn tips on or off, or show them again. | `on`, `off`, `reset`. None shows the state. | `ExoApp.tutorial_command` (`config.set` on `tutorial.enabled`) |
