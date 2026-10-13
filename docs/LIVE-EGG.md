@@ -30,7 +30,7 @@ change it. A change here needs a new `v` number in the feed and a note in D-059.
 
 | Parameter | Meaning |
 |---|---|
-| `since` | optional. The `cursor` from the previous response. Only newer events are returned. Absent or unknown: the replay window (section 2). |
+| `since` | optional. The `cursor` from the previous response. Only newer events are returned. Absent or unknown: the replay window (section 2.3). |
 
 Response, `200`, `content-type: application/json`, `cache-control: public, s-maxage=5, stale-while-revalidate=15`:
 
@@ -77,7 +77,7 @@ Fields:
 | `egg.xp` | integer | counted community XP. Authoritative. Never compute it from `events`. |
 | `egg.pending` | integer | validated XP waiting for the next meditation. It will be added then (caps permitting). Draw it as a faint second fill, or ignore it. |
 | `egg.target` | integer | XP at which the egg starts to crack. |
-| `egg.stage` | number | the value to pass to `egg.setStage()`, 0 to 4, computed by the server (section 3.5). |
+| `egg.stage` | number | the value to pass to `egg.setStage()`, 0 to 4, computed by the server (section 3.6). |
 | `egg.state` | string | `filling`, `meditating`, `waking`, `cracking` or `hatched`. A page treats any other value as `filling`. |
 | `egg.meditation` | object or null | present while `state` is `meditating` or `waking`, else `null`. |
 | `egg.meditation.started` | string | UTC time the meditation began. |
