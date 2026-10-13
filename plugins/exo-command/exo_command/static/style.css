@@ -603,6 +603,8 @@ body { margin: 0; background: #08090a; }
 .xc-root .xc-tcard h3 { font: 600 15px/1.35 var(--xc-sans); letter-spacing: -.01em; color: var(--fg); }
 .xc-tcard-detail { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--fg-2); overflow-wrap: anywhere; }
 .xc-tcard-foot { display: flex; justify-content: space-between; gap: 10px; font: 11px var(--xc-mono); color: var(--fg-3); }
+.xc-tcard-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.xc-tcard-ctl .xc-input { flex: 1 1 140px; min-width: 0; }
 .xc-root .xc-tcard-foot code { font-size: 11px; color: var(--fg-3); }
 
 /* Schedule: job cards in a hairline grid, the form beside them */

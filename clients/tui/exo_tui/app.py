@@ -52,7 +52,7 @@ COMMANDS = {
     "context": ("session", "show what the next model call carries: each part with its tokens (read-only)"),
     "compact": ("session", "summarize now what is eligible in this agent's memory, then show tokens before and after"),
     "restart": ("session", "reopen this session in a new terminal tab and exit this one"),
-    "stop": ("session", "stop the running turn (what was done is kept)"),
+    "stop": ("session", "stop the running turn (what was done is kept); /stop <task> stops a running subagent"),
     "unsteer": ("session", "pull your last queued steer message back into the composer, if it has not landed yet"),
     "exit": ("session", "quit"),
     "quit": ("session", "same as /exit"),
@@ -61,6 +61,9 @@ COMMANDS = {
     "providers": ("model", "set up model providers: add or replace a key, test it, remove it, pick the default"),
     "usage": ("model", "show context size, cost and the model in use"),
     "panel": ("tools", "reopen the last panel"),
+    "tasks": ("tools", "list the subagents this session handed work to, with their status"),
+    "open": ("tools", "watch a subagent's session: /open <task> (a task id, a prefix of it, or its session id)"),
+    "steer": ("tools", "send a note to a running subagent: /steer <task> <text> (the parent's receipt records it)"),
     "peers": ("tools", "list the other live sessions (Exo and Hermes) you can message"),
     "send": ("tools", "message another session yourself: /send <peer> <text>"),
     "handoff": ("other", "have the agent write a handoff note for the next session: /handoff [path]"),
@@ -791,8 +794,8 @@ class ExoApp(App):
         name = info.get("title") or str(info.get("id", ""))[-8:]
         return f"thread {name}" + (" (private)" if info.get("kind") == "private" else "")
 
-    async def load_session(self, sid: str) -> None:
-        got = await self.client.call(s.SessionResume(session=sid))
+    async def load_session(self, sid: str, resume: bool = True) -> None:
+        got = await self.client.call(s.SessionResume(session=sid) if resume else s.SessionGet(session=sid))
         self.session = sid
         info = got["session"]
         self.seat = self.seat or info.get("seat")
@@ -1126,6 +1129,29 @@ class ExoApp(App):
         self.composer.focus()
         return True
 
+    async def subagent(self, verb: str, args: str) -> None:
+        """/tasks, /open, /steer and /stop <task>: the core's ``subagent`` built-in (#97). The core decides who may act."""
+        if verb != "list" and not args.strip():
+            self.note({"open": "usage: /open <task>", "send": "usage: /steer <task> <text>",
+                       "stop": "usage: /stop <task>"}[verb] + "  (see /tasks)", "warn")
+            return
+        resp = await self.post(s.CommandRun(name="subagent", args=f"{verb} {args}".strip(), session=self.session))
+        out = (resp.result.get("output") or {}) if resp.ok else {}
+        if verb == "list":
+            rows = out.get("tasks", [])
+            self.note("\n".join([f"{len(rows)} subagent task(s)"] + [
+                f"  {r['task_id']}  [{r['status']}{', live' if r['live'] else ''}]  {r['title']}" for r in rows]))
+        elif verb == "open" and resp.ok:
+            if not out.get("session"):
+                self.note(f"task {out['task_id']} has no session yet ({out['status']})", "warn")
+                return
+            await self.load_session(out["child_session"], resume=False)  # read-only look: resume would repair a live loop
+            self.note(f"subagent {out['task_id']} is {out['status']}. " + (
+                "/steer <task> <text> sends it a note, /stop <task> stops it, " if out["steerable"] else "finished; ")
+                + "/sessions goes back to a thread", "hint")
+        elif resp.ok:
+            self.note(("note sent to " if verb == "send" else "stopped ") + out["task_id"] + "; the parent's receipt records it")
+
     async def slash(self, name: str, args: str) -> None:
         if not self.busy:
             self.hint_budget = 1
@@ -1137,7 +1163,7 @@ class ExoApp(App):
                 self.composer.text = f"/{guess}" + (f" {args}" if args else "")
                 self.composer.move_cursor(self.composer.document.end)
                 return
-        if args and name in {"exit", "quit", "stop", "unsteer", "restart", "peers", "clear", "cwd",
+        if args and name in {"exit", "quit", "unsteer", "restart", "peers", "clear", "cwd",
                              "usage", "intro", "help", "undo", "compact", "context", "panel"}:
             self.note(f"usage: /{name}", "warn")
             return
@@ -1149,8 +1175,12 @@ class ExoApp(App):
             return
         if name in ("exit", "quit"):
             self.exit()
+        elif name == "stop" and args:
+            await self.subagent("stop", args)
         elif name == "stop":
             self.stop_turn()
+        elif name in ("tasks", "open", "steer"):
+            await self.subagent({"tasks": "list"}.get(name, "send" if name == "steer" else name), args)
         elif name == "unsteer":
             await self.unsteer()
         elif name == "restart":
