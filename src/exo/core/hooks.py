@@ -111,12 +111,17 @@ class HookRegistry:
         return out
 
     async def afire(self, name: str, *, _fail_closed_plugins: frozenset[str] = frozenset(),
+                    kw_factory: Callable[[HookEntry], dict[str, Any]] | None = None,
                     **kwargs: Any) -> list[Any]:
-        """Like ``fire``; the engine can require a trusted security hook to succeed."""
+        """Like ``fire``; the engine can require a trusted security hook to succeed.
+
+        ``kw_factory`` optionally builds extra keyword arguments per callback, so each
+        plugin can receive an independent copy of mutable values."""
         out = []
         for e in self.entries(name):
+            kw = {**kwargs, **kw_factory(e)} if kw_factory is not None else kwargs
             try:
-                r = e.callback(**kwargs)
+                r = e.callback(**kw)
                 if inspect.isawaitable(r):
                     r = await r
             except Exception as exc:
