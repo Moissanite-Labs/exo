@@ -712,3 +712,38 @@ def test_cli_findings_status_all_and_trace_counts(tmp_path, monkeypatch, capsys)
     assert "findings 2:" in capsys.readouterr().out
     assert cli.main(["trace", "s1", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["findings"]["fixed"] == 1
+
+
+def test_verify_clean_marks_fixed_verified_after_one_clean_run():
+    f = fnd(version="abc1234")
+    row = f.fix(f.file("sig", "t")["id"], "abc1234")
+    assert f.verify_clean(set()) == [row["id"]]
+    assert f.get(row["id"])["status"] == "verified"
+
+
+def test_verify_clean_skips_tripped_signature():
+    f = fnd(version="abc1234")
+    row = f.fix(f.file("sig", "t")["id"], "abc1234")
+    assert f.verify_clean({"sig"}) == []
+    assert f.get(row["id"])["status"] == "fixed"
+
+
+def test_verify_clean_skips_when_fix_not_live(monkeypatch):
+    import exo.core.findings as mod
+    f = fnd(version="old0001")
+    row = f.fix(f.file("sig", "t")["id"], "new0002")
+    monkeypatch.setattr(mod, "at_or_after", lambda running, fixed: False)
+    assert f.verify_clean(set()) == []
+    assert f.get(row["id"])["status"] == "fixed"
+
+
+def test_trace_text_lists_open_findings_by_default(tmp_path):
+    eng = engine(tmp_path)
+    eng.findings.version = "abc1234"
+    eng.findings.file("sig.open", "Open thing", severity="bug")
+    fixed = eng.findings.file("sig.fixed", "Fixed thing", severity="bug")
+    eng.findings.fix(fixed["id"], "abc1234")
+    out = eng.trace_text(None)
+    assert "open findings:" in out and "Open thing" in out
+    assert "Fixed thing" not in out  # fixed is counted, not listed
+    assert "1 open, 1 fixed" in out

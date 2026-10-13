@@ -105,6 +105,22 @@ class Findings:
                 done.append(r["id"])
         return done
 
+    def verify_clean(self, seen: set[str]) -> list[str]:
+        """Mark fixed findings verified when a run at/after the fix did not trip their signature.
+
+        ``seen`` holds the signatures this run's anomaly rules tripped. A fixed finding whose
+        signature stayed quiet is verified after one clean run; a signature that tripped again
+        was already reopened by ``file``. Returns the verified ids."""
+        done = []
+        for r in self.store._q("SELECT * FROM findings WHERE status='fixed'"):
+            if r["signature"] in seen:
+                continue
+            if not at_or_after(self.version, r["fixed_in"]):
+                continue  # the fix is not running here, so a clean run proves nothing
+            self.store._q("UPDATE findings SET status='verified' WHERE id=?", (r["id"],))
+            done.append(r["id"])
+        return done
+
     def _turns(self, db: Any = None) -> int:
         q = "SELECT COUNT(*) FROM events WHERE type='turn.completed'"
         return (db.execute(q).fetchone() if db is not None else self.store._q(q)[0])[0]
