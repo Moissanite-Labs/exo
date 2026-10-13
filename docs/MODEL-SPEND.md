@@ -133,6 +133,14 @@ alone cannot enable paid calls under that policy.
 integer nano-USD; reservations/charges round up and ceilings round down. UTC day
 and month are used. Successful final usage settles the reservation using pinned
 rates; usage counters must be complete, nonnegative integers within the contract.
+For Anthropic, `message_start` must explicitly include fresh-input, cache-read,
+cache-write and initial output counters, even when zero. Later input/cache counters
+must agree with that start, and cumulative output cannot decrease. Missing or
+contradictory counters retain the full reservation and stop admission; a later
+well-formed delta cannot erase the ambiguity. This deliberately refuses unsupported
+usage shapes rather than guessing zero, including shapes from compatible proxies.
+See Anthropic's [cache accounting](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+and [cumulative streaming usage](https://platform.claude.com/docs/en/build-with-claude/streaming).
 OpenAI cached input is subtracted from fresh input; Anthropic cache counters are
 additional. Reasoning cannot exceed the output total. Tool-use chunks cannot run
 until final usage settles successfully.

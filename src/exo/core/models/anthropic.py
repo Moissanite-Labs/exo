@@ -20,6 +20,7 @@ from exo.core.types import ContentPart, Message, ProviderEvent, ToolCall, ToolSp
 
 API_VERSION = "2023-06-01"
 EPHEMERAL = {"type": "ephemeral"}
+_INPUT_USAGE = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 _PLACEHOLDER = "(empty)"
 _STOP_MAP = {"end_turn": "end", "stop_sequence": "end", "tool_use": "tool_use", "max_tokens": "max_tokens",
              "pause_turn": "end", "refusal": "end", "model_context_window_exceeded": "max_tokens"}
@@ -278,7 +279,9 @@ class AnthropicProvider(HttpTransport):
         blocks: dict[int, dict] = st.meta.setdefault("_blocks", {})
         if kind == "message_start":
             u = (d.get("message") or {}).get("usage") or {}
-            st.meta["_usage_input"] = type(u.get("input_tokens")) is int and u["input_tokens"] >= 0
+            st.meta["_usage_complete"] = False
+            st.meta["_usage_input"] = ("_usage_input" not in st.meta and
+                all(type(u.get(k)) is int and u[k] >= 0 for k in (*_INPUT_USAGE, "output_tokens")))
             st.usage = Usage(input_tokens=u.get("input_tokens") or 0, output_tokens=u.get("output_tokens") or 0,
                              cache_read_tokens=u.get("cache_read_input_tokens") or 0,
                              cache_write_tokens=u.get("cache_creation_input_tokens") or 0)
@@ -314,19 +317,19 @@ class AnthropicProvider(HttpTransport):
                 args = parse_json_args(cb["_json"]) if cb["_json"] else dict(cb.get("input") or {})
                 yield st.add_tool_call(ToolCall(id=cb.get("id") or "", name=cb.get("name") or "", arguments=args))
         elif kind == "message_delta":
-            final_usage = d.get("usage") or {}
-            st.meta["_usage_complete"] = (st.meta.get("_usage_input", False)
-                and type(final_usage.get("output_tokens")) is int and final_usage["output_tokens"] >= 0)
+            u = d.get("usage") or {}
+            # Input/cache totals are fixed at start; cumulative output cannot decrease. Invalidity is sticky.
+            st.meta["_usage_complete"] = st.meta["_usage_input"] = (st.meta.get("_usage_input", False)
+                and all(k not in u or (type(u[k]) is int and u[k] == count) for k, count in zip(
+                    _INPUT_USAGE, (st.usage.input_tokens, st.usage.cache_read_tokens, st.usage.cache_write_tokens)))
+                and type(u.get("output_tokens")) is int and u["output_tokens"] >= st.usage.output_tokens)
             reason = (d.get("delta") or {}).get("stop_reason")
             if reason:
                 st.stop_reason = map_finish_reason(reason, _STOP_MAP)
                 if reason == "refusal":
                     st.meta["refusal"] = True
-            u = d.get("usage") or {}
             if u.get("output_tokens") is not None:
                 st.usage.output_tokens = u["output_tokens"]
-            if u.get("input_tokens"):
-                st.usage.input_tokens = u["input_tokens"]
             yield ProviderEvent(kind="usage", usage=Usage(**vars(st.usage)))
         elif kind == "message_stop":
             st.meta.pop("_blocks", None)
