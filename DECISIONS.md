@@ -1026,7 +1026,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   second rule for where "the current turn" ends, and item-level newest-first is one rule that can be explained in a line.
   Terminal: `/layout inverse|classic`, saved in `$EXO_HOME/state/ui.json`, `EXO_LAYOUT` overrides for one run. Web: a
   "Layout" button and `/layout`, saved in this browser (`localStorage`, key `xc-layout`; the one place the page uses it,
-  and a test pins that). The approval card, activity line and menu sit under the box.
+  and a test pins that). The approval card, activity line and menu sit under the box. The status strip goes with the box:
+  directly above it in inverse, under the thread in classic (issue #102, both clients).
 - **Default and how to flip it back:** inverse is the default for the experiment only. Terminal: `DEFAULT_LAYOUT` in
   `clients/tui/exo_tui/prefs.py`. Web: `DEFAULT_LAYOUT` in `static/layout.js`. Change it to `"classic"`; anyone who chose a
   layout keeps their choice. The older TUI tests pin classic through `tests/clients/tui/conftest.py`.
