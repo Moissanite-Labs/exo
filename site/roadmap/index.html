@@ -58,12 +58,13 @@
     <h1 id="hero-title" class="hero__title">Exo evolves.</h1>
     <p class="hero__lede">Exo starts as one person's harness: a signed memory, a gate that asks before it acts, and a taste that fits you. This page lays out where it goes from there. Some of it is built and in daily use. Some of it is designed. Some of it is an idea we are still testing. Each part says which.</p>
     <div class="hero__cta">
-      <a class="btn btn--primary" href="#flywheel">The flywheel <span aria-hidden="true">→</span></a>
+      <a class="btn btn--primary" href="#sequence">What comes first <span aria-hidden="true">→</span></a>
       <a class="btn" href="#roadmap">Now, next, horizon</a>
       <a class="btn" href="#refs">References</a>
     </div>
     <dl class="readout" aria-label="Status key">
-      <div><dt>Built</dt><dd><span class="led led--on"></span>In daily use</dd></div>
+      <div><dt>Built</dt><dd><span class="led led--on"></span>In daily use on main</dd></div>
+      <div><dt>In progress</dt><dd><span class="led led--next"></span>Being built or reviewed</dd></div>
       <div><dt>Designed</dt><dd><span class="led rm-led--designed"></span>Written and reviewed</dd></div>
       <div><dt>Exploring</dt><dd><span class="led rm-led--exploring"></span>An idea under test</dd></div>
     </dl>
@@ -76,6 +77,42 @@
   <canvas class="rm-pet__cv"></canvas>
   <span class="rm-pet__k">Stage <b class="rm-pet__n">0.0</b><i class="rm-pet__name">egg</i></span>
 </aside>
+
+<!-- DELIVERY ORDER AND REVIEW EVIDENCE -->
+<section class="section section--alt rm-priority" id="sequence" aria-labelledby="sequence-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">First / Delivery order</p>
+      <h2 id="sequence-t">Core engine <span aria-hidden="true">→</span> Browser experience <span aria-hidden="true">→</span> Electron desktop</h2>
+      <p class="sec-lede">Strengthen the engine, polish the client people can use today, then package it. Electron is the chosen desktop direction. Packaging comes last, after the core and browser checks below hold.</p>
+    </header>
+    <ol class="rm-sequence" aria-label="Delivery stages and exit criteria">
+      <li><span class="rm-sequence__n">01 / Core engine</span><h3>Make the boundary dependable.</h3><p>Exit criteria: review and merge the authority changes; keep the root, plugin, lint and cross-platform CI checks green.</p><p class="rm-sequence__state">Working core · hardening in review</p></li>
+      <li><span class="rm-sequence__n">02 / Browser experience</span><h3>Finish the daily workflow.</h3><p>Exit criteria: verify a turn, approval, memory view and reconnect end to end; check a 400px layout, keyboard use and reduced motion.</p><p class="rm-sequence__state">Local browser exists · polish next</p></li>
+      <li><span class="rm-sequence__n">03 / Electron desktop</span><h3>Package the settled experience.</h3><p>Exit criteria: only after stages 1 and 2, verify installation, core startup and shutdown, signing and updates on the intended desktop platforms.</p><p class="rm-sequence__state">Chosen direction · not built · last</p></li>
+    </ol>
+
+    <article class="rm-evidence" id="verified" aria-labelledby="verified-t">
+      <div class="rm-evidence__head"><div><p class="card__k">Latest verified work · 12 October 2026</p><h3 id="verified-t">Authority follows the person.</h3></div><span class="rm-badge" data-s="progress">In review</span></div>
+      <p class="rm-evidence__scope">Revision <a href="https://github.com/aska-digital/exo/commit/1532fa9" rel="noopener"><code>1532fa9</code></a> on <code>astra/rework</code> is tested and on the live development checkout. <a href="https://github.com/aska-digital/exo/pull/57" rel="noopener">Draft PR #57</a> is unmerged; these changes are not built on main.</p>
+      <dl class="rm-evidence__checks" aria-label="Verification results for revision 1532fa9">
+        <div><dt>Root suite</dt><dd>1,320 passed <span>65 skipped</span></dd></div>
+        <div><dt>Combined plugins</dt><dd>722 passed</dd></div>
+        <div><dt>CI and lint</dt><dd>All green <span>macOS + Linux · Python 3.11 + 3.13</span></dd></div>
+      </dl>
+      <ul class="rm-evidence__outcomes">
+        <li>Local automation cannot speak as the user.</li>
+        <li>Feedback, settings and policy acceptance require the principal's connection: the person responsible for the agent.</li>
+        <li>A derived lesson cannot skip required review or evaluation by citing a user statement.</li>
+      </ul>
+      <p class="rm-evidence__foot"><a href="https://github.com/aska-digital/exo/actions/runs/38344045444" rel="noopener">Inspect the four CI test jobs and lint <span aria-hidden="true">↗</span></a><span>These checks cover the application authority boundary. Isolated tool execution remains a research direction.</span></p>
+    </article>
+    <nav class="rm-jump" aria-label="Roadmap sections">
+      <span>Explore the roadmap</span>
+      <a href="#roadmap">Status chart</a><a href="#runtime">Runtime research</a><a href="#flywheel">Flywheel</a><a href="#taste">House taste</a><a href="#values">Values</a><a href="#exopet">Exopet</a><a href="#forge">Forge</a><a href="#credit">Credit + hub</a><a href="#resolver">Resolver</a><a href="#compute">Compute</a><a href="#local">Local first</a><a href="#horizon">Horizon</a><a href="#screens">Screenshots</a><a href="#refs">References</a>
+    </nav>
+  </div>
+</section>
 
 <!-- 01 FLYWHEEL -->
 <section class="section" id="flywheel" aria-labelledby="fly-t">
@@ -123,16 +160,16 @@
     <header class="sec-head">
       <p class="sec-num">02 / Now, next, horizon</p>
       <h2 id="road-t">What is built, what is designed, what we are still testing.</h2>
-      <p class="sec-lede">Every initiative, placed by when it could land and marked by how far along it is. "Built" means in the repository, tested and in daily use. "Designed" means written down and reviewed, with no code yet. "Exploring" means an idea we believe in and are still checking against the evidence.</p>
+      <p class="sec-lede">Every initiative, placed by when it could land and marked by how far along it is. "Built" means tested and in daily use on main. "In progress" includes work being built or reviewed. "Designed" means written down and reviewed, with no code yet. "Exploring" means an idea under test. The chart counts initiatives; the evidence panel above reports an unmerged revision separately.</p>
     </header>
 
     <div class="rm-tally reveal" aria-label="Initiatives by status">
       <div class="rm-tally__bar"></div>
       <ul class="rm-tally__key">
-        <li><span class="led led--on"></span>Built <b data-count="built"></b></li>
-        <li><span class="led led--next"></span>In progress <b data-count="progress"></b></li>
-        <li><span class="led rm-led--designed"></span>Designed <b data-count="designed"></b></li>
-        <li><span class="led rm-led--exploring"></span>Exploring <b data-count="exploring"></b></li>
+        <li><span class="led led--on"></span>Built <b data-count="built">8</b></li>
+        <li><span class="led led--next"></span>In progress <b data-count="progress">2</b></li>
+        <li><span class="led rm-led--designed"></span>Designed <b data-count="designed">3</b></li>
+        <li><span class="led rm-led--exploring"></span>Exploring <b data-count="exploring">16</b></li>
       </ul>
     </div>
 
@@ -146,48 +183,63 @@
       <div class="rm-road__row" role="row">
         <span class="rm-road__lane" role="rowheader">Harness</span>
         <div class="rm-road__cell" role="cell" data-col="Now">
-          <p class="rm-chip" data-s="built">The core and its protocol</p>
-          <p class="rm-chip" data-s="built">The approval gate</p>
-          <p class="rm-chip" data-s="built">The signed memory ledger</p>
+          <p class="rm-chip" data-s="built">The core and its protocol<span class="rm-chip__status">Built</span></p>
+          <p class="rm-chip" data-s="built">The approval gate<span class="rm-chip__status">Built</span></p>
+          <p class="rm-chip" data-s="built">The signed memory ledger<span class="rm-chip__status">Built</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Next">
-          <p class="rm-chip" data-s="progress">Exo OS, phase 0 design</p>
+          <p class="rm-chip" data-s="progress">Authority hardening, PR #57 in review<span class="rm-chip__status">In progress</span></p>
+          <p class="rm-chip" data-s="progress">Exo OS, phase 0 design<span class="rm-chip__status">In progress</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon">
-          <p class="rm-chip" data-s="exploring">A companion device you carry</p>
+          <p class="rm-chip" data-s="exploring">A companion device you carry<span class="rm-chip__status">Exploring</span></p>
         </div>
       </div>
       <div class="rm-road__row" role="row">
         <span class="rm-road__lane" role="rowheader">Clients</span>
         <div class="rm-road__cell" role="cell" data-col="Now">
-          <p class="rm-chip" data-s="built">Terminal and web clients</p>
-          <p class="rm-chip" data-s="built">Completion in the composer</p>
-          <p class="rm-chip" data-s="built">Inverse layout, big composer</p>
-          <p class="rm-chip" data-s="built">Staging site</p>
+          <p class="rm-chip" data-s="built">Terminal and web clients<span class="rm-chip__status">Built</span></p>
+          <p class="rm-chip" data-s="built">Completion in the composer<span class="rm-chip__status">Built</span></p>
+          <p class="rm-chip" data-s="built">Inverse layout, big composer<span class="rm-chip__status">Built</span></p>
+          <p class="rm-chip" data-s="built">Staging site<span class="rm-chip__status">Built</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Next">
-          <p class="rm-chip" data-s="exploring">Signed desktop apps</p>
+          <p class="rm-chip" data-s="exploring">Browser workflow polish<span class="rm-chip__status">Exploring</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon">
-          <p class="rm-chip" data-s="exploring">Encrypted remote pairing</p>
+          <p class="rm-chip" data-s="exploring">Electron desktop, after core and browser<span class="rm-chip__status">Exploring</span></p>
+          <p class="rm-chip" data-s="exploring">Encrypted remote pairing<span class="rm-chip__status">Exploring</span></p>
         </div>
       </div>
       <div class="rm-road__row" role="row">
         <span class="rm-road__lane" role="rowheader">Taste</span>
         <div class="rm-road__cell" role="cell" data-col="Now">
-          <p class="rm-chip" data-s="built">House taste, wave 1</p>
+          <p class="rm-chip" data-s="built">House taste layers and export, wave 1<span class="rm-chip__status">Built</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Next">
-          <p class="rm-chip" data-s="designed">House taste, waves 2 and 3</p>
+          <p class="rm-chip" data-s="designed">House taste, waves 2 and 3<span class="rm-chip__status">Designed</span></p>
+          <p class="rm-chip" data-s="exploring">First curated house pack, unreleased<span class="rm-chip__status">Exploring</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon"></div>
+      </div>
+      <div class="rm-road__row" role="row">
+        <span class="rm-road__lane" role="rowheader">Runtime research</span>
+        <div class="rm-road__cell" role="cell" data-col="Now"></div>
+        <div class="rm-road__cell" role="cell" data-col="Next">
+          <p class="rm-chip" data-s="exploring">Frozen delegated permissions<span class="rm-chip__status">Exploring</span></p>
+          <p class="rm-chip" data-s="exploring">Durable, steerable work<span class="rm-chip__status">Exploring</span></p>
+        </div>
+        <div class="rm-road__cell" role="cell" data-col="Horizon">
+          <p class="rm-chip" data-s="exploring">Isolated tools and a credential broker<span class="rm-chip__status">Exploring</span></p>
+          <p class="rm-chip" data-s="exploring">Shared task budget admission<span class="rm-chip__status">Exploring</span></p>
+        </div>
       </div>
       <div class="rm-road__row" role="row">
         <span class="rm-road__lane" role="rowheader">Identity</span>
         <div class="rm-road__cell" role="cell" data-col="Now"></div>
         <div class="rm-road__cell" role="cell" data-col="Next">
-          <p class="rm-chip" data-s="designed">The lattice brand</p>
-          <p class="rm-chip" data-s="designed">Exopet and the community hatch</p>
+          <p class="rm-chip" data-s="designed">The lattice brand<span class="rm-chip__status">Designed</span></p>
+          <p class="rm-chip" data-s="designed">Exopet and the community hatch<span class="rm-chip__status">Designed</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon"></div>
       </div>
@@ -195,27 +247,50 @@
         <span class="rm-road__lane" role="rowheader">Ecosystem</span>
         <div class="rm-road__cell" role="cell" data-col="Now"></div>
         <div class="rm-road__cell" role="cell" data-col="Next">
-          <p class="rm-chip" data-s="exploring">Agent-native forge, on SYM-2P</p>
-          <p class="rm-chip" data-s="exploring">Credit for accepted work</p>
-          <p class="rm-chip" data-s="exploring">The fair resolver</p>
+          <p class="rm-chip" data-s="exploring">Agent-native forge, on SYM-2P<span class="rm-chip__status">Exploring</span></p>
+          <p class="rm-chip" data-s="exploring">Credit for accepted work<span class="rm-chip__status">Exploring</span></p>
+          <p class="rm-chip" data-s="exploring">The fair resolver<span class="rm-chip__status">Exploring</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon">
-          <p class="rm-chip" data-s="exploring">The collaboration hub</p>
+          <p class="rm-chip" data-s="exploring">The collaboration hub<span class="rm-chip__status">Exploring</span></p>
         </div>
       </div>
       <div class="rm-road__row" role="row">
         <span class="rm-road__lane" role="rowheader">Compute</span>
         <div class="rm-road__cell" role="cell" data-col="Now"></div>
         <div class="rm-road__cell" role="cell" data-col="Next">
-          <p class="rm-chip" data-s="exploring">Verified work on idle machines</p>
+          <p class="rm-chip" data-s="exploring">Verified work on idle machines<span class="rm-chip__status">Exploring</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon">
-          <p class="rm-chip" data-s="exploring">Our own inference</p>
-          <p class="rm-chip" data-s="exploring">The decentralized horizon</p>
+          <p class="rm-chip" data-s="exploring">Our own inference<span class="rm-chip__status">Exploring</span></p>
+          <p class="rm-chip" data-s="exploring">The decentralized horizon<span class="rm-chip__status">Exploring</span></p>
         </div>
       </div>
     </div>
     <p class="note reveal">Order matters more than dates. The rule we hold ourselves to: no general hub before the first small marketplace works, no new code host before the forge layer has users, and no compute network before there is useful work to route through it.</p>
+  </div>
+</section>
+
+<!-- RUNTIME RESEARCH -->
+<section class="section" id="runtime" aria-labelledby="runtime-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">Research / A more dependable runtime</p>
+      <h2 id="runtime-t">Delegate work. Keep the limits.</h2>
+      <p class="sec-lede">Four directions to explore after the current core review. None is built in Exo. The question is how to keep a long task responsive, recoverable and within the authority and budget it was given. <span class="rm-badge" data-s="exploring">Exploring</span></p>
+    </header>
+    <div class="grid grid--2 rm-research">
+      <article class="card"><p class="card__k">01 / Frozen delegated permissions</p><h3>A child gets a smaller envelope.</h3><p>Capture permissions when work is delegated. A child can narrow that scope, never expand it or acquire later authority just because its parent did. Test expiry, revocation and repeated delegation.</p></article>
+      <article class="card"><p class="card__k">02 / Isolated tool execution</p><h3>Separate tools from credentials.</h3><p>Explore running tools in an isolated workspace, with a credential broker that supplies access only for approved requests. A broker is a separate service that holds and applies credentials. The isolation boundary and failure behavior still need design and testing.</p></article>
+      <article class="card"><p class="card__k">03 / Durable, steerable work</p><h3>A long task can still hear you.</h3><p>Record task state so work can recover after a restart. Keep user input responsive while tools run, and make cancellation and redirection take effect at explicit checkpoints.</p></article>
+      <article class="card"><p class="card__k">04 / Shared task budget admission</p><h3>Reserve before starting.</h3><p>Make a parent and all its delegated work share one ceiling. Before a call starts, reserve its expected cost; settle actual cost afterward. Admission means deciding whether the next step fits the remaining budget.</p></article>
+    </div>
+    <aside class="rm-source" aria-label="Public research references">
+      <p class="card__k">Primary source reference</p>
+      <h3><a href="https://github.com/eumemic/aios" rel="noopener">eumemic / AIOS <span aria-hidden="true">↗</span></a></h3>
+      <p>AIOS provides a public reference for event-driven steps, asynchronous tools, durable sessions and sandbox boundaries. We are studying those ideas against Exo's local core and signed record. It is a source reference, with no imported dependency.</p>
+      <p class="rm-source__secondary">Also: <a href="https://github.com/eumemic/ai-legion" rel="noopener">eumemic / AI Legion</a>, an earlier public platform for cooperating autonomous agents. Both projects are attributed as references; their code and branding are not copied here.</p>
+    </aside>
   </div>
 </section>
 
@@ -224,12 +299,12 @@
   <div class="wrap">
     <header class="sec-head">
       <p class="sec-num">03 / The house taste</p>
-      <h2 id="taste-t">Start tuned. Then become yours, at the pace people really change.</h2>
-      <p class="sec-lede">A fresh install does not start empty. It ships with a house taste: a scrubbed, versioned pack of how to write, how to work and how to check work, tuned over many months. Then the same learning loop that built it starts fitting you. House items lose weight slowly and never vanish. Your own habits replace them only when the change is sustained, not when you are in a mood. <span class="rm-badge" data-s="built">Wave 1 built</span> <span class="rm-badge" data-s="designed">Waves 2 and 3 designed</span></p>
+      <h2 id="taste-t">The layers exist. The first house pack is still to come.</h2>
+      <p class="sec-lede">Wave 1 built the layers, privacy checks, review and export tools for a house taste: a versioned pack of working preferences. The shipped pack is an empty <code>0.0.0</code> placeholder, so the house layer is off on a fresh install. The first curated pack has not been released. Sustained adaptation and the controls in waves 2 and 3 are designed, not built. <span class="rm-badge" data-s="built">Layers and export built</span> <span class="rm-badge" data-s="designed">Waves 2 and 3 designed</span></p>
     </header>
     <div class="grid grid--2 rm-charts">
       <figure class="rm-chart reveal">
-        <p class="card__k">How much a house item counts</p>
+        <p class="card__k">Wave 1 rule · once a reviewed pack is installed</p>
         <svg viewBox="0 0 600 310" role="img" aria-labelledby="pb-t">
           <title id="pb-t">House item precedence starts at 0.7 and halves every year, with a floor of 0.3 reached after about 15 months.</title>
           <g class="rm-ax">
@@ -248,7 +323,7 @@
         <figcaption><code>P(t) = max(0.3, 0.7 · 2<sup>−t/365</sup>)</code> <span>t is days since install. The faint line is where plain decay would go without the floor.</span></figcaption>
       </figure>
       <figure class="rm-chart reveal">
-        <p class="card__k">Sustained change, week by week</p>
+        <p class="card__k">Wave 2 design · illustrative sustained change</p>
         <svg viewBox="0 0 600 310" role="img" aria-labelledby="sc-t">
           <title id="sc-t">A worked example over twelve weeks: the house item fades only while contradicting weeks keep coming, and the user's own version replaces it at week twelve.</title>
           <g class="rm-ax">
@@ -277,7 +352,7 @@
     <div>
       <p class="sec-num">04 / Values</p>
       <h2 id="values-t">Retreat fast, adopt slow.</h2>
-      <p class="sec-lede">A writing habit that does not fit is a small annoyance. A value that does not fit makes you feel judged, and it is the fastest way for a companion to lose you. So values move on two speeds. On one clear disagreement, Exo steps back to neutral at once, and never needs a yes to do it. Your own view becomes part of its picture of you only after you state it and hold it for weeks.</p>
+      <p class="sec-lede">A writing habit that does not fit is a small annoyance. A value that does not fit makes you feel judged. The wave 2 design therefore proposes two speeds: on a clear disagreement, the house stance steps back to neutral; adopting your own view needs an explicit statement and sustained evidence. This adaptation is not built. <span class="rm-badge" data-s="designed">Designed</span></p>
       <p class="sec-lede">Neutral is the safe place when Exo is not sure: it states the facts plainly, gives the main views fairly if asked, and leaves the judgment to you. Safety rules are not taste. They ship as product policy and never fade.</p>
     </div>
     <figure class="rm-chart reveal">
@@ -464,7 +539,7 @@
     <header class="sec-head">
       <p class="sec-num">10 / Local first</p>
       <h2 id="local-t">Your keys stay on your machine.</h2>
-      <p class="sec-lede">Exo runs on your computer. The web client is served by your own machine on a loopback address. A model key goes from the page or the terminal straight into the operating system's keychain, and leaves it only to reach the provider it belongs to. Signed desktop apps come once the build settles. Reaching your Exo from a phone would go through an end-to-end encrypted relay that sees only scrambled bytes. We will not run a service that holds your keys.</p>
+      <p class="sec-lede">Exo runs on your computer. The current web client is served by your own machine on a loopback address. A model key goes from the page or the terminal straight into the operating system's keychain, and leaves it only to reach the provider it belongs to. Electron is the chosen desktop packaging direction, not a built client. It comes last, after core verification and browser polish. Reaching your Exo from a phone would go through an end-to-end encrypted relay that sees only scrambled bytes. We will not run a service that holds your keys.</p>
     </header>
     <figure class="rm-sec reveal" aria-label="Diagram: what stays on your machine and what leaves it">
       <div class="rm-sec__home">
@@ -538,6 +613,8 @@
       <h2 id="refs-t">Ideas we borrowed, and where to read more.</h2>
     </header>
     <ul class="credits">
+      <li><a href="https://github.com/eumemic/aios" rel="noopener"><span class="credits__who">eumemic · primary runtime reference</span><span class="credits__what">AIOS</span></a><p>Event-driven steps, asynchronous tools, durable sessions and sandbox boundaries. Source research for Exo's runtime directions; no imported dependency.</p></li>
+      <li><a href="https://github.com/eumemic/ai-legion" rel="noopener"><span class="credits__who">eumemic · earlier reference</span><span class="credits__what">AI Legion</span></a><p>A public platform for cooperating autonomous agents. An additional reference for delegated work.</p></li>
       <li><a href="https://vitalik.eth.limo/general/2026/09/27/the_cryptographic_world_computer.html" rel="noopener"><span class="credits__who">Vitalik Buterin · essay</span><span class="credits__what">The cryptographic world computer</span></a><p>Verification as the missing ingredient, and a layer between users and a chain. The far horizon on this page.</p></li>
       <li><a href="https://rendernetwork.com/" rel="noopener"><span class="credits__who">Render Network</span><span class="credits__what">Distributed GPU rendering</span></a><p>Proof that idle machines can do real work. Also a lesson: machines are easy to recruit, real demand is the hard part.</p></li>
       <li><a href="https://www.x402.org/" rel="noopener"><span class="credits__who">x402</span><span class="credits__what">HTTP 402, put to work</span></a><p>An open standard that lets an agent settle a request over plain HTTP. A candidate rail for agent-to-agent work, much later.</p></li>

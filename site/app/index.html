@@ -50,7 +50,7 @@
   <div class="wrap hero__in">
     <p class="crumb"><a href="../">Project Exo</a> · Web app</p>
     <h1 id="hero-title" class="hero__title">The same agent,<br>with the memory<br>in view.</h1>
-    <p class="hero__lede">The web client talks to the same core over the same protocol as the terminal. Open it next to the terminal and you see one agent, one thread, one memory. It adds a column that shows what the next call carries.</p>
+    <p class="hero__lede">The current web client runs in your local browser and talks to the same core over the same protocol as the terminal. Open it next to the terminal and you see one agent, one thread, one memory. It adds a column that shows what the next call carries.</p>
     <div class="hero__cta"><a class="btn btn--primary" href="#open">How to open it <span aria-hidden="true">→</span></a><a class="btn" href="#screens">Screenshots</a><a class="btn" href="../cli/">Terminal</a></div>
   </div>
 </section>
@@ -59,8 +59,9 @@
   <div class="wrap">
     <header class="sec-head">
       <p class="sec-num">01 / Overview</p>
-      <h2 id="overview-t">A client, not a second system.</h2>
-      <p class="sec-lede">The web app is plain JavaScript served by a small plugin. It has no build step, no framework and no file from outside. It keeps no state that matters: every panel is drawn from a command answer or an event from the core. Close the tab and nothing is lost.</p>
+      <h2 id="overview-t">One core, another view.</h2>
+      <p class="sec-lede">The web app is plain JavaScript served by a small plugin. It has no build step, no framework and no file from outside. Panels draw from command answers and core events, so completed work stays in the core when you close the tab. Copy any unsent draft before closing.</p>
+      <p class="sec-lede">Electron is the chosen future desktop package. It is not built yet, and comes last after core verification and browser workflow polish. <a href="../roadmap/#sequence">See the delivery order.</a></p>
     </header>
     <div class="grid grid--3 feat">
       <article class="card reveal"><p class="card__k">Memory column</p><p>Tokens the next call carries, split into system, summary tree, other threads and tail. Tree nodes, log length and the fold frontier. Filled from <code>/context</code>.</p></article>

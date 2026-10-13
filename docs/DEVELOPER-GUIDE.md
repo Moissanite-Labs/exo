@@ -282,6 +282,10 @@ Check the change there, then promote with `scripts/deploy-site.sh --prod`, which
 `production` when run interactively, and deploys to `exo.askaconsult.com` (project `exo-site`). `--yes` skips the
 prompt for scripted runs, `--redeploy` skips the project, domain and DNS setup. Both targets deploy from a git-free copy.
 
+Keep site claims tied to the revision that was checked. `docs/SITE-STATUS.md` records the roadmap status rules and
+current evidence snapshot. Unmerged work is in progress even when tested locally. D-055 sets the delivery order:
+core verification, browser workflow polish, then Electron desktop packaging.
+
 **Before the repo goes public.** Git history still holds the files removed in D-042. Rewrite history first (for
 example with `git filter-repo`), then publish.
 
