@@ -72,12 +72,12 @@ def router(tmp_path, mode="ok", login=True, **env):
     (d / "fake.json").write_text(json.dumps({"mode": mode, "out": str(tmp_path / "out.json"),
                                              "pid": str(tmp_path / "pid")}))
     home = home_with_login(tmp_path) if login else tmp_path / "nohome"
-    return Router(roles={"main": ["muse-cli:default"]}, env={"PATH": str(d), "HOME": str(home), **env})
+    return Router(roles={"aux": ["muse-cli:default"]}, env={"PATH": str(d), "HOME": str(home), **env})
 
 
 def run(r, messages, tools=()):
     async def go():
-        return [e async for e in r.stream("main", messages, list(tools))]
+        return [e async for e in r.stream("aux", messages, list(tools))]
     return asyncio.run(go())
 
 
@@ -110,7 +110,7 @@ def test_history_is_flattened_with_roles_and_model_passes_through(tmp_path):
     r = router(tmp_path)
     run(r, [Message.user("one"), Message.assistant("two"), Message.user("three")])
     assert seen(tmp_path)["prompt"] == "[user]\none\n\n[assistant]\ntwo\n\n[user]\nthree"
-    r.roles["main"] = ["muse-cli:m1"]
+    r.roles["aux"] = ["muse-cli:m1"]
     run(r, [Message.user("x")])
     a = seen(tmp_path)["argv"]
     assert a[a.index("--model") + 1] == "m1"
@@ -118,7 +118,7 @@ def test_history_is_flattened_with_roles_and_model_passes_through(tmp_path):
 
 def test_tools_are_refused_and_the_router_falls_back(tmp_path):
     r = router(tmp_path)
-    r.roles["main"] = ["muse-cli:default", "b:m"]
+    r.roles["aux"] = ["muse-cli:default", "b:m"]
     r.instances["b"] = FakeProvider(["fallback ok"], name="b")
     evs = run(r, [Message.user("hello")], [TOOL])
     assert any(e.kind == "notice" and "muse-cli:default" in e.text for e in evs)
@@ -187,7 +187,7 @@ def test_script_launcher_runs_without_claiming_its_binary_is_signed(tmp_path, mo
 @pytest.mark.parametrize("preflight", [True, False])
 def test_signing_failure_falls_back_to_healthy_route(tmp_path, monkeypatch, preflight):
     r = router(tmp_path, "keychain")
-    r.roles["main"].append("b:m")
+    r.roles["aux"].append("b:m")
     r.instances["b"] = FakeProvider(["fallback ok"], name="b")
     if preflight:
         monkeypatch.setattr(muse_cli, "signature_state", lambda exe: "unsigned")
@@ -199,7 +199,7 @@ def test_missing_command_at_startup_falls_back(tmp_path):
     r = router(tmp_path)
     r.credentials("muse-cli")  # the binary disappears after discovery
     (tmp_path / "bin" / "muse").unlink()
-    r.roles["main"].append("b:m")
+    r.roles["aux"].append("b:m")
     r.instances["b"] = FakeProvider(["fallback ok"], name="b")
     assert run(r, [Message.user("hello")])[-1].route == "b:m"
 
@@ -227,7 +227,7 @@ def test_available_only_with_muse_on_path(tmp_path):
     assert not empty.credentials("muse-cli")
     r = router(tmp_path)
     assert r.credentials("muse-cli")
-    assert [m["route"] for m in available_models(r, tmp_path / "h") if m["provider"] == "muse-cli"] == ["muse-cli:default"]
+    assert [m["route"] for m in available_models(r, tmp_path / "h") if m["provider"] == "muse-cli"] == []  # main-role picker excludes the aux-only CLI
     assert not [m for m in available_models(empty, tmp_path / "h") if m["provider"] == "muse-cli"]
 
 
@@ -255,7 +255,7 @@ def test_cancel_kills_process_group(tmp_path):
 
     async def go():
         async def drain():
-            return [e async for e in r.stream("main", [Message.user("hi")], [])]
+            return [e async for e in r.stream("aux", [Message.user("hi")], [])]
         t = asyncio.create_task(drain())
         for _ in range(100):
             if pidf.exists() and pidf.read_text():

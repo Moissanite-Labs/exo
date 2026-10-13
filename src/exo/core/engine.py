@@ -328,6 +328,7 @@ class CoreEngine:
         self._writer: Any = None  # the agent's writer lock, taken by claim_writer() (create() does)
         models = {**(models or {}), **(seat.models if seat else {})}
         self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env)
+        self._automatic_main = "main" not in (models.get("roles") or {}) and not (seat and seat.tier)
         self.registry = registry or default_registry(executor=executor, executor_required=required)
         self.registry.executor = executor
         self.registry.executor_required = required or executor is not None
@@ -441,10 +442,24 @@ class CoreEngine:
                 await self.start_peers()
             if self._writer is not None:  # only the one writer may call a running job lost
                 await self.jobs.recover()
-            self._started = asyncio.ensure_future(self.mcp.start(self.registry))
+            self._started = asyncio.ensure_future(self._start_runtime())
             if self._schedule:
                 self.scheduler.start()
         await asyncio.shield(self._started)
+
+    async def _main_status(self, table: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        from exo import providers_setup
+        state = await asyncio.to_thread(providers_setup.main_status, self.router, self.home,
+                                        automatic=self._automatic_main, table=table)
+        if state["suggested"] and self._automatic_main:
+            self.router.prefer("main", state["suggested"])
+            self.loop.model = self._main_ref()
+        return state
+
+    async def _start_runtime(self) -> None:
+        if self._automatic_main:
+            await self._main_status()
+        await self.mcp.start(self.registry)
 
     async def start_channels(self, link: Any) -> dict[str, str | None]:
         """Run ``factory(link, **config)`` for each channel the seat enables; ``link`` is a protocol Client
@@ -909,6 +924,7 @@ class CoreEngine:
         except ValueError as exc:
             raise CommandFailed("bad_model", str(exc)) from None
         if b.role == "main":
+            self._automatic_main = False
             self.loop.model = self._main_ref()
         if b.session:
             self.store.update_session(self._info(b.session).id, model=b.model)
@@ -1069,7 +1085,9 @@ class CoreEngine:
                     raise CommandFailed("not_found", f"unknown provider {name!r}")
                 return {"reloaded": self.router.reload_credentials(name)}
             from exo import providers_setup
-            return {"providers": await asyncio.to_thread(providers_setup.rows, self.router, self.home)}
+            table = await asyncio.to_thread(providers_setup.rows, self.router, self.home,
+                                           prober=providers_setup.probe)
+            return {"providers": table, "main": await self._main_status(table)}
         if b.name == "handoff_facts":  # D-032: the facts /handoff gives the agent; the client sends the turn
             return await self.handoff_facts(b.session, b.args)
         if b.name == "harness_error":  # a client (the TUI) reporting an exception it caught

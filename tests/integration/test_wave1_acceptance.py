@@ -230,7 +230,7 @@ def test_no_owner_names_in_new_files():
 
 def test_model_defaults_from_environment_only(tmp_path):
     cfg = Config(home=tmp_path)
-    assert cfg.models(env={})["roles"]["main"] == ["fake:scripted"]
+    assert cfg.models(env={}) == {}  # real catalog; no credentials never selects the fake
     assert cfg.models(env={"ANTHROPIC_API_KEY": "x"}) == {}  # catalog routes, Anthropic first
     cfg.data["models"] = {"local": {"base_url": "http://127.0.0.1:8080/v1", "model": "qwen"}}
     m = cfg.models(env={"ANTHROPIC_API_KEY": "x"})

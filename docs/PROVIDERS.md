@@ -36,6 +36,13 @@ Errors come back as a class: `no_key`, `auth`, `billing`, `not_found`, `rate_lim
 
 If no provider can serve the main role, `exo tui` and `exo web` say so and point here.
 
+The default core uses real catalog routes; it never substitutes an offline reply for missing credentials.
+Anthropic and OpenRouter use their catalog routes, and an available Claude CLI can use its catalog alias.
+For a provider without a known main model, such as OpenAI, first run opens the model chooser after the key
+is added. Choose the model you want before `/intro` runs. Explicit roles and local model settings are kept.
+Orientation is remembered only after its own turn finishes with a successful, nonempty real assistant reply;
+a provider error, cancellation or deliberately configured fake reply leaves it unfinished for retry.
+
 ### Security of the web route
 
 `exo web` binds to loopback, but any web page you visit can still make your browser send requests to
@@ -72,7 +79,7 @@ Set it up once, yourself, in a terminal:
 
     muse login                      # browser sign-in
     exo providers test muse-cli     # one tiny muse exec call: ok, or an error class
-    exo providers default muse-cli:default
+    exo providers default muse-cli:default --role aux
 
 `exo providers` shows `not installed`, `not logged in` or `installed`. The `not logged in` check reads two
 non-secret fields (`mechanism`, `subs_active`) from `~/.config/muse/auth.json` and nothing else in that file. It
@@ -84,7 +91,7 @@ Limits, stated plainly:
 
 - **Text only.** `muse exec` runs its own agent. Exo cannot pass its tools to it or stream tool calls out of it.
   A turn that carries Exo tools is refused and the router falls back to the next route, so `muse-cli` suits a role
-  without tools (for example `aux`) or a conversation where another route follows it.
+  without tools. Its catalog limits it to `aux`; it does not make the main model ready for first run.
 - **Slow start, no token stream.** Each turn is a new process. The answer arrives when the run ends. The history
   is flattened into one prompt, and no token counts come back (usage shows as unknown).
 - **The native binary must be code-signed on macOS.** An unsigned native Muse executable can fail keychain
