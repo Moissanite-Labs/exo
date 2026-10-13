@@ -172,6 +172,8 @@ def test_replay_is_byte_bounded_and_short_batch_is_not_end(provisioned, tmp_path
     with Ledger(tmp_path / "copy.sqlite", authority=JournalClient(journal, "memory")) as ledger:
         ledger.sync_authority()
         assert len(ledger) == 3
+        from exo.ledger_authority.verify import verify_authority
+        assert verify_authority(ledger.path, JournalClient(journal, "memory"))["authority_seq"] == 3
 
 
 @pytest.mark.parametrize("bad", [{"seq": False, "chain": crypto.GENESIS}, {"seq": 0.0, "chain": crypto.GENESIS},
@@ -405,3 +407,140 @@ def test_portable_verifier_is_read_only_and_pins_independent_identity(provisione
     manifest.write_bytes(canonical({**identity, "checkpoint_pub": crypto.pubkey_b64(crypto.keygen())}))
     with pytest.raises(AuthorityError):
         verify_files(copy, manifest, checkpoints)
+
+
+def test_canonical_log_verify_detects_deleted_authoritative_tail_without_repair(provisioned, tmp_path, monkeypatch, capsys):
+    import json
+    from types import SimpleNamespace
+    from exo import cli
+    from exo.ledger import SCHEMA
+    from exo.ledger_authority import factory
+    journal, *_ = provisioned
+    copy = tmp_path / "copy.sqlite"
+    with Ledger(copy, authority=JournalClient(journal, "memory")) as ledger:
+        ledger.append("note", {"text": "one"})
+        ledger.db.execute("DROP TRIGGER events_no_delete")
+        ledger.db.execute("DELETE FROM events")
+        ledger.db.executescript(SCHEMA)
+    class Entry:
+        name = "fixture"
+        def load(self):
+            return lambda path, writer: JournalClient(journal, "memory")
+    monkeypatch.setenv("EXO_LEDGER_AUTHORITY", "fixture")
+    monkeypatch.setenv("EXO_LEDGER_AUTHORITY_REQUIRED", "1")
+    monkeypatch.setattr(factory.importlib.metadata, "entry_points", lambda **kw: [Entry()])
+    assert cli.cmd_log(SimpleNamespace(log_cmd="verify"), SimpleNamespace(ledger_path=copy)) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["state"] == "missing_tail" and result["authority_seq"] == 1 and result["local_seq"] == 0
+    from exo import memory_cmd
+    monkeypatch.setattr(memory_cmd, "_stores", lambda args: [SimpleNamespace(root=tmp_path, ledger_path=copy)])
+    assert memory_cmd.verify_ledgers(None)[tmp_path.name]["state"] == "missing_tail"
+    with sqlite3.connect(copy) as db:
+        assert db.execute("SELECT count(*) FROM events").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("damage, expected", [("none", "verified_prefix"), ("body", "divergent"),
+                                             ("extra", "unconfirmed_tail"), ("missing_copy", "unverifiable"),
+                                             ("offline", "unverifiable")])
+def test_configured_cli_verification_is_pinned_read_only_and_fail_closed(provisioned, tmp_path, monkeypatch,
+                                                                       capsys, damage, expected):
+    import json
+    from types import SimpleNamespace
+    from exo import cli
+    from exo.ledger_authority import factory
+    journal, _, keys, _ = provisioned
+    path = tmp_path / "verify.sqlite"
+    with Ledger(path, authority=JournalClient(journal, "memory")) as ledger:
+        ledger.append("note", {"original": True})
+        if damage == "body":
+            ledger.db.execute("DROP TRIGGER events_no_update")
+            ledger.db.execute("UPDATE events SET body='{}'")
+    if damage == "extra":
+        with Ledger(path, crypto.Signer("memory", keys["memory"])) as ledger:
+            ledger.append("note", {"unconfirmed": True})
+    if damage == "missing_copy":
+        path.unlink()
+    calls = []
+    class Entry:
+        name = "fixture"
+        def load(self):
+            def reader(copy, writer):
+                assert writer is None
+                calls.append("read-only")
+                if damage == "offline":
+                    raise AuthorityUnavailable("service unavailable")
+                return JournalClient(journal, "memory")
+            return reader
+    monkeypatch.setenv("EXO_LEDGER_AUTHORITY_REQUIRED", "1")
+    monkeypatch.setenv("EXO_LEDGER_AUTHORITY", "fixture")
+    monkeypatch.setattr(factory.importlib.metadata, "entry_points", lambda **kw: [Entry()])
+    monkeypatch.setattr(Ledger, "sync_authority", lambda *a: pytest.fail("verification repaired the local copy"))
+    monkeypatch.setattr(Ledger, "__init__", lambda *a, **kw: pytest.fail("verification opened writable Ledger"))
+    code = cli.cmd_log(SimpleNamespace(log_cmd="verify"), SimpleNamespace(ledger_path=path))
+    result = json.loads(capsys.readouterr().out)
+    assert result["state"] == expected and result["fresh"] is False
+    assert code == (0 if damage == "none" else 1) and calls == ["read-only"]
+    from exo import memory_cmd
+    monkeypatch.setattr(memory_cmd, "_stores", lambda args: [SimpleNamespace(root=tmp_path, ledger_path=path)])
+    assert memory_cmd.verify_ledgers(None)[tmp_path.name]["state"] == expected
+    assert memory_cmd.cmd_memory(SimpleNamespace(action="verify", agent=None, json=False)) == code
+    if damage == "missing_copy":
+        assert not path.exists()
+    if damage == "body":
+        with sqlite3.connect(path) as db:
+            assert db.execute("SELECT body FROM events").fetchone()[0] == "{}"
+            assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='events_no_update'").fetchone()
+
+
+def test_required_cli_verify_without_backend_never_accepts_legacy_copy(tmp_path, monkeypatch, capsys):
+    import json
+    from types import SimpleNamespace
+    from exo import cli
+    path = tmp_path / "absent.sqlite"
+    monkeypatch.setenv("EXO_LEDGER_AUTHORITY_REQUIRED", "1")
+    monkeypatch.delenv("EXO_LEDGER_AUTHORITY", raising=False)
+    assert cli.cmd_log(SimpleNamespace(log_cmd="verify"), SimpleNamespace(ledger_path=path)) == 1
+    assert json.loads(capsys.readouterr().out)["state"] == "unverifiable"
+    assert not path.exists()
+
+
+def test_live_verifier_retries_head_change_instead_of_false_unconfirmed_tail(provisioned, tmp_path, monkeypatch):
+    from exo.ledger_authority.verify import verify_authority
+    journal, *_ = provisioned
+    base = JournalClient(journal, "memory")
+    with Ledger(tmp_path / "copy.sqlite", authority=base) as ledger:
+        ledger.append("note", {"text": "one"})
+        reader = JournalClient(journal, "memory")
+        original = reader.read_since
+        advanced = False
+        def concurrent_append(seq, limit):
+            nonlocal advanced
+            records = original(seq, limit)
+            if not advanced:
+                advanced = True
+                journal.append("memory", "concurrent", head(journal), intent("two"))
+                ledger.sync_authority()  # the other writer, not the verifier, updates its copy
+            return records
+        monkeypatch.setattr(reader, "read_since", concurrent_append)
+        result = verify_authority(ledger.path, reader)
+        assert result["ok"] and result["authority_seq"] == result["local_seq"] == 2
+
+
+def test_live_verifier_fails_closed_when_head_keeps_changing(provisioned, tmp_path, monkeypatch):
+    from exo.ledger_authority.verify import verify_authority
+    journal, *_ = provisioned
+    reader = JournalClient(journal, "memory")
+    original = reader.head
+    count = 0
+    def advancing_head(seq=None):
+        nonlocal count
+        if seq is None:
+            count += 1
+            journal.append("memory", f"busy{count}", head(journal), intent(str(count)))
+        return original(seq)
+    monkeypatch.setattr(reader, "head", advancing_head)
+    with Ledger(tmp_path / "copy.sqlite") as ledger:
+        with pytest.raises(AuthorityUnavailable, match="advanced during verification"):
+            verify_authority(ledger.path, reader)
+        assert len(ledger) == 0
+    assert count == 6
