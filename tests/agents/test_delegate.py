@@ -54,6 +54,7 @@ class Keyed:
 def engine(tmp_path, rules, **limits) -> tuple[CoreEngine, Keyed]:
     eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={},
                      delegation=limits or None)
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     fake = Keyed(rules)
     eng.loop.provider = fake
     return eng, fake
