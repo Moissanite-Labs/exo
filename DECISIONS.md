@@ -1091,6 +1091,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   construction and asserts it. This revision also does the migration left open above: the nav mark on every page,
   the favicons, the app icons and the og image now use the new marks; the terminal mark and name files
   (`tui-mark`, `tui-wordmark`) are generated for the exosphere client.
+- **Revision 2 (2026-10-13), no dots; the mark as the X.** The principal: "remove the dots entirely, the internal
+  lines are more important ... where its small, just the internal lines (12 lines, 3 in each quadrant of the
+  square)", then "what if we just made the x in the middle of 3X0 in the written logo be the symbol itself". The mark
+  draws no dots; each incentre is where its three bisectors meet. Large (96 px and up, found from actual-size renders):
+  square, X with its V, twelve bisectors and four incircles. Small: square, X with its V and the twelve lines in one
+  tint. At 16 px the lines merge into an orange star; kept as asked, with the plain X as the fallback if wanted. The
+  wordmark's X is now the mark without its square (the "open" form, picked over a framed one that reads as a box at
+  small sizes): incircles from 96 px tall, the twelve lines from 24 px, the plain X under 24 px. The nav brand is that
+  wordmark at 24 px, replacing the mark-plus-label pair; the lockups are retired. The label "3 X 0" and the terminal
+  name stay text.
 
 ## D-050 (2026-10-12) Consumer path: local first, desktop apps after the build settles
 - **Why:** the 2026-10-12 audit (item 10) asked for the consumer path to be decided before building toward it.

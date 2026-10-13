@@ -106,44 +106,47 @@ def construction_table():
 
 
 # ---------------------------------------------------------------- the mark
-def mark_body(size=100.0, inset=8.0, sq=1.6, xw=1.6, vw=3.4, rw=1.25, aw=1.25, dot=2.5, level="full",
-              square=FG2, legs=FG, red=ACC, amber=AMBER, dots=FG, circles=False, cid="m", ro=.72, ao=.9):
-    """The figure in a size x size box. level: "full" (all twelve bisectors), "simple" (square, X, dots)."""
+def mark_body(size=100.0, inset=8.0, sq=1.2, xw=1.2, vw=2.4, rw=1.6, aw=1.6, cw=0.9, circles=True,
+              square=FG3, legs=FG2, red=ACC, amber=AMBER, circle=AMBER, co=.6, cid="m"):
+    """The figure in a size x size box, with no dots: each incentre is only where its triangle's three bisectors meet.
+
+    circles=True (large sizes): the square, the X with its V, the twelve bisectors and the four incircles.
+    circles=False (small sizes): the square, the X with its V and the twelve bisectors."""
     s = (size - 2 * inset) / 2
     P = lambda u, v: (inset + s * u, size - inset - s * v)  # noqa: E731  (v up)
+    seg = lambda p, q, col, w, extra="": (  # noqa: E731
+        f'<line x1="{n(P(*p)[0])}" y1="{n(P(*p)[1])}" x2="{n(P(*q)[0])}" y2="{n(P(*q)[1])}" stroke="{col}" stroke-width="{n(w)}"{extra}/>')
     out = []
-    if circles:
+    if circles:                                  # centre the incentre, radius R: tangent to all three sides
         for d in DOTS:
             dp = P(*d)
-            out.append(f'<circle cx="{n(dp[0])}" cy="{n(dp[1])}" r="{n(R * s)}" fill="none" stroke="{amber}" '
-                       f'stroke-opacity=".5" stroke-width="{n(aw * .7)}"/>')
-    if level == "full":
-        for (p, q), col, w, op in [(e, red, rw, ro) for e in RED] + [(e, amber, aw, ao) for e in AMB]:
-            a, b = P(*p), P(*q)
-            out.append(f'<line x1="{n(a[0])}" y1="{n(a[1])}" x2="{n(b[0])}" y2="{n(b[1])}" stroke="{col}" '
-                       f'stroke-opacity="{op}" stroke-width="{n(w)}" stroke-linecap="round"/>')
-    # the X: lower legs in the line colour, the V (the two upper half-diagonals) in orange. The V starts half a
-    # stroke past the centre so it owns the crossing. Clipped to the square so the 45-degree ends stay inside.
-    c = P(*CENTRE)
+            out.append(f'<circle cx="{n(dp[0])}" cy="{n(dp[1])}" r="{n(R * s)}" fill="none" stroke="{circle}" '
+                       f'stroke-opacity="{co}" stroke-width="{n(cw)}"/>')
+    # the X, clipped to the square so its 45-degree ends stay inside: lower legs quiet, the V on top in orange
     out.append(f'<clipPath id="{cid}"><polygon points="{pts([P(*k) for k in CORNERS])}"/></clipPath><g clip-path="url(#{cid})">')
-    for corner, col, w in ((CORNERS[0], legs, xw), (CORNERS[1], legs, xw), (CORNERS[3], ACC, vw), (CORNERS[2], ACC, vw)):
-        a = P(*corner)
-        dx, dy = a[0] - c[0], a[1] - c[1]
-        L = math.hypot(dx, dy)
-        back = max(vw, xw) / 2 if col == ACC else 0
-        out.append(f'<line x1="{n(c[0] - dx / L * back)}" y1="{n(c[1] - dy / L * back)}" x2="{n(a[0] + dx / L * w)}" '
-                   f'y2="{n(a[1] + dy / L * w)}" stroke="{col}" stroke-width="{n(w)}"/>')
+    for corner in CORNERS[:2]:
+        out.append(seg(CENTRE, (2 * corner[0] - 1, 2 * corner[1] - 1), legs, xw))
     out.append("</g>")
     out.append(f'<polygon fill="none" stroke="{square}" stroke-width="{n(sq)}" points="{pts([P(*c) for c in CORNERS])}"/>')
-    for d in DOTS:
-        dp = P(*d)
-        out.append(f'<circle cx="{n(dp[0])}" cy="{n(dp[1])}" r="{n(dot)}" fill="{dots}"/>')
+    # the twelve bisectors, the focus: each ends at its incentre, so the three of a triangle meet there
+    for p, q in AMB:
+        out.append(seg(p, q, amber, aw, ' stroke-linecap="round"'))
+    for p, q in RED:
+        out.append(seg(p, q, red, rw, ' stroke-linecap="round"'))
+    # the V owns the crossing: it starts half a stroke below the centre
+    out.append(f'<g clip-path="url(#{cid})">')
+    k = vw / 2 / s / math.sqrt(2)
+    for corner in CORNERS[2:]:
+        out.append(seg((1 - (corner[0] - 1) * k, 1 - k), (2 * corner[0] - 1, 2 * corner[1] - 1), ACC, vw))
+    out.append("</g>")
     return "".join(out)
 
 
-FULL = dict(inset=8, sq=1.6, xw=2.2, vw=3.6, rw=1.3, aw=1.3, dot=2.6, level="full")
-SIMPLE = dict(inset=11, sq=4.2, xw=5.4, vw=7.4, dot=5.4, level="simple")
-LIGHT = dict(square=FG3, legs=BG, dots=BG, red=ACC, amber="#d98a2b")
+FULL = dict(inset=8, sq=1.2, xw=1.2, vw=2.8, rw=1.6, aw=1.6, cw=0.9, circles=True)
+SMALL = dict(inset=9, sq=3.2, xw=3.2, vw=6.4, rw=3.4, aw=3.4, circles=False, red=ACC2, amber=ACC2)  # one tint: the V stays the strongest orange
+LIGHT = dict(square=FG3, legs="#5a5a56", amber="#d98a2b", circle="#d98a2b")
+SIZE16 = dict(inset=0.5, sq=1, xw=1, vw=1.8, rw=1, aw=1, circles=False, red=ACC2, amber=ACC2)
+CIRCLES_MIN = 96                              # px: below this the incircles crowd the bisectors (actual-size renders)
 
 
 def tile(size, inner, radius_frac=0.0):
@@ -152,39 +155,17 @@ def tile(size, inner, radius_frac=0.0):
 
 
 def favicon16():
-    """16 px: the square on the tile's edge, the X with its V, the four dots.
-
-    The square's outline is the outermost pixel ring (centre lines 0.5 and 15.5), so one unit of the drawing is
-    7.5 px and the X runs corner to corner. The incentres land 7.5 R = 3.11 px inside the sides, which leaves a
-    clear pixel between each dot and the X."""
-    lo, hi = 0.5, 15.5
-    s = (hi - lo) / 2
-    P = lambda u, v: (lo + s * u, hi - s * v)  # noqa: E731
-    sq = [P(*c) for c in CORNERS]
-    c = P(*CENTRE)
-    body = [f'<clipPath id="f16"><rect width="16" height="16"/></clipPath><g clip-path="url(#f16)">']
-    for corner, col in ((CORNERS[0], FG), (CORNERS[1], FG), (CORNERS[3], ACC), (CORNERS[2], ACC)):
-        a = P(*corner)
-        k = 0.9 / math.sqrt(2) if col == ACC else 0      # the V starts half a stroke past the centre: it owns the crossing
-        sx = c[0] - math.copysign(k, a[0] - c[0])
-        sy = c[1] - math.copysign(k, a[1] - c[1])
-        body.append(f'<line x1="{n(sx)}" y1="{n(sy)}" x2="{n(2 * a[0] - c[0])}" y2="{n(2 * a[1] - c[1])}" stroke="{col}" stroke-width="1.8"/>')
-    body.append("</g>")
-    body.append(f'<polygon fill="none" stroke="{FG3}" stroke-width="1" points="{pts(sq)}"/>')
-    for d in DOTS:
-        x, y = P(*d)
-        body.append(f'<circle cx="{n(x)}" cy="{n(y)}" r="1.1" fill="{FG}"/>')
-    return svg(16, 16, tile(16, "".join(body)))
+    """16 px: the small mark with the square on the tile's outer pixel ring (one unit = 7.5 px), lines at 1 px."""
+    return svg(16, 16, tile(16, mark_body(16, cid="f16", **SIZE16)))
 
 
-def icon(size, radius_frac=0.0, level=None):
-    """32 px and up. Below 120 px the simple mark (square, X, dots); from 120 px the full figure."""
+def icon(size, radius_frac=0.0):
+    """Icons: the large mark (with incircles) from CIRCLES_MIN px up, the small mark below."""
     k = size / 100
-    level = level or ("full" if size >= 120 else "simple")
-    if level == "full":
-        body = mark_body(100, inset=14, sq=2.2, xw=3.0, vw=4.6, rw=1.6, aw=1.6, dot=3.4, level="full", cid=f"i{size}")
+    if size >= CIRCLES_MIN:
+        body = mark_body(100, cid=f"i{size}", **{**FULL, "inset": 12, "sq": 1.6, "xw": 1.6, "vw": 3.0, "rw": 2.0, "aw": 2.0, "cw": 1.1})
     else:
-        body = mark_body(100, cid=f"i{size}", **{**SIMPLE, "inset": 14})
+        body = mark_body(100, cid=f"i{size}", **SMALL)
     return svg(size, size, tile(size, f'<g transform="scale({n(k)})">{body}</g>', radius_frac))
 
 
@@ -273,6 +254,75 @@ def wordmark(variant, on="dark", pad=0.0, h=HC, t=T, gap=GAP):
     return x, "".join(parts)
 
 
+def glyph_xmark(x0, frame, size, h=HC, t=T, colour=FG, cid="xm"):
+    """The X of 3X0 drawn as the mark. frame: True puts the square round it. size: "lg" adds the incircles,
+    "sm" is the X and the twelve bisectors, "xs" falls back to the plain X with its V (glyph_x).
+
+    The figure's square is the X's centre-line box: its corners are the centres of the X's four flat ends, so the
+    bisectors start exactly where the strokes end. Returns (svg, width)."""
+    if size == "xs":
+        return glyph_x(x0, h, t, colour_rest=colour)
+    xt = t * (0.42 if frame else 0.6)            # the X is thinner than the letters: the line work inside carries weight
+    lw = t * (0.17 if size == "lg" else 0.24)    # the bisectors
+    if frame:
+        fw = t * 0.42
+        side = h - fw                            # the frame's outer edge is the cap height
+        ox, oy = x0 + fw / 2, fw / 2
+        width = h
+    else:
+        hh = xt / math.sqrt(2)
+        side, ox, oy, width = h, x0 + hh, 0.0, h + 2 * hh
+    u = side / 2
+    P = lambda a, b: (ox + a * u, oy + (2 - b) * u)  # noqa: E731
+    seg = lambda p, q, col, w, cap="round": (  # noqa: E731
+        f'<line x1="{n(P(*p)[0])}" y1="{n(P(*p)[1])}" x2="{n(P(*q)[0])}" y2="{n(P(*q)[1])}" stroke="{col}" stroke-width="{n(w)}" stroke-linecap="{cap}"/>')
+    red, amber = (ACC, AMBER) if size == "lg" else (ACC2, ACC2)
+    out = []
+    if size == "lg":
+        for d in DOTS:
+            dp = P(*d)
+            out.append(f'<circle cx="{n(dp[0])}" cy="{n(dp[1])}" r="{n(R * u)}" fill="none" stroke="{AMBER}" stroke-opacity=".7" stroke-width="{n(lw * .7)}"/>')
+    if frame:
+        out.append(f'<clipPath id="{cid}"><polygon points="{pts([P(*k) for k in CORNERS])}"/></clipPath><g clip-path="url(#{cid})">')
+        for corner in CORNERS[:2]:
+            out.append(seg(CENTRE, (2 * corner[0] - 1, 2 * corner[1] - 1), colour, xt, "butt"))
+        out.append("</g>")
+        out.append(f'<polygon fill="none" stroke="{colour}" stroke-width="{n(fw)}" points="{pts([P(*c) for c in CORNERS])}"/>')
+    else:                                         # the letter's own lower legs, flat ends, 45 degrees
+        g, _ = glyph_x(ox - xt / math.sqrt(2), h, xt, colour_v="none", colour_rest=colour)
+        out.append(g)
+    for p, q in AMB:
+        out.append(seg(p, q, amber, lw))
+    for p, q in RED:
+        out.append(seg(p, q, red, lw))
+    if frame:
+        out.append(f'<g clip-path="url(#{cid})">')
+        k = xt * 1.4 / 2 / u / math.sqrt(2)
+        for corner in CORNERS[2:]:
+            out.append(seg((1 - (corner[0] - 1) * k, 1 - k), (2 * corner[0] - 1, 2 * corner[1] - 1), ACC, xt * 1.4, "butt"))
+        out.append("</g>")
+    else:
+        g, _ = glyph_x(ox - xt / math.sqrt(2), h, xt, colour_v=ACC, colour_rest="none")
+        out.append(g)
+    return "".join(out), width
+
+
+MARKWORDS = ("framed", "open")
+
+
+def markword(variant, size, on="dark", h=HC, t=T, gap=GAP, cid=None):
+    """3 + the mark + 0 (facet 3 and 0). variant: framed | open. size: lg | sm | xs."""
+    fg = FG if on == "dark" else BG
+    parts, x = [], 0.0
+    g3 = glyph_3(x, "facet", h, t, fg)
+    parts.append(g3[0]); x += g3[1] + gap
+    gm = glyph_xmark(x, variant == "framed", size, h, t, fg, cid or f"xm-{variant}-{size}-{on}")
+    parts.append(gm[0]); x += gm[1] + gap
+    g0 = glyph_0(x, "facet", h, t, fg)
+    parts.append(g0[0]); x += g0[1]
+    return x, "".join(parts)
+
+
 def label(on="dark", h=20.0):
     """The spaced label form, "3 X 0", for the nav and the terminal: the facet glyphs, lighter, a wide gap."""
     t = h * 0.18
@@ -320,8 +370,10 @@ def panel(step, u=60, o=20):
             out.append(f'<circle cx="{n(dp[0])}" cy="{n(dp[1])}" r="{n(R * u)}" fill="none" stroke="{AMBER}" stroke-opacity=".8" stroke-width="1"/>')
             out.append(f'<line x1="{n(dp[0])}" y1="{n(dp[1])}" x2="{n(dp[0])}" y2="{n(P(1, 0)[1])}" stroke="{AMBER}" stroke-width="1" stroke-dasharray="2 2"/>')
             out.append(f'<text x="{n(dp[0] + 5)}" y="{n(dp[1] + R * u * .62)}" fill="{AMBER}" font-family="ui-monospace,Menlo,monospace" font-size="9">√2−1</text>')
-        out.append(f'<circle cx="{n(P(*d)[0])}" cy="{n(P(*d)[1])}" r="3" fill="{FG}"/>')
-    if step >= 5:
+    if step >= 5:                                # all four triangles: incircles, then the twelve bisectors
+        for d in DOTS:
+            dp = P(*d)
+            out.append(f'<circle cx="{n(dp[0])}" cy="{n(dp[1])}" r="{n(R * u)}" fill="none" stroke="{AMBER}" stroke-opacity=".55" stroke-width="1"/>')
         for p, q in RED:
             line(p, q, ACC, 1.3)
         for p, q in AMB:
@@ -329,14 +381,11 @@ def panel(step, u=60, o=20):
         if step >= 6:                            # redraw the V on top so it owns the crossing
             for corner in CORNERS[2:]:
                 line(CENTRE, corner, ACC, 3.2)
-        for d in DOTS:
-            dp = P(*d)
-            out.append(f'<circle cx="{n(dp[0])}" cy="{n(dp[1])}" r="3" fill="{FG}"/>')
     return svg(2 * u + 2 * o, 2 * u + 2 * o, "".join(out))
 
 
 def lattice_panel():
-    """The figure tiled: the dots of four neighbouring squares make a regular octagon (the 4.8.8 tiling)."""
+    """The figure tiled: the incentres round each shared corner make a regular octagon (the 4.8.8 tiling)."""
     u2, body = 24, ""
     for i in range(4):
         for j in range(3):
@@ -353,9 +402,6 @@ def lattice_panel():
                 a, b = P(*p), P(*q)
                 cc = (ACC if (p, q) in RED else AMBER) if hl else col
                 body += f'<line x1="{n(a[0])}" y1="{n(a[1])}" x2="{n(b[0])}" y2="{n(b[1])}" stroke="{cc}" stroke-opacity="{.9 if hl else .8}" stroke-width=".9"/>'
-            for d in DOTS:
-                dp = P(*d)
-                body += f'<circle cx="{n(dp[0])}" cy="{n(dp[1])}" r="{2 if hl else 1.6}" fill="{FG if hl else FG3}"/>'
     for cx, cy in [(8 + 2 * u2 * i, 8 + 2 * u2 * j) for i in (1, 2, 3) for j in (1, 2)]:
         rr = u2 * math.sqrt(1 + R * R)
         ring = [(cx + rr * math.cos(math.radians(45 * k) + math.atan(R)), cy + rr * math.sin(math.radians(45 * k) + math.atan(R))) for k in range(8)]
@@ -402,15 +448,13 @@ def braille(segments, dots_pts, cols, rows, scale, ox, oy):
 
 
 def tui_mark():
-    """The simple mark in braille, 12 x 6 cells: the square, the X with its V (orange cells), the four dots.
-
-    At 24 x 24 braille dots the twelve bisectors would fill the square, so the terminal takes the simple form."""
+    """The small mark in braille, 12 x 6 cells: the square, the X with its V (orange cells) and the twelve bisectors."""
     flip = lambda p: (p[0], 2 - p[1])  # noqa: E731  (y down in the grid)
     segs = [(flip(a), flip(b), 0) for a, b in SIDES]
-    segs += [(flip(CENTRE), flip(CORNERS[0]), 0), (flip(CENTRE), flip(CORNERS[1]), 0),
-             (flip(CENTRE), flip(CORNERS[2]), 1), (flip(CENTRE), flip(CORNERS[3]), 1)]
-    dts = [(flip(d), 0) for d in DOTS]
-    return braille(segs, dts, cols=12, rows=6, scale=11.0, ox=1, oy=1)
+    segs += [(flip(CENTRE), flip(CORNERS[0]), 0), (flip(CENTRE), flip(CORNERS[1]), 0)]
+    segs += [(flip(p), flip(q), 0) for p, q in RED + AMB]
+    segs += [(flip(CENTRE), flip(CORNERS[2]), 1), (flip(CENTRE), flip(CORNERS[3]), 1)]
+    return braille(segs, [], cols=12, rows=6, scale=11.0, ox=1, oy=1)
 
 
 def tui_egg():
@@ -457,14 +501,17 @@ def tui_wordmark():
 
 
 # ---------------------------------------------------------------- the nav fragment (every page)
-def nav_fragment(i=0):
-    """Inline SVG for the site nav: the simple mark at 24 px and the "3 X 0" label. Written between
-    <!-- exo-brand --> and <!-- /exo-brand --> in every page, and into site/brand/nav-brand.html for the
-    whitepaper builder."""
-    mk = mark_body(100, cid=f"exo-nav-clip-{i}", **SIMPLE)          # one clip id per copy on a page
-    w, h, body = label("dark", 20)
-    return (f'<svg class="brand__mark" viewBox="0 0 100 100" aria-hidden="true">{mk}</svg>'
-            f'<svg class="brand__word" viewBox="0 0 {n(w)} {n(h)}" aria-hidden="true">{body}</svg>')
+NAV_VARIANT = "open"
+WORD_LG_MIN = 96                              # px tall: from here the wordmark's X shows the incircles
+WORD_SM_MIN = 24                              # px tall: below this the twelve lines blur and the X is the plain X
+
+
+def nav_fragment(i=0, variant=None):
+    """Inline SVG for the site nav: the wordmark 3X0 with the mark as its X, 24 px tall (the "sm" form).
+    Written between <!-- exo-brand --> and <!-- /exo-brand --> in every page, and into site/brand/nav-brand.html
+    for the whitepaper builder."""
+    w, body = markword(variant or NAV_VARIANT, "sm", "dark", cid=f"exo-nav-clip-{i}")   # one clip id per copy
+    return f'<svg class="brand__word" viewBox="0 0 {n(w)} {n(HC)}" aria-hidden="true">{body}</svg>'
 
 
 def splice(text, name, frag):
@@ -489,20 +536,18 @@ def main(png=False):
         for on in ("dark", "light"):
             wdt, body = wordmark(variant, on)
             files[f"wordmark-{variant}-{on}.svg"] = svg(wdt, HC, body)
+    for variant in MARKWORDS:
+        for size in ("lg", "sm"):
+            for on in ("dark", "light"):
+                wdt, body = markword(variant, size, on)
+                files[f"wordmark-{variant}-{size}-{on}.svg"] = svg(wdt, HC, body)
     for on in ("dark", "light"):
         w, h, body = label(on)
         files[f"wordmark-label-{on}.svg"] = svg(w, h, body)
-    # lockup: the simple mark beside the pick (facet), mark as tall as the cap height plus a margin
-    for on in ("dark", "light"):
-        wdt, body = wordmark("facet", on)
-        pal = {} if on == "dark" else LIGHT
-        mk = mark_body(100, cid=f"lk{on}", **{**SIMPLE, "inset": 4, **{k: v for k, v in pal.items() if k in ("square", "legs", "dots")}})
-        files[f"lockup-{on}.svg"] = svg(44 + wdt, 36, f'<g transform="scale(.36)">{mk}</g><g transform="translate(46,4)">{body}</g>')
     files["mark.svg"] = svg(100, 100, mark_body(100, cid="mf", **FULL))
     files["mark-light.svg"] = svg(100, 100, mark_body(100, cid="mfl", **FULL, **LIGHT))
-    files["mark-simple.svg"] = svg(100, 100, mark_body(100, cid="ms", **SIMPLE))
-    files["mark-simple-light.svg"] = svg(100, 100, mark_body(100, cid="msl", **SIMPLE, **{k: v for k, v in LIGHT.items() if k in ("square", "legs", "dots")}))
-    files["mark-construction.svg"] = svg(100, 100, mark_body(100, cid="mc", **{**FULL, "dot": 2.0, "vw": 2.6}, circles=True))
+    files["mark-small.svg"] = svg(100, 100, mark_body(100, cid="ms", **SMALL))
+    files["mark-small-light.svg"] = svg(100, 100, mark_body(100, cid="msl", **SMALL, **{k: v for k, v in LIGHT.items() if k in ("square", "legs")}))
     files["favicon-16.svg"] = favicon16()
     files["favicon.svg"] = icon(32)
     files["app-icon.svg"] = icon(1024)
@@ -567,10 +612,9 @@ def shoot(page_html, w, h, out, tmp, tag):
 
 
 def og_html():
-    """The 1200 x 630 social card: the headline, the full mark, and the 3X0 lockup."""
-    mk = mark_body(100, cid="og", **{**FULL, "sq": 1.2, "xw": 1.4, "vw": 2.8, "rw": 1.0, "aw": 1.0, "dot": 2.0})
-    wdt, wm = wordmark("facet", "dark")
-    small = mark_body(100, cid="ogs", **SIMPLE)
+    """The 1200 x 630 social card: the headline, the large mark, and the 3X0 wordmark."""
+    mk = mark_body(100, cid="og", **{**FULL, "sq": 1.0, "xw": 1.0, "vw": 2.2, "rw": 1.3, "aw": 1.3, "cw": .8})
+    wdt, wm = markword(NAV_VARIANT, "sm", "dark", cid="ogw")
     css = (SITE / "assets" / "style.css").as_uri()
     return f"""<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="{css}"><style>
 body{{margin:0;width:1200px;height:630px;background:{BG};position:relative;overflow:hidden}}
@@ -590,7 +634,7 @@ p{{position:absolute;left:72px;top:350px;margin:0;width:580px;font:400 23px/1.5 
 <p>One system that knows you, remembers, learns your taste and grows with you.</p>
 <svg class="mark" viewBox="0 0 100 100">{mk}</svg>
 <div class="rule"></div>
-<div class="foot"><svg viewBox="0 0 {n(44 + wdt)} 36" height="30"><g transform="scale(.36)">{small}</g><g transform="translate(46,4)">{wm}</g></svg><span>EXO.ASKACONSULT.COM &nbsp;/&nbsp; <b>IN ACTIVE BUILD</b></span></div>
+<div class="foot"><svg viewBox="0 0 {n(wdt)} {n(HC)}" height="30">{wm}</svg><span>EXO.ASKACONSULT.COM &nbsp;/&nbsp; <b>IN ACTIVE BUILD</b></span></div>
 </body></html>"""
 
 
