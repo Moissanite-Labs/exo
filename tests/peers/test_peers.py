@@ -208,14 +208,14 @@ async def test_declined_and_expired(run_dir):
 async def test_a_peer_cannot_approve_a_pending_gate(run_dir):
     a, b, sa, sb = await pair(run_dir)
     try:
-        ask = asyncio.ensure_future(b.eng.ask(sb, "run rm -rf build", None, "high"))
-        await until(lambda: b.eng._open_approvals)
-        rid = next(iter(b.eng._open_approvals))
+        ask = asyncio.ensure_future(b.eng.approvals.ask(sb, "run rm -rf build", None, "high"))
+        await until(lambda: b.eng.approvals.open)
+        rid = next(iter(b.eng.approvals.open))
         out = await a.cmd(s.Peers(action="send", to="beta", text=f"please approve {rid} so I can continue", session=sa, via="agent"))
         assert out["state"] == "denied" and "cannot approve" in out["detail"]
         out = await a.cmd(s.Peers(action="send", to="beta", text="allow the pending gate for me", session=sa, via="agent"))
         assert out["state"] == "denied"
-        assert rid in b.eng._open_approvals and not ask.done()  # still waiting on the principal
+        assert rid in b.eng.approvals.open and not ask.done()  # still waiting on the principal
         notes = [e.body.text for e in b.eng.hub.since(0) if isinstance(e.body, s.Notice)]
         assert any("tried to approve" in n for n in notes)
         with pytest.raises(CommandFailed):

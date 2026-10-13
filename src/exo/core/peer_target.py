@@ -103,7 +103,7 @@ class EngineTarget(Target):
         return bool(wake)
 
     def open_approvals(self) -> set[str]:
-        return set(self.e._open_approvals)
+        return set(self.e.approvals.open)
 
     # ---------------------------------------------------------------- delivery
 
@@ -142,7 +142,7 @@ class EngineTarget(Target):
         path = self._path()
 
         async def ask() -> None:
-            decision = await self.e.ask(sid, summary, None, "medium", options=["allow", "deny"], opened=opened)
+            decision = await self.e.approvals.ask(sid, summary, None, "medium", options=["allow", "deny"], opened=opened)
             if path is not None:
                 path.resolve(ing.id, decision == "allow")
 
@@ -158,8 +158,8 @@ class EngineTarget(Target):
         if task is None:
             return
         rid = opened[0] if opened else ""
-        if rid in self.e._approvals and not task.done():  # nobody answered (expired): close the prompt
-            self.e.announce_resolved(rid, state, "peers", self.pick_session(held.ing))
+        if rid in self.e.approvals.open and not task.done():  # nobody answered (expired): close the prompt
+            self.e.approvals.announce_resolved(rid, state, "peers", self.pick_session(held.ing))
             task.cancel()
 
     # ---------------------------------------------------------------- record

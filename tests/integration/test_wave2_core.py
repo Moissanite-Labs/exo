@@ -288,7 +288,7 @@ def test_once_verdict_is_never_a_standing_allow(tmp_path):
         asked.append(options)
         return "allow_always"
 
-    eng.ask = fake_ask
+    eng.approvals.ask = fake_ask
 
     async def main():
         spec = ToolSpec(name="x", description="", parameters={})

@@ -31,7 +31,7 @@ async def _turn(d: Dispatcher, eng: CoreEngine, sid: str, text: str, answer: str
     while eng._tasks:
         if answer:
             for ev in eng.hub.since(start):
-                if isinstance(ev.body, s.ApprovalRequested) and ev.body.request_id in eng._approvals:
+                if isinstance(ev.body, s.ApprovalRequested) and ev.body.request_id in eng.approvals.open:
                     resp = await d.run(s.Command.of(s.ApprovalRespond(request_id=ev.body.request_id,
                                                                       decision=answer)), "principal:tui")
                     assert resp.ok
