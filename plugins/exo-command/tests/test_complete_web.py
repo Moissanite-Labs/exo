@@ -58,7 +58,7 @@ def repo(tmp_path):
 def test_commands_route_lists_what_the_composer_runs():
     code, d = dispatch(Src(), "/api/complete/commands")
     names = [c["name"] for c in d["commands"]]
-    assert code == 200 and names == ["context", "findings", "trace", "new", "layout"]
+    assert code == 200 and names == ["context", "findings", "trace", "new", "rename", "layout"]
     trace = next(c for c in d["commands"] if c["name"] == "trace")
     assert trace["args"] == "[last N turns]" and [x["value"] for x in trace["choices"]] == ["5", "10", "25"]
     assert d["guidance"] is True

@@ -134,6 +134,26 @@ def test_feedback_and_ui_respond_carry_the_schema_fields():
     assert (r1.panel_id, r1.action, r1.value) == ("p1", "acted", {"choice": "b"}) and r2.action == "dismissed"
 
 
+def test_task_open_steer_stop_routes_use_the_subagent_builtin():
+    src = FakeSource({"command.run": {"output": {"task_id": "k_1", "steerable": True}}})
+    c = centre(src)
+    assert call(c, "GET", "/api/tasks/k_1") == (200, {"task_id": "k_1", "steerable": True})
+    assert call(c, "POST", "/api/tasks/k_1/steer", {"text": "use the other file"})[0] == 200
+    assert call(c, "POST", "/api/tasks/k_1/stop")[0] == 200
+    assert [(b.name, b.args) for b in src.calls] == [("subagent", "open k_1"), ("subagent", "send k_1 use the other file"),
+                                                     ("subagent", "stop k_1")]
+    assert call(c, "POST", "/api/tasks/k_1/steer", {})[0] == 400          # no text
+    assert call(c, "POST", "/api/tasks/bad id/stop")[0] == 400            # a ref cannot smuggle arguments
+    assert call(c, "GET", "/api/tasks/k_1/steer")[0] == 405
+    assert len(src.calls) == 3
+
+
+def test_task_routes_map_core_refusals():
+    for code, status in (("forbidden", 403), ("conflict", 409), ("not_found", 404)):
+        c = centre(FakeSource(fail={"command.run": code}))
+        assert call(c, "POST", "/api/tasks/k_1/stop")[0] == status
+
+
 def test_schedule_and_tasks():
     src = FakeSource({"schedule.edit": {"jobs": [{"job_id": "j1", "when": "every 1m"}]},
                       "tasks.list": {"tasks": [{"task_id": "t1"}]}})

@@ -443,3 +443,62 @@ def test_taste_block_off_with_zero_budget_or_no_pack(make_provider, tmp_path, mo
     assert "# Taste" not in make_provider().system_prompt_block()          # the shipped pack is empty
     monkeypatch.setenv("EXO_HOUSE_TASTE", str(_released_house_pack(tmp_path)))
     assert "# Taste" not in make_provider(session="s2", taste_budget=0).system_prompt_block()
+
+
+def test_tool_call_initializes_lazily_from_config(tmp_path, store):
+    """A fresh provider with a valid config answers tools without an explicit initialize()."""
+    from exo_memory import ExoMemoryProvider
+    p = ExoMemoryProvider({"store_root": str(store.root), "principal": "pat",
+                           "compact_enabled": False})
+    try:
+        home = str(tmp_path / "exo-home")
+        out = json.loads(p.handle_tool_call("exo_note", {"text": "lazy note", "kind": "note"},
+                                            session_id="s1", exo_home=home))
+        assert out.get("ok"), out
+        out = json.loads(p.handle_tool_call("exo_recall", {"query": "lazy note"},
+                                            session_id="s1", exo_home=home))
+        assert "lazy note" in out.get("result", ""), out
+    finally:
+        p.shutdown()
+
+
+def test_tool_call_ambiguous_home_names_the_reason(tmp_path, store):
+    from exo_memory import ExoMemoryProvider
+    p = ExoMemoryProvider({"store_root": str(store.root), "principal": "pat",
+                           "compact_enabled": False})
+    try:
+        p.initialize("s1", exo_home=str(tmp_path / "home-a"))
+        p.initialize("s2", exo_home=str(tmp_path / "home-b"))
+        out = json.loads(p.handle_tool_call("exo_note", {"text": "x", "kind": "note"},
+                                            session_id="s1"))
+        assert "more than one home" in out.get("error", ""), out
+        assert "exo_home" in out.get("error", ""), out
+    finally:
+        p.shutdown()
+
+
+def test_tool_call_without_principal_names_the_reason(tmp_path):
+    from exo_memory import ExoMemoryProvider
+    p = ExoMemoryProvider({"compact_enabled": False})
+    try:
+        out = json.loads(p.handle_tool_call("exo_note", {"text": "x", "kind": "note"},
+                                            session_id="s1"))
+        assert "no principal" in out.get("error", ""), out
+    finally:
+        p.shutdown()
+
+
+def test_lazy_init_keeps_the_host_log(tmp_path, store):
+    """D-028: a lazy start inside the core takes the core's agent log and opens no second episodic log."""
+    from exo_memory import ExoMemoryProvider
+    p = ExoMemoryProvider({"store_root": str(store.root), "principal": "pat",
+                           "compact_enabled": False})
+    try:
+        home, log = str(tmp_path / "exo-home"), object()
+        out = json.loads(p.handle_tool_call("exo_note", {"text": "host log note", "kind": "note"},
+                                            session_id="s1", exo_home=home, agent_log=log))
+        assert out.get("ok"), out
+        st = p._state(home)
+        assert st.core_log is log and st.rt.episodic is None
+    finally:
+        p.shutdown()
