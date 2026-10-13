@@ -613,24 +613,26 @@ class CoreEngine:
         if opened is not None:
             opened.append(rid)
         self._open_approvals[rid] = req
-        self.hub.publish(req, session)
         answered = False
         try:
+            self.hub.publish(req, session)
             decision = await fut
             answered = True
             if decided_by is not None:
                 decided_by.append(self._deciders.pop(rid, "unknown"))
             return decision
         finally:
-            if not answered:  # the turn was stopped or the ask cancelled: close the card in every client (D-045)
-                self.announce_resolved(rid, "cancelled", "core", session)
-            if session:  # the turn summary reports this apart from tool time
-                self.loop.approval_ms[session] = self.loop.approval_ms.get(session, 0) + int((time.monotonic() - t0) * 1000)
-            self._announced.discard(rid)
-            self._approvals.pop(rid, None)
+            self._approvals.pop(rid, None)  # first: a failed publication below leaves no pending row
             self._open_approvals.pop(rid, None)
             self._deciders.pop(rid, None)
             self._approval_rules.pop(rid, None)
+            if session:  # the turn summary reports this apart from tool time
+                self.loop.approval_ms[session] = self.loop.approval_ms.get(session, 0) + int((time.monotonic() - t0) * 1000)
+            try:
+                if not answered:  # the turn was stopped or the ask cancelled: close the card in every client (D-045)
+                    self.announce_resolved(rid, "cancelled", "core", session)
+            finally:
+                self._announced.discard(rid)
 
     def announce_resolved(self, rid: str, decision: str, by: str, session: str | None) -> None:
         """Tell every client an approval is closed, once per request."""
@@ -680,7 +682,7 @@ class CoreEngine:
             if fut is None or fut.done() or (b.session and sid != b.session):
                 continue
             out.append({**to_dict(req), "session": sid})
-        return {"approvals": out}
+        return {"approvals": out, "cursor": {"instance": self.hub.instance, "seq": self.hub.seq}}  # one await-free copy
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
         info = self._info(b.session)

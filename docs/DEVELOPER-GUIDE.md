@@ -73,6 +73,12 @@ Rules for changes (written in the file header): additive only, within a protocol
 defaults, or new types. Never rename or remove. Commands are strict: an unknown field is rejected. Clients decode
 events with `strict=False` so a newer server does not break them.
 
+Recovery fields (D-060): `hello` returns `instance` and `heartbeat`; `approvals.list` returns a `cursor`
+(`instance`, `seq`) taken with the list. A client replaces its pending approvals from the list, applies events above
+`cursor.seq`, and takes a new snapshot when `instance` changes. Never resend a turn or an approval answer whose
+reply was lost; reconcile from the snapshot instead. Principal clients on the Unix socket go through
+`exo.protocol.client.Client(principal=...)`, which checks the peer with the kernel first (`docs/GATE.md`).
+
 Who sent a command is stamped by the transport, not read from the body (D-039, `docs/GATE.md` "Who answered").
 A client of the principal that answers approvals passes a label: `Client(socket=..., principal="tui")` sends the
 core's per-launch credential; an in-process `Dispatcher(engine, caller="principal:<label>")` is the principal by

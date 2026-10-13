@@ -116,6 +116,11 @@ def _open(home: Path, agent: str, wait: float = START_TIMEOUT) -> Any:
             raise
 
 
+SAFE_READS = frozenset({"hello", "session.list", "session.get", "approvals.list", "commands.list", "events.subscribe",
+                        "search", "config.get", "models.list", "tools.list", "skills.list", "tasks.list", "seat.list",
+                        "taste.list"})
+
+
 class SharedClient:
     """A window that joined another window's core. Same surface as Client; after the core's window closes it
     reconnects (or starts the core here) and resumes the event stream where it stopped."""
@@ -133,13 +138,19 @@ class SharedClient:
         self.inner = await asyncio.to_thread(_open, self.home, self.agent)
 
     async def send(self, body: Any) -> s.Response:
+        """After a lost connection, rejoin. Resend only what cannot have acted twice: a command that never left
+        (connect failed, so no byte was written) or a read. A turn, an approval answer or any other change whose
+        reply was lost is raised, not repeated: the caller reconciles with a fresh snapshot (D-060)."""
         import httpx
 
         try:
             return await self.inner.send(body)
-        except (httpx.TransportError, OSError):
+        except (httpx.TransportError, OSError) as exc:
             await self._failover()
-            return await self.inner.send(body)
+            if isinstance(exc, (httpx.ConnectError, ConnectionRefusedError, FileNotFoundError)) \
+                    or getattr(type(body), "TYPE", "") in SAFE_READS:
+                return await self.inner.send(body)
+            raise
 
     async def call(self, body: Any) -> dict[str, Any]:
         from exo.protocol.client import ClientError
