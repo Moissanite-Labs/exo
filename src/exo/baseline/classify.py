@@ -115,6 +115,17 @@ Q_TASK = "What kind of task is this?"
 Q_CLAIM = "Write the user's version of the taste item as one short neutral sentence starting 'The user wants'."
 
 
+DELTA_LEVELS = ("none", "small", "medium", "large", "opposite")  # index i maps to shift.DELTAS[i]
+
+
+def _expected_level(probabilities: dict[str, float]) -> float:
+    """The probability-weighted level index (0 to 4). A generative route puts 1.0 on its one pick."""
+    total = sum(p for k, p in probabilities.items() if k in DELTA_LEVELS)
+    if total <= 0:
+        return 0.0
+    return sum(DELTA_LEVELS.index(k) * p for k, p in probabilities.items() if k in DELTA_LEVELS) / total
+
+
 def decision_labeller(router=None) -> Labeller | None:
     """A labeller on the `decision` role (D-015), or None when no decision route is configured: then the
     signature fallback is used and the model is never asked."""
@@ -126,7 +137,7 @@ def decision_labeller(router=None) -> Labeller | None:
             return None
     if not (getattr(router, "roles", None) or {}).get("decision"):
         return None
-    from ..core.models.decision import ask_choice_result, ask_score
+    from ..core.models.decision import ask_choice_result
 
     async def label(item: Candidate, behaviour: str, reply: str, kind: str) -> Label | None:
         state = {"taste item": item.claim, "the user's own words or action": behaviour,
@@ -135,7 +146,7 @@ def decision_labeller(router=None) -> Labeller | None:
         conf = rel.confidence if rel.confidence is not None else max(rel.probabilities.values(), default=0.0)
         if rel.choice in ("unrelated", "refine"):
             return Label(rel.choice, 0.0, confidence=conf, route=rel.route or "decision")
-        delta = await ask_score(router, state, Q_DELTA, ["none", "small", "medium", "large", "opposite"])
+        delta = await ask_choice_result(router, state, Q_DELTA, list(DELTA_LEVELS))
         scope = await ask_choice_result(router, state, Q_SCOPE, ["general", "this project", "this kind of task",
                                                                  "this period"])
         task = await ask_choice_result(router, state, Q_TASK, list(shift.TASK_KINDS))
@@ -144,7 +155,7 @@ def decision_labeller(router=None) -> Labeller | None:
             voice = (await ask_choice_result(router, state, Q_VOICE, ["own view", "quoting", "asking",
                                                                       "role-playing"])).choice
             voice = "own" if voice == "own view" else voice
-        d = shift.DELTAS[max(0, min(4, round(delta.score)))]
+        d = shift.DELTAS[max(0, min(4, round(_expected_level(delta.probabilities))))]
         sc = {"this project": "project", "this kind of task": "task", "this period": "period"}.get(scope.choice,
                                                                                                  "general")
         return Label(rel.choice, d, sc, voice, conf, task.choice, "", rel.route or "decision")
