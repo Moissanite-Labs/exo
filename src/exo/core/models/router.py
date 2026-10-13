@@ -48,7 +48,7 @@ BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
-CLI_TRANSPORTS = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
+CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
 
 
 def load_catalog(path: Path | str = CATALOG_PATH) -> dict[str, Any]:
