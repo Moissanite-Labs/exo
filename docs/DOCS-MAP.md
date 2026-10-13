@@ -128,3 +128,4 @@ real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Still open:
 | D-052 Principal authority for turn authorship, learning, settings, policy adoption, human peer sends and unsteer | `docs/GATE.md`, `docs/MEMORY-MODEL.md`, `docs/COMMANDS.md` | n/a | n/a | n/a |
 | D-053 Hermetic terminal preferences and corrected approval and undo documentation | `docs/DEVELOPER-GUIDE.md`, `docs/UI.md`, `docs/MEMORY-MODEL.md` | n/a | n/a | n/a |
 | D-054 Mandatory learning checks precede ruling citations, with explicit acceptance separate | `docs/LEARNING.md`, `research/LEARNING-LOOP.md` | n/a | n/a | n/a |
+| D-056 Versioning and naming: SemVer with codenames, site and doc versions, tags, branches, changelog | `docs/VERSIONING.md`, `CHANGELOG.md`, `DECISIONS.md` | n/a | `docs/DEVELOPER-GUIDE.md` "Cutting a release" | n/a |

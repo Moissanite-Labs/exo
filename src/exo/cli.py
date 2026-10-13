@@ -46,7 +46,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import __version__, crypto
+from . import __version__, crypto, display_version
 from .ledger import KINDS, Ledger, LedgerError
 from .store import PrincipalStore, exo_home, principal_root
 from .ingest.cli import register as register_ingest, cmd_ingest  # noqa: F401  (dispatched via globals)
@@ -258,7 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument('--root', help='store directory; overrides --principal')
 
     ap = argparse.ArgumentParser(prog='exo', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--version', action='version', version=f'exo {__version__}')
+    ap.add_argument('--version', action='version', version=f'exo {display_version()}')
     sp = ap.add_subparsers(dest='cmd', required=True)
 
     p = sp.add_parser('init', parents=[common], help='create an empty principal store')

@@ -317,6 +317,13 @@ heading, and the map says so.
 
 Private data and secrets never go in the repo. The principal store is separate from this repository.
 
+### Cutting a release
+
+Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). To release Exo: bump the version in
+`pyproject.toml` and the files that section lists, move `[Unreleased]` in `CHANGELOG.md` under a new
+`[X.Y.Z] (codename) - date` heading, run the suites (`tests/test_versioning.py` fails if they drift), merge, then tag
+main with an annotated `exo-vX.Y.Z`. Site deploys take `--version`; see `scripts/deploy-site.sh`.
+
 ## 9. Recipes
 
 Short, working patterns for four things people ask about. Each one names the file to read next.
