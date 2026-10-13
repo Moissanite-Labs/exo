@@ -1256,3 +1256,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Limits:** child approvals shown in the parent, and `followup` or `resume`, are follow-ups. Typing straight into a
   child's session still steers it through `turn.send`; that path works but leaves no note on the receipt.
 - **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-073 (2026-10-13) Signed updates verify against a pinned trust list (issue #42)
+- **Decision:** `update.require_signed` (default false) makes `exo update` verify the upstream tip with
+  `git verify-commit` (SSH signatures) against `$EXO_HOME/update/allowed_signers`, then merge exactly that sha. The
+  repo's `trust/allowed_signers` is only the source for the pin; `exo update --pin-trust [REV]` copies it, by hand.
+  Code: `src/exo/update_verify.py`, two hooks in `src/exo/update_cmd.py`.
+- **Why:** the repo cannot be its own root of trust. If the check read the list from the commit being installed, an
+  attacker who can push could add their own key. A local pin makes the first trust decision a human one and makes
+  every later key change visible. Opt-in because the project does not sign releases yet.
+- **Limits:** trust on first use of the pin; SSH signatures only; commit signatures, not tags; `uv tool` installs
+  cannot be verified. A key compromise needs the pin edited by hand.
+- **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
