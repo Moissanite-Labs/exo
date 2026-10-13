@@ -63,7 +63,9 @@
   if (eggOn) {
     var stage = eggQ && eggQ[1] && !isNaN(+eggQ[1]) ? +eggQ[1] : 0;
     var s = document.createElement("script");
-    s.src = "brand/egg.js";
+    var mainScript = document.querySelector('script[src$="assets/main.js"]');
+    var sitePath = new URL("../", mainScript.src).pathname;
+    s.src = sitePath + "brand/egg.js";
     s.onload = function () {
       window.exoEgg = window.ExoEgg.mount(canvas, { stage: stage, activity: 0.5, layout: function (W, H) {
         var narrow = W < 760;
@@ -71,9 +73,9 @@
                  r: narrow ? Math.min(W, H) * 0.42 : Math.min(W * 0.3, H * 0.4) };
       } });
       var tag = document.createElement("a");
-      tag.className = "egg-tag"; tag.href = "brand/";
+      tag.className = "egg-tag"; tag.href = sitePath + "brand/";
       tag.textContent = "Preview: the lattice egg, stage " + stage + " \u00b7 brand";
-      canvas.parentNode.appendChild(tag);
+      (canvas.parentNode.querySelector(".hero__in") || canvas.parentNode).appendChild(tag);
     };
     document.head.appendChild(s);
     return;

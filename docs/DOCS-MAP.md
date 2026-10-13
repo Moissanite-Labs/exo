@@ -88,7 +88,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Web client (command centre) | `plugins/exo-command/README.md`, `docs/ui/WEB.md` | §2 | n/a | WP §24 |
 | Bus (agent to agent relay) | `plugins/exo-bus/README.md`, `docs/PEERS.md` "Bus seats" (D-040) | §7 (bus seats are held, pinned keys) | §9 "Use the bus" | WP §29 (named, not explained) |
 | Upstream tracking (`exo upstream`) | `docs/PINNING.md`, `docs/STANDALONE.md` §3 | n/a | MISSING | WP §25 |
-| Public roadmap page (`site/roadmap/`): the flywheel, now / next / horizon with status per initiative, concept diagrams, screenshots, references | `site/roadmap/index.html`; content drawn from `docs/TASTE-BASELINE.md`, `docs/BRAND.md` and `DECISIONS.md` D-020, D-044, D-049, D-050 | n/a | `docs/DEVELOPER-GUIDE.md` "Deploying the site" (staging first) | n/a (the page links the whitepaper) |
+| Public roadmap page (`site/roadmap/`): delivery order, revision evidence, now / next / horizon with status per initiative, concept diagrams, screenshots, references | `docs/SITE-STATUS.md`, `site/roadmap/index.html`; content drawn from `docs/TASTE-BASELINE.md`, `docs/BRAND.md` and `DECISIONS.md` D-020, D-044, D-049, D-050, D-055 | n/a (no user commands changed) | `docs/DEVELOPER-GUIDE.md` "Deploying the site" (staging first) | n/a (the page links the whitepaper) |
 
 ## Whitepaper gaps
 
@@ -126,3 +126,4 @@ real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Still open:
 | D-047 Staging first for the public site (`deploy-site.sh` defaults to staging, `--prod` to promote, noindex on staging) | `docs/DEVELOPER-GUIDE.md` "Deploying the site" | n/a | n/a | n/a |
 | D-049 Brand (proposed): the X/V wordmark, the incentre-lattice mark, the living egg and its stage API, staging-only front-page preview | `docs/BRAND.md`, `site/brand/index.html`, `site/brand/egg.js`, `scripts/brand_assets.py` | n/a | n/a | n/a |
 | D-050 Consumer path: local first, desktop apps after the build settles, remote pairing and own inference later | `DECISIONS.md` D-050, `docs/PROVIDERS.md` | n/a | n/a | n/a |
+| D-055 Keep staging current with verified status; core engine, browser polish, then Electron desktop packaging | `docs/SITE-STATUS.md`, `DECISIONS.md` D-055, `site/roadmap/index.html`, `site/app/index.html` | n/a (no user commands changed) | "Deploying the site" | Batched; desktop delivery direction only |
