@@ -128,6 +128,7 @@ Every command `/help` lists, in one line each, so you can answer "what does /x d
 - `/providers` sets up a model key: add or replace it (typed in a hidden field), test it, remove it, pick the default.
 - `/panel` reopens the last panel (an approval or a choice the agent showed you).
 - `/peers`, `/send`: peers, above.
+- `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>`: watch, steer and stop a subagent that is working for you.
 - `/trace`, `/findings`: trace and findings, above.
 - `/handoff [path]` has the agent write a structured handoff note (goal, state, done, next, blockers,
   paths) to `$EXO_HOME/handoffs/<seat>-<date>.md` (or `$EXO_HANDOFF_DIR`, or `handoff_dir` in `config.json`), or to the path you give. It uses the exo-handoff skill and the

@@ -44,6 +44,7 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
 | typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
+| `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>` | List the subagents your session handed work to, watch one's session, send a running one a note (it lands at its next tool step) or stop it. A finished subagent answers with a clear error and nothing changes. The parent's receipt says it was steered or stopped. On the web page the Tasks cards have Open, Steer and Stop. |
 | `ctrl+f` | Puts the focus on an approval card, wherever you are. Your draft stays. |
 | `@path` | Adds that file to your message. |
 | `!command` | Asks the agent to run that shell command and show the output. |

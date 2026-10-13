@@ -52,6 +52,7 @@ the middle dot as separator come straight from the site.
    the selected row, a dim argument shape, up to eight rows then `N matches`. Ghost text is drawn dim after the caret.
    The placeholder doubles as the one-line guidance (`job j1 finished: ask for its job_output · tab fills it in`).
    No animation: the menu and the line change only on keys and events, so reduced motion needs no special case.
+   Subagent commands (D-070): `/tasks` lists the tasks this session handed out, `/open <task>` shows the child's session (read-only look; the child's loop is not resumed), `/steer <task> <text>` sends a running child a note and `/stop <task>` stops it. A bare `/stop` still stops the running turn.
 6. Status strip: `MODEL` (the route that served, in orange with `← requested` when it fell back), `MEM` gauge,
    `CACHE` share of the last call, `COST`, open findings.
 7. Start: the site's hero motif in braille (`exo_tui/hero.py`): a shell of linked nodes around an orange core,

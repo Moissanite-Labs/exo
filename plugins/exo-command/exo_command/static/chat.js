@@ -590,6 +590,8 @@ export function mount(root) {
   });
   const off = () => { ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
-  refreshSessions().then(() => { if (!current && sessions.length) open(sessions[0].id); });
+  const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
+  sessionStorage.removeItem("xc-open");
+  refreshSessions().then(() => { if (!current && (asked || sessions.length)) open(asked || sessions[0].id); });
   return off;
 }

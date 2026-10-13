@@ -47,3 +47,11 @@ def test_no_null_children():
 def test_reduced_motion_stops_everything():
     css = text("style.css")
     assert "@media (prefers-reduced-motion: reduce)" in css and "animation: none !important" in css
+
+
+def test_tasks_rows_carry_open_steer_and_stop_controls():
+    """#97: a task with a child session can be opened in Chat; a running one can be steered or stopped."""
+    js = (STATIC / "tasks.js").read_text(encoding="utf-8")
+    assert '"/api/tasks/" + encodeURIComponent(t.task_id) + "/" + verb' in js
+    assert "child_session" in js and '"Steer"' in js and '"Stop"' in js and "xc-open" in js
+    assert 'sessionStorage.getItem("xc-open")' in (STATIC / "chat.js").read_text(encoding="utf-8")

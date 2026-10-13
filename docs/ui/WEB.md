@@ -161,6 +161,10 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
 - **Tasks** reads like the roadmap chart: a tally bar with a key, then one hairline lane per status with cards whose
   top rule repeats the state. Under 760px the lanes stack. The empty state shows the lattice egg at stage 0
   (`static/egg.js`, a byte-for-byte copy of `site/brand/egg.js`, checked by a test); this is the only place it appears.
+- **Task controls (D-070).** A card whose task has a child session gets Open, which shows that session in Chat. A running
+  card also gets a note box with Steer, and Stop. They call `GET /api/tasks/<task>` and `POST /api/tasks/<task>/steer`
+  or `/stop`, which run the core's `subagent` built-in. The core allows the principal only and its refusal (403, or 409
+  for a finished child) shows on the card. A half-typed note survives the next event.
 - **Schedule** shows each job as a card in a hairline grid: the clock line in mono, the title, the prompt, then next,
   last and tier as a readout (local date and time plus "in 2h"), and the actions. A paused job's top rule is dashed.
   The form sits beside the list, with labelled fields; under 1100px it follows the list.
