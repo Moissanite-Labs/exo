@@ -182,7 +182,9 @@ class SpendJournal:
 
     def settle(self, token: str, actual: int):
         with self._db() as db:
-            self._identity(db)
+            # A global stop denies new work, but admitted calls still need accounting.
+            # Settlement validates identity and leaves the blocked reason untouched.
+            self._identity(db, check_block=False)
             row = db.execute("SELECT reserved, actual FROM calls WHERE id=?", (token,)).fetchone()
             if row is None or row[1] is not None or actual < 0 or actual > row[0]:
                 raise SpendDenied("invalid model spend settlement")
