@@ -1331,7 +1331,8 @@ TOOLS: dict[str, str] = {
 # is_sensitive_path() because they can sit anywhere.
 _SENSITIVE_PATH = re.compile(
     r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.config/muse|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
-    r"credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|"
+    r"\.?credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|"
+    r"\.claude(/[^/]*)*|"
     r"keys\.env|\.config/exo/keys(\.env)?|\.exo/keys|\.divan/[^/]+\.key|auth\.json|"
     r"client_secret[^/]*\.json|\.unii/[^/]+/token|[^/]*token[^/]*\.(json|txt|pickle|ya?ml)|[^/]+\.token|"
     r"\.config/gh/hosts\.yml|\.git-credentials|\.docker/config\.json|\.kube/config|"
@@ -1362,6 +1363,8 @@ def _expand_text(text: str) -> str:
         text = re.sub(r"\$\{?EXO_PRINCIPAL_STORE\}?", lambda m: os.path.expanduser(store), text)
     text = re.sub(r"\$\{?EXO_HOME\}?", lambda m: exo, text)
     text = re.sub(r"\$\{?HOME\}?", lambda m: home, text)
+    claude_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
+    text = re.sub(r"\$\{?CLAUDE_CONFIG_DIR\}?", lambda m: os.path.expanduser(claude_dir), text)
     return re.sub(r"(^|(?<=[\s'\"=:<>]))~(?=/|$|\s|['\"])", lambda m: m.group(1) + home, text)
 
 
@@ -1369,6 +1372,8 @@ def _dynamic_secret_paths() -> list[str]:
     paths = [os.path.join(_exo_home(), "keys")]
     kf = os.environ.get("EXO_KEYS_FILE")
     paths.append(os.path.expanduser(kf) if kf else os.path.join(_home(), ".config", "exo", "keys.env"))
+    claude_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(_home(), ".claude")
+    paths.append(os.path.expanduser(claude_dir))
     return paths
 
 
