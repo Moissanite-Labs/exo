@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from exo.core.engine import CoreEngine
+from exo.core.hooks import VALID_HOOKS
 from exo.core.plugins import Manifest, PluginManager
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher
@@ -43,9 +44,11 @@ def _results(eng: CoreEngine) -> list[str]:
 
 def test_plugin_hooks_block_approve_and_plugin_tools(tmp_path):
     seen: list[dict] = []
+    fired: list[str] = []
 
     def register(ctx):
         def pre(tool_name="", args=None, **kw):
+            fired.append("pre_tool_call")
             seen.append({"tool": tool_name, **kw})
             if "hi" in (args or {}).get("command", ""):
                 return {"action": "block", "message": "no hi"}
@@ -54,7 +57,20 @@ def test_plugin_hooks_block_approve_and_plugin_tools(tmp_path):
             return None
 
         ctx.register_hook("pre_tool_call", pre)
-        ctx.register_hook("post_approval_response", lambda **kw: seen.append({"approval": kw["choice"]}))
+        def approval(**kw):
+            fired.append("post_approval_response")
+            seen.append({"approval": kw["choice"]})
+
+        ctx.register_hook("post_approval_response", approval)
+        ctx.register_hook("post_tool_call", lambda **kw: fired.append("post_tool_call"))
+
+        def transform(tool_name="", result="", **kw):
+            fired.append("transform_tool_result")
+            return "transformed" if tool_name == "shout" else None
+
+        ctx.register_hook("transform_tool_result", transform)
+        ctx.register_hook("on_turn_start", lambda **kw: fired.append("on_turn_start"))
+        ctx.register_hook("on_turn_end", lambda **kw: fired.append("on_turn_end"))
         ctx.register_tool("shout", "demo", {"parameters": {"type": "object",
                                                           "properties": {"text": {"type": "string"}}}},
                           handler=lambda args, **kw: args["text"].upper())
@@ -74,9 +90,10 @@ def test_plugin_hooks_block_approve_and_plugin_tools(tmp_path):
     asyncio.run(main())
     res = _results(eng)
     assert res[0] == "Blocked: no hi"
-    assert "asked" in res[1] and res[2] == "HEY"
+    assert "asked" in res[1] and res[2] == "transformed"
     assert {"approval": "once"} in seen
     assert seen[0]["session_id"] and seen[0]["tool_call_id"]
+    assert set(fired) == set(VALID_HOOKS)
 
 
 def test_context_slot_adapter_sees_turns(tmp_path):

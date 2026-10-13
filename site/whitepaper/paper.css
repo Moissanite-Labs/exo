@@ -50,7 +50,7 @@ html { scroll-behavior: smooth; scroll-padding-top: 76px; }
   width: min(100% - 40px, 1320px); margin-inline: auto; height: 58px;
 }
 .wp-brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font: 800 16px/1 var(--p-mono); letter-spacing: .28em; }
-.wp-brand__mark { width: 22px; height: 22px; color: var(--p-acc); display: block; }
+.wp-brand .brand__word { height: 24px; width: auto; display: block; flex: none; }
 .wp-bar__doc { font: 500 11px/1 var(--p-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--p-fg-3); padding-left: 18px; border-left: 1px solid var(--p-line-2); }
 .wp-bar__back {
   margin-left: auto; text-decoration: none;

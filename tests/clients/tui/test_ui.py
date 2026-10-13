@@ -64,7 +64,7 @@ def test_no_color_app_uses_the_plain_theme(tmp_path, monkeypatch):
 
     async def sc(app, pilot, client, eng):
         assert app.theme == "exo-plain"
-        assert "E X O" in plain(app.brand.render())  # draws without a palette lookup failing
+        assert "3 X 0" in plain(app.brand.render())  # draws without a palette lookup failing
 
     run(tmp_path, sc)
 
@@ -122,11 +122,11 @@ def test_model_call_drives_served_model_and_cache_share(tmp_path):
 
 def test_brand_bar_live_dot_and_names(tmp_path):
     async def sc(app, pilot, client, eng):
-        assert "E X O" in plain(app.brand.render()) and "exo-razi" not in plain(app.brand.render())
+        assert "3 X 0" in plain(app.brand.render()) and "exo-razi" not in plain(app.brand.render())
         bar = BrandBar()
         bar.set("exo-razi", "thread work", False)
         out = plain(bar.render())
-        assert "E X O" in out and "exo-razi" in out and "thread work" in out and "IDLE" in out
+        assert "3 X 0" in out and "exo-razi" in out and "thread work" in out and "IDLE" in out
         bar.set("exo-razi", "thread work", True)
         assert "LIVE" in plain(bar.render())
 

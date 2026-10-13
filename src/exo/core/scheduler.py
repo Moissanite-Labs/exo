@@ -104,6 +104,7 @@ class Scheduler:
                         ' paused INTEGER NOT NULL DEFAULT 0, last_run REAL, next_run REAL, last_status TEXT)')
         self.db.commit()
         self.running: dict[str, asyncio.Task] = {}
+        self.loops: dict[str, Loop] = {}  # scheduled child session -> live turn loop
         self._wake, self._main = asyncio.Event(), None
         self.error_pause = 5.0  # seconds to wait after a failed tick, so a persistent fault does not spin
 
@@ -177,6 +178,10 @@ class Scheduler:
         self.engine.hub.publish(s.TaskUpdated(task_id=task_id, title=job["title"], status=status,
                                               child_session=child, detail=detail))
 
+    def interrupt(self, session: str) -> bool:
+        loop = self.loops.get(session)
+        return bool(loop and loop.interrupt(session))
+
     async def run(self, job: dict[str, Any], task_id: str) -> str:
         e, sid, status, answer = self.engine, None, "failed", ""
         self._emit(job, task_id, "queued", f"Scheduled job {job['title']!r} is waiting to start.")
@@ -189,12 +194,21 @@ class Scheduler:
             loop = Loop(e.store, provider, bus=_Bus(e), context=e.loop.context, memory=e.loop.memory,
                         tool_specs=lambda: e.registry.specs(names=names), run_tool=e.run_tool,
                         system_prompt="\n\n".join(p for p in (e.loop.system_prompt, PROMPT) if p), model=model,
-                        max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
+                        max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay, max_iterations=e.loop.max_iterations)
             loop.approval_ms, loop.on_turn_end = e.loop.approval_ms, e.observe_turn
-            loop.before_turn, loop.system_extra = e.loop.before_turn, e.loop.system_extra
+
+            def refresh_prompt() -> str:
+                soul = e.loop.before_turn() if e.loop.before_turn is not None else ""
+                # Refresh may replace the main prompt. Rebuild this run's snapshot afterward; never append to
+                # the main prompt or to the child's previous snapshot (which already carries PROMPT).
+                loop.system_prompt = "\n\n".join(p for p in (e.loop.system_prompt, PROMPT) if p)
+                return soul or ""
+
+            loop.before_turn, loop.system_extra = refresh_prompt, e.loop.system_extra
             info = await loop.create_session(title=f"scheduled: {job['title'][:60]}", model=model, cwd=e.cwd,
                                              agent=getattr(e, "agent", None), kind="scheduled")
             sid = info.id
+            self.loops[sid] = loop
             self._emit(job, task_id, "running", f"Running {job['title']!r}.", sid)
             res = await e._turn(s.TurnSend(session=sid, text=job["prompt"]), meta={"author": "schedule"},
                                 loop=loop)  # D-041 normal path; D-040 not a live principal turn
@@ -210,6 +224,8 @@ class Scheduler:
         except Exception as exc:
             answer = f"{type(exc).__name__}: {exc}"
         finally:
+            if sid is not None:
+                self.loops.pop(sid, None)  # cleanup must happen even if final database bookkeeping fails
             self.db.execute("UPDATE jobs SET last_run=?, last_status=? WHERE id=?", (self.clock(), status, job["id"]))
             self.db.commit()
             ok = status == "done"
@@ -268,14 +284,14 @@ class Scheduler:
         while True:
             try:
                 await self.tick()
+                nxt = [j["next_run"] for j in self.list() if not j["paused"] and j["next_run"] is not None]
+                delay = max(0.0, min(nxt) - self.clock()) if nxt else 3600.0
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # one bad tick (a bad row, a full disk) must not end every future job
                 trace.report("scheduler tick", exc)
                 await asyncio.sleep(self.error_pause)
                 continue
-            nxt = [j["next_run"] for j in self.list() if not j["paused"] and j["next_run"] is not None]
-            delay = max(0.0, min(nxt) - self.clock()) if nxt else 3600.0
             self._wake.clear()
             try:
                 await asyncio.wait_for(self._wake.wait(), min(delay, 3600.0) + 0.05)

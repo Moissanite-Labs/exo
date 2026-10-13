@@ -34,6 +34,15 @@ Keep protocol schemas and command names stable throughout the migration.
 Each extraction should be a separate PR with a behavior-preservation check and a measured before/after
 count. Avoid one large rewrite while the broker and authority contracts are changing.
 
+## Progress
+
+- 2026-10-13, first pass: the diagnostic views (`/context`, `/compact`, `/trace`, `/findings`, handoff facts and the
+  built-in `command.run` names) moved from `CoreEngine` to `src/exo/diagnostics.py`, as functions over the engine.
+  The factory moved to `src/exo/compose.py` (`exo.compose:create`, the `exo serve` default), the start of step 3;
+  `exo.core.engine:create` forwards to it. The engine keeps thin public methods (`trace_text`, `context_report`,
+  `context_text`, `compact_text`, `handoff_facts`). Counted core lines: 16,023 before, 15,800 after. These modules
+  still read private state (`loop._state`, `store._q`, tree `_view`), which step 1 replaces with public queries.
+
 ## Budget policy
 
 Recommendation pending review: retain the current 16,000-line acceptance ceiling while #46 is open.

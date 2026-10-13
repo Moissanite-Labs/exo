@@ -1,17 +1,18 @@
 // One event stream for the page: /api/events relays every protocol event from the core.
 // Listeners get plain event objects {seq, type, session, body, ts}. The browser reconnects by itself and
-// resumes from the last id, so nothing is missed or repeated.
+// resumes from the last id; expired ring cursors replay the core log and refresh durable state.
 import { api, stream } from "./dom.js";
 
 const listeners = new Set();
 let source = null;
-let panels = [];
-let state = { connected: false, seq: 0, denied: false, resumed: 0 };
+let panels = [], panelBuffer = null;
+let state = { connected: false, seq: 0, denied: false, resumed: 0, synced: 0, gaps: 0 };
 const stateListeners = new Set();
 
 export function on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 export function onState(fn) { stateListeners.add(fn); fn(state); return () => stateListeners.delete(fn); }
 export function openPanels() { return panels.slice(); }
+export function forget(id) { panels = panels.filter((p) => p.panel_id !== id); }   // closed here; the core may not say so
 export function lastSeq() { return state.seq; }
 
 function setState(patch) { state = { ...state, ...patch }; stateListeners.forEach((f) => f(state)); }
@@ -28,6 +29,14 @@ export async function start() {
   connect();
 }
 
+export async function restart() {
+  clearTimeout(retryTimer);
+  if (source) source.close();
+  source = null; panels = [];
+  setState({ connected: false, denied: false, seq: 0 });
+  await start();
+}
+
 // A browser EventSource reconnects by itself after a dropped connection, but gives up for good on an HTTP error
 // (403 after the server restarted with a new page token, 502 while the core restarts). Then we open a new one
 // ourselves from the last seq we saw, so the page is never left listening to nothing (D-045).
@@ -36,21 +45,43 @@ function connect() {
   clearTimeout(retryTimer);
   if (source) source.close();
   source = stream("/api/events?since=" + state.seq);
-  source.onopen = () => { retry = 0; const back = state.denied || !state.connected; setState({ connected: true, denied: false, resumed: back ? state.resumed + 1 : state.resumed }); };
+  const connection = source;
+  source.onopen = () => { if (source !== connection) return; retry = 0; const back = state.denied || !state.connected; setState({ connected: true, denied: false, resumed: back ? state.resumed + 1 : state.resumed }); };
   source.onerror = () => {
+    if (source !== connection) return;
     setState({ connected: false });
     if (source && source.readyState === 2) {   // CLOSED: the browser will not retry
       retry += 1;
       retryTimer = setTimeout(async () => {
-        try { await api("GET", "/api/health"); } catch (e) { if (e.status === 403) setState({ denied: true }); }
-        connect();
+        try { await api("GET", "/api/health"); } catch (e) { if (source === connection && e.status === 403) setState({ denied: true }); }
+        if (source === connection && !state.denied) connect();
       }, Math.min(15000, 500 * 2 ** Math.min(retry, 5)));
     }
   };
+  source.addEventListener("gap", (m) => {
+    if (source !== connection) return;
+    let gap;
+    try { gap = JSON.parse(m.data); } catch (e) { return; }
+    setState({ gaps: state.gaps + 1, ...(gap.reset ? { seq: 0 } : {}) });
+  });
+  source.addEventListener("synced", async () => {
+    const buffered = []; panelBuffer = buffered;
+    try {
+      const d = await api("GET", "/api/chat/panels");
+      if (source !== connection) return;
+      panels = d.panels || [];
+    } catch (e) { /* replayed panels still work */ }
+    finally { if (panelBuffer === buffered) panelBuffer = null; }
+    if (source !== connection) return;
+    buffered.forEach(foldPanel);
+    setState({ synced: state.synced + 1 });
+  });
   source.onmessage = (m) => {
+    if (source !== connection) return;
     let ev;
     try { ev = JSON.parse(m.data); } catch (e) { return; }
     if (ev.seq && ev.seq <= state.seq) return;   // a replay of what this page already handled
+    if (panelBuffer && ev.type === "ui.panel") panelBuffer.push(ev);
     foldPanel(ev);
     setState({ seq: Math.max(state.seq, ev.seq || 0) });
     listeners.forEach((f) => { try { f(ev); } catch (e) { console.error(e); } });

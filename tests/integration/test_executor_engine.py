@@ -4,7 +4,8 @@ import asyncio
 
 import pytest
 
-from exo.core.engine import CoreEngine, create
+from exo.compose import create
+from exo.core.engine import CoreEngine
 from exo.core.plugins import LoadedPlugin, Manifest, PluginManager
 from exo.core.tools.executor import ExecutorConfigurationError
 from exo.core.types import ToolCall, ToolResult
@@ -45,7 +46,6 @@ def test_required_mcp_config_fails_before_startup(tmp_path, server):
 def test_engine_main_child_and_background_share_broker(tmp_path, monkeypatch):
     broker = DenyBroker()
     engine = CoreEngine(tmp_path / "home", executor=broker, executor_required=True, cwd=str(tmp_path))
-    engine.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     monkeypatch.setattr(engine.jobs, "start", lambda *args, **kw: pytest.fail("host background handler ran"))
 
     async def main():
@@ -67,7 +67,7 @@ def test_engine_main_child_and_background_share_broker(tmp_path, monkeypatch):
 def test_secure_plugin_discovery_uses_only_executor_roots(tmp_path, monkeypatch):
     broker = DenyBroker()
     broker.trusted_plugin_dirs = (str(tmp_path / "audited"),)
-    monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
+    monkeypatch.setattr("exo.compose.load_executor", lambda: (broker, True))
     seen = []
 
     def load_all(self, **kw):
@@ -83,7 +83,7 @@ def test_secure_plugin_discovery_uses_only_executor_roots(tmp_path, monkeypatch)
 def test_missing_required_executor_plugin_refuses_factory(monkeypatch):
     broker = DenyBroker()
     broker.required_plugins = ("exo-gate",)
-    monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
+    monkeypatch.setattr("exo.compose.load_executor", lambda: (broker, True))
     monkeypatch.setattr(PluginManager, "load_all", lambda *args, **kw: [])
     with pytest.raises(ExecutorConfigurationError, match="required executor plugins failed"):
         create()
@@ -91,7 +91,7 @@ def test_missing_required_executor_plugin_refuses_factory(monkeypatch):
 
 def test_required_factory_needs_gate_even_when_broker_omits_it(monkeypatch):
     broker = DenyBroker()  # required_plugins = (): the gate is still compulsory
-    monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
+    monkeypatch.setattr("exo.compose.load_executor", lambda: (broker, True))
     monkeypatch.setattr(PluginManager, "load_all", lambda *args, **kw: [])
     with pytest.raises(ExecutorConfigurationError, match="required executor plugins failed to load: exo-gate"):
         create()
@@ -141,7 +141,7 @@ def test_secure_config_cannot_disable_required_plugins(tmp_path, monkeypatch):
     monkeypatch.setenv("EXO_HOME", str(home))
     broker = DenyBroker()
     broker.required_plugins = ("exo-gate",)
-    monkeypatch.setattr("exo.core.engine.load_executor", lambda: (broker, True))
+    monkeypatch.setattr("exo.compose.load_executor", lambda: (broker, True))
     monkeypatch.setattr(PluginManager, "load_all", lambda *args, **kw: pytest.fail("disabled gate imported"))
     with pytest.raises(ExecutorConfigurationError, match="disables a required"):
         create()
@@ -153,7 +153,6 @@ def test_scheduler_tools_use_broker(tmp_path):
               "roles": {"main": ["fake:x"], "aux": ["fake:x"], "fast": ["fake:x"]}}
     broker = DenyBroker()
     engine = CoreEngine(tmp_path / "home", models, executor=broker, executor_required=True)
-    engine.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     job = engine.scheduler.add("every 1m", "probe", tier="fast")
 
     async def main():
@@ -183,7 +182,6 @@ def test_required_local_delegate_setup_has_no_workspace_execution(tmp_path, monk
               "roles": {"main": ["fake:x"], "aux": ["fake:x"], "standard": ["fake:x"]}}
     engine = CoreEngine(tmp_path / "home", models, executor=LocalDelegate(), executor_required=True,
                         cwd=str(tmp_path))
-    engine.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     monkeypatch.setattr("exo.core.workspace.git_facts", lambda *a: pytest.fail("delegate host workspace Git"))
     monkeypatch.setattr("subprocess.run", lambda *a, **kw: pytest.fail("delegate setup host subprocess"))
 
@@ -208,7 +206,6 @@ def test_required_remote_delegate_refuses_host_bus_connection(tmp_path, monkeypa
             return await run_trusted()
 
     engine = CoreEngine(tmp_path / "home", executor=LocalDelegate(), executor_required=True)
-    engine.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     monkeypatch.setattr(engine.agents, "_remote", lambda *a: pytest.fail("host bus connection"))
 
     async def main():

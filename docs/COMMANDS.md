@@ -14,20 +14,21 @@ A client reads the line and decides. Three things can answer:
 1. **The client itself.** The terminal client (TUI) handles these in `ExoApp.slash` in
    `clients/tui/exo_tui/app.py`. They are listed in its `COMMANDS` table, and `/help` is built from that table.
 2. **The core, as a built-in.** The client sends the protocol command `command.run` with `name`, `args` and
-   `session`. `CoreEngine._builtin_command` in `src/exo/core/engine.py` answers a few names. It returns text, a dict
+   `session`. `builtin_command` in `src/exo/diagnostics.py` answers a few names. It returns text, a dict
    or nothing, wrapped as `{"output": ...}`.
 3. **A plugin.** If the core has no built-in with that name, `command.run` looks in the plugin registry
    (`ctx.register_command` in `src/exo/core/plugins.py`) and calls the handler with the raw argument string. An
    unknown name fails with the error code `not_found`.
 
-`commands.list` returns the commands a client may offer: the four core ones below that are listed there (`context`,
-`compact`, `trace`, `findings`) plus every plugin command, each with a name, a description and an argument hint.
+`commands.list` returns the commands a client may offer: the five core ones below that are listed there (`context`,
+`compact`, `trace`, `findings`, `rounds`) plus every plugin command, each with a name, a description and an argument hint.
 The TUI shows the plugin ones under `other` in `/help` and in its palette (ctrl+p).
 
 Any client can use categories 2 and 3 with no client code. Only category 1 is specific to the TUI. The line client
 `exo chat` has no client-side commands except `/quit` and `/exit`. It sends every other `/name args` line straight to
 `command.run`, so `/new` or `/model` there fail with `not_found`, while `/context` and `/grants` work.
-The web client (`exo web`) runs `/context`, `/findings` and `/trace` from its composer the same way.
+The web client (`exo web`) runs `/context`, `/findings` and `/trace` from its composer the same way, and
+`/permissions` through its own route (`GET`/`POST /api/permissions`).
 
 ### Client commands (TUI)
 
@@ -44,6 +45,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/cwd` | Show this session's working folder. | none | `session.get` |
 | `/restart` | Reopen this session in a new terminal tab and quit this one. | none | `ExoApp.restart`, `clients/tui/exo_tui/restart.py` |
 | `/stop` | Stop the running turn (same as ctrl+c). | none | `ExoApp.stop_turn` |
+| `/rounds` | Show or set how many tool rounds one turn may run before it wraps up (D-064). The default is 64. Setting it is the principal's (D-052); it lasts for this session until the core restarts, and a running turn keeps the cap it started with. | none shows the cap; `N` (1 to 1000) sets it; `default` clears it | core built-in `rounds` (`src/exo/rounds.py`) |
 | `/unsteer` | Pull your newest queued steer message back into the composer, if it has not landed yet (Up in an empty composer does the same). Never stops the turn. | none | `ExoApp.unsteer` (`command.run` built-in `unsteer`) |
 | `/exit` | Quit. | none | `ExoApp.slash` |
 | `/quit` | Same as `/exit`. | none | same |
@@ -59,6 +61,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/tutorial` | Turn tips on or off, or show them again. | `on`, `off`, `reset`. None shows the state. | `ExoApp.tutorial_command` (`config.set` on `tutorial.enabled`) |
 | `/compose` | Open the big editor for a long prompt (also `ctrl+g`). Enter adds a line, `ctrl+s` or `ctrl+enter` sends, Esc closes and keeps the draft. | `task` adds Goal, Context, Constraints, Done when headings; `edit` opens `$VISUAL` or `$EDITOR`; `close`. None opens it. | `ExoApp.compose_command` (client only) |
 | `/layout` | `inverse` puts the input on top and the newest message under it; `classic` is the usual order. Saved. The web page runs it too. | `inverse`, `classic`. None shows the layout. | `ExoApp.layout_command`, `exo_tui/prefs.py` (web: `static/layout.js`) |
+| `/exosphere` | Shows or hides the corner exosphere (D-062). Saved per user. | `on`, `off`. None shows the state. | `ExoApp.exosphere_command`, `exo_tui/prefs.py`, `exo_tui/exosphere.py` |
 | `/help` | List every command. | none | `ExoApp.help_text` |
 
 Not slash commands, but in the same composer: `@path` adds a file to the turn, `!cmd` asks the agent to run a shell
@@ -102,7 +105,7 @@ through `GET /api/complete/files`, ghost text, history for the page's life and t
 
 ### Core built-ins (`command.run`)
 
-All in `CoreEngine._builtin_command`, `src/exo/core/engine.py`.
+All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._command_run`).
 
 | Name | What it does | Arguments | Returns |
 |---|---|---|---|
@@ -110,10 +113,11 @@ All in `CoreEngine._builtin_command`, `src/exo/core/engine.py`.
 | `compact` | Summarizes now what is eligible in this agent's memory, then shows tokens before and after. Fails with `busy` if a turn is running. | none | text (`compact_text`) |
 | `trace` | The model this session runs on, then the per-turn table: timing, route, estimated cost, flags. | a number N for the last N turns (default 10) | text (`trace_text`) |
 | `findings` | The harness's findings by state. | `count` returns `{"open": N, "by_state": {open, fixed, verified, reopened, total}}` (`open` is what needs work: open plus reopened). Anything else returns text: the per-state summary, what changed since this session last looked, then every finding with its state and fixed-in commit. `open`, `fixed`, `verified` or `reopened` limits the list. | text or dict |
+| `rounds` | This session's tool-round cap (D-064). Anyone may read it; only a live principal caller may change it (`forbidden` otherwise). | none, `N` from 1 to 1000, or `default` | text (`exo.rounds.command`) |
 | `handoff_facts` | The facts the agent needs to write a handoff: thread, git state of the folder, open findings and tasks, recent summaries, last turns. Reads only. | optional path | dict (`handoff_facts`) |
 | `harness_error` | A client reports an exception it caught, so the core files a finding. Not for people. | JSON with `where`, `message`, `error_type`, `traceback`. Plain text also works. | nothing |
 
-Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `handoff_facts` and `harness_error` are
+Only `context`, `compact`, `trace`, `findings` and `rounds` appear in `commands.list`. `handoff_facts` and `harness_error` are
 for clients to call.
 
 ### Plugin commands
@@ -124,6 +128,7 @@ description, args_hint)` (`src/exo/core/plugins.py`). A name that is already tak
 | Command | Plugin | What it does | Arguments | Implemented in |
 |---|---|---|---|---|
 | `/grants` | `exo-gate` | Lists standing approval grants. Revoking one writes a `revoke` row to the ledger. | `list` (default), or `revoke <id>` | `grants_command` in `plugins/exo-gate/exo_gate/hook.py`. See `docs/GATE.md`. |
+| `/permissions` | `exo-gate` | Shows the permission mode, `ask` or `bypass`, with the counts for this run of the core: auto-approved, held, still asked. `bypass` turns asking off except for `store_write` and `credentials`; only a principal connection may, and never under a required executor (D-065). `ask` turns it back on, from any caller. `json` returns `{mode, available, auto_approved, held, floor_asks, by, via, since, floor, summary}` for clients. Each switch writes a `permissions` ledger row. | `status` (default), `bypass`, `bypass launch` (what `exo --skip-permissions` sends), `ask`, `json` | `permissions_command` in `plugins/exo-gate/exo_gate/hook.py`, `plugins/exo-gate/exo_gate/permissions.py`. See `docs/GATE.md` "Bypass mode". |
 | `/gate` | `exo-gate` | Shows whether policy files changed this session. `accept` adopts the change (ledger row `policy_accept`); until then the stricter of old and new applies (D-038). | `status` (default), or `accept` | `gate_command` in `plugins/exo-gate/exo_gate/hook.py`. See `docs/GATE.md`. |
 | `/exo` | `exo-memory`, `exo-context` | One front door for Exo plugins. `/exo help` lists subcommands. `/exo help <name>` shows one. | `<subcommand> [args]` | `src/exo/dispatcher.py`, `register_root` |
 | `/exo branch` | `exo-context` | Writes a handoff and prints the line that starts a fresh session on it. | `<topic>` | `cmd_branch` in `plugins/exo-context/exo_context/commands.py` |
@@ -203,13 +208,13 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
-| `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.core.engine:create`, or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). | `cmd_serve` in `src/exo/cli_chat.py` |
+| `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.compose:create`; `exo.core.engine:create` still works; or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). | `cmd_serve` in `src/exo/cli_chat.py` |
 | `exo chat` | A line client for `exod`. Sends `/name args` lines as `command.run`. `/quit` and `/exit` leave. | `--socket PATH`, `--url URL`, `--token-file PATH`, `--session ID`, `--resume`, `--title T` | `cmd_chat` in `src/exo/cli_chat.py` |
-| `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `main` and `cmd_tui` in `src/exo/cli.py` |
+| `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro`, `--skip-permissions` (alias `--dangerously-skip-permissions`: after connecting, the window sends `/permissions bypass launch`; D-065) | `main` and `cmd_tui` in `src/exo/cli.py` |
 | `exo resume` | Reopens the last session in the terminal client: `exo --resume`. Other flags pass through (`exo resume --seat X`). | same as `exo` | `main` in `src/exo/cli.py` |
 | `exo --version` | Package version, plus the git sha for a checkout install. | none | `version_string` in `src/exo/update_cmd.py` |
-| `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`), prints `old -> new`, then a quick self-check (import, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing | `cmd_update` in `src/exo/update_cmd.py` |
-| `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
+| `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`; a detached checkout fetches and checks out the tracked remote branch instead of pulling, and rolls back if a later step fails), prints `old -> new`, then a quick self-check (import, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing. `--force` lets a detached checkout move to a target that does not contain its current commit (D-064). | `cmd_update` in `src/exo/update_cmd.py` |
+| `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro`, `--skip-permissions` | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
 | `exo stop` | Stops the background core (exod) that `exo web` or `exo serve` started. Reads `$EXO_HOME/run/exod.pid`. | none | `stop_core` in `src/exo/ensure_core.py` |
 | `exo web` | The command centre web client. Joins a running core (exod, or a terminal window's) or starts `exo serve` in the background (D-036). | `--socket`, `--url`, `--token-file`, `--host` (default 127.0.0.1), `--port` (default 7342) | `cmd_web` in `src/exo/cli.py`, `plugins/exo-command/exo_command/__main__.py` |
 

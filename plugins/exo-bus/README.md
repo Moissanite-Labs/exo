@@ -55,6 +55,13 @@ the plugin settings) and the plugin starts a listener thread, a presence file in
 the tools `peers` and `peer_send`, the commands `/peers`, `/peer-release` and `/peer-deny`, and the `peers`
 skill. See docs/PEERS.md for what it can and cannot do (gateway sessions in particular).
 
+The peers lifecycle adapter is Hermes-specific today. Exo's core currently fires only
+`pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`, `on_turn_start` and
+`on_turn_end`; the peer adapter registers Hermes hooks beginning with `on_session_start`, which Exo rejects.
+The `exo-bus` entry point catches and logs that registration error, so peer mode is incomplete on Exo. Keep
+`EXO_PEERS` disabled under Exo until the adapter is ported to supported fire sites. The bus tools and channel
+are separate from this peer lifecycle adapter.
+
 Why the bus is still not a Hermes platform: Hermes has `register_platform` (a gateway adapter that turns
 chat messages into user input behind its allowlists and pairing), not `register_channel`. A bus adapter would
 be a few hundred lines and would admit text from other seats as user-level input, so it needs a security

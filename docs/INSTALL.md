@@ -30,10 +30,34 @@ export PATH="$HOME/.local/bin:$PATH"   # zsh: ~/.zshrc, bash: ~/.bashrc, fish: f
 `~/.local/bin/exo` that is not this installer's link is left alone, with a warning. The installer never reads or
 writes model keys; the first `exo` run with no working provider opens the providers panel (`/providers`).
 
-`exo update` upgrades in place and prints `old -> new`, then checks that `import exo` works, the protocol export
-is current and `exo models` answers. It reads `install` in `config.json` (written by the installer): it pulls the
-checkout and re-runs `install.sh`. For a `pip install -e` checkout it pulls and reinstalls; for a `uv tool install`
-it runs `uv tool upgrade exo`. `exo update --dry-run` prints the steps and changes nothing.
+`exo update` checks the checkout for tracked changes, untracked files and ignored source files before pulling with
+`--ff-only`. Commit, stash (including untracked files), or remove local changes before updating. It
+checks the target Python for pip first; when pip is absent (for example after `uv sync`), it uses
+`uv pip --python` for that same environment. If neither installer is available, it stops before the
+pull. Installer-managed installs also refresh their plugins with `install.sh --no-pip --no-interview`.
+For a `uv tool install`, it runs `uv tool upgrade exo`. After installation a fresh Python process checks
+imports, the protocol export and `exo models`. `exo update --dry-run` only prints the plan: it runs no
+subprocesses, preflight probes, upgrades or checks.
+
+A detached checkout (one moved with `git checkout --detach`, as a canary install is) cannot pull. `exo update` then
+fetches `origin` and moves to the tracked branch: the install record's `branch` if one is set, else `origin/HEAD`,
+else `origin/main`. It moves only if the target contains the current commit (a fast-forward). `--force` overrides
+that. If the reinstall or installer step then fails, it checks the previous commit out again and prints
+`ROLLED BACK`. Packages a failed install step changed are not undone, so fix the cause and update again (D-064).
+
+After updating, finish active turns, close your clients, run `exo stop`, then reopen `exo` or `exo web`.
+The running shared core and clients retain their loaded code until restarted. The updater prints this
+instruction and leaves stopping the core to you.
+
+The updater refuses environment overrides that redirect Git, package sources/configuration, or
+Python and shell execution (including `GIT_CONFIG*`, `PIP_INDEX_URL`, `UV_INDEX`, `PYTHONPATH`,
+`PYTHONHOME`, `EXO_PYTHON`, `EXO_VENV`, `BASH_ENV`, `ENV`); its error names the variables to unset.
+Cache and progress settings remain usable. Git subprocesses disable
+checkout hooks and fsmonitor. These guards do **not** authenticate the remote or the pulled commit:
+there is no signed-release or pinned-commit trust chain yet. The remote's build code and, for
+installer-managed installs, its `install.sh` still execute after a pull. A clean checkout does not
+prove its contents are safe. Signature verification and protection of the source checkout remain
+open work ([issue #42](https://github.com/aska-digital/exo/issues/42)).
 
 ## What it does
 

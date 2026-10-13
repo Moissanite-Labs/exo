@@ -44,7 +44,7 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
 | typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
-| `ctrl+f` | Puts the focus on an approval card, wherever you are. Your draft stays. |
+| `ctrl+f` | Puts the focus on the pending decision, an approval card or a choice, wherever you are. Press again to move to the other one. Your draft stays. |
 | `@path` | Adds that file to your message. |
 | `!command` | Asks the agent to run that shell command and show the output. |
 | `ctrl+p` | Opens the command palette. |
@@ -52,13 +52,17 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `ctrl+y`, `ctrl+e`, `ctrl+r` | Accept, edit or reject the last answer. This is feedback the learning loop uses. |
 | `ctrl+g` or `/compose` | Opens the big editor for a long, structured prompt. Enter adds a line. **`ctrl+s` sends** (`ctrl+enter` too, on terminals that report it). `Esc` closes it and your draft stays. `ctrl+l` shows line numbers, `ctrl+t` edits in `$EDITOR`. `/compose task` starts you with Goal, Context, Constraints and Done when headings. Slash and `@` completion work inside it. |
 | `/layout inverse` or `classic` | Inverse puts the input on top and the newest message directly under it, so a thread opens on its latest. Classic is the usual order. Your choice is saved. |
+| `/exosphere on` or `off` | Shows or hides the exosphere, the small lattice figure (the x0 egg) in the bottom-right corner. It moves with what the agent is doing: a slow breath when idle, a pulse while it thinks, packets while a tool runs, a steady glow with `!` when it waits for your approval, a dim flicker after an error, a bloom when a turn is done. It never takes focus, and your text never runs under it. On by default, hidden on terminals under 90 columns. Your choice is saved. |
+
+`/copy` tries `pbcopy`, `wl-copy`, `xclip`, then `xsel` when available. Without a successful helper it sends OSC52
+and reports that clipboard receipt cannot be verified; a terminal can ignore that escape sequence.
 
 Click anywhere on the transcript and you are typing again; keys typed while nothing else has focus go to the composer.
 
 The screen shows the model that served each call, how full memory is, how much of the call came from cache, the cost,
 and the number of open findings. Screenshots are in `docs/ui/` (for example `docs/ui/01-empty.png`,
 `docs/ui/03-approval.png`, `docs/ui/05-context.png`). The look is described in `docs/UI.md`.
-Set `EXO_REDUCED_MOTION=1` to turn motion off. `NO_COLOR` turns colour off.
+Set `EXO_REDUCED_MOTION=1` to turn motion off (the exosphere then holds still). `NO_COLOR` turns colour off.
 
 **Web (`exo web`).** Run `exo web` in a terminal. It opens the page in your browser for you. If it does not (no
 browser, or `--no-open`), open the link it prints: `http://127.0.0.1:7342/#token=...`. The part after `#token=` is a
@@ -88,6 +92,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/compact` | Summarize now what is eligible, then show tokens before and after. |
 | `/restart` | Reopen this session in a new terminal tab and exit this one. |
 | `/stop` | Stops the running turn. What was done is kept. |
+| `/rounds [N]` | Show or set how many tool rounds one turn may run (default 64). `/rounds default` goes back to the default. |
 | `/exit`, `/quit` | Quit. |
 | `/model [ref]` | Pick the model for this session, or set it with a reference. `/model default <ref>` sets the default. |
 | `/default [ref]` | Set the default model for new sessions, or pick one. |
@@ -97,6 +102,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/findings` | Show what the harness found wrong with itself. |
 | `/grants` | List standing approvals. `/grants revoke <id>` removes one. |
 | `/gate` | Show whether policy files changed this session. `/gate accept` adopts the change. |
+| `/permissions` | Show whether the gate asks or is in bypass, and how many calls bypass approved. `/permissions bypass` stops the asking (except Exo's own records and secrets); `/permissions ask` turns it back on. |
 | `/peers` | List other live sessions you can message. |
 | `/send <peer> <text>` | Message another session yourself. |
 | `/handoff [path]` | The agent writes a handoff note for the next session. |
@@ -106,8 +112,9 @@ The technical reference, with arguments and where each command is implemented, i
 | `/help` | List every command. |
 
 Plugins add commands. They show in `/help` under `other`. `/exo` (the dispatcher) and `/orchestra` are examples when
-those plugins load. The core answers `/context`, `/compact`, `/trace` and `/findings` itself. `/grants` comes from
-the `exo-gate` plugin. The web client runs `/context`, `/findings` and `/trace` from its composer.
+those plugins load. The core answers `/context`, `/compact`, `/trace`, `/findings` and `/rounds` itself. `/grants` comes from
+the `exo-gate` plugin, and so do `/gate` and `/permissions`. The web client runs `/context`, `/findings`, `/trace`
+and `/permissions` from its composer.
 
 ### Typing help
 
@@ -131,7 +138,8 @@ Different seats are different agents. They share your store and talk through pee
 - A thread is a focus. `/new` starts one. Memory carries over.
 - The log keeps every word, word for word. Nothing is lost when the context is compacted.
 - Old parts of the log are folded into summaries so the model call stays small. This happens by itself.
-  `/compact` does it now.
+  `/compact` does it now. A temporary provider failure keeps those words verbatim and retries on later upkeep,
+  with delays up to five minutes. Only explicitly non-retryable summary failures reach the permanent attempt cap.
 - `/context` shows the parts of the next call: the system text, the summary tree, news from other threads, and this
   thread's recent messages.
 - Your rulings and corrections are kept verbatim in summaries and are copied to your principal store, so a
@@ -193,6 +201,11 @@ even when the composer is empty. Typing in an editable field cannot authorize. P
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
 longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
+When the agent asks you to pick (a choice, or a question with options), the terminal shows a choice card in the same
+place. It takes the keyboard at once unless you are typing. Up and down move, `1` to `9` pick, Enter chooses, a click
+picks, Esc dismisses. Your pick goes to the agent as your reply. Letters go to the composer, so you can also answer in
+your own words.
+
 What the gate asks about, and why:
 
 - **Credentials always ask.** Anything that reads or fills a password, token or key asks every time. An "always"
@@ -221,6 +234,28 @@ Exo is not you, whatever it claims, and only you can answer "always".
 
 "Always" answers become standing grants. They expire (7 days for outward acts, 30 days for others) and an outward
 grant covers one exact text. `/grants` lists them. `/grants revoke <id>` removes one.
+
+### Bypass: let the agent work without asking (D-065)
+
+If you want the agent to get on with it, like Claude Code with `--dangerously-skip-permissions`, start Exo with
+
+    exo --skip-permissions
+
+or type `/permissions bypass` in a running window or the web page. The gate then approves on its own everything it
+would have asked you about: comments, deletes, network posts, scripts. Bypass auto-approves everything except
+changes to Exo's own records and reading secrets. Those two still ask you, every time: a write to your policies,
+ledger, keys, grants, seat files or the core's socket, and reading a key or token. Your `deny` rules still block. A
+public post that breaks your posting rules (an internal name, a home path) is sent back to the agent with the fixes
+instead of to you.
+
+You always know it is on. The terminal status line starts with `permissions: bypass` and a count, and every web page
+shows a banner with an "Ask again" button. Every call it approved is in your ledger, marked `decided_by: bypass`,
+with the exact command. `/permissions` shows the counts. `/permissions ask` turns asking back on.
+
+Only you can turn it on, from your own window or page. The agent, a tool it runs, a peer or a bus message cannot. It
+lasts until the core stops; the next start asks again unless you give the flag again. To make it the default for a
+seat, put `[permissions] mode = "bypass"` in the seat file (`docs/SEATS.md`); changing a seat file always asks you.
+On an Exo OS installation (a required tool executor) bypass is not available.
 
 Details: `docs/GATE.md`.
 
@@ -268,6 +303,8 @@ Details and the cost rules: `docs/TRACE.md`.
 | Learning does nothing | It needs a principal store. Without one it is off and says so once (`docs/LEARNING.md`). |
 | A peer message never arrived | It may be held. Look for an approval card. Held messages expire after 30 minutes (`docs/PEERS.md`). |
 | Memory looks wrong | Run `/context`, then `exo memory verify` to check the log's hash chain (`docs/MEMORY-MODEL.md`). |
+| The turn stopped with "stopped after 64 tool rounds" | Each turn has a tool-round cap. The agent's last reply says what is done, what is open and the next step; say "continue" to go on. Raise the cap with `/rounds N` for this session, `[loop] max_tool_rounds` in the seat, or `EXO_MAX_TOOL_ROUNDS`. |
+| `exo update` says "You are not currently on a branch" | That was an older Exo. Current `exo update` moves a detached checkout to its tracked remote branch (`docs/INSTALL.md`). |
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
 | The warning about "not inside a git repo" | The thread's folder is not a repo. Set `[session] cwd` in the seat, or `/cwd` to see where you are. |
 | The web page says "missing or wrong page token" | Open the link `exo web` printed this time. Each launch has a new token. |

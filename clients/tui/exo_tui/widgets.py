@@ -25,7 +25,8 @@ from textual.widget import Widget
 from textual.widgets import Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
-from exo_tui.panels import choice_options, render_panel
+from exo_tui.brand import wordmark
+from exo_tui.panels import render_panel
 from exo_tui.theme import (DOT, PROMPT, SPINNER, chips, gauge, header_rule, human_tokens, reduced_motion,
                            rich_style)
 
@@ -407,7 +408,7 @@ class PromptMark(Static):
 
 
 class BrandBar(Widget):
-    """`E X O`, the agent, the thread, and a live dot while a turn runs."""
+    """The wordmark (`3 X 0`), the agent, the thread, and a live dot while a turn runs."""
 
     def __init__(self) -> None:
         super().__init__(id="brand")
@@ -428,8 +429,7 @@ class BrandBar(Widget):
 
     def render(self) -> Table:
         left = Text(no_wrap=True, overflow="ellipsis")
-        left.append("◢ ", style=rich_style("accent"))
-        left.append("E X O", style=rich_style("fg", "bold"))
+        left.append_text(wordmark())  # the name as a graphic, from the brand files
         if self.agent:
             left.append(f"  {DOT}  ", style=rich_style("line2"))
             left.append(self.agent, style=rich_style("fg2"))
@@ -457,7 +457,7 @@ class StatusStrip(Widget):
     def __init__(self) -> None:
         super().__init__(id="status")
         self.d: dict[str, Any] = {"model": "", "requested": "", "ctx": 0, "window": 0, "cache": None, "cost": "\u2013",
-                                  "findings": 0}
+                                  "findings": 0, "bypass": False, "auto": 0}
 
     def set(self, **d: Any) -> None:
         self.d.update(d)
@@ -474,6 +474,11 @@ class StatusStrip(Widget):
         def sep() -> None:
             t.append(f"  {DOT}  ", style=rich_style("line2"))
 
+        if d["bypass"]:  # D-065: first, so a narrow window cuts the instruments, never this
+            t.append("permissions: bypass", style=rich_style("accent2", "bold reverse"))
+            if w >= 80:
+                t.append(f" {d['auto']} auto-approved", style=rich_style("accent2"))
+            sep()
         label("MODEL")
         fell = bool(d["requested"] and d["model"] and d["requested"] != d["model"])
         t.append(d["model"] or "-", style=rich_style("accent" if fell else "fg2", "bold" if fell else ""))
@@ -482,8 +487,11 @@ class StatusStrip(Widget):
         frac = d["ctx"] / d["window"] if d["window"] else 0.0
         sep()
         label("MEM")
-        t.append_text(gauge(frac, 10, "accent2" if frac >= 0.85 else "cold"))
-        t.append(f" {min(999, round(100 * frac))}%", style=rich_style("fg2"))
+        if d["window"]:
+            t.append_text(gauge(frac, 10, "accent2" if frac >= 0.85 else "cold"))
+            t.append(f" {min(999, round(100 * frac))}%", style=rich_style("fg2"))
+        else:
+            t.append("capacity unknown", style=rich_style("fg2"))
         if w >= 70 and d["ctx"]:
             t.append(f" {human_tokens(d['ctx'])}", style=rich_style("fg3"))
         if w >= 56:
@@ -696,25 +704,19 @@ class EditScreen(ModalScreen):
 
 
 class PanelView(Vertical):
-    """Right-hand area for ui.panel. Shows one panel; choice panels get a selectable list."""
-
-    class Chose(Message):
-        def __init__(self, panel_id: str, choice: str) -> None:
-            super().__init__()
-            self.panel_id, self.choice = panel_id, choice
+    """Right-hand area for ui.panel. Shows one panel. Choices are not drawn here: they are a ChoiceCard in the chat
+    column (D-066)."""
 
     def __init__(self) -> None:
         super().__init__(id="panel")
         self.panel_id = ""
         self.kind = ""
-        self.options: list[tuple[str, str]] = []
         self.display = False
 
     def compose(self) -> ComposeResult:
         yield Static("", id="panel-title")
         with VerticalScroll(id="panel-scroll"):
             yield Static("", id="panel-body")
-        yield OptionList(id="panel-choices")
 
     def show(self, panel_id: str, kind: str, title: str, text: str, data: dict[str, Any]) -> None:
         self.panel_id, self.kind = panel_id, kind
@@ -723,13 +725,6 @@ class PanelView(Vertical):
             header_rule(f"{kind} {DOT} {title}" if title else kind, role, (self.size.width or 40) - 3, "esc closes"))
         self.set_class(role == "accent", "gate")
         self.query_one("#panel-body", Static).update(render_panel(kind, text, data))
-        lst = self.query_one("#panel-choices", OptionList)
-        self.options = choice_options(data) if kind == "choice" else []
-        lst.clear_options()
-        lst.display = bool(self.options)
-        if self.options:
-            lst.add_options([Option(label) for _, label in self.options])
-            lst.highlighted = 0
         self.display = True
         reveal(self)
 
@@ -737,10 +732,177 @@ class PanelView(Vertical):
         self.display = False
         self.panel_id = ""
 
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+
+class ChoiceRow(Static):
+    """One option on the choice card. A click picks it."""
+
+    def __init__(self, index: int) -> None:
+        super().__init__("", classes="choice-row")
+        self.index = index
+
+    def on_click(self, event: events.Click) -> None:
         event.stop()
-        if 0 <= event.option_index < len(self.options):
-            self.post_message(self.Chose(self.panel_id, self.options[event.option_index][0]))
+        for node in self.ancestors:
+            if isinstance(node, ChoiceCard):
+                node.choose(self.index)
+                return
+
+
+class ChoiceCard(Vertical, can_focus=True):
+    """A pending decision in the chat column (D-066): a `ui.panel` of kind choice, or a question with options.
+
+    Up and down move, 1 to 9 pick, Enter chooses, a click picks, Esc dismisses without choosing. Any other printable
+    key goes to the composer, so typing never picks by accident and a free-text answer is one keystroke away.
+    ``key`` is ("panel", panel_id) or ("question", question_id); the card posts Chose once at most."""
+
+    MAX_ROWS = 10
+
+    class Chose(Message):
+        def __init__(self, key: tuple[str, str], index: int, option_id: str, label: str) -> None:
+            super().__init__()
+            self.key, self.index, self.option_id, self.label = key, index, option_id, label
+
+    class Dismissed(Message):
+        def __init__(self, key: tuple[str, str]) -> None:
+            super().__init__()
+            self.key = key
+
+    def __init__(self, key: tuple[str, str], title: str, prompt: str, items: list[tuple[str, str, str]]) -> None:
+        super().__init__(id="choice")
+        self.key = key
+        self.title, self.prompt, self.items = title, prompt, items
+        self.sel = 0
+        self.done = False  # chose or dismissed: nothing more is sent from this card
+        self.force_focus = False  # take focus on mount even if the app would not (it replaced a focused card)
+
+    # -- drawing
+    def head(self) -> Group:
+        width = max(10, self.content_size.width or 60)
+        kind = "QUESTION" if self.key[0] == "question" else "CHOICE"
+        label = f"{kind} {DOT} {self.title}" if self.title else kind
+        out: list[Any] = [header_rule(label, "accent", width)]
+        if self.prompt:
+            out.append(Text(self.prompt, style=rich_style("fg")))
+        return Group(*out)
+
+    def row(self, i: int) -> Text:
+        _, label, desc = self.items[i]
+        on = i == self.sel
+        t = Text()
+        if on:
+            t.append("▌ ", style=rich_style("accent" if self.has_focus else "fg3", "bold"))
+        else:
+            t.append("  ")
+        t.append(f"{i + 1}" if i < 9 else " ", style=rich_style("accent" if on else "fg3", "bold"))
+        t.append("  ")
+        t.append(label, style=rich_style("fg", "bold") if on else rich_style("fg2"))
+        if desc:
+            t.append("  " + desc, style=rich_style("fg3"))
+        return t
+
+    def foot(self) -> Group:
+        n = min(9, len(self.items))
+        pairs = [("↑↓", "move"), ("1" if n == 1 else f"1-{n}", "pick"), ("enter", "choose"), ("esc", "dismiss")]
+        out: list[Any] = [chips(pairs)]
+        if not self.has_focus:
+            out = [Text("ctrl+f, tab or click to choose; your typing is safe", style=rich_style("fg3"))]
+        elif self.key[0] == "question":
+            out.append(Text("or type your own answer", style=rich_style("fg3")))
+        return Group(*out)
+
+    def redraw(self) -> None:
+        if not self.is_mounted:
+            return
+        self.query_one("#choice-head", Static).update(self.head())
+        for r in self.query(ChoiceRow):
+            if r.index < len(self.items):
+                r.update(self.row(r.index))
+                r.set_class(r.index == self.sel, "on")
+        self.query_one("#choice-foot", Static).update(self.foot())
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="choice-head")
+        with VerticalScroll(id="choice-list"):
+            for i in range(len(self.items)):
+                yield ChoiceRow(i)
+        yield Static("", id="choice-foot")
+
+    def on_mount(self) -> None:
+        self.redraw()
+        reveal(self)
+        if not reduced_motion():  # repaint once the fade is done, so no row keeps a half-faded background
+            self.set_timer(0.6, self.redraw)
+        claim = getattr(self.app, "claim_choice_focus", None)
+        if claim is not None:
+            claim(self, self.force_focus)
+
+    def on_resize(self) -> None:
+        self.redraw()
+
+    def on_focus(self) -> None:
+        self.redraw()
+
+    def on_blur(self) -> None:
+        self.redraw()
+
+    def update_choice(self, title: str, prompt: str, items: list[tuple[str, str, str]]) -> None:
+        """The panel was updated in place: new text and options, the highlight kept when it still fits."""
+        self.title, self.prompt = title, prompt
+        if len(items) != len(self.items):
+            lst = self.query_one("#choice-list")
+            lst.remove_children()
+            lst.mount_all([ChoiceRow(i) for i in range(len(items))])
+        self.items = items
+        self.sel = min(self.sel, max(0, len(items) - 1))
+        self.call_after_refresh(self.redraw)
+
+    # -- acting
+    def move_to(self, to: int) -> None:
+        if not self.items:
+            return
+        self.sel = max(0, min(len(self.items) - 1, to))
+        self.redraw()
+        rows = [r for r in self.query(ChoiceRow) if r.index == self.sel]
+        if rows:
+            rows[0].scroll_visible(animate=False)
+
+    def choose(self, i: int) -> None:
+        if self.done or not 0 <= i < len(self.items):
+            return
+        self.done = True
+        self.sel = i
+        oid, label, _ = self.items[i]
+        self.post_message(self.Chose(self.key, i, oid, label))
+
+    def leave(self) -> None:
+        if self.done:
+            return
+        self.done = True
+        self.post_message(self.Dismissed(self.key))
+
+    def on_key(self, event: events.Key) -> None:
+        if not self.has_focus:
+            return
+        k = event.key
+        if k in ("up", "down"):
+            self.move_to(self.sel + (1 if k == "down" else -1))
+        elif k in ("home", "end"):
+            self.move_to(0 if k == "home" else len(self.items) - 1)
+        elif k == "enter":
+            self.choose(self.sel)
+        elif k == "escape":  # leaves without choosing; never stops a turn (D-043)
+            self.leave()
+        elif len(k) == 1 and k.isdigit() and k != "0":
+            self.choose(int(k) - 1)
+        elif event.is_printable and event.character:  # any other typing is a message, not a pick
+            typer = getattr(self.app, "type_into_composer", None)
+            if typer is None:
+                return
+            typer(event.character)
+        else:
+            return
+        event.stop()
+        event.prevent_default()
 
 
 class Welcome(Static):
@@ -753,8 +915,7 @@ class Welcome(Static):
 
     def on_mount(self) -> None:
         head = Text()
-        head.append("\u25e2 ", style=rich_style("accent"))
-        head.append("E X O", style=rich_style("fg", "bold"))
+        head.append_text(wordmark())
         info = Text(f"{self.agent}  {DOT}  {self.model or '-'}  {DOT}  memory ready", style=rich_style("fg3"))
         keys = chips([("enter", "send"), ("@", "file"), ("!", "shell"), ("/", "commands"), ("ctrl+p", "palette"),
                       ("ctrl+c", "stop")])

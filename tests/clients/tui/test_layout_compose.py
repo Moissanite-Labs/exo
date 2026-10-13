@@ -47,15 +47,21 @@ def test_typing_with_focus_on_the_transcript_goes_into_the_composer(tmp_path):
     run(tmp_path, sc)
 
 
-def test_a_panel_that_holds_focus_keeps_its_keys(tmp_path):
+def test_a_choice_that_holds_focus_keeps_its_keys(tmp_path):
+    """The choice card keeps arrows, digits and Enter; a letter is a message, so it goes to the composer (D-066)."""
     from exo.protocol import schema as s
+    from exo_tui.widgets import ChoiceCard
 
     async def sc(app, pilot, client, eng):
         eng.hub.publish(s.UiPanel(panel_id="p1", action="open", kind="choice", title="pick", text="",
                                   data={"options": [{"id": "a", "label": "alpha"}, {"id": "b", "label": "beta"}]}), app.session)
-        await until(lambda: app.focused is not None and app.focused.id == "panel-choices", pilot)
+        await until(lambda: isinstance(app.focused, ChoiceCard), pilot)
+        card = app.focused
+        await pilot.press("down")
+        assert card.sel == 1 and app.composer.text == ""
         await pilot.press("z")
-        assert app.composer.text == ""
+        assert app.composer.text == "z" and app.focused is app.composer
+        assert app.choice is card and not any(getattr(b, "action", "") == "acted" for b in client.seen)
 
     run(tmp_path, sc)
 
@@ -260,6 +266,7 @@ def test_inverse_puts_the_input_on_top_and_stacks_newest_first(tmp_path, monkeyp
     async def sc(app, pilot, client, eng):
         assert app.inverse
         assert app.query_one("#compose").region.y < app.transcript.region.y
+        assert app.strip.region.y < app.query_one("#compose").region.y  # the status strip moved up with the input
         await send(app, pilot, "hello")
         await until(lambda: "friend" in app.transcript_text(), pilot)
         await pilot.pause(0.2)
@@ -301,10 +308,13 @@ def test_layout_command_flips_in_place_and_is_saved(tmp_path, monkeypatch):
         await pilot.pause(0.2)
         assert [w.text for w in app.transcript.children if w.kind in ("user", "assistant")] == ["first", "second"]
         assert app.query_one("#compose").region.y > app.transcript.region.y
+        assert app.strip.region.y > app.query_one("#compose").region.y  # and the status strip went back down
         assert json.loads(Prefs(os.environ["EXO_HOME"]).path.read_text())["layout"] == "classic"
         assert Prefs(os.environ["EXO_HOME"]).layout() == "classic"
         await send(app, pilot, "/layout inverse")
         await until(lambda: app.inverse, pilot)
+        await pilot.pause(0.2)
+        assert app.strip.region.y < app.query_one("#compose").region.y
         assert Prefs(os.environ["EXO_HOME"]).layout() == "inverse"
         await send(app, pilot, "/layout sideways")
         await pilot.pause(0.1)

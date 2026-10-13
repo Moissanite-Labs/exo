@@ -10,6 +10,8 @@
   exo web [--port N ...]                   the command centre web client (starts the shared core if none is running)
   exo   (no command)                       the terminal client in this directory, same as `exo tui`;
                                            flags pass through: exo --resume, exo --seat NAME, exo --no-intro
+  exo --skip-permissions                   the terminal client with permissions bypass for this run of the
+                                           core: no approval asks except Exo's own records and secrets (D-065)
   exo resume [flags]                       reopen the last session; same as `exo --resume`
   exo tui [--resume] [--session ID] ...     the terminal client (pip install 'exo[tui]')
   exo update [--dry-run]                   upgrade Exo in place, print old -> new, quick self-check
@@ -76,7 +78,14 @@ def resolve_store(a) -> PrincipalStore:
     else:
         pid = a.principal or os.environ.get('EXO_PRINCIPAL')
         if not pid:
-            sys.exit('no active principal: pass --principal <id> or --root <dir>, or set EXO_PRINCIPAL')
+            try:
+                from .config import Config
+                pid = Config.load().principal
+            except Exception:
+                pid = None
+        if not pid:
+            sys.exit('no active principal: pass --principal <id> or --root <dir>, set EXO_PRINCIPAL, '
+                     'or `exo config set principal <id>`')
         store = PrincipalStore.for_principal(pid)
     if not store.exists():
         sys.exit(f'no principal store at {store.root}; run: exo init <id>')

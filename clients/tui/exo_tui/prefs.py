@@ -1,6 +1,7 @@
 """Per-user UI preferences for the terminal client (D-046). Client side only.
 
-State file: ``$EXO_HOME/state/ui.json`` = ``{"layout": "inverse" | "classic"}``. ``EXO_LAYOUT`` overrides it for one run.
+State file: ``$EXO_HOME/state/ui.json`` = ``{"layout": "inverse" | "classic", "exosphere": true | false}``.
+``EXO_LAYOUT`` overrides the layout for one run, ``EXO_EXOSPHERE=on|off`` the corner exosphere (D-062, on by default).
 
 The experiment (D-046) makes ``inverse`` the default. To flip the default back to classic, change ``DEFAULT_LAYOUT``
 below to ``"classic"``; a saved choice (``/layout classic`` or ``/layout inverse``) always wins over the default.
@@ -41,11 +42,24 @@ class Prefs:
         saved = self._read().get("layout")
         return saved if saved in LAYOUTS else DEFAULT_LAYOUT
 
+    def exosphere(self) -> bool:
+        env = os.environ.get("EXO_EXOSPHERE", "").strip().lower()
+        if env in ("on", "off"):
+            return env == "on"
+        saved = self._read().get("exosphere")
+        return saved if isinstance(saved, bool) else True
+
+    def set_exosphere(self, on: bool) -> None:
+        self._write("exosphere", bool(on))
+
     def set_layout(self, name: str) -> None:
         if name not in LAYOUTS:
             raise ValueError(name)
+        self._write("layout", name)
+
+    def _write(self, key: str, value: object) -> None:
         data = self._read()
-        data["layout"] = name
+        data[key] = value
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".ui.", dir=self.path.parent)
         with os.fdopen(fd, "w", encoding="utf-8") as f:

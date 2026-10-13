@@ -16,6 +16,8 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/ui/respond                     ui.respond            {panel_id, action, value}
   GET  /api/complete/commands             the slash commands this page runs, with argument shapes and choices
   GET  /api/complete/files?q=&session=     files under the session's folder for @ (D-037); the server guards it
+  GET  /api/permissions                    command.run permissions json: the mode and its counts (D-065)
+  POST /api/permissions                    command.run permissions {mode: bypass|ask}; the core checks the caller
   GET  /api/tasks                          tasks.list
   GET  /api/schedule                       schedule.edit list
   POST /api/schedule                       schedule.edit         {action, job_id, when, prompt, title, ...}
@@ -35,6 +37,7 @@ MAX_TEXT = 50_000
 MODES = ("send", "queue", "steer")
 VERDICTS = ("accept", "edit", "reject", "should_have_been")
 READ_COMMANDS = ("context", "findings", "trace")   # read-only reports the core answers itself
+PERMISSION_MODES = ("bypass", "ask")
 PANEL_ACTIONS = ("opened", "dismissed", "acted", "ignored")
 SCHEDULE_ACTIONS = ("list", "add", "remove", "pause", "resume", "run_now")
 TIERS = ("fast", "standard", "deep")
@@ -43,6 +46,10 @@ Reply = Tuple[int, Dict[str, Any]]
 
 
 class BadRequest(Exception):
+    pass
+
+
+class Forbidden(Exception):
     pass
 
 
@@ -73,6 +80,8 @@ def _choice(body: Dict[str, Any], key: str, allowed: tuple, default: Optional[st
 def error_reply(exc: Exception) -> Reply:
     if isinstance(exc, BadRequest):
         return 400, {"error": str(exc)}
+    if isinstance(exc, Forbidden):
+        return 403, {"error": str(exc), "code": "forbidden"}
     if isinstance(exc, SourceError):
         status = 404 if exc.code == "not_found" else 501 if exc.code in ("unsupported", "unknown_command") else 502
         return status, {"error": exc.message, "code": exc.code}
@@ -103,6 +112,7 @@ def _route(method: str, p: list, key: str):
         "ui/respond": (None, _ui_respond),
         "complete/commands": (_complete_commands, None),
         "complete/files": (_complete_files, None),
+        "permissions": (_permissions, _permissions_set),
         "tasks": (_tasks, None),
         "schedule": (_schedule_list, _schedule_edit),
     }
@@ -127,13 +137,15 @@ async def _sessions(c, p, q, body):
 
 async def _create(c, p, q, body):
     res = await c.source.call(s.SessionCreate(title=_str(body, "title", limit=200), seat=_opt(body, "seat"),
-                                              model=_opt(body, "model"), cwd=_opt(body, "cwd")))
+                                              model=_opt(body, "model"), cwd=_opt(body, "cwd"),
+                                              kind=_choice(body, "kind", ("", "thread", "private"), "")))
     return {"session": res.get("session")}
 
 
 async def _transcript(c, p, q, body):
+    since = c.state.seq  # before the RPC: replay events arriving while the snapshot is read
     res = await c.source.call(s.SessionGet(session=p[2]))
-    return {"session": res.get("session"), "messages": res.get("messages") or [], "seq": c.state.seq}
+    return {"session": res.get("session"), "messages": res.get("messages") or [], "seq": since}
 
 
 async def _send(c, p, q, body):
@@ -176,9 +188,33 @@ async def _ui_respond(c, p, q, body):
     action = _choice(body, "action", PANEL_ACTIONS)
     pid = _str(body, "panel_id", required=True)
     res = await c.source.call(s.UiRespond(panel_id=pid, action=action, value=value))
-    if action == "dismissed":
-        c.panels.pop(pid, None)
+    if action == "dismissed" or (action == "acted" and "choice" in value
+                                 and c.panels.get(pid, {}).get("kind") == "choice"):
+        c.panels.pop(pid, None)  # a dismissed panel, or a choice that has its answer (D-066), is closed
     return res
+
+
+async def _permissions(c, p, q, body):
+    """The permission mode for the banner. A core without the gate (or an older one) reads as ask."""
+    try:
+        out = (await c.source.call(s.CommandRun(name="permissions", args="json"))).get("output")
+    except SourceError as exc:
+        if exc.code not in ("not_found", "unsupported", "unknown_command"):
+            raise
+        out = None
+    return out if isinstance(out, dict) else {"mode": "ask", "available": False, "auto_approved": 0}
+
+
+async def _permissions_set(c, p, q, body):
+    """Switch the mode. Only the principal may turn bypass on; the core decides that from the connection."""
+    mode = _choice(body, "mode", PERMISSION_MODES)
+    try:
+        res = await c.source.call(s.CommandRun(name="permissions", args=mode))
+    except SourceError as exc:
+        if exc.code == "forbidden":
+            raise Forbidden(exc.message) from None
+        raise
+    return {"output": res.get("output"), "permissions": await _permissions(c, p, q, {})}
 
 
 async def _tasks(c, p, q, body):
@@ -209,6 +245,8 @@ async def _schedule_edit(c, p, q, body):
 WEB_COMMANDS = {"context": "what the next model call carries, part by part",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
                 "new": "start a new thread",
+                "permissions": "ask before risky calls, or bypass: auto-approve everything except changes to "
+                               "Exo's own records and reading secrets",
                 "layout": "inverse puts the box on top with the newest message under it; classic is the usual order"}
 _INDEXES: Dict[str, cm.FileIndex] = {}
 

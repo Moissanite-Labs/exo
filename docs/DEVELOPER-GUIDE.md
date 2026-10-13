@@ -87,7 +87,7 @@ After any change to the schema, regenerate the exports and commit them:
 ### Extend through `command.run` built-ins
 
 `command.run` takes `name`, `args` and `session`. The core answers a few names itself, in
-`CoreEngine._builtin_command` in `src/exo/core/engine.py`: `context`, `compact`, `trace`, `findings`,
+`builtin_command` in `src/exo/diagnostics.py`: `context`, `compact`, `trace`, `findings`,
 `handoff_facts`, `harness_error` and `unsteer` (pull a queued steer message back; args is its id, empty means the
 newest; publishes `steer.cancelled`, D-045). Anything else goes to a command a plugin registered. To add one:
 
@@ -161,15 +161,23 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 | `register_skill(name, path)` | Adds a skill file. |
 | `get_config(key, default)` | Reads a plugin setting. |
 
-**Hooks.** The names are in `VALID_HOOKS` in `src/exo/core/hooks.py`: `pre_tool_call`, `post_tool_call`,
-`transform_tool_result`, `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`,
-`on_session_end`, `on_session_reset`, `on_turn_start`, `on_turn_end`, `on_compaction`, `pre_approval_request`,
-`post_approval_response`, `pre_command`, `subagent_start`, `subagent_stop`, `on_skill_lifecycle`. Callbacks take
-keyword arguments only. A failing `pre_tool_call` callback blocks tool execution; other failing callbacks
-are logged and skipped. The core also refuses tools when no `pre_tool_call` callback is registered: reinstall
-the plugins or enable `exo-gate`, then restart. To veto a call, `pre_tool_call` returns
-`{"action": "block", "message": ...}`. To ask the
-principal, it returns `{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+**Hooks.** `register_hook` accepts only the six names in `VALID_HOOKS` in `src/exo/core/hooks.py`, which the
+core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`,
+`on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. A failing callback is logged and
+skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
+tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
+To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
+`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+
+`KNOWN_UNFIRED_HOOKS` names hooks present in Hermes contracts or earlier Exo declarations that Exo does not
+fire: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`, `on_session_end`,
+`on_session_finalize`, `on_session_reset`, `on_compaction`, `pre_approval_request`, `pre_command`,
+`subagent_start`, `subagent_stop`, `on_skill_lifecycle`, `pre_auxiliary_call`, `post_auxiliary_call`,
+`pre_gateway_dispatch`, `kanban_task_completed`, and `kanban_task_blocked`. Default registration raises
+`HookError` instead of accepting a callback that would never run. A custom `HookRegistry(valid=...)` can define
+a separate fire surface for an isolated consumer; it does not add hooks to the Exo core. Hermes contract tests
+continue to check Hermes's own hook metadata.
+
 Required-executor engines propagate failures of `exo-gate` in `pre_tool_call`
 and `post_approval_response`, blocking dispatch. The gate requires saved signed
 decision and approval events; ordinary optional hooks keep the behavior above.
@@ -352,6 +360,22 @@ Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). To releas
 `pyproject.toml` and the files that section lists, move `[Unreleased]` in `CHANGELOG.md` under a new
 `[X.Y.Z] (codename) - date` heading, run the suites (`tests/test_versioning.py` fails if they drift), merge, then tag
 main with an annotated `exo-vX.Y.Z`. Site deploys take `--version`; see `scripts/deploy-site.sh`.
+
+### Updating a checkout (`exo update`)
+
+`src/exo/update_cmd.py` plans, preflights, then runs steps. The preflight runs before any fetch, pull or install and
+refuses: update-source environment variables (`PYTHONPATH`, `GIT_*`, `PIP_*`, `UV_*` and the rest of its list), a
+dirty tree or untracked files, ignored source files, a missing or symlinked installer, and a target Python with
+neither pip nor `uv pip`. Every git call disables fsmonitor and hooks.
+
+On a branch, step one is `git pull --ff-only`. A detached checkout cannot pull, so (D-064) the preflight records its
+commit and `_move_detached` replaces the pull: `git fetch origin`, resolve the target (the install record's `branch`,
+else `origin/HEAD`, else `origin/main`; a branch name that is not plain is refused before the fetch), refuse unless
+`git merge-base --is-ancestor HEAD <target>` holds or `--force` is given, then `git checkout --detach <target>`.
+The reinstall steps follow. If any of them fails, `_rollback` checks the old commit out again and prints
+`ROLLED BACK` (or `ROLLBACK FAILED` with the command to run by hand). Tests: `tests/test_update_cmd.py` (fake runner)
+and `tests/test_update_detached.py` (real temporary git repos, a detached clone, simulated pip). Never point a test
+at a live install.
 
 ## 9. Recipes
 
