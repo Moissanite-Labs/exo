@@ -66,6 +66,11 @@ class _Stream:
     retries: int = 0
 
 
+WRAP_UP_PROMPT = ("[harness] You have used all {n} tool rounds for this turn; tools are now off. "
+                  "In a short reply: what you finished, what is still open, and the next step to continue "
+                  "(the user can say 'continue' to start a fresh set of rounds).")
+
+
 class _SessionState:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
@@ -82,7 +87,8 @@ class Loop:
                  tool_specs: Iterable[ToolSpec] | Callable[[], Iterable[ToolSpec]] = (),
                  run_tool: ToolRunner | None = None, system_prompt: str = "",
                  model: str | None = None, max_iterations: int = 24, max_retries: int = 3,
-                 retry_delay: float = 0.5, provider_opts: dict[str, Any] | None = None):
+                 retry_delay: float = 0.5, provider_opts: dict[str, Any] | None = None,
+                 wrap_up: bool = True):
         self.store = store
         self.provider = provider
         self.bus = bus or EventBus(store)
@@ -95,6 +101,7 @@ class Loop:
         self.system_prompt = system_prompt
         self.model = model
         self.max_iterations = max_iterations
+        self.wrap_up = wrap_up  # at the round cap, one tool-less call to report progress and what remains
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.provider_opts = dict(provider_opts or {})
@@ -330,6 +337,28 @@ class Loop:
         result.stop_reason = "max_iterations"
         await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
                                    level="warn"), session)
+        if self.wrap_up:
+            await self._wrap_up(session, turn_id, system, extra, st, result)
+
+    async def _wrap_up(self, session: str, turn_id: str, system: str, extra: dict[str, Any],
+                       st: _SessionState, result: TurnResult) -> None:
+        """One last call with no tools, so a capped turn ends with an answer, not a dangling tool round.
+
+        The prompt is transient (never stored); stop_reason stays "max_iterations" so callers still see the cap."""
+        messages = await self.context.build(session, system, **extra)
+        messages.append(Message.user(WRAP_UP_PROMPT.format(n=self.max_iterations)))
+        msg_id = new_id("m")
+        stream = await self._call(session, messages, msg_id, st, result, tools=False)
+        await self._record_call(session, stream, self.max_iterations, st)
+        if stream.usage is not None:
+            result.usage = result.usage + stream.usage
+            st.total = st.total + stream.usage
+            await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total, model=stream.route or self.model or ""), session)
+        if stream.error is not None or not (stream.text or stream.reasoning):
+            return
+        reply = self._assemble(_Stream(text=stream.text, reasoning=stream.reasoning), msg_id)
+        reply.meta["wrap_up"] = True
+        result.message = await self._add(session, reply, turn_id)
 
     async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState) -> None:
         """The model.call event (what was asked, who served, every attempt) and the turn's running totals."""
@@ -363,7 +392,7 @@ class Loop:
     # ---------------------------------------------------------------- provider call
 
     async def _call(self, session: str, messages: list[Message], msg_id: str, st: _SessionState,
-                    result: TurnResult) -> _Stream:
+                    result: TurnResult, *, tools: bool = True) -> _Stream:
         """Stream one model call with retry. Retries only while nothing was shown."""
         opts = dict(self.provider_opts)
         if self.model:
@@ -372,7 +401,7 @@ class Loop:
         # conversation to them (D-028), so they share the provider's prompt cache
         key = getattr(self.context, "cache_key", None)
         opts["session_id"] = (key(session) if callable(key) else None) or session
-        specs = self._specs()
+        specs = self._specs() if tools else []
         attempt, history, t0 = 0, [], time.monotonic()
         while True:
             s = _Stream(t0=t0)

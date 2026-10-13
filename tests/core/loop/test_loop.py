@@ -729,3 +729,41 @@ def test_transient_summary_zero_backoff_still_has_a_retry_floor(tmp_path, monkey
         await ctx.settle(session.id)
         assert comp.calls == 4
     run(go())
+
+
+def test_round_cap_wraps_up_without_tools(tmp_path):
+    spin = [ToolCall(id="c", name="echo", arguments={})]
+    seen_tools = []
+
+    class Spy(Script):
+        async def stream(self, messages, tools, **opts):
+            seen_tools.append(list(tools))
+            async for pe in super().stream(messages, tools, **opts):
+                yield pe
+
+    prov = Spy(*[reply("", spin) for _ in range(3)], reply("did 3 rounds; next: finish X"))
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], run_tool=echo_tool, max_iterations=3)
+
+    async def go():
+        s = await loop.create_session()
+        return s, await loop.send(s.id, "spin")
+
+    s, res = run(go())
+    assert res.stop_reason == "max_iterations"  # callers still see the cap
+    assert res.message.text() == "did 3 rounds; next: finish X" and res.message.meta.get("wrap_up")
+    assert len(prov.calls) == 4 and seen_tools[-1] == [] and all(seen_tools[:3])
+    assert "tool rounds" in prov.calls[-1][-1].text()  # transient prompt reached the model...
+    assert not any("tool rounds" in m.text() for m in store.messages(s.id) if m.role == "user")  # ...not the store
+
+
+def test_round_cap_wrap_up_off(tmp_path):
+    spin = [ToolCall(id="c", name="echo", arguments={})]
+    prov = Script(*[reply("", spin) for _ in range(3)])
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], run_tool=echo_tool, max_iterations=2,
+                             wrap_up=False)
+
+    async def go():
+        s = await loop.create_session()
+        return await loop.send(s.id, "spin")
+
+    assert run(go()).stop_reason == "max_iterations" and len(prov.calls) == 2
