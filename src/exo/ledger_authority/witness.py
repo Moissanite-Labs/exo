@@ -86,8 +86,9 @@ class WitnessJournal:
         self.key, self.pub = key, crypto.pubkey_b64(key)
         self.lock = threading.RLock()
         self.fault = fault or (lambda point: None)
-        if self.pub == self.identity["checkpoint_pub"] or any(
-                self.pub == w["pub"] for w in self.identity["writers"].values()):
+        witness_key = crypto.unb64(self.pub)
+        if witness_key == crypto.unb64(self.identity["checkpoint_pub"]) or any(
+                witness_key == crypto.unb64(w["pub"]) for w in self.identity["writers"].values()):
             raise AuthorityError("the witness must have an independent key")
         with self._db() as db:
             db.execute("BEGIN")  # coherent verification even while another instance appends
@@ -112,8 +113,9 @@ class WitnessJournal:
         canonical(genesis)
         verify_checkpoint(identity, genesis)
         pub = crypto.pubkey_b64(key)
-        if genesis["seq"] != 0 or pub == identity["checkpoint_pub"] or any(
-                pub == w["pub"] for w in identity["writers"].values()):
+        witness_key = crypto.unb64(pub)
+        if genesis["seq"] != 0 or witness_key == crypto.unb64(identity["checkpoint_pub"]) or any(
+                witness_key == crypto.unb64(w["pub"]) for w in identity["writers"].values()):
             raise AuthorityError("provisioning requires genesis and an independent witness key")
         receipt = cls._receipt(identity, key, genesis, None)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

@@ -1,4 +1,5 @@
 """Real ephemeral loopback mTLS; no daemon or credentials survive these tests."""
+import copy
 import contextlib
 import hashlib
 import json
@@ -54,6 +55,48 @@ def append(authority, operation="one", text="PRIVATE_EVENT_MUST_NOT_TRAVEL"):
     head = authority.head()
     return authority.append("agent", operation, {"seq": head["seq"], "chain": head["chain"]},
                             {"author": "agent", "kind": "note", "body": {"text": text}, "session": None, "refs": []})["checkpoint"]
+
+
+def alias_public_key(pub):
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    assert len(pub) == 44 and pub.endswith("=")
+    last = alphabet.index(pub[-2])
+    assert last & 3 == 0
+    alias = pub[:-2] + alphabet[last | 1] + "="
+    assert alias != pub and crypto.unb64(alias) == crypto.unb64(pub)
+    return alias
+
+
+@pytest.mark.parametrize("source", ["checkpoint", "writer"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_witness_key_separation_uses_decoded_bytes(state, tmp_path, source, alias):
+    identity = copy.deepcopy(state[2])
+    key = state[5] if source == "checkpoint" else state[4]
+    pub = crypto.pubkey_b64(key)
+    candidate = alias_public_key(pub) if alias else pub
+
+    # The client must refuse a pinned witness key with identical signing authority.
+    with pytest.raises(AuthorityError, match="independent witness key"):
+        wt._configuration(state[2], state[3], candidate)
+
+    # The service must also reject an identity that spells its authority key
+    # differently from the canonical public key derived from the witness seed.
+    if source == "checkpoint":
+        identity["checkpoint_pub"] = candidate
+    else:
+        identity["writers"]["agent"]["pub"] = candidate
+    genesis = AuthorityJournal._checkpoint(identity, state[5], 0, None, crypto.GENESIS,
+                                           crypto.GENESIS, crypto.GENESIS, None)
+    journal_path = tmp_path / "same-key-witness.sqlite"
+    with pytest.raises(AuthorityError, match="independent witness key"):
+        WitnessJournal.provision(journal_path, identity, key, genesis)
+    assert not journal_path.exists()
+    with pytest.raises(AuthorityError, match="independent key"):
+        WitnessJournal(state[1].path, identity, key)
+
+    distinct = crypto.pubkey_b64(state[6])
+    assert wt._configuration(state[2], state[3], distinct)[0] == state[2]
+    assert WitnessJournal(state[1].path, state[2], state[6]).head() == state[1].head()
 
 
 @contextlib.contextmanager
