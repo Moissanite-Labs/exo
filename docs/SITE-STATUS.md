@@ -24,9 +24,8 @@ additional initiatives.
 ## Evidence snapshot
 
 The roadmap's latest verified work panel is explicitly **in review**, not built on main. Core revision
-[`1532fa9`](https://github.com/aska-digital/exo/commit/1532fa9) on `astra/rework` is tested and present on the
-live development checkout, but [draft PR #57](https://github.com/aska-digital/exo/pull/57) is unmerged.
-Reported verification: root suite 1,320 passed and 65 skipped; combined plugins 722 passed; all four CI
+[`1532fa9`](https://github.com/aska-digital/exo/commit/1532fa9) passed CI, but [draft PR #57](https://github.com/aska-digital/exo/pull/57) is unmerged.
+Reported verification: root suite 1,311 to 1,312 passed and 73 to 74 skipped by platform; combined plugins 721 passed and 1 skipped (figures read from the CI run, not from a local run); all four CI
 test jobs (macOS/Linux, Python 3.11/3.13) and lint green.
 [CI evidence](https://github.com/aska-digital/exo/actions/runs/38344045444).
 
