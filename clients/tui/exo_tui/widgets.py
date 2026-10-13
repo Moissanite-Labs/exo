@@ -482,8 +482,11 @@ class StatusStrip(Widget):
         frac = d["ctx"] / d["window"] if d["window"] else 0.0
         sep()
         label("MEM")
-        t.append_text(gauge(frac, 10, "accent2" if frac >= 0.85 else "cold"))
-        t.append(f" {min(999, round(100 * frac))}%", style=rich_style("fg2"))
+        if d["window"]:
+            t.append_text(gauge(frac, 10, "accent2" if frac >= 0.85 else "cold"))
+            t.append(f" {min(999, round(100 * frac))}%", style=rich_style("fg2"))
+        else:
+            t.append("capacity unknown", style=rich_style("fg2"))
         if w >= 70 and d["ctx"]:
             t.append(f" {human_tokens(d['ctx'])}", style=rich_style("fg3"))
         if w >= 56:

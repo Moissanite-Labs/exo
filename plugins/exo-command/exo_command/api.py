@@ -127,13 +127,15 @@ async def _sessions(c, p, q, body):
 
 async def _create(c, p, q, body):
     res = await c.source.call(s.SessionCreate(title=_str(body, "title", limit=200), seat=_opt(body, "seat"),
-                                              model=_opt(body, "model"), cwd=_opt(body, "cwd")))
+                                              model=_opt(body, "model"), cwd=_opt(body, "cwd"),
+                                              kind=_choice(body, "kind", ("", "thread", "private"), "")))
     return {"session": res.get("session")}
 
 
 async def _transcript(c, p, q, body):
+    since = c.state.seq  # before the RPC: replay events arriving while the snapshot is read
     res = await c.source.call(s.SessionGet(session=p[2]))
-    return {"session": res.get("session"), "messages": res.get("messages") or [], "seq": c.state.seq}
+    return {"session": res.get("session"), "messages": res.get("messages") or [], "seq": since}
 
 
 async def _send(c, p, q, body):
