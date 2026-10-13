@@ -511,6 +511,9 @@ class CoreEngine:
                 "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low"}
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
+        if not self.plugins.hooks.has("pre_tool_call"):
+            return Block("No tool approval gate is available. Reinstall Exo's plugins or enable exo-gate "
+                         "in core_plugins (and the seat's plugins list), then restart Exo.")
         for verdict in await self.plugins.hooks.afire("pre_tool_call", **self._hook_kw(call, ctx)):
             if not isinstance(verdict, dict):
                 continue
