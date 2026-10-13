@@ -266,6 +266,7 @@ class CoreEngine:
         self.executor_required = required
         self.home = Path(home)
         self.cwd_note = ""  # why the default cwd is not the one asked for (shown at session start)
+        self.memory_init_error = ""  # why exo-memory failed to start (shown at session start)
         self.cwd = self._seat_cwd(seat) or cwd or os.getcwd()  # the seat's own folder beats the shared default
         self._cwd_seen: dict[str, set[str]] = {}  # session -> folders already warned about (D-032)
         self.handoff_sources: dict[str, Any] = {"jobs": lambda session: []}  # D-032: facts for /handoff; key -> fn(session)
@@ -470,8 +471,15 @@ class CoreEngine:
             if slot is None:
                 continue
             if slot is pm.slots.memory:  # agent_log: the one log, so the provider keeps no second one (D-028)
-                _safe(slot, "initialize", "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
-                      agent_log=self.log_view)
+                fn = getattr(slot, "initialize", None)
+                if fn is not None:
+                    try:
+                        _call(fn, "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
+                              agent_log=self.log_view)
+                    except Exception as exc:
+                        # Loud at session start, not on the first exo_note: record why memory is down.
+                        trace.report("memory.initialize", exc, None)
+                        self.memory_init_error = str(exc) or type(exc).__name__
             for schema in _safe(slot, "get_tool_schemas") or []:
                 spec = ToolSpec(name=schema["name"], description=schema.get("description", ""),
                                 parameters=schema.get("parameters") or {"type": "object", "properties": {}},
@@ -663,6 +671,10 @@ class CoreEngine:
         if note := workspace.cwd_notice(info.cwd or self.cwd, why):  # D-032: at session start
             self._cwd_seen.setdefault(info.id, set()).add(str(Path(info.cwd or self.cwd).resolve()))
             self.hub.publish(s.Notice(text=note, level="warn"), info.id)
+        if self.memory_init_error:  # the provider failed before any session: say so up front
+            self.hub.publish(s.Notice(
+                text=f"exo-memory did not start: {self.memory_init_error}; "
+                     "memory tools will fail until it is fixed", level="warn"), info.id)
         return {"session": to_dict(info)}
 
     async def _session_list(self, b: s.SessionList) -> dict[str, Any]:
