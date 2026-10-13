@@ -423,24 +423,106 @@ def test_recurrence_on_an_older_harness_does_not_reopen(monkeypatch):
     monkeypatch.setattr(mod, "at_or_after", lambda running, fixed: False)
     again = f.file("sig", "t")
     assert again["status"] == "fixed" and again["count"] == 2
-    assert f.sweep() == []  # quiet proves nothing when the fix is not running
+    assert f.observe(tt(tools=[ToolRow("bash")]), set()) == []  # quiet proves nothing when the fix is not running
 
 
-def test_quiet_for_n_turns_verifies():
+def bash_err(f, version="abc1234"):
+    """A fixed ``tool.error:bash`` finding (fixed in the running harness) and a turn that ran bash cleanly."""
+    return f.fix(f.file("tool.error:bash:exit-1", "t")["id"], version), tt(tools=[ToolRow("bash")])
+
+
+def days(monkeypatch, *dates):
+    import exo.core.findings as mod
+    it = iter(dates)
+    monkeypatch.setattr(mod, "now_ts", lambda: next(it) + "T12:00:00.000Z")
+
+
+def test_quiet_for_n_eligible_turns_verifies():
     f = fnd(version="abc1234", verify_turns=3)
-    row = f.fix(f.file("sig", "t")["id"], "abc1234")
-    assert f.sweep() == []
-    for i in range(3):
-        f.store.append_event(s.TurnCompleted(turn_id=f"t{i}"), "s")
-    assert f.sweep() == [row["id"]] and f.get(row["id"])["status"] == "verified"
-    assert f.file("sig", "t")["status"] == "reopened"  # verified findings are re-measured too
+    row, ran_bash = bash_err(f)
+    assert f.observe(ran_bash, set()) == [] and f.observe(ran_bash, set()) == []
+    assert f.observe(ran_bash, set()) == [row["id"]] and f.get(row["id"])["status"] == "verified"
+    assert f.file("tool.error:bash:exit-1", "t")["status"] == "reopened"  # verified findings are re-measured too
 
 
-def test_quiet_for_days_verifies():
+def test_unrelated_turns_do_not_count():
+    """D-025 as ruled: a turn that could not have tripped the signature is no evidence the fix held."""
+    f = fnd(version="abc1234", verify_turns=2)
+    row, ran_bash = bash_err(f)
+    for t in (tt(), tt(tools=[ToolRow("read_file")]), tt(calls=[Call(route="p:a")])) * 10:
+        assert f.observe(t, set()) == []
+    assert f.get(row["id"])["status"] == "fixed" and f.get(row["id"])["quiet"] is None
+    assert f.observe(ran_bash, set()) == [] and f.observe(ran_bash, set()) == [row["id"]]
+
+
+def test_a_tripped_or_not_live_turn_does_not_count(monkeypatch):
+    f = fnd(version="abc1234", verify_turns=1)
+    row, ran_bash = bash_err(f)
+    assert f.observe(ran_bash, {"tool.error:bash:exit-1"}) == []
+    import exo.core.findings as mod
+    monkeypatch.setattr(mod, "at_or_after", lambda running, fixed: False)
+    assert f.observe(ran_bash, set()) == [] and f.get(row["id"])["status"] == "fixed"
+
+
+def test_quiet_on_three_days_of_activity_verifies(monkeypatch):
+    f = fnd(version="abc1234")  # 20 turns, 3 days
+    row, ran_bash = bash_err(f)
+    days(monkeypatch, "2026-10-01", "2026-10-01", "2026-10-02", "2026-10-09", "2026-10-09")
+    assert [f.observe(ran_bash, set()) for _ in range(3)] == [[], [], []]
+    assert f.observe(ran_bash, set()) == [row["id"]]
+
+
+def test_idle_days_do_not_count(monkeypatch):
+    """A fix marked long ago with one quiet day of activity since is not three days of activity."""
     f = fnd(version="abc1234")
-    row = f.fix(f.file("sig", "t")["id"], "abc1234")
+    row, ran_bash = bash_err(f)
     f.store._q("UPDATE findings SET fixed_at='2026-01-01T00:00:00.000Z' WHERE id=?", (row["id"],))
-    assert f.sweep() == [row["id"]]
+    days(monkeypatch, "2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04")
+    assert f.observe(tt(), set()) == [] and f.observe(tt(), set()) == []  # unrelated turns mark no day
+    assert f.observe(ran_bash, set()) == [] and f.get(row["id"])["status"] == "fixed"
+
+
+def test_a_report_without_a_rule_verifies_by_days_only(monkeypatch):
+    f = fnd(version="abc1234", verify_turns=1)
+    row = f.fix(f.file("agent:slow-startup", "t", source="agent")["id"], "abc1234")
+    days(monkeypatch, "2026-10-01", "2026-10-01", "2026-10-02", "2026-10-03")
+    assert [f.observe(tt(), set()) for _ in range(3)] == [[], [], []]  # turns alone never verify it
+    assert f.observe(tt(), set()) == [row["id"]]
+
+
+def test_an_older_harness_recurrence_restarts_the_clock(monkeypatch):
+    f = fnd(version="abc1234", verify_turns=2)
+    row, ran_bash = bash_err(f)
+    assert f.observe(ran_bash, set()) == []
+    import exo.core.findings as mod
+    monkeypatch.setattr(mod, "at_or_after", lambda running, fixed: False)
+    f.file("tool.error:bash:exit-1", "t")
+    assert f.get(row["id"])["quiet"] is None
+    monkeypatch.setattr(mod, "at_or_after", lambda running, fixed: True)
+    assert f.observe(ran_bash, set()) == [] and f.observe(ran_bash, set()) == [row["id"]]
+
+
+@pytest.mark.parametrize("sig, yes, no", [
+    ("turn.slow", tt(), tt(complete=False)),
+    ("turn.wall", tt(), tt(complete=False)),
+    ("model.slow:p:a", tt(calls=[Call(route="p:a")]), tt(calls=[Call(route="p:b")])),
+    ("model.wait:p:a", tt(calls=[Call(route="")]), tt()),  # no route recorded: the shown model is the route
+    ("model.timeout:p:a", tt(calls=[Call(route="p:b", attempts=[{"route": "p:a", "outcome": "timeout"}])]),
+     tt(calls=[Call(route="p:b")])),
+    ("model.fallback:p:a", tt(children=[tt(calls=[Call(route="p:a")])]), tt(calls=[Call(route="p:b")])),
+    ("model.mismatch", tt(), tt(served=[])),
+    ("tool.error:read_file:not-found", tt(tools=[ToolRow("read_file")]), tt(tools=[ToolRow("bash")])),
+    ("tool.repeat:bash", tt(children=[tt(tools=[ToolRow("bash")])]), tt(tools=[ToolRow("read_file")])),
+    ("shell.masked_exit", tt(tools=[ToolRow("bash")]), tt()),
+    ("subagent.slow", tt(tasks=[TaskRow("k1")]), tt()),
+])
+def test_eligibility_rule(sig, yes, no):
+    assert trace.eligible(sig, yes) is True and trace.eligible(sig, no) is False
+
+
+def test_no_rule_can_tell_for_errors_and_reports():
+    assert trace.eligible("harness.error:hook:KeyError", tt()) is None
+    assert trace.eligible("agent:slow-startup", tt()) is None and trace.eligible("manual:x", tt()) is None
 
 
 def test_at_or_after_rules():
@@ -457,7 +539,8 @@ def test_export_groups_by_severity_newest_first():
 
 
 def test_loop_finding_cycle_through_the_engine(tmp_path):
-    eng = engine(tmp_path, [{"match": "go", "steps": [{"tool": "read_file", "args": {"path": "missing"}}, "ok"]}],
+    eng = engine(tmp_path, [{"match": "go", "steps": [{"tool": "read_file", "args": {"path": "missing"}}, "ok"]},
+                            {"match": "read there", "steps": [{"tool": "read_file", "args": {"path": "there"}}, "ok"]}],
                  trace_cfg={"verify_turns": 1})
     eng.findings.version = "abc1234"
 
@@ -470,7 +553,15 @@ def test_loop_finding_cycle_through_the_engine(tmp_path):
     (row,) = [r for r in eng.findings.list() if r["signature"].startswith("tool.error:read_file")]
     assert row["source"] == "anomaly" and row["session"] == sid and row["status"] == "open"
     eng.findings.fix(row["id"], "abc1234")
-    run(eng.loop.send(sid, "a quiet turn"))  # one clean turn after the fix is enough here
+    run(eng.loop.send(sid, "a quiet turn"))  # no read_file call: it could not have tripped the finding
+    assert eng.findings.get(row["id"])["status"] == "fixed"
+    (tmp_path / "there").write_text("x")
+
+    async def read():
+        info = await eng.loop.create_session(title="read")
+        await eng.loop.send(info.id, "read there")  # read_file ran and did not fail: with verify_turns 1, that verifies
+
+    run(read())
     assert eng.findings.get(row["id"])["status"] == "verified"
     sid2 = run(eng.loop.create_session(title="again")).id
     run(eng.loop.send(sid2, "go"))  # the same failure again: the fix did not hold
@@ -712,29 +803,6 @@ def test_cli_findings_status_all_and_trace_counts(tmp_path, monkeypatch, capsys)
     assert "findings 2:" in capsys.readouterr().out
     assert cli.main(["trace", "s1", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["findings"]["fixed"] == 1
-
-
-def test_verify_clean_marks_fixed_verified_after_one_clean_run():
-    f = fnd(version="abc1234")
-    row = f.fix(f.file("sig", "t")["id"], "abc1234")
-    assert f.verify_clean(set()) == [row["id"]]
-    assert f.get(row["id"])["status"] == "verified"
-
-
-def test_verify_clean_skips_tripped_signature():
-    f = fnd(version="abc1234")
-    row = f.fix(f.file("sig", "t")["id"], "abc1234")
-    assert f.verify_clean({"sig"}) == []
-    assert f.get(row["id"])["status"] == "fixed"
-
-
-def test_verify_clean_skips_when_fix_not_live(monkeypatch):
-    import exo.core.findings as mod
-    f = fnd(version="old0001")
-    row = f.fix(f.file("sig", "t")["id"], "new0002")
-    monkeypatch.setattr(mod, "at_or_after", lambda running, fixed: False)
-    assert f.verify_clean(set()) == []
-    assert f.get(row["id"])["status"] == "fixed"
 
 
 def test_trace_text_lists_open_findings_by_default(tmp_path):

@@ -502,17 +502,30 @@ def _children(store: Any, t: TurnTrace, depth: int, deltas: bool = True) -> None
             t.children += kids
 
 
-def turn_flags(store: Any, session: str, th: Thresholds | None = None) -> list[Flag]:
-    """Flags for the latest turn of ``session``; reads only that turn's events (cheap enough for every turn end)."""
+def last_turn(store: Any, session: str) -> TurnTrace | None:
+    """The latest turn of ``session`` with its subagent turns; reads only that turn's events (cheap at every turn end)."""
     rows = store._q("SELECT seq FROM events WHERE session=? AND type='turn.started' ORDER BY seq DESC LIMIT 1",
                     (session,))
-    if not rows:
-        return []
-    turns = parse(_events(store, session, rows[0]["seq"] - 1, deltas=False), session)
-    if not turns:
-        return []
-    _children(store, turns[-1], 2, deltas=False)
-    return detect(turns[-1], th or Thresholds())
+    turns = parse(_events(store, session, rows[0]["seq"] - 1, deltas=False), session) if rows else []
+    if turns:
+        _children(store, turns[-1], 2, deltas=False)
+    return turns[-1] if turns else None
+
+
+def eligible(signature: str, t: TurnTrace) -> bool | None:
+    """Could turn ``t`` (subagent turns included) have tripped ``signature``? Only a turn that could counts toward
+    verifying a fix (D-025): a ``model.*:<route>`` rule needs a call that tried that route, ``model.mismatch`` a served
+    call, a ``tool.*:<tool>`` rule a call of that tool, ``shell.masked_exit`` a bash call, ``subagent.slow`` a task,
+    ``turn.slow`` and ``turn.wall`` a finished turn. None: no rule can tell (``harness.error``, an agent's or the
+    principal's report), so the turn counts only as a day of activity."""
+    kind, _, key = signature.partition(":")
+    xs, tools = t.everything(), {r.name for r in t.all_tools()}
+    rule = {"turn.slow": t.complete, "turn.wall": t.complete, "subagent.slow": any(x.tasks for x in xs),
+            "model.mismatch": any(x.shown and x.served for x in xs), "shell.masked_exit": "bash" in tools,
+            "tool.error": key.split(":")[0] in tools, "tool.repeat": key in tools}
+    if kind in ("model.wait", "model.slow", "model.fallback", "model.timeout"):
+        return any(key in (c.route or x.shown, *(a.get("route") for a in c.attempts)) for x in xs for c in x.calls)
+    return rule.get(kind)
 
 
 # ---------------------------------------------------------------- anomaly rules
