@@ -21,11 +21,16 @@ status and store keys the same way.
 - **Web client:** `exo web` opens the page with a one-time token in the address. The Providers tab has the same
   list, a masked key field, Test, Remove and a default model picker.
 
-Lookup order is the environment variable, then the macOS Keychain (service `exo`) on a Mac, then the Linux
-Secret Service through `secret-tool` when it is installed, then `~/.config/exo/keys.env` (mode 0600). A key
-added through the UI goes to the platform key store when available and otherwise to the keys file (written
-atomically). Choose the file explicitly with `exo providers add NAME --store file`. If an environment variable
-of the same name is set, it wins, and Exo says so.
+Where a new key goes: the macOS Keychain (service `exo`) on a Mac; on Linux the Secret Service through
+`secret-tool` when it is installed, else `~/.config/exo/keys.env` (written mode 0600, atomically). Choose another
+with `exo providers add NAME --store file`. Saving reports both the destination and the effective lookup source.
+Environment variables, then the Keychain/Secret Service, take precedence over the file. A save to a lower
+store keeps higher credentials intact and warns when they still win. The warning offers an update command
+or removal of only the higher item; `exo providers remove` removes every stored copy, including the new file key.
+An environment override must be changed or unset in the launching shell, followed by restarting Exo.
+
+Exo file saves and removals take an owner-only sibling `keys.env.lock` and atomically replace `keys.env` at mode
+0600, preserving other keys when TUI and web writes overlap. Symlinked key or lock files are refused.
 
 What the test call is: OpenAI-style and local providers list their models (`GET /models`), Anthropic lists one
 model, a decision provider answers one yes or no question, `claude-cli` only checks the binary is on PATH, and

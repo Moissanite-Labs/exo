@@ -908,6 +908,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the last 1.5 s, and it claims focus later once the composer is empty and quiet. Single keys act only when the card
   has focus. Allow always needs `a` then Enter, or `A`. This matches the web guard. The gate and approval identity
   in the core are untouched.
+  *Amendment 2026-10-13 (issues #33, #34):* the late focus claim let ordinary typing answer a card: after a send
+  empties the composer, "ok" allowed once and "Act" granted `allow_always`. The card now never takes focus by
+  itself; `ctrl+f`, Tab or a click moves to it, and Esc on the card returns to the composer. `A` waits for Enter
+  like `a`. The web card uses the same `o` / `a` / `d` keys, with a separate confirm for always. Esc still never
+  stops a turn or answers a card; `ctrl+g` stays the composer pane (D-046); D-045 reconciliation is unchanged.
 - **Failover:** `SharedClient._failover` runs the socket probe, the engine start and the wait for another window in
   a thread, so the terminal keeps drawing.
 - **Docs:** user guide, UI, COMMANDS, WEB, JOBS, TRACE, ONBOARDING, the site, the whitepaper and the intro skill.

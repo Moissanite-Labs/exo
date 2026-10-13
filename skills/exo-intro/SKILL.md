@@ -65,7 +65,9 @@ with `[session] cwd` in its seat.toml), `/restart` reopens in a new terminal tab
 ## The approval gate
 Tools have a risk: low, medium or high. Reading is low. Running commands, editing and anything that leaves
 the machine can be higher. When a tool needs your say, a panel appears with what it wants to do. Allow, deny,
-or allow always for that kind of action. A pending approval blocks only that tool call. Peers and other
+or allow always for that kind of action. Both clients use `o` once, `a` always and `d` deny; always needs a
+separate Enter or confirm button, including uppercase `A`. Cards never take focus: Tab, click or Ctrl+F moves
+to one, and typing in a message cannot approve it. A pending approval blocks only that tool call. Peers and other
 agents cannot approve for you.
 
 ## Models and fallback routing

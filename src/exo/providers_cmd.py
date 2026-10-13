@@ -103,7 +103,11 @@ def cmd_providers(a) -> int:
             out = ps.set_key(a.name, value, router=router, store=a.store)
             value = ''  # drop the reference early
             print(f"stored {out['var']} in {out['stored_in']}")
-            if out['shadowed_by_env']:
+            if 'effective_source' in out:
+                print(f"effective source: {out['effective_source'] or 'not confirmed'}")
+            if out.get('warning'):
+                print(f"note: {out['warning']}")
+            elif out['shadowed_by_env']:
                 print(f"note: the environment variable {out['var']} is set and wins over the stored key")
             if not a.no_test:
                 print(_test_line(ps.test_provider(a.name, router=ps.build_router())))
