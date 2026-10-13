@@ -280,12 +280,12 @@ class JobManager:
         task.add_done_callback(self._tasks.discard)
 
     async def _announce(self, h: Handle, state: str, code: int, ended: float, detail: str) -> None:
-        mode = ""
+        _mode = ""
         if state != "killed" or h.kill_by != "job_kill":  # an agent that killed it knows: no notice for that
             try:
                 rec = await self.path.submit(self._notice(h.id, state, code, h.command, h.started, ended, h.session,
                                                           detail))
-                mode = rec.mode or rec.state
+                _mode = rec.mode or rec.state
                 detail = (detail + "; " if detail else "") + f"notice {rec.mode or rec.state}"
             except Exception as exc:  # a delivery problem never loses the job's end
                 from exo.core import trace

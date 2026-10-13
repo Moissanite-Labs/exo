@@ -1,7 +1,6 @@
 """D-037: the completion engine. Ranking, argument slots, @ files, typo help, history ghost text, guidance rules."""
 from __future__ import annotations
 
-import os
 import subprocess
 
 import pytest

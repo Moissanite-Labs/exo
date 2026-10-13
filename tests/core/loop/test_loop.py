@@ -304,7 +304,7 @@ def test_turn_is_fresh_call_from_tree_and_tail(tmp_path):
             await loop.send(s.id, f"q{i}")
         return s
 
-    s = run(go())
+    _s = run(go())
     last = prov.calls[-1]
     assert last[0].role == "system" and "SUMMARY" in last[0].text()
     assert len(last) <= 1 + 2 + 2  # system, maybe a bridge, tail of at most leaf+tail

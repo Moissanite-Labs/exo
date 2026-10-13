@@ -307,7 +307,7 @@ def fig_turn():
         b.append(line(a, y, z + (-6 if z > a else 6), y, "ln ln--acc" if acc else "ln", "f6-o" if acc else "f6-a"))
         b.append(text((a + z) / 2, y - 6, label, "tx tx--acc" if acc else "tx"))
         if note:
-            nx = xm - 10 if d in ("s>c", "c>s") else xs + 10
+            _nx = xm - 10 if d in ("s>c", "c>s") else xs + 10
             if d in ("s>m", "m>s"):
                 b.append(text((xs + xm) / 2, y + 14, note, "mu"))
             else:

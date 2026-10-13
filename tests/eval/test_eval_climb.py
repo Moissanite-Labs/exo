@@ -1,5 +1,4 @@
 import json
-from datetime import datetime, timezone
 
 import pytest
 
@@ -73,14 +72,14 @@ def led(tmp_path, signer):
 
 
 def test_build_replays_from_verdicts_answers_and_rulings(led):
-    u = led.append("utterance", {"text": "Write the status", "role": "user"}, "p", session="s")
+    _u = led.append("utterance", {"text": "Write the status", "role": "user"}, "p", session="s")
     a = led.append("utterance", {"text": "Status :)", "role": "assistant"}, "a", session="s")
     led.append("verdict", {"verdict": "edit", "target": a["id"], "chosen": "Status"}, "p", session="s")
     led.append("verdict", {"verdict": "accept", "target": a["id"]}, "p", session="s")
     led.append("verdict", {"verdict": "reject", "target": a["id"]}, "p", session="s")
     q = led.append("question", {"text": "Which branch ships?"}, "a", session="s")
     led.append("answer", {"text": "main"}, "p", session="s", refs=[q["id"]])
-    u2 = led.append("utterance", {"text": "Going forward keep it short", "role": "user"}, "p", session="s2")
+    _u2 = led.append("utterance", {"text": "Going forward keep it short", "role": "user"}, "p", session="s2")
     led.append("ruling", {"text": "Keep it short."}, "p", session="s2")
     rs = E.build_replays(led)
     by = {r["verdict"]: r for r in rs}

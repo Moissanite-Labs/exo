@@ -26,7 +26,8 @@ from exo.core.slots import MemoryProvider, RecallStatus
 
 try:
     from exo import crypto
-    from exo.capture import (CORRECTION, DECISION, RULING, clip, extract_signals, is_trivial, normalize,
+    # These constants remain part of the optional capture API compatibility check.
+    from exo.capture import (CORRECTION, DECISION as DECISION, RULING as RULING, clip, extract_signals, is_trivial, normalize,
                              render_block, to_event)
     from exo.ledger import Ledger
     from exo.provenance import principal_view

@@ -561,7 +561,6 @@ def test_load_earlier_adds_a_page_and_drops_the_row_at_the_end(tmp_path):
 
 def test_streaming_block_is_throttled_and_ends_as_markdown(tmp_path):
     from rich.padding import Padding
-    from rich.markdown import Markdown
     from exo_tui import app as appmod
 
     async def sc(app, pilot, client, eng):

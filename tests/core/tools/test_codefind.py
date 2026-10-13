@@ -1,7 +1,6 @@
 """code_find (jevgrep). A fake ``jg`` (a small Python script) stands in for the real CLI: no network, no Node."""
 import json
 import os
-import stat
 import sys
 import textwrap
 

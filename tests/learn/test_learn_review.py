@@ -1,8 +1,6 @@
 import asyncio
 import json
 
-from exo.consolidate import load_state
-from exo.core.models.fake import FakeProvider
 from exo.learn import attach, handle_feedback
 from exo.learn.review import review, run_review
 

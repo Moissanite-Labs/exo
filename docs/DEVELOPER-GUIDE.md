@@ -250,9 +250,30 @@ then each plugin suite on its own (from the plugin folder, because each has its 
 with Python 3.11 and 3.13. It also runs `pytest plugins` once, to prove the plugin tests collect together. Plugin
 test files need unique names (`test_<plugin>_...py`) because the plugin test folders are not packages.
 
-**Lint.** `ruff check` with the pyflakes rules only (`F`, set in `pyproject.toml`). CI runs it with `--exit-zero` for
-now, so findings show but do not fail the build: the tree still has unused imports (F401) that were not mass-fixed
-while several branches edit the same files. Keep new code clean. When the baseline is clean, drop `--exit-zero`.
+**Lint.** `uv run --frozen --all-extras ruff check .` checks the pyflakes rules (`F`, set in `pyproject.toml`).
+Findings fail CI. Keep intentional public re-exports explicit (`from module import name as name`), and preserve
+calls with side effects when removing unused bindings.
+
+**Types.** CI checks `src/exo` and the packaged terminal client `clients/tui/exo_tui` with mypy 2.4.0,
+Python 3.11 and the Linux platform. Both are explicit targets so mypy checks the same source whether the
+editable installation points at this checkout or another one. It follows local imports using `src`,
+`clients/tui` and `plugins/exo-command`. Diagnostics from those imports also count. This is the standard
+mypy check, not strict mode or a check of every unannotated function body. Run the same check locally:
+
+    uv sync --frozen --all-extras --python 3.11
+    uv run --frozen --all-extras python scripts/check_types.py
+
+The reviewed `.github/mypy-baseline.json` records existing errors by relative path, message, code and occurrence
+count. Source line shifts do not matter. Another occurrence of an existing error does. New errors fail the check
+and must be fixed. Resolved errors also fail until their stale entries are removed. After fixing errors, run:
+
+    uv run --frozen --all-extras python scripts/check_types.py --update
+
+Review and commit the smaller baseline. `--update` refuses new errors and never expands it. CI never writes it.
+`--initialize` creates a first baseline only when the file is absent, for a separately reviewed migration of the
+compiler or check scope. The helper refuses missing dependencies, mismatched settings and malformed or fatal
+compiler output. It uses no disk cache. `--root PATH --baseline PATH` can check another checkout without changing
+that checkout. No global or per-module type-error suppressions are applied.
 
 **Lockfile.** `uv.lock` pins every dependency, extras included. CI installs with `uv sync --frozen --all-extras`.
 After you change `dependencies` or an extra in `pyproject.toml`, run `uv lock` and commit the result. Declare every

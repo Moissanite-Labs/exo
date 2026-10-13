@@ -1,9 +1,7 @@
-import json
 import re
 
 import pytest
 
-from exo import eval as E
 from exo.consolidate import load_state, proposals_list
 from exo.learn import export_taste, learned_since, revert
 from exo.learn.promote import accepted_rules, apply_policy
