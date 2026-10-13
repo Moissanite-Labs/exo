@@ -974,9 +974,18 @@ class CoreEngine:
 
     async def context_text(self, session: str | None) -> str:
         """``/context``: what the next model call for this thread carries. Read-only."""
+        return (await self.context_report(session))["text"]
+
+    async def context_report(self, session: str | None) -> dict[str, Any]:
         tree = self._agent_ctx(session)
         r = tree.report(session, await self.loop.base_system())
-        return render_context(r, tree)
+        assert session is not None  # _agent_ctx has validated the thread
+        info = self._info(session)
+        model = info.model or self.loop.model or ""
+        capacity = self.router.models.get(model, {}).get("context")
+        return {**r, "schema_version": 1, "model": model,
+                "capacity": capacity if isinstance(capacity, int) and capacity > 0 else None,
+                "text": render_context(r, tree)}
 
     async def compact_text(self, session: str | None) -> str:
         """``/compact``: summarize now what is eligible for this agent. Runs here, in the process that holds the
@@ -1033,7 +1042,9 @@ class CoreEngine:
 
     async def _builtin_command(self, b: s.CommandRun) -> Any:
         if b.name == "context":
-            return await self.context_text(b.session)
+            if b.args.strip() not in ("", "json"):
+                raise CommandFailed("bad_request", "usage: /context [json]")
+            return await self.context_report(b.session) if b.args.strip() == "json" else await self.context_text(b.session)
         if b.name == "compact":
             return await self.compact_text(b.session)
         if b.name == "trace":

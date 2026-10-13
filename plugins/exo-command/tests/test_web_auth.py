@@ -230,6 +230,9 @@ def test_page_answers_as_the_principal_and_reattaches_to_a_restarted_core(tmp_pa
             no = (await raw(port, "POST", "/api/approvals/" + rid, {}, {"decision": "allow_always"}))[0]
             yes = (await raw(port, "POST", "/api/approvals/" + rid, {"X-Exo-Token": TOKEN}, {"decision": "allow"}))
             await _until(lambda: sent)
+            # Finish the first scripted turn before opening another thread: a late shared-memory
+            # note would look like a new user prompt to RuleFake and repeat its tool step.
+            await _until(lambda: not eng._tasks)
             # the core restarts: a new principal credential; the web reads it again and still answers
             task.cancel()
             await srv.close()

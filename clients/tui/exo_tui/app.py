@@ -33,7 +33,7 @@ from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar
                              EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
 CLIENT_ID = "exo-tui"
-DEFAULT_WINDOW = 200_000
+DEFAULT_WINDOW = 0  # unknown until the core reports this model's capacity
 MAX_FILE = 64 * 1024
 WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
 PAGE = 60  # entries added per "load earlier"
@@ -184,6 +184,7 @@ class ExoApp(App):
         self.title_arg = title
         self.model = ""
         self.window = DEFAULT_WINDOW
+        self.capacities: dict[str, int] = {}
         self.ctx_tokens = 0
         self.cost: float | None = None  # session USD from priced calls; None = no priced call (D-032: unknown, never 0)
         self.calls_seen = 0  # model calls that used tokens, seen by this client
@@ -321,10 +322,10 @@ class ExoApp(App):
 
     def status_text(self) -> str:
         """The status strip as plain text (the strip itself draws instruments from the same numbers)."""
-        pct = min(999, round(100 * self.ctx_tokens / self.window)) if self.window else 0
+        pct = str(min(999, round(100 * self.ctx_tokens / self.window))) + "%" if self.window else "capacity unknown"
         bug = f" · {self.findings} findings" if self.findings else ""
         cache = "" if self.cache_share is None else f" · cache {round(100 * self.cache_share)}%"
-        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}%{cache} · {self.cost_label()}{bug}"
+        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
 
     def cost_label(self) -> str:
         """The D-032 rule, formatted by the same `money` /trace uses: "-" before any call, "unknown" when no call is
@@ -417,11 +418,10 @@ class ExoApp(App):
             self.boot_mark("core", "connected")
             try:
                 for m in (await self.client.call(s.ModelsList())).get("models", []):
+                    self.capacities[m.get("route", "")] = int(m.get("context") or 0)
                     if m.get("role") == "main":
                         self.model = self.model or m.get("route", "")
-                        if m.get("context"):
-                            self.window = int(m["context"])
-                            break
+                self.window = self.capacities.get(self.model, 0)
                 self.boot_mark("model", self.model)
                 self.commands = (await self.client.call(s.CommandsList())).get("commands", [])
                 self.catalog = cm.build_catalog(LOCAL_COMMANDS, self.commands)  # the core's list, once per session
@@ -511,6 +511,7 @@ class ExoApp(App):
                 self.intro_started()
             self.turn_t0 = time.monotonic()
             self.model = b.model or self.model
+            self.window = self.capacities.get(self.model, 0)
             self.requested, self.served = self.model, ""  # what this turn asked for; ModelCall says what served
             self.close_cur()
         elif isinstance(b, s.TurnCompleted):
@@ -591,7 +592,7 @@ class ExoApp(App):
             self.note(f"question: {b.text}{opts}  (type your answer)")
         elif isinstance(b, s.UsageUpdated):
             u = b.usage
-            self.ctx_tokens = u.input_tokens + u.cache_read_tokens
+            self.ctx_tokens = u.input_tokens + u.cache_read_tokens + u.cache_write_tokens
             if b.session_total and b.session_total.cost_usd is not None:
                 self.cost = b.session_total.cost_usd
             self.model = self.served or b.model or self.model  # a fallback that served stays visible
@@ -601,6 +602,7 @@ class ExoApp(App):
             self.gstate.provider_error = bool(b.error)
             if b.route:
                 self.model = self.served = b.route  # the route that served, not the one asked for
+                self.window = self.capacities.get(b.route, 0)
             if b.requested:
                 self.requested = b.requested
             if b.usage is not None and (b.usage.input_tokens or b.usage.output_tokens or b.usage.cache_read_tokens
@@ -769,6 +771,7 @@ class ExoApp(App):
         info = got["session"]
         self.seat = self.seat or info.get("seat")
         self.model = info.get("model") or self.model
+        self.window = self.capacities.get(self.model, 0)
         self.thread_label = self.label_of(info)
         self.clear_transcript()
         self.render_history(got.get("messages", []))
@@ -783,6 +786,7 @@ class ExoApp(App):
         got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat, kind=kind))
         self.session = got["session"]["id"]
         self.model = got["session"].get("model") or self.model
+        self.window = self.capacities.get(self.model, 0)
         self.thread_label = self.label_of(got["session"])
         self.clear_transcript()
         if kind == "private":
@@ -1028,13 +1032,17 @@ class ExoApp(App):
         return parts
 
     async def submit(self, text: str) -> None:
-        if self.question and not text.startswith("/"):
+        parts = text[1:].split(maxsplit=1) if text.startswith("/") else []
+        name, args = (parts[0], parts[1] if len(parts) > 1 else "") if parts else ("", "")
+        known = set(LOCAL_COMMANDS) | {c["name"] for c in self.commands}
+        # Only simple command names are eligible for typo help; /etc/hosts and paths are literal text.
+        command = name in known or (bool(re.fullmatch(r"[a-z][a-z-]*", name)) and cm.closest(name, known))
+        if self.question and not command:
             qid, self.question = self.question, None
             self.add(Block(text, "user"))
             await self.post(s.QuestionAnswer(question_id=qid, answer=text))
             return
-        if text.startswith("/"):
-            name, _, args = text[1:].partition(" ")
+        if command:
             await self.slash(name, args.strip())
             return
         shown, send = text, text
@@ -1096,13 +1104,23 @@ class ExoApp(App):
         if not self.busy:
             self.hint_budget = 1
         known = {n for n in LOCAL_COMMANDS} | {c["name"] for c in self.commands}
-        if self.commands and name not in known:  # D-037: a typo gets a suggestion, not a round trip and an error
+        if name not in known:  # D-037: a typo gets a suggestion, not a round trip and an error
             guess = cm.closest(name, known)
             if guess:
                 self.note(f"unknown command /{name}. did you mean /{guess}? It is in the composer: Enter runs it.", "warn")
                 self.composer.text = f"/{guess}" + (f" {args}" if args else "")
                 self.composer.move_cursor(self.composer.document.end)
                 return
+        if args and name in {"exit", "quit", "stop", "unsteer", "restart", "peers", "clear", "cwd",
+                             "usage", "intro", "help", "undo", "compact", "context", "panel"}:
+            self.note(f"usage: /{name}", "warn")
+            return
+        if name == "trace" and args and not args.isdigit():
+            self.note("usage: /trace [count]", "warn")
+            return
+        if name == "findings" and args not in ("", "all", "count", "open", "fixed", "verified", "reopened"):
+            self.note("usage: /findings [state]", "warn")
+            return
         if name in ("exit", "quit"):
             self.exit()
         elif name == "stop":
@@ -1147,6 +1165,9 @@ class ExoApp(App):
             else:
                 self.open_providers()
         elif name == "new":
+            if args not in ("", "private"):
+                self.note("usage: /new [private]", "warn")
+                return
             await self.new_session("private" if args.strip() == "private" else "")
             self.hint("new_thread")
         elif name == "intro":
@@ -1185,10 +1206,17 @@ class ExoApp(App):
         else:  # /context and /compact are core commands too (command.run); the core that holds the agent lock does the work
             if name == "compact":
                 self.note("compacting...")
-            resp = await self.post(s.CommandRun(name=name, args=args, session=self.session))
+            resp = await self.post(s.CommandRun(name=name, args="json" if name == "context" else args,
+                                                session=self.session))
             if resp.ok:
                 out = resp.result.get("output")
                 if out and name == "context":
+                    if isinstance(out, dict) and out.get("schema_version") == 1:
+                        self.ctx_tokens = out["tokens"]["total"]
+                        self.window = int(out.get("capacity") or 0)
+                        self.capacities[out["model"]] = self.window
+                        self.refresh_status()
+                        out = out["text"]
                     self.close_cur()
                     self.add(Block(out if isinstance(out, str) else str(out), "report", head="context " + th.DOT + " next call"))
                 elif out:
@@ -1450,6 +1478,7 @@ class ExoApp(App):
         resp = await self.post(s.ModelsSet(model=ref, session=self.session))
         if resp.ok:
             self.model = ref
+            self.window = self.capacities.get(ref, 0)
             self.refresh_status()
 
     # ------------------------------------------------------------ approvals

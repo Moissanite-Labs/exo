@@ -22,7 +22,8 @@ With `--socket` or `--url` nothing is started; the page says the core is not rea
 the token in the URL fragment, `http://127.0.0.1:7342/#token=...`, and, when run in a terminal, opens that address
 in the browser. A fragment is never sent to a server or written to a server log. The page moves the token to
 `sessionStorage` (this tab only) and takes it out of the address bar. A new launch makes a new token, so open the
-new link after a restart; `--no-open` prints the link without opening it.
+latest complete link after a restart; the bare URL shows instructions rather than a usable client. Tokens are
+not persisted across launches. Opening a new token fragment in the same tab reconnects it with that token; `--no-open` prints the link without opening it.
 
 Every `/api/` route needs the token: the page sends it as `X-Exo-Token` on every fetch (`api()` in `dom.js`) and as
 `?token=` on the two event streams (`stream()` in `dom.js`; a browser EventSource cannot send headers). The Host
@@ -33,6 +34,12 @@ the page shell (`/`, `/static/`) loads without the token. Responses carry `Refer
 The web process answers approvals as the principal: it reads the core's principal credential
 (`run/<socket>.principal.key`) on each request, so it re-joins a core that restarted with a new one. The optional
 ASGI app (`asgi.py`) is gone: it re-exposed the routes with no checks.
+
+The stream resumes through the core’s durable event log when its cursor has fallen outside the web event ring.
+After replay the page refreshes durable messages, session activity, open panels and pending approvals. Composer
+drafts and unfinished streamed output survive that refresh. `/context` uses typed token counts (`command.run`,
+`args="json"`), while the default core command still returns the human-readable report. `/new private` creates a
+private session; malformed known commands show usage. Literal paths such as `/etc/hosts is broken` remain messages.
 
 ## Screens
 
@@ -47,7 +54,8 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   pulses orange while a turn runs and is hollow when idle.
 - **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
   that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
-  against a nominal 200k window, from `usage.updated`), cache share of that call, session cost. While busy a
+  against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
+  `/context` reports), cache share of that call, session cost. While busy a
   packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
 - **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed;
   click to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded ·
