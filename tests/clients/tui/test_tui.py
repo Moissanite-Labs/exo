@@ -617,3 +617,45 @@ def test_copy_all_and_last_include_unmounted_history(tmp_path):
         assert got[-1].startswith("answer 1")
 
     run(tmp_path, sc)
+
+
+def test_literal_paths_and_known_command_usage_do_not_collide(tmp_path):
+    async def sc(app, pilot, client, eng):
+        await app.submit("/etc/hosts is broken")
+        await until(lambda: not app.busy and not eng._tasks, pilot)
+        assert any(isinstance(b, s.TurnSend) and b.text == "/etc/hosts is broken" for b in app.sent)
+        assert not any(isinstance(b, s.CommandRun) and b.name == "etc/hosts" for b in app.sent)
+        for line in ("/context/file is broken", "/layout/file is broken", "/new/file is broken", "/frobnicate is literal"):
+            await app.submit(line)
+            await until(lambda: not eng._tasks, pilot)
+            assert any(isinstance(b, s.TurnSend) and b.text == line for b in app.sent)
+        old = app.session
+        await app.submit("/new private extra")
+        await pilot.pause()
+        assert app.session == old and "usage: /new" in app.transcript_text()
+        await app.submit("/context broken")
+        await pilot.pause()
+        assert "usage: /context" in app.transcript_text()
+        await app.submit("/contex")
+        await pilot.pause()
+        assert app.composer.text == "/context" and "did you mean /context" in app.transcript_text()
+        await app.submit("/new private")
+        assert app.session != old and eng.store.get_session(app.session).kind == "private"
+    run(tmp_path, sc)
+
+
+def test_context_capacity_and_fallback_model_are_typed(tmp_path):
+    async def sc(app, pilot, client, eng):
+        assert app.window == 0 and "capacity unknown" in app.status_text()
+        eng.router.models["fake:x"] = {"context": 8192}
+        await app.submit("hello")
+        await until(lambda: not app.busy and "friend" in app.transcript_text(), pilot)
+        await app.submit("/context")
+        assert app.window == 8192 and app.ctx_tokens > 0
+        assert any(isinstance(b, s.CommandRun) and b.name == "context" and b.args == "json" for b in app.sent)
+        app.capacities["fake:small"] = 4096
+        app.handle(s.Event.of(s.ModelCall(route="fake:small", requested="fake:x"), seq=100, session=app.session))
+        assert app.window == 4096 and app.model == "fake:small"
+        app.handle(s.Event.of(s.ModelCall(route="fake:unknown", requested="fake:x"), seq=101, session=app.session))
+        assert app.window == 0 and "capacity unknown" in app.status_text()
+    run(tmp_path, sc)

@@ -68,3 +68,24 @@ def test_context_refuses_without_a_thread(tmp_path):
         assert not r.ok and r.error.code == "bad_request"
         await eng.close()
     asyncio.run(go())
+
+
+def test_structured_context_capacity_is_model_specific_and_unknown_stays_unknown(tmp_path):
+    async def go():
+        eng = _engine(tmp_path / "home")
+        d = Dispatcher(eng)
+        eng.router.models["fake:x"] = {"context": 8192}
+        sid = (await d.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
+        await _say(d, eng, sid, "hello")
+        before = eng.store.last_seq(sid)
+        r = (await _cmd(d, "context", sid, args="json")).result["output"]
+        assert r["schema_version"] == 1 and r["model"] == "fake:x" and r["capacity"] == 8192
+        assert r["tokens"]["total"] == sum(r["tokens"][k] for k in ("system", "tree", "notes", "tail"))
+        assert r["text"] == (await _cmd(d, "context", sid)).result["output"]
+        assert eng.store.last_seq(sid) == before
+        eng.router.models.pop("fake:x")
+        assert (await _cmd(d, "context", sid, args="json")).result["output"]["capacity"] is None
+        bad = await _cmd(d, "context", sid, args="broken")
+        assert not bad.ok and "usage" in bad.error.message
+        await eng.close()
+    asyncio.run(go())

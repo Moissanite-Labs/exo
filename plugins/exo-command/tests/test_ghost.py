@@ -157,7 +157,7 @@ def test_bus_reopens_a_closed_stream_from_the_last_seq(tmp_path):
     (tmp_path / "bus.mjs").write_text(text("bus.js").replace("./dom.js", "./dom.mjs"))
     (tmp_path / "t.mjs").write_text('''
 const made = [];
-class ES { constructor(url) { this.url = url; this.readyState = 1; made.push(this); } close() { this.readyState = 2; } }
+class ES { addEventListener(type, fn) { this[type] = fn; } constructor(url) { this.url = url; this.readyState = 1; made.push(this); } close() { this.readyState = 2; } }
 globalThis.EventSource = ES;
 globalThis.sessionStorage = { getItem: () => "tok" };
 globalThis.fetch = async (path) => ({ ok: true, status: 200, json: async () => (path.includes("panels") ? { panels: [], seq: 5 } : { ok: true }) });
