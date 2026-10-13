@@ -6,10 +6,8 @@ import asyncio
 import re
 from pathlib import Path
 
-import pytest
 from test_tui import FAKE, FakeServerClient, make_engine, send, until
 
-import exo_tui
 from exo.config import Config
 from exo.core.engine import TUTORIAL_LINE, CoreEngine
 from exo.protocol import schema as s

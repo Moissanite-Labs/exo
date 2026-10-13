@@ -24,9 +24,9 @@ import re
 import shutil
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from . import crypto
 from .consolidate import event_ref

@@ -8,7 +8,7 @@ from gate_fixtures import PLUGIN
 from exo import crypto
 from exo.ledger import Ledger
 from exo_gate import hook
-from exo_gate.hook import Gate, LedgerSink, resolve_settings
+from exo_gate.hook import resolve_settings
 
 FOOT = "> Posted with agent help, reviewed by a person."
 

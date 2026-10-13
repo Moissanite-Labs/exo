@@ -91,7 +91,6 @@ def test_key_never_in_status_repr_or_listing(monkeypatch):
 
 def test_key_never_in_error_text(monkeypatch):
     import asyncio
-    from exo.core.models.fake import FakeProvider
     from exo.core.types import Message
     patch(monkeypatch, {"OPENCODE_GO_API_KEY": KEY})
     r = Router(env={}, key_sources=True, roles={"main": ["opencode-go:kimi-k3"]})

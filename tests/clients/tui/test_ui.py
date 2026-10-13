@@ -7,16 +7,15 @@ import re
 from pathlib import Path
 
 import pytest
-from exo.core.engine import CoreEngine
 from exo.core.types import ToolCall
 from exo.protocol import schema as s
 from exo_tui import theme as th
 from exo_tui.app import ExoApp
 from exo_tui.boot import BootScreen
-from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, PromptMark, StatusStrip,
+from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, StatusStrip,
                              ToolBlock, Welcome)
 from rich.console import Console
-from test_tui import FAKE, FakeServerClient, make_engine, run, send, until
+from test_tui import FakeServerClient, make_engine, run, send, until
 
 SITE_CSS = Path(__file__).resolve().parents[3] / "site" / "assets" / "style.css"
 
@@ -383,7 +382,7 @@ def test_hero_hidden_on_a_short_terminal(tmp_path):
 
     async def main():
         app = ExoApp(FakeServerClient(eng), seat="tester")
-        async with app.run_test(size=(100, 24)) as pilot:
+        async with app.run_test(size=(100, 24)) as _pilot:
             await asyncio.wait_for(app.ready.wait(), 5)
             assert not app.query("#hero") and app.query("#welcome")
 

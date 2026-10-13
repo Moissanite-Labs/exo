@@ -9,9 +9,8 @@ from pathlib import Path
 import pytest
 
 from exo.core.engine import CoreEngine
-from exo.core.models.fake import FakeProvider, tool_turn
+from exo.core.models.fake import FakeProvider
 from exo.core.seats import Seat
-from exo.core.types import ToolSpec
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher, HttpServer
 from exo_bus_hermes import peers as hp
