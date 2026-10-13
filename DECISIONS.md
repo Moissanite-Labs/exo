@@ -1049,8 +1049,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Docs:** `docs/DEVELOPER-GUIDE.md` "Deploying the site".
 
 ## D-049 (2026-10-12) Brand: the lattice egg and the X/V mark
-- **Status:** Proposed 2026-10-12. Nothing on the live site changes until it is accepted: the new egg shows on the
-  staging host only (or with `?egg` on the front page), and the brand page is `site/brand/` (noindex).
+- **Status:** Accepted 2026-10-13 (the principal: "a work of beauty"). Proposed 2026-10-12, previewed on staging
+  only. On acceptance the lattice egg became the front-page default on every host (`?egg=off` keeps the old orb as an
+  escape hatch). The favicon, nav mark and og image still wait for their own change.
 - **Why (A, verbatim):** "what if in the logo and branding we made the top half of the x in exo orange so it also looks
   like a v and center our branding around a continually evolving harness, ecosystem, etc." And: "i want the logo for exo
   and all this to be based on my favourite geometric figure since childhood ... an alive evolving pulsing matrix of
@@ -1169,7 +1170,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   isolated tools with a credential broker, durable steerable work and shared budget admission are exploring directions.
   Application authority checks are not described as OS isolation.
 - **Site:** preserve the latest staging design, keep mobile page navigation reachable, provide section jump links,
-  and show status in words as well as color. The lattice egg preview remains staging-only under D-049.
+  and show status in words as well as color. The lattice egg was a staging-only preview under D-049 until it was accepted on 2026-10-13.
 - **Deployment scope:** this instruction authorizes staging updates. Deploy to `exo-site-staging` from a git-free copy,
   preserving staging's robots exclusion and noindex header. Production promotion remains separate under D-047.
 - **Docs:** `docs/SITE-STATUS.md`; `docs/DEVELOPER-GUIDE.md` "Deploying the site"; `site/roadmap/` and the landing and

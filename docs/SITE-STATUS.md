@@ -47,6 +47,6 @@ dependency and no code or branding was imported.
 
 The long roadmap has section jump links. Phone navigation remains accessible in a scrollable page row,
 anchor targets clear the sticky header, and the decorative floating egg is hidden on narrow screens to
-keep text unobscured. The staging egg asset and brand link resolve from the shared script location, so
-client subpages use the same site-level renderer. On narrow screens, the egg preview caption flows below
+keep text unobscured. The egg asset and brand link resolve from the shared script location, so
+client subpages use the same site-level renderer. On narrow screens, the egg caption flows below
 the hero content and wraps within its width; it keeps its absolute placement on desktop.

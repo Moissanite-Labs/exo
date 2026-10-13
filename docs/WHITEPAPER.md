@@ -661,14 +661,13 @@ typed-decisions set without fine-tuning. A gate cannot lean on that.
 
 So the default `decision` route is now Jev, then local Laya, then `aux`, then `main`. Jev is a hosted
 service, so it is used only when the user has set a TypeSafe key. Without one, the role falls through to
-Laya, and without Laya to the chat models, which answer the same typed question as JSON. Perplexity's
-pplx-decider and OpenAI's Decisions API were weighed too, and are not wired in. A hosted decision model sees the
+Laya, and without Laya to the chat models, which answer the same typed question as JSON. A hosted decision model sees the
 state it is asked about.
 
 Laya can take the default back. Exo plans to ship a fine-tuned version, "exo-decide", trained on a generic
 seed set and, per user, on that user's own verdicts. It becomes the default only if it beats Jev on a
 held-out set.
-Licence terms shape the data: TypeSafe's and OpenAI's terms forbid training other models on their outputs,
+Licence terms shape the data: TypeSafe's terms forbid training other models on its outputs,
 so those outputs are never training labels. Weights stay private until they beat base Laya and Jev on a
 held-out set. None of this is measured yet.
 
@@ -1823,7 +1822,7 @@ why the ledger is kept in a form that could train a per-person adapter later.
 **DSPy.** For showing that prompts can be searched and improved against a metric. Exo's climb does the same
 with one readable change at a time.
 
-**Decision and embedding models.** TypeSafe (Jev), Convai Innovations (Laya), Perplexity, OpenAI, Google
+**Decision and embedding models.** TypeSafe (Jev), Convai Innovations (Laya), Google
 (EmbeddingGemma) and the Qwen team, whose public documentation informed sections 14 and 21.
 
 Exo's own earlier knowledge-base, ingest and team-memory systems contributed the store format, the router

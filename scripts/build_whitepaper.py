@@ -527,7 +527,8 @@ PAGE = """<!doctype html>
       <span>EXO</span>
     </a>
     <span class="wp-bar__doc">Whitepaper v0.2</span>
-    <a class="wp-bar__back" href="../">&larr; Back to the site</a>
+    <a class="wp-bar__back" href="../roadmap/">Roadmap</a>
+    <a class="wp-bar__back wp-bar__home" href="../">&larr; Back to the site</a>
   </div>
 </header>
 

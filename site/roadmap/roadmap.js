@@ -37,7 +37,18 @@
       arcs.push(el("path", { "class": "rm-fly__arc", d: "M" + p0[0].toFixed(1) + "," + p0[1].toFixed(1) + " A" + R + "," + R + " 0 0 1 " + p1[0].toFixed(1) + "," + p1[1].toFixed(1), "marker-end": "url(#arr)" }, arcsG));
     }
     for (i = 0; i < N; i++) {
-      var p = pt(-90 + i * 60), g = el("g", { "class": "rm-fly__node", transform: "translate(" + p[0].toFixed(1) + "," + p[1].toFixed(1) + ")" }, nodesG);
+      var p = pt(-90 + i * 60), href = items[i] && items[i].querySelector("h3 a");
+      var host = nodesG;
+      if (href) {
+        host = el("a", { "class": "rm-fly__a", href: href.getAttribute("href"), "aria-label": names[i] + ": read how it works" }, nodesG);
+        (function (j) {
+          host.addEventListener("mouseenter", function () { hover = j; light(j); });
+          host.addEventListener("mouseleave", function () { hover = -1; });
+          host.addEventListener("focus", function () { hover = j; light(j); });
+          host.addEventListener("blur", function () { hover = -1; });
+        })(i);
+      }
+      var g = el("g", { "class": "rm-fly__node", transform: "translate(" + p[0].toFixed(1) + "," + p[1].toFixed(1) + ")" }, host);
       el("rect", { x: -78, y: -30, width: 156, height: 60 }, g);
       var t1 = el("text", { "class": "rm-fly__nn", x: 0, y: -8, "text-anchor": "middle" }, g); t1.textContent = "0" + (i + 1);
       var t2 = el("text", { x: 0, y: 17, "text-anchor": "middle" }, g); t2.textContent = names[i];
@@ -52,6 +63,8 @@
     items.forEach(function (li, j) {
       li.addEventListener("mouseenter", function () { hover = j; light(j); });
       li.addEventListener("mouseleave", function () { hover = -1; });
+      li.addEventListener("focusin", function () { hover = j; light(j); });
+      li.addEventListener("focusout", function () { hover = -1; });
     });
     if (reduce) { light(0); packet.style.display = "none"; arcs.forEach(function (a) { a.classList.add("is-on"); }); }
     else {
