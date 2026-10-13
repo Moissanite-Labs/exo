@@ -943,7 +943,7 @@ class CoreEngine:
         r = tree.report(session, await self.loop.base_system())
         assert session is not None  # _agent_ctx has validated the thread
         info = self._info(session)
-        model = info.model or self.loop.model
+        model = info.model or self.loop.model or ""
         capacity = self.router.models.get(model, {}).get("context")
         return {**r, "schema_version": 1, "model": model,
                 "capacity": capacity if isinstance(capacity, int) and capacity > 0 else None,

@@ -85,6 +85,10 @@ def test_structured_context_capacity_is_model_specific_and_unknown_stays_unknown
         assert eng.store.last_seq(sid) == before
         eng.router.models.pop("fake:x")
         assert (await _cmd(d, "context", sid, args="json")).result["output"]["capacity"] is None
+        eng.store.update_session(sid, model=None)
+        eng.loop.model = None
+        unknown = (await _cmd(d, "context", sid, args="json")).result["output"]
+        assert unknown["model"] == "" and unknown["capacity"] is None
         bad = await _cmd(d, "context", sid, args="broken")
         assert not bad.ok and "usage" in bad.error.message
         await eng.close()
