@@ -50,14 +50,17 @@ with `[session] cwd` in its seat.toml), `/restart` reopens in a new terminal tab
 ## While the agent works
 - Type while it is running and your message steers it: it lands at the next tool round, and the agent
   changes course. Nothing is lost and you do not need to wait.
-- Press ctrl+c, or type `/stop`, to stop the turn. Esc never stops it: it only closes a menu, clears a tip or leaves a panel.
-- A message typed while a turn runs is a steer. Until it lands you can pull it back: press Up in an empty box or type `/unsteer`.
+- Press ctrl+c, or type `/stop`, to stop a running turn. With selected text ctrl+c copies it; while idle it shows the quit hint. Esc never stops a turn: it only closes a menu, clears a tip or leaves a panel.
+- A message typed while a turn runs is a steer. Until it lands you can pull it back: press Up in an empty box to return it to the composer for editing, or type `/unsteer`.
+- Press ctrl+f to focus a pending approval card so you can answer it without losing the composer draft. Press ctrl+g to open or close the big composer for a longer message.
 - `@path` attaches a file, `!command` runs a shell command through the agent, ctrl+p opens a palette of
   commands, ctrl+o expands tool output.
 - Typing `/` opens a menu of every command with its arguments; Tab completes. `/model `, `/resume ` and `@` list
-  models, threads and files. A mistyped command gets "did you mean". Up arrow recalls earlier lines, right arrow
-  takes the dim suggestion. `/tutorial off` also silences the one-line next-step suggestion.
+  models, threads and files. A mistyped command gets "did you mean". At the first line, Up recalls earlier
+  lines; in an empty composer it first pulls a queued steer back for editing. Right arrow takes the dim
+  suggestion. `/tutorial off` also silences the one-line next-step suggestion.
 - `ctrl+y`, `ctrl+e`, `ctrl+r` accept, edit or reject the last answer, which Exo learns from.
+- F6 loads earlier transcript messages when the older history is not mounted yet.
 
 ## The approval gate
 Tools have a risk: low, medium or high. Reading is low. Running commands, editing and anything that leaves
