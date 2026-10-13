@@ -114,6 +114,7 @@ class ExoApp(App):
     #left.inverse #cmenu { border-top: none; border-bottom: solid $line; }
     #cmenu { height: auto; max-height: 10; background: $background; border-top: solid $line; padding: 0 2; }
     #status { height: 2; padding: 0 2; border-top: solid $line; background: $surface; }
+    #status.inverse { border-top: none; border-bottom: solid $line; }
     #approval { height: auto; border-left: outer $accent; background: $surface; padding: 0 1; margin: 0 2 1 2; }
     #hero { margin: 0; }
     #approval Input { border: none; background: $panel; height: 1; padding: 0 1; }
@@ -1563,6 +1564,13 @@ class ExoApp(App):
         if self.card is not None:  # the approval card stays right above the activity line (its own code mounts it so)
             left.move_child(self.card, before=self.query_one("#activity"))
         left.set_class(self.inverse, "inverse")
+        main = self.query_one("#main")  # the status strip goes with the input: top in inverse, bottom in classic
+        screen = main.screen  # the strip and #main are both children of the app's own screen
+        if self.inverse:
+            screen.move_child(self.strip, before=main)
+        else:
+            screen.move_child(self.strip, after=main)
+        self.strip.set_class(self.inverse, "inverse")
 
     def apply_layout(self, name: str, save: bool = True) -> None:
         if name not in LAYOUTS:

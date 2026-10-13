@@ -87,10 +87,10 @@ one note says to type `/providers`.
   it), Esc to close with the draft kept (the menu and ghost text close first; Esc never stops a turn), `ctrl+l` line numbers,
   `ctrl+t` or `/compose edit` for `$VISUAL`/`$EDITOR`, `/compose task` for the four headings. A long paste stays whole.
   Slash, argument and `@` completion work as in the one-line composer; up and down move the caret and do not recall history.
-- **Inverse layout** (`docs/media/tui-11-inverse.png`): input under the brand bar, then the menu, approval card and activity
-  line, then the transcript with the newest item first. Text inside one message still reads top to bottom. A thread opens on
-  its newest item at the top. `/layout classic` restores the usual order (`docs/media/tui-12-classic-bottom.png`: a long
-  thread opens at the bottom). The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
+- **Inverse layout** (`docs/media/tui-11-inverse.png`): the status strip under the brand bar, then the input, the menu,
+  approval card and activity line, then the transcript with the newest item first. Text inside one message still reads top to bottom. A thread opens on
+  its newest item at the top. `/layout classic` restores the usual order with the status strip at the bottom
+  (`docs/media/tui-12-classic-bottom.png`: a long thread opens at the bottom). `/layout` moves the strip live. The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
   Inverse is the default only for the experiment: set `DEFAULT_LAYOUT = "classic"` in `exo_tui/prefs.py` to flip it back.
 
 ## Switches
