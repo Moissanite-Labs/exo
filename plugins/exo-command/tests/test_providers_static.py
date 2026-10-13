@@ -1,8 +1,13 @@
 """Static checks on the web client's provider setup code: a key must never reach storage, logs or the URL."""
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 STATIC = Path(__file__).resolve().parent.parent / "exo_command" / "static"
 
@@ -67,3 +72,34 @@ def test_token_goes_with_every_request():
     assert '"X-Exo-Token": token()' in api and "startsWith(" not in api
     stream = js[js.index("export function stream("):js.index("export async function api(")]
     assert "new EventSource(" in stream and '"token="' in stream
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="Node is needed to execute the browser save handler")
+@pytest.mark.parametrize("source,warning,kind", [
+    ("file", "", "ok"),
+    ("keychain", "The keychain key still wins; the saved file key is shadowed. Update with --store keychain.", "bad"),
+])
+def test_web_save_handler_displays_effective_source_and_warning(source, warning, kind):
+    script = r'''
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[1], "utf8");
+const func = src.slice(src.indexOf("async function save("), src.indexOf("async function test("));
+const data = JSON.parse(fs.readFileSync(0, "utf8"));
+const results = [], input = { value: "synthetic-browser-test-key" };
+const context = { api: async () => data, show: (...args) => results.push(args), load: () => {}, alive: false };
+vm.createContext(context);
+vm.runInContext(func + "; this.save = save;", context);
+context.save({provider: "openai"}, input).then(() => {
+  process.stdout.write(JSON.stringify({results, input: input.value}));
+}).catch(() => process.exit(1));
+'''
+    data = {"stored_in": "file", "effective_source": source, "shadowed_by_env": False,
+            "warning": warning, "var": "OPENAI_API_KEY", "core_reloaded": True}
+    proc = subprocess.run([shutil.which("node"), "-e", script, str(STATIC / "providers.js")],
+                          input=json.dumps(data), capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 0, proc.stderr
+    rendered = json.loads(proc.stdout)
+    name, message, css = rendered["results"][0]
+    assert name == "openai" and "Stored in file" in message and f"Effective source: {source}" in message
+    assert warning in message and css == kind and rendered["input"] == ""
+    assert "synthetic-browser-test-key" not in proc.stdout

@@ -171,6 +171,7 @@ def test_add_test_remove_and_default_with_every_check_passing(caplog, capsys):
         st, data, text = await raw(port, "POST", "/api/providers/openai/key", h, {"key": FAKE, "store": "file"})
         texts.append(text)
         assert st == 200 and data["stored_in"] == "file" and data["core_reloaded"] is True
+        assert data["effective_source"] == "file" and data["shadowed_by"] is None and not data["warning"]
         assert f"OPENAI_API_KEY={FAKE}" in keys.keys_file_path().read_text()
         assert stat.S_IMODE(keys.keys_file_path().stat().st_mode) == 0o600
         assert keys.redact_secrets(FAKE) == "[redacted]"  # learned at once in the web process
@@ -204,6 +205,23 @@ def test_add_test_remove_and_default_with_every_check_passing(caplog, capsys):
     assert [c.args for c in reloads] == ["reload openai", "reload openai"]
     sets = [c for c in src.calls if isinstance(c, (s.ModelsSet, s.ConfigSet))]
     assert sets[0].model == "openai:gpt-5" and sets[1].key == "models.roles.main"
+
+
+def test_file_save_reports_shadowing_through_web_response(monkeypatch):
+    old = "older-web-test-key-123456"
+    monkeypatch.setattr(keys, "keychain_get", lambda name: old if name == "OPENAI_API_KEY" else None)
+
+    async def go(web, port):
+        status, data, text = await raw(port, "POST", "/api/providers/openai/key", ok_headers(port),
+                                       {"key": FAKE, "store": "file"})
+        assert status == 200 and data["ok"] and data["core_reloaded"]
+        assert data["stored_in"] == "file" and data["effective_source"] == data["shadowed_by"] == "keychain"
+        assert "remove only that item" in data["warning"] and "--store keychain" in data["warning"]
+        assert FAKE not in text and old not in text
+        assert keys.lookup_key("OPENAI_API_KEY", {}) == old
+        assert keys.file_get("OPENAI_API_KEY") == FAKE
+
+    serve(go)
 
 
 def test_default_falls_back_to_config_when_the_core_is_down():
