@@ -24,6 +24,8 @@
 <script src="../assets/main.js" defer></script>
 <script src="../brand/egg.js" defer></script>
 <script src="roadmap.js" defer></script>
+<script src="../brand/egg-feed.js" defer></script>
+<script src="../assets/activity.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -69,6 +71,15 @@
       <div><dt>Exploring</dt><dd><span class="led rm-led--exploring"></span>An idea under test</dd></div>
     </dl>
     <p class="rm-hero__note">The figure is the Exo egg, drawn from the incentre lattice. It grows as you read: by the end of the page it reaches its fourth dimension.</p>
+    <aside class="egg-legend" aria-label="What the egg shows" hidden>
+      <p class="egg-legend__k">The egg reacts to project activity <span class="egg-legend__demo" hidden>Demo activity: simulated, not real</span></p>
+      <ul>
+        <li><i class="egg-pips" style="--n:1"></i><b>issue</b><span>level 1 · a small, quick pulse</span></li>
+        <li><i class="egg-pips" style="--n:2"></i><b>pull request</b><span>level 2 · a stronger pulse and a bright packet</span></li>
+        <li><i class="egg-pips" style="--n:3"></i><b>merge</b><span>level 3 · a flash through the whole lattice</span></li>
+      </ul>
+      <p class="egg-legend__live" aria-live="polite"></p>
+    </aside>
   </div>
 </section>
 
@@ -167,9 +178,9 @@
       <div class="rm-tally__bar"></div>
       <ul class="rm-tally__key">
         <li><span class="led led--on"></span>Built <b data-count="built">10</b></li>
-        <li><span class="led led--next"></span>In progress <b data-count="progress">1</b></li>
+        <li><span class="led led--next"></span>In progress <b data-count="progress">2</b></li>
         <li><span class="led rm-led--designed"></span>Designed <b data-count="designed">2</b></li>
-        <li><span class="led rm-led--exploring"></span>Exploring <b data-count="exploring">16</b></li>
+        <li><span class="led rm-led--exploring"></span>Exploring <b data-count="exploring">20</b></li>
       </ul>
     </div>
 
@@ -190,6 +201,8 @@
         </div>
         <div class="rm-road__cell" role="cell" data-col="Next">
           <p class="rm-chip" data-s="progress"><a class="rm-chip__a" href="#card-exo-os">Exo OS, phase 0 design</a><span class="rm-chip__status">In progress</span></p>
+          <p class="rm-chip" data-s="exploring"><a class="rm-chip__a" href="#act-events">Event-driven activation</a><span class="rm-chip__status">Exploring</span></p>
+          <p class="rm-chip" data-s="exploring"><a class="rm-chip__a" href="#act-runs">Runs dashboard and root-cause analysis</a><span class="rm-chip__status">Exploring</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon">
           <p class="rm-chip" data-s="exploring"><a class="rm-chip__a" href="../#companion">A companion device you carry</a><span class="rm-chip__status">Exploring</span></p>
@@ -205,6 +218,7 @@
         </div>
         <div class="rm-road__cell" role="cell" data-col="Next">
           <p class="rm-chip" data-s="exploring"><a class="rm-chip__a" href="#sequence">Browser workflow polish</a><span class="rm-chip__status">Exploring</span></p>
+          <p class="rm-chip" data-s="progress"><a class="rm-chip__a" href="#act-egg">The live egg</a><span class="rm-chip__status">In progress</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon">
           <p class="rm-chip" data-s="exploring"><a class="rm-chip__a" href="../app/#overview">Electron desktop, after core and browser</a><span class="rm-chip__status">Exploring</span></p>
@@ -240,6 +254,7 @@
         <div class="rm-road__cell" role="cell" data-col="Next">
           <p class="rm-chip" data-s="built"><a class="rm-chip__a" href="../brand/">The lattice brand</a><span class="rm-chip__status">Built</span></p>
           <p class="rm-chip" data-s="designed"><a class="rm-chip__a" href="#exopet">Exopet and the community hatch</a><span class="rm-chip__status">Designed</span></p>
+          <p class="rm-chip" data-s="exploring"><a class="rm-chip__a" href="#exopet">Evolution mechanics, revised</a><span class="rm-chip__status">Exploring</span></p>
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon"></div>
       </div>
@@ -253,6 +268,7 @@
         </div>
         <div class="rm-road__cell" role="cell" data-col="Horizon">
           <p class="rm-chip" data-s="exploring"><a class="rm-chip__a" href="#hub">The collaboration hub</a><span class="rm-chip__status">Exploring</span></p>
+          <p class="rm-chip" data-s="exploring"><a class="rm-chip__a" href="#act-sdk">An Exo SDK for third-party agents</a><span class="rm-chip__status">Exploring</span></p>
         </div>
       </div>
       <div class="rm-road__row" role="row">
@@ -295,6 +311,78 @@
       <p>AIOS provides a public reference for event-driven steps, asynchronous tools, durable sessions and sandbox boundaries. We are studying those ideas against Exo's local core and signed record. It is a source reference, with no imported dependency.</p>
       <p class="rm-source__secondary">Also: <a href="https://github.com/eumemic/ai-legion" rel="noopener">eumemic / AI Legion</a>, an earlier public platform for cooperating autonomous agents. Both projects are attributed as references; their code and branding are not copied here.</p>
     </aside>
+  </div>
+</section>
+
+<!-- RESEARCH: EVENTS, RUNS, SDK, LIVE EGG -->
+<section class="section section--alt" id="activation" aria-labelledby="act-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">Research / Events, runs and a live egg</p>
+      <h2 id="act-t">Exo acts when something happens, not only when you type.</h2>
+      <p class="sec-lede">Today Exo works when you give it a turn. These four directions let it react to the world, show you how its runs went, let others build on it, and let the egg on this site show the project's pulse. One is being built; the rest are ideas under test. <span class="rm-badge" data-s="exploring">Exploring</span> <span class="rm-badge" data-s="progress">The live egg is in progress</span></p>
+    </header>
+    <div class="grid grid--2 rm-research rm-acts">
+      <article class="card reveal" id="act-events">
+        <p class="card__k">01 / Event-driven activation</p>
+        <h3>Something happens. Exo notices.</h3>
+        <svg class="rm-mini" viewBox="0 0 520 150" role="img" aria-labelledby="ev-t">
+          <title id="ev-t">Events such as a file, mail, a webhook or a system event enter Exo. Data is masked on your machine, the model sees only masked data, and the gate asks before anything leaves.</title>
+          <g class="rm-mini__t" text-anchor="end"><text x="98" y="28">a file lands</text><text x="98" y="58">mail arrives</text><text x="98" y="88">a webhook fires</text><text x="98" y="118">a system event</text></g>
+          <g class="rm-mini__l"><path d="M104 24h40M104 54h40M104 84h40M104 114h40"/><path d="M144 24v90"/><path d="M144 69h26" class="rm-mini__a"/></g>
+          <rect x="170" y="49" width="80" height="40" class="rm-mini__b"/><text x="210" y="73" class="rm-mini__c">mask</text>
+          <path d="M250 69h24" class="rm-mini__a"/>
+          <rect x="274" y="49" width="80" height="40" class="rm-mini__b"/><text x="314" y="73" class="rm-mini__c">model</text>
+          <path d="M354 69h24" class="rm-mini__a"/>
+          <rect x="378" y="49" width="70" height="40" class="rm-mini__b rm-mini__hot"/><text x="413" y="73" class="rm-mini__c">gate</text>
+          <path d="M448 69h26" class="rm-mini__a"/><text x="478" y="73" class="rm-mini__t" style="text-anchor:start">act</text>
+          <path d="M160 20v100M160 20" class="rm-mini__d"/><text x="170" y="138" class="rm-mini__t">stays here</text>
+          <path d="M366 20v100" class="rm-mini__d"/><text x="376" y="138" class="rm-mini__t">asks first</text>
+        </svg>
+        <p>Exo can start work when a file lands, mail arrives, a webhook fires or an Exo OS system event occurs. It does not only act when you type. It stays local first: data is masked before any model sees it, and the approval gate still asks before anything leaves the machine. An event is only a reason to start; it grants no new authority.</p>
+        <p class="rm-mini__credit">Inspired by Railtown AI's idea of building, feeding and observing an agent. See the <a href="#refs">references</a>.</p>
+      </article>
+      <article class="card reveal" id="act-runs">
+        <p class="card__k">02 / Runs dashboard and root-cause analysis</p>
+        <h3>See every run. Learn why one failed.</h3>
+        <svg class="rm-mini" viewBox="0 0 520 150" role="img" aria-labelledby="rn-t">
+          <title id="rn-t">A row of bars for agent runs, one marked as failed. An arrow leads from the failure to a root cause, then to an issue, then to a pull request.</title>
+          <g class="rm-mini__l"><path d="M10 120h230"/></g>
+          <g class="rm-mini__bars"><rect x="16" y="70" width="14" height="50"/><rect x="38" y="52" width="14" height="68"/><rect x="60" y="64" width="14" height="56"/><rect x="82" y="40" width="14" height="80"/><rect x="104" y="58" width="14" height="62"/><rect x="126" y="86" width="14" height="34" class="rm-mini__hot"/><rect x="148" y="50" width="14" height="70"/><rect x="170" y="44" width="14" height="76"/><rect x="192" y="60" width="14" height="60"/><rect x="214" y="48" width="14" height="72"/></g>
+          <text x="133" y="140" class="rm-mini__c" text-anchor="middle">failed run</text>
+          <path d="M250 86h22" class="rm-mini__a"/>
+          <rect x="274" y="66" width="70" height="40" class="rm-mini__b"/><text x="309" y="90" class="rm-mini__c">cause</text>
+          <path d="M344 86h18" class="rm-mini__a"/>
+          <rect x="364" y="66" width="62" height="40" class="rm-mini__b"/><text x="395" y="90" class="rm-mini__c">issue</text>
+          <path d="M426 86h18" class="rm-mini__a"/>
+          <rect x="446" y="66" width="62" height="40" class="rm-mini__b rm-mini__hot"/><text x="477" y="90" class="rm-mini__c">PR</text>
+        </svg>
+        <p>A runs dashboard lists each agent run with its outcome, cost and time. When a run fails, an automatic analysis traces it to a likely root cause, the first thing that went wrong. Findings feed the loop from the flywheel: a finding becomes an issue, and the issue becomes a pull request that a person reviews.</p>
+      </article>
+      <article class="card reveal" id="act-sdk">
+        <p class="card__k">03 / An Exo SDK</p>
+        <h3>Build your own agent on Exo.</h3>
+        <svg class="rm-mini" viewBox="0 0 520 150" role="img" aria-labelledby="sd-t">
+          <title id="sd-t">Three third-party agents plug into the Exo core, which provides the gate, the memory and the signed record.</title>
+          <g class="rm-mini__b"><rect x="12" y="14" width="130" height="34"/><rect x="12" y="58" width="130" height="34"/><rect x="12" y="102" width="130" height="34"/></g>
+          <g class="rm-mini__c"><text x="77" y="36" text-anchor="middle">your agent</text><text x="77" y="80" text-anchor="middle">a team's agent</text><text x="77" y="124" text-anchor="middle">a tool's agent</text></g>
+          <path d="M142 31h60M142 75h60M142 119h60" class="rm-mini__a"/>
+          <rect x="202" y="10" width="306" height="130" class="rm-mini__b rm-mini__hot"/>
+          <text x="355" y="34" class="rm-mini__c" text-anchor="middle">Exo core</text>
+          <g class="rm-mini__t" text-anchor="middle"><text x="265" y="79">gate</text><text x="355" y="79">memory</text><text x="445" y="79">ledger</text></g>
+          <g class="rm-mini__l"><rect x="222" y="56" width="86" height="34"/><rect x="312" y="56" width="86" height="34"/><rect x="402" y="56" width="86" height="34"/></g>
+        </svg>
+        <p>A software development kit, or SDK, is a set of tools and rules for building on top of something. An Exo SDK would let third parties write agents that run on Exo and use its gate, its memory and its signed record, instead of rebuilding them. The hard part is keeping the gate honest for code Exo did not write.</p>
+      </article>
+      <article class="card reveal" id="act-egg">
+        <p class="card__k">04 / The live egg <span class="rm-badge" data-s="progress">In progress</span></p>
+        <h3>The egg on this site feels the project.</h3>
+        <div class="rm-mini rm-mini--egg"><canvas data-exo-egg data-stage="2" data-activity="0.45" data-seed="21" aria-hidden="true"></canvas>
+          <ol class="rm-mini__key"><li><b>issue</b> a small pulse</li><li><b>pull request</b> a stronger pulse and a travelling packet</li><li><b>merge</b> a flash through the whole lattice</li></ol></div>
+        <p>The egg reacts to what happens in the project. An issue is a small, quick pulse, a pull request is stronger and sends a bright packet along the edges, and a merge makes the whole lattice flash and the heart beat faster for a few seconds. With reduced motion turned on, there is no movement, only a brief highlight. Until the real feed exists, staging runs a demo that says so on the page. Try <code>?feed=demo</code> on any page.</p>
+      </article>
+    </div>
+    <p class="note reveal">Nothing in this section is built except the egg's animations. Event-driven activation, the dashboard and the SDK have no code yet.</p>
   </div>
 </section>
 
@@ -384,7 +472,7 @@
     <header class="sec-head">
       <p class="sec-num">05 / Exopet</p>
       <h2 id="pet-t">The pet is Exo. It grows when real work and real teaching flow in.</h2>
-      <p class="sec-lede">Exopet makes learning visible. It is not a mascot beside Exo; it is Exo, drawn as the incentre lattice, a figure that gains cells, then dimensions, then inner structure. Growth is computed from the signed ledger, so there is no number to edit. Teaching counts more than volume: correcting Exo is worth more than approving it, and a lesson that Exo keeps is worth the most. It never gets hungry, never sends a notification and cannot die. <span class="rm-badge" data-s="designed">Designed</span></p>
+      <p class="sec-lede">Exopet makes learning visible. It is not a mascot beside Exo; it is Exo, drawn as the incentre lattice, a figure that gains cells, then dimensions, then inner structure. Your own Exo grows from your own use, computed from your signed ledger, so there is no number to edit. Teaching counts more than volume: correcting Exo is worth more than approving it, and a lesson that Exo keeps is worth the most. It never gets hungry, never sends a notification and cannot die. <span class="rm-badge" data-s="designed">Designed</span></p>
     </header>
     <ol class="rm-evo reveal" aria-label="The evolution line">
       <li><canvas data-exo-egg data-stage="0" data-activity="0.35" data-seed="2" aria-hidden="true"></canvas><b>egg</b><span>start</span></li>
@@ -401,11 +489,11 @@
       <div class="rm-hatch__body">
         <p class="rm-mock">Mockup · not live · numbers are illustrative</p>
         <h3><a class="rm-hl" href="../brand/#egg">The community hatch</a></h3>
-        <p>At launch, everyone's Exo is the same egg. It hatches only when the whole community has fed it enough work, about a million units of growth from at least 256 installs. Until then, your own growth is banked, and nothing is lost by waiting. Reporting is off by default and sends only a daily capped number, never what you did.</p>
+        <p>At launch, everyone's Exo is the same egg. The community egg gates everyone's first evolution, and it grows from project activity, not from what any one person does in their own Exo. An issue counts least, a pull request counts more, and a merge counts most. Until it hatches, your own growth is banked, and nothing is lost by waiting. The egg at the top of this page reacts to the same activity. It reads public project activity only, never what you did.</p>
         <div class="rm-hatch__bar" role="img" aria-label="Mockup progress bar at 41 percent"><span style="--p:.41"></span></div>
         <dl class="rm-hatch__stats">
           <div><dt>Community growth</dt><dd>431,207 / 1,048,576</dd></div>
-          <div><dt>Installs reporting</dt><dd>173 / 256</dd></div>
+          <div><dt>Counts most</dt><dd>merges, then pull requests, then issues</dd></div>
           <div><dt>Then</dt><dd>a 24 hour crack, then every egg opens at once</dd></div>
         </dl>
       </div>
@@ -617,6 +705,7 @@
       <h2 id="refs-t">Ideas we borrowed, and where to read more.</h2>
     </header>
     <ul class="credits">
+      <li><a href="https://railtown.ai" rel="noopener"><span class="credits__who">Railtown AI</span><span class="credits__what">Build, feed, observe the agent</span></a><p>The shape behind event-driven activation: an agent that is built, fed by events and observed while it runs. An inspiration only; none of their product names or branding are used.</p></li>
       <li><a href="https://github.com/eumemic/aios" rel="noopener"><span class="credits__who">eumemic · primary runtime reference</span><span class="credits__what">AIOS</span></a><p>Event-driven steps, asynchronous tools, durable sessions and sandbox boundaries. Source research for Exo's runtime directions; no imported dependency.</p></li>
       <li><a href="https://github.com/eumemic/ai-legion" rel="noopener"><span class="credits__who">eumemic · earlier reference</span><span class="credits__what">AI Legion</span></a><p>A public platform for cooperating autonomous agents. An additional reference for delegated work.</p></li>
       <li><a href="https://vitalik.eth.limo/general/2026/09/27/the_cryptographic_world_computer.html" rel="noopener"><span class="credits__who">Vitalik Buterin · essay</span><span class="credits__what">The cryptographic world computer</span></a><p>Verification as the missing ingredient, and a layer between users and a chain. The far horizon on this page.</p></li>

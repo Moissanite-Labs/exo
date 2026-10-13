@@ -89,6 +89,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Bus (agent to agent relay) | `plugins/exo-bus/README.md`, `docs/PEERS.md` "Bus seats" (D-040) | §7 (bus seats are held, pinned keys) | §9 "Use the bus" | WP §29 (named, not explained) |
 | Upstream tracking (`exo upstream`) | `docs/PINNING.md`, `docs/STANDALONE.md` §3 | n/a | MISSING | WP §25 |
 | Public roadmap page (`site/roadmap/`): delivery order, revision evidence, now / next / horizon with status per initiative, concept diagrams, screenshots, references | `docs/SITE-STATUS.md`, `site/roadmap/index.html`; content drawn from `docs/TASTE-BASELINE.md`, `docs/BRAND.md` and `DECISIONS.md` D-020, D-044, D-049, D-050, D-055 | n/a (no user commands changed) | `docs/DEVELOPER-GUIDE.md` "Deploying the site" (staging first) | n/a (the page links the whitepaper) |
+| Live egg (`ExoEgg.event`, `site/brand/egg-feed.js`, `site/brand/egg-feed.demo.json`, `site/assets/activity.js`; contract: LIVE-EGG doc on branch design/event-activation, D-059) and the roadmap's event-driven, runs, SDK and evolution cards | `docs/SITE-STATUS.md` "Live egg feed", `site/brand/egg.js` header | n/a (site only, no user commands changed) | `docs/DEVELOPER-GUIDE.md` "Deploying the site" (demo mode) | n/a |
 
 ## Whitepaper gaps
 
