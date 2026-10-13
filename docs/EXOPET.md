@@ -1,6 +1,7 @@
 # Exopet: Exo as a living lattice (D-048)
 
-Status: **Proposed** (2026-10-12). Nothing here is built. D-048 in `DECISIONS.md`.
+Status: **Proposed** (2026-10-12), revised 2026-10-13 by D-058 (the community egg grows from repository activity;
+section 3). Nothing here is built. D-048 and D-058 in `DECISIONS.md`.
 Builds on D-040 (signed authors, anchored ledger), D-012 and D-022 (the learning loop), D-044 (taste baseline) and
 D-031 (the Exo look). The open questions for the principal are at the end.
 
@@ -11,8 +12,9 @@ as a small geometric figure that grows when real work and real teaching flow int
 signed ledger, so it cannot be faked by editing a file. Its shape is the incentre lattice, a drawing that gains cells,
 then dimensions, then internal structure as it evolves. Its motion reports what the agent is doing (thinking, running
 a tool, waiting on you), and its lit points show what Exo has learned about you. At launch, everyone's Exo starts as
-one shared egg on the project site. It hatches only when the whole community has fed it enough work. After that,
-every install grows its own.
+one shared egg on the project site. It hatches only when the community has done enough work on the project itself:
+issues, pull requests, merges and releases in the repository. After that, every install grows its own from its own
+use.
 
 The principal's brief, in his words: "an alive evolving pulsing matrix of information", and "enough info (tokens)
 flow into it and its ready to evolve."
@@ -96,6 +98,9 @@ is used except the error red, and only for one bar, for under a second.
 
 ## 2. Where XP comes from
 
+This section is personal XP: an install's own Exo grows from its own use. The community egg has its own source,
+repository activity (section 3).
+
 ### XP is a function of the ledger
 
 The pet stores no XP. XP, level and form are computed from the store's signed ledger (`docs/CORE.md`) by one pure
@@ -139,102 +144,168 @@ Needs create guilt and prompts ("feed me"), and a tool for serious work must nev
 holiday. Exo's attention budget already says when it may interrupt; a pet does not get an exception. The pet cannot
 get hungry, sick or dirty, cannot die, and never sends a notification.
 
-## 3. The community hatch
+## 3. The community egg
 
-### The rule
+Revised 2026-10-13 by D-058. The first version of this section filled the community egg from daily reports sent by
+installs. The principal changed the source: **personal Exos grow from their own usage (section 2, unchanged); the
+community egg, which gates every user's first evolution, grows from activity in the project repository, scaled by how
+significant each event is.** Issues are the smallest, pull requests are bigger, merges are biggest.
 
-Until the hatch, every install's pet is the same egg. The egg is the orb on the project site. The
-first evolution (egg to cell) is locked for everyone until the community, together, has earned enough XP.
+This is simpler and more private. No install ever reports anything. The egg is fed by public work on the project,
+which anyone can see once the repository is public, and which the site already shows as a live animation
+(`docs/LIVE-EGG.md`, D-059).
 
-| Number | Value | Why |
-|---|---|---|
-| Target | 2^20 = 1,048,576 community XP | a round binary number; "a million bits of information" reads well on the egg |
-| Distinct contributors | at least 256 installs, each with at least 3 reporting days | one person, or a few, cannot hatch it alone |
-| Daily cap per install | 1,000 XP (the local cap) | matches section 2 |
-| New-key ramp | 300 XP a day for a key's first 7 days | a fresh key cannot add much |
-| Crack phase | 24 hours from threshold to hatch | time to drop bad keys before the moment; and a day of "it is cracking" on the site |
+### The weights
 
-How long it takes: 300 contributing installs at about 350 XP a day reach the target in about 10 days; 1,000 installs
-in about 3 days. Fewer than 256 contributors never hatch it; see open question 2.
+| Repository event | XP | Settles | Why this number |
+|---|---|---|---|
+| Issue opened | 1 | after 7 days | one person noticed something and wrote it down. Cheap to make, so it is the unit. |
+| Pull request opened | 3 | after 7 days | someone wrote code. Roughly three issues of effort, and still unreviewed. |
+| Pull request merged | 10 | at once | the change passed review and CI and is in the product. Only a maintainer can make this happen, so it is the hardest to fake, and it is worth the most per item. |
+| Release published (`exo-v*` tag) | 25 | at once, at most one per 7 days | a release bundles many merges (usually 5 to 15). 25 is about two and a half merges: enough to make a release a moment, well below the merges it carries, so tagging is never a shortcut. |
 
-### What each person sees
+The steps grow by about three times each (1, 3, 10, then 25 for the rare top event), the same shape as the level
+animations on the site. A merged pull request earns 3 when opened and 10 when merged, 13 in all.
 
-- **Before the hatch.** The pet in the terminal and the web client is the egg, drawn like the site orb. Its fill is the
-  community total, read once a day. The share of lit shell nodes rises from 8 to 100 percent with progress, the core
-  brightens, and the inward pulses come faster when more installs reported in the last day. The user's own XP still
-  accrues in their ledger as normal, so nothing is lost by waiting.
-- **The crack.** For 24 hours the shell's edges flicker. A line on the site says when.
-- **The hatch.** At the hatch time every egg opens at once: the shell nodes drift outward and fade, and the drawing
-  inside grows to full size. This is the cell form. Banked personal XP then applies, one form per day.
-- **The mark.** Installs that contributed before the hatch keep a thin orange ring around the cell, in every later
-  form: a record that they hatched it. It is checked by the install's own receipt (below), not by a name or account.
-- **After the hatch.** A new install starts from its own egg, which fills from its own XP and hatches at level 6 (260
-  XP, usually on the first day). This is the EvoPet model.
-- **The site.** After the hatch, the site's orb shows the community Exo and keeps evolving on a larger scale, one form
-  per factor of 8 in community XP (2^20 cell, 2^23 tile, 2^26 cube, and so on). See open question 3.
+Not counted: comments, reactions, stars, forks, pushes to branches, CI runs, edits, and anything from a GitHub bot
+account. Each is either too cheap to make or already reflected in a merge.
 
-An install that never goes online (or opts out) still hatches: the hatch time is shipped in the next Exo release, and
-the egg opens on update.
+### The target and the timing
+
+**Target: 2^11 = 2,048 community XP.** A binary number, as before, at a scale that repo activity can reach.
+
+Hatch timing, from a small simulation (below). Assumptions: the repository stays private for 30 days, during which
+only the core team counts (capped, see anti-gaming); then it goes public with a launch spike (three times the steady
+rate on day one, fading over about a week); 15 percent of issues and 10 percent of pull requests are voided as spam
+or invalid; one release every two weeks.
+
+| Outside activity once public (per day) | Steady XP a day | Hatch, days after going public | Where the 2,048 came from |
+|---|---|---|---|
+| Quiet: 1.5 issues, 0.5 PRs, 0.25 merges | 5 | 211 (about 7 months) | core 512, outside 1,158, releases 400 |
+| Steady: 5 issues, 2 PRs, 1 merge | 20 | 57 (about 8 weeks) | core 512, outside 1,415, releases 125 |
+| Busy: 15 issues, 6 PRs, 3 merges | 59 | 13 (about 2 weeks) | core 512, outside 1,514, releases 25 |
+
+For comparison, 4,096 would take 434, 129 and 36 days, and 8,192 would take 877, 273 and 87. 2,048 makes a steady
+project hatch in about two months and a busy launch in about two weeks, and leaves a quiet project a slow but real
+path, carried mostly by its own releases.
+
+```python
+import math
+W = {"issue": 1, "pr": 3, "merge": 10, "release": 25}
+CORE_DAY, CORE_SHARE = 40, 0.25
+SPAM = {"issue": 0.15, "pr": 0.10, "merge": 0.0}
+LEVELS = {"quiet": {"issue": 1.5, "pr": 0.5, "merge": 0.25},
+          "steady": {"issue": 5, "pr": 2, "merge": 1},
+          "busy": {"issue": 15, "pr": 6, "merge": 3}}
+def spike(d): return 1 + 2 * math.exp(-d / 7)
+def hatch_day(target, level, private_days=30, release_every=14):
+    core_cap = CORE_SHARE * target
+    core = min(core_cap, CORE_DAY * private_days)
+    out = rel = 0.0; d = 0
+    while core + out + rel < target and d < 2000:
+        out += spike(d) * sum(LEVELS[level][k] * W[k] * (1 - SPAM[k]) for k in LEVELS[level])
+        core = min(core_cap, core + CORE_DAY)
+        if d % release_every == 0: rel += W["release"]
+        d += 1
+    return d
+for t in (2048, 4096, 8192):
+    print(t, {lv: hatch_day(t, lv) for lv in LEVELS})
+```
 
 ### Anti-gaming
 
-Exo is local-first. A server cannot see a user's ledger, and it must not, so it cannot prove that the work behind a
-report was real. A modified client can lie. The design does not pretend otherwise. It makes cheating bounded, costly
-and visible, and keeps the stakes low: the hatch is a launch event, not a prize.
+The stakes are low (the hatch is a launch event, not a prize), so the rules aim to make gaming slow and visible,
+not impossible.
 
-- **Locally:** XP is the ledger function, with the limits in section 2. A stock client cannot report more than its
-  ledger supports.
-- **Per key:** one report per key per UTC day, capped at 1,000 XP, and 300 for the first 7 days.
-- **Per new key:** registration needs a proof of work of about a minute of one CPU core, so a thousand fake installs
-  cost a thousand CPU minutes and still add at most 300 XP a day each for a week.
-- **Distinct days:** a key counts toward the 256 only after 3 reporting days, so a burst of new keys on the last day
-  counts for nothing.
-- **Crack phase:** keys that report the cap every day from registration, or that register in bursts from one network
-  in the server's short-lived rate limiter, can be dropped by the operator during the 24 hours. The rules for dropping
-  are published before launch.
-- **Audit:** each day's reports are hashed into a Merkle tree and the root is published. Each install keeps its own
-  proof of inclusion (its receipt), so anyone can check that their contribution was counted without seeing anyone
-  else's.
+- **Settle window.** An issue or an opened pull request is `pending` for 7 days. It is voided, and never counts, if in
+  that time it is closed with a `spam`, `invalid` or `duplicate` label, deleted, transferred out, or its author is
+  blocked; or if its own author closes it within an hour of opening. The site may show pending XP as a faint fill.
+- **Per account.** At most 3 counted issues and 3 counted opened pull requests per account per UTC day; merges and
+  releases have no per-account cap, because a maintainer decides them. Accounts newer than 7 days at the time of the
+  event count nothing for issues and opened pull requests.
+- **Bots and loops.** GitHub bot accounts count nothing and do not animate. An issue or pull request opened by an
+  agent account (below) and closed by an agent within a day counts nothing. A global cap of 30 issue XP and 30 opened
+  pull request XP an hour stops any loop from moving the egg fast.
+- **The core cap** (below) bounds the team's own activity, including its agents.
+- **Audit.** The function keeps per-day totals and the rules are in this document, so anyone can check the numbers
+  once the repository is public by recounting from GitHub.
 
-## 4. Privacy and the counter service
+### Founders and core: a cap, not a discount
 
-### What is sent, and what is not
+The question was whether the founders' own activity should count less. Recommendation: **count it, but cap it**.
 
-Community reporting is **off by default**. Exo asks once, in one line on first run, and the question shows the exact
-fields that would be sent. `exo pet community on|off` changes it at any time.
+- **Core** means the founders, the maintainers, and the agents they run. The list is a setting of the feed function,
+  not a file in the repository.
+- Core activity counts at the normal weights, up to **40 XP per UTC day**, and up to **25 percent of the target over
+  the egg's life** (512 of 2,048).
+- **Why count it at all.** While the repository is private the core team is the whole community. Counting nothing would
+  leave the site egg at zero for months while the project is in fact busy. A quarter of the way is a fair picture of
+  "the builders started it".
+- **Why not a plain multiplier.** Core volume is high and mostly agent-driven: in its first two days the repository saw
+  54 issues, 52 pull requests and 33 merges, all from core accounts, about 270 XP a day at full weight. Any discount
+  factor still scales with volume, so the core alone would hatch the egg in days. A cap bounds it whatever the volume,
+  so the rest must come from outside contributors and from releases.
+- Releases are always made by the core, and still count in full outside the cap (at most one a week): shipping is the
+  one thing the community egg should reward from the team.
+- **Merges** are credited to the pull request's author, not the maintainer who merged: an outside contributor's merged
+  pull request is outside XP.
 
-| Sent, once a day | Never sent |
+### Agent activity
+
+Agents (exo-razi and others) now open issues and pull requests too. Recommendation: **agent
+work counts only where a person accepted it.**
+
+| Agent event | XP |
 |---|---|
-| a counter key made only for this (Ed25519, not any Exo key) | prompts, answers, file names, paths |
-| the UTC date of the day reported | event kinds, counts of turns, verdicts or lessons |
-| that day's XP, capped and rounded down to a multiple of 10 | model names, providers, costs, tokens |
-| a report sequence number and a signature | times of day, session counts, taste items |
-| once, at registration: the proof of work | anything about the user or the machine |
+| Issue opened by an agent | 0 |
+| Pull request opened by an agent | 0 |
+| Agent pull request merged | 10, inside the core cap if the agent is run by the core |
+| Release | 25, as above |
 
-- The report for a day is sent at a random time during the next day, so its timing says nothing about when the user
-  worked.
-- Turning community off deletes the counter key locally and asks the server to drop it.
-- Opting out of everything (`pet.network = off`) means no request at all, including the daily read of the egg's fill.
-  The egg then fills from the user's own XP until the release that carries the hatch time.
+Why: an agent can open issues and pull requests at almost no cost, so counting them would turn the egg into a measure
+of how many agents run. A merge is different: a maintainer reviewed it and took it into the product, which is the
+significance the weights are about. Agent events still animate on the site, because the project is alive when its
+agents work. An outside user's agent is treated the same way: its merged work counts as that user's.
 
-### The service
+How the function knows: agent work carries a marker. Exo's own agents add the `agent` label when they open an issue or
+pull request (one line in their tooling); a pull request whose body ends with an agent attribution line counts as
+agent work too. Unmarked work from a core account counts as core. A missing marker can at worst move XP inside the
+core cap, so the cap is the backstop.
 
-The counter is the only shared service in the exopet design, and the only one Exo would run. It is small on purpose:
-three routes and one counter.
+### What each person sees
 
-| Route | Does |
+- **Before the hatch.** The pet in the terminal and the web client is the egg. Its fill is the community total, read
+  at most once a day from the site's public feed (`GET /api/egg/feed`, `docs/LIVE-EGG.md`). The share of lit shell
+  nodes rises with progress and the core brightens. The user's own XP still accrues in their ledger, so nothing is
+  lost by waiting.
+- **The crack.** When the counted total reaches the target, the egg cracks for 24 hours: the shell's edges flicker,
+  and the site says when it will hatch. The day lets voided items settle before the moment.
+- **The hatch.** At the hatch time every egg opens at once: the shell nodes drift outward and fade, and the drawing
+  inside grows to full size. This is the cell form. Banked personal XP then applies, one form per day.
+- **The mark.** Installs whose own ledger has verified events from before the hatch time keep a thin orange ring
+  around the cell in every later form. It is checked locally against the hatch time; nothing is sent and no account
+  is needed.
+- **After the hatch.** A new install starts from its own egg, which fills from its own XP and hatches at level 6 (260
+  XP, usually on the first day).
+- **The site.** The site egg is the community egg and reacts to every repository event (`docs/LIVE-EGG.md`). After the
+  hatch it shows the community Exo; see open question 3.
+
+An install that never goes online (or sets `pet.network = off`) still hatches: the hatch time ships in the next Exo
+release, and the egg opens on update.
+
+## 4. Privacy
+
+The revision removes the only telemetry the first design had. Installs report nothing, and there is no counter
+service, no install keys, no proof of work and no Merkle receipts.
+
+| What an install does | What it sends |
 |---|---|
-| `POST /v1/register` | takes a counter key and its proof of work; records the key and its registration day |
-| `POST /v1/report` | takes one signed day report; checks the signature, the cap, the ramp and one-per-day; adds to the day total |
-| `GET /v1/egg` | public: target, total, contributors (count), reports in the last day, crack and hatch times, today's Merkle root, site form; cached at the edge for 60 seconds |
+| Reads the community total, at most once a day, off the turn path | one `GET` to the public feed, with no identifiers; nothing when `pet.network = off` |
+| Computes personal XP | nothing; it stays in the ledger |
+| Checks the founders' ring | nothing; a local comparison with the hatch time |
 
-What the server keeps: each key and its registration day; the current day's set of keys that have reported (for one
-per day); per-day totals and contributor counts; the Merkle trees for 7 days, then only their roots. No IP addresses
-are stored and request logging is off. Per-key daily rows are deleted after 7 days.
-
-Recommended shape: one serverless function in front of one strongly consistent store (a single-writer counter), so
-two reports cannot race. Both the server code and the client code live in the open repository. The platform choice
-is open question 4. The site reads `GET /v1/egg` to draw the egg; changes to the site go to the staging domain first.
+The feed itself carries only an event type, a time and a nominal weight (`docs/LIVE-EGG.md` section 4). The feed
+function sees GitHub payloads and keeps only keyed hashes of authors, for the per-account caps, for 8 days.
 
 ## 5. The pet shows what Exo has learned
 
@@ -299,7 +370,7 @@ reads that format.
 | Terminal client | a braille glyph, 8 columns by 4 rows, at the right end of the status strip | `/pet on, off, mini`; `EXO_PET=0`. The start screen's hero becomes the user's own pet at its current form |
 | Web client | the brand bar's square dot becomes a 16 pixel pet glyph; the empty-thread hero is the pet full size; a pet card in the instrument column (form, level, bar toward the next form, learned count) | |
 | Desktop float | a 96 pixel transparent, always-on-top window in the future desktop shell (the web client in a thin shell, `docs/STANDALONE.md`) | until then, `exo pet export --atlas` writes the 9-row atlas package so the pet can float in an existing desktop pet app |
-| Project site | the hero orb is the community egg, then the community Exo; a hatch page with the counter, the rules and the privacy table; a gallery page | |
+| Project site | the hero egg is the community egg, live with repository events (`docs/LIVE-EGG.md`), then the community Exo; a hatch page with the total, the rules and the privacy table; a gallery page | |
 
 ## 8. Fun, on brand, never in the way
 
@@ -319,7 +390,7 @@ reads that format.
 | Points drawn | at most 512 at any form |
 | XP | incremental from the last ledger seq: under 5 ms after a turn; a full recompute of 100,000 events under 2 s, in the background |
 | Memory | under 2 MB for the pet in any client |
-| Network | at most one GET and one POST a day, never on the turn path; zero when off |
+| Network | at most one GET a day (the community total), never on the turn path; zero when off |
 | Core | the pet never runs on the turn path; the core only answers `pet` |
 
 ## 10. The pet format
@@ -397,31 +468,30 @@ distress for errors; the user's description is the only source, never the user's
 - **Wave 1, the pet locally.** `src/exo/pet/` (the XP function, ladder, form, `pet` built-in), the lattice geometry
   shared by both renderers, the terminal glyph and the web glyph and card, the state machine. Tests: the XP function
   is deterministic over a fixture ledger; a forged or unpinned event earns nothing; a broken anchor freezes the pet.
-- **Wave 2, the hatch.** The counter service, `exo pet community`, the site egg on the staging domain first, the hatch
-  page with the privacy table, receipts.
+- **Wave 2, the hatch.** The repository feed and the live site egg (`docs/LIVE-EGG.md`), the clients' daily read of
+  the community total, the crack and hatch, the founders' ring, the hatch page with the rules. Staging first.
 - **Wave 3, the gallery and the skill.** The format, `exo pet check, preview, install, publish, export`, the index
   repository and its CI, `skills/exopet-create/`.
 
 ## Open questions for the principal
 
-1. **The hatch target.** (a) 2^20 XP with 256 contributors, as proposed: a launch-week event if a few hundred people
-   install. (b) 2^18 XP with 64 contributors: hatches even with a small first wave, but less of an event. (c) Set the
-   number on launch day from early sign-ups: fits reality, but the number moves after people see it, which feels less
-   fair.
-2. **If the community is slower than hoped.** (a) No fallback; the egg waits: honest, but a stalled egg is a bad look.
-   (b) A published deadline (for example 30 days) after which it hatches anyway: always ends well, weaker as a shared
-   goal. (c) The target steps down by 2x every two weeks, announced up front: keeps momentum, more rules to explain.
-3. **The site creature after the hatch.** (a) It keeps evolving with community XP, one form per factor of 8: ongoing
-   reason to visit, needs the counter to run for good. (b) It stays at cell as a monument: simple, and the counter can
-   shut down after the hatch. (c) It shows the most common form among reporting installs: reflects users, but needs a
-   new report field.
-4. **The counter's platform.** (a) A serverless function with one strongly consistent object store at the edge
-   provider that already serves the DNS: smallest and cheapest, a second platform to run. (b) A function on the
-   platform that hosts the site plus a hosted key-value store: one platform, but two vendors and a weaker
-   consistency story. (c) A tiny service on one small server: full control, but uptime is ours.
-5. **Default on or off for the pet in the clients.** (a) On, as the small glyph: people see it, which is the point.
-   (b) Off until the first evolution: no surprise for serious users, but most will never find it. (c) On in the web
-   client, off in the terminal: matches where people expect play.
-6. **The founders' mark.** (a) A thin ring for every pre-hatch contributor, as proposed. (b) No mark: no status
-   difference between users. (c) A mark only for the first 1,024 contributors: more special, and more reason to game
-   registration.
+Revised 2026-10-13 for D-058. The old questions on contributor counts, the counter's platform and receipts are gone
+with the counter service.
+
+1. **The hatch target.** (a) 2^11 = 2,048 XP, as proposed: about two months for a steady project, two weeks for a busy
+   launch. (b) 2^10 = 1,024: hatches within weeks even when quiet, less of an event. (c) 2^12 = 4,096: a bigger
+   moment, four months at a steady rate.
+2. **If the community is slower than hoped.** (a) No fallback; the egg waits, and releases keep it moving: honest,
+   slow when quiet. (b) A published deadline (for example 90 days after going public) after which it hatches anyway:
+   always ends well, weaker as a shared goal. (c) The target steps down by 2x every month, announced up front.
+3. **The site creature after the hatch.** (a) It keeps evolving with community XP, one stage per factor of 8: an
+   ongoing reason to visit, and the feed runs anyway for the live animation. (b) It stays at cell as a monument.
+4. **The core cap.** (a) 40 XP a day and 25 percent of the target, as proposed. (b) No core XP at all: a purely
+   outside-earned hatch, but a flat egg until the repository is public. (c) Count the core in full: hatches in days on
+   today's volume.
+5. **Agent work.** (a) Only merged agent pull requests count, as proposed. (b) Agent issues and pull requests count
+   at half weight inside the core cap. (c) Agents count like people.
+6. **Default on or off for the pet in the clients.** (a) On, as the small glyph: people see it, which is the point.
+   (b) Off until the first evolution. (c) On in the web client, off in the terminal.
+7. **The founders' ring.** (a) A thin ring for every install that was running before the hatch, as proposed. (b) No
+   ring: no status difference between users.
