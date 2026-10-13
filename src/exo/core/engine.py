@@ -34,6 +34,7 @@ from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
 from exo.core.models.router import Router
+from exo.core.models.spend_policy import resolve_spend_policy
 from exo.core import jobs as jobs_mod
 from exo.core import peer_target
 from exo.core.ingress import STANDING_LINE
@@ -341,14 +342,16 @@ class CoreEngine:
         self._writer: Any = None  # the agent's writer lock, taken by claim_writer() (create() does)
         principal_spend = (models or {}).get("spend")
         active_principal = (seat.principal if seat else None) or os.environ.get("EXO_PRINCIPAL")
-        if principal_spend is not None and active_principal and principal_spend.get("principal") != active_principal:
-            raise ValueError("model-spend policy principal does not match the active principal")
+        if seat and seat.principal and os.environ.get("EXO_PRINCIPAL") not in (None, "", seat.principal):
+            raise ValueError("seat principal conflicts with EXO_PRINCIPAL")
+        selection = resolve_spend_policy(principal_spend, principal=active_principal)
         models = {**(models or {}), **(seat.models if seat else {})}
         if principal_spend is not None:
             models["spend"] = principal_spend
-        elif seat and "spend" in seat.models:
+        elif seat and "spend" in seat.models and selection.source is None:
             raise ValueError("model-spend policy belongs to the principal, not a seat")
-        self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env)
+        self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env,
+                                         principal=active_principal)
         self.registry = registry or default_registry(executor=executor, executor_required=required)
         self.registry.executor = executor
         self.registry.executor_required = required or executor is not None
@@ -918,7 +921,7 @@ class CoreEngine:
             avail = await asyncio.wait_for(asyncio.to_thread(available_models, self.router, self.home), 25)
         except Exception:
             avail = []
-        return {"models": self.router.status(), "available": avail}
+        return {"models": self.router.status(), "available": avail, "spend": self.router.spend_status()}
 
     async def _models_set(self, b: s.ModelsSet) -> dict[str, Any]:
         require_principal("change models")
@@ -1150,11 +1153,6 @@ def create(seat: str | None = None) -> CoreEngine:
 
     ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
     cfg = Config.load()
-    from exo.core.models.spend import configured
-    spend_config = (cfg.data.get("models") or {}).get("spend")
-    spend = configured(spend_config, required=os.environ.get("EXO_MODEL_SPEND_REQUIRED") == "1")
-    if spend is not None and spend.principal != cfg.principal:
-        raise ValueError("model-spend policy principal does not match the configured principal")
     executor, executor_required = load_executor()  # required failures precede all plugin imports
     st = None
     if seat or os.environ.get("EXO_SEAT"):
@@ -1162,8 +1160,16 @@ def create(seat: str | None = None) -> CoreEngine:
             st = load_seat(cfg.home, seat or os.environ["EXO_SEAT"])
         except SeatError as exc:
             raise SystemExit(f"exo: {exc}") from None
-        if st.principal and not os.environ.get("EXO_PRINCIPAL"):
-            os.environ["EXO_PRINCIPAL"] = st.principal
+    if st and st.principal and os.environ.get("EXO_PRINCIPAL") not in (None, "", st.principal):
+        raise ValueError("seat principal conflicts with EXO_PRINCIPAL")
+    principal = (st.principal if st else None) or cfg.principal
+    from exo.core.models.spend import configured
+    selection = resolve_spend_policy((cfg.data.get("models") or {}).get("spend"), principal=principal)
+    spend = configured(selection.config, required=selection.required)
+    if spend is not None and spend.principal != principal:
+        raise ValueError("model-spend policy principal does not match the configured principal")
+    if st and st.principal and not os.environ.get("EXO_PRINCIPAL"):
+        os.environ["EXO_PRINCIPAL"] = st.principal
     pm = PluginManager(config=cfg.data.get("plugin_config") or {},
                        executor_required=executor_required,
                        memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))

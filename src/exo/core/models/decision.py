@@ -28,7 +28,6 @@ stricter: callers pass its verdict through ``tighten_only``.
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Mapping, Sequence
@@ -237,9 +236,7 @@ def _error_text(resp: httpx.Response) -> str:
 
 async def _run(router: Any, role: str, state: Any, question: dict[str, Any], kind: str) -> tuple[Any, str, str]:
     """Try each route of ``role`` in order. Returns (answer, source, route ref)."""
-    if os.environ.get("EXO_MODEL_SPEND_REQUIRED") == "1" and getattr(router, "spend", None) is None:
-        from exo.core.models.spend import SpendDenied
-        raise SpendDenied("required model-spend policy is missing; ask the principal to configure it")
+    router.check_spend_policy()
     last: DecisionError | None = None
     tried = 0
     for route in router.chain(role):
@@ -249,7 +246,7 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any], kin
             tried += 1
             try:
                 if getattr(cred.provider, "is_decision", False):
-                    if getattr(router, "spend", None) is not None or os.environ.get("EXO_MODEL_SPEND_REQUIRED") == "1":
+                    if router.spend_enforced:
                         from exo.core.models.spend import SpendDenied
                         if router.spend is not None:
                             router.spend.freeze("typed decision pricing is unbounded")

@@ -27,6 +27,7 @@ from exo.core.models.muse_cli import MuseCliProvider
 from exo.core.models.decision import DecisionProvider
 from exo.core.models.keys import lookup_key
 from exo.core.models.spend import SpendJournal, admitted_stream, configured
+from exo.core.models.spend_policy import POLICY_ENV, required as spend_required, resolve_spend_policy
 from exo.core.models.openai_chat import OpenAIChatProvider
 from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
@@ -119,8 +120,15 @@ class Router:
                  *, catalog: dict[str, Any] | None = None, instances: Mapping[str, Provider] | None = None,
                  env: Mapping[str, str] | None = None, clock: Callable[[], float] = time.time,
                  client: Any = None, key_sources: bool | None = None,
-                 breaker: Mapping[str, Any] | None = None, spend: SpendJournal | None = None) -> None:
-        self.spend = spend
+                 breaker: Mapping[str, Any] | None = None, spend: SpendJournal | None = None,
+                 spend_config: Mapping[str, Any] | None = None, principal: str | None = None) -> None:
+        selection = resolve_spend_policy(spend_config if spend is None else {"principal": spend.principal},
+                                         principal=principal)
+        if selection.source is not None and spend is not None:
+            from exo.core.models.spend import SpendDenied
+            raise SpendDenied("an injected journal cannot replace protected model-spend policy")
+        self.spend = spend if spend is not None else configured(selection.config, required=selection.required)
+        self._spend_required, self._spend_source = selection.required, selection.source
         cat = load_catalog() if catalog is None else catalog
         self.providers: dict[str, dict] = {**cat.get("providers", {}), **(providers or {})}
         self.models: dict[str, dict] = dict(cat.get("models", {}))
@@ -146,13 +154,33 @@ class Router:
         overrides of the catalog: ``input``, ``output``, ``cache_read``, ``cache_write`` USD per million tokens,
         ``context``)."""
         config = config or {}
-        if "spend" not in kw:
-            kw["spend"] = configured(config.get("spend"), required=os.environ.get("EXO_MODEL_SPEND_REQUIRED") == "1")
+        kw.setdefault("spend_config", config.get("spend"))
         r = cls(roles=config.get("roles"), providers=config.get("providers"), breaker=config.get("breaker"), **kw)
         for ref, info in (config.get("models") or {}).items():  # prices and limits per "provider:model" (D-032)
             if isinstance(info, dict):
                 r.models[ref] = {**r.models.get(ref, {}), **info}
         return r
+
+    @property
+    def spend_enforced(self) -> bool:
+        return self.spend is not None or self._spend_required or spend_required()
+
+    def check_spend_policy(self) -> None:
+        from exo.core.models.spend import SpendDenied
+        if POLICY_ENV in os.environ and os.environ[POLICY_ENV] != self._spend_source:
+            raise SpendDenied("protected model-spend policy changed; restart the engine")
+        if self.spend_enforced and self.spend is None:
+            raise SpendDenied("required model-spend policy is missing; ask the principal to configure it")
+
+    def spend_status(self) -> dict[str, Any] | None:
+        try:
+            self.check_spend_policy()
+            if self.spend is None:
+                return None
+            return {**self.spend.status(), "policy_source": self._spend_source or "config"}
+        except Exception:
+            return {"state": "unavailable", "policy_source": self._spend_source or "config",
+                    "stop_reason": "Model-spend accounting is unavailable; ask the principal to review."}
 
     # --- resolution ----------------------------------------------------------
     def chain(self, role: str = "main") -> list[Route]:
@@ -354,9 +382,12 @@ class Router:
         """One call on one credential. A failure that may fall back is swallowed and
         appended to ``failed``; anything else (including a terminal error) is yielded.
         Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``)."""
-        if self.spend is None and os.environ.get("EXO_MODEL_SPEND_REQUIRED") == "1":
-            yield error_event("required model-spend policy is missing; ask the principal to configure it", None,
-                              retryable=False)
+        try:
+            self.check_spend_policy()
+        except RuntimeError as exc:
+            event = error_event(str(exc), None, retryable=False)
+            event.attempts = [{"route": route.ref, "outcome": "spend_stopped"}]
+            yield event
             return
         if self.spend is not None:
             async for event in admitted_stream(self.spend, route.ref, cred.provider, messages, tools,

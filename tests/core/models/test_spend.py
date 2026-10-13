@@ -1,7 +1,10 @@
 """Offline admission tests. Mock HTTP at the real adapter boundary; no provider keys."""
 import asyncio
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
@@ -150,7 +153,9 @@ def test_concurrent_success_settles_after_global_freeze(tmp_path, mode):
                 [('stopped', None), ('successful', 200_000)] if mode == 'error'
                 else [('successful', 200_000)])
         with pytest.raises(SpendDenied, match=blocked): r.spend.check()
-        with pytest.raises(SpendDenied, match=blocked): SpendJournal(cfg)
+        reopened = SpendJournal(cfg)
+        assert reopened.status()['state'] == 'stopped'
+        with pytest.raises(SpendDenied, match=blocked): reopened.check()
         assert (await consume('new'))[-1].kind == 'error'
         assert len(seen) == (2 if mode == 'error' else 1)
 
@@ -233,6 +238,60 @@ def test_pending_survives_restart_and_utc_rollover(tmp_path):
     with pytest.raises(SpendDenied): resumed.reserve('test:m', '', 1, p)
 
 
+def test_abrupt_exit_pending_with_headroom_is_retained_not_an_automatic_stop(tmp_path):
+    cfg = policy(tmp_path)
+    journal = SpendJournal(cfg, clock=lambda: 0)
+    price = journal.prices['test:m']
+    journal.reserve('test:m', 'lost-process', price.maximum(100), price)
+    # Models the durable state after SIGKILL, which cannot execute stream finally.
+    later = SpendJournal(cfg, clock=lambda: 86400 * 400)
+    status = later.status()
+    assert status['pending_reserved_usd'] == '0.002000000' and status['pending_count'] == 1
+    assert status['state'] == 'ready' and status['stop_reason'] == ''
+    later.reserve('test:m', 'new-process', price.maximum(100), price)
+    assert rows(cfg) == [(2_000_000, None), (2_000_000, None)]
+    with pytest.raises(SpendDenied): later.reserve('test:m', 'over-cap', price.maximum(100), price)
+
+
+def test_crash_hot_journal_recovers_committed_reservation_without_reseeding(tmp_path):
+    cfg = policy(tmp_path)
+    script = '''
+import json, os, sqlite3, sys
+from exo.core.models.spend import SpendJournal
+config = json.load(sys.stdin)
+journal = SpendJournal(config, clock=lambda: 100)
+price = journal.prices['test:m']
+journal.reserve('test:m', 'committed-before-crash', price.maximum(100), price)
+db = sqlite3.connect(config['journal'])
+db.execute('PRAGMA journal_mode=DELETE')
+db.execute('PRAGMA synchronous=FULL')
+db.execute('PRAGMA cache_size=1')
+db.execute('PRAGMA cache_spill=ON')
+db.execute('BEGIN IMMEDIATE')
+db.execute("UPDATE identity SET blocked='uncommitted-stop'")
+db.execute('CREATE TABLE crash_payload (content BLOB)')
+for _ in range(8):
+    db.execute('INSERT INTO crash_payload VALUES (zeroblob(65536))')
+os._exit(23)
+'''
+    child = subprocess.run([sys.executable, '-c', script], input=json.dumps(cfg), text=True,
+                           capture_output=True, timeout=10)
+    assert child.returncode == 23, child.stderr
+    hot = cfg['journal'] + '-journal'
+    assert os.path.getsize(hot) > 512
+    with open(hot, 'rb') as stream:
+        assert stream.read(8) != b'\x00' * 8  # a hot, flushed rollback journal
+    with pytest.raises(sqlite3.OperationalError): SpendJournal.inspect(cfg)
+    recovered = SpendJournal(cfg)
+    assert recovered.identity == cfg['journal_id']
+    assert recovered.status()['pending_reserved_usd'] == '0.002000000'
+    assert recovered.status()['stop_reason'] == ''
+    with sqlite3.connect(cfg['journal']) as db:
+        assert db.execute('SELECT id FROM identity').fetchone()[0] == cfg['journal_id']
+        assert not db.execute("SELECT name FROM sqlite_master WHERE name='crash_payload'").fetchall()
+    assert rows(cfg) == [(2_000_000, None)]
+
+
 @pytest.mark.parametrize('mode', ['error', 'missing', 'exceeded', 'exception'])
 def test_uncertain_usage_keeps_reservation_freezes_and_never_retries(tmp_path, mode):
     cfg = policy(tmp_path); seen = []
@@ -246,7 +305,7 @@ def test_uncertain_usage_keeps_reservation_freezes_and_never_retries(tmp_path, m
     assert call(r)[-1].kind == 'error'
     assert len(seen) == 1 and rows(cfg) == [(2_000_000, None)]
     assert call(r)[-1].kind == 'error' and len(seen) == 1
-    with pytest.raises(SpendDenied): SpendJournal(cfg)
+    with pytest.raises(SpendDenied): SpendJournal(cfg).check()
 
 
 def test_cancellation_retains_durable_reservation(tmp_path):
@@ -266,7 +325,7 @@ def test_cancellation_retains_durable_reservation(tmp_path):
         await asyncio.sleep(0)
     asyncio.run(run())
     assert rows(cfg) == [(2_000_000, None)]
-    with pytest.raises(SpendDenied): SpendJournal(cfg)
+    with pytest.raises(SpendDenied): SpendJournal(cfg).check()
 
 
 def test_missing_replaced_corrupt_journals_never_initialize(tmp_path):
@@ -337,6 +396,8 @@ def test_loop_denial_runs_zero_tools_and_does_not_retry(tmp_path, mode):
         return await loop.send(session.id, 'do it')
     result = asyncio.run(run())
     assert result.error and not tools and len(calls) == (0 if mode == 'cap' else 1)
+    errors = [e for e in loop.store.events_since() if e.type == 'error']
+    assert errors and errors[-1].body.code == 'model_spend_stopped'
 
 
 def test_background_summary_and_child_role_share_principal_cap(tmp_path):

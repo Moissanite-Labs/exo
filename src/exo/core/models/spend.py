@@ -98,7 +98,7 @@ class Price:
 
 
 class SpendJournal:
-    def __init__(self, config: dict, *, clock=time.time, _review: bool = False):
+    def __init__(self, config: dict, *, clock=time.time, _review: bool = False, _readonly: bool = False):
         self.path = Path(config["journal"]).absolute()
         self.principal = str(config["principal"])
         self.identity = str(uuid.UUID(config["journal_id"]))
@@ -107,8 +107,10 @@ class SpendJournal:
         self.daily, self.monthly = _money(config["daily_usd"], ceiling=False), _money(config["monthly_usd"], ceiling=False)
         self.prices = MappingProxyType({k: Price.parse(v) for k, v in config["routes"].items()})
         self.clock = clock
-        with self._db() as db:
-            self._identity(db, check_block=not _review)
+        with self._db(readonly=_readonly) as db:
+            # A recorded stop must leave transcript/status access available after restart.
+            # Admission and tool boundaries still call check(); opening is not resuming.
+            self._identity(db, check_block=False)
 
     @staticmethod
     def provision(path: str | Path, principal: str) -> str:
@@ -129,11 +131,12 @@ class SpendJournal:
         return identity
 
     @contextmanager
-    def _db(self):
-        db = sqlite3.connect(self.path.as_uri() + "?mode=rw", uri=True, timeout=10)
+    def _db(self, *, readonly=False):
+        db = sqlite3.connect(self.path.as_uri() + ("?mode=ro" if readonly else "?mode=rw"), uri=True, timeout=10)
         try:
-            db.execute("PRAGMA synchronous=FULL")
-            db.execute("BEGIN IMMEDIATE")
+            if not readonly:
+                db.execute("PRAGMA synchronous=FULL")
+            db.execute("BEGIN" if readonly else "BEGIN IMMEDIATE")
             yield db
             db.commit()
         except BaseException:
@@ -160,6 +163,28 @@ class SpendJournal:
     def check(self):
         with self._db() as db:
             self._identity(db)
+
+    def status(self) -> dict:
+        """Inspect one consistent snapshot without updating the clock or journal."""
+        with self._db(readonly=True) as db:
+            self._identity(db, check_block=False)
+            reason = db.execute("SELECT blocked FROM identity").fetchone()[0]
+            pending, count = db.execute("SELECT COALESCE(SUM(reserved), 0), COUNT(*) FROM calls WHERE actual IS NULL").fetchone()
+            now = datetime.fromtimestamp(self.clock(), timezone.utc)
+            charged = {}
+            for column, period in (("day", now.strftime("%Y-%m-%d")), ("month", now.strftime("%Y-%m"))):
+                charged[column] = db.execute(f"SELECT COALESCE(SUM(actual), 0) FROM calls "
+                    f"WHERE actual IS NOT NULL AND ({column}=? OR completed_{column}=?)", (period, period)).fetchone()[0]
+        money = lambda n: format(Decimal(n) / SCALE, ".9f")
+        return {"state": "stopped" if reason else ("offline" if not self.prices else "ready"),
+                "principal": self.principal, "daily_cap_usd": money(self.daily), "monthly_cap_usd": money(self.monthly),
+                "day_charged_usd": money(charged["day"]), "month_charged_usd": money(charged["month"]),
+                "pending_reserved_usd": money(pending), "pending_count": count, "stop_reason": reason}
+
+    @classmethod
+    def inspect(cls, config: dict) -> dict:
+        """Public read-only inspection, including stopped journals; never provisions or resumes."""
+        return cls(config, _readonly=True).status()
 
     def reserve(self, route: str, session: str, maximum: int, price: Price) -> str:
         with self._db() as db:
@@ -238,10 +263,21 @@ async def admitted_stream(journal: SpendJournal, route: str, provider: Any,
     """Strict adapter boundary. Refusal never enters a provider or executes a tool."""
     from exo.core.models.anthropic import AnthropicProvider
     from exo.core.models.openai_chat import OpenAIChatProvider
+    from exo.core.models.fake import RuleFake
     from exo.core.models.base import error_event
 
     token, settled, stream = None, False, None
     try:
+        journal.check()
+        if type(provider) is RuleFake:
+            # Exact installed implementation only, never a provider label/local flag/subclass.
+            stream = RuleFake.stream(provider, messages, tools, **opts)
+            async for event in stream:
+                event.route = route
+                if event.usage is not None:
+                    event.usage.cost_usd = 0.0
+                yield event
+            return
         price = journal.prices.get(route)
         if price is None:
             raise SpendDenied(f"no pinned model-spend contract for {route}")
