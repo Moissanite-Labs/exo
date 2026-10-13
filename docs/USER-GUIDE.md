@@ -52,6 +52,7 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `ctrl+y`, `ctrl+e`, `ctrl+r` | Accept, edit or reject the last answer. This is feedback the learning loop uses. |
 | `ctrl+g` or `/compose` | Opens the big editor for a long, structured prompt. Enter adds a line. **`ctrl+s` sends** (`ctrl+enter` too, on terminals that report it). `Esc` closes it and your draft stays. `ctrl+l` shows line numbers, `ctrl+t` edits in `$EDITOR`. `/compose task` starts you with Goal, Context, Constraints and Done when headings. Slash and `@` completion work inside it. |
 | `/layout inverse` or `classic` | Inverse puts the input on top and the newest message directly under it, so a thread opens on its latest. Classic is the usual order. Your choice is saved. |
+| `/exosphere on` or `off` | Shows or hides the exosphere, the small lattice figure (the x0 egg) in the bottom-right corner. It moves with what the agent is doing: a slow breath when idle, a pulse while it thinks, packets while a tool runs, a steady glow with `!` when it waits for your approval, a dim flicker after an error, a bloom when a turn is done. It never takes focus, and your text never runs under it. On by default, hidden on terminals under 90 columns. Your choice is saved. |
 
 `/copy` tries `pbcopy`, `wl-copy`, `xclip`, then `xsel` when available. Without a successful helper it sends OSC52
 and reports that clipboard receipt cannot be verified; a terminal can ignore that escape sequence.
@@ -61,7 +62,7 @@ Click anywhere on the transcript and you are typing again; keys typed while noth
 The screen shows the model that served each call, how full memory is, how much of the call came from cache, the cost,
 and the number of open findings. Screenshots are in `docs/ui/` (for example `docs/ui/01-empty.png`,
 `docs/ui/03-approval.png`, `docs/ui/05-context.png`). The look is described in `docs/UI.md`.
-Set `EXO_REDUCED_MOTION=1` to turn motion off. `NO_COLOR` turns colour off.
+Set `EXO_REDUCED_MOTION=1` to turn motion off (the exosphere then holds still). `NO_COLOR` turns colour off.
 
 **Web (`exo web`).** Run `exo web` in a terminal. It opens the page in your browser for you. If it does not (no
 browser, or `--no-open`), open the link it prints: `http://127.0.0.1:7342/#token=...`. The part after `#token=` is a

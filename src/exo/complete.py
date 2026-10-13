@@ -26,7 +26,7 @@ ARG_HINTS: dict[str, str] = {
     "model": "[default] <model>", "default": "[model]", "providers": "[add] [name]", "usage": "",
     "panel": "", "peers": "", "send": "<peer> <text>", "handoff": "[path]", "intro": "",
     "tutorial": "[on|off|reset]", "copy": "[last|error|all]", "help": "",
-    "compose": "[task|edit|close]", "layout": "[inverse|classic]",
+    "compose": "[task|edit|close]", "layout": "[inverse|classic]", "exosphere": "[on|off]",
     "trace": "[last N turns]", "findings": "[count]",
     "grants": "[list | revoke <id>]", "exo": "<subcommand> [args]", "orchestra": "[seats|skills|seat|check]",
     "peer-release": "<id>", "peer-deny": "<id>", "exo-command": "",
@@ -97,6 +97,9 @@ def plan(cmd: str, done: Sequence[str]) -> Slot | None:
     elif cmd == "layout":
         return Slot("[inverse|classic]", "", _c("inverse|input on top, newest message under it",
                                                  "classic|input at the bottom, newest at the bottom")) if n == 0 else None
+    elif cmd == "exosphere":
+        return Slot("[on|off]", "", _c("on|show the figure in the bottom-right corner",
+                                        "off|hide it")) if n == 0 else None
     elif cmd == "trace":
         return Slot("[last N turns]", "", _c("5|last 5 turns", "10|last 10 turns", "25|last 25 turns")) if n == 0 else None
     elif cmd == "findings":

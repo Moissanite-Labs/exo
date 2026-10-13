@@ -26,6 +26,8 @@ from exo_tui.onboarding import INTRO_PROMPT, Onboarding, load_catalog
 from exo_tui.prefs import LAYOUTS, Prefs
 from exo_tui import theme as th
 from exo_tui.hero import Hero, hero_rows
+from exo_tui import exosphere as xs
+from exo_tui.exosphere import Exosphere
 from exo_tui.boot import STEPS as BOOT_STEPS
 from exo_tui.boot import BootScreen
 from exo_tui.providers import ProvidersScreen, refuse_key_in_composer
@@ -68,12 +70,26 @@ COMMANDS = {
     "tutorial": ("other", "tips the first time something comes up: /tutorial on, off or reset (bare shows state)"),
     "copy": ("other", "copy to the clipboard: /copy (last answer), /copy error, /copy all"),
     "compose": ("other", "open the big editor for a long prompt: /compose, /compose task (scaffold), /compose edit ($EDITOR)"),
+    "exosphere": ("other", "the lattice figure in the bottom-right corner that moves with the agent: /exosphere on|off"),
     "layout": ("other", "inverse puts the input on top and the newest message under it; classic is the usual order: /layout inverse|classic"),
     "help": ("other", "list every command"),
 }
 LOCAL_COMMANDS = {n: d for n, (_, d) in COMMANDS.items()}
 GROUPS = ("session", "model", "tools", "other")
+SPHERE_MIN_COLS = 90  # the corner exosphere hides on terminals narrower than this (D-062)
+SPHERE_MIN_LEFT = 64  # ... or when the chat column itself is this narrow (a panel is open on a mid-size terminal)
+SPHERE_MIN_ROWS = 20
+SPHERE_PAD = xs.WIDTH + 2  # right padding that keeps the input rows out of the exosphere's box (classic)
 SCAFFOLD = "## Goal\n\n## Context\n\n## Constraints\n\n## Done when\n"  # /compose task
+
+
+class LeftPane(Vertical):
+    """The chat column. It tells the app when its size changes, so the corner exosphere stays in its corner."""
+
+    def on_resize(self, event: Any) -> None:
+        place = getattr(self.app, "place_sphere", None)
+        if place is not None:
+            place()
 
 
 PROMPT_IDLE = th.PROMPT  # the mark left of the composer; PromptMark redraws it with steer state
@@ -86,7 +102,7 @@ class ExoApp(App):
     Screen { background: $background; color: $foreground; }
     #brand { height: 2; padding: 0 1; border-bottom: solid $line; background: $background; }
     #main { height: 1fr; }
-    #left { width: 1fr; }
+    #left { width: 1fr; layers: base sphere; }
     #transcript { height: 1fr; padding: 1 2 0 2; background: $deep; scrollbar-size-vertical: 1;
                   scrollbar-background: $deep; scrollbar-color: $line-2; scrollbar-color-hover: $fg-3;
                   scrollbar-color-active: $accent; }
@@ -117,6 +133,17 @@ class ExoApp(App):
     #status.inverse { border-top: none; border-bottom: solid $line; }
     #approval { height: auto; border-left: outer $accent; background: $surface; padding: 0 1; margin: 0 2 1 2; }
     #hero { margin: 0; }
+    #exosphere { layer: sphere; position: absolute; display: none; }
+    #sphere-gap { height: {gap}; display: none; background: $deep; }
+    #left.sphere #exosphere { display: block; }
+    #left.sphere #sphere-gap { display: block; }
+    #left.sphere.inverse #sphere-gap { height: {h}; }
+    #left.sphere-flow #activity { padding: 0 {pad} 0 2; }
+    #left.sphere-flow #compose { padding: 0 {pad} 0 2; }
+    #left.sphere-flow #cmenu { padding: 0 {pad} 0 2; }
+    #left.sphere-flow #approval { padding: 0 {padc} 0 1; }
+    #left.composing #exosphere { display: none; }
+    #left.composing #sphere-gap { display: none; }
     #approval Input { border: none; background: $panel; height: 1; padding: 0 1; }
     #approval Input:focus { border: none; }
     #panel { width: 45%; border-left: outer $cold; background: $surface; padding: 0 1; }
@@ -135,7 +162,8 @@ class ExoApp(App):
     #edit-area { height: 1fr; }
     BootScreen { align: center middle; background: $deep; }
     #boot-art { width: 36; height: auto; }
-    """
+    """.replace("{gap}", str(xs.HEIGHT - 3)).replace("{h}", str(xs.HEIGHT)).replace("{pad}", str(SPHERE_PAD))\
+        .replace("{padc}", str(SPHERE_PAD - 2))  # the card keeps its own margin; a wider margin would narrow the transcript
     BINDINGS = [
         Binding("ctrl+p", "palette", "palette", priority=True),
         Binding("ctrl+o", "toggle_tools", "tool output", priority=True),
@@ -239,6 +267,8 @@ class ExoApp(App):
         self.prefs = Prefs(home or exo_home())  # saved layout (D-046)
         self.layout = self.prefs.layout()  # "inverse" (input on top, newest first) or "classic"
         self.composing = False  # the big editor pane (D-046)
+        self.sphere_on = self.prefs.exosphere()  # the corner exosphere (D-062), on by default
+        self.sphere_error = False  # an error event arrived during this turn: the turn ends in a dim flicker
         self.numbers = False  # line numbers in the pane
         self.older: list[tuple] = []  # history entries not mounted yet, oldest first
         self.earlier_row: Static | None = None
@@ -248,14 +278,16 @@ class ExoApp(App):
     def compose(self) -> ComposeResult:
         yield BrandBar()
         with Horizontal(id="main"):
-            with Vertical(id="left"):
+            with LeftPane(id="left"):
                 yield VerticalScroll(id="transcript")
+                yield Static("", id="sphere-gap")  # the rows the exosphere's box takes from the transcript
                 yield Static("", id="activity")
                 yield ComposeHeader()
                 with Horizontal(id="compose"):
                     yield PromptMark(PROMPT_IDLE, id="prompt")
                     yield Composer()
                 yield CompletionMenu()
+                yield Exosphere()
             yield PanelView()
         yield StatusStrip()
 
@@ -265,6 +297,7 @@ class ExoApp(App):
         self.menu = self.query_one(CompletionMenu)
         self.composer.key_hook = self.composer_key
         self.cheader = self.query_one(ComposeHeader)
+        self.sphere = self.query_one(Exosphere)
         self.apply_layout(self.layout, save=False)
         self.composer.focus()
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
@@ -344,6 +377,7 @@ class ExoApp(App):
         self.brand.set(self.seat or "main", self.thread_label, self.busy)
         self.prompt.set_state(self.busy, bool(self.question))
         self.composer.placeholder = BUSY_HINT if self.busy else self.tip_line() or IDLE_HINT
+        self.sphere.set_state(self.sphere_state())
 
     def wire(self, width: int = 9) -> Text:
         """A packet travelling along a wire: data in flight. Still under reduced motion."""
@@ -379,8 +413,11 @@ class ExoApp(App):
         if not widgets:
             return
         if any(not (isinstance(w, Block) and w.kind in ("note", "warn", "job", "memory")) for w in widgets):
-            for w in self.query("#welcome, #hero"):  # a system line does not end the empty start; a message does
+            gone = list(self.query("#welcome, #hero"))  # a system line does not end the empty start; a message does
+            for w in gone:
                 w.remove()
+            if gone:
+                self.call_after_refresh(self.place_sphere)  # the big egg leaves; the small one takes the corner
         tr = self.transcript
         if self.inverse and tr.children:  # newest first: the batch goes in above everything, last of it on top
             tr.mount(*widgets[::-1], before=0)
@@ -509,6 +546,7 @@ class ExoApp(App):
     def handle(self, ev: s.Event) -> None:
         b = ev.body
         if isinstance(b, s.TurnStarted):
+            self.sphere_error = False
             self.busy = True
             self.turn_t0 = time.monotonic()
             self.model = b.model or self.model
@@ -525,6 +563,8 @@ class ExoApp(App):
             self.turn_t0 = 0.0
             self.running_tools = 0
             self.close_cur()
+            self.sphere.flash("error" if self.sphere_error or b.stop_reason == "error" else "done")
+            self.sphere_error = False
             self.hint_budget = 1
             if (b.timing.get("wall_ms", 0) - b.timing.get("tool_ms", 0) - b.timing.get("approval_ms", 0)
                     - b.timing.get("model_ms", 0)) >= LONG_TURN_MS:
@@ -671,6 +711,10 @@ class ExoApp(App):
             self.note(f"{b.level}: {b.text}" if b.level != "info" else b.text, "warn" if b.level == "warn" else "note")
         elif isinstance(b, s.Error):
             self.note(f"error: {b.code}: {b.message}", "error")
+            if self.busy:
+                self.sphere_error = True  # shown when the turn ends, so the turn's own state is not cut short
+            else:
+                self.sphere.flash("error")
         self.refresh_status()
         self.refresh_activity()
 
@@ -824,6 +868,7 @@ class ExoApp(App):
             if rows:
                 self.transcript.mount(Hero(rows))
             self.transcript.mount(Welcome(self.seat or "main", self.model))
+            self.call_after_refresh(self.place_sphere)
         self.refresh_status()
 
     # ------------------------------------------------------------ sending
@@ -1204,6 +1249,8 @@ class ExoApp(App):
             await self.tutorial_command(args)
         elif name == "layout":
             self.layout_command(args)
+        elif name == "exosphere":
+            self.exosphere_command(args)
         elif name == "compose":
             self.compose_command(args)
         elif name in ("sessions", "resume"):
@@ -1579,6 +1626,7 @@ class ExoApp(App):
         self.approvals = [a for a in self.approvals if a.request_id not in gone]
         if self.card is not None and self.card.req.request_id in gone:
             self.close_card()
+        self.sphere.set_state(self.sphere_state())
 
     def close_card(self) -> None:
         restore = self.card is not None and (self.focused is self.card or self.card.has_focus_within)
@@ -1586,6 +1634,7 @@ class ExoApp(App):
             self.card.remove()
             self.card = None
         self.show_approval()
+        self.sphere.set_state(self.sphere_state())  # the glow ends with the last card
         if restore:
             self.query_one(Composer).focus()
 
@@ -1645,9 +1694,10 @@ class ExoApp(App):
     def arrange(self) -> None:
         """Put the input, menu, activity line and transcript in the order the layout wants."""
         left = self.query_one("#left")
-        order = [self.cheader, self.query_one("#compose"), self.menu, self.query_one("#activity"), self.transcript]
+        gap = self.query_one("#sphere-gap")  # the exosphere's rows: under the transcript, whichever way it runs
+        order = [self.cheader, self.query_one("#compose"), self.menu, self.query_one("#activity"), self.transcript, gap]
         if not self.inverse:
-            order = [self.transcript, self.query_one("#activity"), self.cheader, self.query_one("#compose"), self.menu]
+            order = [self.transcript, gap, self.query_one("#activity"), self.cheader, self.query_one("#compose"), self.menu]
         prev = None
         for w in order:
             if prev is None:
@@ -1665,6 +1715,7 @@ class ExoApp(App):
         else:
             screen.move_child(self.strip, after=main)
         self.strip.set_class(self.inverse, "inverse")
+        self.place_sphere()
 
     def apply_layout(self, name: str, save: bool = True) -> None:
         if name not in LAYOUTS:
@@ -1693,6 +1744,59 @@ class ExoApp(App):
         else:
             self.note("usage: /layout inverse|classic", "warn")
 
+    # ------------------------------------------------------------ the exosphere (D-062)
+    def sphere_state(self) -> str:
+        """The live state the corner figure shows, from what this client already knows. Waiting on the user (an
+        approval or a question) outranks work in flight; "done" and "error" are passing beats (Exosphere.flash)."""
+        if self.approvals or self.card is not None or self.question:
+            return "approval"
+        if self.running_tools:
+            return "tool"
+        return "thinking" if self.busy else "idle"
+
+    def sphere_fits(self) -> bool:
+        if not self.sphere_on or self.composing or self.query("#hero"):  # the start motif is the same figure, large
+            return False
+        left = self.query_one("#left")
+        return (self.size.width >= SPHERE_MIN_COLS and self.size.height >= SPHERE_MIN_ROWS
+                and left.size.width >= SPHERE_MIN_LEFT)
+
+    def place_sphere(self) -> None:
+        """Show or hide the corner exosphere and pin it to the bottom-right of the chat column.
+
+        Text never runs under it: the figure sits on its own layer, and its rows are reserved. In classic, the input
+        rows beside it (activity line, composer, menu, approval card) get a right padding the width of the box, so
+        their text wraps short of it, and a gap row block under the transcript makes up the rest of its height. In
+        inverse, the gap sits under the transcript at the bottom and the box stands in its right end."""
+        if not hasattr(self, "sphere"):  # before on_mount
+            return
+        left = self.query_one("#left")
+        on = self.sphere_fits()
+        left.set_class(on, "sphere")
+        left.set_class(on and not self.inverse, "sphere-flow")
+        self.sphere.show(on)
+        if on:
+            w, h = left.size
+            self.sphere.styles.offset = (max(0, w - xs.WIDTH), max(0, h - xs.HEIGHT))
+
+    def exosphere_command(self, args: str) -> None:
+        word = args.strip().lower()
+        if not word:
+            hidden = "" if not self.sphere_on or self.sphere.on else (
+                f" (hidden now: it shows from {SPHERE_MIN_COLS} columns, outside the big editor and the start)")
+            self.note(f"exosphere: {'on' if self.sphere_on else 'off'}{hidden}. /exosphere on|off shows or hides "
+                      "the figure in the bottom-right corner; the choice is saved.")
+        elif word in ("on", "off"):
+            self.sphere_on = word == "on"
+            try:
+                self.prefs.set_exosphere(self.sphere_on)
+            except OSError:
+                pass
+            self.place_sphere()
+            self.note(f"exosphere: {word} (saved)")
+        else:
+            self.note("usage: /exosphere on|off", "warn")
+
     # ------------------------------------------------------------ the big editor (D-046)
     def action_compose(self) -> None:
         if self.modal_open():
@@ -1716,6 +1820,7 @@ class ExoApp(App):
         c.tab_behavior = "indent"
         c.indent_width = 2
         self.query_one("#left").add_class("composing")
+        self.place_sphere()
         c.placeholder = "write the whole prompt here. Enter adds a line, ctrl+s sends."
         self.cheader.show(c, self.numbers)
         c.focus()
@@ -1730,6 +1835,7 @@ class ExoApp(App):
         c.show_line_numbers = False
         c.tab_behavior = "focus"
         self.query_one("#left").remove_class("composing")
+        self.place_sphere()
         self.refresh_status()
         c.focus()
         c.refresh()

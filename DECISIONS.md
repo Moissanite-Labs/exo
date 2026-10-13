@@ -1196,3 +1196,33 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Numbering:** D-055 is used by branch `feat/roadmap-page`, so this is D-056.
 - **Validation:** tests check the `--version` form and that the changelog's latest release equals the pyproject version.
 - **Docs:** `docs/VERSIONING.md`, `CHANGELOG.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-062 (2026-10-13) The exosphere in the terminal client
+- **Why:** principal A named Exo's evolving 3D figure the exosphere, with forms x0 (the egg), then x, then 3xo, and
+  more to come. The terminal client showed an older start motif and no lasting figure. A wanted the x0 design as the
+  intro, and a small exosphere that stays on screen all session and moves with the agent, like the pets in Hermes
+  Agent's CLI.
+- **Research:** Hermes Agent's CLI (prompt_toolkit) draws its Petdex pet in a right-aligned window of fixed height
+  above the prompt: a reserved band. TamaHermes (AppKit panel) and EvoPet (Metal window) float their pets over the
+  terminal in separate windows. None of them flows text around the pet.
+- **Decision:** the start motif and the boot screen are redrawn from the brand files and the egg geometry: the x0 egg
+  (`exo_tui/exosphere.py`, the geometry of `site/brand/egg.js` at stage 0) and the mark and wordmark read at run time
+  from `site/brand/tui-mark.html` and `tui-wordmark.html` (`exo_tui/brand.py`). The name as a graphic is `3 X 0`;
+  plain text stays "Exo". A small x0 sits in the bottom-right corner of the chat column on its own layer. Textual
+  has no float, so a wrap inside the scrolling transcript is not clean; the corner is reserved instead. In classic
+  the input rows beside the box get a right padding the box's width, so the composer's text flows beside it, and a
+  gap under the transcript makes up its height; in inverse a gap under the transcript holds it. The figure maps
+  client events to six states: idle (slow breath), thinking (inner pulse), tool running (packets), waiting on
+  approval (steady glow and `!`), error (dim flicker), done (brief bloom). Frames are cached per state and played at
+  4 fps (2 idle) with no layout pass; one still frame under reduced motion or `NO_COLOR`. `/exosphere on|off` is
+  saved per user, on by default. It hides under 90 columns, in the big editor and while the large start figure
+  shows. It never takes focus. The label shows the form and, once a level source exists, the level; none exists yet,
+  so it shows `x0`.
+- **Numbering:** D-057 to D-059 are held by draft #107, D-060 and D-061 by open PRs #109 and #110, so this is D-062.
+- **Validation:** `tests/clients/tui/test_exosphere.py`: frames, states, the label, the corner position, no text
+  under the box in both layouts (long answer, long draft, approval card), the completion menu beside it, the saved
+  toggle, the narrow hide and return, focus and keys (click, tab, ctrl+f, Esc), reduced motion, the big editor, and
+  the brand files' packaged copies. CPU measured with `scripts/exosphere_cpu.py`: +0.25% of one core idle, +0.8%
+  during a turn.
+- **Docs:** `docs/UI.md` "The exosphere", `docs/USER-GUIDE.md`, `docs/COMMANDS.md`, `docs/BRAND.md` "Terminal",
+  `skills/exo-intro/SKILL.md`.

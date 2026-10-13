@@ -46,7 +46,7 @@ Geometry (units, x-height 20): stroke 4, letter gap 3.2, the x is 20 + 2·(4/√
 | `favicon.svg`, `favicon-32.png`, `favicon-16.svg`, `favicon-16.png` | At 16 px only the X with its V remains. |
 | `app-icon.svg`, `app-icon-round.svg`, `app-icon-1024.png`, `icon-512.png`, `icon-192.png`, `apple-touch-icon.png` | App tiles on `#08090a`. |
 | `story-1.svg` to `story-5.svg` | The brand page's walk from the drawing to the x. |
-| `tui-mark.txt`, `tui-egg.txt` | Terminal proposals in braille (not wired into the client). |
+| `tui-mark.txt`, `tui-egg.txt`, `tui-wordmark.txt` | Terminal braille mark and egg, and the terminal wordmark `3 X 0`; each `.html` twin marks the orange cells. The client reads the mark and wordmark (D-062). |
 
 Colours are the site's tokens, unchanged (`site/assets/style.css`): bg `#08090a`, fg `#eceae4`, fg-3 `#8b8b86`,
 accent `#ff5b14` (the V, the seed, the core), accent-2 `#ff8a4c` (packets), cold `#9fb4c4` (the added dimension).
@@ -112,8 +112,11 @@ Keep the stage meaning (more cells, more structure, a dimension, more light) so 
 - The front page (`site/assets/main.js`): the hero shows the egg on every host (D-049 accepted 2026-10-13). `?egg=2`
   picks a stage and adds a small "Preview" tag linking to the brand page; `?egg=off` brings back the old orb.
 
-## Terminal (proposal)
+## Terminal
 
-`tui-mark.txt` (12 × 6 braille cells) and `tui-egg.txt` (14 × 7) render the mark and the stage-0 egg for the terminal
-header, in the same braille style as the current start motif (`clients/tui/exo_tui/hero.py`). The brand page shows
-them with the V cells in orange. The terminal client is unchanged.
+The terminal client reads `tui-mark.html` and `tui-wordmark.html` at run time (`clients/tui/exo_tui/brand.py`; the
+`.txt` files are the fallback; an installed client uses copies packaged in `exo_tui/brand/`, kept identical by a test).
+The boot screen shows the mark and the wordmark; the brand bar and the empty-start card show the wordmark. The
+exosphere (x0, the egg at stage 0) is drawn by `exo_tui/exosphere.py` from the same geometry as `egg.js`: large on the
+start screen and small in the bottom-right corner for the whole session (D-062, `docs/UI.md`). `tui-egg.txt` stays as
+the original still proposal.

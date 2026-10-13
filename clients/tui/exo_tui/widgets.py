@@ -25,6 +25,7 @@ from textual.widget import Widget
 from textual.widgets import Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 
+from exo_tui.brand import wordmark
 from exo_tui.panels import choice_options, render_panel
 from exo_tui.theme import (DOT, PROMPT, SPINNER, chips, gauge, header_rule, human_tokens, reduced_motion,
                            rich_style)
@@ -407,7 +408,7 @@ class PromptMark(Static):
 
 
 class BrandBar(Widget):
-    """`E X O`, the agent, the thread, and a live dot while a turn runs."""
+    """The wordmark (`3 X 0`), the agent, the thread, and a live dot while a turn runs."""
 
     def __init__(self) -> None:
         super().__init__(id="brand")
@@ -428,8 +429,7 @@ class BrandBar(Widget):
 
     def render(self) -> Table:
         left = Text(no_wrap=True, overflow="ellipsis")
-        left.append("◢ ", style=rich_style("accent"))
-        left.append("E X O", style=rich_style("fg", "bold"))
+        left.append_text(wordmark())  # the name as a graphic, from the brand files
         if self.agent:
             left.append(f"  {DOT}  ", style=rich_style("line2"))
             left.append(self.agent, style=rich_style("fg2"))
@@ -756,8 +756,7 @@ class Welcome(Static):
 
     def on_mount(self) -> None:
         head = Text()
-        head.append("\u25e2 ", style=rich_style("accent"))
-        head.append("E X O", style=rich_style("fg", "bold"))
+        head.append_text(wordmark())
         info = Text(f"{self.agent}  {DOT}  {self.model or '-'}  {DOT}  memory ready", style=rich_style("fg3"))
         keys = chips([("enter", "send"), ("@", "file"), ("!", "shell"), ("/", "commands"), ("ctrl+p", "palette"),
                       ("ctrl+c", "stop")])

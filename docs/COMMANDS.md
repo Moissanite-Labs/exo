@@ -59,6 +59,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/tutorial` | Turn tips on or off, or show them again. | `on`, `off`, `reset`. None shows the state. | `ExoApp.tutorial_command` (`config.set` on `tutorial.enabled`) |
 | `/compose` | Open the big editor for a long prompt (also `ctrl+g`). Enter adds a line, `ctrl+s` or `ctrl+enter` sends, Esc closes and keeps the draft. | `task` adds Goal, Context, Constraints, Done when headings; `edit` opens `$VISUAL` or `$EDITOR`; `close`. None opens it. | `ExoApp.compose_command` (client only) |
 | `/layout` | `inverse` puts the input on top and the newest message under it; `classic` is the usual order. Saved. The web page runs it too. | `inverse`, `classic`. None shows the layout. | `ExoApp.layout_command`, `exo_tui/prefs.py` (web: `static/layout.js`) |
+| `/exosphere` | Shows or hides the corner exosphere (D-062). Saved per user. | `on`, `off`. None shows the state. | `ExoApp.exosphere_command`, `exo_tui/prefs.py`, `exo_tui/exosphere.py` |
 | `/help` | List every command. | none | `ExoApp.help_text` |
 
 Not slash commands, but in the same composer: `@path` adds a file to the turn, `!cmd` asks the agent to run a shell

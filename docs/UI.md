@@ -39,7 +39,7 @@ the middle dot as separator come straight from the site.
 
 ## What is on screen
 
-1. Brand bar: `E X O`, agent, thread, and `LIVE` with a pulsing dot while a turn runs (`IDLE` otherwise).
+1. Brand bar: the wordmark `3 X 0` (the X in orange, read from `site/brand/tui-wordmark.html`), agent, thread, and `LIVE` with a pulsing dot while a turn runs (`IDLE` otherwise).
 2. Transcript: `›` and your text for a prompt (`steer ›` when sent mid-turn); agent text in fg-2 as Markdown;
    one line per tool with state glyph, name, short args, line count and elapsed time (ctrl+o expands); system
    lines dim; tips as `tip · ...` in dim italic; `memory · log 1-16 folded · 1781 → 153 tok` as a cold line.
@@ -54,12 +54,16 @@ the middle dot as separator come straight from the site.
    No animation: the menu and the line change only on keys and events, so reduced motion needs no special case.
 6. Status strip: `MODEL` (the route that served, in orange with `← requested` when it fell back), `MEM` gauge,
    `CACHE` share of the last call, `COST`, open findings.
-7. Start: the site's hero motif in braille (`exo_tui/hero.py`): a shell of linked nodes around an orange core,
-   turning once every 16 s. Frames are precomputed, played at 3 fps, 10 rows (7 below 38 terminal rows, hidden below
-   30), one still frame under reduced motion or `NO_COLOR`, gone with the first message. Idle cost measured with
-   `scripts/idle_cpu.py`: about 1.3% of one core (0.5% without it). A plain startup prints no `new thread` line; `/new` does.
-   Before that, a boot sequence (under a second, any key skips it) that marks `core`, `agent`, `memory`, `model` as
-   each real step finishes, then an empty-start card with the keys.
+7. Start: the exosphere in its x0 form, large (`exo_tui/hero.py`, drawn by `exo_tui/exosphere.py`): the lattice
+   egg of `site/brand/egg.js` at stage 0, the yolk's six incentre dots (an octahedron) with the seed in orange inside the
+   egg's ring of lattice dots, turning a quarter turn every 16 s (seamless, by the figure's symmetry). Frames are
+   precomputed, played at 3 fps, 10 rows (7 below 38 terminal rows, hidden below 30), one still frame under reduced
+   motion or `NO_COLOR`, gone with the first message, when the small exosphere takes the corner. A plain startup
+   prints no `new thread` line; `/new` does.
+   Before that, a boot sequence (under a second, any key skips it): the mark and the wordmark, read from
+   `site/brand/tui-mark.html` and `tui-wordmark.html` (`exo_tui/brand.py`), then `core`, `agent`, `memory`, `model`
+   marked as each real step finishes, then an empty-start card with the keys.
+8. The exosphere: a small x0 in the bottom-right corner of the chat column for the whole session. See below.
 
 Where the numbers come from, all from events the core already sends: `model.call` (`requested`, `route`,
 `usage.cache_read_tokens`), `usage.updated` (context tokens, session cost), `memory.summarized`,
@@ -93,12 +97,68 @@ one note says to type `/providers`.
   (`docs/media/tui-12-classic-bottom.png`: a long thread opens at the bottom). `/layout` moves the strip live. The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
   Inverse is the default only for the experiment: set `DEFAULT_LAYOUT = "classic"` in `exo_tui/prefs.py` to flip it back.
 
+## The exosphere (D-062)
+
+The exosphere is the name of Exo's evolving lattice figure. Its forms are **x0** (the egg), then **x**, then
+**3xo**, with more to come (`exosphere.FORMS` is an open list). The community figure on the site is x0 too. The
+terminal draws x0 at two sizes: large on the start screen, and small (14 x 6 braille cells, 28 x 24 dots) in the
+bottom-right corner of the chat column, with a one-line label under it.
+
+**Label.** The form, and the level when one exists: `x0 · lv 3`. No XP or level source exists yet (the exopet XP
+design is on branch `design/exopet`, not built), so today the label is `x0` alone. `Exosphere(level=...)` takes the
+number when a source lands.
+
+**Where it sits, and why text never runs under it.** Hermes Agent's CLI (prompt_toolkit) draws its Petdex pet as a
+right-aligned window of fixed height above the prompt: a reserved band, not a wrap. TamaHermes and EvoPet draw their
+pets in separate always-on-top windows (AppKit, Metal) that float over the terminal. None of them flows text around
+the pet. Textual has no float, so a true wrap around a box inside a scrolling transcript is not clean either. Exo
+reserves a corner region, with the input flowing beside it:
+
+- The figure is its own widget on a layer above the chat column, pinned to the column's bottom-right (it moves when
+  the terminal or a side panel changes the column's size).
+- Classic layout: the activity line, the composer, the completion menu and the approval card get a right padding
+  the width of the box, so their text wraps short of it. A gap of three rows under the transcript makes up the rest
+  of the box's height. The composer's text flows beside the figure; the transcript ends above it.
+- Inverse layout: the input is at the top, so the box stands in the right end of a gap of its own height under the
+  transcript.
+- Tests (`tests/clients/tui/test_exosphere.py`) check, in both layouts, with a long answer, a long draft and an
+  approval card, that no text widget's content area overlaps the box and that every cell of the box shows the figure.
+
+**States.** Mapped from events the client already gets:
+
+| State | When | Animation |
+|---|---|---|
+| idle | nothing running | a slow breath (the shell swells 3.5% twice a loop) and a quarter turn every 12 s; 2 repaints a second |
+| thinking | `turn.started` until the turn ends, no tool running | inner pulse: the yolk and the lines to its centre glow orange every 3 s |
+| tool running | `tool.started` until `tool.completed` | packets: orange dots travel out of the core along the six axes to the shell |
+| waiting on approval | an approval card is open, or the agent asked a question | steady glow, no motion, no timer; an orange `!` beside the label |
+| error | an `error` event, or a turn that ends with `stop_reason` "error" | dim flicker: the figure goes dim, a few ring dots drop out, a different few each beat; 3 s |
+| done | `turn.completed` | brief bloom: the yolk swells and brightens once, 1.6 s |
+
+Waiting on the user outranks a passing beat; new work cuts a passing beat short. An error inside a running turn is
+shown when the turn ends, so the turn's own state is not cut short.
+
+**Cost.** Each state is a fixed loop of 48 frames (one only for approval, 6 for the bloom), cached after first use,
+so a frame is one text swap of a 16 x 7 box with no layout pass, at 4 fps (2 when idle). The timer stops when the
+figure is hidden or still. Measured headless with `scripts/exosphere_cpu.py` (30 s, M-series Mac): idle 0.80% of
+one core with it, 0.55% without (+0.25%); a turn in flight 3.24% with it, 2.43% without (+0.8%). This counts the
+app's own work, not the terminal's drawing.
+
+**Rules.** On by default; `/exosphere off` and `/exosphere on` save the choice per user in
+`$EXO_HOME/state/ui.json` (`EXO_EXOSPHERE=on|off` overrides it for one run). It hides on terminals under 90 columns,
+under 20 rows, when a side panel leaves the chat column under 64 columns, in the big editor (ctrl+g), and while the
+large start figure is on screen. It never takes focus and has no keys: a click on it is a click on a plain surface
+(focus goes to the composer), ctrl+f still reaches an approval card, ctrl+g still opens the editor, Esc still never
+stops a turn (D-043, D-045), and the completion menu (D-037) works beside it. `EXO_REDUCED_MOTION` and `NO_COLOR`
+give one still frame per state (bold and dim only under `NO_COLOR`).
+
 ## Switches
 
 - `EXO_REDUCED_MOTION=1`: no boot sequence, no spinner, packet, pulse, fade or caret blink. The state is still
   shown, as still glyphs.
 - `NO_COLOR`: the `exo-plain` theme paints nothing (the terminal's own colours); orange becomes bold, dim stays
   dim, so the shape still reads.
+- `EXO_EXOSPHERE=on|off`: shows or hides the corner exosphere for one run, over the saved `/exosphere` choice.
 - 256-colour terminals: Textual and Rich downgrade the hex values; the palette was chosen so orange, blue and
   grey stay distinct. The app paints its own background, so light terminals are not blinded.
 
@@ -110,6 +170,8 @@ approval panel, the `/context` report, a background job, then the completion sho
 drives the app with Textual's pilot over an in-process core and a scripted model, with neutral demo data.
 `docs/media/README.md` has the commands. The older shots in `docs/ui/` were removed because they used internal
 names. `scripts/ui_shots.py` still renders the full set (boot, narrow 80x24) for local checks.
+The exosphere shots (boot, start, a turn in both layouts, approval in both, the bloom, the menu, a narrow terminal)
+come from `scripts/exosphere_shots.py <out-dir>`.
 The `/providers` panel shots (`docs/ui/07-providers.png`, `docs/ui/07b-providers-key.png`, demo data, no
 real status or keys) come from `scripts/ui_shots.py`.
 
