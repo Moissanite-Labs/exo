@@ -1,5 +1,5 @@
 // Tasks view: tasks.list once, then task.updated events keep it current.
-// Drawn like the site's roadmap grid (D-060): a status tally, then one hairline lane per status.
+// Drawn like the site's roadmap grid (D-061): a status tally, then one hairline lane per status.
 import { h, api, short, ago, errorBox, pageHead, readout, pill, emptyState } from "./dom.js";
 import * as bus from "./bus.js";
 import "./egg.js";   // defines window.ExoEgg (copied from site/brand/egg.js); used once, in the empty state

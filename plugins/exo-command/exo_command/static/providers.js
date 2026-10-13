@@ -1,5 +1,5 @@
 // Providers view: where model keys go, per-provider status, key save/test/remove, and the default model.
-// Drawn as an instrument panel (D-060): one ruled row per provider, status in a pill whose led form carries it.
+// Drawn as an instrument panel (D-061): one ruled row per provider, status in a pill whose led form carries it.
 // A key value only ever lives in the password field. It is read once to build the request body, the field is
 // cleared at once (also on error), and it is never logged, stored, put in a URL, or shown again.
 import { h, api, errorBox, pageHead, readout, pill, emptyState } from "./dom.js";

@@ -1,4 +1,4 @@
-"""Static checks on the sub-page look (D-060): the shared egg stays in step with the site, every sub-page has a page
+"""Static checks on the sub-page look (D-061): the shared egg stays in step with the site, every sub-page has a page
 head and a designed empty state, and status pills carry their state in form, not colour alone."""
 from __future__ import annotations
 

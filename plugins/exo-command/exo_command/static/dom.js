@@ -64,7 +64,7 @@ export function tag(text, tone) { return h("span", { class: "xc-tag" + (tone ? "
 export function empty(t) { return h("div", { class: "xc-empty" }, t); }
 export function errorBox(t) { return h("div", { class: "xc-error" }, t); }
 
-// ---------- sub-page pieces (D-060): the site's section head, a designed empty state, status in form ----------
+// ---------- sub-page pieces (D-061): the site's section head, a designed empty state, status in form ----------
 // A page head: a mono eyebrow, the title, one line of purpose, and an optional readout or controls on the right.
 export function pageHead(o) {
   return h("header", { class: "xc-phead" },

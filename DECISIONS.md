@@ -1197,7 +1197,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** tests check the `--version` form and that the changelog's latest release equals the pyproject version.
 - **Docs:** `docs/VERSIONING.md`, `CHANGELOG.md`, `docs/DEVELOPER-GUIDE.md`.
 
-## D-060 (2026-10-13) Web sub-pages to the site v2 standard
+## D-061 (2026-10-13) Web sub-pages to the site v2 standard
 - **Why:** the chat page and the site v2 (front page, roadmap) set a high bar; Tasks, Schedule, Command and Providers
   still looked like a debug console: small mono panel titles, cramped lanes, colour-only status, plain one-line empty
   states, no 400px layout for the nav, and a DOM quirk that printed `null` above the lists.
@@ -1208,9 +1208,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   grid and cards; Command and Providers like an instrument panel. The lattice egg (`site/brand/egg.js`, copied
   byte for byte to `static/egg.js`) appears once, in the Tasks empty state. Presentation only: no route, protocol,
   token (D-039), approval (D-045), layout (D-046) or completion (D-037) behaviour changes; element ids stay.
-- **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-060.
+- **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
 - **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
   sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root
   suites; before and after screenshots from `scripts/shots_web_tabs.py`.
-- **Docs:** `docs/ui/WEB.md` "Sub-pages (D-060)".
+- **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)".
 

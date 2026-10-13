@@ -502,7 +502,7 @@ body { margin: 0; background: #08090a; }
 .xc-layout { margin: auto 12px 0 12px; font-size: 10px; padding: 8px 10px; text-align: left; }
 .xc-chat-left > .xc-sessions { flex: 0 1 auto; }
 
-/* ---------- sub-pages v2 (D-060): Tasks, Schedule, Command, Providers ----------
+/* ---------- sub-pages v2 (D-061): Tasks, Schedule, Command, Providers ----------
    The site's v2 language (site/assets/style.css, site/roadmap/roadmap.css): a mono eyebrow with an orange rule, an Inter
    display title, one line of purpose, hairline grids whose cells draw right and bottom, status as a led whose form
    carries the state (filled, hollow, dashed, crossed, barred) next to the word, tabular numbers. Tasks and Schedule read
