@@ -21,10 +21,11 @@ status and store keys the same way.
 - **Web client:** `exo web` opens the page with a one-time token in the address. The Providers tab has the same
   list, a masked key field, Test, Remove and a default model picker.
 
-Where a new key goes: the macOS Keychain (service `exo`) on a Mac; on Linux the Secret Service through
-`secret-tool` when it is installed, else `~/.config/exo/keys.env` (written mode 0600, atomically). Choose another
-with `exo providers add NAME --store file`. If an environment variable of the same name is set, it wins, and Exo
-says so.
+Lookup order is the environment variable, then the macOS Keychain (service `exo`) on a Mac, then the Linux
+Secret Service through `secret-tool` when it is installed, then `~/.config/exo/keys.env` (mode 0600). A key
+added through the UI goes to the platform key store when available and otherwise to the keys file (written
+atomically). Choose the file explicitly with `exo providers add NAME --store file`. If an environment variable
+of the same name is set, it wins, and Exo says so.
 
 What the test call is: OpenAI-style and local providers list their models (`GET /models`), Anthropic lists one
 model, a decision provider answers one yes or no question, `claude-cli` only checks the binary is on PATH, and

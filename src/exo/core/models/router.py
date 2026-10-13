@@ -7,7 +7,8 @@ provider-stated reset is re-probed after max(60 s, 2% of the open window), never
 past the reset, and each failed probe re-stamps a shorter window. Credentials with
 siblings, and billing failures, keep the provider reset.
 
-Keys: environment, then the macOS Keychain (macOS only), then ~/.config/exo/keys.env (see keys.py).
+Keys: environment, then the macOS Keychain, Linux Secret Service when `secret-tool` is available, then
+`~/.config/exo/keys.env` (mode 0600; override with `EXO_KEYS_FILE`; see keys.py).
 """
 
 from __future__ import annotations
