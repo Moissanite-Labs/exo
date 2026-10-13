@@ -9,8 +9,9 @@ What this provider is not, said plainly:
   it, so a call that carries tools is refused (status 501) and the router falls back to the next route.
 - One process per turn, so every turn pays process start-up and a fresh session. History is flattened into one
   prompt. Output arrives when the run ends, not token by token.
-- On macOS the ``muse`` binary must be code-signed (ad-hoc is enough: ``codesign -s - <path>``). If it is not,
-  the keychain write at login, and the read at run time, fail. ``signature_state`` detects that.
+- On macOS the native Muse binary must be code-signed for keychain access. ``signature_state`` checks a native
+  executable directly; a shell launcher is ``unknown``, because its own signature says nothing about the binary
+  it starts. Launchers may run, and an actual signing failure is classified from the CLI's error.
 - ``META_API_KEY`` is removed from the child's environment. It would override the account login and bill an API
   account instead of the subscription.
 
@@ -40,6 +41,9 @@ from exo.core.types import Message, ProviderEvent, ToolSpec
 DROP_ENV = ("META_API_KEY",)
 PROBE_PROMPT = "Reply with the single word: ok"
 NOT_SIGNED = "not signed at all"
+CLEANUP_TIMEOUT = 2.0
+MACHO_MAGICS = frozenset(bytes.fromhex(m) for m in (
+    "feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"))
 
 
 def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -70,10 +74,18 @@ def login_state(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     return {"logged_in": mechanism == "oauth", "subs_active": subs if isinstance(subs, bool) else None}
 
 
+def _native_binary(exe: str) -> bool:
+    try:
+        with open(exe, "rb") as f:
+            return f.read(4) in MACHO_MAGICS
+    except OSError:
+        return False
+
+
 def signature_state(exe: str) -> str:
-    """``"unsigned"``, ``"signed"`` or ``"unknown"``. Only macOS cares: an unsigned binary cannot write the
-    keychain (OSStatus -67068). Elsewhere, or if ``codesign`` cannot say, the answer is ``unknown``."""
-    if sys.platform != "darwin" or not shutil.which("codesign"):
+    """Signing state of a directly configured native macOS binary. Scripts and launchers are ``unknown``:
+    they cannot be code-signed, and this does not resolve or verify the executable they eventually start."""
+    if sys.platform != "darwin" or not _native_binary(exe) or not shutil.which("codesign"):
         return "unknown"
     try:
         r = subprocess.run(["codesign", "-dv", exe], capture_output=True, text=True, timeout=10)
@@ -84,10 +96,16 @@ def signature_state(exe: str) -> str:
     return "unsigned" if NOT_SIGNED in (r.stderr or "") else "unknown"
 
 
+def unsigned_detail(exe: str) -> str:
+    if _native_binary(exe):
+        return f"the native Muse binary is not code-signed; run: codesign -s - {exe}"
+    return "Muse keychain access failed (unsigned binary); run codesign -s - on the native Muse binary, not its launcher"
+
+
 def classify_failure(returncode: int, stderr: str) -> str:
     """Map a failed ``muse exec`` to one of Exo's error classes. Looks at the text, never returns it."""
     low = (stderr or "").lower()
-    if "-67068" in low or "keychain" in low:
+    if "-67068" in low or NOT_SIGNED in low:
         return "unsigned"
     if any(w in low for w in ("not logged in", "no credentials", "login required", "muse login")):
         return "no_key"
@@ -106,26 +124,31 @@ def probe(exe: str, env: Mapping[str, str] | None = None, timeout: float = 60.0)
     """One tiny ``muse exec`` call for the provider test. Returns ``{"error_class", "detail"}``; an empty class
     means it worked. Details are fixed phrases, never CLI output."""
     if signature_state(exe) == "unsigned":
-        return {"error_class": "unsigned",
-                "detail": f"the muse binary is not code-signed; run: codesign -s - {exe}"}
+        return {"error_class": "unsigned", "detail": unsigned_detail(exe)}
     with tempfile.TemporaryDirectory(prefix="muse-cli-") as tmp:
         argv = [exe, "exec", "--no-session-log", "--disable-shell", "--disable-write", "--disable-web-tools",
-                "--approval-mode", "never", "--workspace", tmp, "--prompt-file", _write(tmp, PROBE_PROMPT)]
+                "--disable-reminders", "--no-foreign-personal-context", "--approval-mode", "never",
+                "--workspace", tmp, "--prompt-file", _write(tmp, PROBE_PROMPT)]
         try:
-            r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=tmp,
-                               env=child_env(env), stdin=subprocess.DEVNULL, start_new_session=True)
-        except subprocess.TimeoutExpired:
-            return {"error_class": "timeout", "detail": f"no answer in {timeout:.0f} s"}
+            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                    encoding="utf-8", errors="replace", cwd=tmp, env=child_env(env),
+                                    stdin=subprocess.DEVNULL, start_new_session=True)
         except OSError:
             return {"error_class": "not_installed", "detail": "the muse CLI could not be run"}
-    if r.returncode != 0:
-        cls = classify_failure(r.returncode, r.stderr)
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return {"error_class": "timeout", "detail": f"no answer in {timeout:.0f} s"}
+        finally:
+            stop_sync(proc)
+    if proc.returncode != 0:
+        cls = classify_failure(proc.returncode, err)
         return {"error_class": cls, "detail": {
-            "unsigned": f"the muse binary is not code-signed; run: codesign -s - {exe}",
+            "unsigned": unsigned_detail(exe),
             "no_key": "not logged in; run: muse login", "auth": "the Muse login was rejected; run: muse login",
             "billing": "the Muse subscription is not active", "rate_limited": "rate limited",
-            "network": "could not connect"}.get(cls, f"muse exec exited {r.returncode}")}
-    if not (r.stdout or "").strip():
+            "network": "could not connect"}.get(cls, f"muse exec exited {proc.returncode}")}
+    if not (out or "").strip():
         return {"error_class": "bad_response", "detail": "muse exec printed nothing"}
     return {"error_class": "", "detail": "muse exec answered (its own login is the credential)"}
 
@@ -149,11 +172,37 @@ def build_prompt(messages: list[Message]) -> str:
     return ("\n\n".join(system) + "\n\n" + body) if system else body
 
 
-def kill_group(proc: asyncio.subprocess.Process) -> None:
+def kill_group(proc: asyncio.subprocess.Process | subprocess.Popen) -> None:
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+def stop_sync(proc: subprocess.Popen) -> None:
+    """Stop descendants too, even if the leader has exited; bound both draining and reaping."""
+    kill_group(proc)
+    try:
+        proc.communicate(timeout=CLEANUP_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # A descendant that detached from the group may still hold the captured pipes. Do not wait for it.
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe:
+                pipe.close()
+        try:
+            proc.wait(timeout=CLEANUP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+async def stop_async(proc: asyncio.subprocess.Process) -> None:
+    kill_group(proc)
+    try:
+        await asyncio.wait_for(proc.wait(), CLEANUP_TIMEOUT)
+    except asyncio.TimeoutError:
+        # asyncio exposes no public close for subprocess output pipes; release them if a detached child holds
+        # them open. The transport also kills a still-running leader. Waiting for EOF must stay bounded.
+        proc._transport.close()
 
 
 class MuseCliProvider:
@@ -182,8 +231,7 @@ class MuseCliProvider:
             yield error_event(f"muse-cli: {exc}", 400, retryable=False)
             return
         if signature_state(self.command) == "unsigned":
-            yield error_event(f"muse-cli: the muse binary is not code-signed; run: codesign -s - {self.command}",
-                              None, retryable=False)
+            yield error_event(f"muse-cli: {unsigned_detail(self.command)}", None, retryable=True)
             return
         model = opts.get("model") or self.model
         effort = {"ultra": "ultra"}.get(opts.get("reasoning"), opts.get("reasoning"))
@@ -191,7 +239,8 @@ class MuseCliProvider:
         with tempfile.TemporaryDirectory(prefix="muse-cli-") as tmp:
             # An empty private workspace: the run has no files of Exo's or the user's to read.
             argv = [self.command, "exec", "--no-session-log", "--disable-shell", "--disable-write",
-                    "--disable-web-tools", "--approval-mode", "never", "--workspace", tmp,
+                    "--disable-web-tools", "--disable-reminders", "--no-foreign-personal-context",
+                    "--approval-mode", "never", "--workspace", tmp,
                     "--prompt-file", _write(tmp, prompt)]
             if model and model != "default":
                 argv += ["--model", str(model)]
@@ -204,24 +253,23 @@ class MuseCliProvider:
             except OSError as exc:
                 yield error_event(f"cannot run {self.command}: {exc.strerror or type(exc).__name__}", None, retryable=True)
                 return
+            timed_out = False
             try:
-                try:
-                    out, err = await asyncio.wait_for(proc.communicate(), self._read)
-                except asyncio.TimeoutError:
-                    yield error_event(f"ReadTimeout: muse sent nothing for {self._read:.0f} s", None, retryable=True)
-                    return
-            finally:  # also runs on cancel (a stop): leave no muse behind
-                if proc.returncode is None:
-                    kill_group(proc)
-                    await asyncio.shield(proc.wait())
+                out, err = await asyncio.wait_for(proc.communicate(), self._read)
+            except asyncio.TimeoutError:
+                timed_out = True
+            finally:  # also runs on cancel (a stop), and after an exited leader with live descendants
+                await asyncio.shield(stop_async(proc))
+            if timed_out:
+                yield error_event(f"ReadTimeout: muse sent nothing for {self._read:.0f} s", None, retryable=True)
+                return
         text = out.decode("utf-8", "replace").strip()
         if proc.returncode != 0:
             cls = classify_failure(proc.returncode, err.decode("utf-8", "replace"))
             status = {"auth": 401, "no_key": 401, "rate_limited": 429, "billing": 402}.get(cls)
             hint = " (run `muse login`)" if cls in ("auth", "no_key") else (
-                f" (run `codesign -s - {self.command}`)" if cls == "unsigned" else "")
-            yield error_event(f"muse exec failed ({cls}, exit {proc.returncode}){hint}", status,
-                              retryable=cls not in ("unsigned",))
+                f" ({unsigned_detail(self.command)})" if cls == "unsigned" else "")
+            yield error_event(f"muse exec failed ({cls}, exit {proc.returncode}){hint}", status, retryable=True)
             return
         if not text:
             yield error_event("muse exec printed nothing", None, retryable=True)

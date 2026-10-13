@@ -1049,12 +1049,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Why:** the subscription is reachable only through the vendor's login. A subprocess keeps the token out of Exo
   and out of every log, which is the same line D-034 and D-039 draw for keys.
 - **Limits, accepted:** text only (a turn with tools is refused with status 501 so the router falls back), one
-  process per turn, no token stream, no usage counts, history flattened into one prompt. On macOS the binary must
-  be code-signed or its keychain write fails (`OSStatus -67068`); Exo detects this with `codesign -dv`.
-- **Locked down:** the run has no shell, no writes, no web tools and no session log, in an empty private workspace.
+  process per turn, no token stream, no usage counts, history flattened into one prompt. On macOS native binaries
+  need signing for keychain access (`OSStatus -67068`). Exo checks native Mach-O commands with `codesign -dv`;
+  a shell launcher's signing state is unknown, and Exo lets it run without claiming its binary is verified.
+  An actual signing failure remains `unsigned`, and signing or startup errors allow router fallback.
+- **Locked down:** the run has no shell, no writes, no web tools, no reminder agents, no imported foreign
+  personal context and no session log, in a private temporary workspace. Timeout and stop clean the entire
+  process group, including descendants after leader exit, with bounded waits before returning an error.
   `META_API_KEY` is dropped from the child so the subscription, not an API account, is used.
-- **Gate:** `muse login`, `muse auth` and `muse logout` (any position) and `~/.config/muse/` are `credentials`:
-  always ask.
+- **Gate:** `muse login`, `muse auth` and `muse logout` (any position, executable paths and nested shells too)
+  and `~/.config/muse/` are `credentials`: always ask, regardless of lowering policies or standing grants.
 - **Rejected:** reading the token from the keychain or `auth.json` and calling the API directly (Exo would hold a
   vendor secret); passing `META_API_KEY` through (bills an API account, not the subscription).
 - **Revisit if:** `muse exec` gains a structured output or tool bridge, which could lift the text-only limit.

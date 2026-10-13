@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import signal
 import stat
 import subprocess
 import sys
@@ -93,7 +94,8 @@ def test_success_argv_env_and_isolation(tmp_path):
     s = seen(tmp_path)
     a = s["argv"]
     assert a[0] == "exec" and "--model" not in a  # "default" leaves the CLI's own default
-    for flag in ("--no-session-log", "--disable-shell", "--disable-write", "--disable-web-tools"):
+    for flag in ("--no-session-log", "--disable-shell", "--disable-write", "--disable-web-tools",
+                 "--disable-reminders", "--no-foreign-personal-context"):
         assert flag in a
     assert a[a.index("--approval-mode") + 1] == "never"
     assert "--yolo" not in a and "--disable-approval" not in a and "--disable-sandbox" not in a
@@ -147,24 +149,64 @@ def test_empty_output_is_an_error(tmp_path):
 def test_unsigned_binary_is_refused_with_the_fix(tmp_path, monkeypatch):
     monkeypatch.setattr(muse_cli, "signature_state", lambda exe: "unsigned")
     end = run(router(tmp_path), [Message.user("hi")])[-1]
-    assert end.kind == "error" and "codesign -s -" in end.error and end.retryable is False
+    assert end.kind == "error" and "codesign -s -" in end.error and end.retryable is True
     assert not (tmp_path / "out.json").exists()
 
 
-def test_signature_state_reads_codesign(monkeypatch):
+def test_signature_state_reads_codesign_only_for_native_binaries(tmp_path, monkeypatch):
     monkeypatch.undo()  # drop the autouse "signed" stub
+    exe = tmp_path / "muse"
+    exe.write_bytes(bytes.fromhex("cffaedfe") + b"fake native binary")
     out = {"rc": 1, "err": "x: code object is not signed at all"}
     monkeypatch.setattr(muse_cli.sys, "platform", "darwin")
     monkeypatch.setattr(muse_cli.shutil, "which", lambda n: "/usr/bin/codesign")
     monkeypatch.setattr(muse_cli.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
         a[0], out["rc"], "", out["err"]))
-    assert muse_cli.signature_state("/x/muse") == "unsigned"
+    assert muse_cli.signature_state(str(exe)) == "unsigned"
     out.update(rc=0, err="Identifier=muse")
-    assert muse_cli.signature_state("/x/muse") == "signed"
+    assert muse_cli.signature_state(str(exe)) == "signed"
     out.update(rc=1, err="something else")
-    assert muse_cli.signature_state("/x/muse") == "unknown"
+    assert muse_cli.signature_state(str(exe)) == "unknown"
+    exe.write_text("#!/bin/sh\nexec /path/to/native-muse \"$@\"\n")
+    monkeypatch.setattr(muse_cli.subprocess, "run", lambda *a, **k: pytest.fail("do not codesign a launcher"))
+    assert muse_cli.signature_state(str(exe)) == "unknown"
+    assert muse_cli.signature_state(str(tmp_path / "missing")) == "unknown"
     monkeypatch.setattr(muse_cli.sys, "platform", "linux")
-    assert muse_cli.signature_state("/x/muse") == "unknown"
+    assert muse_cli.signature_state(str(exe)) == "unknown"
+
+
+def test_script_launcher_runs_without_claiming_its_binary_is_signed(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    r = router(tmp_path)
+    monkeypatch.setattr(muse_cli.sys, "platform", "darwin")
+    assert muse_cli.signature_state(str(tmp_path / "bin" / "muse")) == "unknown"
+    assert run(r, [Message.user("hello")])[-1].kind == "done"
+    assert muse_cli.probe(str(tmp_path / "bin" / "muse"), r.env)["error_class"] == ""
+
+
+@pytest.mark.parametrize("preflight", [True, False])
+def test_signing_failure_falls_back_to_healthy_route(tmp_path, monkeypatch, preflight):
+    r = router(tmp_path, "keychain")
+    r.roles["main"].append("b:m")
+    r.instances["b"] = FakeProvider(["fallback ok"], name="b")
+    if preflight:
+        monkeypatch.setattr(muse_cli, "signature_state", lambda exe: "unsigned")
+    end = run(r, [Message.user("hello")])[-1]
+    assert end.kind == "done" and end.route == "b:m" and end.message.text() == "fallback ok"
+
+
+def test_missing_command_at_startup_falls_back(tmp_path):
+    r = router(tmp_path)
+    r.credentials("muse-cli")  # the binary disappears after discovery
+    (tmp_path / "bin" / "muse").unlink()
+    r.roles["main"].append("b:m")
+    r.instances["b"] = FakeProvider(["fallback ok"], name="b")
+    assert run(r, [Message.user("hello")])[-1].route == "b:m"
+
+
+def test_keychain_errors_do_not_all_mean_unsigned():
+    assert muse_cli.classify_failure(1, "keychain has no credentials; run muse login") == "no_key"
+    assert muse_cli.classify_failure(1, "keychain read failed for an unrelated reason") == "error"
 
 
 def test_login_state_reads_only_non_secret_fields(tmp_path):
@@ -226,6 +268,85 @@ def test_cancel_kills_process_group(tmp_path):
             pass
     asyncio.run(go())
     assert _wait_dead(int(pidf.read_text()))
+
+
+def descendant_cli(tmp_path, mode):
+    """An ordinary child inheriting the CLI's pipes; it remains in the owned process group."""
+    exe, childpid = tmp_path / "muse", tmp_path / "childpid"
+    child = f"import os,time; open({str(childpid)!r}, 'w').write(str(os.getpid())); time.sleep(60)"
+    tail = {"running": "time.sleep(60)", "exited": "sys.exit(0)",
+            "failed": "sys.stderr.write('boom'); sys.exit(3)"}[mode]
+    # A failed leader closes its own pipes normally; the child still needs explicit cleanup even without a timeout.
+    redirect = ", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL" if mode == "failed" else ""
+    exe.write_text(f"#!{sys.executable}\nimport subprocess,sys,time,pathlib\n"
+                   f"subprocess.Popen([sys.executable,'-c',{child!r}]{redirect})\n"
+                   f"while not pathlib.Path({str(childpid)!r}).exists(): time.sleep(.01)\n{tail}\n")
+    exe.chmod(0o700)
+    return str(exe), childpid
+
+
+@pytest.mark.parametrize("mode", ["running", "exited", "failed"])
+def test_probe_stops_descendants_even_after_leader_exit(tmp_path, mode):
+    exe, childpid = descendant_cli(tmp_path, mode)
+    try:
+        t0 = time.monotonic()
+        res = muse_cli.probe(exe, {"HOME": str(tmp_path)}, timeout=.3)
+        assert time.monotonic() - t0 < 3
+        assert res["error_class"] == ("error" if mode == "failed" else "timeout")
+        assert _wait_dead(int(childpid.read_text()))
+    finally:
+        if childpid.exists():
+            try:
+                os.kill(int(childpid.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.parametrize("mode", ["running", "exited", "failed"])
+def test_stream_stops_descendants_before_yielding_error(tmp_path, mode):
+    exe, childpid = descendant_cli(tmp_path, mode)
+
+    async def go():
+        provider = muse_cli.MuseCliProvider(exe, env={"HOME": str(tmp_path)}, read_timeout=.3)
+        async for ev in provider.stream([Message.user("hello")], []):
+            assert ev.kind == "error"
+            assert _wait_dead(int(childpid.read_text()))  # cleanup must precede the event consumed by the router
+    try:
+        asyncio.run(go())
+    finally:
+        if childpid.exists():
+            try:
+                os.kill(int(childpid.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.parametrize("mode", ["running", "exited"])
+def test_cancel_stops_descendants_even_after_leader_exit(tmp_path, mode):
+    exe, childpid = descendant_cli(tmp_path, mode)
+
+    async def go():
+        provider = muse_cli.MuseCliProvider(exe, env={"HOME": str(tmp_path)}, read_timeout=30)
+        async def drain():
+            return [ev async for ev in provider.stream([Message.user("hello")], [])]
+        task = asyncio.create_task(drain())
+        for _ in range(100):
+            if childpid.exists() and childpid.read_text():
+                break
+            await asyncio.sleep(.01)
+        await asyncio.sleep(.05)  # let the exited leader be reaped before cancellation
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert _wait_dead(int(childpid.read_text()))
+    try:
+        asyncio.run(go())
+    finally:
+        if childpid.exists():
+            try:
+                os.kill(int(childpid.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 # ---------------------------------------------------------------- status and test call (providers_setup)

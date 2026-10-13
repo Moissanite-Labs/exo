@@ -388,7 +388,9 @@ when a subscription is only reachable through the vendor's own login. The rules:
 1. Exo never reads or stores the token. The CLI owns it. Read at most non-secret status fields, and return
    only the fields you need.
 2. Give the child `exo.envscrub.minimal_env` minus any API-key variable that would switch billing.
-3. Kill the whole process group on cancel and on timeout.
+3. Kill the whole process group on cancel, timeout and completion, even after the leader has exited. Bound
+   cleanup waits and finish cleanup before reporting an error. Check signing only for native binaries;
+   launchers have unknown signing state, and actual CLI signing errors must still allow router fallback.
 4. Say what the CLI cannot do (tools, streaming, usage counts) in the module docstring and in
    `docs/PROVIDERS.md`. Refuse what you cannot carry with a status that lets the router fall back.
 5. Wire it in `catalog.toml` (`transport`), `Router.credentials`, `providers_setup.rows` and `test_provider`,

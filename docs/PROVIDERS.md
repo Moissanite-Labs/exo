@@ -86,15 +86,20 @@ Limits, stated plainly:
   without tools (for example `aux`) or a conversation where another route follows it.
 - **Slow start, no token stream.** Each turn is a new process. The answer arrives when the run ends. The history
   is flattened into one prompt, and no token counts come back (usage shows as unknown).
-- **The binary must stay code-signed on macOS.** An unsigned `muse` fails its keychain write at login
-  (`OSStatus -67068`). Ad-hoc signing is enough: `codesign -s - $(which muse)`. Exo checks this
-  (`codesign -dv`) and reports the class `unsigned` with that command. Updating `muse` can replace the binary
-  and drop the signature; sign again.
-- **Locked down.** The run gets no shell, no file writes, no web tools and no session log, with an empty private
-  directory as its workspace. `META_API_KEY` is removed from the child's environment so the subscription is what
+- **The native binary must be code-signed on macOS.** An unsigned native Muse executable can fail keychain
+  access (`OSStatus -67068`). Exo checks signing with `codesign -dv` only when the configured command is a native
+  Mach-O binary. The vendor's `muse` command may be a shell launcher: shell scripts cannot be code-signed, and
+  Exo reports their signing state as unknown and lets them run. This does not verify the binary they start.
+  An actual signing error is still reported as `unsigned`; if signing is needed, apply `codesign -s -` to the
+  native binary, not the launcher. Signing and startup errors allow fallback to another configured route.
+- **Locked down.** The run gets no shell, no file writes, no web tools, no reminder agents, no imported foreign
+  personal context and no session log, with a private temporary directory as its workspace. Timeout and stop
+  terminate its process group, including descendants whose leader has already exited, with bounded cleanup.
+  `META_API_KEY` is removed from the child's environment so the subscription is what
   is used, never an API account. The child gets only the minimal environment (D-039).
 - **The agent cannot log in for you.** The gate treats `muse login`, `muse auth` and `muse logout` (also with
-  flags before them) and any read or write of `~/.config/muse/` as `credentials`, which always asks.
+  flags before them, paths to the executable, or shell wrappers) and any read or write of `~/.config/muse/` as
+  `credentials`, which always asks and cannot be covered by a standing grant or lowered by policy.
 
 ## Add a key by hand
 
