@@ -1040,6 +1040,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   memory. Considered only through cryptographic or decentralized compute that keeps the operator blind.
 - **Own inference (later):** a keyless path where users never handle API keys, once funded.
 - **Rejected for now:** a hosted service that stores user keys on our servers.
+- **Implementation acceptance:** `docs/CONSUMER-PATH.md` proposes the first user, local web surface, first five
+  minutes and calm defaults for review under #50. It separates implemented fixes from usability and distribution
+  checks still required; it does not replace these principal rulings or claim consumer acceptance.
 
 ## D-051 (2026-10-12) muse-cli: a Muse Code subscription through the `muse` CLI
 - **Decision:** add a keyless provider `muse-cli` that runs `muse exec` as a subprocess, modelled on `claude-cli`.
