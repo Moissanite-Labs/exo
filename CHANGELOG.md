@@ -7,6 +7,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Added
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
+- Whitepaper v0.3 (draft, tagged `whitepaper-v0.3` when published): the security wave (D-038 to D-040), principal
+  authority (D-052 to D-054), required executor mode (#70) and ledger authority (#80), the composer, keys and layouts
+  (D-037, D-043, D-045, D-046), the house taste wave 1 (D-044), the engine split (#46), versioning (D-056), the web
+  sub-pages (D-061), subagent controls and `/rename` (D-069, D-070), and an "In progress" section. The user guide,
+  developer guide, command reference and docs map are brought up to date with main.
 
 ### Changed
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).

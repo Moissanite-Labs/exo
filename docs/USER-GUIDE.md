@@ -40,11 +40,12 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 
 | Key or prefix | Does |
 |---|---|
-| `ctrl+c` | Stops the running turn. Your draft stays. With nothing running it does nothing (`ctrl+q` quits). `/stop` does the same. |
+| `ctrl+c` | Stops the running turn. Your draft stays. With nothing running it only shows a hint that `ctrl+q` quits; a single press never quits. `/stop` does the same. |
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
 | typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
 | `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>` | List the subagents your session handed work to, watch one's session, send a running one a note (it lands at its next tool step) or stop it. A finished subagent answers with a clear error and nothing changes. The parent's receipt says it was steered or stopped. On the web page the Tasks cards have Open, Steer and Stop. |
+| `F6` | Loads 60 earlier messages when the top of the transcript says "N earlier messages" (with `/layout inverse` it is the bottom). Scrolling to that end does the same. |
 | `ctrl+f` | Puts the focus on an approval card, wherever you are. Your draft stays. |
 | `@path` | Adds that file to your message. |
 | `!command` | Asks the agent to run that shell command and show the output. |
@@ -74,6 +75,11 @@ after you close the web page, so a later `exo` joins it. `exo stop` ends it.
 It shows approvals, decisions waiting on you, live sessions, tasks, projects and cost. Screenshots are
 `docs/ui/web-*.png`. Details are in `docs/ui/WEB.md` and `plugins/exo-command/README.md`.
 
+The web page has its own sub-pages for Tasks, Schedule, Command and Providers. Its composer runs `/context`,
+`/findings`, `/trace`, `/new`, `/rename` and `/layout`. Type `/` for the menu. The Layout button in the page does what
+`/layout` does. Double-click a thread in the list to rename it. Anything else you type there goes to the agent as a
+message. Add `--no-open` to `exo web` if you do not want it to open a browser tab.
+
 ## 3. Slash commands
 
 Type `/help` in the terminal client for the live list. This table is the same list.
@@ -92,7 +98,8 @@ The technical reference, with arguments and where each command is implemented, i
 | `/context` | Show what the next model call carries, part by part, with token counts. Read-only. |
 | `/compact` | Summarize now what is eligible, then show tokens before and after. |
 | `/restart` | Reopen this session in a new terminal tab and exit this one. |
-| `/stop` | Stops the running turn. What was done is kept. |
+| `/stop` | Stops the running turn. What was done is kept. `/stop <task>` stops a running subagent instead (see "Subagents" in section 5). |
+| `/unsteer` | Pull your newest queued steer message back into the composer, if it has not landed yet. It never stops the turn. |
 | `/exit`, `/quit` | Quit. |
 | `/model [ref]` | Pick the model for this session, or set it with a reference. `/model default <ref>` sets the default. |
 | `/default [ref]` | Set the default model for new sessions, or pick one. |
@@ -108,11 +115,17 @@ The technical reference, with arguments and where each command is implemented, i
 | `/intro` | The agent's orientation: what Exo is and how to use it. |
 | `/tutorial on`, `off`, `reset` | Tips the first time something comes up. Bare `/tutorial` shows the state. |
 | `/panel` | Reopen the last panel. |
+| `/tasks` | List the subagents this session handed work to, with their status. |
+| `/open <task>` | Watch a subagent's session. `<task>` is a task id, the start of one, or the subagent's session id. |
+| `/steer <task> <text>` | Send a note to a running subagent. |
+| `/copy [error\|all]` | Copy the last answer to the clipboard. `/copy error` copies the last error, `/copy all` the whole transcript. |
+| `/compose [task\|edit]` | Open the big editor for a long prompt (also `ctrl+g`). `task` starts it with headings, `edit` opens `$EDITOR`. |
+| `/layout [inverse\|classic]` | Put the input on top with the newest message under it, or back to the usual order. Saved. |
 | `/help` | List every command. |
 
 Plugins add commands. They show in `/help` under `other`. `/exo` (the dispatcher) and `/orchestra` are examples when
 those plugins load. The core answers `/context`, `/compact`, `/trace` and `/findings` itself. `/grants` comes from
-the `exo-gate` plugin. The web client runs `/context`, `/findings` and `/trace` from its composer.
+the `exo-gate` plugin. The web client runs `/context`, `/findings`, `/trace`, `/new`, `/rename` and `/layout` from its composer.
 
 ### Typing help
 
@@ -166,7 +179,7 @@ Safety settings (approvals, budget, posting rules) are not taste. They never com
 change when you edit them. Changing taste slowly to fit you, and the `/taste` view, are still to come. Details:
 `docs/TASTE-BASELINE.md`.
 
-## 5. Background jobs
+## 5. Background jobs and subagents
 
 The agent can start a long command, such as a build or a test run, and keep working. It uses `bash` with
 `background: true`, then `jobs`, `job_output` and `job_kill`. When the job ends, the thread gets a short notice with
@@ -174,6 +187,48 @@ the exit code and the last lines of output. The notice is never from you and can
 
 - Stopping a turn (ctrl+c or `/stop`) does not stop a job. Ending the core does.
 - Limits (four at a time, two hours each) are per seat. See `docs/JOBS.md`.
+
+### Subagents
+
+A subagent is a helper the agent starts with its `delegate` tool, to do a part of the work in its own session while
+the main thread carries on. Each one runs on the cheapest model tier that can do the job: `fast` for reading, search
+and simple edits, `standard` for building and tests, `deep` only for hard judgment. If a subagent fails, it is tried
+once more one tier up. Limits keep it small: by default a subagent cannot start its own helpers, at most four run at
+once, and each has a cap on tool rounds, tokens and time. The briefs and receipts it passes are in
+`docs/AGENT-WIRE.md` section 6.
+
+You can watch and control them:
+
+- `/tasks` lists them with their status. `/open <task>` shows one's session (read only).
+- `/steer <task> <text>` sends a running subagent a note. It lands at its next tool step.
+- `/stop <task>` stops one subagent and leaves the rest. A bare `/stop` stops the main turn.
+- On the web page, the Tasks cards have Open, Steer and Stop buttons.
+- A subagent that has finished, failed or been cancelled is locked: steering or stopping it gives a clear error and
+  changes nothing.
+- The agent's receipt for the task records what you did: "steered by principal" or "stopped by parent".
+
+Only you, or the agent that started the subagent, can steer or stop it. Other sessions and peers cannot (D-070).
+
+### Scheduled jobs
+
+A scheduled job is a prompt that runs by itself on a timer, such as a morning brief or a test run every six hours.
+Each run is a fresh unattended session, and it ends with a short plain-English result that arrives as a notice.
+The run goes through the same gate as any turn, so an action that needs your approval waits for it and the run can
+stall there.
+
+The place to manage jobs is the **Schedule** page of `exo web`. The form takes:
+
+- **When**: a cron line such as `0 9 * * 1-5` (minute, hour, day of month, month, day of week), or `every 30m`,
+  `every 2h`, `every 1d`.
+- **Prompt**: what the run should do. **Title**: an optional label.
+- **Tier**: `fast` (the default), `standard` or `deep`. Pick the cheapest that can do the job.
+
+Each job shows as a card with its next and last run. The card has buttons to pause or resume it, run it now (the run
+appears on the Tasks page) and remove it. Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
+starts if needed) runs the timer. A run missed while Exo was down happens once at the next start.
+
+There is no terminal command for jobs, and the agent has no tool to create them. The web page and the protocol
+command `schedule.edit` are the entry points. Details: `docs/SCHEDULE.md`.
 
 ## 6. Approvals
 
@@ -329,6 +384,19 @@ Example: make a key, write a note, check the chain.
     exo keygen me
     exo log append note --author me --text "Prefer short answers."
     exo log verify
+
+**Review what Exo learned.** These commands read your store and its ledger. None of them calls a model API on its own.
+They need `--principal ID` or `--root DIR`, like the others.
+
+| Command | What you get |
+|---|---|
+| `exo brief` | The morning brief in Markdown. `--html` prints HTML. `--write` also saves `reports/brief-YYYY-MM-DD.md` and `.html` in the store. |
+| `exo ask list` | The questions Exo wants to put to you, with how much each is worth asking. `exo ask next` gives the next few within your daily interruption budget (`-n 3` by default). `exo ask answer <id> "text" --author NAME` records your answer in the ledger, signed with that author's key. |
+| `exo consolidate` | Turns new ledger events into proposed changes to what Exo believes. `--dry-run` reports without writing. |
+| `exo proposals` | Lists those proposals. `show <id>` reads one. `accept <id>` applies it. `reject <id> --reason "..."` and `revert <id> --reason "..."` need a reason. `--all` includes decided ones. |
+| `exo eval` | A report that measures Exo against your own questions and past choices (files in the store's `training/` folder). `--no-write` prints it without saving. |
+
+Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` for the loop that uses them.
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.
