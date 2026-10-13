@@ -8,7 +8,8 @@ the intended region::
     new_content, count, strategy, error = fuzzy_find_and_replace(
         content, old_string, new_string, replace_all=False)
 
-Exo trims: metrics hooks dropped, docstrings shortened, logic unchanged.
+Exo trims: metrics hooks dropped, docstrings shortened. One fix: the whitespace-normalized span
+mapping no longer starts a match inside the blank run before it.
 """
 
 from __future__ import annotations
@@ -90,15 +91,19 @@ def _map_normalized_positions(original: str, normalized: str, matches: list[Span
     orig_to_norm: list[int] = []
     oi = ni = 0
     while oi < len(original) and ni < len(normalized):
-        if original[oi] == normalized[ni]:
-            orig_to_norm.append(ni)
-            oi += 1
-            ni += 1
-        elif original[oi] in " \t" and normalized[ni] == " ":
+        if original[oi] in " \t":
+            # Every blank of a run maps to the one space it collapsed to; the run's last blank moves on.
+            # (A blank must take this branch: matching it as an ordinary character consumed the normalized
+            # space on the run's first blank and mapped the rest of the run onto the next word, so a span
+            # could start inside the indentation and the reindented replacement shifted every line.)
             orig_to_norm.append(ni)
             oi += 1
             if oi < len(original) and original[oi] not in " \t":
                 ni += 1
+        elif original[oi] == normalized[ni]:
+            orig_to_norm.append(ni)
+            oi += 1
+            ni += 1
         else:
             orig_to_norm.append(ni)
             oi += 1
@@ -406,6 +411,12 @@ def _apply_replacements(content: str, matches: list[Span], new_string: str,
     for start, end in sorted(matches, key=lambda x: x[0], reverse=True):
         adjusted = new_string
         if old_string is not None:
+            line_start = content.rfind("\n", 0, start) + 1
+            if line_start < start and not content[line_start:start].strip(" \t"):
+                # The match begins after the line's indentation (a whitespace-normalized or Unicode match of
+                # a pattern with no leading blanks). Take that indentation into the region, so the reindent
+                # below sees the file's base indent and the replacement's lines keep their depth.
+                start = line_start
             region = content[start:end]
             if unicode_plan is not None:
                 adjusted = _preserve_unicode_in_replacement(region, adjusted, unicode_plan)
