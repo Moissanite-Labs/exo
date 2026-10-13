@@ -16,7 +16,6 @@ import os
 import shutil
 import signal
 import subprocess
-import sys
 import threading
 import tempfile
 import time
@@ -82,20 +81,7 @@ def _wait_for_group_exit(proc: subprocess.Popen, pgid: int, timeout: float) -> b
 
 def kill_process_group(proc: subprocess.Popen, grace: float = TERM_GRACE) -> None:
     """TERM the child's process group, wait ``grace`` seconds, then KILL it."""
-    if sys.platform == "win32":
-        proc.kill()
-        return
-    pgid = getattr(proc, "_exo_pgid", None)
-    if pgid is None:
-        try:
-            pgid = os.getpgid(proc.pid)
-        except ProcessLookupError:
-            return
-    if pgid == os.getpgrp():
-        # Child shares our group (spawner skipped setsid): killpg would hit us. Kill by PID.
-        with contextlib.suppress(Exception):
-            proc.kill()
-        return
+    pgid = proc.pid  # every spawner uses start_new_session, so the child leads its own group
     try:
         os.killpg(pgid, signal.SIGTERM)
         if not _wait_for_group_exit(proc, pgid, grace):
@@ -205,9 +191,6 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
             os.unlink(side_path)
         raise
     os.close(side_fd)
-    if sys.platform != "win32":
-        with contextlib.suppress(ProcessLookupError):
-            proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
     out = _Capped(cap)
     drain = threading.Thread(target=_drain, args=(proc, out, emit), daemon=True)
     drain.start()
