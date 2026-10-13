@@ -319,7 +319,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   configured it is the D-040 local key path unchanged: pinned keys, head anchor, `exo log verify`. With
   `EXO_LEDGER_AUTHORITY` set, an installed backend signs and commits each event and checkpoint before
   replying; verification replays its pinned identity read-only and never falls back to local keys. Enabling
-  it on an existing store fails closed (unconfirmed local tail); there is no migration. See
+  it on an existing store fails closed (unconfirmed local tail); there is no migration. An independent witness is future work. See
   `docs/LEDGER-AUTHORITY.md`.
 - **Lead call:** nothing on the Linux test machine's live OS changes in phase 0. It is someone's working machine
   (CRM, messaging, assistants). Where the OS first runs is A's call after the design.
