@@ -230,3 +230,15 @@ def test_rename_route_runs_the_core_rename_command():
     assert isinstance(cmd, s.CommandRun) and (cmd.name, cmd.args, cmd.session) == ("rename", "New name", "s1")
     assert asyncio.run(api.dispatch(c, "POST", "/api/chat/sessions/s1/rename", {}, {}))[0] == 400
     assert "/rename" in text("chat.js") and "dblclick" in text("chat.js")
+
+
+def test_taste_route_passes_args_and_maps_forbidden_to_403():
+    src = FakeSource({"command.run": {"output": {"text": "house: 3 rules", "mode": "ask"}}})
+    c = CommandCentre(load_settings({}), src)
+    code, out = asyncio.run(api.dispatch(c, "POST", "/api/taste", {}, {"args": "mode ask"}))
+    assert code == 200 and out == {"text": "house: 3 rules", "mode": "ask"}
+    cmd = src.calls[-1]
+    assert isinstance(cmd, s.CommandRun) and (cmd.name, cmd.args) == ("taste", "mode ask")
+    deny = FakeSource(fail={"command.run": "forbidden"})
+    assert asyncio.run(api.dispatch(CommandCentre(load_settings({}), deny), "POST", "/api/taste", {}, {"args": "pin h-b"}))[0] == 403
+    assert "/api/taste" in text("chat.js")

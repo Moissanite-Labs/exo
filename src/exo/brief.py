@@ -11,8 +11,8 @@ Format rules live in `policies/brief.yaml` (optional; defaults below), so anothe
 can change them without touching code:
 
     title: Morning brief
-    order: [status, blockers, decisions, questions]
-    headings: {status: Status, blockers: Blockers, decisions: Decisions, questions: Questions}
+    order: [status, blockers, decisions, questions, taste]
+    headings: {status: Status, blockers: Blockers, decisions: Decisions, questions: Questions, taste: Taste}
     window_hours: 24              # ledger look-back for status
     group_by: [project, workstream]   # body keys naming the workstream; else the session; else "general"
     max_status: 8
@@ -48,8 +48,9 @@ BAD_STATUS = {"failed", "failure", "error", "blocked", "broken", "unverified"}
 CORRECTIONS = {"edit", "reject", "should_have_been"}
 DEFAULTS: dict = {
     "title": "Morning brief",
-    "order": ["status", "blockers", "decisions", "questions"],
-    "headings": {"status": "Status", "blockers": "Blockers", "decisions": "Decisions", "questions": "Questions"},
+    "order": ["status", "blockers", "decisions", "questions", "taste"],
+    "headings": {"status": "Status", "blockers": "Blockers", "decisions": "Decisions", "questions": "Questions",
+                 "taste": "Taste"},
     "window_hours": 24,
     "group_by": ["project", "workstream"],
     "max_status": 8,
@@ -233,6 +234,12 @@ class Brief:
     decisions: list[dict]
     questions: list[dict]
     budget: dict
+    taste: list[str] = field(default_factory=list)   # D-044: swaps, step backs, adoptions, proposals
+
+    def order(self) -> list[str]:
+        """The policy's sections; taste lines are shown even under an older order that does not name them."""
+        order = list(self.policy.get("order") or [])
+        return order + (["taste"] if "taste" not in order and self.taste else [])
 
     def _link(self, s: str, md: bool) -> str:
         if md:
@@ -277,13 +284,14 @@ class Brief:
                                         if q.get("node") else "",
                                         default=esc(q.get("default") or ""))
                             for i, q in enumerate(self.questions, 1)]
+        out["taste"] = [esc(x) for x in self.taste]
         return out
 
     def to_markdown(self) -> str:
         heads = self.policy.get("headings") or {}
         ls = self.lines(md=True)
         parts = [f"# {self.title}"]
-        for sec in self.policy.get("order") or []:
+        for sec in self.order():
             items = ls.get(sec) or []
             if not items:
                 if sec == "status":
@@ -297,7 +305,7 @@ class Brief:
         heads = self.policy.get("headings") or {}
         ls = self.lines(md=False)
         body = []
-        for sec in self.policy.get("order") or []:
+        for sec in self.order():
             items = ls.get(sec) or []
             if not items and sec != "status":
                 continue
@@ -359,7 +367,19 @@ def build_brief(root: str | os.PathLike, *, ledger=None, now: datetime | None = 
         qq.mark_asked([q.id for q in qs], "brief", author=author, now=now)
     return Brief(title=str(pol.get("title")), generated=now.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
                  policy=pol, status=status, blockers=blockers, decisions=decisions,
-                 questions=[q.to_dict() for q in qs], budget=budget)
+                 questions=[q.to_dict() for q in qs], budget=budget, taste=_taste_lines(root, since))
+
+
+def _taste_lines(root: Path, since: str) -> list[str]:
+    """What the taste rule did in the window (D-044): never fails the brief."""
+    if not (root / "ledger.sqlite").exists():
+        return []
+    try:
+        from .baseline.adapt import brief_lines
+        from .store import PrincipalStore
+        return brief_lines(PrincipalStore(root), since)
+    except Exception:
+        return []
 
 
 def write_brief(root: str | os.PathLike, brief: Brief, day: date | None = None) -> dict[str, Path]:
