@@ -42,7 +42,8 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
   `exo.core.engine:create` forwards to it. The engine keeps thin public methods (`trace_text`, `context_report`,
   `context_text`, `compact_text`, `handoff_facts`). Counted core lines: 16,023 before, 15,800 after. These modules
   still read private state (`loop._state`, `store._q`, tree `_view`), which step 1 replaces with public queries.
-- 2026-10-13, step 4 (D-067): counted core lines 15,951 before (main at `2c55d26`), 14,777 after, 1,174 fewer.
+- 2026-10-13, step 4 (D-067): counted core lines 15,986 before (main at `58f064f`), 14,812 after, 1,174 fewer
+  (15,951 to 14,777 on the starting base `2c55d26`).
   About 300 of those are code that is gone. The rest left the core through two seams. Every change is its own commit.
   - **Deleted or collapsed** (about 300 lines):
     - The decision models' score and noul asks and the `key_found` lookup, which nothing outside tests called.
@@ -85,7 +86,7 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
 Recommendation pending review: retain the current 16,000-line acceptance ceiling while #46 is open.
 Do not raise it again to accommodate a
 wave or exclude existing counted modules to make a failing test pass. Step 4 brought the count under the historical
-15,000-line goal (14,777 at D-067), two thirds of it by moving two subsystems out through real seams. Whether to
+15,000-line goal (14,812 at D-067), two thirds of it by moving two subsystems out through real seams. Whether to
 lower the ceiling to lock that in is part of the budget decision. This pass leaves it at 16,000.
 
 Before changing the ceiling, decide whether total line count remains useful. If it is retired, replace it
