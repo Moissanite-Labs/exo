@@ -1055,6 +1055,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 
 ## D-048 (2026-10-12) Exopet: Exo as a living lattice, hatched by the community
 - **Status:** Proposed 2026-10-12. Design in docs/EXOPET.md. Nothing built. D-047 is left for a parallel branch.
+- **Revised:** 2026-10-13 by D-058: the community egg grows from repository activity, not install reports.
 - **Why (principal, 2026-10-12):** bring the earlier pet experiments (EvoPet, TamaHermes) into Exo in its own look and
   make them more: the first evolution unlocks only when the community together has earned enough XP, then Exo
   hatches from its digital egg (the site orb); later users get personal evolution; a pet gallery; a skill to make a
@@ -1217,3 +1218,50 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Numbering:** D-055 is used by branch `feat/roadmap-page`, so this is D-056.
 - **Validation:** tests check the `--version` form and that the changelog's latest release equals the pyproject version.
 - **Docs:** `docs/VERSIONING.md`, `CHANGELOG.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-057 (2026-10-13) Event-driven activation: triggers, masked connectors, a runs dashboard, root causes
+- **Status:** Proposed 2026-10-13. Design in docs/EVENT-ACTIVATION.md. Nothing built.
+- **Why (principal, 2026-10-13):** Railtown AI's platform (railtown.ai: build, feed, observe the agent) gave the idea
+  of agents started by events, not only by a person or a timer. Credited as the inspiration; none of its names are used.
+- **Proposal:** a trigger is a scheduled job with `on` (an event source) instead of `when`, managed by `schedule.edit`:
+  no new protocol command or event. Sources: a watched folder, a mailbox, a loopback-only signed webhook, a local git
+  repository, Exo OS system events. Connectors pass an allowlist of fields and mask sensitive values into placeholders
+  that resolve only at the gate. Trigger turns have author `trigger:<id>`, never the principal, and run as unattended
+  runs under the gate. Debounce, minimum gap, runs per hour and day, tokens per run, spend caps per trigger and for all
+  triggers, pause one, pause all, automatic pauses, a loop guard. A runs dashboard in the web client (`runs` built-in).
+  An automatic root-cause pass after a failed run files a finding that feeds the existing findings to issue to pull
+  request loop. An Exo SDK for third-party agents is on the roadmap only.
+- **Rejected:** a hosted event relay (breaks D-050); installing git hooks in the user's repositories (watching refs is
+  enough and changes nothing); letting the agent add its own triggers (it could widen its own reach).
+- **Open:** default limits, root-cause pass on or off by default, whether the agent may propose triggers.
+
+## D-058 (2026-10-13) Exopet: the community egg grows from repository activity
+- **Status:** Proposed 2026-10-13. Revises D-048 (Proposed). Design in docs/EXOPET.md section 3. Nothing built.
+- **Why (principal, 2026-10-13, verbatim):** "users personal exos can gain xp from and level up from their own usage.
+  however the community one, and the one that initially gates all users exo evolutions, should be pased on repo
+  activity ... xp scales with significance of event of repo."
+- **Proposal:** personal XP is unchanged. The community egg counts repository events: issue 1, pull request opened 3,
+  pull request merged 10, release 25 (at most one a week). Target 2^11 = 2,048. Issues and opened pull requests settle
+  for 7 days and drop out if labelled spam, invalid or duplicate, deleted, or closed by their author within an hour.
+  Per-account daily caps, new-account exclusion, bots ignored, hourly global caps. The core team, founders and their
+  agents count up to 40 XP a day and 25 percent of the target, a cap rather than a discount. Agent issues and pull
+  requests count nothing until merged. Simulated hatch: about 2 weeks after going public when busy, 8 weeks when
+  steady, 7 months when quiet.
+- **Removes from D-048:** install reports, the counter service, counter keys, proof of work and Merkle receipts. No
+  install sends anything; clients read the public feed (D-059) at most once a day.
+- **Rejected:** a discount multiplier on the core (it still scales with agent volume); counting agent issues and pull
+  requests (cheap to make in bulk); counting stars, comments or pushes (cheap, or already in merges).
+
+## D-059 (2026-10-13) The live egg: the site egg reacts to repository events
+- **Status:** Proposed 2026-10-13. Design in docs/LIVE-EGG.md, interface first. Nothing built.
+- **Why (principal, 2026-10-13):** "event triggered animation ... on the 3d egg that happens every time there's
+  activity on the github. different types and levels of animations for different types of events."
+- **Proposal:** a GitHub webhook calls a Vercel function on the site's host, which verifies the HMAC signature,
+  ignores bots, applies D-058 and appends to a public feed holding only event type, time, level and nominal weight,
+  plus the community totals and the egg's stage. The page polls `GET /api/egg/feed` and calls a new
+  `egg.event(type)`: an issue a small pulse, a pull request a pulse and a packet across the lattice, a merge a bloom, a
+  release a growth flash. Replay of the last 24 hours on open, a queue that folds bursts, a text line instead of motion
+  under reduced motion, an edge cache and a per-address limit on reads. No GitHub token anywhere; the webhook secret is
+  a server environment variable. Staging and production have their own store and webhook.
+- **Rejected:** reading the GitHub API from the page (private repo, and a token would be public); streaming (keeps a
+  function open per tab for a few events an hour); titles or authors in the feed while the repository is private.
