@@ -109,17 +109,20 @@ A value item may ship only when it passes all of these:
 4. **Many people could hold it.** It is phrased at the level of a general principle, not a narrow conviction
    that points to one person.
 
-**How a value is generalised.** The export keeps the principle and drops everything that ties it to its
-holder. Concretely, for each value item:
+**How a value is prepared for export.** The exporter makes limited mechanical edits to the claim; it does not
+infer or write a general principle from a personal story. Before exporting, the principal must rephrase a
+candidate as a general working principle in the source store. The exporter then:
 
-- take only the claim, never its evidence, quotes, dates or links;
-- rewrite it as a working principle in the second person neutral form ("Weigh evidence above who said it"),
-  removing any example, story, cause or named target from the claim;
-- if the claim cannot be stated without its example (the example *is* the value), drop the item.
+- Keep only the claim, never its evidence, quotes, dates or links.
+- Replace references to "the principal" with "the user".
+- For a value, remove a parenthetical example, a "for example" tail and the clause after "because".
+- If the candidate needs its example to make sense, rephrase it in the source store before export; the
+  exporter cannot infer or supply the missing principle.
 
-So the principal's "my years at a firm that hid bad numbers taught me to show the bad news first" ships, if
-at all, as "Lead with bad news; do not bury it." The lesson travels; the firm, the years and the person do
-not.
+For example, the principal should edit "My years at a firm that hid bad numbers taught me to show the bad
+news first" into a general claim such as "Lead with bad news; do not bury it" before export. The exporter
+does not make that semantic rewrite. If a first-person claim remains, the tighter value check rejects it and
+the export fails closed without writing a pack; rephrase the source claim and run the export again.
 
 **The tighter check for the value domain.** On top of the general privacy check (section 1, "The export",
 step 3), every value item must also pass:
@@ -141,10 +144,11 @@ step 3), every value item must also pass:
    `work`, `systems` and `mind`. Value items: type value in any of those domains, and worldview beliefs in
    `mind`. Confidence medium or higher, stability core or durable, current weight at least 0.45. Drop
    anything excluded above, including guarded items.
-2. **Neutralise.** Rewrite each claim in neutral form ("The principal" and any name become "the user"); for
-   value items, also generalise as above. Drop sources, quotes and dates; keep only the evidence count.
-   Compute the signature with `exo.taste.signature`. The item id is a hash of the normalised claim, so it is
-   stable across exports.
+2. **Normalise.** Replace "the principal" with "the user"; for values, remove examples and the causal clause
+   as described above. This is mechanical cleanup, not a semantic rewrite. The principal must rephrase any
+   first-person value claim in the source store before export. Drop sources, quotes and dates; keep only the
+   evidence count. Compute the signature with `exo.taste.signature`. The item id is a hash of the normalised
+   claim, so it is stable across exports.
 3. **Privacy check.** The export fails, and writes nothing, if any line hits:
    - the store's leak patterns (`exo.store.LEAKS`: phone numbers, keys, tokens, passwords);
    - the gate's internal-name sweep (seat names, registry names, agent names, home paths, internal ids,
@@ -155,6 +159,9 @@ step 3), every value item must also pass:
      not in a plain dictionary (likely names), which are held for review rather than failed (failed, for
      value items);
    - for value items, the tighter check above.
+
+   A first-person value claim that survives mechanical cleanup fails this check. Nothing is written until
+   the principal rephrases the source claim and reruns the export.
 
    An optional decision-model pass asks of each item "does this name or point to a real person, company,
    place or account?" It can only hold an item, never pass one (the D-015 rule: stricter, never looser).
