@@ -448,6 +448,10 @@ class Loop:
         stop = asyncio.ensure_future(st.interrupt.wait())
         try:
             await asyncio.wait({task, stop}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
         finally:
             stop.cancel()
         if task.done():
