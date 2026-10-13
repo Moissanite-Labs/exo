@@ -398,9 +398,11 @@ class Router:
         waits = [cd.until - now for cd in self.cooldowns.values() if cd.until > now]
         wait = min(waits) if waits else None
         if not self.chain(role):
-            return error_event(f"no model configured for role {role!r}", None, retryable=False)
+            return error_event(f"no model configured for role {role!r}; use /providers and choose a default model",
+                               None, retryable=False)
         if not tried and not waits:
-            return error_event(f"no credentials for role {role!r}: set the provider key_env variables",
+            return error_event(f"no credentials for role {role!r}: set the provider key_env variables, "
+                               "or use /providers to add a provider and choose its model",
                                None, retryable=False)
         why = f"; last error: {last.error}" if last is not None else ""
         hint = f"; next route reopens in {wait:.0f}s" if wait else ""
