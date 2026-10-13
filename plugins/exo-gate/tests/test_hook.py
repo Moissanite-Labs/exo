@@ -205,7 +205,12 @@ def test_policy_change_mid_session_only_tightens_until_accepted(keyed_store):
     bodies = [e["body"] for e in events(store)]
     assert any(b.get("phase") == "policy_change" for b in bodies)
     assert "/gate accept" in bodies[-1]["decision"]["reason"]
-    assert hook.gate_command(g, "accept").startswith("accepted")
+    from exo import principal
+    token = principal.CALLER.set(principal.Caller("principal:tui"))
+    try:
+        assert hook.gate_command(g, "accept").startswith("accepted")
+    finally:
+        principal.CALLER.reset(token)
     assert call(ctx, "terminal", {"command": "rm -rf build"}) is None
     assert any(e["body"].get("phase") == "policy_accept" for e in events(store))
     assert hook.gate_command(g, "status").startswith("policy")

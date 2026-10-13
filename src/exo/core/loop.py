@@ -144,15 +144,16 @@ class Loop:
         st.steer.append(msg)
         return True
 
-    def unsteer(self, session: str, message_id: str = "") -> list[Message]:
+    def unsteer(self, session: str, message_id: str = "", principal: bool = True) -> list[Message]:
         """Pull queued steer messages back before they are delivered (D-045): the one with ``message_id``, or
         with no id the newest. A message already added to the conversation is not here any more: nothing is
-        removed and the list is empty."""
+        removed and the list is empty. ``principal=False`` (a local caller) never removes the principal's words."""
         st = self.state(session)
+        mine = [m for m in st.steer if principal or not provenance.is_principal_author(provenance.author_of(m))]
         if message_id:
-            gone = [m for m in st.steer if m.id == message_id]
+            gone = [m for m in mine if m.id == message_id]
         else:
-            gone = st.steer[-1:]
+            gone = mine[-1:]
         for m in gone:
             st.steer.remove(m)
         return gone
