@@ -36,10 +36,6 @@ CALL_TIMEOUT = 120.0
 _VAR = re.compile(r"\$\{(\w+)\}")
 
 
-class McpUnavailable(RuntimeError):
-    """The ``mcp`` package is not installed."""
-
-
 def tool_name(server: str, tool: str) -> str:
     """``mcp__<server>__<tool>``, at most 64 characters of letters, digits, ``_`` and ``-``. When the name had
     to be shortened or cleaned, an 8 character hash of the real server and tool names ends it, so two long or
