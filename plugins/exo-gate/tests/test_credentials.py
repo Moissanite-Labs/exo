@@ -3,6 +3,7 @@ import pytest
 
 from exo import gate
 from exo.gate import classify, decide, normalize_policies
+from exo_gate.hook import GrantStore
 
 
 @pytest.fixture(autouse=True)
@@ -97,6 +98,20 @@ CREDENTIALS = [
     sh("cat ~/.config/gh/hosts.yml"),
     sh("cat ~/.git-credentials"),
     sh("cat ~/.kube/config"),
+    # The Muse CLI keeps its login in the keychain; its credential commands and auth file are the user's
+    sh("muse login"),
+    sh("muse auth"),
+    sh("muse auth --help"),
+    sh("muse logout"),
+    sh("muse --yolo login"),
+    sh("muse mcp login some-server"),
+    sh("sudo muse logout"),
+    fs("read_file", "~/.config/muse/auth.json"),
+    fs("write_file", "~/.config/muse/auth.json"),
+    sh("cat ~/.config/muse/auth.json"),
+    sh("cat $HOME/.config/muse/auth.json"),
+    sh("cd ~/.config/muse && cat auth.json"),
+    sh("cp ~/.config/muse/auth.json /tmp/x"),
     sh("env"),
     sh("env | sort"),
     sh("printenv"),
@@ -176,3 +191,28 @@ def test_no_policy_lowers_credentials(raw):
 
 def test_credentials_is_not_a_peer_or_auto_category():
     assert gate.CATEGORIES["credentials"][0] != "reversible"
+
+
+@pytest.mark.parametrize("cmd", [
+    "bash -c 'muse login'", "sh -c 'muse logout'", "bash -lc 'sh -c \"muse auth\"'",
+    "~/.local/bin/muse login", "/home/user/.local/bin/muse login", "./bin/muse logout",
+    "'/tmp/Muse CLI/muse' auth", '"/tmp/Muse CLI/muse" --yolo login',
+])
+def test_muse_credential_floor_survives_paths_wrappers_lowering_and_grants(cmd, tmp_path):
+    c = classify(sh(cmd))
+    assert c.category == "credentials"
+    policies = normalize_policies({"gates": {"categories": {"opaque_exec": "allow", "credentials": "allow"},
+                                             "rules": [{"match": {"tool": "terminal"}, "decision": "allow"}]}})
+    d = decide(c, policies)
+    assert d.outcome == "ask"
+    grants = GrantStore(tmp_path / "grants.json")
+    binding = gate.approval_binding(c, sh(cmd)[1])
+    grants.add("opaque_exec", "*", binding, 30, "principal")
+    assert grants.match(c.category, c.target, binding, outward=gate.binds_exact(c, d)) is None
+    assert grants.add(c.category, c.target, binding, 30, "principal") is None
+
+
+@pytest.mark.parametrize("cmd", ["muse --version", "muse exec --help", "muse exec 'summarize this'"])
+def test_other_muse_commands_are_not_credentials(cmd):
+    """Only login, auth and logout are credential commands. The rest is an unknown program, which asks anyway."""
+    assert classify(sh(cmd)).category != "credentials"

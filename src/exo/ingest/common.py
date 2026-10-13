@@ -212,7 +212,7 @@ class Run:
         stats.setdefault('added', 0)
         if stats['added'] or new_wm != self.watermark:
             self.ledger.append('ingest', {'adapter': self.adapter, 'source': self.source, 'watermark': new_wm,
-                                          'since': self.since, 'stats': stats}, self.ledger.signer.author or 'exo-ingest')
+                                          'since': self.since, 'stats': stats}, self.ledger.author or 'exo-ingest')
         stats['adapter'] = self.adapter
         return stats
 

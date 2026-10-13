@@ -33,16 +33,26 @@ fact, or question (when the signal is unclear). Limits live in `learn.fast_loop`
 
 ## Promotion
 
-`exo.learn.promote.apply_policy` decides each open proposal, in this order:
+`exo.learn.promote.apply_policy` checks mandatory constraints before the direct-ruling shortcut. The rule
+numbers stay fixed for ledger records:
 
-1. You said it (a ruling or an answer that you wrote is in the evidence): promote now. The event's author is checked,
-   not only its kind, so an agent-written ruling never triggers this rule (D-040).
-2. Guarded (irreversible, public, financial, third party): never promoted on its own. It becomes a question once.
-3. It conflicts with an existing belief: it stays held and a question is raised. Never silent.
-4. Taste or fact, not guarded, high weight, evidence from at least `min_sessions` (2) sessions, no critic objection:
-   promoted automatically and logged for the brief.
-5. A skill patch is promoted only if it passes the held-out eval gate. With no held-out cases it waits.
-6. Anything else stays a proposal. After `stale_days` (14) it becomes a question or decays.
+- Rule 3: a conflict already held by consolidation stays held. Its existing question awaits your answer.
+- Rule 2: guarded proposals (irreversible, public, financial, third party) never promote on their own.
+  They become a question once, even when they cite a ruling or answer you wrote.
+- Rule 5: skill patches always need the held-out eval gate. Types in `eval_gate_for` and domains in
+  `high_impact_domains` need it too. A ruling citation cannot bypass this check or a critic objection.
+  Non-skill gated proposals also need high weight and `min_sessions` (2) sessions. The fast loop waits.
+  The slow loop evaluates. With no held-out cases the gate fails and the proposal remains open.
+- Rule 1: an ordinary unguarded, ungated proposal citing your ruling or answer promotes immediately.
+  The event's author is checked, so an agent-written ruling never triggers this rule (D-040).
+- Rule 4: ordinary taste or fact with high weight, at least `min_sessions` sessions, and no critic objection
+  promotes automatically and is logged for the brief.
+- Rule 6: anything else stays a proposal. After `stale_days` (14) it becomes a question or decays.
+
+These checks govern lessons derived by the reviewer. Your original rulings remain in the ledger and context.
+Explicitly accepting a proposal uses the separate `proposal_accept` path and can apply a guarded lesson or skill
+without automatic promotion. A citation establishes authorship, not that the cited words support the derived claim.
+Semantic evidence matching for ordinary unguarded proposals remains outside this policy.
 
 A promotion can be reverted (`exo.learn.revert`), and the revert is a ledger row too.
 

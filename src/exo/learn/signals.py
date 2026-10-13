@@ -38,7 +38,7 @@ def ensure_utterance(rt: Runtime, session: str | None, role: str, text: str, mes
     body = {"text": text or "(empty)", "role": role, "source": "learn_backfill"}
     if message_id:
         body["message_id"] = message_id
-    return rt.ledger.append("utterance", body, rt.signer.author if role != "user" else PRINCIPAL,
+    return rt.ledger.append("utterance", body, rt.ledger.author if role != "user" else PRINCIPAL,
                             session=session)["id"]
 
 
@@ -53,7 +53,8 @@ def _answer_and_context(lr: Learner, session: str, message_id: str | None) -> tu
             break
     if idx is None:
         return "", "", message_id
-    context = next((m.text() for m in reversed(msgs[:idx]) if m.role == "user" and m.text().strip()), "")
+    context = next((m.text() for m in reversed(msgs[:idx]) if m.role == "user" and m.text().strip()
+                    and provenance.is_principal_author(provenance.author_of(m))), "")
     return msgs[idx].text(), context, msgs[idx].id
 
 

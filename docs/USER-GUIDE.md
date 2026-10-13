@@ -19,6 +19,9 @@ Or type `/providers` in the terminal client, or open the Providers tab in `exo w
 type it after the command name. If no provider works, `exo` and `exo web` tell you. Details and the security of
 the web route: `docs/PROVIDERS.md`.
 
+To use a Muse Code subscription instead of a key, run `muse login` yourself, then `exo providers test muse-cli`. It is
+text only and has limits; they are listed in `docs/PROVIDERS.md` ("Use a Muse Code subscription").
+
 Then start the terminal client by typing the command, in the folder you want to work in:
 
     exo                     # same as `exo tui`; flags pass through: exo --resume (or `exo resume`), exo --seat NAME
@@ -167,6 +170,17 @@ the exit code and the last lines of output. The notice is never from you and can
 - Limits (four at a time, two hours each) are per seat. See `docs/JOBS.md`.
 
 ## 6. Approvals
+
+On an Exo OS installation, the execution broker checks approved actions too.
+An action the installed broker does not support returns a tool error. Approval
+does not enable that operation. Installation details are in `docs/EXECUTORS.md`.
+The handoff facts also mark Git information unavailable; inspecting Git runs
+through the installed executor instead of the host handoff collector.
+If the required gate cannot save its decision or approval evidence, the tool
+returns an error and does not run. Body-file posting requests are also blocked
+before host inspection; inline text can be checked by the gate.
+Simultaneous approvals are recorded separately. Changed policies and standing
+grants become active only after their required authorization audit succeeds.
 
 Some actions wait for you. The gate looks at each tool call and decides: allow, log, ask or deny, from your policy
 files (`policies/gates.yaml` in your store). When it asks, a panel shows what the agent wants to do and why.

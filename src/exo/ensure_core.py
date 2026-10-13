@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable
 
 from exo.core.agentlog import lock_path, socket_path
+from exo.core.private import private_dir, private_file
 
 START_TIMEOUT = 40.0
 
@@ -90,14 +91,13 @@ def writer_holder(home: Path, agent: str) -> str | None:
 
 def _spawn(home: Path) -> subprocess.Popen:
     log = log_path(home)
-    log.parent.mkdir(parents=True, exist_ok=True)
-    out = open(log, "ab")
+    out = open(private_file(log), "ab")
     try:
         proc = subprocess.Popen([sys.executable, "-m", "exo.cli", "serve"], stdin=subprocess.DEVNULL, stdout=out,
                                 stderr=out, start_new_session=True, env=dict(os.environ, EXO_HOME=str(home)))
     finally:
         out.close()
-    pid_path(home).write_text(f"{proc.pid}\n")
+    private_file(pid_path(home)).write_text(f"{proc.pid}\n")
     return proc
 
 
@@ -117,11 +117,11 @@ def ensure_core(home: Path | None = None, agent: str | None = None, timeout: flo
     spawn = spawn or _spawn
     if (found := find_core(home, agent)) is not None:
         return found
-    (home / "run").mkdir(parents=True, exist_ok=True, mode=0o700)
+    private_dir(home / "run")
     deadline = time.monotonic() + timeout
     proc = None
     holder = None
-    with open(home / "run" / "exod-start.lock", "a+") as gate:
+    with open(private_file(home / "run" / "exod-start.lock"), "a+") as gate:
         while True:  # one starter at a time; the others wait here, then find its socket
             try:
                 fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)

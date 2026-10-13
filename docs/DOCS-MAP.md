@@ -50,7 +50,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-017 Subagents on the cheapest model | `docs/AGENT-WIRE.md` "Model tiers" | MISSING | §5 (`[models] tier`) | WP §8, §13.2, §16.1 |
 | D-018 Provider agnostic, user-chosen models | `docs/PROVIDERS.md` | §1, §3 (`/model`) | §5 | WP §13 |
 | D-019 Jev default decision model | `docs/PROVIDERS.md` "Providers" | n/a | n/a | WP §14.5 |
-| D-020 Exo OS | Lives in the `exo-os` repository, not here | n/a | n/a | WP §27 (design branch, one paragraph) |
+| D-020 Exo OS | OS in `exo-os`; shared interface in `docs/EXECUTORS.md`, required handoff in `docs/HANDOFF.md`, audit and authority ordering in `docs/GATE.md`, ledger authority in `docs/LEDGER-AUTHORITY.md` | §6 (executor denial and audit) | §3 (executor interface), §4 (required gate hooks and approval tokens) | WP §27 (design branch, one paragraph) |
 | D-021 Wave 2 closed | `docs/SEATS.md`, `docs/STANDALONE.md` §6 | §8 | §4, §5 | WP §18, §29, §31 |
 | D-022 Wave 3 plan | `docs/WAVE-3.md`, `docs/SCHEDULE.md` | §2 | §2 | WP §22, §24, §31, §32 |
 | D-023 Wave 3 built | `docs/WAVE-3.md` "Acceptance" | n/a | n/a | WP §22, §24, §29, §31 |
@@ -126,4 +126,8 @@ real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Still open:
 | D-047 Staging first for the public site (`deploy-site.sh` defaults to staging, `--prod` to promote, noindex on staging) | `docs/DEVELOPER-GUIDE.md` "Deploying the site" | n/a | n/a | n/a |
 | D-049 Brand (proposed): the X/V wordmark, the incentre-lattice mark, the living egg and its stage API, staging-only front-page preview | `docs/BRAND.md`, `site/brand/index.html`, `site/brand/egg.js`, `scripts/brand_assets.py` | n/a | n/a | n/a |
 | D-050 Consumer path: local first, desktop apps after the build settles, remote pairing and own inference later | `DECISIONS.md` D-050, `docs/PROVIDERS.md` | n/a | n/a | n/a |
+| D-051 muse-cli: a Muse Code subscription through the `muse` CLI (keyless, text only, gate treats `muse login`, `auth`, `logout` as credentials) | `docs/PROVIDERS.md` "Use a Muse Code subscription", `docs/GATE.md` "Muse CLI credentials", `docs/TOOLS.md` | `docs/PROVIDERS.md` (linked from §1) | §9 "Add a CLI-backed provider" | WP §13.1 |
+| D-052 Principal authority for turn authorship, learning, settings, policy adoption, human peer sends and unsteer | `docs/GATE.md`, `docs/MEMORY-MODEL.md`, `docs/COMMANDS.md` | n/a | n/a | n/a |
+| D-053 Hermetic terminal preferences and corrected approval and undo documentation | `docs/DEVELOPER-GUIDE.md`, `docs/UI.md`, `docs/MEMORY-MODEL.md` | n/a | n/a | n/a |
+| D-054 Mandatory learning checks precede ruling citations, with explicit acceptance separate | `docs/LEARNING.md`, `research/LEARNING-LOOP.md` | n/a | n/a | n/a |
 | D-055 Keep staging current with verified status; core engine, browser polish, then Electron desktop packaging | `docs/SITE-STATUS.md`, `DECISIONS.md` D-055, `site/roadmap/index.html`, `site/app/index.html` | n/a (no user commands changed) | "Deploying the site" | Batched; desktop delivery direction only |

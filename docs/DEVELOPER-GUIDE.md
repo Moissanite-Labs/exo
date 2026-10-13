@@ -132,6 +132,11 @@ the gate tests. Decide whether a subagent may use it: the blocked list is `BLOCK
 
 A plugin registers a tool with `ctx.register_tool(name, toolset, schema, handler, risk=...)`.
 
+Exo OS can require an installed execution broker after approvals and validation.
+New tools need an explicit broker decision before their handler may run;
+unsupported operations fail closed. The immutable request, installed entry point,
+trusted plugin inventory and host-code limits are in `docs/EXECUTORS.md`.
+
 ## 4. Add a plugin
 
 A plugin is a folder with `plugin.yaml`, an `__init__.py` that has `register(ctx)`, and a `tests/` folder.
@@ -161,6 +166,13 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 keyword arguments only. A failing callback is logged and skipped (it fails open), except that a `pre_tool_call`
 block is honoured. To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the
 principal, it returns `{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+Required-executor engines propagate failures of `exo-gate` in `pre_tool_call`
+and `post_approval_response`, blocking dispatch. The gate requires saved signed
+decision and approval events; ordinary optional hooks keep the behavior above.
+See `docs/GATE.md` "Required executor audit".
+The gate's approval verdict adds an `approval_key` for one pending call; the core
+passes it back to `post_approval_response`. Keep `rule_key` stable for grant
+scope and do not substitute it for this correlation token.
 
 **Memory provider hooks.** A memory provider is a subclass of `MemoryProvider` in `src/exo/core/slots.py`. Two
 methods matter for the principal's words:
@@ -237,7 +249,8 @@ If you changed the protocol schema, also run `python -m exo.protocol.export --ch
 Rules that tests enforce: the protocol caps, the core line budget, the TUI colour tokens against the site's
 `style.css`, that every `/help` command appears in the intro skill, and the docs map (`tests/docs/test_docs_map.py`).
 Tests use fake models and no network. The conftest fixtures isolate `EXO_HOME`, the bus identity and the peers
-folder, so a test never reads your real setup.
+folder, so a test never reads your real setup. The root fixture also clears inherited `NO_COLOR` so terminal
+settings cannot change the expected TUI theme. Tests that need no-colour mode set `NO_COLOR` themselves.
 
 Check your prose before you commit docs:
 
@@ -382,6 +395,25 @@ probs = await ask_choice(router, state, "Which fits?", ["a", "b"])   # just {opt
 - To try one from a shell: `exo decide "Is this safe?" --options safe,risky --state "rm -rf build/"`.
 
 Tests use a fake router. Do not call a real provider in tests (section 7). `tests/core/models/` has examples.
+
+### Add a CLI-backed provider
+
+Two providers run a vendor CLI as a subprocess instead of calling an API: `claude-cli`
+(`src/exo/core/models/claude_cli.py`) and `muse-cli` (`src/exo/core/models/muse_cli.py`, D-051). Use this shape
+when a subscription is only reachable through the vendor's own login. The rules:
+
+1. Exo never reads or stores the token. The CLI owns it. Read at most non-secret status fields, and return
+   only the fields you need.
+2. Give the child `exo.envscrub.minimal_env` minus any API-key variable that would switch billing.
+3. Kill the whole process group on cancel, timeout and completion, even after the leader has exited. Bound
+   cleanup waits and finish cleanup before reporting an error. Check signing only for native binaries;
+   launchers have unknown signing state, and actual CLI signing errors must still allow router fallback.
+4. Say what the CLI cannot do (tools, streaming, usage counts) in the module docstring and in
+   `docs/PROVIDERS.md`. Refuse what you cannot carry with a status that lets the router fall back.
+5. Wire it in `catalog.toml` (`transport`), `Router.credentials`, `providers_setup.rows` and `test_provider`,
+   and `models_cmd.available_models`. Map failures to the existing error classes, with fixed detail text.
+6. Test with a fake script on `PATH` (`tests/core/models/test_muse_cli.py`). No network, no real keychain.
+7. Add the vendor's login and logout commands to the gate's credential rules.
 
 ### Use the bus
 

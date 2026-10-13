@@ -4,6 +4,8 @@ Names follow Hermes's ``VALID_HOOKS`` where Exo has the same seam, so exo-gate's
 ``pre_tool_call`` and ``post_approval_response`` keep working. Callbacks get keyword
 arguments only. A failing callback is logged and skipped (fail open), except that a
 ``pre_tool_call`` block decision is honoured by whoever reads the results.
+Required-executor engines propagate failures of the trusted gate's decision and
+approval hooks so the registry can block execution.
 """
 
 from __future__ import annotations
@@ -95,8 +97,9 @@ class HookRegistry:
                 out.append(r)
         return out
 
-    async def afire(self, name: str, **kwargs: Any) -> list[Any]:
-        """Like ``fire`` but awaits async callbacks."""
+    async def afire(self, name: str, *, _fail_closed_plugins: frozenset[str] = frozenset(),
+                    **kwargs: Any) -> list[Any]:
+        """Like ``fire``; the engine can require a trusted security hook to succeed."""
         out = []
         for e in self.entries(name):
             try:
@@ -106,6 +109,8 @@ class HookRegistry:
             except Exception as exc:
                 logger.warning("hook %s from %s failed", name, e.plugin or "?", exc_info=True)
                 trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)
+                if e.plugin in _fail_closed_plugins:
+                    raise HookError("required security hook failed") from None
                 continue
             if r is not None:
                 out.append(r)

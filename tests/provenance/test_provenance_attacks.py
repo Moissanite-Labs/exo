@@ -141,7 +141,8 @@ def test_a_principal_turn_still_reaches_capture_as_the_principal(tmp_path):
 
     async def run():
         sid = (await eng.loop.create_session(title="t")).id
-        await eng._turn_send(s.TurnSend(session=sid, text=MERGE))
+        from exo.server.app import Dispatcher
+        await Dispatcher(eng, caller="principal:tui").run(s.Command.of(s.TurnSend(session=sid, text=MERGE)))
         await _settle(eng)
 
     asyncio.run(run())

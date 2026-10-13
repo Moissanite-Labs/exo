@@ -526,6 +526,11 @@ Which providers exist, their base URLs, and which environment variable holds eac
 `catalog.toml`, not code. A provider may list several key variables. Each becomes a separate *credential*
 that the router can rotate through.
 
+A third kind of provider is a vendor's own command-line tool, run as a subprocess (`claude-cli`, `muse-cli`).
+It exists for subscriptions that can only be used through the vendor's login. The login token stays with the
+vendor's program, in the OS keychain, and Exo never touches it. The price is honest: one process per turn, no
+token stream, and for `muse-cli` no tool calls, so the router skips it when a turn needs tools.
+
 #### 13.2 Roles
 
 Code never asks for a model by name. It asks for a *role*:

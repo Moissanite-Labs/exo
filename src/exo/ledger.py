@@ -106,7 +106,16 @@ class Ledger:
     """`Ledger(path, signer)`. `signer` may be a `crypto.Signer`, a bare `SigningKey`, or None
     for read-only use."""
 
-    def __init__(self, path: str | os.PathLike, signer: Signer | SigningKey | None = None):
+    def __init__(self, path: str | os.PathLike, signer: Signer | SigningKey | None = None,
+                 *, authority=None, authority_author: str | None = None):
+        from .ledger_authority import AuthorityError, validate_identity
+        from .ledger_authority.factory import required
+        if signer is not None and (authority is not None or required()):
+            raise AuthorityError("direct-key ledger writes are disabled; use the installed authority factory")
+        self.authority = authority
+        self.authority_author = authority_author
+        if authority is not None:
+            validate_identity(authority.identity)
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if isinstance(signer, SigningKey):
@@ -224,6 +233,16 @@ class Ledger:
         for p in self.anchor_paths():
             p.unlink(missing_ok=True)
 
+    @property
+    def writable(self) -> bool:
+        return self.authority is not None or self.signer is not None
+
+    @property
+    def author(self) -> str | None:
+        if self.authority is not None:
+            return self.authority_author or self.authority.identity["writers"][self.authority.writer]["author"]
+        return self.signer.author if self.signer else None
+
     def close(self) -> None:
         self.db.close()
 
@@ -271,7 +290,12 @@ class Ledger:
     # --- write ---------------------------------------------------------------
 
     def append(self, kind: str, body: Mapping, author: str | None = None, session: str | None = None,
-               refs: Iterable[str] = ()) -> dict:
+               refs: Iterable[str] = (), *, operation_id: str | None = None) -> dict:
+        if self.authority is not None:
+            return self._append_authority(kind, body, author, session, refs, operation_id)
+        from .ledger_authority.factory import required
+        if required():
+            raise LedgerError("direct-key ledger writes are disabled; use the installed authority factory")
         if self.signer is None:
             raise LedgerError("ledger opened without a signer; cannot append")
         author = author or self.signer.author
@@ -327,6 +351,54 @@ class Ledger:
                     self.db.execute("ROLLBACK")
                 raise
         return {**event, "seq": head.seq + 1, "chain": chain}
+
+    def sync_authority(self) -> dict:
+        from .ledger_authority import AuthorityError
+        from .ledger_authority.projection import synchronize
+        if self.authority is None:
+            raise AuthorityError("ledger has no pinned authority")
+        return synchronize(self, self.authority)
+
+    def _append_authority(self, kind, body, author, session, refs, operation_id):
+        import secrets
+        from .ledger_authority import (AppendOutcomeUnknown, AuthorityUnavailable, HeadConflict,
+                                       ProjectionPending, AuthorityError, canonical, validate_intent, verify_checkpoint, verify_record)
+        authority = self.authority
+        author = author or self.authority_author or authority.identity["writers"][authority.writer]["author"]
+        refs = list(dict.fromkeys(refs))
+        if kind == "verdict" and isinstance(body, Mapping) and body.get("target") not in refs:
+            refs.insert(0, body.get("target"))
+        intent = validate_intent({"author": author, "kind": kind, "body": dict(body), "session": session, "refs": refs})
+        operation_id = operation_id or secrets.token_hex(16)
+        # Recovery does not repeat an external action. It copies only already-committed ledger records.
+        for attempt in range(3):
+            checkpoint = self.sync_authority()
+            try:
+                record = authority.append(operation_id, {"seq": checkpoint["seq"], "chain": checkpoint["chain"]}, intent)
+                break
+            except HeadConflict:
+                if attempt == 2:
+                    raise
+            except (AuthorityUnavailable, OSError) as exc:
+                raise AppendOutcomeUnknown(operation_id) from exc
+        # The service may already have committed even if its reply cannot be verified
+        # or the predecessor lookup fails. Preserve the operation ID for reconciliation.
+        try:
+            canonical(record)
+            cp = record["checkpoint"]
+            verify_checkpoint(authority.identity, cp)
+            predecessor = checkpoint if cp["seq"] == checkpoint["seq"] + 1 else authority.head(cp["seq"] - 1)
+            verify_record(authority.identity, record, predecessor)
+            returned_intent = {k: record["event"][k] for k in intent}
+            if record["checkpoint"]["writer"] != authority.writer or canonical(returned_intent) != canonical(intent):
+                raise AuthorityError("authority returned a different append intent")
+        except Exception as exc:
+            raise AppendOutcomeUnknown(operation_id) from exc
+        try:
+            self.sync_authority()
+        except Exception as exc:
+            raise ProjectionPending(operation_id, record) from exc
+        return record["event"]
 
     # --- verify --------------------------------------------------------------
 

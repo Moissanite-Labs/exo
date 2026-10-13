@@ -20,6 +20,7 @@ from typing import Any, Callable
 from exo.core import trace
 from exo.core.agents.delegate import BLOCKED_TOOLS
 from exo.core.loop import Loop
+from exo.core.private import private_file
 from exo.core.models.router import TIERS
 from exo.core.sessions import new_id
 from exo.protocol import schema as s
@@ -96,7 +97,7 @@ class _Bus:
 class Scheduler:
     def __init__(self, engine: Any, clock: Callable[[], float] = time.time) -> None:
         self.engine, self.clock = engine, clock
-        self.db = sqlite3.connect(str(engine.home / "schedule.sqlite"), check_same_thread=False)
+        self.db = sqlite3.connect(str(private_file(engine.home / "schedule.sqlite")), check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, title TEXT NOT NULL, "when" TEXT NOT NULL,'
                         ' prompt TEXT NOT NULL, seat TEXT, tier TEXT NOT NULL, deliver TEXT NOT NULL,'

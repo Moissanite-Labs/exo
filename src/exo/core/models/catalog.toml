@@ -75,6 +75,16 @@ transport = "claude-cli"
 command = "claude"
 models = ["sonnet", "opus", "haiku"]
 
+# Muse Code subscription through the `muse` CLI (its own login, no key in Exo; META_API_KEY is dropped from
+# the subprocess). Available only when `muse` is on PATH. Text only: calls that carry Exo tools are refused
+# and the router falls back. One `muse exec` process per turn, so it is slower than an API route. On macOS the
+# native binary needs signing for keychain access; a shell launcher has unknown signing state and is allowed.
+# Model refs look like "muse-cli:default" (the CLI's own default).
+[providers.muse-cli]
+transport = "muse-cli"
+command = "muse"
+models = ["default"]
+
 # TypeSafe Jev: a decision model (probabilities, not text), so decision role only.
 # Verified https://docs.typesafe.ai/api.md : POST https://api.typesafe.ai/v1/systemone,
 # Authorization: Bearer. Question shapes verified live 2026-10-11 (see decision.py). Default first
