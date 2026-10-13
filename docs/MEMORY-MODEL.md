@@ -25,7 +25,8 @@ Everything stays in `sessions.sqlite`.
   with `memory_zoom`), fork copies (the original is already in the log) and context notes (below).
   Private threads are logged, but never enter the tree, other threads' views or search.
 - **Undo** hides the entries (`messages.hidden`) instead of deleting them, so the log stays append-only
-  and verifiable. Hidden entries leave the thread view and search; a summary already made keeps them.
+  and verifiable. Hidden entries leave the thread view and search. Summaries whose ranges reach the hidden
+  entries are invalidated and rebuilt from the remaining entries.
 - **Tree.** One summary tree per agent over log positions, stored in `summaries` under the key
   `agent:<id>`. Leaves cover `leaf_size` positions, parents merge pairs, as in D-013. Leaf text labels each
   entry with its thread. The compaction floor from the canary fix carries over: a span under
