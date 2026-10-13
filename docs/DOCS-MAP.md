@@ -84,6 +84,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-039 Approval identity from the connection, web token on every route, one secret scrub | `docs/GATE.md` "Who answered: the connection, not the body", `docs/ui/WEB.md` "Opening the page and the page token", `docs/TOOLS.md` "Environment of bash and jobs", `docs/SEATS.md` | §2, §6, §10 | §2 | WP §7 |
 | D-037 Completion and guidance in the composer | `docs/COMMANDS.md` "Completion and guidance", `docs/UI.md`, `docs/ui/WEB.md` "The composer" | §3 | n/a | n/a |
 | D-042 Repo hygiene, privacy and licensing | `docs/DEVELOPER-GUIDE.md` §7 "CI, lint, lockfile and the privacy deny-list", `docs/HANDOFF.md` | n/a | §7 | n/a |
+| Opt-in real-CLI contract test for the claude-cli provider (issue #47; `EXO_TEST_REAL_CLAUDE=1`) | `docs/DEVELOPER-GUIDE.md` §7 | n/a | §7 | n/a |
 | D-040 Who wrote it: message authors, pinned keys, anchored ledger head | `docs/MEMORY-MODEL.md` "Who wrote it", `docs/LEARNING.md` "Signals in", `docs/PEERS.md` "Bus seats", `docs/CORE.md` "Pinned keys" and "Head anchor", `docs/COMMANDS.md`, `plugins/exo-bus/README.md`, `plugins/exo-memory/README.md` | §4, §7, §11 | §4 "Who wrote it", §9 "Work on the learning loop" | MISSING (written after v0.2) |
 | Web client (command centre) | `plugins/exo-command/README.md`, `docs/ui/WEB.md` | §2 | n/a | WP §24 |
 | Bus (agent to agent relay) | `plugins/exo-bus/README.md`, `docs/PEERS.md` "Bus seats" (D-040) | §7 (bus seats are held, pinned keys) | §9 "Use the bus" | WP §29 (named, not explained) |
