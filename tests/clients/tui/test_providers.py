@@ -251,7 +251,7 @@ def test_set_default_uses_the_model_palette(tmp_path, fakes, monkeypatch):
             return {"models": [{"route": "openai:gpt-x", "role": "main"}, {"route": "fake:x", "role": "main"}],
                     "available": []}
 
-        scr = await open_panel(app, pilot)
+        _scr = await open_panel(app, pilot)
         real = client.call
 
         async def call(body):

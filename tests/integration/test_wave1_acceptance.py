@@ -191,7 +191,8 @@ def test_core_line_budget():
 
     Wave 1 shipped under 8k. STANDALONE.md section 6 allows 15k by the end of wave 3; delegation (D-016)
     is a wave 3 item, so the budget moved to 15k on 2026-10-12. Raised to 16k the same day for the audit
-    security wave (D-038..D-042); the way back down is the CoreEngine split the 2026-10-12 audit asks for."""
+    security wave (D-038..D-042). The old 15k goal remains unmet; moving engine methods alone does not reduce
+    this total. Issue #46 and docs/ENGINE-SPLIT.md track the proposed split and budget policy."""
     files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
              if "generated" not in p.parts]
     total = sum(len(p.read_text().splitlines()) for p in files)

@@ -1313,7 +1313,11 @@ class ExoApp(App):
         lines += ["copy: drag to select, then ctrl+c; or /copy, /copy error, /copy all",
                   "      (Terminal.app has no OSC 52, so exo also uses pbcopy; iTerm2: hold Option to select natively)",
                   "keys: @path adds a file   !cmd runs a shell command   ctrl+p palette",
-                  "      ctrl+o tool output   ctrl+y accept  ctrl+e edit  ctrl+r reject"]
+                  "      ctrl+o tool output   ctrl+y accept  ctrl+e edit  ctrl+r reject",
+                  "      ctrl+c stops a running turn (idle: quit hint; with a selection: copy)",
+                  "      ctrl+f focuses the approval card   ctrl+g opens/closes the big composer",
+                  "      Up in an empty composer pulls a queued steer back to edit; at the first line it recalls history",
+                  "      F6 loads earlier transcript messages"]
         return "\n".join(lines)
 
     async def restart(self) -> None:
