@@ -27,13 +27,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from exo.core.types import ToolCall, ToolResult, ToolSpec, to_dict
+from exo.core.types import ContentPart, ToolCall, ToolResult, ToolSpec, to_dict
 
 PRE_TOOL_CALL = "pre_tool_call"
 POST_TOOL_CALL = "post_tool_call"
 HOOK_POINTS = (PRE_TOOL_CALL, POST_TOOL_CALL)
 
 MAX_RESULT_CHARS = 100_000
+MAX_RESULT_IMAGE_BYTES = 4 * 1024 * 1024  # UTF-8 data/URL field bytes, not remote asset download sizes
 
 
 def _redact_result(result: ToolResult) -> ToolResult:
@@ -51,7 +52,24 @@ def _redact_result(result: ToolResult) -> ToolResult:
 
 
 def _cap_result(result: ToolResult) -> ToolResult:
-    """The same character cap a plain string result gets, over all the text parts of a ``ToolResult``."""
+    """Cap aggregate text and image payloads, dropping whole over-budget images with a visible marker."""
+    image_room = MAX_RESULT_IMAGE_BYTES
+    kept = []
+    dropped = 0
+    for part in result.content:
+        if part.type == "image":
+            data, url = part.data or "", part.url or ""
+            size = len(data) + len(url)
+            # Base64 is ASCII: reject by length before any encoding/allocation. For a non-ASCII URL,
+            # count UTF-8 one character at a time, never making another payload-sized byte string.
+            if size <= image_room and not (data.isascii() and url.isascii()):
+                size = sum(len(c.encode("utf-8", "replace")) for value in (data, url) for c in value)
+            if size > image_room:
+                dropped += 1
+                continue
+            image_room -= size
+        kept.append(part)
+    result.content = kept
     room = MAX_RESULT_CHARS
     for part in result.content:
         if part.type != "text" or not part.text:
@@ -62,6 +80,9 @@ def _cap_result(result: ToolResult) -> ToolResult:
             room = 0
         else:
             room -= len(part.text)
+    if dropped:
+        result.content.append(ContentPart.of_text(f"[omitted {dropped} image part(s): aggregate image payload exceeds "
+                                                 f"{MAX_RESULT_IMAGE_BYTES} bytes]"))
     return result
 
 

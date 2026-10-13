@@ -129,3 +129,58 @@ def test_real_exod_starts_detached_and_stops(home, monkeypatch):
     assert "stopped" in msg
     time.sleep(0.2)
     assert ensure.probe(ensure.exod_socket(home)) in ("none", "stale")
+
+
+def test_tui_waits_for_slow_exod_on_the_shared_start_lock(home, monkeypatch):
+    """A daemon taking longer than the old TUI five-second wait still gets joined, never raced."""
+    from exo.core.agentlog import WriterBusy
+    from exo_tui import conn
+    from exo.protocol.client import Client
+
+    started = threading.Event()
+    out, failures, sockets, locks, loads = [], [], [], [], []
+
+    def spawn(h):
+        locks.append(claim_writer(h, "default"))
+        started.set()
+        threading.Timer(5.2, lambda: sockets.append(listener(ensure.exod_socket(h)))).start()
+        return FakeProc()
+
+    def load(_):
+        loads.append(1)
+        raise WriterBusy("fake daemon is already starting")
+
+    monkeypatch.setattr("exo.server.app.load_engine", load)
+
+    def starter():
+        try:
+            out.append(ensure.ensure_core(home, "default", timeout=10, spawn=spawn))
+        except BaseException as exc:
+            failures.append(exc)
+
+    thread = threading.Thread(target=starter)
+    thread.start()
+    assert started.wait(2)
+    try:
+        joined = conn._open(home, "default")
+        thread.join(2)
+        assert isinstance(joined, Client) and out == [ensure.exod_socket(home)]
+        assert not failures and not loads and not thread.is_alive()
+    finally:
+        thread.join(10)
+        for sock in sockets:
+            sock.close()
+        for lock in locks:
+            release_writer(lock)
+
+
+def test_start_lock_releases_on_failure_and_timeout_is_bounded(home):
+    with pytest.raises(RuntimeError, match="boom"):
+        with ensure.startup_lock(home):
+            raise RuntimeError("boom")
+    with ensure.startup_lock(home):
+        with pytest.raises(ensure.CoreUnavailable, match="too long"):
+            with ensure.startup_lock(home, timeout=0.01):
+                pytest.fail("another owner cannot acquire the starter lock")
+    with ensure.startup_lock(home, timeout=0.01):
+        pass  # failure and timeout did not leave a held lock
