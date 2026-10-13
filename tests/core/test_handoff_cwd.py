@@ -86,7 +86,7 @@ def test_git_facts(tmp_path):
     assert workspace.git_facts(tmp_path / "nowhere") == {"repo": None}
 
 
-def test_required_handoff_never_runs_workspace_fsmonitor(tmp_path):
+def test_required_handoff_never_runs_workspace_fsmonitor(tmp_path, trusted_gate):
     r = repo(tmp_path / "workspace")
     outside = tmp_path / "outside-marker"
     hook = r / ".git" / "evil-fsmonitor"
@@ -102,7 +102,7 @@ def test_required_handoff_never_runs_workspace_fsmonitor(tmp_path):
         async def execute(self, request, tool, run_trusted):
             return ToolResult.of_text(request.call_id, "denied", True)
 
-    eng = engine(tmp_path, cwd=str(r), executor=Broker(), executor_required=True)
+    eng = engine(tmp_path, cwd=str(r), executor=Broker(), executor_required=True, plugins=trusted_gate)
 
     async def go():
         try:

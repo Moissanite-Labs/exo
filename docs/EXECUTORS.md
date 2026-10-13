@@ -10,7 +10,9 @@ fails during loading aborts startup even without the required flag.
 
 The ordinary Exo engine retains direct handlers when no executor is configured
 or required. `CoreEngine(executor=broker, executor_required=True)` supports
-explicit injection; a custom registry receives the same broker.
+explicit injection with an explicitly loaded trusted folder gate; a custom registry
+receives the same broker. Missing or failed gate registration, ambient entry-point
+gates, and gates outside a declared executor inventory are rejected before stores open.
 
 ## Dispatch contract
 
@@ -27,8 +29,12 @@ async def execute(self, request: ExecutionRequest, tool: Tool,
 Every registered main-turn, delegated and scheduled tool goes through the same
 `Registry.call`: lookup and availability, pre-tool hooks (including approvals),
 schema validation, executor, then post-tool hooks and secret redaction. Unknown
-tools, blocked calls and invalid arguments never dispatch. Pre-hooks may rewrite
-arguments but cannot change a call's name or id. The schema validator checks
+tools, blocked calls and invalid arguments never dispatch. In broker mode the
+registry binds a detached immutable request before pre-tool hooks. Registry hooks
+cannot change its arguments, name, id, cwd or session; each required plugin hook
+receives an independent ordinary JSON copy for inspection and serialization.
+One observer cannot change the gate's input or the dispatched request, including
+nested arguments. Ordinary mode retains argument rewriting, but not identity changes. The schema validator checks
 required keys and top-level types/enums; it is not a complete JSON Schema engine.
 
 The frozen request contains `call_id`, `tool_name`, `arguments`, `cwd`, and
@@ -87,8 +93,10 @@ Required engines omit the Git portion of `/handoff` facts with an explicit
 unavailable note. Even read-only Git commands can execute a workspace's
 `core.fsmonitor` helper. File completion in a process with the required flag,
 or a `FileIndex(executor_required=True)`, uses a bounded filesystem listing
-without Git; that listing does not apply `.gitignore`. OS client launchers must
-export the required flag as well as the engine service. Git tool requests may
+without Git; that listing does not apply `.gitignore`. Embedded TUI and web
+completion also use the explicit engine flag; web caches separate required and
+ordinary indexes. Remote clients use the bounded listing because they cannot
+establish the remote engine mode. Git tool requests may
 still run inside an isolated worker according to the broker's policy.
 
 ## Startup and trusted code
@@ -102,11 +110,14 @@ Required mode disables user folder discovery (`EXO_PLUGIN_DIRS` and
 `EXO_HOME/plugins`). A broker may supply `trusted_plugin_dirs`, a tuple of
 absolute paths, and `required_plugins`, a tuple of plugin names. The OS broker
 must verify ownership, permissions and symlinks for its trusted directories
-before returning them. Core loads only those directories plus installed plugin
-entry points. `exo-gate` is always required, whatever the broker lists, because
+before returning them. Required factory startup loads only those directories;
+ambient installed plugin entry points are disabled. `exo-gate` is always required, whatever the broker lists, because
 it supplies the decision and approval evidence. Disabling a required plugin in
 config, missing plugins, or failed required imports/registration abort startup. Executor loading happens before
-any plugin import. Non-required mode keeps existing discovery behavior.
+any plugin import. The manager is marked required before registration and cannot
+be downgraded afterwards. A preloaded gate also observes this pinned manager flag
+when attached directly to a required engine. Non-required mode keeps existing
+discovery behavior.
 
 This interface mediates model tool requests; it does not sandbox arbitrary
 Python code loaded into the engine. Installed executor and plugin imports,

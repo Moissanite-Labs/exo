@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -98,12 +99,15 @@ class HookRegistry:
         return out
 
     async def afire(self, name: str, *, _fail_closed_plugins: frozenset[str] = frozenset(),
+                    _isolate_arguments: bool = False,
                     **kwargs: Any) -> list[Any]:
         """Like ``fire``; the engine can require a trusted security hook to succeed."""
         out = []
         for e in self.entries(name):
             try:
-                r = e.callback(**kwargs)
+                # Required tool hooks inspect independent JSON copies of the bound request.
+                call_kw = {**kwargs, "args": deepcopy(kwargs["args"])} if _isolate_arguments else kwargs
+                r = e.callback(**call_kw)
                 if inspect.isawaitable(r):
                     r = await r
             except Exception as exc:

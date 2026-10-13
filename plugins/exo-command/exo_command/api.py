@@ -210,7 +210,7 @@ WEB_COMMANDS = {"context": "what the next model call carries, part by part",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
                 "new": "start a new thread",
                 "layout": "inverse puts the box on top with the newest message under it; classic is the usual order"}
-_INDEXES: Dict[str, cm.FileIndex] = {}
+_INDEXES: Dict[tuple, cm.FileIndex] = {}
 
 
 async def _complete_commands(c, p, q, body):
@@ -239,10 +239,12 @@ async def _complete_files(c, p, q, body):
     if not cwd or not os.path.isdir(cwd):
         return {"files": []}
     query = (q.get("q") or [""])[0][:200]
-    ix = _INDEXES.get(cwd)
+    required = bool(getattr(c.source, "executor_required", True))
+    key = (cwd, required)
+    ix = _INDEXES.get(key)
     if ix is None:
         while len(_INDEXES) >= 4:
             _INDEXES.pop(next(iter(_INDEXES)))
-        ix = _INDEXES[cwd] = cm.FileIndex(cwd)
+        ix = _INDEXES[key] = cm.FileIndex(cwd, executor_required=required)
     items = await asyncio.to_thread(ix.query, query, 30)
     return {"files": [{"value": i.value, "label": i.label, "meta": i.meta} for i in items]}

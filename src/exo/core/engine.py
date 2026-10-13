@@ -305,12 +305,26 @@ class CoreEngine:
         else:
             executor, loaded_required = load_executor()
             required = required or loaded_required
-        required = required or bool(registry and registry.executor_required)
+        required = required or bool(registry and registry.executor_required) or bool(plugins and plugins.executor_required)
         if required and executor is None:
             raise ExecutorConfigurationError("Required tool executor is unavailable")
         mcp_cfg = {**(mcp or {}), **(seat.mcp if seat else {})}
         if required and mcp_cfg and getattr(executor, "supports_mcp_startup", False) is not True:
             raise ExecutorConfigurationError("Required tool executor does not support MCP transport startup")
+        plugins = plugins or PluginManager()
+        plugins.executor_required = required
+        if required:
+            gate = plugins.plugins.get("exo-gate")
+            roots = getattr(executor, "trusted_plugin_dirs", None)
+            if roots is not None and (not isinstance(roots, (tuple, list)) or not all(
+                    isinstance(p, str) and Path(p).is_absolute() for p in roots)):
+                raise ExecutorConfigurationError("executor trusted_plugin_dirs must contain absolute paths")
+            if (gate is None or not gate.ok or gate.source != "dir" or gate.manifest.path is None
+                    or (roots is not None and not any(gate.manifest.path.resolve().is_relative_to(Path(p).resolve())
+                                                       for p in roots))
+                    or any(not any(e.plugin == "exo-gate" for e in plugins.hooks.entries(point))
+                           for point in ("pre_tool_call", "post_approval_response"))):
+                raise ExecutorConfigurationError("Required executor needs a trusted folder exo-gate with security hooks")
         self.executor = executor
         self.executor_required = required
         self.home = Path(home)
@@ -331,8 +345,7 @@ class CoreEngine:
         self.registry = registry or default_registry(executor=executor, executor_required=required)
         self.registry.executor = executor
         self.registry.executor_required = required or executor is not None
-        self.plugins = plugins or PluginManager()
-        self.plugins.executor_required = required
+        self.plugins = plugins
         self.plugins.router = self.router  # plugins reach it as ctx.router
         self._approvals: dict[str, tuple[asyncio.Future, str | None]] = {}
         self._open_approvals: dict[str, s.ApprovalRequested] = {}  # what approvals.list shows
@@ -533,6 +546,7 @@ class CoreEngine:
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
         required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()
         for verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
+                                                     _isolate_arguments=self.executor_required,
                                                      **self._hook_kw(call, ctx)):
             if not isinstance(verdict, dict):
                 continue
@@ -1138,6 +1152,7 @@ def create(seat: str | None = None) -> CoreEngine:
         if st.principal and not os.environ.get("EXO_PRINCIPAL"):
             os.environ["EXO_PRINCIPAL"] = st.principal
     pm = PluginManager(config=cfg.data.get("plugin_config") or {},
+                       executor_required=executor_required,
                        memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
     enabled = st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins")
     plugin_dirs = None
@@ -1158,7 +1173,7 @@ def create(seat: str | None = None) -> CoreEngine:
         required_plugins = tuple(dict.fromkeys(("exo-gate", *raw_required)))
         if enabled is not None and not set(required_plugins).issubset(enabled):
             raise ExecutorConfigurationError("plugin configuration disables a required executor plugin")
-    pm.load_all(dirs=plugin_dirs, enabled=enabled)
+    pm.load_all(dirs=plugin_dirs, enabled=enabled, entry_points=not executor_required)
     if executor_required:
         missing = [name for name in required_plugins if name not in pm.plugins or pm.plugins[name].error]
         if missing:
