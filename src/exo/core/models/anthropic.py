@@ -278,6 +278,7 @@ class AnthropicProvider(HttpTransport):
         blocks: dict[int, dict] = st.meta.setdefault("_blocks", {})
         if kind == "message_start":
             u = (d.get("message") or {}).get("usage") or {}
+            st.meta["_usage_input"] = type(u.get("input_tokens")) is int and u["input_tokens"] >= 0
             st.usage = Usage(input_tokens=u.get("input_tokens") or 0, output_tokens=u.get("output_tokens") or 0,
                              cache_read_tokens=u.get("cache_read_input_tokens") or 0,
                              cache_write_tokens=u.get("cache_creation_input_tokens") or 0)
@@ -313,6 +314,9 @@ class AnthropicProvider(HttpTransport):
                 args = parse_json_args(cb["_json"]) if cb["_json"] else dict(cb.get("input") or {})
                 yield st.add_tool_call(ToolCall(id=cb.get("id") or "", name=cb.get("name") or "", arguments=args))
         elif kind == "message_delta":
+            final_usage = d.get("usage") or {}
+            st.meta["_usage_complete"] = (st.meta.get("_usage_input", False)
+                and type(final_usage.get("output_tokens")) is int and final_usage["output_tokens"] >= 0)
             reason = (d.get("delta") or {}).get("stop_reason")
             if reason:
                 st.stop_reason = map_finish_reason(reason, _STOP_MAP)

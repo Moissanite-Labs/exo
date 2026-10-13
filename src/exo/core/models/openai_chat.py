@@ -136,6 +136,8 @@ class OpenAIChatProvider(HttpTransport):
             yield error_event(f"provider error: {err.get('message', err)}", status)
             return
         if u := d.get("usage"):
+            st.meta["_usage_complete"] = all(type(u.get(k)) is int and u[k] >= 0
+                                             for k in ("prompt_tokens", "completion_tokens"))
             st.usage = Usage(
                 input_tokens=u.get("prompt_tokens") or 0, output_tokens=u.get("completion_tokens") or 0,
                 cache_read_tokens=(u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0,
