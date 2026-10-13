@@ -45,6 +45,7 @@ def test_required_mcp_config_fails_before_startup(tmp_path, server):
 def test_engine_main_child_and_background_share_broker(tmp_path, monkeypatch):
     broker = DenyBroker()
     engine = CoreEngine(tmp_path / "home", executor=broker, executor_required=True, cwd=str(tmp_path))
+    engine.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     monkeypatch.setattr(engine.jobs, "start", lambda *args, **kw: pytest.fail("host background handler ran"))
 
     async def main():
@@ -152,6 +153,7 @@ def test_scheduler_tools_use_broker(tmp_path):
               "roles": {"main": ["fake:x"], "aux": ["fake:x"], "fast": ["fake:x"]}}
     broker = DenyBroker()
     engine = CoreEngine(tmp_path / "home", models, executor=broker, executor_required=True)
+    engine.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     job = engine.scheduler.add("every 1m", "probe", tier="fast")
 
     async def main():
@@ -181,6 +183,7 @@ def test_required_local_delegate_setup_has_no_workspace_execution(tmp_path, monk
               "roles": {"main": ["fake:x"], "aux": ["fake:x"], "standard": ["fake:x"]}}
     engine = CoreEngine(tmp_path / "home", models, executor=LocalDelegate(), executor_required=True,
                         cwd=str(tmp_path))
+    engine.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     monkeypatch.setattr("exo.core.workspace.git_facts", lambda *a: pytest.fail("delegate host workspace Git"))
     monkeypatch.setattr("subprocess.run", lambda *a, **kw: pytest.fail("delegate setup host subprocess"))
 
@@ -205,6 +208,7 @@ def test_required_remote_delegate_refuses_host_bus_connection(tmp_path, monkeypa
             return await run_trusted()
 
     engine = CoreEngine(tmp_path / "home", executor=LocalDelegate(), executor_required=True)
+    engine.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     monkeypatch.setattr(engine.agents, "_remote", lambda *a: pytest.fail("host bus connection"))
 
     async def main():

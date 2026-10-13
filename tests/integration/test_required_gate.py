@@ -151,13 +151,28 @@ def test_optional_hook_failures_remain_optional_in_required_engine(tmp_path, mon
     engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch)
     async def broken_observer(**kw):
         raise RuntimeError("optional observer")
-    for phase in ("pre_tool_call", "post_approval_response"):
-        engine.plugins.hooks.register(phase, broken_observer, "optional-observer")
+    engine.plugins.hooks.register("post_approval_response", broken_observer, "optional-observer")
     async def main():
         try:
             result = await approved_call(engine)
             assert not result.is_error
             assert broker.seen == ["bash"] and len(ran) == 1
+        finally:
+            await engine.close()
+    asyncio.run(main())
+
+
+def test_any_failing_pre_tool_call_hook_blocks_in_required_engine(tmp_path, monkeypatch):
+    """PR #68: a pre_tool_call callback is a veto seam, so its failure blocks even from a non-gate plugin."""
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch)
+    async def broken_observer(**kw):
+        raise RuntimeError("optional observer")
+    engine.plugins.hooks.register("pre_tool_call", broken_observer, "optional-observer")
+    async def main():
+        try:
+            result = await approved_call(engine)
+            assert result.is_error and "approval hook failed" in result.text()
+            assert not ran
         finally:
             await engine.close()
     asyncio.run(main())
