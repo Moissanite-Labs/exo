@@ -27,9 +27,10 @@ with `exo providers add NAME --store file`. If an environment variable of the sa
 says so.
 
 What the test call is: OpenAI-style and local providers list their models (`GET /models`), Anthropic lists one
-model, a decision provider answers one yes or no question, and `claude-cli` only checks the binary is on PATH.
+model, a decision provider answers one yes or no question, `claude-cli` only checks the binary is on PATH, and
+`muse-cli` runs one tiny `muse exec` prompt (see "Use a Muse Code subscription").
 Errors come back as a class: `no_key`, `auth`, `billing`, `not_found`, `rate_limited`, `server`, `timeout`,
-`network`, `not_running`, `not_installed`, `bad_response`, `http`, `error`. The last result is kept in
+`network`, `not_running`, `not_installed`, `unsigned`, `bad_response`, `http`, `error`. The last result is kept in
 `$EXO_HOME/state/providers.json` (no secrets) and shows as `verified` or `failed: <class>`; a new key clears it.
 
 If no provider can serve the main role, `exo tui` and `exo web` say so and point here.
@@ -59,6 +60,46 @@ output, the token is in that log until the next start.
 No tool gives the model these functions. The gate classes `exo providers add|remove|test|default`, `secret-tool`,
 any shell or code that names `/api/providers` or `providers_setup`, and every Keychain read as `credentials`,
 which always asks you and never gets a standing grant (D-033). Keys are write-only: no code path returns one.
+
+## Use a Muse Code subscription (`muse-cli`)
+
+`muse-cli` lets Exo use a Muse Code subscription by running the `muse` command-line tool. Exo does not hold a
+key for it. The Muse login keeps its token in the OS keychain, owned by the `muse` program, and Exo never reads,
+copies or stores it. Exo only starts `muse exec` (one prompt, no screen) and reads what it prints.
+
+Set it up once, yourself, in a terminal:
+
+    muse login                      # browser sign-in
+    exo providers test muse-cli     # one tiny muse exec call: ok, or an error class
+    exo providers default muse-cli:default
+
+`exo providers` shows `not installed`, `not logged in` or `installed`. The `not logged in` check reads two
+non-secret fields (`mechanism`, `subs_active`) from `~/.config/muse/auth.json` and nothing else in that file. It
+cannot see the keychain, so the test call is what proves the login works. Error classes from the test:
+`not_installed`, `no_key` (not logged in), `auth` (login rejected), `billing` (subscription not active),
+`rate_limited`, `timeout`, `network`, `unsigned`, `bad_response`, `error`.
+
+Limits, stated plainly:
+
+- **Text only.** `muse exec` runs its own agent. Exo cannot pass its tools to it or stream tool calls out of it.
+  A turn that carries Exo tools is refused and the router falls back to the next route, so `muse-cli` suits a role
+  without tools (for example `aux`) or a conversation where another route follows it.
+- **Slow start, no token stream.** Each turn is a new process. The answer arrives when the run ends. The history
+  is flattened into one prompt, and no token counts come back (usage shows as unknown).
+- **The native binary must be code-signed on macOS.** An unsigned native Muse executable can fail keychain
+  access (`OSStatus -67068`). Exo checks signing with `codesign -dv` only when the configured command is a native
+  Mach-O binary. The vendor's `muse` command may be a shell launcher: shell scripts cannot be code-signed, and
+  Exo reports their signing state as unknown and lets them run. This does not verify the binary they start.
+  An actual signing error is still reported as `unsigned`; if signing is needed, apply `codesign -s -` to the
+  native binary, not the launcher. Signing and startup errors allow fallback to another configured route.
+- **Locked down.** The run gets no shell, no file writes, no web tools, no reminder agents, no imported foreign
+  personal context and no session log, with a private temporary directory as its workspace. Timeout and stop
+  terminate its process group, including descendants whose leader has already exited, with bounded cleanup.
+  `META_API_KEY` is removed from the child's environment so the subscription is what
+  is used, never an API account. The child gets only the minimal environment (D-039).
+- **The agent cannot log in for you.** The gate treats `muse login`, `muse auth` and `muse logout` (also with
+  flags before them, paths to the executable, or shell wrappers) and any read or write of `~/.config/muse/` as
+  `credentials`, which always asks and cannot be covered by a standing grant or lowered by policy.
 
 ## Add a key by hand
 

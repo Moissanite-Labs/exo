@@ -74,6 +74,16 @@ both reads the file without the gate seeing it and detaches from the core's proc
 still pass. The full fix is an OS sandbox for tools; until then the gate and the process-tree
 check are the guard.
 
+## Muse CLI credentials
+
+`muse login`, `muse auth` and `muse logout` are `credentials` acts, like `vercel login`: they always ask and never
+get a standing grant. The match is on the word anywhere after `muse`, so `muse --yolo login` is caught, and a
+prompt that is exactly one of these words over-asks, which is the safe side. `~/.config/muse/` is a secret-store
+path: reading or writing `auth.json` there is `credentials` too. Other `muse` commands are unknown programs and
+ask by default. Paths to the Muse executable and nested shell commands keep the credential classification;
+lowering `opaque_exec` by policy or granting an opaque command cannot bypass the credential floor.
+Tests: `plugins/exo-gate/tests/test_credentials.py`.
+
 ## Standing grants ("always")
 
 An `allow_always` answer becomes a grant with a scope, an expiry and a ledger row
