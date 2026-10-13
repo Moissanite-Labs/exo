@@ -447,6 +447,10 @@ def test_provider(provider: str, *, router: Router | None = None, home: str | os
     """One tiny live call. Returns ``{provider, ok, latency_ms, error_class, detail, models}``; never the key,
     and ``detail`` is built from the status code or error class only."""
     router = router or build_router(home)
+    if router.spend is not None or os.environ.get("EXO_MODEL_SPEND_REQUIRED") == "1":
+        return {"provider": provider, "ok": False, "latency_ms": None, "error_class": "spend_boundary",
+                "detail": "Live setup probes have no bounded billing contract; use the guarded model router.",
+                "models": None, "at": int(time.time())}
     spec = _spec(router, provider)
     transport = spec.get("transport", "openai")
     res: dict[str, Any] = {"provider": provider, "ok": False, "latency_ms": None, "error_class": "",

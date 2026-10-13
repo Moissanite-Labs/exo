@@ -339,7 +339,15 @@ class CoreEngine:
         self.agent = seat.name if seat else "default"  # one agent, one memory: every thread of this seat (D-028)
         self.log_view = agentlog.AgentLogView(self.store, self.agent)
         self._writer: Any = None  # the agent's writer lock, taken by claim_writer() (create() does)
+        principal_spend = (models or {}).get("spend")
+        active_principal = (seat.principal if seat else None) or os.environ.get("EXO_PRINCIPAL")
+        if principal_spend is not None and active_principal and principal_spend.get("principal") != active_principal:
+            raise ValueError("model-spend policy principal does not match the active principal")
         models = {**(models or {}), **(seat.models if seat else {})}
+        if principal_spend is not None:
+            models["spend"] = principal_spend
+        elif seat and "spend" in seat.models:
+            raise ValueError("model-spend policy belongs to the principal, not a seat")
         self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env)
         self.registry = registry or default_registry(executor=executor, executor_required=required)
         self.registry.executor = executor
@@ -1142,6 +1150,11 @@ def create(seat: str | None = None) -> CoreEngine:
 
     ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
     cfg = Config.load()
+    from exo.core.models.spend import configured
+    spend_config = (cfg.data.get("models") or {}).get("spend")
+    spend = configured(spend_config, required=os.environ.get("EXO_MODEL_SPEND_REQUIRED") == "1")
+    if spend is not None and spend.principal != cfg.principal:
+        raise ValueError("model-spend policy principal does not match the configured principal")
     executor, executor_required = load_executor()  # required failures precede all plugin imports
     st = None
     if seat or os.environ.get("EXO_SEAT"):

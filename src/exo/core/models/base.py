@@ -176,6 +176,12 @@ class HttpTransport:
     async def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
         session_id = opts.pop("session_id", None)
         body = self.build_body(messages, tools, **opts)
+        async for event in self.stream_prepared(body, session_id=session_id):
+            yield event
+
+    async def stream_prepared(self, body: dict[str, Any], *, session_id: str | None = None,
+                              require_usage: bool = False) -> AsyncIterator[ProviderEvent]:
+        """Send exactly the prepared body. HTTPX's default transport does not retry."""
         url = self.base_url + self.path
         sent = {"user-agent": USER_AGENT, **self.headers(), **self.extra_headers}
         if self.session_header and session_id:
@@ -216,6 +222,11 @@ class HttpTransport:
         finished = st.meta.pop("_finished", False) or st.stop_reason is not None
         if not finished:  # closed cleanly but cut short: no finish event and no stop reason; never a normal end
             yield error_event("stream ended without a response", None, retryable=True)
+            return
+        usage_complete = st.meta.pop("_usage_complete", False)
+        st.meta.pop("_usage_input", None)
+        if require_usage and not usage_complete:
+            yield error_event("provider did not return complete token usage", None, retryable=False)
             return
         if st.usage != Usage():
             yield ProviderEvent(kind="usage", usage=st.usage)

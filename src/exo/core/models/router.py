@@ -26,6 +26,7 @@ from exo.core.models.claude_cli import ClaudeCliProvider
 from exo.core.models.muse_cli import MuseCliProvider
 from exo.core.models.decision import DecisionProvider
 from exo.core.models.keys import lookup_key
+from exo.core.models.spend import SpendJournal, admitted_stream, configured
 from exo.core.models.openai_chat import OpenAIChatProvider
 from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
@@ -118,7 +119,8 @@ class Router:
                  *, catalog: dict[str, Any] | None = None, instances: Mapping[str, Provider] | None = None,
                  env: Mapping[str, str] | None = None, clock: Callable[[], float] = time.time,
                  client: Any = None, key_sources: bool | None = None,
-                 breaker: Mapping[str, Any] | None = None) -> None:
+                 breaker: Mapping[str, Any] | None = None, spend: SpendJournal | None = None) -> None:
+        self.spend = spend
         cat = load_catalog() if catalog is None else catalog
         self.providers: dict[str, dict] = {**cat.get("providers", {}), **(providers or {})}
         self.models: dict[str, dict] = dict(cat.get("models", {}))
@@ -144,6 +146,8 @@ class Router:
         overrides of the catalog: ``input``, ``output``, ``cache_read``, ``cache_write`` USD per million tokens,
         ``context``)."""
         config = config or {}
+        if "spend" not in kw:
+            kw["spend"] = configured(config.get("spend"), required=os.environ.get("EXO_MODEL_SPEND_REQUIRED") == "1")
         r = cls(roles=config.get("roles"), providers=config.get("providers"), breaker=config.get("breaker"), **kw)
         for ref, info in (config.get("models") or {}).items():  # prices and limits per "provider:model" (D-032)
             if isinstance(info, dict):
@@ -350,6 +354,15 @@ class Router:
         """One call on one credential. A failure that may fall back is swallowed and
         appended to ``failed``; anything else (including a terminal error) is yielded.
         Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``)."""
+        if self.spend is None and os.environ.get("EXO_MODEL_SPEND_REQUIRED") == "1":
+            yield error_event("required model-spend policy is missing; ask the principal to configure it", None,
+                              retryable=False)
+            return
+        if self.spend is not None:
+            async for event in admitted_stream(self.spend, route.ref, cred.provider, messages, tools,
+                                               {**opts, "model": route.model}):
+                yield event
+            return
         started, t0 = False, time.monotonic()
         attempts = [] if attempts is None else attempts
         cool: float | None = None  # set when this failure opens the route's breaker
