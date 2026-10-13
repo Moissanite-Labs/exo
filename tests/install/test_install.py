@@ -187,7 +187,8 @@ def test_real_install_puts_exo_on_path_and_rerun_upgrades(box):
 
 
 @pytest.mark.parametrize("custom_venv", [False, True])
-def test_no_pip_refresh_preserves_existing_install_metadata_and_default_paths(box, custom_venv):
+@pytest.mark.parametrize("with_hermes", [False, True], ids=["standalone", "with-hermes"])
+def test_no_pip_refresh_preserves_existing_install_metadata_and_default_paths(box, custom_venv, with_hermes):
     import json
     exo = box / "exo"
     exo.mkdir()
@@ -195,14 +196,24 @@ def test_no_pip_refresh_preserves_existing_install_metadata_and_default_paths(bo
     install = {"mode": "venv", "checkout": str(REPO), "python": "/recorded/python",
                "venv": str(venv), "source": str(REPO)}
     (exo / "config.json").write_text(json.dumps({"install": install}))
-    result = run(box, "--no-pip", "--no-interview", "--yes", "--exo-source", str(REPO),
+    mode_args = ["--with-hermes", "--no-pin"] if with_hermes else []
+    result = run(box, "--no-pip", "--no-interview", "--yes", "--exo-source", str(REPO), *mode_args,
                  env_extra={"EXO_VENV": str(venv)} if custom_venv else None)
     assert result.returncode == 0, result.stderr + result.stdout
     config = json.loads((exo / "config.json").read_text())
     assert config["install"] == install
     assert config["venv"] == str(venv)
     assert "exo-memory" in config["plugins"]
-    assert (exo / "hermes-home" / "plugins" / "exo-memory" / ".exo-managed").is_file()
+    assert (exo / "plugins" / "exo-memory" / ".exo-managed").is_file()
+    hermes_plugins = exo / "hermes-home" / "plugins"
+    if with_hermes:
+        assert (hermes_plugins / "exo-memory" / ".exo-managed").is_file()
+        assert config["hermes_home"] == str(exo / "hermes-home")
+        assert (exo / "bin" / "exo-hermes").is_file()
+    else:
+        assert not hermes_plugins.exists()
+        assert "hermes_home" not in config
+        assert not (exo / "bin" / "exo-hermes").exists()
     envsh = (exo / "env.sh").read_text()
     assert f'export EXO_HOME="{exo}"' in envsh
     assert "PYTHONPATH" not in envsh and "EXO_PYTHON" not in envsh and "EXO_VENV" not in envsh
