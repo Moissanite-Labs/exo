@@ -48,6 +48,7 @@ BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
+CLI_TRANSPORTS = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
 
 
 def load_catalog(path: Path | str = CATALOG_PATH) -> dict[str, Any]:
@@ -225,23 +226,17 @@ class Router:
 
     def _load_credentials(self, provider: str) -> list[Credential]:
         creds: list[Credential] = []
+        spec = self.providers.get(provider)
+        timeout = {"read_timeout": float(spec["read_timeout"])} if spec and spec.get("read_timeout") else {}
         if provider in self.instances:
             creds = [Credential(provider, None, self.instances[provider])]
-        elif (spec := self.providers.get(provider)) is not None and spec.get("transport") == "claude-cli":
-            # No key: the CLI's own OAuth login is the credential. Available only if the binary is on PATH.
-            exe = shutil.which(spec.get("command", "claude"), path=self.env.get("PATH", ""))
+        elif spec is not None and spec.get("transport") in CLI_TRANSPORTS:
+            # No key: the CLI's own login is the credential (D-051 for muse). Available only if the binary is on PATH.
+            cls = CLI_TRANSPORTS[spec["transport"]]
+            exe = shutil.which(spec.get("command", cls.default_command), path=self.env.get("PATH", ""))
             if exe:
-                prov = ClaudeCliProvider(exe, name=provider, env=self.env,
-                                         **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
-                creds = [Credential(provider, None, prov)]
-        elif (spec := self.providers.get(provider)) is not None and spec.get("transport") == "muse-cli":
-            # No key: the muse CLI's own login is the credential (D-051). Available only if the binary is on PATH.
-            exe = shutil.which(spec.get("command", "muse"), path=self.env.get("PATH", ""))
-            if exe:
-                prov = MuseCliProvider(exe, name=provider, env=self.env,
-                                       **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
-                creds = [Credential(provider, None, prov)]
-        elif (spec := self.providers.get(provider)) is not None:
+                creds = [Credential(provider, None, cls(exe, name=provider, env=self.env, **timeout))]
+        elif spec is not None:
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
@@ -249,8 +244,7 @@ class Router:
             for i, key in enumerate(keys):
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
-                                 headers=spec.get("headers"), session_header=spec.get("session_header"),
-                                 **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
+                                 headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout)
                 creds.append(Credential(cid, key, prov))
         return creds
 
@@ -607,9 +601,6 @@ _BG: dict[str, Any] = {}
 def aux_sync(router: Router, prompt: str | list[Message], *, timeout: float | None = 120.0, **kw: Any) -> str:
     """Blocking ``aux`` for sync callers (plugin threads). Runs on one shared background event loop so the
     router's HTTP clients stay bound to a single loop. Never call it from that loop."""
-    import asyncio
-    import threading
-
     if "loop" not in _BG:
         loop = asyncio.new_event_loop()
         threading.Thread(target=loop.run_forever, name="exo-aux-loop", daemon=True).start()
