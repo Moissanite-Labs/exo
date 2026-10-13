@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
+from exo.principal import require_principal
 
 logger = logging.getLogger("exo_gate")
 
@@ -317,8 +318,9 @@ class Gate:
                 out[p.name] = None
         return out
 
-    def accept_policies(self, by: str = "principal") -> str:
-        """Make the changed policy files the pinned policy (``/gate accept``)."""
+    def accept_policies(self) -> str:
+        """Adopt changed policy files only with live principal authority (``/gate accept``)."""
+        by = require_principal("accept changed gate policies")
         if self.changed_policies() is None:
             return "policy unchanged since the session started"
         self._policies, self._policy_error = self._changed, self._changed_error
