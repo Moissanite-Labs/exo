@@ -15,7 +15,7 @@ import time
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Optional
 
-from .state import USAGE_KEYS, epoch
+from .state import USAGE_KEYS
 
 DAY = 86400.0
 

@@ -194,10 +194,11 @@ such as "the tests passed" or "the post went out". In the background, a reviewer
 wants the result first and the detail after, not a long preamble, because they cut the preamble in three
 drafts this week (entries 41, 77, 102)." The reviewer can only propose. It cannot edit your profile.
 
-A lesson can sound right and still be wrong. So Exo tests lessons before keeping them. It keeps a personal
-exam built from your own past decisions: questions about you with known answers, pairs of a reply you
-rejected and the one you chose, and real past moments cut off right before you gave your verdict. A change is
-scored against the current setup on this exam.
+A lesson can sound right and still be wrong. Exo has a personal exam built from your own past decisions:
+questions about you with known answers, pairs of a reply you rejected and the one you chose, and real past
+moments cut off right before you gave your verdict. Changes covered by an evaluation gate are scored against
+the current setup on this exam. Other promotion rules can promote a lesson without that gate, including your
+explicit ruling and some repeated, high-confidence taste or fact evidence.
 
 This method is called *hill climbing*. Picture standing on a hillside in thick fog. You cannot see the top,
 but you can tell whether a step takes you higher. Take one small step. If you are higher, stay. If not, step
@@ -206,11 +207,12 @@ such as one new taste rule.
 
 Any exam has a weak spot: you can learn the answers instead of the subject. A student who memorizes last
 year's practice paper scores well on it and badly on the real exam. So the newest part of your exam is *held
-out*. The learning process never reads it, and a change is kept only if it also does not score worse there.
-That is the guard against a system that flatters its own test.
+out*. The learning process never reads it. For changes that go through the evaluation gate, the held-out set
+helps guard against a system that flatters its own test.
 
-This loop is built: capture, the background reviewer, typed proposals, promotion rules, revert, and a
-nightly climb that keeps a change only if it holds up on held-out cases. What is not yet built is the trigger
+This loop is built: capture, the background reviewer, typed proposals, promotion rules, revert, and a climb
+that evaluates selected changes against held-out cases. Principal-confirmed lessons and some repeated,
+high-confidence taste or fact lessons can promote through separate rules. What is not yet built is the trigger
 that runs the climb every night by itself.
 
 ### 7. Acting safely without asking about everything
@@ -312,8 +314,8 @@ machine, and a test checks this. A fresh install with an empty store runs end to
 interview builds a new person's store from zero. Updating the core must never lose anything in a store.
 
 That is the whole system at a high level: a signed record at the bottom, a portable store of what it knows
-about you, one continuous memory with fresh and complete context on every turn, lessons that are kept only
-if they prove themselves, gates by consequence with consent bound to exact text, one core and one way in
+about you, one continuous memory with fresh and complete context on every turn, explicit promotion rules
+with held-out evaluation for selected changes, gates by consequence with consent bound to exact text, one core and one way in
 behind every screen, and a harness that measures itself. Part II covers each piece in depth.
 
 ---
@@ -344,9 +346,7 @@ to model providers). The HTTP server inside `exod` is written on the standard li
 no web framework. Storage is SQLite files and plain Markdown files.
 
 The core has a line budget. A test counts the lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`
-and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3, and
-the test now fails above that. Today the count is 14,694, so the next large addition must either remove
-something or argue for a higher budget. The budget exists so that growth is a decision, and so the core can
+and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3. The budget is now 16,000 and the test fails above that. Today the count is about 15,836, so the next large addition must either remove something or argue for a higher budget. The budget exists so that growth is a decision, and so the core can
 later shrink onto a small device (section 27).
 
 Repository layout, in short:
@@ -1174,7 +1174,8 @@ only as an opt-in that the person's policy must allow, because it sends personal
 **Status.** The fused loop, `exo.learn`, is **[built]** (wave 3) on top of the earlier modules (`exo.capture`,
 `exo.consolidate`, `exo.taste`, `exo.ask`, `exo.eval`): signals, the background reviewer, typed proposals,
 promotion, revert, and a climb with the held-out gate. Clients send verdicts with `feedback.send` and panel
-responses with `ui.respond`. In a live acceptance run, one edit verdict produced three typed proposals.
+responses with `ui.respond`; panel responses are recorded as `ui_signal` ledger notes and are not yet
+consumed by the learning loop. In a live acceptance run, one edit verdict produced three typed proposals.
 **[designed, not built]**: the automatic nightly trigger, climb candidates other than adding or dropping one
 lesson, and a "learned" section in the brief.
 
@@ -1402,9 +1403,9 @@ Richer elements are *panels*: a diff, a table, a task board, a choice, an approv
 file, a chart. The model opens one with the `ui` tool, which emits a `ui.panel` event. Each client draws what
 it can, and every panel carries a plain-text version, so a client that cannot draw it (a phone notice, a
 voice device) still says the same thing. The person can always open or close a panel by hand. What they did
-comes back through `ui.respond` (opened, dismissed, acted, ignored), and feeds the learning loop, because an
-ignored panel teaches as much as an opened one. Subagents and scheduled runs get no `ui` tool: nobody is
-watching them.
+comes back through `ui.respond` (opened, dismissed, acted, ignored) and is recorded as a `ui_signal` ledger
+note. The learning loop does not yet consume those notes. Subagents and scheduled runs get no `ui` tool:
+nobody is watching them.
 
 **Instruments, not chrome.** Every line on screen reports something. A status strip shows the model that
 actually served (and, in the signal colour, that it fell back from the one asked for), how full the context
@@ -1524,7 +1525,7 @@ store and grows with them. The near-term design rules that keep that path open:
 
 - **The store is one folder.** Pack, nodes, items, ledger and indexes are plain files and SQLite. Copy the
   folder and the person moves.
-- **The core stays small.** Under 15,000 lines (14,694 today), enforced by a test. Two runtime
+- **The core stays small.** Under 16,000 lines (about 15,836 today), enforced by a test. Two runtime
   dependencies. The terminal client is Python too, so the core and its main client need no Node, no browser
   engine and no containers. One optional tool, `code_find`, needs Node and hides itself when Node is
   missing. The planned idle memory target is under 80 MB **[not measured]**.
@@ -1638,26 +1639,25 @@ If the network drops at step 7, the terminal reconnects with `events.subscribe` 
 
 ### 29. Built and tested
 
-Checked by running `python -m pytest -q` from the repository root: **over a thousand tests pass**, in
-about two minutes. The skips are contract tests against a Hermes Agent checkout, which skip when no checkout
-is configured. Tests that live inside the plugin folders run as separate suites, one per plugin (see CI in
-`docs/DEVELOPER-GUIDE.md`). The exact count changes with every commit, so this page does not pin it.
+The repository test suite is run with `python -m pytest -q` from the root. Contract tests against a Hermes
+Agent checkout skip when no checkout is configured. Tests inside plugin folders run as separate suites, one
+per plugin (see CI in `docs/DEVELOPER-GUIDE.md`). Counts change with commits, so this page does not list them.
 
-| Area | Tests collected | What they cover |
-|---|---|---|
-| Core (`tests/core`) | 286 | types and codec, both transports, router fallback, cooldown, tiers and pricing, tools and background jobs, loop, the agent log and threads, context assembly, principal capture, scheduler, plugins, slots, seats, skills, MCP |
-| Agents (`tests/agents`) | 61 | the wire codec, strict decoding, signing, delegation limits, cancel, tiers and escalation |
-| Clients (`tests/clients`) | 81 | the terminal client: panels, approvals, onboarding and tips, the colour test against the site |
-| Learning (`tests/learn`, `consolidate`, `eval`, `ask`, `brief`) | 128 | signals, review, proposals, promotion, revert, the climb and held-out gate, taste, question queue, brief |
-| Trace (`tests/trace`) | 40 | trace rows, the rules, findings and their life cycle, cost |
-| Peers (`tests/peers`) | 14 | presence, signed messages, policy, hold and release, refusal of consent |
-| Protocol (`tests/protocol`) | 39 | schema, caps, strict decoding, export to JSON Schema and TypeScript, two clients, replay |
-| Integration (`tests/integration`) | 41 | the wave 1 acceptance run with a hard kill and resume, hooks that block and ask, approvals bound to exact text, the line budget, dependency list, no owner names |
-| Bus (`tests/bus`) | 92 | the signed agent-to-agent relay, client, wire format |
-| Ledger, store, crypto, CLI | 33 | signing, chain verification, append-only triggers, store lint and search |
-| Onboard, ingest, install, orchestra, skills | 56 | onboarding interview, history importers, installer, role templates, the intro skill lists every command |
-| Upstream, acceptance, docs | 29 | provenance, an example store, and that the docs map is complete |
-| Hermes contracts (`tests/contract`) | 62 | skipped in this run |
+| Area | What tests cover |
+|---|---|
+| Core (`tests/core`) | Types and codec, transports, router fallback, tools and background jobs, agent log and threads, context assembly, capture, scheduler, plugins, slots, seats, skills, MCP |
+| Agents (`tests/agents`) | Wire codec, strict decoding, signing, delegation limits, cancellation, tiers and escalation |
+| Clients (`tests/clients`) | Terminal and web clients, panels, approvals, onboarding, tips and site color consistency |
+| Learning (`tests/learn`, `consolidate`, `eval`, `ask`, `brief`) | Signals, review, proposals, promotion, revert, climb, held-out gate, taste, questions and brief |
+| Trace (`tests/trace`) | Trace rows, anomaly rules, findings and their life cycle, cost |
+| Peers (`tests/peers`) | Presence, signed messages, policy, hold and release, refusal of consent |
+| Protocol (`tests/protocol`) | Schema, caps, strict decoding, JSON Schema and TypeScript export, clients and replay |
+| Integration (`tests/integration`) | Acceptance flow, hard kill and resume, blocking hooks, exact-text approvals and system invariants |
+| Bus (`tests/bus`) | Signed agent-to-agent relay, client and wire format |
+| Ledger, store, crypto, CLI | Signing, chain verification, append-only triggers, store lint and search |
+| Onboard, ingest, install, orchestra, skills | Interview, importers, installer, role templates and intro skill |
+| Upstream, acceptance, docs | Provenance, example store and docs map |
+| Hermes contracts (`tests/contract`) | Skipped when no checkout is configured |
 
 What that means in plain terms:
 
@@ -1670,8 +1670,9 @@ What that means in plain terms:
 - The gate runs on every tool call with exact-text binding, approver lists, signed seat answers, scoped
   grants, two floors and the outbound scrub.
 - Subagents, background jobs, peers through one ingress path, and scheduled runs work.
-- The learning loop captures, reviews, proposes, promotes and reverts, and the climb keeps a lesson only on
-  a held-out win.
+- The learning loop captures, reviews, proposes, promotes and reverts. Selected changes use a held-out
+  evaluation gate; other promotion rules include explicit principal rulings and some repeated,
+  high-confidence taste or fact evidence.
 - The trace records every call and turn, files findings, and reopens or verifies them after a fix.
 - Provenance is tracked and checked. The upstream report works on a test repository.
 
@@ -1718,7 +1719,7 @@ a small cycle of fix and ship, or a design item.
 |---|---|---|---|
 | 1. Core skeleton | loop, providers, tools, sessions, slots, plugin loader, protocol server, provenance, `exo upstream` | a multi-turn session with tools persists, resumes after a kill, and streams the same events to two clients, the old suite stays green, and the core is under 8k lines | done |
 | 2. Re-home | the six plugins on the core, skills loader, MCP client, seat config, ledger mirror | a correction survives compaction word for word, the gate blocks a public action until a client answers `approval.requested`, and a bus round trip verifies | done |
-| 3. UI and learning | terminal and web clients, panels, `exo.learn` with the eval gate, cron, subagents and tasks | the live acceptance run above, then continual use on a canary agent, with a lesson promoted only after it scores better on held-out cases | built, canary use under way |
+| 3. UI and learning | terminal and web clients, panels, `exo.learn` with selected evaluation gates, cron, subagents and tasks | the live acceptance run above, then continual use on a canary agent; selected changes use held-out evaluation, while other lessons follow promotion rules based on principal rulings or repeated, high-confidence evidence | built, canary use under way |
 | 4. Channels and cutover | chat adapters lifted with provenance, editor adapter, history import, real users moved over one by one with rollback | each move done with a working rollback | planned |
 | 5. Device | footprint audit, local small-model defaults, core on a small board, thin device client | the core runs on the board with an empty store and with a real one, and the device client chats and approves | planned |
 

@@ -61,7 +61,7 @@ def test_web_start_with_no_core_spawns_one_and_attaches(home, monkeypatch):
 def test_unreachable_core_shows_actionable_text(home):
     async def go():
         c = CommandCentre(load_settings({"socket": str(home / "none.sock")}))
-        web = WebServer(c)
+        _web = WebServer(c)
         c.connect()
         with pytest.raises(Exception) as e:
             await c.bootstrap()

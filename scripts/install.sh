@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install.sh: install Exo for any user on macOS or Linux.
 #
-#   one venv + exo (with the terminal client) + the `exo` command on PATH + the Exo plugins + an `exo models` check + `exo init --interview`
+#   one venv + exo (with the terminal client) + the `exo` command on PATH + the Exo plugins + an `exo models` check
 #   Hermes is NOT installed by default. Exo runs on its own core. `--with-hermes` adds the
 #   pinned Hermes Agent and its patch queue (kept until the wave 4 cutover).
 #
@@ -446,7 +446,7 @@ if [ "$INTERVIEW" -eq 1 ] && [ -n "$PRINCIPAL" ]; then
     [ "$DRY" -eq 1 ] || EXO_HOME="$EXO_HOME" "${EXO_RUN[@]}" "${args[@]}"
   fi
 elif [ "$INTERVIEW" -eq 1 ]; then
-  say "next: exo init <id> --interview   (or: exo import-store <path> --id <id>)"
+  say "next: run exo to start the terminal client and first-run orientation; optional: exo init <id> --interview or exo import-store <path> --id <id>"
 fi
 
 # --- 9. exo models check, summary -------------------------------------------------
