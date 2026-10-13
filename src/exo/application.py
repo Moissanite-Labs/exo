@@ -6,15 +6,33 @@ here. The core engine keeps turn orchestration and its public lifecycle.
 from __future__ import annotations
 
 import os
+from functools import wraps
+from typing import Any
 from pathlib import Path
 
 from exo.config import Config
-from exo.core.engine import CoreEngine, SYSTEM_PROMPT
+from exo.core.engine import CoreRuntime, SYSTEM_PROMPT
 from exo.core.plugins import PluginManager
 from exo.core.seats import SeatError, load as load_seat
 from exo.core.skills import pack_dir
 from exo.core.tools.executor import ExecutorConfigurationError, load_executor
 from exo.model_spend import resolve_spend_policy
+from exo.plugin_context import ContextAdapter
+
+
+class CoreEngine(CoreRuntime):
+    """Standalone application runtime with the optional plugin context bridge.
+
+    The public constructor retains CoreRuntime's signature and type hints. Supplying
+    context_factory replaces only this bridge; the runtime still owns its tree.
+    """
+
+    @wraps(CoreRuntime.__init__)
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        plugins = kwargs["plugins"] = kwargs.get("plugins") or PluginManager()
+        if kwargs.get("context_factory") is None:
+            kwargs["context_factory"] = lambda tree: ContextAdapter(tree, plugins.slots.context, plugins.slots.memory)
+        super().__init__(*args, **kwargs)
 
 
 def create(seat: str | None = None) -> CoreEngine:

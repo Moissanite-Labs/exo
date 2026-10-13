@@ -261,3 +261,28 @@ existing `exo.core.engine:create` factory path delegates to it, preserving CLI a
 protocol startup. This is the construction step of the ENGINE-SPLIT direction;
 core engine lifecycle and turn orchestration remain in place. The counted core
 line-budget test and its 16,000-line threshold are unchanged.
+
+The next construction step separates `exo.core.engine.CoreRuntime` from
+`exo.application.CoreEngine`. The runtime owns `context_tree` and accepts an
+optional `context_factory(ContextTree) -> TurnContext`; without a factory it uses
+the tree directly and never imports application or plugin-context composition.
+The narrow protocols live in `exo.core.context`. The tree exposes recent original
+messages through `transcript`, while retaining persistence, summary scheduling,
+capture acknowledgement and provenance rules. Diagnostic commands address this
+owned tree even when the injected view has no `.tree` attribute.
+
+Application `CoreEngine` supplies `exo.plugin_context.ContextAdapter`, which
+translates optional context/memory plugin callbacks and text selections. Generic
+selection reconstruction stays in core and preserves original Message objects
+(including tool calls, results and provenance). Plugin signature adaptation also
+stays in the core plugin interface. Legacy named imports of `CoreEngine` and
+`ContextAdapter` from `exo.core.engine` resolve lazily; constructor parameters,
+signature inspection, type hints and `create` paths remain usable. Required gate
+validation precedes any injected context factory. Existing factory helper patch
+points remain in `exo.application`, and runtime executor loading remains in
+`exo.core.engine`.
+
+This is one step of the #82/#46 ENGINE-SPLIT direction, not completion of that
+split or its historical 15,000-line target. After rebasing on the required-executor
+security fix, the counted core measured 16,047 lines; this context boundary brings
+it to 15,989 under the unchanged threshold, leaving only 11 lines of headroom.

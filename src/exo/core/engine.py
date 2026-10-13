@@ -7,10 +7,11 @@ Everything lives under ``$EXO_HOME``: ``config.json`` (models, plugins) and
 Adapters kept here so the parts stay independent of each other:
 - ``SqliteLog``: the server's EventLog over sessions.sqlite; the Hub numbers events.
 - ``HubBus``: the loop's event bus, publishing through the Hub (written before sent).
-- ``ContextAdapter``: the loop's context calls on top of TreeContext plus an optional
-  Hermes-shaped ContextEngine plugin (select_context, update_from_response, on_turn_complete).
 - tool bridge: one ToolContext per call (cwd, cancel, emit) and the plugin hook names
   ``pre_tool_call`` / ``post_tool_call`` / ``transform_tool_result`` on Registry hooks.
+
+The runtime owns its summary tree and accepts an optional context factory.
+Application composition supplies the context/memory plugin bridge.
 """
 
 from __future__ import annotations
@@ -22,13 +23,13 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from exo import provenance
 from exo.core import trace, workspace
 from exo.core.agents import Delegator
 from exo.core import agentlog
-from exo.core.context import AgentContext, DefaultCompressor, TreeContext, _maybe_await
+from exo.core.context import AgentContext, ContextTree, DefaultCompressor, TurnContext, _maybe_await
 from exo.core.findings import STATUSES, Findings
 from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
@@ -39,7 +40,7 @@ from exo.core import jobs as jobs_mod
 from exo.core import peer_target
 from exo.core.ingress import STANDING_LINE
 from exo.core.peers import PeerConfig
-from exo.core.plugins import PluginManager
+from exo.core.plugins import PluginManager, safe_plugin_call
 from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
 from exo.gate import approver_allowed, approver_identity
@@ -54,7 +55,7 @@ from exo.core.tools.registry import Block, Registry, ToolContext, default_regist
 from exo.core.tools.executor import (
     ExecutionBroker, ExecutorConfigurationError, load_executor, validate_executor,
 )
-from exo.core.types import ContentPart, Message, ToolCall, ToolResult, ToolSpec, Usage, to_dict
+from exo.core.types import ToolCall, ToolResult, ToolSpec, to_dict
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed, Hub
 
@@ -88,17 +89,11 @@ class SqliteLog:
 class HubBus:
     """Stands in for the loop's EventBus: every loop event goes through the server Hub."""
 
-    def __init__(self, engine: CoreEngine) -> None:
+    def __init__(self, engine: CoreRuntime) -> None:
         self.engine = engine
 
     async def emit(self, body: Any, session: str | None = None) -> s.Event:
         return self.engine.hub.publish(body, session)
-
-
-def _usage_dict(u: Usage | None) -> dict[str, int]:
-    u = u or Usage()
-    return {"prompt_tokens": u.input_tokens, "completion_tokens": u.output_tokens,
-            "total_tokens": u.input_tokens + u.output_tokens}
 
 
 def _tok(n: int) -> str:
@@ -148,142 +143,8 @@ def render_compact(res: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-class ContextAdapter:
-    """TreeContext for the loop, plus a plugin ContextEngine when one fills the slot."""
-
-    RECENT = 40  # messages of transcript handed to hooks that take one
-
-    def __init__(self, tree: TreeContext, plugin: Any = None, memory: Any = None) -> None:
-        self.tree = tree
-        self.plugin = plugin
-        self.memory = memory
-        self._started: set[str] = set()
-        tree.on_pre_compress = self._pre_compress
-        tree.on_capture = self._capture if hasattr(memory, "capture_principal") else None
-        tree.on_compacted = self._compacted
-
-    def transcript(self, session: str, last: int | None = None) -> list[dict[str, Any]]:
-        """Recent messages as OpenAI-style dicts, for plugin hooks."""
-        msgs = self.tree.store.messages(session)[-(last or self.RECENT):]
-        return [provenance.flat(m) for m in msgs]  # D-040: each message says who wrote it
-
-    async def _pre_compress(self, session: str, msgs: list[Message]) -> str:
-        """Memory providers get the messages about to be compacted: ``on_pre_compress(messages)`` may return
-        insights for the summary prompt, and ``checkpoint(session_id=, messages=, reason="pre_compress")`` runs."""
-        flat = [provenance.flat(m) for m in msgs]  # D-040: author and principal flag per message
-        if self.memory is None:
-            return ""
-        _safe(self.memory, "checkpoint", session_id=session, messages=flat, reason="pre_compress")
-        out = _safe(self.memory, "on_pre_compress", flat)
-        return out if isinstance(out, str) else ""
-
-    async def _capture(self, session: str, msgs: list[Message]) -> bool:
-        """The principal store's capture hook (D-032): ``capture_principal(messages, session_id=, source=)`` returns
-        true when it took them. An error is recorded and counts as not captured."""
-        from exo.core.context import is_principal
-
-        flat = [{**provenance.flat(m), **({"principal": is_principal(m)} if m.role == "user" else {})}
-                for m in msgs]  # a user message that is not the principal (peer, bus, job notice) says so
-        try:
-            out = _call(self.memory.capture_principal, flat, session_id=session, source="leaf")
-            out = await _maybe_await(out)
-        except Exception as exc:
-            trace.report(f"{type(self.memory).__name__}.capture_principal", exc, session)
-            return False
-        return out is not None and out is not False
-
-    def _compacted(self, session: str, node: Any) -> None:
-        """``on_compacted(session, node)`` on the context engine and the memory provider; node is a SummaryNode
-        (id, level, start, end, text, status)."""
-        for obj in (self.plugin, self.memory):
-            if obj is not None:
-                _safe(obj, "on_compacted", session, node, session_id=session)
-
-    @property
-    def on_event(self) -> Any:
-        return self.tree.on_event
-
-    @on_event.setter
-    def on_event(self, fn: Any) -> None:
-        self.tree.on_event = fn
-
-    def cache_key(self, session: str) -> str:
-        key = getattr(self.tree, "cache_key", None)
-        return key(session) if callable(key) else session
-
-    def note(self, session: str) -> None:
-        self.tree.note(session)
-        if self.plugin is not None and session not in self._started:
-            self._started.add(session)
-            _safe(self.plugin, "on_session_start", session, platform="exo")
-
-    async def build(self, session: str, system: str, **kw: Any) -> list[Message]:
-        if "recall" in inspect.signature(self.tree.build).parameters:
-            msgs = await self.tree.build(session, system, **kw)
-        else:  # a per-session tree: recall goes in the system message, as before D-028
-            recall = kw.get("recall") or ""
-            msgs = await self.tree.build(session, (system + "\n\n" if system else "") + "# Recalled memory\n" + recall
-                                         if recall else system)
-        pick = getattr(self.plugin, "select_context", None)
-        if pick is None:
-            return msgs
-        flat = [{"role": m.role, "content": m.text()} for m in msgs]
-        try:
-            out = await _maybe_await(_call(pick, flat, conversation_messages=flat, budget_tokens=0,
-                                           session_id=session))
-        except Exception as exc:
-            trace.report("context engine select_context", exc, session)
-            return msgs
-        if not out:
-            return msgs
-        return _apply_selection(msgs, flat, out)
-
-    def on_turn_complete(self, session: str, usage: Usage) -> None:
-        if self.plugin is not None:
-            _safe(self.plugin, "update_from_response", _usage_dict(usage))
-            _safe(self.plugin, "on_turn_complete", self.transcript(session), usage=_usage_dict(usage),
-                  session_id=session)
-
-
-def _apply_selection(msgs: list[Message], flat: list[dict[str, Any]], out: list[dict[str, Any]]) -> list[Message]:
-    """Turn a ``select_context`` result back into messages. The hook sees text only, so a dict it passes through
-    unchanged maps back to the original Message (its tool calls and results survive); only changed or new dicts
-    (an injected system block, an edited turn) become plain text messages. A tool message it did not keep goes."""
-    out_msgs: list[Message] = []
-    at = 0
-    for d in out:
-        role = d.get("role")
-        hit = next((j for j in range(at, len(flat)) if flat[j]["role"] == role and flat[j]["content"] == (d.get("content") or "")), None)
-        if hit is not None:
-            out_msgs.append(msgs[hit])
-            at = hit + 1
-        elif role in ("system", "user", "assistant"):
-            out_msgs.append(Message(role=role, content=[ContentPart.of_text(str(d.get("content") or ""))]))
-    return out_msgs
-
-
-def _call(fn: Any, *args: Any, **kw: Any) -> Any:
-    """Call a plugin hook with the keyword arguments it accepts (all of them when it takes **kwargs)."""
-    try:
-        params = inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        return fn(*args, **kw)
-    if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
-        kw = {k: v for k, v in kw.items() if k in params}
-    return fn(*args, **kw)
-
-
-def _safe(obj: Any, method: str, *args: Any, **kw: Any) -> Any:
-    fn = getattr(obj, method, None)
-    try:
-        return _call(fn, *args, **kw) if fn else None
-    except Exception as exc:  # a plugin failure never breaks a turn, but it is recorded
-        trace.report(f"{type(obj).__name__}.{method}", exc, kw.get("session_id"))
-        return None
-
-
-class CoreEngine:
-    """Implements exod's Engine protocol on the wave 1 core."""
+class CoreRuntime:
+    """Turn orchestration with a core-owned tree and an injected context view."""
 
     def __init__(self, home: str | os.PathLike, models: dict[str, Any] | None = None, *,
                  registry: Registry | None = None, plugins: PluginManager | None = None,
@@ -294,6 +155,7 @@ class CoreEngine:
                  mcp: dict[str, dict[str, Any]] | None = None,
                  channels: dict[str, dict[str, Any]] | None = None,
                  tree_cfg: dict[str, Any] | None = None, schedule: bool = False,
+                 context_factory: Callable[[ContextTree], TurnContext] | None = None,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
                  jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None, **loop_kw: Any) -> None:
         # Fail before opening stores, loading adapters or registering host handlers.
@@ -396,10 +258,10 @@ class CoreEngine:
         self._soul_sig = self._soul_stat()
         system_prompt = self._compose_prompt()
         slots = self.plugins.slots
-        tree = AgentContext(self.store, DefaultCompressor(self.router.provider("aux")), **(tree_cfg or {}))
+        self.context_tree = tree = AgentContext(self.store, DefaultCompressor(self.router.provider("aux")), **(tree_cfg or {}))
         agentlog.register_zoom(self.registry, self.log_view)
         self.loop = Loop(self.store, self.router.provider("main"), bus=HubBus(self),  # type: ignore[arg-type]
-                         context=ContextAdapter(tree, slots.context, slots.memory), memory=slots.memory,
+                         context=context_factory(tree) if context_factory is not None else tree, memory=slots.memory,
                          tool_specs=self._specs, run_tool=self.run_tool,
                          system_prompt=system_prompt, model=self._main_ref(), **loop_kw)
         self.loop.on_turn_end = self.observe_turn
@@ -526,9 +388,9 @@ class CoreEngine:
             if slot is None:
                 continue
             if slot is pm.slots.memory:  # agent_log: the one log, so the provider keeps no second one (D-028)
-                _safe(slot, "initialize", "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
+                safe_plugin_call(slot, "initialize", "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
                       agent_log=self.log_view)
-            for schema in _safe(slot, "get_tool_schemas") or []:
+            for schema in safe_plugin_call(slot, "get_tool_schemas") or []:
                 spec = ToolSpec(name=schema["name"], description=schema.get("description", ""),
                                 parameters=schema.get("parameters") or {"type": "object", "properties": {}},
                                 toolset="memory" if slot is pm.slots.memory else "context")
@@ -985,7 +847,7 @@ class CoreEngine:
                          + (["", peers] if peers else []) + (["", jobs] if jobs else []))
 
     def _agent_ctx(self, session: str | None) -> AgentContext:
-        tree = getattr(self.loop.context, "tree", self.loop.context)
+        tree = self.context_tree
         if not session or self.store.get_session(session) is None:
             raise CommandFailed("bad_request", "no thread to look at")
         if not isinstance(tree, AgentContext) or tree._agent_key(session) is None:
@@ -1147,10 +1009,24 @@ class CoreEngine:
         return {"key": b.key, "saved": True, "applies": "next start"}
 
 
-def create(seat: str | None = None) -> CoreEngine:
+def create(seat: str | None = None) -> CoreRuntime:
     """Compatible factory path; application composition owns configuration and plugins."""
     from exo.application import create as compose
     return compose(seat)
 
 
-__all__ = ["ContextAdapter", "CoreEngine", "HubBus", "SqliteLog", "create"]
+def __getattr__(name: str) -> Any:
+    # Legacy named imports compose the application; importing CoreRuntime stays independent.
+    if name == "CoreEngine":
+        from exo.application import CoreEngine
+        return CoreEngine
+    if name == "ContextAdapter":
+        from exo.plugin_context import ContextAdapter
+        return ContextAdapter
+    if name == "_apply_selection":
+        from exo.core.context import apply_selection
+        return apply_selection
+    raise AttributeError(name)
+
+
+__all__ = ["ContextAdapter", "CoreEngine", "CoreRuntime", "HubBus", "SqliteLog", "create"]  # noqa: F822 - lazy exports
