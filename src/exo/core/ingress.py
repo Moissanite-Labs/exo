@@ -41,6 +41,23 @@ _APPROVE_CALL = re.compile(r"approval\.respond|\b(approve|allow|grant|authori[sz
 
 
 @dataclass
+class PeerConfig:
+    policy: dict[str, str] = field(default_factory=dict)  # trust level -> auto|hold|deny
+    rules: list[dict[str, str]] = field(default_factory=list)
+    hold_minutes: float = 30.0
+    wake: bool | None = None  # None: off for an interactive seat, on for a headless one
+    active_hours: float = 12.0  # a session idle longer than this is not "live"
+    enabled: bool = True
+
+    @classmethod
+    def of(cls, raw: dict[str, Any] | None) -> PeerConfig:
+        raw = raw or {}
+        return cls(policy=dict(raw.get("policy") or {}), rules=list(raw.get("rules") or []),
+                   hold_minutes=float(raw.get("hold_minutes") or 30), wake=raw.get("wake"),
+                   active_hours=float(raw.get("active_hours") or 12), enabled=raw.get("enabled", True) is not False)
+
+
+@dataclass
 class Ingress:
     """Something that wants the agent's attention. ``trust`` is a gate.PEER_TRUST level; ``session`` names
     the target session when the sender asked for one."""

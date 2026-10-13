@@ -458,31 +458,34 @@ def test_peers_command_send_and_inline_peer_message(tmp_path):
     import tempfile
 
     from exo.core.seats import Seat
+    from exo.peers import attach
     from exo.server.app import Dispatcher, HttpServer
 
     d = tempfile.mkdtemp(prefix="exot", dir="/tmp")  # short: unix socket paths
     try:
         models = {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
-        mine = CoreEngine(tmp_path / "h1", models, cwd=str(tmp_path), env={}, seat=Seat(name="tester"), peers_dir=d)
-        other = CoreEngine(tmp_path / "h2", models, cwd=str(tmp_path), env={}, seat=Seat(name="razi"), peers_dir=d)
+        mine = CoreEngine(tmp_path / "h1", models, cwd=str(tmp_path), env={}, seat=Seat(name="tester"), peers_dir=d,
+                          attach_peers=attach)
+        other = CoreEngine(tmp_path / "h2", models, cwd=str(tmp_path), env={}, seat=Seat(name="razi"), peers_dir=d,
+                           attach_peers=attach)
         client = FakeServerClient(mine)
 
         async def main():
             srv = HttpServer(Dispatcher(other, other.hub))
             await srv.start_unix(f"{d}/razi.sock")
-            await other.start_peers(f"{d}/razi.sock")
+            await other.peers.start(f"{d}/razi.sock")
             sb = (await other.loop.create_session(title="razi work")).id
             app = ExoApp(client, seat="tester")
             async with app.run_test(size=(120, 40)) as pilot:
                 await asyncio.wait_for(app.ready.wait(), 5)
-                await mine.start_peers(f"{d}/tester.sock")  # the TUI's own engine serves no socket here; give it one
+                await mine.peers.start(f"{d}/tester.sock")  # the TUI's own engine serves no socket here; give it one
                 srv2 = HttpServer(Dispatcher(mine, mine.hub))
                 await srv2.start_unix(f"{d}/tester.sock")
                 await send(app, pilot, "/peers")
                 await until(lambda: "razi" in app.transcript_text(), pilot)
                 await send(app, pilot, "/send razi are you free?")
                 await until(lambda: any("are you free?" in m.text() for m in other.store.messages(sb)), pilot)
-                await other.peer_node.send("tester", "yes, go ahead", sb, "agent")
+                await other.peers.node.send("tester", "yes, go ahead", sb, "agent")
                 await until(lambda: "peer message from razi" in app.transcript_text(), pilot)
                 assert "yes, go ahead" in app.transcript_text()
                 assert "/peers" in app.help_text() and "/send" in app.help_text()
