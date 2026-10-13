@@ -256,3 +256,75 @@ def test_event_stream_survives_an_error_reply_when_reconnecting(monkeypatch):
             raise AssertionError("expected ClientError")
 
     asyncio.run(go())
+
+
+def test_shutdown_covers_accepted_client_before_handler_registration(sock_dir):
+    """Accepted transports exist before the async request handler gets its first turn."""
+    async def main():
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class DeferredHandlerServer(HttpServer):
+            async def _client(self, reader, writer):
+                entered.set()
+                await release.wait()  # simulate a handler task scheduled behind daemon shutdown
+                await super()._client(reader, writer)
+
+        srv = DeferredHandlerServer(Dispatcher(EchoEngine()))
+        path = sock_dir / "closing.sock"
+        await srv.start_unix(path)
+        peer_reader, peer_writer = await asyncio.open_unix_connection(path)
+        await entered.wait()
+        closing = asyncio.create_task(srv.close())
+        await asyncio.sleep(0)
+        release.set()
+        try:
+            try:
+                await asyncio.wait_for(asyncio.shield(closing), 0.2)
+            except TimeoutError:
+                # Keep concrete evidence in failure output without abandoning sockets or tasks.
+                print("shutdown stuck: registered handlers", len(srv._streams))
+                for task in asyncio.all_tasks():
+                    if task is not asyncio.current_task():
+                        task.print_stack()
+                raise
+            assert await peer_reader.read() == b""
+        finally:
+            peer_writer.close()
+            await peer_writer.wait_closed()
+            await closing
+            await srv.close()
+
+    _run(main())
+
+
+def test_shutdown_does_not_wait_for_peer_to_drain_response(sock_dir):
+    async def main():
+        buffered = asyncio.Event()
+        server_writer = None
+
+        class BufferedResponseServer(HttpServer):
+            async def _request(self, reader, writer):
+                nonlocal server_writer
+                server_writer = writer
+                writer.write(b"x" * (4 * 1024 * 1024))
+                assert writer.transport.get_write_buffer_size() > 0
+                buffered.set()
+                await writer.drain()
+
+        srv = BufferedResponseServer(Dispatcher(EchoEngine()))
+        path = sock_dir / "buffered.sock"
+        await srv.start_unix(path)
+        peer_reader, peer_writer = await asyncio.open_unix_connection(path)
+        await buffered.wait()
+        try:
+            # The peer never drains the response; stopping the daemon must still release the socket.
+            await asyncio.wait_for(srv.close(), 0.2)
+            assert server_writer.is_closing()
+            assert not srv._streams and not srv._writers
+        finally:
+            peer_writer.close()
+            await peer_writer.wait_closed()
+            await srv.close()
+
+    _run(main())

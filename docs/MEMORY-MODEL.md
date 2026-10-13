@@ -25,7 +25,8 @@ Everything stays in `sessions.sqlite`.
   with `memory_zoom`), fork copies (the original is already in the log) and context notes (below).
   Private threads are logged, but never enter the tree, other threads' views or search.
 - **Undo** hides the entries (`messages.hidden`) instead of deleting them, so the log stays append-only
-  and verifiable. Hidden entries leave the thread view and search; a summary already made keeps them.
+  and verifiable. Hidden entries leave the thread view and search. Summaries whose ranges reach the hidden
+  entries are invalidated and rebuilt from the remaining entries.
 - **Tree.** One summary tree per agent over log positions, stored in `summaries` under the key
   `agent:<id>`. Leaves cover `leaf_size` positions, parents merge pairs, as in D-013. Leaf text labels each
   entry with its thread. The compaction floor from the canary fix carries over: a span under
@@ -125,7 +126,8 @@ every message from the path it came in by, never from its text (`src/exo/provena
 
 | Path in | Author |
 |---|---|
-| `turn.send` from one of the seat's clients | `principal` |
+| `turn.send` from an authenticated principal connection | `principal` |
+| `turn.send` from a local, TCP, stdio or unstamped caller | `local` |
 | the model's reply | `agent` |
 | a tool result | `tool` |
 | a peer message (D-026) | `peer:<name>` |
@@ -158,9 +160,14 @@ In the ledger, the principal's voice is an event whose author is one of `exo.pro
 exo-memory add them; `exo keys principal ID` adds one by hand). Consolidation and learning read rulings, verdicts,
 answers and utterances only from those authors (LEARNING.md).
 
-What it does not cover: who is on the other end of a client connection. Any local process that can reach the
-seat's socket can still send `turn.send`, and that counts as the principal. Binding a turn to a real client is
-separate work (the approval identity and web authentication branch).
+Turn authorship uses the transport caller defined in D-039. The core snapshots it before launching a
+background turn. Send and steer use the same check. Local callers may drive turns, but their text never
+counts as principal evidence. A background turn without explicit source metadata is authored as system.
+`feedback.send` and `ui.respond` require a live principal caller before any learning or findings mutation.
+Caller identity expires when a command returns or is cancelled. A child task gains no standing authority.
+
+The same-user process limit in D-039 still applies. This does not provide an OS sandbox or repair older
+messages already recorded with the wrong author.
 
 ## Concurrency
 

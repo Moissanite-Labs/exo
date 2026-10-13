@@ -114,6 +114,8 @@ class HttpServer:
         self._unix_path: Path | None = None
         self._server: asyncio.base_events.Server | None = None
         self._streams: set[asyncio.Task] = set()
+        self._writers: set[asyncio.StreamWriter] = set()
+        self._closing = False
 
     async def start_unix(self, path: str | os.PathLike) -> None:
         path = Path(path)
@@ -125,7 +127,7 @@ class HttpServer:
             path.unlink()
         old = os.umask(0o177)
         try:
-            self._server = await asyncio.start_unix_server(self._client, path=str(path))
+            self._server = await asyncio.start_unix_server(self._accept_client, path=str(path))
         finally:
             os.umask(old)
         os.chmod(path, 0o600)
@@ -136,7 +138,7 @@ class HttpServer:
     async def start_tcp(self, host: str, port: int) -> int:
         if not self.token:
             raise ValueError("TCP needs a bearer token")
-        self._server = await asyncio.start_server(self._client, host, port)
+        self._server = await asyncio.start_server(self._accept_client, host, port)
         return self._server.sockets[0].getsockname()[1]
 
     async def serve_forever(self) -> None:
@@ -148,20 +150,38 @@ class HttpServer:
             await self.close()
 
     async def close(self) -> None:
+        self._closing = True
         if self._principal_token and self._unix_path is not None:
             pr.revoke(self._unix_path, self._principal_token)
             self._principal_token = None
         if self._server is not None:
             self._server.close()
-        for t in list(self._streams):
-            t.cancel()
+        # Python 3.13 Server.wait_closed also waits for accepted transports. A handler task may not
+        # have started yet, and a graceful writer.close may wait for a peer to drain buffered output.
+        # Abort owned transports and drain the synchronously registered tasks before waiting.
+        writers, tasks = list(self._writers), list(self._streams)
+        for writer in writers:
+            writer.transport.abort()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._writers.difference_update(writers)
         if self._server is not None:
             await self._server.wait_closed()
 
+    def _accept_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        # Registration must happen in the connection callback, before scheduling the async handler.
+        # A callback already queued when close stops listening still needs its transport closed.
+        if self._closing:
+            writer.transport.abort()
+            return
+        self._writers.add(writer)
+        task = asyncio.create_task(self._client(reader, writer))
+        self._streams.add(task)
+        task.add_done_callback(self._streams.discard)
+
     async def _client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        task = asyncio.current_task()
-        if task:
-            self._streams.add(task)
         try:
             await self._request(reader, writer)
         except (ConnectionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError):
@@ -169,12 +189,13 @@ class HttpServer:
         except asyncio.CancelledError:
             pass
         finally:
-            if task:
-                self._streams.discard(task)
             try:
                 writer.close()
-            except Exception:
+                await writer.wait_closed()
+            except (ConnectionError, asyncio.CancelledError):
                 pass
+            finally:
+                self._writers.discard(writer)
 
     async def _request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         line = (await reader.readuntil(b"\r\n")).decode("latin-1").strip()
@@ -274,7 +295,7 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
         while (line := await lines()) is not None:
             if not line.strip():
                 continue
-            cmd, resp = await dispatcher.dispatch(line)
+            cmd, resp = await dispatcher.dispatch(line, caller=pr.LOCAL)
             if cmd is not None and isinstance(cmd.body, s.EventsSubscribe) and resp.ok:
                 if feed:
                     feed.cancel()

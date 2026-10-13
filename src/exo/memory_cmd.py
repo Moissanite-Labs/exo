@@ -28,11 +28,19 @@ def _stores(a) -> list:
     if pid:
         return [PrincipalStore.for_principal(pid)]
     d = exo_home() / 'principals'
-    return [PrincipalStore(p) for p in sorted(d.iterdir()) if (p / 'ledger.sqlite').is_file()] if d.is_dir() else []
+    return [PrincipalStore(p) for p in sorted(d.iterdir()) if p.is_dir()] if d.is_dir() else []
 
 
 def verify_ledgers(a) -> dict[str, dict]:
-    """Each store's ledger checked with the pinned key registry as `trusted` (D-040)."""
+    """Check each copy against the configured authority, or the legacy pinned registry."""
+    from .ledger_authority.factory import configured
+    if configured():
+        from .ledger_authority.verify import verify_configured
+        stores = _stores(a)
+        if not stores:
+            return {"authority": {"ok": False, "state": "unverifiable", "fresh": False,
+                                   "error": "no principal store configured for authority verification"}}
+        return {s.root.name: verify_configured(s.ledger_path) for s in stores}
     from .keyring import KeyRegistry
     from .ledger import Ledger
     out: dict[str, dict] = {}
@@ -77,11 +85,15 @@ def cmd_memory(a) -> int:
             print('no agent logs yet')
         for name, r in ledgers.items():
             if r['ok']:
-                note = '' if r.get('anchored') else ' (head not anchored yet: it will be on the next write)'
-                print(f"ledger {name}: {r['checked']} events, ok{note}")
+                if r.get('authority_contacted'):
+                    note = ' (matches captured authority head)'
+                else:
+                    note = '' if r.get('anchored') else ' (head not anchored yet: it will be on the next write)'
+                print(f"ledger {name}: {r.get('checked', r.get('local_seq', 0))} events, ok{note}")
             else:
                 where = f" at seq {r['seq']}" if 'seq' in r else ''
-                print(f"ledger {name}: BROKEN{where}: {r['error']}")
+                status = "UNVERIFIED" if "state" in r else "BROKEN"
+                print(f"ledger {name}: {status}{where}: {r.get('error') or r.get('state', 'unverifiable')}")
     ok = all(r['ok'] for r in logs.values()) and all(r['ok'] for r in ledgers.values())
     if not logs and not ledgers and not have_sessions:
         print('nothing to verify', file=sys.stderr)
