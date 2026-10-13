@@ -26,6 +26,7 @@ written by the principal); the commands that write them come with `/taste` in wa
 """
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -46,6 +47,7 @@ DEFAULTS = {
     "value_window_max_days": 90,
 }
 PIN_TYPES = ("taste_pin", "taste_unpin", "taste_off", "taste_on")
+log = logging.getLogger(__name__)
 
 
 def taste_policy(store: PrincipalStore | None) -> dict:
@@ -61,11 +63,13 @@ def taste_policy(store: PrincipalStore | None) -> dict:
         if isinstance(raw, Mapping):
             for k, v in raw.items():
                 if k == "house":
-                    pol["house"] = v not in (False, "off", "no", "false", 0)
+                    disabled = (v.strip().casefold() in {"off", "no", "false"}
+                                if isinstance(v, str) else v in (False, 0))
+                    pol["house"] = not disabled
                 elif k in DEFAULTS and isinstance(v, (int, float)):
                     pol[k] = v
                 elif k not in DEFAULTS:
-                    pol[k] = v
+                    log.warning("ignoring unknown taste policy key %r in %s", k, path)
     return pol
 
 

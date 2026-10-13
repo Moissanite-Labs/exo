@@ -145,6 +145,23 @@ def test_start_blank_turns_the_house_layer_off(principal_store, tmp_path):
     assert not v.house_on and "house: off" in v.reason and not v.entries
 
 
+@pytest.mark.parametrize("value", ['"Off"', '" OFF "', '"No"', '" FALSE "'])
+def test_house_policy_false_strings_are_trimmed_and_case_insensitive(principal_store, value):
+    pol = principal_store.root / "policies" / "consolidate.yaml"
+    pol.write_text(f"taste:\n  house: {value}\n")
+    assert L.taste_policy(principal_store)["house"] is False
+
+
+def test_unknown_taste_policy_key_warns_and_is_ignored(principal_store, caplog):
+    pol = principal_store.root / "policies" / "consolidate.yaml"
+    pol.write_text("taste:\n  half_life: 100\n  baseline_half_life: 180\n")
+    with caplog.at_level("WARNING", logger="exo.baseline.layers"):
+        got = L.taste_policy(principal_store)
+    assert got["baseline_half_life"] == 180
+    assert "half_life" not in got
+    assert "unknown taste policy key 'half_life'" in caplog.text
+
+
 def test_unreleased_pack_is_never_used(principal_store, tmp_path):
     X.export_house(principal_store, tmp_path / "pack", "1.3.0")
     s = PrincipalStore.create(tmp_path / "user")
