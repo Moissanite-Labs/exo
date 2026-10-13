@@ -6,6 +6,7 @@ import pytest
 
 from exo.compose import create
 from exo.core.engine import CoreEngine
+from exo.scheduler import Scheduler
 from exo.core.plugins import LoadedPlugin, Manifest, PluginManager
 from exo.core.tools.executor import ExecutorConfigurationError
 from exo.core.types import ToolCall, ToolResult
@@ -152,7 +153,8 @@ def test_scheduler_tools_use_broker(tmp_path):
         {"tool": "bash", "args": {"command": "echo scheduled"}}, "done"]}]},
               "roles": {"main": ["fake:x"], "aux": ["fake:x"], "fast": ["fake:x"]}}
     broker = DenyBroker()
-    engine = CoreEngine(tmp_path / "home", models, executor=broker, executor_required=True)
+    engine = CoreEngine(tmp_path / "home", models, executor=broker, executor_required=True,
+                        attach_scheduler=Scheduler)
     job = engine.scheduler.add("every 1m", "probe", tier="fast")
 
     async def main():

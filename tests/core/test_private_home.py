@@ -9,7 +9,7 @@ import pytest
 from exo import cli_chat, ensure_core
 from exo.core import agentlog
 from exo.core.private import private_dir, private_file
-from exo.core.scheduler import Scheduler
+from exo.scheduler import Scheduler
 from exo.core.sessions import SessionStore
 
 

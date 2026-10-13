@@ -18,6 +18,7 @@ from exo.core.seats import SeatError
 from exo.core.seats import load as load_seat
 from exo.core.skills import pack_dir
 from exo.core.tools.executor import ExecutorConfigurationError, load_executor
+from exo.scheduler import Scheduler
 
 
 def create(seat: str | None = None) -> CoreEngine:
@@ -68,6 +69,7 @@ def create(seat: str | None = None) -> CoreEngine:
                       cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
                       mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
                       delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"), jobs=cfg.get("jobs"), attach_peers=peers.attach,
+                      attach_scheduler=Scheduler,
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
                             if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")})
     eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is

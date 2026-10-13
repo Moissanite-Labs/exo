@@ -4,6 +4,10 @@ Jobs live in ``$EXO_HOME/schedule.sqlite``. ``when`` is a 5-field cron line (min
 month day-of-week; ``*``, lists, ranges, steps) or ``every <n>m|h|d``. A run is a new session at the
 job's tier; the final answer goes out as a ``notice`` (deliver="notice") or to a channel by id.
 Runs missed while the engine was down happen once on start, not once per missed slot.
+
+A product feature on the engine's public turn API, outside the core (docs/ENGINE-SPLIT.md, step 4): the
+composition layer builds it (``CoreEngine(attach_scheduler=Scheduler)``), and the engine only calls ``start``,
+``stop``, ``interrupt`` and ``edit`` (the ``schedule.edit`` command).
 """
 
 from __future__ import annotations
@@ -178,10 +182,10 @@ class Scheduler:
         e, sid, status, answer = self.engine, None, "failed", ""
         self._emit(job, task_id, "queued", f"Scheduled job {job['title']!r} is waiting to start.")
         try:
-            provider, model = e.agents._route(job["tier"])
+            provider, model = e.agents.route(job["tier"])
             names = sorted(n for n in e.registry.names() if n not in BLOCKED_TOOLS)
             # same turn path as every other turn (audit 2026-10-12): the engine's context tree and memory,
-            # its soul refresh and system extras, and the turn hooks (through ``e._turn``). Only the model,
+            # its soul refresh and system extras, and the turn hooks (through ``e.run_turn``). Only the model,
             # the narrowed toolset and the unattended-job prompt differ.
             loop = Loop(e.store, provider, bus=e.loop.bus, context=e.loop.context, memory=e.loop.memory,
                         tool_specs=lambda: e.registry.specs(names=names), run_tool=e.run_tool,
@@ -202,7 +206,7 @@ class Scheduler:
             sid = info.id
             self.loops[sid] = loop
             self._emit(job, task_id, "running", f"Running {job['title']!r}.", sid)
-            res = await e._turn(s.TurnSend(session=sid, text=job["prompt"]), meta={"author": "schedule"},
+            res = await e.run_turn(s.TurnSend(session=sid, text=job["prompt"]), meta={"author": "schedule"},
                                 loop=loop)  # D-041 normal path; D-040 not a live principal turn
             answer = res.message.text() if res is not None and res.message is not None else ""
             stop = getattr(res, "stop_reason", "error")
@@ -231,7 +235,7 @@ class Scheduler:
     async def _deliver(self, job: dict[str, Any], text: str) -> None:
         e, to = self.engine, job["deliver"]
         msg = f"{job['title']}: {text}"
-        chan = e._channels.get(to) if to != "notice" else None
+        chan = e.channels.get(to) if to != "notice" else None
         if chan is not None and hasattr(chan, "deliver"):
             try:
                 await maybe_await(chan.deliver(msg))
@@ -289,12 +293,13 @@ class Scheduler:
                 pass
 
 
-async def handle_schedule_edit(engine: Any, body: Any) -> dict[str, Any]:
-    """schedule.edit: list, add, remove, pause, resume, run_now. The scheduler is ``engine.scheduler`` (made on first use)."""
+    async def edit(self, body: Any) -> dict[str, Any]:
+        """The ``schedule.edit`` command; ``{"error": ...}`` for a bad request."""
+        return await handle_schedule_edit(self, body)
+
+async def handle_schedule_edit(sch: Scheduler, body: Any) -> dict[str, Any]:
+    """schedule.edit: list, add, remove, pause, resume, run_now (``Scheduler.edit``)."""
     b = asdict(body) if is_dataclass(body) else dict(body)
-    sch = getattr(engine, "scheduler", None)
-    if sch is None:
-        sch = engine.scheduler = Scheduler(engine)
     act = b.get("action")
     try:
         if act == "list":

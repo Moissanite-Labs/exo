@@ -38,7 +38,6 @@ from exo.core import jobs as jobs_mod
 from exo.core.peer_target import EngineTarget
 from exo.core.ingress import STANDING_LINE, PeerConfig
 from exo.core.plugins import PluginManager
-from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
 from exo.principal import current_caller, ingress_author, is_principal, require_principal
 from exo.core.approvals import ApprovalDesk
@@ -240,7 +239,7 @@ class CoreEngine:
                  tree_cfg: dict[str, Any] | None = None, schedule: bool = False,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
                  jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None,
-                 attach_peers: Any = None, **loop_kw: Any) -> None:
+                 attach_peers: Any = None, attach_scheduler: Any = None, **loop_kw: Any) -> None:
         # Fail before opening stores, loading adapters or registering host handlers.
         required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
         if executor is not None:
@@ -281,7 +280,7 @@ class CoreEngine:
         self.plugins.executor_required = required
         self.plugins.router = self.router  # plugins reach it as ctx.router
         self.approvals = ApprovalDesk(lambda body, sid: self.hub.publish(body, sid), self._approval_waited)
-        self._channels: dict[str, Any] = {}
+        self.channels: dict[str, Any] = {}  # running channel plugins by name
         self._channel_cfg: dict[str, dict[str, Any]] = {**(channels or {}), **(seat.channels if seat else {})}
         self._tasks: set[asyncio.Task] = set()
         trace_cfg = {**(trace_cfg or {}), **(seat.trace if seat else {})}  # the seat's [trace] wins (D-032)
@@ -332,7 +331,7 @@ class CoreEngine:
                 signer = None
         self.agents = Delegator(self, delegation, signer=signer)  # the delegate tool and the tasks table
         self.agents.install()
-        self.scheduler = Scheduler(self)
+        self.scheduler = attach_scheduler(self) if attach_scheduler else None  # exo.scheduler, from exo.compose
         self._schedule = schedule  # serve turns the cron loop on; tests and one-shot engines leave it off
 
     def _compose_prompt(self) -> str:
@@ -381,7 +380,7 @@ class CoreEngine:
             if self._writer is not None:  # only the one writer may call a running job lost
                 await self.jobs.recover()
             self._started = asyncio.ensure_future(self._start_runtime())
-            if self._schedule:
+            if self._schedule and self.scheduler is not None:
                 self.scheduler.start()
         await asyncio.shield(self._started)
 
@@ -405,13 +404,13 @@ class CoreEngine:
         out: dict[str, str | None] = {}
         for name, cfg in self._channel_cfg.items():
             entry = self.plugins.channels.get(name)
-            if entry is None or name in self._channels:
+            if entry is None or name in self.channels:
                 out[name] = None if entry else "no plugin registered this channel"
                 continue
             try:
                 chan = await maybe_await(entry.factory(link, **(cfg or {})))
                 await maybe_await(chan.start())
-                self._channels[name] = chan
+                self.channels[name] = chan
                 out[name] = None
             except Exception as exc:  # one bad channel never stops the server
                 out[name] = f"{type(exc).__name__}: {exc}"
@@ -419,12 +418,12 @@ class CoreEngine:
         return out
 
     async def stop_channels(self) -> None:
-        for name, chan in list(self._channels.items()):
+        for name, chan in list(self.channels.items()):
             try:
                 await maybe_await(chan.stop())
             except Exception as exc:
                 trace.report(f"channel {name} stop", exc)
-            self._channels.pop(name, None)
+            self.channels.pop(name, None)
 
     def claim_writer(self) -> None:
         """Become the one writer of this agent's log and tree (raises agentlog.WriterBusy if another process is)."""
@@ -439,7 +438,8 @@ class CoreEngine:
         if self.peers is not None:
             await self.peers.stop()
         await self.jobs.close()  # jobs end with exod
-        await self.scheduler.stop()
+        if self.scheduler is not None:
+            await self.scheduler.stop()
         if self._started is not None:
             await self.mcp.close()
             self._started = None
@@ -655,7 +655,7 @@ class CoreEngine:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
-        task = asyncio.create_task(self._turn(b, meta))
+        task = asyncio.create_task(self.run_turn(b, meta))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return {"accepted": True}
@@ -663,11 +663,11 @@ class CoreEngine:
     def start_turn(self, session: str, text: str, meta: dict[str, Any] | None = None) -> None:
         """Start a turn in the background (a peer woke an idle session)."""
         b = s.TurnSend(session=session, text=text)
-        task = asyncio.create_task(self._turn(b, meta))
+        task = asyncio.create_task(self.run_turn(b, meta))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
+    async def run_turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
         meta = dict(meta or {})
@@ -720,7 +720,7 @@ class CoreEngine:
     async def _turn_interrupt(self, b: s.TurnInterrupt) -> dict[str, Any]:
         self._info(b.session)
         return {"interrupted": int(self.loop.interrupt(b.session) or self.agents.interrupt(b.session)
-                                   or self.scheduler.interrupt(b.session))}
+                                   or bool(self.scheduler and self.scheduler.interrupt(b.session)))}
 
     async def _tasks_list(self, b: s.TasksList) -> dict[str, Any]:
         return {"tasks": self.agents.list(b.session)}
@@ -812,7 +812,9 @@ class CoreEngine:
         return {"output": out if isinstance(out, (str, dict, list)) or out is None else str(out)}
 
     async def _schedule_edit(self, b: s.ScheduleEdit) -> dict[str, Any]:
-        out = await handle_schedule_edit(self, b)
+        if self.scheduler is None:
+            raise CommandFailed("unsupported", "scheduled jobs are not available in this engine")
+        out = await self.scheduler.edit(b)
         if "error" in out:
             raise CommandFailed("bad_request", out["error"])
         return out
@@ -823,7 +825,7 @@ class CoreEngine:
     async def _seat_list(self, b: s.SeatList) -> dict[str, Any]:
         return {"active": self.seat.name if self.seat else None, "seats": list_seats(self.home),
                 "mcp": self.mcp.status(),
-                "channels": {n: n in self._channels for n in self._channel_cfg}}
+                "channels": {n: n in self.channels for n in self._channel_cfg}}
 
     def _tutorial_line(self) -> str:
         """D-030: one stable line while tutorial mode is on, appended after the rest of the stable system text.
