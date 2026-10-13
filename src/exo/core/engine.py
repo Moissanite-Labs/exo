@@ -51,6 +51,9 @@ from exo.core.skills import SkillIndex, pack_dir, register_skill_tool
 from exo.core.tools.builtin import harness as harness_tool
 from exo.core.tools.builtin import ui as ui_tool
 from exo.core.tools.registry import Block, Registry, ToolContext, default_registry
+from exo.core.tools.executor import (
+    ExecutionBroker, ExecutorConfigurationError, load_executor, validate_executor,
+)
 from exo.core.types import ContentPart, Message, ToolCall, ToolResult, ToolSpec, Usage, to_dict
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed, Hub
@@ -284,6 +287,7 @@ class CoreEngine:
 
     def __init__(self, home: str | os.PathLike, models: dict[str, Any] | None = None, *,
                  registry: Registry | None = None, plugins: PluginManager | None = None,
+                 executor: ExecutionBroker | None = None, executor_required: bool = False,
                  cwd: str | None = None, system_prompt: str = SYSTEM_PROMPT,
                  env: dict[str, str] | None = None, delegation: dict[str, Any] | None = None,
                  seat: Seat | None = None, skill_folders: Iterable[str | os.PathLike] | None = None,
@@ -292,6 +296,23 @@ class CoreEngine:
                  tree_cfg: dict[str, Any] | None = None, schedule: bool = False,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
                  jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None, **loop_kw: Any) -> None:
+        # Fail before opening stores, loading adapters or registering host handlers.
+        required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
+        if executor is not None:
+            executor = validate_executor(executor)
+        elif registry is not None and registry.executor is not None:
+            executor = validate_executor(registry.executor)
+        else:
+            executor, loaded_required = load_executor()
+            required = required or loaded_required
+        required = required or bool(registry and registry.executor_required)
+        if required and executor is None:
+            raise ExecutorConfigurationError("Required tool executor is unavailable")
+        mcp_cfg = {**(mcp or {}), **(seat.mcp if seat else {})}
+        if required and mcp_cfg and getattr(executor, "supports_mcp_startup", False) is not True:
+            raise ExecutorConfigurationError("Required tool executor does not support MCP transport startup")
+        self.executor = executor
+        self.executor_required = required
         self.home = Path(home)
         self.cwd_note = ""  # why the default cwd is not the one asked for (shown at session start)
         self.cwd = self._seat_cwd(seat) or cwd or os.getcwd()  # the seat's own folder beats the shared default
@@ -307,7 +328,9 @@ class CoreEngine:
         self._writer: Any = None  # the agent's writer lock, taken by claim_writer() (create() does)
         models = {**(models or {}), **(seat.models if seat else {})}
         self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env)
-        self.registry = registry or default_registry()
+        self.registry = registry or default_registry(executor=executor, executor_required=required)
+        self.registry.executor = executor
+        self.registry.executor_required = required or executor is not None
         self.plugins = plugins or PluginManager()
         self.plugins.router = self.router  # plugins reach it as ctx.router
         self._approvals: dict[str, tuple[asyncio.Future, str | None]] = {}
@@ -342,7 +365,7 @@ class CoreEngine:
         peer_target.attach(self)  # D-026: peers and peer_send tools
         self.jobs = jobs_mod.attach(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
         self.handoff_sources["jobs"] = self._open_jobs  # /handoff lists the agent's running background jobs
-        self.mcp = McpManager({**(mcp or {}), **(seat.mcp if seat else {})}, env)
+        self.mcp = McpManager(mcp_cfg, env)
         self._started: asyncio.Future | None = None
         self._prompt_head = system_prompt
         self._prompt_tail = [self.skills.prompt(), CODE_FIND_LINE if self.registry.specs(names=["code_find"]) else "",
@@ -1097,6 +1120,7 @@ def create(seat: str | None = None) -> CoreEngine:
 
     ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
     cfg = Config.load()
+    executor, executor_required = load_executor()  # required failures precede all plugin imports
     st = None
     if seat or os.environ.get("EXO_SEAT"):
         try:
@@ -1107,12 +1131,35 @@ def create(seat: str | None = None) -> CoreEngine:
             os.environ["EXO_PRINCIPAL"] = st.principal
     pm = PluginManager(config=cfg.data.get("plugin_config") or {},
                        memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
-    pm.load_all(enabled=st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins"))
+    enabled = st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins")
+    plugin_dirs = None
+    if executor_required:
+        # The installed executor owns this trusted inventory; user discovery is disabled.
+        raw_dirs = getattr(executor, "trusted_plugin_dirs", ())
+        if not isinstance(raw_dirs, (tuple, list)):
+            raise ExecutorConfigurationError("executor trusted_plugin_dirs must be a tuple/list of absolute paths")
+        plugin_dirs = tuple(raw_dirs)
+        if not all(isinstance(path, str) and Path(path).is_absolute() for path in plugin_dirs):
+            raise ExecutorConfigurationError("executor trusted_plugin_dirs must contain absolute paths")
+        raw_required = getattr(executor, "required_plugins", ())
+        if not isinstance(raw_required, (tuple, list)):
+            raise ExecutorConfigurationError("executor required_plugins must be a tuple/list of plugin names")
+        required_plugins = tuple(raw_required)
+        if not all(isinstance(name, str) and name for name in required_plugins):
+            raise ExecutorConfigurationError("executor required_plugins must contain plugin names")
+        if enabled is not None and not set(required_plugins).issubset(enabled):
+            raise ExecutorConfigurationError("plugin configuration disables a required executor plugin")
+    pm.load_all(dirs=plugin_dirs, enabled=enabled)
+    if executor_required:
+        missing = [name for name in required_plugins if name not in pm.plugins or pm.plugins[name].error]
+        if missing:
+            raise ExecutorConfigurationError(f"required executor plugins failed to load: {', '.join(missing)}")
     models = cfg.models()
     folders = [*(st.skill_folders if st else []), cfg.home / "skills"]
     if pack := pack_dir():
         folders.append(pack)
-    eng = CoreEngine(cfg.home, models, plugins=pm, cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
+    eng = CoreEngine(cfg.home, models, plugins=pm, executor=executor, executor_required=executor_required,
+                      cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
                       mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
                       delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"), jobs=cfg.get("jobs"),
                       tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()

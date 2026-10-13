@@ -44,6 +44,13 @@ earlier stage failed with a code other than 141 (SIGPIPE) and the last stage suc
 line in the job's end notice. Only the command's last pipeline is checked, and a command that sets its own EXIT trap
 turns the note off. The trace rule `shell.masked_exit` (docs/TRACE.md) flags it.
 
+## Execution brokers (D-020)
+
+An installed broker can mediate every registered tool after pre-hooks and
+validation, including foreground/background bash and delegated or scheduled
+turns. Required mode refuses missing executors and unsupported MCP startup.
+The immutable request and trusted host-code boundary are in `docs/EXECUTORS.md`.
+
 ## Result cap (D-041)
 
 Every tool result is cut at 100,000 characters (`MAX_RESULT_CHARS`) with a `[truncated N chars]` note. This now holds

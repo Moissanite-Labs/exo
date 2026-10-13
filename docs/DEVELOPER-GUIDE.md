@@ -132,6 +132,11 @@ the gate tests. Decide whether a subagent may use it: the blocked list is `BLOCK
 
 A plugin registers a tool with `ctx.register_tool(name, toolset, schema, handler, risk=...)`.
 
+Exo OS can require an installed execution broker after approvals and validation.
+New tools need an explicit broker decision before their handler may run;
+unsupported operations fail closed. The immutable request, installed entry point,
+trusted plugin inventory and host-code limits are in `docs/EXECUTORS.md`.
+
 ## 4. Add a plugin
 
 A plugin is a folder with `plugin.yaml`, an `__init__.py` that has `register(ctx)`, and a `tests/` folder.
