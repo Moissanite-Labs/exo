@@ -1237,7 +1237,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Behaviour:** no protocol, event or command changes. D-033, D-038, D-039, D-040, D-045 and D-052 to D-054 checks
   run as before, and required-executor mode (#70) still fails closed. An engine built without composition no longer
   has peers or a scheduler: `peers` and `schedule.edit` answer `unsupported` there.
-- **Numbers:** 15,951 counted lines before, 14,777 after: about 300 deleted, 561 moved with peers, about 320 moved
+- **Numbers:** 15,986 counted lines on main before, 14,812 after (1,174 fewer): about 300 deleted, 561 moved with peers, about 320 moved
   with the scheduler, 20 added by the approvals desk.
 - **Validation:** root suite (twice) and every plugin suite, `ruff check`, the mypy baseline (it shrank from 277 to
   249 entries; no new ones), `python -m exo.protocol.export --check`.
