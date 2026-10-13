@@ -345,12 +345,6 @@
     },
     {
       "path": "src/exo/config.py",
-      "message": "Incompatible types in assignment (expression has type \"_Environ[str] | dict[Any, Any]\", variable has type \"dict[Any, Any] | None\")",
-      "code": "assignment",
-      "count": 1
-    },
-    {
-      "path": "src/exo/config.py",
       "message": "Unsupported target for indexed assignment (\"dict[Any, Any] | None\")",
       "code": "index",
       "count": 1
