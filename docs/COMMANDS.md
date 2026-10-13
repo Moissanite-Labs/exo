@@ -14,7 +14,7 @@ A client reads the line and decides. Three things can answer:
 1. **The client itself.** The terminal client (TUI) handles these in `ExoApp.slash` in
    `clients/tui/exo_tui/app.py`. They are listed in its `COMMANDS` table, and `/help` is built from that table.
 2. **The core, as a built-in.** The client sends the protocol command `command.run` with `name`, `args` and
-   `session`. `CoreEngine._builtin_command` in `src/exo/core/engine.py` answers a few names. It returns text, a dict
+   `session`. `builtin_command` in `src/exo/diagnostics.py` answers a few names. It returns text, a dict
    or nothing, wrapped as `{"output": ...}`.
 3. **A plugin.** If the core has no built-in with that name, `command.run` looks in the plugin registry
    (`ctx.register_command` in `src/exo/core/plugins.py`) and calls the handler with the raw argument string. An
@@ -102,7 +102,7 @@ through `GET /api/complete/files`, ghost text, history for the page's life and t
 
 ### Core built-ins (`command.run`)
 
-All in `CoreEngine._builtin_command`, `src/exo/core/engine.py`.
+All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._command_run`).
 
 | Name | What it does | Arguments | Returns |
 |---|---|---|---|
@@ -203,7 +203,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
-| `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.core.engine:create`, or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). | `cmd_serve` in `src/exo/cli_chat.py` |
+| `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.compose:create`; `exo.core.engine:create` still works; or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). | `cmd_serve` in `src/exo/cli_chat.py` |
 | `exo chat` | A line client for `exod`. Sends `/name args` lines as `command.run`. `/quit` and `/exit` leave. | `--socket PATH`, `--url URL`, `--token-file PATH`, `--session ID`, `--resume`, `--title T` | `cmd_chat` in `src/exo/cli_chat.py` |
 | `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `main` and `cmd_tui` in `src/exo/cli.py` |
 | `exo resume` | Reopens the last session in the terminal client: `exo --resume`. Other flags pass through (`exo resume --seat X`). | same as `exo` | `main` in `src/exo/cli.py` |

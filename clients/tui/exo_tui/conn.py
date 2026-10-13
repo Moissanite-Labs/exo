@@ -105,7 +105,7 @@ def _open(home: Path, agent: str, wait: float = START_TIMEOUT) -> Any:
             if _alive(p):
                 return Client(socket=str(p), principal="tui")
         try:
-            return LocalClient(load_engine("exo.core.engine:create"), serve=path)
+            return LocalClient(load_engine("exo.compose:create"), serve=path)
         except WriterBusy:  # another window is starting it: wait for its socket
             end = time.monotonic() + wait
             while time.monotonic() < end:

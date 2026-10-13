@@ -38,7 +38,7 @@ def register(sp: Any, common: Any) -> None:
     p.add_argument("--tcp", metavar="HOST:PORT", help="also listen on TCP (bearer token required)")
     p.add_argument("--token-file", help="token for TCP (default: $EXO_HOME/run/exod.token, created 0600)")
     p.add_argument("--stdio", action="store_true", help="JSON lines on stdin/stdout instead of HTTP")
-    p.add_argument("--engine", default=os.environ.get("EXO_ENGINE", "exo.core.engine:create"),
+    p.add_argument("--engine", default=os.environ.get("EXO_ENGINE", "exo.compose:create"),
                    help="module:factory returning an Engine (default the real core), or echo")
     p.add_argument("--seat", help="seat name: loads $EXO_HOME/seats/<name>.toml (see docs/SEATS.md)")
     p.add_argument("--stop", action="store_true", help="stop the background exod that exo web started, then exit")

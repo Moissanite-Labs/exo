@@ -334,7 +334,7 @@ async def serve_stdio(dispatcher: Dispatcher) -> None:
 # ---------------------------------------------------------------- entry
 
 
-DEFAULT_ENGINE = "exo.core.engine:create"
+DEFAULT_ENGINE = "exo.compose:create"
 
 
 def load_engine(spec: str = DEFAULT_ENGINE) -> Engine:

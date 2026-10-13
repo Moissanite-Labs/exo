@@ -435,42 +435,6 @@
     },
     {
       "path": "src/exo/core/engine.py",
-      "message": "Argument \"skill_folders\" to \"CoreEngine\" has incompatible type \"list[object]\"; expected \"Iterable[str | PathLike[Any]] | None\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/engine.py",
-      "message": "Argument 1 to \"_last\" of \"AgentContext\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/engine.py",
-      "message": "Argument 1 to \"_view\" of \"AgentContext\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/engine.py",
-      "message": "Argument 1 to \"compact\" of \"AgentContext\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/engine.py",
-      "message": "Argument 1 to \"get\" of \"dict\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/engine.py",
-      "message": "Argument 1 to \"report\" of \"AgentContext\" has incompatible type \"str | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/engine.py",
       "message": "Argument 7 to \"ask\" of \"CoreEngine\" has incompatible type \"**dict[str, list[str] | str]\"; expected \"list[str] | None\"",
       "code": "arg-type",
       "count": 1
@@ -479,18 +443,6 @@
       "path": "src/exo/core/engine.py",
       "message": "Argument 7 to \"ask\" of \"CoreEngine\" has incompatible type \"**dict[str, list[str] | str]\"; expected \"str\"",
       "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/engine.py",
-      "message": "Incompatible types in assignment (expression has type \"list[Row]\", variable has type \"bool\")",
-      "code": "assignment",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/engine.py",
-      "message": "Value of type \"Literal[True]\" is not indexable",
-      "code": "index",
       "count": 1
     },
     {
