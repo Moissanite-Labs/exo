@@ -523,8 +523,7 @@ PAGE = """<!doctype html>
 <header class="wp-bar">
   <div class="wp-bar__in">
     <a class="wp-brand" href="../" aria-label="Project Exo home">
-      <svg class="wp-brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg>
-      <span>EXO</span>
+      <!-- exo-brand -->{navbrand}<!-- /exo-brand -->
     </a>
     <span class="wp-bar__doc">Whitepaper v0.2</span>
     <a class="wp-bar__back" href="../roadmap/">Roadmap</a>
@@ -585,7 +584,8 @@ def main():
             "turn from one continuous memory, a learning loop that keeps a lesson only if it scores better on "
             "held-out cases, approvals bound to exact text, a harness that traces and re-verifies itself, and one "
             "core daemon behind every screen. With an honest status of what is built.")
-    page = PAGE.replace("{desc}", esc(desc)).replace("{toc}", toc_html(toc)).replace("{body}", body)
+    nav = (REPO / "site/brand/nav-brand.html").read_text().strip()  # written by scripts/brand_assets.py
+    page = PAGE.replace("{navbrand}", nav).replace("{desc}", esc(desc)).replace("{toc}", toc_html(toc)).replace("{body}", body)
     page = page.replace('<a href="#top-of-page" onclick="window.scrollTo(0,0);return false;">Top</a>',
                         '<a href="#wp-main">Top</a>')
     OUT.parent.mkdir(parents=True, exist_ok=True)

@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Exo brand: the lattice egg and the X/V mark (proposal)</title>
-<meta name="description" content="Proposal D-049: the Exo mark, wordmark and living egg, built from the incentre lattice.">
+<title>Exo brand: 3X0, the incentre mark and the lattice egg</title>
+<meta name="description" content="D-049: the 3X0 wordmark, the incentre mark and the living egg, all built from one construction.">
 <meta name="theme-color" content="#08090a">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
@@ -23,7 +23,8 @@
   .b-hero .ctl button { font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line-2); padding: 9px 12px; cursor: pointer; }
   .b-hero .ctl button:hover { border-color: var(--accent); color: var(--accent); }
   .prop { display: inline-block; margin-bottom: 22px; font: 500 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); border: 1px solid rgba(255, 91, 20, .5); padding: 6px 9px; }
-  .story { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .story { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .story .wide { grid-column: span 2; }
   .story figure { margin: 0; padding: 22px; display: flex; flex-direction: column; gap: 16px; }
   .story img { width: 100%; height: 150px; object-fit: contain; }
   .story figcaption, .cap { font: 500 12px/1.5 var(--mono); color: var(--fg-3); letter-spacing: .02em; }
@@ -31,6 +32,8 @@
   .rules { margin-top: 28px; display: grid; gap: 10px; max-width: 60em; color: var(--fg-2); padding-left: 1.1em; }
   .rules li::marker { color: var(--accent); }
   .variants { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .labelform { margin-top: 28px; display: flex; flex-wrap: wrap; gap: 28px 44px; align-items: center; }
+  table.coords td:first-child { font-family: var(--sans); }
   .variant { padding: 26px; display: flex; flex-direction: column; gap: 18px; position: relative; }
   .variant .big { height: 64px; width: auto; max-width: 100%; align-self: flex-start; }
   .variant .light { background: #f4f2ec; padding: 14px; display: flex; gap: 16px; align-items: center; }
@@ -54,7 +57,7 @@
   table.api th, table.api td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
   table.api th { font: 600 11px/1.2 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--fg-3); }
   table.api td:first-child { font-family: var(--mono); color: var(--fg); white-space: nowrap; }
-  .swatches { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .swatches { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .swatches > div { padding: 18px; font: 500 12px/1.5 var(--mono); color: var(--fg-3); }
   .swatches span { display: block; height: 64px; margin-bottom: 12px; border: 1px solid var(--line-2); }
   .tui { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -65,8 +68,9 @@
   .prose a { color: var(--fg); text-decoration-color: var(--accent); text-underline-offset: 4px; }
   @media (max-width: 1000px) {
     .story { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    table.coords { font-size: 13px; }
     .variants, .marks, .eggs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .swatches { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .swatches { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .tui { grid-template-columns: 1fr; }
   }
 </style>
@@ -75,11 +79,11 @@
 <a class="skip" href="#main">Skip to content</a>
 <header class="nav" id="top">
   <div class="wrap nav__in">
-    <a class="brand" href="../" aria-label="Project Exo home"><img src="lockup-dark.svg" alt="exo" height="24" style="height:24px;width:auto"></a>
+    <a class="brand" href="../" aria-label="Project Exo, home"><!-- exo-brand --><svg class="brand__mark" viewBox="0 0 100 100" aria-hidden="true"><clipPath id="exo-nav-clip-0"><polygon points="11,89 89,89 89,11 11,11"/></clipPath><g clip-path="url(#exo-nav-clip-0)"><line x1="50" y1="50" x2="7.182" y2="92.818" stroke="#eceae4" stroke-width="5.4"/><line x1="50" y1="50" x2="92.818" y2="92.818" stroke="#eceae4" stroke-width="5.4"/><line x1="52.616" y1="52.616" x2="5.767" y2="5.767" stroke="#ff5b14" stroke-width="7.4"/><line x1="47.384" y1="52.616" x2="94.233" y2="5.767" stroke="#ff5b14" stroke-width="7.4"/></g><polygon fill="none" stroke="#b4b3ad" stroke-width="4.2" points="11,89 89,89 89,11 11,11"/><circle cx="50" cy="72.846" r="5.4" fill="#eceae4"/><circle cx="72.846" cy="50" r="5.4" fill="#eceae4"/><circle cx="50" cy="27.154" r="5.4" fill="#eceae4"/><circle cx="27.154" cy="50" r="5.4" fill="#eceae4"/></svg><svg class="brand__word" viewBox="0 0 75.091 20" aria-hidden="true"><polygon fill="#eceae4" points="0,0 9.899,0 14,4.101 14,15.899 9.899,20 0,20 0,16.4 8.408,16.4 10.4,14.408 10.4,11.8 4.2,11.8 4.2,8.2 10.4,8.2 10.4,5.592 8.408,3.6 0,3.6"/><polygon fill="#eceae4" points="40.091,10 50.091,20 45,20 37.546,12.546"/><polygon fill="#eceae4" points="37.546,12.546 30.091,20 25,20 35,10"/><polygon fill="#ff5b14" points="25,0 30.091,0 40.091,10 37.546,12.546"/><polygon fill="#ff5b14" points="45,0 50.091,0 37.546,12.546 35,10"/><path fill="#eceae4" fill-rule="evenodd" d="M65.192,0 L70.991,0 L75.091,4.101 L75.091,15.899 L70.991,20 L65.192,20 L61.091,15.899 L61.091,4.101Z M64.691,5.592 L64.691,14.408 L66.683,16.4 L69.499,16.4 L71.491,14.408 L71.491,5.592 L69.499,3.6 L66.683,3.6Z"/></svg><!-- /exo-brand --></a>
     <nav aria-label="Sections">
       <ul class="nav__links">
-        <li><a href="#drawing">Drawing</a></li>
-        <li><a href="#rule">X/V</a></li>
+        <li><a href="#drawing">Construction</a></li>
+        <li><a href="#rule">3X0</a></li>
         <li><a href="#wordmark">Wordmark</a></li>
         <li><a href="#mark">Mark</a></li>
         <li><a href="#egg">Egg</a></li>
@@ -94,9 +98,9 @@
 <section class="b-hero" aria-labelledby="t">
   <canvas id="hero-egg" aria-hidden="true"></canvas>
   <div class="wrap">
-    <span class="prop">Proposal · D-049 · not live</span>
+    <span class="prop">D-049 · revised 2026-10-13 · 3X0</span>
     <h1 id="t">An egg made of one drawing.</h1>
-    <p class="lede">Exo is a harness that keeps changing: it learns, grows and adds parts. Its mark is a square with an X and a dot in each triangle, the same distance from every side. The top of the X is orange, so it also reads as a V. Repeat the drawing and you get a lattice. Repeat it in more dimensions and the lattice keeps growing. The egg is that lattice, alive.</p>
+    <p class="lede">Exo is a harness that keeps changing: it learns, grows and adds parts. Its mark is a square with an X and a dot in each triangle, the same distance from every side, joined to its triangle's corners. The top of the X is orange, so it also reads as a V. Its name is written 3X0, the names of the forms it grows through: x0, x, 3xo. Repeat the drawing and you get a lattice. Repeat it in more dimensions and the lattice keeps growing. The egg is that lattice, alive.</p>
     <div class="ctl">
       <label>Stage <input id="hs" type="range" min="0" max="3" step="0.05" value="0"> <b id="hsv">0 · egg</b></label>
       <button type="button" id="hp">Send a pulse</button>
@@ -108,34 +112,45 @@
 <section class="section" id="drawing" aria-labelledby="d-t">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">01 / The drawing</p>
-      <h2 id="d-t">A square, its X, and four dots.</h2>
-      <p class="sec-lede">Draw a square and both diagonals. The diagonals are an X, and they cut the square into four triangles. In each triangle, mark the one point that is the same distance from all three sides: its incentre. In a square of side 2 it sits √2 − 1 above the side, which is tan 22.5°. Join each dot to the corners of its triangle. Those three lines are where a fire lit on all three sides at once would meet.</p>
-      <p class="sec-lede">Tile the drawing and the dots of four neighbouring squares make a regular octagon: the 4.8.8 tiling. Lift it to a cube and the six dots make the truncated cubic honeycomb, with every edge the same length. The same rule works in every dimension: an n-dimensional cube has 2n dots, each touching 2n − 1 others. The mark, the wordmark and the egg all come from this one figure.</p>
+      <p class="sec-num">01 / The construction</p>
+      <h2 id="d-t">One drawing, built one line at a time.</h2>
+      <p class="sec-lede">The mark is the figure from the <a href="https://aska-digital.github.io/incentre-lattice/origin.html" rel="noopener">origin page of the Incentre lattice research</a>, drawn exactly. Nothing in it is placed by eye: every point below follows from the step before it, and the generator (<code>scripts/brand_assets.py</code>) computes each one and checks it against the closed form.</p>
     </header>
     <div class="grid story">
-      <figure><img src="story-1.svg" alt="A square with its two diagonals, an X."><figcaption><b>1. The X.</b> A square of side 2 and its diagonals: four right isosceles triangles.</figcaption></figure>
-      <figure><img src="story-2.svg" alt="The four incentres with their incircles and lines to the corners."><figcaption><b>2. The dots.</b> Each incentre, its circle, and its lines to the triangle's corners.</figcaption></figure>
-      <figure><img src="story-3.svg" alt="The top two half-diagonals in orange, forming a V, with the top dot in orange."><figcaption><b>3. The V.</b> The top triangle's two slanted sides are the X's top half. In orange they read as a V, with the top dot as its seed.</figcaption></figure>
-      <figure><img src="story-4.svg" alt="The drawing tiled; dots form regular octagons; one cell carries the orange V."><figcaption><b>4. The lattice.</b> Tiled, the dots make regular octagons (steel blue). The V is one cell of it.</figcaption></figure>
-      <figure><img src="story-5.svg" alt="The x of the wordmark: two 45 degree strokes, the top half orange."><figcaption><b>5. The x.</b> The same X, as a letter: strokes at 45°, the V on top.</figcaption></figure>
+      <figure><img src="story-1.svg" alt="A square of side 2."><figcaption><b>1. A square.</b> Side 2, corners at (0, 0) and (2, 2).</figcaption></figure>
+      <figure><img src="story-2.svg" alt="The square with both diagonals, an X."><figcaption><b>2. Both diagonals.</b> They cross at the centre (1, 1) and cut the square into four right isosceles triangles, with angles of 45°, 45° and 90°.</figcaption></figure>
+      <figure><img src="story-3.svg" alt="The bottom triangle with the lines that halve each of its corners, meeting at one point."><figcaption><b>3. Halve each corner.</b> Take the bottom triangle, A (0, 0), B (2, 0), C (1, 1). Every point on the line that halves a corner is equally far from that corner's two sides. The corner at A is 45°, so its bisector rises at 22.5°.</figcaption></figure>
+      <figure><img src="story-4.svg" alt="The incentre of the bottom triangle with its incircle."><figcaption><b>4. The dot.</b> The three bisectors meet at one point, the incentre, equally far from all three sides. The triangle is symmetric about x = 1, and the bisector from A gives its height: tan 22.5° = √2 − 1 ≈ 0.4142.</figcaption></figure>
+      <figure><img src="story-5.svg" alt="All four triangles, each with its incentre and three bisectors."><figcaption><b>5. All four triangles.</b> Each dot is joined to its triangle's two square corners (red on the origin page, orange here) and to the centre (amber). Four dots, twelve lines.</figcaption></figure>
+      <figure><img src="story-6.svg" alt="The finished mark: the top half of the X in orange, a V."><figcaption><b>6. The V.</b> The top half of the X is the brand orange and drawn heavier, so it also reads as a V, for a harness that keeps evolving. The top dot sits inside the V.</figcaption></figure>
+      <figure class="wide"><img src="story-7.svg" alt="The figure tiled; the dots of four neighbouring squares make regular octagons."><figcaption><b>7. The lattice.</b> Tile the figure and the eight dots round each shared corner sit on one circle, 2R apart: a regular octagon, the 4.8.8 tiling. Lifted to a cube it becomes the honeycomb the egg is made of.</figcaption></figure>
     </div>
+    <table class="api coords">
+      <thead><tr><th>Triangle</th><th>Incentre, exact</th><th>Incentre</th><th>Red lines to</th><th>Amber line to</th><th>Bisector at a square corner</th></tr></thead>
+      <tbody><!-- construction -->
+<tr><td>Bottom</td><td>(1, √2 − 1)</td><td>(1, 0.4142)</td><td>(0, 0), (2, 0)</td><td>(1, 1)</td><td>22.5°</td></tr>
+<tr><td>Right</td><td>(3 − √2, 1)</td><td>(1.5858, 1)</td><td>(2, 0), (2, 2)</td><td>(1, 1)</td><td>22.5°</td></tr>
+<tr><td>Top (in the V)</td><td>(1, 3 − √2)</td><td>(1, 1.5858)</td><td>(2, 2), (0, 2)</td><td>(1, 1)</td><td>22.5°</td></tr>
+<tr><td>Left</td><td>(√2 − 1, 1)</td><td>(0.4142, 1)</td><td>(0, 2), (0, 0)</td><td>(1, 1)</td><td>22.5°</td></tr>
+<!-- /construction --></tbody>
+    </table>
+    <p class="sec-lede" style="margin-top:22px">Units: the square has side 2, y points up. In an icon of size N with margin m, a point (u, v) is drawn at (m + u·s, N − m − v·s) with s = (N − 2m)/2. The incentre of a triangle with corners A, B, C is (|BC|·A + |CA|·B + |AB|·C) / perimeter; the generator uses that formula and asserts it lands on the values above.</p>
   </div>
 </section>
 
 <section class="section section--alt" id="rule" aria-labelledby="r-t">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">02 / The X/V rule</p>
-      <h2 id="r-t">Exo, and also evo.</h2>
-      <p class="sec-lede">The x in exo is the drawing's X. Its top half is the brand orange, so the word also reads as evo: a harness, an ecosystem, always evolving. The rule is short so it holds at every size.</p>
+      <p class="sec-num">02 / The 3X0 rule</p>
+      <h2 id="r-t">Exo, written as its forms.</h2>
+      <p class="sec-lede">The exosphere grows through three forms: x0, the egg; then x; then 3xo. The wordmark spells the last of them. The E is drawn as a 3, a mirrored E; the X is the drawing's X with its orange V; the O is a zero. Read as letters it still says exo, and the V still says evo.</p>
     </header>
     <ol class="rules">
-      <li>The x is two strokes at exactly 45°, the square's diagonals. Nothing else in the mark is diagonal at another angle, except the thin incentre lines at 22.5° and 67.5°.</li>
-      <li>The V is the two upper arms, and it owns the crossing: the lower legs stop at the V's lower edges. On dark the legs are fg <code>#eceae4</code>; on light they are <code>#08090a</code>.</li>
-      <li>The V is always <code>#ff5b14</code> and nothing else in the wordmark is orange. In the mark, only the V and the top dot (the seed) are orange.</li>
-      <li>The e and the o are cut from regular octagons, the octagon the dots make. The side of a regular octagon of height h is h(√2 − 1): the incentre number again.</li>
-      <li>Never outline, stretch, rotate or recolour the V. In one-colour print, the V is solid and the legs are a 40% tint.</li>
+      <li>The X is two strokes at exactly 45°, the square's diagonals, with flat horizontal ends. Its top half owns the crossing and is always <code>#ff5b14</code>: the V.</li>
+      <li>The 3 is a mirrored E: three arms off a spine on the right, flat ends on the left, the middle arm shorter. Its right corners are cut at 45°, the same cut as the zero, so its right side reads as the round of a 3.</li>
+      <li>The 0 is narrower than it is tall (0.7 of its height, like the 3). Its corners are cut at 45° so that its top is w(√2 − 1) wide: the incentre number again.</li>
+      <li>Every edge runs at 0°, 45° or 90°. Nothing else in the wordmark is orange. On light, the 3, the 0 and the X's lower legs are <code>#08090a</code>.</li>
+      <li>Never outline, stretch, rotate or recolour the V. In one-colour print, the V is solid and the lower legs are a 40% tint.</li>
     </ol>
   </div>
 </section>
@@ -144,40 +159,46 @@
   <div class="wrap">
     <header class="sec-head">
       <p class="sec-num">03 / Wordmark</p>
-      <h2 id="w-t">Four variants, one pick.</h2>
-      <p class="sec-lede">Each is shown at display size, on light, and at its real size of 32 and 16 pixels tall. The x-height is 20 units with a 4-unit stroke, so at 16 px the stroke is 3.2 px and the V still reads.</p>
+      <h2 id="w-t">Four ways to draw 3X0, one pick.</h2>
+      <p class="sec-lede">Each is shown at display size, on light, and at its real size of 32 and 16 pixels tall. The cap height is 28 units with a 5-unit stroke, so at 16 px the stroke is 2.9 px and the V still reads.</p>
     </header>
     <div class="grid variants">
       <div class="variant"><span class="pick">Pick</span>
-        <img class="big" src="wordmark-facet-dark.svg" alt="exo, facet variant">
+        <img class="big" src="wordmark-facet-dark.svg" alt="3X0, facet variant">
         <h3>A · Facet</h3>
-        <p>Octagonal e and o, the octagon of the lattice. Every edge is at 0°, 45° or 90°, so it stays sharp on a pixel grid and matches the X. The e's terminal is cut at 45°, square to its stroke.</p>
-        <div class="light"><img src="wordmark-facet-light.svg" alt="exo, facet, on light"></div>
+        <p>The 3 and the 0 share one 45° cut, sized by √2 − 1. The cut corners make the mirrored E read as a 3, and the narrow octagon read as a zero, not an O.</p>
+        <div class="light"><img src="wordmark-facet-light.svg" alt="3X0, facet, on light"></div>
         <div class="sizes"><img src="wordmark-facet-dark.svg" alt="" style="height:32px"><img src="wordmark-facet-dark.svg" alt="" style="height:16px"></div>
       </div>
       <div class="variant">
-        <img class="big" src="wordmark-round-dark.svg" alt="exo, round variant">
-        <h3>B · Round</h3>
-        <p>Circular e and o, the incircles. Softer and more familiar; the circles sit less well beside the sharp X, and at 16 px the round counters blur first.</p>
-        <div class="light"><img src="wordmark-round-light.svg" alt="exo, round, on light"></div>
-        <div class="sizes"><img src="wordmark-round-dark.svg" alt="" style="height:32px"><img src="wordmark-round-dark.svg" alt="" style="height:16px"></div>
+        <img class="big" src="wordmark-block-dark.svg" alt="3X0, block variant">
+        <h3>B · Block</h3>
+        <p>Square corners only: the plainest mirrored E and a box zero. It reads as a reversed E more than a 3, and the box zero can pass for a D or an O.</p>
+        <div class="light"><img src="wordmark-block-light.svg" alt="3X0, block, on light"></div>
+        <div class="sizes"><img src="wordmark-block-dark.svg" alt="" style="height:32px"><img src="wordmark-block-dark.svg" alt="" style="height:16px"></div>
       </div>
       <div class="variant">
-        <img class="big" src="wordmark-seed-dark.svg" alt="exo, seed variant">
-        <h3>C · Seed</h3>
-        <p>Facet, with the incentre of the V's triangle as an orange dot and a hairline between the V and the legs. Tells the whole story; for display sizes only (48 px and up).</p>
-        <div class="light"><img src="wordmark-seed-light.svg" alt="exo, seed, on light"></div>
-        <div class="sizes"><img src="wordmark-seed-dark.svg" alt="" style="height:32px"><img src="wordmark-seed-dark.svg" alt="" style="height:16px"></div>
+        <img class="big" src="wordmark-incircle-dark.svg" alt="3X0, incircle variant">
+        <h3>C · Incircle</h3>
+        <p>The zero is two halves of an incircle joined by straight sides, with the incentre as its dot: a dotted zero. Clearly a digit, but the only curves in the system, and the dot fills in at 16 px.</p>
+        <div class="light"><img src="wordmark-incircle-light.svg" alt="3X0, incircle, on light"></div>
+        <div class="sizes"><img src="wordmark-incircle-dark.svg" alt="" style="height:32px"><img src="wordmark-incircle-dark.svg" alt="" style="height:16px"></div>
       </div>
       <div class="variant">
-        <img class="big" src="wordmark-caps-dark.svg" alt="EXO, caps variant">
-        <h3>D · Caps</h3>
-        <p>Spaced capitals, matching the site's nav and the terminal's <code>E X O</code> brand bar. For labels and tight UI, not as the main mark.</p>
-        <div class="light"><img src="wordmark-caps-light.svg" alt="EXO, caps, on light"></div>
-        <div class="sizes"><img src="wordmark-caps-dark.svg" alt="" style="height:32px"><img src="wordmark-caps-dark.svg" alt="" style="height:16px"></div>
+        <img class="big" src="wordmark-bisector-dark.svg" alt="3X0, bisector variant">
+        <h3>D · Bisector</h3>
+        <p>Facet, with the 3's middle arm ending in a point whose edges run at 22.5°, the bisector's angle. A nice nod at display size; at 16 px it cannot be told from A.</p>
+        <div class="light"><img src="wordmark-bisector-light.svg" alt="3X0, bisector, on light"></div>
+        <div class="sizes"><img src="wordmark-bisector-dark.svg" alt="" style="height:32px"><img src="wordmark-bisector-dark.svg" alt="" style="height:16px"></div>
       </div>
     </div>
-    <p class="sec-lede" style="margin-top:28px"><b style="color:var(--fg)">Why A.</b> It is the only variant where every letter comes from the drawing: the X from the diagonals, the e and o from the lattice's octagon. It has the fewest angles (three), so it renders crisply at 16 px, and it pairs with the mark without a second shape language. C is its display form; D is its label form.</p>
+    <p class="sec-lede" style="margin-top:28px"><b style="color:var(--fg)">Why A.</b> It reads as 3X0 first and exo second, which is the point. It uses one cut for every corner, sized by the same √2 − 1 as the mark, so the 3, the X and the 0 look like one family and like the drawing. With only three angles it stays crisp on a pixel grid, and it is the clearest of the four at 16 px. B loses the 3, C brings in curves, D adds a detail nobody sees at small sizes.</p>
+    <div class="labelform">
+      <img src="wordmark-label-dark.svg" alt="3 X 0, the label form" style="height:14px;width:auto">
+      <img src="wordmark-label-dark.svg" alt="" style="height:28px;width:auto">
+      <div style="background:#f4f2ec;padding:12px 16px"><img src="wordmark-label-light.svg" alt="3 X 0 on light" style="height:20px;width:auto"></div>
+      <p class="cap" style="max-width:34em"><b>Label form, "3 X 0".</b> The facet glyphs at a lighter stroke (0.18 of the height) and spaced half a height apart. It is the nav label on every page; in the terminal the same form is the text <code>3 X 0</code> with the X in orange (site/brand/tui-wordmark.txt).</p>
+    </div>
   </div>
 </section>
 
@@ -186,17 +207,18 @@
     <header class="sec-head">
       <p class="sec-num">04 / Mark and icons</p>
       <h2 id="m-t">The figure is the mark.</h2>
-      <p class="sec-lede">The mark is the drawing itself: the square, the X with its V, the four dots and their lines. The top dot sits inside the V, at the incentre of the V's triangle; it is the seed that the egg grows from. Below 32 px the lines and dots drop out and only the X with its V remains.</p>
+      <p class="sec-lede">Three forms, by size. The full mark is the whole figure: the square, the X with its V, the four dots, and all twelve bisectors, the corner lines in orange and the centre lines in soft amber, as on the origin page. Below about 120 px the bisectors drop out and the simple mark keeps the square, the X with its V and the four dots. At 16 px the square moves to the tile's edge so a clear pixel stays between each dot and the X.</p>
     </header>
     <div class="grid marks">
-      <div><img src="mark.svg" alt="The Exo mark" width="220" height="220"><p class="cap"><b>Mark.</b> mark.svg, mark-light.svg</p></div>
-      <div><img src="mark-construction.svg" alt="The construction" width="180" height="180"><p class="cap"><b>Construction.</b> With incircles; for explaining, not as a logo.</p></div>
-      <div><div class="tile"><img src="app-icon-round.svg" alt="App icon" width="120" height="120"><img src="apple-touch-icon.png" alt="" width="60" height="60"></div><p class="cap"><b>App icon.</b> app-icon.svg (square, platforms round it), app-icon-1024.png, icon-512, icon-192, apple-touch-icon.</p></div>
-      <div><div class="tile"><img src="favicon-32.png" alt="" width="32" height="32"><img src="favicon-16.png" alt="" width="16" height="16"><img class="zoom" src="favicon-16.png" alt="16 px favicon, enlarged" width="64" height="64"></div><p class="cap"><b>Favicons.</b> favicon.svg and favicon-32 keep the square and dots; favicon-16 is the X alone (shown at 4× on the right).</p></div>
+      <div><img src="mark.svg" alt="The full Exo mark" width="240" height="240"><p class="cap"><b>Full mark.</b> mark.svg, mark-light.svg. 120 px and up.</p></div>
+      <div><img src="mark-simple.svg" alt="The simple Exo mark" width="150" height="150"><p class="cap"><b>Simple mark.</b> mark-simple.svg, mark-simple-light.svg. The nav, the lockup and icons under 120 px.</p></div>
+      <div><div class="tile"><img src="app-icon-round.svg" alt="App icon" width="120" height="120"><img src="apple-touch-icon.png" alt="" width="60" height="60"></div><p class="cap"><b>App icon.</b> app-icon.svg (square; platforms round it), app-icon-1024.png, icon-512, icon-192, apple-touch-icon (180).</p></div>
+      <div><div class="tile"><img src="favicon-32.png" alt="" width="32" height="32"><img src="favicon-16.png" alt="" width="16" height="16"><img class="zoom" src="favicon-16.png" alt="16 px favicon, enlarged" width="64" height="64"></div><p class="cap"><b>Favicons.</b> favicon.svg and favicon-32 are the simple mark; favicon-16 is drawn on the pixel grid (shown at 4× on the right).</p></div>
     </div>
     <div style="margin-top:40px;display:flex;gap:40px;flex-wrap:wrap;align-items:center">
+      <img src="mark-construction.svg" alt="The construction, with incircles" width="140" height="140">
       <img src="lockup-dark.svg" alt="Lockup: mark and wordmark" style="height:56px;width:auto">
-      <div style="background:#f4f2ec;padding:16px 20px"><img src="lockup-light.svg" alt="Lockup on light" style="height:40px;width:auto"></div>
+      <div style="background:#f4f2ec;padding:16px 20px;display:flex;gap:20px;align-items:center"><img src="mark-light.svg" alt="The full mark on light" width="80" height="80"><img src="lockup-light.svg" alt="Lockup on light" style="height:40px;width:auto"></div>
     </div>
   </div>
 </section>
@@ -240,8 +262,8 @@ egg.getStage(); egg.pause(); egg.resume(); egg.destroy();
   <div class="wrap">
     <header class="sec-head">
       <p class="sec-num">06 / Colour</p>
-      <h2 id="c-t">The site's palette, unchanged.</h2>
-      <p class="sec-lede">Orange is the signal: the V, the seed, information in motion. Steel blue is system knowledge, and in the egg it marks the dimension that was added. Everything else is structure.</p>
+      <h2 id="c-t">The site's palette, plus one tint for the mark.</h2>
+      <p class="sec-lede">Orange is the signal: the V, the corner bisectors, information in motion. The soft amber is the origin figure's amber line, used only for the mark's lines to the centre. Steel blue is system knowledge, and in the egg it marks the dimension that was added. Everything else is structure.</p>
     </header>
     <div class="grid swatches">
       <div><span style="background:#08090a"></span>bg #08090a</div>
@@ -249,6 +271,7 @@ egg.getStage(); egg.pause(); egg.resume(); egg.destroy();
       <div><span style="background:#8b8b86"></span>fg-3 #8b8b86</div>
       <div><span style="background:#ff5b14"></span>accent #ff5b14 · the V</div>
       <div><span style="background:#ff8a4c"></span>accent-2 #ff8a4c · packets</div>
+      <div><span style="background:#f2b25c"></span>amber #f2b25c · lines to the centre</div>
       <div><span style="background:#9fb4c4"></span>cold #9fb4c4 · new dimension</div>
     </div>
   </div>
@@ -257,17 +280,18 @@ egg.getStage(); egg.pause(); egg.resume(); egg.destroy();
 <section class="section" id="terminal" aria-labelledby="tu-t">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">07 / Terminal (proposal)</p>
-      <h2 id="tu-t">The mark in braille.</h2>
-      <p class="sec-lede">A text-mode rendering for the terminal client's header, in braille cells like the current start motif (<code>exo_tui/hero.py</code>). Orange cells hold the V or the seed. Proposal only; the terminal client is unchanged.</p>
+      <p class="sec-num">07 / Terminal</p>
+      <h2 id="tu-t">The mark in braille, the name in text.</h2>
+      <p class="sec-lede">Text-mode renderings for the terminal client, written by the generator. The mark is the simple form in braille cells (at 24 × 24 braille dots the twelve bisectors would fill the square); orange cells hold the V. The name is the label form as text, <code>3 X 0</code>, with the X in orange: a cell cannot be half orange.</p>
     </header>
     <div class="tui">
-      <div><pre aria-label="The mark in braille"><!-- tui-mark --><b>⢰</b><b>⢶</b><b>⢖</b><b>⣒</b>⠒⠒⠒⠒<b>⢒</b><b>⣒</b><b>⢶</b><b>⢶</b>
-⢸ <b>⠑</b><b>⢌</b><b>⠉</b><b>⠒</b><b>⠖</b><b>⠊</b><b>⢉</b><b>⠔</b><b>⠁</b>⢸
+      <div><pre aria-label="The mark in braille"><!-- tui-mark --><b>⢰</b><b>⢖</b>⠒⠒⠒⠒⠒⠒⠒⠒<b>⢒</b><b>⢶</b>
+⢸ <b>⠑</b><b>⢄</b>  ⠆ <b>⢀</b><b>⠔</b><b>⠁</b>⢸
 ⢸   <b>⠑</b><b>⢄</b><b>⢀</b><b>⠔</b><b>⠁</b>  ⢸
 ⢸ ⠈⠁⢀⠔<b>⠑</b>⢄ ⠉ ⢸
 ⢸ ⢀⠔⠁ ⡄ ⠑⢄ ⢸
-⢸⣔⣁⣀⣀⣀⣀⣀⣀⣀⣑⣼<!-- /tui-mark --></pre><p class="cap"><b>Mark,</b> 12 × 6 cells. site/brand/tui-mark.txt</p></div>
+⢸⣔⣁⣀⣀⣀⣀⣀⣀⣀⣑⣼<!-- /tui-mark --></pre><p class="cap"><b>Mark,</b> 12 × 6 cells. site/brand/tui-mark.txt</p>
+        <pre aria-label="The name in the terminal"><!-- tui-wordmark -->3 <b>X</b> 0<!-- /tui-wordmark --></pre><p class="cap"><b>Name,</b> one line. site/brand/tui-wordmark.txt</p></div>
       <div><pre aria-label="The egg in braille"><!-- tui-egg -->     ⡠⠤⠤⠤⣀
    ⡰⠋    ⠈⠓⡀
   ⡸   <b>⣠</b><b>⢦</b><b>⡀</b>  ⠹
@@ -286,7 +310,7 @@ egg.getStage(); egg.pause(); egg.resume(); egg.destroy();
       <h2 id="cr-t">Where the figure comes from.</h2>
     </header>
     <div class="prose">
-      <p>The drawing is a lattice figure. Its geometry is studied in the open research project <a href="https://aska-digital.github.io/incentre-lattice/" rel="noopener">Incentre lattice</a> (aska-digital/incentre-lattice), which this design follows for every number: the incentre height √2 − 1, the 4.8.8 tiling, the truncated cubic honeycomb and its n-dimensional form. The mark borrows the geometry, not that project's look: its colours and type stay its own.</p>
+      <p>The mark is figure 1 of the <a href="https://aska-digital.github.io/incentre-lattice/origin.html" rel="noopener">origin page</a> of the open research project <a href="https://aska-digital.github.io/incentre-lattice/" rel="noopener">Incentre lattice</a> (aska-digital/incentre-lattice): the square, its diagonals, the four incentres, and each incentre's three bisectors, red to the corners and amber to the centre. This design follows that project for every number: the incentre height √2 − 1, the 22.5° bisector, the 4.8.8 tiling, the truncated cubic honeycomb and its n-dimensional form. The mark borrows the geometry and the red/amber split of the lines, mapped to Exo's orange and a soft amber; that project's own colours and type stay its own.</p>
       <p>The classical mathematics behind it is old and belongs to everyone: the incentre and the medial axis; the Wythoff construction (Wythoff, 1918) as developed by H. S. M. Coxeter; the uniform tilings and honeycombs.</p>
       <p>The egg is a rework of the orb on the Exo front page, which was a shell of linked nodes around an orange core.</p>
     </div>
@@ -296,9 +320,9 @@ egg.getStage(); egg.pause(); egg.resume(); egg.destroy();
 
 <footer class="foot">
   <div class="wrap foot__in">
-    <img src="lockup-dark.svg" alt="exo" style="height:22px;width:auto">
-    <p>Brand proposal D-049 · <a href="../">Home</a> · <a href="egg.html">The egg, full screen</a></p>
-    <p class="foot__small">A proposal for review. Nothing on the live site has changed.</p>
+    <img src="lockup-dark.svg" alt="3X0" style="height:24px;width:auto">
+    <p>Brand D-049, revised 2026-10-13 · <a href="../">Home</a> · <a href="egg.html">The egg, full screen</a></p>
+    <p class="foot__small">Every asset on this page is generated by scripts/brand_assets.py from the construction in section 01.</p>
   </div>
 </footer>
 <script src="egg.js"></script>
