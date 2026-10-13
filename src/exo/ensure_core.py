@@ -91,8 +91,7 @@ def writer_holder(home: Path, agent: str) -> str | None:
 
 def _spawn(home: Path) -> subprocess.Popen:
     log = log_path(home)
-    private_dir(log.parent)
-    out = open(log, "ab")
+    out = open(private_file(log), "ab")
     try:
         proc = subprocess.Popen([sys.executable, "-m", "exo.cli", "serve"], stdin=subprocess.DEVNULL, stdout=out,
                                 stderr=out, start_new_session=True, env=dict(os.environ, EXO_HOME=str(home)))
