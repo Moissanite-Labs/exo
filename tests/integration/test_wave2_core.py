@@ -21,6 +21,7 @@ MODELS = {"fake": {"rules": [{"match": "mcp", "steps": [{"tool": "mcp__e__add", 
 
 def _eng(tmp_path, seat=None, register=None, **kw):
     pm = PluginManager()
+    pm.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     if register:
         pm._run_register(Manifest(name="t"), "dir", register)
     sk = tmp_path / "skills" / "demo"

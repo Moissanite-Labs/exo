@@ -13,8 +13,10 @@ FAKE = {"rules": [{"match": "hello", "steps": ["hi"]},
 
 
 def engine(tmp_path) -> CoreEngine:
-    return CoreEngine(tmp_path / "home", {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
-                      cwd=str(tmp_path), env={})
+    eng = CoreEngine(tmp_path / "home", {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
+                     cwd=str(tmp_path), env={})
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
+    return eng
 
 
 def events_of(hub, kind):
