@@ -1063,3 +1063,23 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   memory. Considered only through cryptographic or decentralized compute that keeps the operator blind.
 - **Own inference (later):** a keyless path where users never handle API keys, once funded.
 - **Rejected for now:** a hosted service that stores user keys on our servers.
+
+## D-055 (2026-10-12) Keep staging current; package with Electron after the core and browser
+- **Why (A):** update the latest staging site as the work advances, improve it where useful, and eventually package
+  the browser client as an Electron desktop app. Packaging is the last step after polishing the core engine and codebase.
+- **Delivery order:** core verification and review, then browser workflow polish, then Electron packaging. The desktop
+  package is a chosen direction, not a built client. Its eventual checks include installation, core lifecycle, signing
+  and updates on the intended platforms. The roadmap gives the exit criteria for each stage.
+- **Evidence:** the site identifies the authority and learning fixes at `1532fa9` as in review in draft PR #57, with
+  links to the revision and CI results. A successful local installation does not make an unmerged change built on main.
+  The four existing roadmap states stay unchanged. House taste wave 1 is layers and export tooling; the shipped
+  `0.0.0` pack is empty. A curated pack and adaptation remain future work.
+- **Research:** AIOS and AI Legion are public references, not new dependencies. Frozen delegated permissions,
+  isolated tools with a credential broker, durable steerable work and shared budget admission are exploring directions.
+  Application authority checks are not described as OS isolation.
+- **Site:** preserve the latest staging design, keep mobile page navigation reachable, provide section jump links,
+  and show status in words as well as color. The lattice egg preview remains staging-only under D-049.
+- **Deployment scope:** this instruction authorizes staging updates. Deploy to `exo-site-staging` from a git-free copy,
+  preserving staging's robots exclusion and noindex header. Production promotion remains separate under D-047.
+- **Docs:** `docs/SITE-STATUS.md`; `docs/DEVELOPER-GUIDE.md` "Deploying the site"; `site/roadmap/` and the landing and
+  web-client pages. No user commands changed, so the user guide is unaffected. Whitepaper updates remain batched.
