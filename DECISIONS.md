@@ -1235,33 +1235,52 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   enough and changes nothing); letting the agent add its own triggers (it could widen its own reach).
 - **Open:** default limits, root-cause pass on or off by default, whether the agent may propose triggers.
 
-## D-058 (2026-10-13) Exopet: the community egg grows from repository activity
-- **Status:** Proposed 2026-10-13. Revises D-048 (Proposed). Design in docs/EXOPET.md section 3. Nothing built.
+## D-058 (2026-10-13) Exopet: the community egg, x0, grows from repository activity
+- **Status:** Proposed 2026-10-13, revised the same day (instant and validated XP, the name x0, meditation). Revises
+  D-048 (Proposed). Design in docs/EXOPET.md section 3. Nothing built.
 - **Why (principal, 2026-10-13, verbatim):** "users personal exos can gain xp from and level up from their own usage.
   however the community one, and the one that initially gates all users exo evolutions, should be pased on repo
-  activity ... xp scales with significance of event of repo."
-- **Proposal:** personal XP is unchanged. The community egg counts repository events: issue 1, pull request opened 3,
-  pull request merged 10, release 25 (at most one a week). Target 2^11 = 2,048. Issues and opened pull requests settle
-  for 7 days and drop out if labelled spam, invalid or duplicate, deleted, or closed by their author within an hour.
-  Per-account daily caps, new-account exclusion, bots ignored, hourly global caps. The core team, founders and their
-  agents count up to 40 XP a day and 25 percent of the target, a cap rather than a discount. Agent issues and pull
-  requests count nothing until merged. Simulated hatch: about 2 weeks after going public when busy, 8 weeks when
-  steady, 7 months when quiet.
+  activity ... xp scales with significance of event of repo." Revision: "a small part of the learning is instant ...
+  then whenever we start reviewing community contributions the exo, which we will start calling x0 ... will go into
+  "meditating" mode ... and during that process it gains addional xp for each contribution that was validated."
+- **Proposal:** personal XP is unchanged. The community egg is named x0 (read "x-o"); a person's own copy stays "your
+  Exo". Each repository event adds a small instant share at once: issue 1, pull request opened 1, review 1, merge 2,
+  release 25 (at most one a week, validated by the act). The large share is validated XP, granted when x0 meditates
+  (a maintainer-started batch review): issue fixed by a merged pull request ("Fixes #N") 4, pull request merged or
+  salvaged (`Salvaged-from: #N` in the landing pull request) 10, review marked meaningful by the reviewer bot (name
+  TBD) with a `rocket` reaction from the bot's own account id 4. Target 2^11 = 2,048. Instant XP is capped per
+  account (3 a day), excludes new accounts, has global caps (15 an hour, 60 a day) and fills at most 25 percent of the
+  target, and is never taken back. The core team, founders and their agents count up to 40 XP a day and 25 percent of
+  the target, instant and validated together, a cap rather than a discount. Agent issues, pull requests and reviews
+  earn nothing until a pull request is merged. At least half of x0 comes from validated work and releases. Simulated
+  hatch with a weekly meditation: about 2 weeks after going public when busy, 6 weeks when steady, 5 months when quiet.
 - **Removes from D-048:** install reports, the counter service, counter keys, proof of work and Merkle receipts. No
   install sends anything; clients read the public feed (D-059) at most once a day.
 - **Rejected:** a discount multiplier on the core (it still scales with agent volume); counting agent issues and pull
-  requests (cheap to make in bulk); counting stars, comments or pushes (cheap, or already in merges).
+  requests (cheap to make in bulk); counting stars, comments outside reviews or pushes (cheap, or already in merges);
+  a settle window that held all XP back for 7 days (a contributor saw nothing land); taking instant XP back on a void
+  (the fill would jump backwards; small caps bound it instead); trusting the reaction from any account or by login.
 
-## D-059 (2026-10-13) The live egg: the site egg reacts to repository events
-- **Status:** Proposed 2026-10-13. Design in docs/LIVE-EGG.md, interface first. Nothing built.
+## D-059 (2026-10-13) The live egg: x0 on the site reacts to repository events and meditates
+- **Status:** Proposed 2026-10-13, revised the same day (instant events, meditation, feed `v: 2`). Design in
+  docs/LIVE-EGG.md, interface first. Nothing built.
 - **Why (principal, 2026-10-13):** "event triggered animation ... on the 3d egg that happens every time there's
-  activity on the github. different types and levels of animations for different types of events."
+  activity on the github. different types and levels of animations for different types of events." Revision: "they
+  should be instant triggered so users can see the satisfaction of their contribution triggering an animation."
 - **Proposal:** a GitHub webhook calls a Vercel function on the site's host, which verifies the HMAC signature,
-  ignores bots, applies D-058 and appends to a public feed holding only event type, time, level and nominal weight,
-  plus the community totals and the egg's stage. The page polls `GET /api/egg/feed` and calls a new
-  `egg.event(type)`: an issue a small pulse, a pull request a pulse and a packet across the lattice, a merge a bloom, a
-  release a growth flash. Replay of the last 24 hours on open, a queue that folds bursts, a text line instead of motion
-  under reduced motion, an edge cache and a per-address limit on reads. No GitHub token anywhere; the webhook secret is
-  a server environment variable. Staging and production have their own store and webhook.
+  ignores bots, applies D-058 and appends to a public feed holding only event type, kind, time, level and nominal
+  weight, plus the community totals, the egg's stage and state. The page polls `GET /api/egg/feed` (`v: 2`, 5 second
+  edge cache, 10 second poll, an extra poll when the tab becomes visible) and calls `egg.event(type)` at once: an issue
+  a small pulse, a pull request a packet into the core, a review a packet across the lattice, a merge a bloom, a
+  release a growth flash. A maintainer starts a meditation by a signed `workflow_dispatch` (`x0-meditate`), with a
+  14-day backstop from the daily cron; the function reads the reviewer bot's `rocket` reactions with one read-only,
+  single-repository token, shuffles the validated items and schedules their absorbs. The feed then shows
+  `egg.state` `meditating` with progress and `validated` events (kind only), and the page calls `egg.meditate(true)`:
+  the lattice folds inward, dims and breathes slowly, each validated item travels into the core as a cold-blue glow
+  with the XP ticking up, then `waking` and `egg.meditate(false)`. Replay of the last 24 hours on open, queues that
+  fold bursts, stills and a text line under reduced motion, a per-address limit on reads. Staging and production have
+  their own store, secrets and webhook.
 - **Rejected:** reading the GitHub API from the page (private repo, and a token would be public); streaming (keeps a
-  function open per tab for a few events an hour); titles or authors in the feed while the repository is private.
+  function open per tab for a few events an hour); titles or authors in the feed while the repository is private;
+  a label as the meditation trigger (it sits on one item, not the batch); a fixed schedule as the trigger (it would
+  meditate when nobody reviewed anything).
