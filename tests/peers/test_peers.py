@@ -342,3 +342,21 @@ async def test_peer_traffic_shows_in_the_trace(run_dir):
         assert "peers" in a.eng.trace_text(sa)
     finally:
         await a.stop(), await b.stop()
+
+
+@aio
+@pytest.mark.parametrize("caller,trust", [("local", "same-principal"), ("unknown", "same-principal"),
+                                          ("principal:tui", "principal")])
+async def test_human_peer_send_needs_a_principal_connection(run_dir, caller, trust):
+    """D-039: ``via="human"`` is a body claim. Only a principal connection may make the receiver read the message
+    as the principal typing in another client; a local caller's send arrives as same-principal automation."""
+    a, b, sa, sb = await pair(run_dir, b_peers={"wake": False})
+    try:
+        out = await a.cmd(s.Peers(action="send", to="beta", text="ship it", session=sa, via="human"), caller=caller)
+        assert out["state"] == "delivered"
+        pm = b.events(s.PeerMessage)[0].body
+        assert pm.trust == trust
+        framed = [m.text() for m in b.eng.store.messages(sb) if "ship it" in m.text()]
+        assert framed and ("your principal" in framed[0]) is (trust == "principal")
+    finally:
+        await a.stop(), await b.stop()

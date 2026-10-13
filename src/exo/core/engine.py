@@ -791,7 +791,8 @@ class CoreEngine:
             if b.action == "send":
                 if b.session:
                     self._info(b.session)
-                return await node.send(b.to, b.text, b.session, b.via)
+                via = b.via if is_principal(current_caller()) else "agent"  # "human" is a body claim (D-039)
+                return await node.send(b.to, b.text, b.session, via)
             if b.action == "deliver":
                 return await node.deliver(b.envelope)
             return await node.receipt(b.envelope)
@@ -1010,7 +1011,7 @@ class CoreEngine:
         if b.name == "unsteer":  # D-045: pull a queued steer message back; args is its id, empty means the newest
             if not b.session:
                 raise CommandFailed("bad_request", "unsteer needs a session")
-            gone = self.loop.unsteer(b.session, b.args.strip())
+            gone = self.loop.unsteer(b.session, b.args.strip(), principal=is_principal(current_caller()))
             for m in gone:
                 self.hub.publish(s.SteerCancelled(message_id=m.id or "", text=m.text()), b.session)
             return {"cancelled": [{"id": m.id, "text": m.text()} for m in gone]}
