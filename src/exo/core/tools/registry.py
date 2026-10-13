@@ -28,6 +28,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from exo.core.types import ToolCall, ToolResult, ToolSpec, to_dict
+from exo.core.tools.executor import (
+    ExecutionBroker, ExecutionRequest, thaw_arguments, validate_executor,
+)
 
 PRE_TOOL_CALL = "pre_tool_call"
 POST_TOOL_CALL = "post_tool_call"
@@ -151,9 +154,12 @@ async def _maybe_await(value: Any) -> Any:
 
 
 class Registry:
-    def __init__(self) -> None:
+    def __init__(self, *, executor: ExecutionBroker | None = None,
+                 executor_required: bool = False) -> None:
         self._tools: dict[str, Tool] = {}
         self._hooks: dict[str, list[Hook]] = {p: [] for p in HOOK_POINTS}
+        self.executor = validate_executor(executor) if executor is not None else None
+        self.executor_required = executor_required or executor is not None
 
     # ------------------------------------------------------------ registration
 
@@ -233,6 +239,7 @@ class Registry:
         if not tool.available():
             return ToolResult.of_text(call.id, f"Tool {call.name!r} is not available here",
                                       is_error=True)
+        identity = (call.id, call.name)
         for hook in list(self._hooks[PRE_TOOL_CALL]):
             try:
                 verdict = await _maybe_await(hook(call, tool.spec, ctx))
@@ -243,12 +250,46 @@ class Registry:
             if isinstance(verdict, Block):
                 result = ToolResult.of_text(call.id, f"Blocked: {verdict.reason}", is_error=True)
                 return await self._post(call, result, ctx)
+        if (call.id, call.name) != identity:
+            return await self._post(call, ToolResult.of_text(identity[0],
+                "Blocked: pre_tool_call hooks may rewrite arguments, not call identity", is_error=True), ctx)
         err = validate_args(tool.spec.parameters, call.arguments)
         if err:
             return await self._post(call, ToolResult.of_text(
                 call.id, f"Invalid arguments for {call.name}: {err}", is_error=True), ctx)
-        result = await self._run(tool, call, ctx)
+        if self.executor is not None or self.executor_required:
+            result = await self._execute(tool, call, ctx)
+        else:
+            result = await self._run(tool, call, ctx)
         return await self._post(call, result, ctx)
+
+    async def _execute(self, tool: Tool, call: ToolCall, ctx: ToolContext) -> ToolResult:
+        """The broker is the only dispatch authority once configured or required."""
+        call_id, tool_name = call.id, call.name
+        try:
+            if self.executor is None:
+                raise ToolError("Required tool executor is unavailable")
+            request = ExecutionRequest(call.id, call.name, call.arguments, ctx.cwd, ctx.session)
+            trusted_ctx = ToolContext(cwd=request.cwd, session=request.session, call_id=request.call_id,
+                                     cancel=ctx.cancel, emit=ctx.emit, meta=dict(ctx.meta))
+
+            async def run_trusted() -> ToolResult:
+                frozen_call = ToolCall(request.call_id, request.tool_name, thaw_arguments(request.arguments))
+                return await self._run(tool, frozen_call, trusted_ctx)
+
+            result = await self.executor.execute(request, tool, run_trusted)
+            if not isinstance(result, ToolResult):
+                raise ToolError("Tool executor must return ToolResult")
+            result.call_id = request.call_id
+            return _cap_result(result)
+        except asyncio.CancelledError:
+            ctx.cancel.set()
+            raise
+        except ToolError as exc:
+            return ToolResult.of_text(call_id, str(exc), is_error=True)
+        except Exception as exc:
+            return ToolResult.of_text(call_id, f"{tool_name} executor failed: {type(exc).__name__}: {exc}",
+                                      is_error=True)
 
     async def _run(self, tool: Tool, call: ToolCall, ctx: ToolContext) -> ToolResult:
         args = dict(call.arguments)
@@ -289,10 +330,11 @@ class Registry:
         return asyncio.run(self.call(call, ctx))
 
 
-def default_registry() -> Registry:
+def default_registry(*, executor: ExecutionBroker | None = None,
+                     executor_required: bool = False) -> Registry:
     """A registry with the built-in fs, search and shell tools."""
     from exo.core.tools.builtin import register_builtins
-    reg = Registry()
+    reg = Registry(executor=executor, executor_required=executor_required)
     register_builtins(reg)
     return reg
 
