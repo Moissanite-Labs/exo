@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exo terminal client: a calm prompt with instruments</title>
+<meta name="description" content="exo-tui is the terminal client for Exo. A prompt and a transcript, with a status strip that shows the model that served, memory, cache share and cost. Approvals, jobs and findings on the same screen.">
+<meta name="theme-color" content="#08090a">
+<link rel="canonical" href="https://exo.askaconsult.com/cli/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Project Exo">
+<meta property="og:url" content="https://exo.askaconsult.com/cli/">
+<meta property="og:title" content="Exo terminal client: a calm prompt with instruments">
+<meta property="og:description" content="exo-tui is the terminal client for Exo. A prompt and a transcript, with a status strip that shows the model that served, memory, cache share and cost. Approvals, jobs and findings on the same screen.">
+<meta property="og:image" content="https://exo.askaconsult.com/media/tui-02-turn.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://exo.askaconsult.com/media/tui-02-turn.png">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="stylesheet" href="../assets/style.css">
+<script>document.documentElement.classList.add("js")</script>
+<script src="../assets/main.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" id="top">
+  <div class="wrap nav__in">
+    <a class="brand" href="../" aria-label="Project Exo, home">
+      <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg>
+      <span>EXO</span>
+    </a>
+    <nav aria-label="Pages">
+      <ul class="nav__links">
+        <li><a href="../">Overview</a></li>
+        <li><a class="nav__page" href="../cli/" aria-current="page">Terminal</a></li>
+        <li><a class="nav__page" href="../app/">Web app</a></li>
+        <li><a class="nav__paper" href="../whitepaper/">Whitepaper</a></li>
+      </ul>
+    </nav>
+    <a class="btn btn--sm" href="https://github.com/aska-digital/exo" rel="noopener">Repository <span class="tag">private preview</span></a>
+  </div>
+</header>
+<main id="main">
+<section class="hero hero--sub" aria-labelledby="hero-title">
+  <canvas class="hero__canvas" aria-hidden="true"></canvas>
+  <div class="hero__grid" aria-hidden="true"></div>
+  <div class="wrap hero__in">
+    <p class="crumb"><a href="../">Project Exo</a> · Terminal client</p>
+    <h1 id="hero-title" class="hero__title">A prompt.<br>A transcript.<br>Instruments.</h1>
+    <p class="hero__lede"><code>exo-tui</code> is the terminal client for Exo. It looks like a quiet shell, and it reports what the system is doing: which model served the call, how full memory is, how much came from the cache, what it cost.</p>
+    <div class="hero__cta"><a class="btn btn--primary" href="#install">Install <span aria-hidden="true">→</span></a><a class="btn" href="#screens">Screenshots</a><a class="btn" href="../app/">Web app</a></div>
+  </div>
+</section>
+
+<section class="section" id="overview" aria-labelledby="overview-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">01 / Overview</p>
+      <h2 id="overview-t">Text is the fastest way to ask for work. The screen should say what happened.</h2>
+      <p class="sec-lede">The client is a Textual app over the Exo protocol. It holds no state of its own: every line comes from an event the core sent, so a second window or the web app sees the same thing. It follows the site design language: hairlines instead of boxes, mono capitals for labels, orange only for the one thing that needs you.</p>
+    </header>
+    <div class="grid grid--3 feat">
+      <article class="card reveal"><p class="card__k">Status strip</p><p>The route that served the call (orange, with the requested model, when it fell back), a memory gauge, cache share of the last call, session cost and open findings.</p></article>
+      <article class="card reveal"><p class="card__k">Activity you can read</p><p>One line per tool with its state, short arguments and elapsed time. A wire with a travelling packet shows data in flight. Nothing moves at rest.</p></article>
+      <article class="card reveal"><p class="card__k">Approvals in place</p><p>A panel with an orange rule shows the exact text that will go out. The answer is bound to it. Edit the text and the gate asks again.</p></article>
+      <article class="card reveal"><p class="card__k">Jobs, peers, memory</p><p>A finished background job, a message from a peer session and a folded stretch of memory each show as one short line with a cold label.</p></article>
+      <article class="card reveal"><p class="card__k">A first run that teaches</p><p>The first launch starts with <code>/intro</code> and small tips the first time something comes up. <code>/tutorial off</code> turns them off.</p></article>
+      <article class="card reveal"><p class="card__k">Plain when you need it</p><p><code>NO_COLOR</code> drops the colours and keeps the shape. <code>EXO_REDUCED_MOTION=1</code> turns off the boot, spinner, pulse and blink.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="section section--alt" id="screens" aria-labelledby="screens-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">02 / Screenshots</p>
+      <h2 id="screens-t">Five states you will see.</h2>
+      <p class="sec-lede">The demo agent is called <code>atlas</code> and is fixing a failing test in a small library. The text is scripted for the screenshot. The layout is the real client.</p>
+    </header>
+    <div class="gallery">
+      <figure class="reveal">
+        <div class="gallery__img"><img src="../media/tui-01-start.png" width="1939" height="1504" alt="The Exo terminal client on an empty thread, with a hero of linked nodes around an orange core and a row of key hints." loading="lazy"></div>
+        <figcaption><p class="card__k">Start</p><h3>An empty thread</h3><p>The hero is the site motif drawn in braille, turning once every 16 seconds. It goes away with your first message. Key hints sit below it.</p></figcaption>
+      </figure>
+      <figure class="reveal">
+        <div class="gallery__img"><img src="../media/tui-02-turn.png" width="1939" height="1504" alt="A turn in the terminal client with tool lines and the status strip." loading="lazy"></div>
+        <figcaption><p class="card__k">A turn</p><h3>Tools, with their time</h3><p>Each tool is one line: name, arguments, elapsed time. The strip below shows the served model, memory, cache and cost. Press <kbd>ctrl+o</kbd> to expand a tool line.</p></figcaption>
+      </figure>
+      <figure class="reveal">
+        <div class="gallery__img"><img src="../media/tui-03-approval.png" width="1939" height="1504" alt="An approval panel in the terminal client showing the exact text and the key chips." loading="lazy"></div>
+        <figcaption><p class="card__k">Gate</p><h3>An approval that names its risk</h3><p>The gate stops anything public or irreversible. The panel shows what will happen, and the answer is tied to that exact text. Keys: <kbd>o</kbd> once, <kbd>a</kbd> always, <kbd>d</kbd> deny.</p></figcaption>
+      </figure>
+      <figure class="reveal">
+        <div class="gallery__img"><img src="../media/tui-04-context.png" width="1939" height="1504" alt="The /context report in the terminal client." loading="lazy"></div>
+        <figcaption><p class="card__k">Memory</p><h3><code>/context</code>: what the next call carries</h3><p>A report of the next call, split into the agent summary tree, the thread tail and notes from other threads, with the log position and how many of your messages still wait to be captured.</p></figcaption>
+      </figure>
+      <figure class="reveal">
+        <div class="gallery__img"><img src="../media/tui-05-job.png" width="1939" height="1504" alt="A finished background job shown as one line in the transcript." loading="lazy"></div>
+        <figcaption><p class="card__k">Jobs</p><h3>A job that outlives the turn</h3><p>A long test run starts in the background. Esc stops the turn and leaves the job alone. When the job ends, the agent gets a notice and the transcript shows one line.</p></figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="keys" aria-labelledby="keys-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">03 / Key commands</p>
+      <h2 id="keys-t">Three prefixes and one menu.</h2>
+      <p class="sec-lede"><code>/help</code> lists everything. These are the ones you will use first.</p>
+    </header>
+    <div class="keygroup">
+      <div>
+        <h3>Prefixes and keys</h3>
+        <table class="keytable">
+          <tr><th><code>/</code></th><td>Run a command.</td></tr>
+          <tr><th><code>@</code></th><td>Attach a file or note to the message.</td></tr>
+          <tr><th><code>!</code></th><td>Run a system command.</td></tr>
+          <tr><th><kbd>ctrl+p</kbd></th><td>Open the searchable list of every action.</td></tr>
+          <tr><th><kbd>ctrl+o</kbd></th><td>Expand or fold a tool line.</td></tr>
+          <tr><th><kbd>esc</kbd></th><td>Stop the turn. Background jobs keep running.</td></tr>
+          <tr><th>type while busy</th><td>Steers the running turn.</td></tr>
+        </table>
+      </div>
+      <div>
+        <h3>Commands</h3>
+        <table class="keytable">
+          <tr><th><code>/new</code> <code>/sessions</code></th><td>Start a thread, list threads. Same memory in all.</td></tr>
+          <tr><th><code>/fork</code> <code>/undo</code></th><td>Branch from here, or hide the last turn.</td></tr>
+          <tr><th><code>/context</code></th><td>See what the next call will carry.</td></tr>
+          <tr><th><code>/compact</code></th><td>Fold what is ready, capturing your words first.</td></tr>
+          <tr><th><code>/model</code> <code>/default</code></th><td>Pick a model, set the default.</td></tr>
+          <tr><th><code>/usage</code> <code>/trace</code></th><td>Tokens, timing and estimated cost per turn.</td></tr>
+          <tr><th><code>/findings</code></th><td>Problems the harness found in itself.</td></tr>
+          <tr><th><code>/peers</code> <code>/send</code></th><td>See and message other sessions.</td></tr>
+          <tr><th><code>/handoff</code></th><td>Write a note for the next session.</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section section--alt" id="install" aria-labelledby="install-t">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">04 / Install</p>
+      <h2 id="install-t">Python 3.11 or newer, on macOS or Linux.</h2>
+      <p class="sec-lede">The installer prints its plan first, and <code>--dry-run</code> changes nothing. Add a model key (the providers guide is in the repository), then start the client.</p>
+    </header>
+    <div class="cmd"><span class="c"># the repository is private during the early build, access on request</span>
+<span class="t-p">$</span> git clone https://github.com/aska-digital/exo &amp;&amp; cd exo
+<span class="t-p">$</span> scripts/install.sh --dry-run
+<span class="t-p">$</span> scripts/install.sh
+<span class="t-p">$</span> . ~/.exo/env.sh &amp;&amp; exo-tui</div>
+    <p class="note reveal" style="margin-top:28px">Prefer a browser? <a href="../app/">The web app</a> runs on the same core and the same memory.</p>
+  </div>
+</section>
+</main>
+<footer class="foot">
+  <div class="wrap foot__in">
+    <a class="brand" href="../"><svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg><span>EXO</span></a>
+    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a> · <a href="../cli/">Terminal</a> · <a href="../app/">Web app</a> · <a href="../whitepaper/">Whitepaper</a></p>
+    <p class="foot__small">Exo is early and in active development. This page describes the design as of October 2026 and will change.</p>
+  </div>
+</footer>
+</body>
+</html>
