@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
+from typing import Any
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -36,7 +37,7 @@ from .. import taste
 from ..store import PrincipalStore
 from .pack import HouseItem, HousePack, load_pack, sha256
 
-DEFAULTS = {
+DEFAULTS: dict[str, Any] = {
     "house": True,
     "baseline_start": 0.7,
     "baseline_half_life": 365.0,
@@ -46,6 +47,9 @@ DEFAULTS = {
     "value_window_sessions": 20,
     "value_window_max_days": 90,
 }
+from .shift import DEFAULTS as _SHIFT  # noqa: E402  the sustained-change knobs share the taste: table
+
+DEFAULTS.update({k: v for k, v in _SHIFT.items() if k not in DEFAULTS})
 PIN_TYPES = ("taste_pin", "taste_unpin", "taste_off", "taste_on")
 log = logging.getLogger(__name__)
 
@@ -66,7 +70,11 @@ def taste_policy(store: PrincipalStore | None) -> dict:
                     disabled = (v.strip().casefold() in {"off", "no", "false"}
                                 if isinstance(v, str) else v in (False, 0))
                     pol["house"] = not disabled
-                elif k in DEFAULTS and isinstance(v, (int, float)):
+                elif k == "mode" and isinstance(v, str) and v.strip().casefold() in ("ask", "silent"):
+                    pol[k] = v.strip().casefold()
+                elif k == "timezone" and isinstance(v, str):
+                    pol[k] = v.strip()
+                elif k in DEFAULTS and isinstance(v, (int, float)) and not isinstance(v, bool):
                     pol[k] = v
                 elif k not in DEFAULTS:
                     log.warning("ignoring unknown taste policy key %r in %s", k, path)
@@ -201,11 +209,17 @@ def _matches(u: UserItem, h: HouseItem) -> bool:
 
 def resolve(house: Sequence[HouseItem], user: Sequence[UserItem], *, pins: set[str] = frozenset(),
             offs: set[str] = frozenset(), weight_of=None, version: str = "", start: float = 0.7,
-            scope: str | None = None) -> list[Entry]:
+            scope: str | None = None, stepped: Set[str] = frozenset(),
+            weights: Mapping[str, float] | None = None) -> list[Entry]:
     """Per-item lookup: ruling, pin, learned (or scoped), house. `house` is empty when the layer is off.
-    `weight_of(item)` gives a house item's precedence. Returns entries by weight, highest first."""
+    `weight_of(item)` gives a house item's precedence. `stepped` are value items that stepped back (wave 2):
+    they stay listed with source `stepped_back` and are never applied. `weights` replaces the weight of an
+    armed item (it fades while the user's change lasts). A learned item that another learned item
+    `overrides` is not listed unless pinned. Returns entries by weight, highest first."""
+    weights = weights or {}
     weight_of = weight_of or (lambda h: start)
-    active = [u for u in user if u.scope is None or u.scope == scope]
+    shadowed = {u.overrides for u in user if u.overrides and (u.scope is None or u.scope == scope)}
+    active = [u for u in user if (u.scope is None or u.scope == scope) and (u.id not in shadowed or u.id in pins)]
     used: set[str] = set()
     out: list[Entry] = []
 
@@ -213,8 +227,10 @@ def resolve(house: Sequence[HouseItem], user: Sequence[UserItem], *, pins: set[s
         used.add(u.id)
         pinned = u.id in pins
         cls = "value" if u.type == "value" else (h.cls if h else "method")
+        if u.id in stepped and not pinned:
+            return Entry(u.id, u.claim, "stepped_back", "[stepped back]", 0.0, cls, h.id if h else None)
         return Entry(u.id, u.claim, "pinned" if pinned else u.source, "[pinned]" if pinned else _learned_tag(u),
-                     u.weight, cls, h.id if h else None)
+                     weights.get(u.id, u.weight), cls, h.id if h else None)
 
     for h in house:
         matches = sorted((u for u in active if _matches(u, h)), key=lambda u: (-u.weight, u.id))
@@ -233,8 +249,11 @@ def resolve(house: Sequence[HouseItem], user: Sequence[UserItem], *, pins: set[s
             out.append(from_user(winner, h))   # one user item that covers two house items is listed once
         elif h.id in pins:
             out.append(Entry(h.id, h.claim, "pinned", "[pinned]", start, h.cls, h.id))
+        elif h.id in stepped:
+            out.append(Entry(h.id, h.claim, "stepped_back", "[stepped back]", 0.0, h.cls, h.id))
         elif h.id not in offs:
-            out.append(Entry(h.id, h.claim, "house", f"[house {version}]", weight_of(h), h.cls, h.id))
+            out.append(Entry(h.id, h.claim, "house", f"[house {version}]", weights.get(h.id, weight_of(h)), h.cls,
+                             h.id))
         used.update(u.id for u in matches)
     for u in active:
         if u.id not in used:
@@ -253,6 +272,7 @@ class TasteView:
     entries: list[Entry]
     days: float = 0.0
     window: bool = False
+    state: Any = None             # exo.baseline.adapt.State, when the replay ran
 
 
 def house_status(pack: HousePack, layer: UserLayer, pol: Mapping) -> tuple[bool, str]:
@@ -273,10 +293,17 @@ def view(store: PrincipalStore, *, pack: HousePack | None = None, now: str | dat
     on, reason = house_status(pack, layer, pol)
     days = taste.age_days(layer.installed, _now(now)) if layer.installed else 0.0
     window = in_window(days, layer.sessions, pol)
+    state = None
+    try:
+        from . import adapt
+        state = adapt.load(store, now=now, pack=pack)
+    except Exception as exc:   # the shift rule must never take the taste layers down with it
+        log.warning("taste: the sustained-change replay failed (%s: %s)", type(exc).__name__, exc)
     entries = resolve(pack.items if on else (), layer.items, pins=layer.pins, offs=layer.offs,
                       weight_of=lambda h: house_weight(h, days, window, pol), version=pack.short_version,
-                      start=pol["baseline_start"], scope=scope)
-    return TasteView(on, reason, pack, entries, days, window)
+                      start=pol["baseline_start"], scope=scope, stepped=state.stepped_back if state else set(),
+                      weights=state.weights() if state else None)
+    return TasteView(on, reason, pack, entries, days, window, state)
 
 
 def taste_block(store: PrincipalStore, *, budget_tokens: int = 400, pack: HousePack | None = None,
@@ -290,6 +317,9 @@ def taste_block(store: PrincipalStore, *, budget_tokens: int = 400, pack: HouseP
     lines, used, limit = [head], len(head), max(budget_tokens, 50) * 4
     for e in v.entries:
         line = f"- {e.claim} {e.tag}"
+        if e.source == "stepped_back":
+            line = (f"- Neutral, the user's view is not yet clear: do not apply or argue \"{e.claim}\" or its "
+                    "opposite; give the facts and the main views if asked [stepped back]")
         if used + len(line) + 1 > limit:
             break
         lines.append(line)

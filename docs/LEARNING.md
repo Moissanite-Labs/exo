@@ -60,7 +60,9 @@ fact, or question (when the signal is unclear). Limits live in `learn.fast_loop`
 `exo.learn.promote.apply_policy` checks mandatory constraints before the direct-ruling shortcut. The rule
 numbers stay fixed for ledger records:
 
-- Rule 3: a conflict already held by consolidation stays held. Its existing question awaits your answer.
+- Rule 3: a conflict already held by consolidation stays held. Its existing question awaits your answer. Since
+  D-044 wave 2, an unguarded inferred taste lesson that would replace an accepted belief or an active house item
+  is held too: it can only move by the sustained-change rule (below), or by your own ruling (rule 1).
 - Rule 2: guarded proposals (irreversible, public, financial, third party) never promote on their own.
   They become a question once, even when they cite a ruling or answer you wrote.
 - Rule 5: skill patches always need the held-out eval gate. Types in `eval_gate_for` and domains in
@@ -122,6 +124,15 @@ prompt shows its source. House items have no evidence; their precedence is `max(
 install day. The house layer is off on the store it was exported from. Learning itself is unchanged: the loop
 never writes to the house pack, and nothing learned on one install flows back into it. Design and status:
 `docs/TASTE-BASELINE.md`; code: `src/exo/baseline/`.
+
+**The sustained-change rule (wave 2).** After each fast-loop review, `exo.baseline.classify` labels your new
+verdicts and utterances against the active taste items and writes `taste_signal` notes; only events you wrote
+count (D-040), and quoted, pasted and code text is dropped first. The labeller is the `decision` role when one is
+configured; otherwise a signature match. `exo.baseline.adapt` replays the notes week by week (`exo.baseline.shift`):
+episodes, weekly majorities, the persistence score, arming, fading, the swap, value step backs and adoptions. What a
+closed week decides is written once: `taste_replaced` (with the challenger as an accepted belief that `overrides`
+the item), `taste_scoped`, `value_stepped_back`, `value_adopted`, `taste_restored`, `taste_proposed` or a question.
+The brief lists them. `/taste` shows and changes them.
 
 ## Where to look
 

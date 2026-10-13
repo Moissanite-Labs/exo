@@ -10,6 +10,7 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/chat/sessions/<id>/send        turn.send             {text, mode}
   POST /api/chat/sessions/<id>/interrupt   turn.interrupt
   POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
+  POST /api/taste                          command.run taste      {args, session?}; principal writes only
   POST /api/chat/sessions/<id>/rename      command.run rename     {title}; principal only (D-069)
   POST /api/chat/sessions/<id>/command     command.run           {name, args}; read-only names only
   POST /api/chat/sessions/<id>/model       session.get, then models.set {model}; the shared main route, principal only
@@ -126,6 +127,8 @@ def _route(method: str, p: list, key: str):
         return (g if get else po if post else None) or False
     if len(p) == 3 and p[:2] == ["chat", "sessions"]:
         return _transcript if get else False
+    if p == ["taste"]:
+        return _taste if post else False
     if len(p) == 2 and p[0] == "tasks":
         return _task_open if get else False
     if len(p) == 3 and p[0] == "tasks" and p[2] in ("steer", "stop"):
@@ -184,6 +187,12 @@ async def _command(c, p, q, body):
 async def _unsteer(c, p, q, body):
     res = await c.source.call(s.CommandRun(name="unsteer", args=_str(body, "message_id", limit=80), session=p[2]))
     return res.get("output") or {"cancelled": []}
+
+
+async def _taste(c, p, q, body):
+    res = await c.source.call(s.CommandRun(name="taste", args=_str(body, "args", limit=200),
+                                           session=_opt(body, "session")))
+    return res.get("output") or {}
 
 
 async def _rename(c, p, q, body):
@@ -273,6 +282,7 @@ WEB_COMMANDS = {"context": "what the next model call carries, part by part",
                 "default": "pick or set the default model for new threads",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
                 "new": "start a new thread", "rename": "give this thread a new title",
+                "taste": "your taste: what Exo learned, pending, stepped back; mode, pin, off, undo, reset",
                 "layout": "inverse puts the box on top with the newest message under it; classic is the usual order"}
 # The names of the shared table that core plugins serve through commands.list, not the terminal client: credited to
 # the core when listed, and unknown (so sent, as in the TUI) when their plugin is not loaded.

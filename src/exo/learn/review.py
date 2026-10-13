@@ -234,8 +234,28 @@ async def review(lr: Learner, session: str | None = None, reason: str = "manual"
     if promote:
         from .promote import apply_policy
         out["promotions"] = [d.to_dict() for d in apply_policy(lr, allow_eval=False)]
+    out["taste"] = await taste_step(lr)
     lr.reviews.append(out)
     return out
+
+
+async def taste_step(lr: Learner) -> dict | None:
+    """The sustained-change rule (D-044): label the principal's new signals against the taste items, then write
+    whatever finished weeks decided. The decision model labels only when a `decision` route is configured."""
+    rt = lr.runtime
+    if rt is None:
+        return None
+    try:
+        from exo.baseline.classify import decision_labeller
+        from exo.baseline.command import tick
+        router = getattr(lr.engine, "router", None)
+        with rt.lock:
+            return await tick(rt.store, rt.ledger, labeller=decision_labeller(router) if router is not None else None)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        lr.notice(f"taste: the sustained-change step failed ({type(exc).__name__}: {exc})")
+        return None
 
 
 async def run_review(lr: Learner, session: str | None, reason: str) -> dict:
