@@ -15,9 +15,8 @@ inward, breathes slowly, and absorbs each contribution that was validated (an is
 pull request merged or salvaged, a review the reviewer bot marked as meaningful), gaining XP for each. Then it wakes.
 This mirrors how Exo learns: a little at once from experience, most of it on reflection.
 
-The org's automated reviewer is written here as **the reviewer bot (name TBD)**. Its name is being chosen. Every
-mention uses that exact phrase, so one search and replace sets it. The function identifies the bot by its numeric
-GitHub account id, never by name, so the rename changes no rule.
+The org's automated reviewer is ion, the org's review bot. The function identifies the bot by its numeric
+GitHub account id, never by name, so a rename would change no rule.
 
 ## 1. The interface (stable)
 
@@ -274,7 +273,7 @@ client code or the feed.
    `closed`, `edited`, `labeled`), `pull_request_review` (`submitted`), `release` (`published`), `ping`. Everything
    else gets `204`.
 6. **Bots.** Events whose `sender.type` is `Bot` or whose login ends in `[bot]` are dropped: no XP and no animation, so
-   a bot loop cannot make the egg flicker. This includes reviews by the reviewer bot (name TBD).
+   a bot loop cannot make the egg flicker. This includes reviews by ion, the org's review bot.
 7. **Classify and score.** Apply D-058 (`docs/EXOPET.md` section 3): author class (core, agent, outside), instant XP
    and its caps, voids. The private record keeps an HMAC of the item's repository number and of the author login
    (keyed with `EGG_HASH_KEY`), the GitHub node id of reviews (needed to read reactions), the class, the type, the time
@@ -297,8 +296,8 @@ form.
 | Kind | Validated when | How the function detects it |
 |---|---|---|
 | issue | a pull request that fixes it was merged | the merged pull request's title or body contains a GitHub closing keyword (`close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, `resolved`, any case, optional colon) followed by `#N` or `<this repo>#N`. These are the same words GitHub uses to close the issue itself, and the team's pull requests already say "Fixes #N". Issue N must be known to the store, not voided, not already validated, and opened before the merge. At most 3 issues per merged pull request. |
-| pr | it was merged, or it was salvaged: its commits or a substantial part of its diff landed through another pull request | merged: the `pull_request` `closed` event with `merged: true`. Salvaged: the landing pull request, when merged, has a line `Salvaged-from: #N` in its body (one per line, any case, at most 3). Pull request N must be closed without merge, not voided, not already validated, and opened by a different account than the landing pull request (an author who re-lands their own work is credited by that merge). The maintainer who merges is answerable for the line; the reviewer bot (name TBD) may propose it when it sees the same commits. |
-| review | the reviewer bot (name TBD) judged it a meaningful contribution | at meditation start, for each recorded review from the last 30 days not yet validated, the function asks the GitHub GraphQL API for the review's `ROCKET` reactions and checks whether one is from the account whose numeric id is `EGG_REVIEWER_BOT_ID`. Reactions from any other account, including maintainers, are ignored. A reaction removed before the meditation does not count; once absorbed, a validation stands. |
+| pr | it was merged, or it was salvaged: its commits or a substantial part of its diff landed through another pull request | merged: the `pull_request` `closed` event with `merged: true`. Salvaged: the landing pull request, when merged, has a line `Salvaged-from: #N` in its body (one per line, any case, at most 3). Pull request N must be closed without merge, not voided, not already validated, and opened by a different account than the landing pull request (an author who re-lands their own work is credited by that merge). The maintainer who merges is answerable for the line; ion, the org's review bot may propose it when it sees the same commits. |
+| review | ion, the org's review bot judged it a meaningful contribution | at meditation start, for each recorded review from the last 30 days not yet validated, the function asks the GitHub GraphQL API for the review's `ROCKET` reactions and checks whether one is from the account whose numeric id is `EGG_REVIEWER_BOT_ID`. Reactions from any other account, including maintainers, are ignored. A reaction removed before the meditation does not count; once absorbed, a validation stands. |
 
 **The reaction is `rocket`.** It is the one reaction that says "this moved the work forward", which is what a
 meaningful review does. `+1`, `heart` and `hooray` are what people use every day for agreement, thanks and
@@ -314,7 +313,7 @@ editing the merged pull request's body.
 
 **Start: a maintainer action.** A GitHub Actions workflow, `x0-meditate`, run by hand (`workflow_dispatch`) when the
 team sits down to review community work. Only people with write access can run it, every run is in the Actions log,
-and the reviewer bot (name TBD) can dispatch it too at the end of a batch run. The workflow sends
+and ion, the org's review bot can dispatch it too at the end of a batch run. The workflow sends
 `{"action": "start", "ts": <unix seconds>, "nonce": <random>}` signed with HMAC-SHA256 under `EGG_MEDITATE_SECRET`
 (held as a repository Actions secret and a Vercel variable) in the `X-Egg-Signature-256` header. The function rejects
 a bad signature (`401`), a `ts` more than 5 minutes off, or a nonce seen in the last 48 hours.

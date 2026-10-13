@@ -168,8 +168,8 @@ The split mirrors how Exo itself learns: a little at once from experience, most 
   moment, so a contributor sees their contribution land.
 - **Validated.** When the team reviews community contributions in a batch (processing them and taking them into
   Exo), x0 **meditates**, as if reflecting on what it has experienced. During meditation it gains more XP for each
-  contribution that was validated. This is the large share, and it needs a maintainer's merge or a mark from the
-  reviewer bot (name TBD). The meditation itself is in `docs/LIVE-EGG.md` sections 2.2 and 3.4.
+  contribution that was validated. This is the large share, and it needs a maintainer's merge or a mark from ion, the
+  org's review bot. The meditation itself is in `docs/LIVE-EGG.md` sections 2.2 and 3.4.
 
 What "validated" means, per kind (detection rules in `docs/LIVE-EGG.md` section 3.3):
 
@@ -177,7 +177,7 @@ What "validated" means, per kind (detection rules in `docs/LIVE-EGG.md` section 
 |---|---|
 | Issue | a pull request that fixes it was merged ("Fixes #N" or another GitHub closing keyword in the merged pull request) |
 | Pull request | it was merged, or salvaged: its commits or a substantial part of its diff landed through another pull request that says `Salvaged-from: #N` |
-| Code review | the reviewer bot (name TBD) judged it meaningful and marked it with a `rocket` reaction, from the bot's own account |
+| Code review | ion, the org's review bot judged it meaningful and marked it with a `rocket` reaction, from the bot's own account |
 
 ### The weights
 
@@ -186,7 +186,7 @@ What "validated" means, per kind (detection rules in `docs/LIVE-EGG.md` section 
 | Issue opened | 1 | 4 if a merged pull request fixes it | one person noticed something and wrote it down. Cheap to make, so the instant share is the unit; an issue that led to a fix is worth five. |
 | Pull request opened | 1 | 10 if merged or salvaged | someone wrote code. Unreviewed code earns the unit; the review and merge are what make it count. |
 | Pull request merged | 2 | (the 10 above, once) | a merge is the brightest moment on the site, so it earns a little more at once. A merged pull request totals 13, as before the split; a salvaged one totals 11. |
-| Review submitted | 1 | 4 if the reviewer bot (name TBD) marks it | reading someone else's code carefully is real work. A meaningful review totals 5, like a fixed issue. |
+| Review submitted | 1 | 4 if ion, the org's review bot marks it | reading someone else's code carefully is real work. A meaningful review totals 5, like a fixed issue. |
 | Release published (`exo-v*` tag) | 25 | none | a release bundles many merges (usually 5 to 15). Only maintainers publish one, so it is validated by the act; it counts at once, at most one per 7 days, and outside the core cap. |
 
 The instant share is at most 3 of 13 for a pull request and 1 of 5 for an issue or review: about a fifth. The rest
@@ -282,7 +282,7 @@ merge or the reviewer bot to mark.
   most one validated review per account per pull request and 3 per account per UTC day.
 - A meditation needs a signed maintainer action (or the 14-day backstop); nobody outside the team can start one.
 
-**Bots and loops.** GitHub bot accounts, including the reviewer bot (name TBD), count nothing and do not animate. A
+**Bots and loops.** GitHub bot accounts, including ion, the org's review bot, count nothing and do not animate. A
 global cap on instant XP stops any loop from moving x0 fast.
 
 **Audit.** The function keeps per-day totals and the rules are in this document, so anyone can check the numbers once
