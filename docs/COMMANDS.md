@@ -27,7 +27,8 @@ The TUI shows the plugin ones under `other` in `/help` and in its palette (ctrl+
 Any client can use categories 2 and 3 with no client code. Only category 1 is specific to the TUI. The line client
 `exo chat` has no client-side commands except `/quit` and `/exit`. It sends every other `/name args` line straight to
 `command.run`, so `/new` or `/model` there fail with `not_found`, while `/context` and `/grants` work.
-The web client (`exo web`) runs `/context`, `/findings` and `/trace` from its composer the same way.
+The web client (`exo web`) runs `/context`, `/findings` and `/trace` from its composer the same way, and
+`/permissions` through its own route (`GET`/`POST /api/permissions`).
 
 ### Client commands (TUI)
 
@@ -124,6 +125,7 @@ description, args_hint)` (`src/exo/core/plugins.py`). A name that is already tak
 | Command | Plugin | What it does | Arguments | Implemented in |
 |---|---|---|---|---|
 | `/grants` | `exo-gate` | Lists standing approval grants. Revoking one writes a `revoke` row to the ledger. | `list` (default), or `revoke <id>` | `grants_command` in `plugins/exo-gate/exo_gate/hook.py`. See `docs/GATE.md`. |
+| `/permissions` | `exo-gate` | Shows the permission mode, `ask` or `bypass`, with the counts for this run of the core: auto-approved, held, still asked. `bypass` turns asking off except for `store_write` and `credentials`; only a principal connection may, and never under a required executor (D-065). `ask` turns it back on, from any caller. `json` returns `{mode, available, auto_approved, held, floor_asks, by, via, since, floor, summary}` for clients. Each switch writes a `permissions` ledger row. | `status` (default), `bypass`, `bypass launch` (what `exo --skip-permissions` sends), `ask`, `json` | `permissions_command` in `plugins/exo-gate/exo_gate/hook.py`, `plugins/exo-gate/exo_gate/permissions.py`. See `docs/GATE.md` "Bypass mode". |
 | `/gate` | `exo-gate` | Shows whether policy files changed this session. `accept` adopts the change (ledger row `policy_accept`); until then the stricter of old and new applies (D-038). | `status` (default), or `accept` | `gate_command` in `plugins/exo-gate/exo_gate/hook.py`. See `docs/GATE.md`. |
 | `/exo` | `exo-memory`, `exo-context` | One front door for Exo plugins. `/exo help` lists subcommands. `/exo help <name>` shows one. | `<subcommand> [args]` | `src/exo/dispatcher.py`, `register_root` |
 | `/exo branch` | `exo-context` | Writes a handoff and prints the line that starts a fresh session on it. | `<topic>` | `cmd_branch` in `plugins/exo-context/exo_context/commands.py` |
@@ -205,11 +207,11 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 |---|---|---|---|
 | `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.compose:create`; `exo.core.engine:create` still works; or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). | `cmd_serve` in `src/exo/cli_chat.py` |
 | `exo chat` | A line client for `exod`. Sends `/name args` lines as `command.run`. `/quit` and `/exit` leave. | `--socket PATH`, `--url URL`, `--token-file PATH`, `--session ID`, `--resume`, `--title T` | `cmd_chat` in `src/exo/cli_chat.py` |
-| `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `main` and `cmd_tui` in `src/exo/cli.py` |
+| `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro`, `--skip-permissions` (alias `--dangerously-skip-permissions`: after connecting, the window sends `/permissions bypass launch`; D-065) | `main` and `cmd_tui` in `src/exo/cli.py` |
 | `exo resume` | Reopens the last session in the terminal client: `exo --resume`. Other flags pass through (`exo resume --seat X`). | same as `exo` | `main` in `src/exo/cli.py` |
 | `exo --version` | Package version, plus the git sha for a checkout install. | none | `version_string` in `src/exo/update_cmd.py` |
 | `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`), prints `old -> new`, then a quick self-check (import, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing | `cmd_update` in `src/exo/update_cmd.py` |
-| `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
+| `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro`, `--skip-permissions` | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
 | `exo stop` | Stops the background core (exod) that `exo web` or `exo serve` started. Reads `$EXO_HOME/run/exod.pid`. | none | `stop_core` in `src/exo/ensure_core.py` |
 | `exo web` | The command centre web client. Joins a running core (exod, or a terminal window's) or starts `exo serve` in the background (D-036). | `--socket`, `--url`, `--token-file`, `--host` (default 127.0.0.1), `--port` (default 7342) | `cmd_web` in `src/exo/cli.py`, `plugins/exo-command/exo_command/__main__.py` |
 

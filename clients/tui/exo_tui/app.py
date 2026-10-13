@@ -151,8 +151,11 @@ class ExoApp(App):
 
     def __init__(self, client: Any, session: str | None = None, resume: bool = False,
                  seat: str | None = None, title: str = "", home: str | None = None,
-                 auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False) -> None:
+                 auto_intro: bool = False, boot_anim: bool = False, provider_check: bool = False,
+                 skip_permissions: bool = False) -> None:
         super().__init__()
+        self.skip_permissions = skip_permissions  # exo --skip-permissions: ask the core for bypass at boot (D-065)
+        self.perm: dict[str, Any] = {}  # the core's /permissions json; {} when it has no gate
         self.motion = not th.reduced_motion()
         self.boot_anim = boot_anim and self.motion  # only the real entry point asks; never under reduced motion
         self.boot_screen: BootScreen | None = None
@@ -269,6 +272,7 @@ class ExoApp(App):
         self.composer.focus()
         self.set_interval(1.0, self.refresh_activity)  # ticks the "waiting for <model>" counter
         self.set_interval(1.0, self.reconcile_approvals)
+        self.set_interval(3.0, lambda: self.run_worker(self.load_permissions(), exit_on_error=False))  # another window may switch it
         if self.motion:
             self.set_interval(10.0, self.update_guidance)  # a pause, not an animation; events also call it
             self.set_interval(0.12, self.tick)  # spinners, the live dot and the packet on the wire
@@ -323,12 +327,28 @@ class ExoApp(App):
         return "\n".join(old + [w.text if isinstance(w, Block) else f"{w.tool_name} {w.output}"
                                 for w in self.chrono() if isinstance(w, (Block, ToolBlock))])
 
+    @property
+    def bypass(self) -> bool:
+        return self.perm.get("mode") == "bypass"
+
+    async def load_permissions(self) -> None:
+        """The core's permission mode for the banner. An older core or one without the gate leaves it empty."""
+        try:
+            out = (await self.client.call(s.CommandRun(name="permissions", args="json"))).get("output")
+        except Exception:
+            out = None
+        perm = out if isinstance(out, dict) else {}
+        if perm != self.perm:
+            self.perm = perm
+            self.refresh_status()
+
     def status_text(self) -> str:
         """The status strip as plain text (the strip itself draws instruments from the same numbers)."""
         pct = str(min(999, round(100 * self.ctx_tokens / self.window))) + "%" if self.window else "capacity unknown"
         bug = f" · {self.findings} findings" if self.findings else ""
         cache = "" if self.cache_share is None else f" · cache {round(100 * self.cache_share)}%"
-        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
+        perm = f"permissions: bypass ({self.perm.get('auto_approved', 0)} auto-approved) · " if self.bypass else ""
+        return f"{perm}{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
 
     def cost_label(self) -> str:
         """The D-032 rule, formatted by the same `money` /trace uses: "-" before any call, "unknown" when no call is
@@ -340,7 +360,8 @@ class ExoApp(App):
     def refresh_status(self) -> None:
         self.strip.set(model=self.model, requested=self.requested, ctx=self.ctx_tokens,
                                         window=self.window, cache=self.cache_share, cost=self.cost_label(),
-                                        findings=self.findings)
+                                        findings=self.findings, bypass=self.bypass,
+                                        auto=int(self.perm.get("auto_approved") or 0))
         self.brand.set(self.seat or "main", self.thread_label, self.busy)
         self.prompt.set_state(self.busy, bool(self.question))
         self.composer.placeholder = BUSY_HINT if self.busy else self.tip_line() or IDLE_HINT
@@ -448,6 +469,13 @@ class ExoApp(App):
                 await self.load_session(self.session)
             else:
                 await self.new_session(announce=False)
+            if self.skip_permissions:  # the launch flag is this principal window sending /permissions bypass (D-065)
+                try:
+                    out = (await self.client.call(s.CommandRun(name="permissions", args="bypass launch"))).get("output")
+                    self.note(out if isinstance(out, str) else "permissions: bypass")
+                except Exception as exc:
+                    self.note(f"--skip-permissions: {getattr(exc, 'message', None) or exc}", "error")
+            await self.load_permissions()
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", "ready")
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
@@ -1247,6 +1275,8 @@ class ExoApp(App):
                     self.add(Block(out if isinstance(out, str) else str(out), "report", head="context " + th.DOT + " next call"))
                 elif out:
                     self.note(out if isinstance(out, str) else str(out))
+            if name == "permissions":
+                await self.load_permissions()
 
     # ------------------------------------------------------------ onboarding (D-030)
     async def intro(self, kind: str) -> None:

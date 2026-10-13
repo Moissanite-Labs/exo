@@ -9,6 +9,7 @@ import { attachApprovals } from "./approvals.js";
 import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOUTS } from "./layout.js";
 
 import { contextMetrics, mergeTranscript, slashInput, commandUsage } from "./chat_state.js";
+import * as permissions from "./permissions.js";
 
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
@@ -503,6 +504,15 @@ export function mount(root) {
       return;
     }
     if (command && command.name === "new") { input.value = ""; help.sent(text); create(command.args); return; }
+    if (command && command.name === "permissions") {   // D-065: the mode lives in the core; the banner follows it
+      input.value = ""; help.sent(text);
+      const mode = command.args === "status" ? "" : command.args;
+      try {
+        const out = mode ? await permissions.set(mode) : permissions.describe(await permissions.refresh());
+        push({ kind: "report", id: "rep" + Date.now(), title: "permissions", text: typeof out === "string" ? out : permissions.describe(permissions.current()) });
+      } catch (e) { fail(e); }
+      return;
+    }
     const slash = command && ["context", "findings", "trace"].includes(command.name) ? [null, command.name, command.args] : null;
     if (slash) {
       if (!current) { flash("open a thread first for /" + slash[1]); return; }

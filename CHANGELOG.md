@@ -7,6 +7,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Added
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
+- Permissions bypass (D-065): `exo --skip-permissions` or `/permissions bypass` stops approval asks for this run of
+  the core, except writes to Exo's own records and reading secrets. Principal only, refused under a required
+  executor, a banner in both clients, every auto-approved call in the ledger as `decided_by: bypass`.
 
 ### Changed
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,

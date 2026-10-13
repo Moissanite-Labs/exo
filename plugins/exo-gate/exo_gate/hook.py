@@ -44,7 +44,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
-from exo.principal import require_principal
+from exo.principal import current_caller, require_principal
+
+from . import permissions as perm
 
 logger = logging.getLogger("exo_gate")
 
@@ -286,10 +288,64 @@ class Gate:
         self._spent: Dict[str, float] = {}
         self._lock = threading.Lock()
         self.grants = GrantStore(settings.grants_path)
+        self.permissions = perm.Permissions()  # D-065: ask (default) or bypass, for this run of the core only
 
     @property
     def executor_required(self) -> bool:
         return self._required_at_load or bool(self.required_getter and self.required_getter())
+
+    # --- permission mode (D-065) ---------------------------------------------------------
+
+    @property
+    def bypass_on(self) -> bool:
+        """Bypass is in force: switched on and not under a required executor, whatever the order they came in."""
+        return self.permissions.mode == perm.BYPASS and not self.executor_required
+
+    def set_permissions(self, mode: str, via: str = "/permissions") -> None:
+        """Switch the mode. Bypass needs a live principal connection and no required executor; going back to
+        ask is allowed to anyone, since it only tightens. The ledger row is written before the switch."""
+        if mode not in (perm.ASK, perm.BYPASS):
+            raise ValueError(mode)
+        if mode == perm.BYPASS:
+            by = require_principal("turn on permissions bypass")
+            if self.executor_required:
+                from exo.server.engine import CommandFailed
+                raise CommandFailed("forbidden", perm.REQUIRED_REFUSAL)
+        else:
+            by = current_caller()
+        if mode == self.permissions.mode:
+            return
+        self._append({"gate": PLUGIN_ID, "phase": "permissions", "mode": mode, "previous": self.permissions.mode,
+                      "by": by, "via": via, "auto_approved": self.permissions.auto_approved})
+        self.permissions.set(mode, by, via, time.time())
+
+    def start_from_seat(self) -> None:
+        """The seat file's ``[permissions] mode = "bypass"``, applied once when the gate loads."""
+        if self.executor_required:
+            logger.warning("exo-gate: the seat asks for permissions bypass; %s", perm.REQUIRED_REFUSAL)
+            return
+        try:
+            self._append({"gate": PLUGIN_ID, "phase": "permissions", "mode": perm.BYPASS, "previous": perm.ASK,
+                          "by": "seat file", "via": "seat default"})
+        except Exception:
+            logger.warning("exo-gate: could not record the seat's bypass default; staying in ask", exc_info=True)
+            return
+        self.permissions.set(perm.BYPASS, "seat file", "seat default", time.time())
+
+    def permissions_snapshot(self) -> dict:
+        snap = self.permissions.snapshot(available=not self.executor_required)
+        if not self.bypass_on:
+            snap["mode"] = perm.ASK
+        return snap
+
+    def _bypass(self, c: gate.Classification, d: gate.Decision) -> Optional[str]:
+        """What bypass does with an ask: ``allow``, ``hold`` (a post that breaks the posting rules goes back to
+        the agent with the fixes) or ``floor`` (store writes and secrets still ask). None when bypass is off."""
+        if d.outcome != "ask" or not self.bypass_on:
+            return None
+        if c.category in perm.FLOOR:
+            return "floor"
+        return "hold" if d.violations else "allow"
 
     def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
         try:
@@ -508,6 +564,13 @@ class Gate:
         if grant:
             d.outcome, d.rule = "allow", "grant"
             d.reason += f"; standing grant {grant['id']} (until {_iso(grant['expires'])})"
+        bypass = self._bypass(c, d)
+        if bypass == "allow":
+            asked = {"would": "ask", "rule": d.rule, "reason": d.reason}
+            d.outcome, d.rule = "allow", "bypass"
+            d.reason += "; auto-approved: permissions bypass"
+        elif bypass == "hold":
+            d.outcome, d.rule = "deny", "bypass_hold"
         default = str(pol["gates"].get("ask_default") or "skip")
         body = {
             "gate": PLUGIN_ID, "phase": "decision", "tool": tool, "outcome": d.outcome,
@@ -521,9 +584,20 @@ class Gate:
             body["grant"] = grant["id"]
         if binding:
             body["binding"] = binding
+        if bypass in ("allow", "hold"):  # D-065: the exact call, so the audit can be read without the session
+            body["decided_by"] = "bypass"
+            body["call"] = perm.recorded_call(tool, args)
+            if bypass == "allow":
+                body["bypass"] = asked
+        elif bypass == "floor":
+            body["bypass"] = {"floor": c.category}
         result: Optional[dict] = None
         if d.outcome == "deny":
             result = {"action": "block", "message": f"exo-gate blocked {c.summary or tool}: {d.reason}."}
+            if bypass == "hold":
+                result["message"] = (f"exo-gate held {c.summary or tool}: it breaks the posting rules. Fix: "
+                                     + "; ".join(d.violations) + ". Permissions bypass does not ask about this; "
+                                     "change the text and call again.")
         elif d.outcome == "ask":
             msg = gate.summarize(c, d, default)
             if d.violations:
@@ -551,6 +625,10 @@ class Gate:
             with self._lock:
                 self._spent[today] = self._spent.get(today, 0.0) + float(c.cost)
         eid = self._append(body, session=session_id)
+        if bypass:
+            with self._lock:
+                key = {"allow": "auto_approved", "hold": "held", "floor": "floor_asks"}[bypass]
+                setattr(self.permissions, key, getattr(self.permissions, key) + 1)
         if result and result["action"] == "approve":
             with self._lock:
                 scope = {"rule": c.category, "target": c.target or tool, "binding": binding, "outward": outward,
@@ -672,6 +750,20 @@ def gate_command(g: "Gate", args: str = "") -> str:
     return "policy files changed this session; the stricter of old and new applies. Run /gate accept to adopt them."
 
 
+def permissions_command(g: "Gate", args: str = "") -> Any:
+    """``/permissions`` shows the mode and its counts; ``bypass`` and ``ask`` switch it; ``json`` is for clients."""
+    words = (args or "").split()
+    if words[:1] == ["json"]:
+        return g.permissions_snapshot()
+    if words[:1] in (["bypass"], ["ask"]):
+        if len(words) > 2 or words[1:] not in ([], ["launch"]):
+            return "usage: permissions [status] | bypass | ask"
+        g.set_permissions(words[0], "launch flag" if words[1:] == ["launch"] else "/permissions")
+    elif words and words[0] != "status":
+        return "usage: permissions [status] | bypass | ask"
+    return perm.status_text(g.permissions, on=g.bypass_on, available=not g.executor_required)
+
+
 def _iso(ts: float) -> str:
     return _dt.datetime.fromtimestamp(float(ts), _dt.timezone.utc).isoformat(timespec="seconds")
 
@@ -706,6 +798,8 @@ def register(ctx) -> Gate:
     g = Gate(resolve_settings(get_config=get_config), risk_lookup=_risk_lookup_for(ctx),
              router_getter=lambda: getattr(ctx, "router", None),
              required_getter=lambda: bool(getattr(getattr(ctx, "manager", None), "executor_required", False)))
+    if perm.seat_default() == perm.BYPASS:  # read once, at start; a seat file is a store path (D-065)
+        g.start_from_seat()
     ctx.register_hook("pre_tool_call", g.apre_tool_call)
     ctx.register_hook("post_approval_response", g.post_approval_response)
     reg_cmd = getattr(ctx, "register_command", None)
@@ -715,6 +809,8 @@ def register(ctx) -> Gate:
                     "[list] | revoke <id>")
             reg_cmd("gate", lambda args="": gate_command(g, args), "Show or accept policy files changed this session",
                     "[status] | accept")
+            reg_cmd("permissions", lambda args="": permissions_command(g, args),
+                    "Ask before risky calls, or bypass: " + perm.SUMMARY, "[status] | bypass | ask")
         except Exception:
             logger.warning("exo-gate: could not register /grants or /gate", exc_info=True)
     return g
