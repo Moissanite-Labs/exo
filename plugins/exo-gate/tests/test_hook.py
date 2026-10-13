@@ -216,7 +216,7 @@ def test_policy_change_mid_session_only_tightens_until_accepted(keyed_store):
     assert hook.gate_command(g, "status").startswith("policy")
 
 
-def test_required_policy_accept_audit_failure_keeps_prior_active_policy(keyed_store, monkeypatch):
+def test_required_policy_accept_audit_failure_keeps_prior_active_policy(keyed_store, monkeypatch, request):
     store, key = keyed_store
     g, ctx = make_gate(store, key, decision_model=False)
     g.required_getter = lambda: True
@@ -229,6 +229,9 @@ def test_required_policy_accept_audit_failure_keeps_prior_active_policy(keyed_st
     def fail_accept(body, **kw):
         return None if body.get("phase") == "policy_accept" else append(body, **kw)
     monkeypatch.setattr(g.sink, "append", fail_accept)
+    from exo import principal
+    token = principal.CALLER.set(principal.Caller("principal:tui"))
+    request.addfinalizer(lambda: principal.CALLER.reset(token))
     with pytest.raises(hook.GateAuditError):
         g.accept_policies()
     assert g.policies() is prior
