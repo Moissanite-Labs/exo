@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import signal
 import stat
 import sys
 import time
@@ -89,7 +90,8 @@ def test_success_argv_env_and_isolation(tmp_path):
     assert a[0] == "exec"
     assert a[a.index("--model") + 1] == "muse-spark-1.3"  # the catalog default is passed through
     assert a[a.index("--reasoning-effort") + 1] == "low"  # quiet default for a one-shot call
-    for flag in ("--no-session-log", "--disable-shell", "--disable-write", "--disable-web-tools"):
+    for flag in ("--no-session-log", "--disable-shell", "--disable-write", "--disable-web-tools",
+                 "--disable-reminders", "--no-foreign-personal-context"):
         assert flag in a
     assert a[a.index("--approval-mode") + 1] == "never"
     assert "--yolo" not in a and "--disable-approval" not in a and "--disable-sandbox" not in a
@@ -104,25 +106,10 @@ def test_history_is_flattened_with_roles_and_model_passes_through(tmp_path):
     r = router(tmp_path)
     run(r, [Message.user("one"), Message.assistant("two"), Message.user("three")])
     assert seen(tmp_path)["prompt"] == "[user]\none\n\n[assistant]\ntwo\n\n[user]\nthree"
-    r.roles["main"] = ["muse-cli:muse-wonder-1.0"]
+    r.roles["main"] = ["muse-cli:m1"]
     run(r, [Message.user("x")])
     a = seen(tmp_path)["argv"]
-    assert a[a.index("--model") + 1] == "muse-wonder-1.0"
-
-
-@pytest.mark.parametrize("asked,sent", [(None, "low"), ("high", "high"), ("xhigh", "xhigh"), ("ultra", "ultra"),
-                                        ("none", "none"), ("bogus", "low")])
-def test_reasoning_effort_maps_onto_the_cli_scale(tmp_path, asked, sent):
-    async def go():
-        prov = router(tmp_path).credentials("muse-cli")[0].provider
-        return [e async for e in prov.stream([Message.user("x")], [], **({"reasoning": asked} if asked else {}))]
-    asyncio.run(go())
-    a = seen(tmp_path)["argv"]
-    assert a[a.index("--reasoning-effort") + 1] == sent
-
-
-def test_cli_notices_on_stdout_are_dropped():
-    assert muse_cli.clean_output("muse: local session messaging disabled: session logging is required\nhi\n") == "hi"
+    assert a[a.index("--model") + 1] == "m1"
 
 
 def test_tools_are_refused_and_the_router_falls_back(tmp_path):
@@ -156,13 +143,59 @@ def test_empty_output_is_an_error(tmp_path):
 
 
 def test_a_working_unsigned_binary_is_not_flagged(tmp_path):
-    """The fake script is unsigned. It works, so status, test call and chat all pass; signing is never mentioned."""
+    """The fake script is unsigned and works, so status, test call and chat all pass and signing is never mentioned."""
     r = router(tmp_path)
     assert row(r)["status"] == "installed"
     res = ps.test_provider("muse-cli", router=r, save=False)
     assert res["ok"] and "codesign" not in json.dumps(res)
     evs = run(r, [Message.user("hi")])
     assert evs[-1].kind == "done" and "codesign" not in json.dumps([e.text for e in evs])
+    assert not hasattr(muse_cli, "signature_state")  # no up-front signature check exists any more
+
+
+def test_signing_failure_falls_back_to_healthy_route(tmp_path):
+    r = router(tmp_path, "keychain")
+    r.roles["main"].append("b:m")
+    r.instances["b"] = FakeProvider(["fallback ok"], name="b")
+    end = run(r, [Message.user("hello")])[-1]
+    assert end.kind == "done" and end.route == "b:m" and end.message.text() == "fallback ok"
+
+
+@pytest.mark.parametrize("asked,sent", [(None, "low"), ("high", "high"), ("xhigh", "xhigh"), ("ultra", "ultra"),
+                                        ("none", "none"), ("bogus", "low")])
+def test_reasoning_effort_maps_onto_the_cli_scale(tmp_path, asked, sent):
+    async def go():
+        prov = router(tmp_path).credentials("muse-cli")[0].provider
+        return [e async for e in prov.stream([Message.user("x")], [], **({"reasoning": asked} if asked else {}))]
+    asyncio.run(go())
+    a = seen(tmp_path)["argv"]
+    assert a[a.index("--reasoning-effort") + 1] == sent
+
+
+def test_model_ref_is_passed_through(tmp_path):
+    r = router(tmp_path)
+    r.roles["main"] = ["muse-cli:muse-wonder-1.0"]
+    run(r, [Message.user("x")])
+    a = seen(tmp_path)["argv"]
+    assert a[a.index("--model") + 1] == "muse-wonder-1.0"
+
+
+def test_cli_notices_on_stdout_are_dropped():
+    assert muse_cli.clean_output("muse: local session messaging disabled: session logging is required\nhi\n") == "hi"
+
+
+def test_missing_command_at_startup_falls_back(tmp_path):
+    r = router(tmp_path)
+    r.credentials("muse-cli")  # the binary disappears after discovery
+    (tmp_path / "bin" / "muse").unlink()
+    r.roles["main"].append("b:m")
+    r.instances["b"] = FakeProvider(["fallback ok"], name="b")
+    assert run(r, [Message.user("hello")])[-1].route == "b:m"
+
+
+def test_keychain_errors_do_not_all_mean_unsigned():
+    assert muse_cli.classify_failure(1, "keychain has no credentials; run muse login") == "no_key"
+    assert muse_cli.classify_failure(1, "keychain read failed for an unrelated reason") == "error"
 
 
 def test_login_state_reads_only_non_secret_fields(tmp_path):
@@ -225,6 +258,85 @@ def test_cancel_kills_process_group(tmp_path):
             pass
     asyncio.run(go())
     assert _wait_dead(int(pidf.read_text()))
+
+
+def descendant_cli(tmp_path, mode):
+    """An ordinary child inheriting the CLI's pipes; it remains in the owned process group."""
+    exe, childpid = tmp_path / "muse", tmp_path / "childpid"
+    child = f"import os,time; open({str(childpid)!r}, 'w').write(str(os.getpid())); time.sleep(60)"
+    tail = {"running": "time.sleep(60)", "exited": "sys.exit(0)",
+            "failed": "sys.stderr.write('boom'); sys.exit(3)"}[mode]
+    # A failed leader closes its own pipes normally; the child still needs explicit cleanup even without a timeout.
+    redirect = ", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL" if mode == "failed" else ""
+    exe.write_text(f"#!{sys.executable}\nimport subprocess,sys,time,pathlib\n"
+                   f"subprocess.Popen([sys.executable,'-c',{child!r}]{redirect})\n"
+                   f"while not pathlib.Path({str(childpid)!r}).exists(): time.sleep(.01)\n{tail}\n")
+    exe.chmod(0o700)
+    return str(exe), childpid
+
+
+@pytest.mark.parametrize("mode", ["running", "exited", "failed"])
+def test_probe_stops_descendants_even_after_leader_exit(tmp_path, mode):
+    exe, childpid = descendant_cli(tmp_path, mode)
+    try:
+        t0 = time.monotonic()
+        res = muse_cli.probe(exe, {"HOME": str(tmp_path)}, timeout=.3)
+        assert time.monotonic() - t0 < 3
+        assert res["error_class"] == ("error" if mode == "failed" else "timeout")
+        assert _wait_dead(int(childpid.read_text()))
+    finally:
+        if childpid.exists():
+            try:
+                os.kill(int(childpid.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.parametrize("mode", ["running", "exited", "failed"])
+def test_stream_stops_descendants_before_yielding_error(tmp_path, mode):
+    exe, childpid = descendant_cli(tmp_path, mode)
+
+    async def go():
+        provider = muse_cli.MuseCliProvider(exe, env={"HOME": str(tmp_path)}, read_timeout=.3)
+        async for ev in provider.stream([Message.user("hello")], []):
+            assert ev.kind == "error"
+            assert _wait_dead(int(childpid.read_text()))  # cleanup must precede the event consumed by the router
+    try:
+        asyncio.run(go())
+    finally:
+        if childpid.exists():
+            try:
+                os.kill(int(childpid.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.parametrize("mode", ["running", "exited"])
+def test_cancel_stops_descendants_even_after_leader_exit(tmp_path, mode):
+    exe, childpid = descendant_cli(tmp_path, mode)
+
+    async def go():
+        provider = muse_cli.MuseCliProvider(exe, env={"HOME": str(tmp_path)}, read_timeout=30)
+        async def drain():
+            return [ev async for ev in provider.stream([Message.user("hello")], [])]
+        task = asyncio.create_task(drain())
+        for _ in range(100):
+            if childpid.exists() and childpid.read_text():
+                break
+            await asyncio.sleep(.01)
+        await asyncio.sleep(.05)  # let the exited leader be reaped before cancellation
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert _wait_dead(int(childpid.read_text()))
+    try:
+        asyncio.run(go())
+    finally:
+        if childpid.exists():
+            try:
+                os.kill(int(childpid.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 # ---------------------------------------------------------------- status and test call (providers_setup)

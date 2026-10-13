@@ -3,6 +3,7 @@ import pytest
 
 from exo import gate
 from exo.gate import classify, decide, normalize_policies
+from exo_gate.hook import GrantStore
 
 
 @pytest.fixture(autouse=True)
@@ -192,10 +193,23 @@ def test_credentials_is_not_a_peer_or_auto_category():
     assert gate.CATEGORIES["credentials"][0] != "reversible"
 
 
-@pytest.mark.parametrize("cmd", ["bash -c 'muse login'", "sh -c 'muse logout'", "~/.local/bin/muse login"])
-def test_muse_credential_commands_ask_even_when_wrapped(cmd):
-    """A wrapper or a path hides the program from the credentials rule, but the call still asks (never allow)."""
-    assert decide(classify(sh(cmd))).outcome == "ask"
+@pytest.mark.parametrize("cmd", [
+    "bash -c 'muse login'", "sh -c 'muse logout'", "bash -lc 'sh -c \"muse auth\"'",
+    "~/.local/bin/muse login", "/home/user/.local/bin/muse login", "./bin/muse logout",
+    "'/tmp/Muse CLI/muse' auth", '"/tmp/Muse CLI/muse" --yolo login',
+])
+def test_muse_credential_floor_survives_paths_wrappers_lowering_and_grants(cmd, tmp_path):
+    c = classify(sh(cmd))
+    assert c.category == "credentials"
+    policies = normalize_policies({"gates": {"categories": {"opaque_exec": "allow", "credentials": "allow"},
+                                             "rules": [{"match": {"tool": "terminal"}, "decision": "allow"}]}})
+    d = decide(c, policies)
+    assert d.outcome == "ask"
+    grants = GrantStore(tmp_path / "grants.json")
+    binding = gate.approval_binding(c, sh(cmd)[1])
+    grants.add("opaque_exec", "*", binding, 30, "principal")
+    assert grants.match(c.category, c.target, binding, outward=gate.binds_exact(c, d)) is None
+    assert grants.add(c.category, c.target, binding, 30, "principal") is None
 
 
 @pytest.mark.parametrize("cmd", ["muse --version", "muse exec --help", "muse exec 'summarize this'"])
