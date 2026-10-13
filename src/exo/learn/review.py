@@ -14,10 +14,10 @@ from typing import Any
 
 from exo import provenance, taste
 from exo.capture import clip
-from exo.consolidate import PTYPES, consolidate_run, load_policy, load_state, propose_typed
+from exo.consolidate import PTYPES, consolidate_run, load_state, propose_typed
 
 from .learner import Learner
-from .signals import CORRECTION_VERDICTS, record_chat_signals
+from .signals import CORRECTION_VERDICTS
 
 SIGNAL_KINDS = ("verdict", "ruling", "answer")
 

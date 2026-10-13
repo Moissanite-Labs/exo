@@ -10,7 +10,7 @@ from textual import events
 
 from exo_tui.app import SCAFFOLD
 from exo_tui.prefs import DEFAULT_LAYOUT, Prefs
-from exo_tui.widgets import Block, Composer, ToolBlock
+from exo_tui.widgets import Block
 from test_tui import long_history, run, send, until
 
 

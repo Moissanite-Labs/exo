@@ -1,5 +1,4 @@
 """D-036: `exo web` and `exo` share one core in any order."""
-import os
 import shutil
 import socket
 import subprocess

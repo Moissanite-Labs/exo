@@ -13,7 +13,7 @@ from exo.core.findings import Findings
 from exo.core.models.fake import FakeProvider
 from exo.core.models.router import Router
 from exo.core.sessions import SessionStore
-from exo.core.trace import Call, Flag, TaskRow, Thresholds, ToolRow, TurnTrace
+from exo.core.trace import Call, TaskRow, Thresholds, ToolRow, TurnTrace
 from exo.core.types import ProviderEvent, ToolCall, Usage
 from exo.protocol import schema as s
 
@@ -675,7 +675,7 @@ def test_findings_counts_by_state_reconcile_and_fixed_stay_listed():
     assert f.open_count() == 2  # open + reopened still need work
     assert f.summary() == "findings 4: 1 open, 1 fixed (awaiting re-verification), 1 verified, 1 reopened"
     text = f.text("all")
-    assert text.splitlines()[0] == f.summary() and f"fixed in abc1234" in text
+    assert text.splitlines()[0] == f.summary() and "fixed in abc1234" in text
     assert len(f.list("all")) == 4 == len(f.list())  # nothing dropped
     assert [r["id"] for r in f.list("fixed")] == [b]
 

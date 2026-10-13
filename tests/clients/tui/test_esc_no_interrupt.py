@@ -10,7 +10,7 @@ import httpx
 
 from exo.protocol import schema as s
 from exo_tui import conn
-from exo_tui.widgets import ApprovalCard, Composer
+from exo_tui.widgets import ApprovalCard
 from test_tui import run, send, until
 
 

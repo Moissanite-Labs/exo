@@ -17,8 +17,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
-import shutil
 import signal
 import stat
 import sys
@@ -30,7 +28,7 @@ import httpx
 
 from exo.core.models.base import StreamState, error_event
 from exo.core.models.anthropic import sanitize_tool_id
-from exo.core.types import ContentPart, Message, ProviderEvent, ToolCall, ToolSpec, Usage
+from exo.core.types import Message, ProviderEvent, ToolCall, ToolSpec, Usage
 
 PREFIX = "mcp__hermes__"  # the inert server is named "hermes" so tool names match the proven plugin
 # Credentials and backend switches that would make the CLI bill an API account instead of the login.

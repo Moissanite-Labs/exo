@@ -9,7 +9,6 @@ Anything else: say so and point at scripts/install.sh. Keys and principal stores
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
