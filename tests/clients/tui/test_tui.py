@@ -365,7 +365,8 @@ def test_copy_to_clipboard_also_uses_pbcopy(tmp_path, monkeypatch):
     import subprocess
     calls = []
     monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/pbcopy")
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append((a, k)))
+    from types import SimpleNamespace
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (calls.append((a, k)), SimpleNamespace(returncode=0))[1])
 
     async def sc(app, pilot, client, eng):
         app.copy_to_clipboard("héllo")
@@ -657,4 +658,60 @@ def test_context_capacity_and_fallback_model_are_typed(tmp_path):
         assert app.window == 4096 and app.model == "fake:small"
         app.handle(s.Event.of(s.ModelCall(route="fake:unknown", requested="fake:x"), seq=101, session=app.session))
         assert app.window == 0 and "capacity unknown" in app.status_text()
+    run(tmp_path, sc)
+
+
+def test_windowed_older_tool_receives_live_updates_before_being_mounted(tmp_path):
+    from exo.core.types import ContentPart, ToolResult
+    from exo_tui import app as appmod
+    from exo_tui.widgets import ToolBlock
+
+    async def sc(app, pilot, client, eng):
+        app.clear_transcript()
+        messages = [{"id": "m-tool", "role": "assistant", "content": [],
+                     "tool_calls": [{"id": "c-old", "name": "bash", "arguments": {"command": "fake"}}]}]
+        messages += long_history(appmod.WINDOW + 5)
+        app.render_history(messages)
+        await pilot.pause()
+        assert "c-old" not in app.tools
+        app.handle(s.Event.of(s.ToolOutput(call_id="c-old", text="streamed"), seq=100, session=app.session))
+        assert "streamed" in app.transcript_text()
+        app.handle(s.Event.of(s.ToolCompleted(result=ToolResult(call_id="c-old", content=[ContentPart.of_text("final output")]),
+                                             duration_ms=10), seq=101, session=app.session))
+        assert "final output" in app.transcript_text() and "streamed" not in app.transcript_text()
+        app.action_load_earlier()
+        await until(lambda: not app.older, pilot)
+        tool = next(w for w in app.transcript.children if isinstance(w, ToolBlock))
+        assert tool.output == "final output" and tool.status == "done"
+    run(tmp_path, sc)
+
+
+def test_clipboard_helpers_fall_back_and_osc52_receipt_is_not_claimed(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from textual.app import App
+    import subprocess
+
+    calls, osc = [], []
+    monkeypatch.setattr(App, "copy_to_clipboard", lambda app, text: osc.append(text))
+    monkeypatch.setattr("shutil.which", lambda name: "/fake/" + name if name in {"wl-copy", "xclip", "xsel"} else None)
+
+    def native(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0 if "xclip" in argv[0] else 1)
+
+    monkeypatch.setattr(subprocess, "run", native)
+
+    async def sc(app, pilot, client, eng):
+        app.add(Block("héllo", "assistant"))
+        app.copy_command("last")
+        assert [a[0][0] for a in calls] == ["/fake/wl-copy", "/fake/xclip"]
+        assert calls[-1][0][1:] == ["-selection", "clipboard"]
+        assert calls[-1][1]["input"] == "héllo".encode() and app.clipboard_verified and not osc
+        await pilot.pause()
+        assert "copied last answer" in app.transcript_text()
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1))
+        app.copy_command("last")
+        assert osc == ["héllo"] and not app.clipboard_verified
+        await pilot.pause()
+        assert "via OSC52; clipboard receipt cannot be verified" in app.transcript_text()
     run(tmp_path, sc)
