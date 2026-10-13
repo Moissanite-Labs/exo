@@ -188,11 +188,15 @@ def _configuration(identity, genesis, witness_pub):
     if genesis["seq"] != 0:
         raise AuthorityError("pinned genesis checkpoint required")
     try:
-        if not isinstance(witness_pub, str) or len(crypto.unb64(witness_pub)) != 32:
+        if not isinstance(witness_pub, str):
+            raise ValueError()
+        witness_key = crypto.unb64(witness_pub)
+        if len(witness_key) != 32:
             raise ValueError()
     except (ValueError, TypeError) as exc:
         raise AuthorityError("invalid pinned witness key") from exc
-    if witness_pub == identity["checkpoint_pub"] or any(witness_pub == w["pub"] for w in identity["writers"].values()):
+    if witness_key == crypto.unb64(identity["checkpoint_pub"]) or any(
+            witness_key == crypto.unb64(w["pub"]) for w in identity["writers"].values()):
         raise AuthorityError("independent witness key required")
     return identity, json.loads(canonical(genesis))
 
