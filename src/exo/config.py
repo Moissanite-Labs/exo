@@ -247,17 +247,15 @@ class Config:
     def models(self, env: dict | None = None) -> dict:
         """The `models` table for the core Router, with a working default.
 
-        First hit wins: explicit `models.roles`; a scripted `models.fake`; a local
-        OpenAI-compatible server in `models.local` ({"base_url", "model"}); the catalog
-        (Anthropic) when ANTHROPIC_API_KEY is set; else the offline fake model.
-        Keys: environment, then the macOS Keychain (macOS only), then ~/.config/exo/keys.env (core/models/keys.py).
+        Preserve explicit roles, an explicitly configured fake, or a local server.
+        Otherwise use the real catalog. Credential resolution belongs to runtime
+        setup, not this synchronous configuration view.
         """
-        env = os.environ if env is None else env
         m = copy.deepcopy(self.data.get('models') or {})
         if m.get('roles'):
             return m
         fake = {'roles': {'main': ['fake:scripted'], 'aux': ['fake:scripted'], 'decision': []}}
-        if m.get('fake'):
+        if isinstance(m.get('fake'), dict):
             return {**m, **fake}
         local = m.get('local')
         if isinstance(local, dict) and local.get('base_url') and local.get('model'):
@@ -267,10 +265,7 @@ class Config:
             ref = f"local:{local['model']}"
             return {**m, 'providers': {**(m.get('providers') or {}), 'local': prov},
                     'roles': {'main': [ref], 'aux': [ref], 'decision': []}}
-        from .core.models.keys import lookup_key
-        if lookup_key('ANTHROPIC_API_KEY', env, sources=env is os.environ):
-            return m
-        return {**m, **fake}
+        return m
 
     def plugin_config(self, name: str) -> dict:
         return copy.deepcopy((self.data.get('plugin_config') or {}).get(name) or {})
