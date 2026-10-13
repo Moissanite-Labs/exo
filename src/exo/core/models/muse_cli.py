@@ -49,20 +49,16 @@ def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
     return claude_cli.child_env(env, drop=DROP_ENV, extra={})
 
 
-def auth_path(env: Mapping[str, str] | None = None) -> Path:
-    env = os.environ if env is None else env
-    base = env.get("XDG_CONFIG_HOME") or os.path.join(env.get("HOME") or os.path.expanduser("~"), ".config")
-    return Path(base) / "muse" / "auth.json"
-
-
 def login_state(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     """``{"logged_in": bool, "subs_active": bool | None}`` from the non-secret fields of the Muse auth file.
 
     Reads ``providers.meta.mechanism`` and ``providers.meta.subs_active`` and nothing else; the rest of the file
     (which holds personal metadata) is dropped at once. Never touches the keychain, so a stale file can say
     "logged in" when the keychain entry is gone: the test call is what proves the login works."""
+    env = os.environ if env is None else env
+    base = env.get("XDG_CONFIG_HOME") or os.path.join(env.get("HOME") or os.path.expanduser("~"), ".config")
     try:
-        meta = (json.loads(auth_path(env).read_text(encoding="utf-8")).get("providers") or {}).get("meta") or {}
+        meta = (json.loads((Path(base) / "muse" / "auth.json").read_text(encoding="utf-8")).get("providers") or {}).get("meta") or {}
         mechanism, subs = meta.get("mechanism"), meta.get("subs_active")
     except (OSError, ValueError, AttributeError):
         return {"logged_in": False, "subs_active": None}
@@ -208,7 +204,7 @@ class MuseCliProvider(claude_cli.CliProvider):
             yield error_event(f"muse-cli: {unsigned_detail(self.command)}", None, retryable=True)
             return
         model = opts.get("model") or self.model
-        effort = {"ultra": "ultra"}.get(opts.get("reasoning"), opts.get("reasoning"))
+        effort = opts.get("reasoning")
         st = StreamState()
         with tempfile.TemporaryDirectory(prefix="muse-cli-") as tmp:
             # An empty private workspace: the run has no files of Exo's or the user's to read.

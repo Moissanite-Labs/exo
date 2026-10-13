@@ -86,9 +86,6 @@ class OpenAIChatProvider(HttpTransport):
         return (self.name.startswith(("opencode-go", "nous")) and status in (400, 429, 502, 503)
                 and any(m in text.lower() for m in self._UPSTREAM_MARKS))
 
-    def explain_error(self, status: int, text: str) -> str:
-        return self.explain_request_error(status, text, model=self.model)
-
     def explain_request_error(self, status: int, text: str, *, model: str | None) -> str:
         low, model = text.lower(), model or "this model"
         if self.name.startswith("opencode-go"):
