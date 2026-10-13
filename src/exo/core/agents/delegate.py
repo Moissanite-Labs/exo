@@ -235,7 +235,7 @@ class Delegator:
             return tier
         return top
 
-    def _route(self, tier: str) -> tuple[Any, str]:
+    def route(self, tier: str) -> tuple[Any, str]:
         """(provider, "provider:model") for a tier. No usable tier route means the parent's own model."""
         e = self.engine
         if e.router.roles.get("delegate"):  # an explicit delegate role still wins
@@ -253,7 +253,7 @@ class Delegator:
         if r.status != "failed" or not self.escalate_on_fail or b.tier not in TIERS:
             return r
         nxt = self._cap(parent, TIERS[min(TIERS.index(b.tier) + 1, len(TIERS) - 1)])
-        if nxt == b.tier or self._route(nxt)[1] == self._route(b.tier)[1]:
+        if nxt == b.tier or self.route(nxt)[1] == self.route(b.tier)[1]:
             return r
         return await self.run(parent, replace(b, id=new_id("k"), tier=nxt), escalated=True)
 
@@ -334,7 +334,7 @@ class Delegator:
                                       s.now_ts(), s.now_ts()))
         self._emit(parent, b, "queued", None, line)
         sid, code, why, result, loop, turn = "", "", "", None, None, None
-        provider, model = self._route(b.tier)
+        provider, model = self.route(b.tier)
         try:
             async with self.sems.setdefault(b.depth, asyncio.Semaphore(self.limits.max_concurrent)):
                 loop = self._loop(b, provider, model)
