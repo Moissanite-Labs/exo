@@ -307,6 +307,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Workspace subprocess closure:** required mode omits host Git handoff facts and uses filesystem-only
   completion, because workspace Git configuration can execute helpers. Cross-seat delegation requires a
   separate broker capability; local child setup passes tools through the shared registry.
+- **Required gate audit (2026-10-13):** execution requires committed decision and approval evidence.
+  Missing stores/keys, failed audit writes and trusted gate hook exceptions block before the executor.
+  Required mode refuses tool-selected body-file host reads, including symlinks; ordinary gate behavior
+  remains compatible. See `docs/GATE.md` "Required executor audit".
 - **Lead call:** nothing on the Linux test machine's live OS changes in phase 0. It is someone's working machine
   (CRM, messaging, assistants). Where the OS first runs is A's call after the design.
 

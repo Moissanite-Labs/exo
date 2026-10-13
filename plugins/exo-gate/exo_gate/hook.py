@@ -200,7 +200,8 @@ class GrantStore:
 
 class LedgerSink:
     """Appends `action` events to the principal's ledger. A no-op (plain logging) when no store
-    or no signing key is configured. Never raises into the tool call."""
+    or no signing key is configured. The required gate checks the returned event id
+    and refuses execution when opening or committing the audit fails."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -242,15 +243,22 @@ class LedgerSink:
                 return None
 
 
+class GateAuditError(RuntimeError):
+    """Required gate evidence was not committed; do not expose host error details."""
+
+
 class Gate:
     """Holds settings, cached policies and the ledger sink; exposes the two hook callbacks."""
 
     def __init__(self, settings: Settings, sink: LedgerSink | None = None,
                  risk_lookup: Callable[[str], Optional[str]] | None = None,
-                 router_getter: Callable[[], Any] | None = None):
+                 router_getter: Callable[[], Any] | None = None,
+                 required_getter: Callable[[], bool] | None = None):
         self.settings = settings
         self.router_getter = router_getter
         self.risk_lookup = risk_lookup
+        self._required_at_load = os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
+        self.required_getter = required_getter
         self.sink = sink if sink is not None else LedgerSink(settings)
         self._policies: Optional[dict] = None      # pinned: the policy in force for this session
         self._policy_stamp: tuple = ()
@@ -262,6 +270,21 @@ class Gate:
         self._spent: Dict[str, float] = {}
         self._lock = threading.Lock()
         self.grants = GrantStore(settings.grants_path)
+
+    @property
+    def executor_required(self) -> bool:
+        return self._required_at_load or bool(self.required_getter and self.required_getter())
+
+    def _append(self, body: Mapping, **kwargs: Any) -> Optional[str]:
+        try:
+            eid = self.sink.append(body, **kwargs)
+        except Exception:
+            if self.executor_required:
+                raise GateAuditError("Required gate audit could not be saved") from None
+            raise
+        if self.executor_required and (not isinstance(eid, str) or not eid):
+            raise GateAuditError("Required gate audit could not be saved")
+        return eid
 
     # --- policies ---------------------------------------------------------------------
 
@@ -304,7 +327,7 @@ class Gate:
         if stamp != self._changed_stamp:
             self._changed, self._changed_error = self._load()
             self._changed_stamp = stamp
-            self.sink.append({"gate": PLUGIN_ID, "phase": "policy_change", "files": self._file_hashes(),
+            self._append({"gate": PLUGIN_ID, "phase": "policy_change", "files": self._file_hashes(),
                               "error": self._changed_error or None})
         return self._changed
 
@@ -325,12 +348,15 @@ class Gate:
             return "policy unchanged since the session started"
         self._policies, self._policy_error = self._changed, self._changed_error
         self._policy_stamp, self._changed, self._changed_stamp = self._changed_stamp, None, ()
-        self.sink.append({"gate": PLUGIN_ID, "phase": "policy_accept", "files": self._file_hashes(), "by": by})
+        self._append({"gate": PLUGIN_ID, "phase": "policy_accept", "files": self._file_hashes(), "by": by})
         return "accepted the changed policy files"
 
     # --- hooks ------------------------------------------------------------------------
 
     def _load_body_file(self, c: gate.Classification) -> None:
+        if c.text_file and self.executor_required:
+            # Tool-selected host paths, including symlinks, must never be read before the worker.
+            raise GateAuditError("Body-file inspection is unavailable with a required executor")
         if not (c.text_file and self.settings.read_body_files and not c.text):
             return
         try:
@@ -401,6 +427,8 @@ class Gate:
                     verdict = await self._verdict(d, c, risk_s, tool_name)  # (option, via) or None
             except Exception:
                 logger.exception("exo-gate: rules failed before the decision model on %s", tool_name)
+                if self.executor_required:
+                    return {"action": "block", "message": "Required gate checks failed"}
         return self.pre_tool_call(tool_name, args, session_id, task_id, tool_call_id, turn_id, risk,
                                   _verdict=verdict)
 
@@ -413,6 +441,8 @@ class Gate:
                                        _verdict)
         except Exception as exc:
             logger.exception("exo-gate: internal error on %s", tool_name)
+            if self.executor_required:
+                return {"action": "block", "message": "Required gate checks or audit failed"}
             secret = False
             try:
                 secret = bool(gate.args_sensitive(args))
@@ -497,7 +527,7 @@ class Gate:
         if d.outcome in ("allow", "log") and c.cost:
             with self._lock:
                 self._spent[today] = self._spent.get(today, 0.0) + float(c.cost)
-        eid = self.sink.append(body, session=session_id)
+        eid = self._append(body, session=session_id)
         if result and result["action"] == "approve":
             with self._lock:
                 scope = {"rule": c.category, "target": c.target or tool, "binding": binding, "outward": outward,
@@ -512,12 +542,14 @@ class Gate:
         with self._lock:
             pending = self._pending.pop(pattern_key, None)
         if pending is None:
+            if self.executor_required and pattern_key.startswith("plugin_rule:exo-gate:"):
+                raise GateAuditError("Required gate approval evidence is unavailable")
             return None
         eid, session, scope = pending
         body = {"gate": PLUGIN_ID, "phase": "approval", "choice": str(choice),
                 "approved": str(choice) in ("once", "session", "always"), "decided_by": str(decided_by or ""),
                 "rule_key": pattern_key.split(":", 1)[-1]}
-        aid = self.sink.append(body, session=session, refs=(eid,) if eid else ())
+        aid = self._append(body, session=session, refs=(eid,) if eid else ())
         if str(choice) == "always":
             self._add_grant(scope, str(decided_by or ""), session, aid or eid)
         return None
@@ -549,7 +581,7 @@ class Gate:
             return
         body = {"gate": PLUGIN_ID, "phase": "grant", "grant": g["id"], "rule": g["rule"], "target": g["target"],
                 "binding": g["binding"] or None, "by": by, "expires": _iso(g["expires"])}
-        self.sink.append(body, session=session, refs=(ref,) if ref else ())
+        self._append(body, session=session, refs=(ref,) if ref else ())
 
 
 def grants_command(g: "Gate", args: str = "") -> str:
@@ -561,7 +593,7 @@ def grants_command(g: "Gate", args: str = "") -> str:
         hit = g.grants.revoke(words[1])
         if hit is None:
             return f"no grant {words[1]}"
-        g.sink.append({"gate": PLUGIN_ID, "phase": "revoke", "grant": hit["id"], "rule": hit.get("rule"),
+        g._append({"gate": PLUGIN_ID, "phase": "revoke", "grant": hit["id"], "rule": hit.get("rule"),
                        "target": hit.get("target"), "binding": hit.get("binding") or None})
         return f"revoked {hit['id']}"
     if words and words[0] != "list":
@@ -622,7 +654,8 @@ def register(ctx) -> Gate:
     if callable(explicit):
         get_config = lambda key, default=None: explicit(key)  # noqa: E731
     g = Gate(resolve_settings(get_config=get_config), risk_lookup=_risk_lookup_for(ctx),
-             router_getter=lambda: getattr(ctx, "router", None))
+             router_getter=lambda: getattr(ctx, "router", None),
+             required_getter=lambda: bool(getattr(getattr(ctx, "manager", None), "executor_required", False)))
     ctx.register_hook("pre_tool_call", g.apre_tool_call)
     ctx.register_hook("post_approval_response", g.post_approval_response)
     reg_cmd = getattr(ctx, "register_command", None)

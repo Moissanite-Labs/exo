@@ -328,6 +328,7 @@ class PluginManager:
         self.config = dict(config or {})
         self.hooks = hooks or HookRegistry()
         self.router: Any = None  # set by the engine: the model Router, for plugins that make side calls
+        self.executor_required = False  # trusted engine mode, not tool arguments or plugin settings
         self.slots = Slots(memory_choice=memory_choice, context_choice=context_choice)
         self.tools: dict[str, ToolEntry] = {}
         self.commands: dict[str, CommandEntry] = {}

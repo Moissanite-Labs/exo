@@ -7,6 +7,22 @@ each call, records the decision in the signed ledger, and turns an ask into the 
 it, how long "always" lasts, and the sweep for internal names in outbound posts. D-038 made the
 shell classifier an allowlist and put the store itself behind the gate (see the last three sections).
 
+## Required executor audit
+
+With a required tool executor, the gate refuses execution unless its signed
+decision event was committed to the principal ledger. After a principal answers,
+the approval event must also commit before the broker or handler runs. Missing
+stores, unusable signing keys, failed writes and gate hook exceptions block with
+a generic error, including read tools and observe-mode exception fallbacks.
+Optional observer hook failures remain optional. Ordinary Exo retains its
+existing logging-only behavior when no ledger is available.
+
+Required mode blocks `gh --body-file` requests before inspecting the selected
+host path, including symlinks, even when body-file reading is disabled. The gate
+cannot approve unseen contents. Pass inline text for inspection; the executor
+then applies its own operation policy. Policy and grant files remain trusted
+configuration outside the worker's writable workspace.
+
 ## What an approval covers
 
 An outward act is a post, message, email, social post, payment or account action, or anything

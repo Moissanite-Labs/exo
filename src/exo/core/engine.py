@@ -332,6 +332,7 @@ class CoreEngine:
         self.registry.executor = executor
         self.registry.executor_required = required or executor is not None
         self.plugins = plugins or PluginManager()
+        self.plugins.executor_required = required
         self.plugins.router = self.router  # plugins reach it as ctx.router
         self._approvals: dict[str, tuple[asyncio.Future, str | None]] = {}
         self._open_approvals: dict[str, s.ApprovalRequested] = {}  # what approvals.list shows
@@ -530,7 +531,9 @@ class CoreEngine:
                 "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low"}
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
-        for verdict in await self.plugins.hooks.afire("pre_tool_call", **self._hook_kw(call, ctx)):
+        required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()
+        for verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
+                                                     **self._hook_kw(call, ctx)):
             if not isinstance(verdict, dict):
                 continue
             if verdict.get("action") == "block":
@@ -547,6 +550,7 @@ class CoreEngine:
                                           options=["allow", "deny"] if once else None, **bound)
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
                 await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
+                                               _fail_closed_plugins=required_hooks,
                                                decided_by=who[0] if who else "unknown", session_id=ctx.session or "")
                 if decision == "allow_always" and not once:
                     if not verdict.get("persist"):  # a plugin that sets persist keeps its own scoped grants (D-033)

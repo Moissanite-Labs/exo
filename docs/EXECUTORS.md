@@ -47,6 +47,19 @@ become error results and also reach post-hooks. Cancellation sets the shared
 cancel event and propagates `CancelledError`, just as handler cancellation does.
 There is no automatic handler retry or fallback after a broker failure or loss.
 
+The required gate must commit its signed decision event before allowing a call
+or asking for approval. It must also commit the approval event before execution.
+Missing stores, unusable keys, failed appends or missing event IDs block the call
+with a generic error. Gate callback failures in these two phases propagate to
+the registry; optional observer hooks retain their existing failure behavior.
+The safe-read and observe-mode exception fallbacks cannot permit a failed
+required gate check.
+
+Required mode refuses `gh --body-file` inspection before touching the selected
+host path, including symlinks. Inline text can be checked without opening a file;
+an unseen body file cannot be approved by this gate. Policy, grant and scrub
+name files come from trusted store/configuration paths and remain host code.
+
 Background bash arguments reach the broker before any host job starts. The
 broker must deny background mode until it has an isolated background worker.
 Existing job recovery marks interrupted jobs lost; it does not restart them.
