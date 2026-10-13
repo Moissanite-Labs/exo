@@ -146,6 +146,38 @@ removes it from the address bar and sends it as `X-Exo-Token` on every call (D-0
 need a loopback peer). Without a token the tab only asks you to open that link. When no provider is ready, the Chat view shows one quiet line with a
 link to this tab.
 
+## Sub-pages (D-060)
+
+Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.css`, `site/roadmap/roadmap.css`).
+
+- **Head.** Each page opens with a mono eyebrow and an orange rule (`02 / Tasks`), an Inter display title, one line of
+  purpose, and a readout on the right (Tasks: open, failed, done; Schedule: jobs, active, next run; Command: core and
+  seq with Refresh; Providers: ready count and default). Shared helpers in `dom.js`: `pageHead`, `readout`, `pill`,
+  `emptyState`, `stamp`, `until`.
+- **Status in form.** A pill (`.xc-st[data-s]`) or led (`.xc-led[data-s]`) carries the state in its shape and the word
+  names it; colour only confirms. run: dashed orange, blinking led. queue: hollow. done: filled cold. fail: crossed.
+  stop: dashed. on: filled orange. ok: filled green. known: tinted cold. pause: two bars. warn: half filled. alert:
+  filled with a ring. Numbers are tabular.
+- **Tasks** reads like the roadmap chart: a tally bar with a key, then one hairline lane per status with cards whose
+  top rule repeats the state. Under 760px the lanes stack. The empty state shows the lattice egg at stage 0
+  (`static/egg.js`, a byte-for-byte copy of `site/brand/egg.js`, checked by a test); this is the only place it appears.
+- **Schedule** shows each job as a card in a hairline grid: the clock line in mono, the title, the prompt, then next,
+  last and tier as a readout (local date and time plus "in 2h"), and the actions. A paused job's top rule is dashed.
+  The form sits beside the list, with labelled fields; under 1100px it follows the list.
+- **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
+  hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
+  At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
+  Empty sections say what will appear and how.
+- **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count
+  and roles as labelled values, with the key field and buttons under them. The default model has its own panel.
+- **Focus and motion.** Every control keeps the orange focus ring (inset on tabs and gauges). The page head reveals
+  once; the running led blinks. All of it stops under `prefers-reduced-motion`.
+- **Fix found on the way.** `replaceChildren(err ? box : null, ...)` drew the text `null` above Tasks, Schedule and
+  Command; the lists are filtered first now.
+
+Screenshots: `python scripts/shots_web_tabs.py OUTDIR` serves the client over demo data (no core, no Exo home, provider
+table and snapshot stubbed, no key read) and shoots every tab with data and empty, at 1440 and 400px, full page.
+
 ## Motion and accessibility
 
 Every animation (pulse, packet, caret blink, reveal, boot) sits behind `prefers-reduced-motion: reduce`, which
