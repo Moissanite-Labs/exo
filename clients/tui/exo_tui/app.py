@@ -907,10 +907,12 @@ class ExoApp(App):
             self.note(f"new thread {self.session} (same memory)")
         else:  # a plain startup: no log line, the empty-start card says it all
             rows = hero_rows(self.size.height)
+            # Awaited, so the start motif is in the DOM before the corner figure is placed: a resize that lands
+            # while the mount is pending would otherwise show the small figure beside the large one (D-062).
             if rows:
-                self.transcript.mount(Hero(rows))
-            self.transcript.mount(Welcome(self.seat or "main", self.model))
-            self.call_after_refresh(self.place_sphere)
+                await self.transcript.mount(Hero(rows))
+            await self.transcript.mount(Welcome(self.seat or "main", self.model))
+            self.place_sphere()
         self.refresh_status()
 
     # ------------------------------------------------------------ sending
@@ -1898,7 +1900,8 @@ class ExoApp(App):
         return "thinking" if self.busy else "idle"
 
     def sphere_fits(self) -> bool:
-        if not self.sphere_on or self.composing or self.query("#hero"):  # the start motif is the same figure, large
+        # The start motif is the same figure, large; and before the first thread opens there is no corner yet.
+        if not self.sphere_on or self.composing or not self.session or self.query("#hero"):
             return False
         left = self.query_one("#left")
         return (self.size.width >= SPHERE_MIN_COLS and self.size.height >= SPHERE_MIN_ROWS

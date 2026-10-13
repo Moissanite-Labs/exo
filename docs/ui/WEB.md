@@ -70,6 +70,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   so a card the core no longer holds is dropped (D-045). Taste, diff and the
   other panels are cold. A peer message has the sender in the header, a grey rule and the line "from another
   session, not from you": it never looks like the user. Panels and new transcript items reveal on arrival.
+- **Choice panels** (D-066). A pick sends `ui.respond` `acted` `{choice: id}` and the option's label as your reply,
+  a new turn or a steer if a turn is running, once; then the panel closes. Before this the agent never heard a web
+  pick.
 - **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
   `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed

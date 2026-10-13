@@ -17,6 +17,7 @@ export function mount(root) {
   let capacity = null, capacities = {}, snapshotGeneration = 0;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
+  const picked = new Set();   // choice panels already answered (D-066)
   const landed = new Set();   // user messages the core has added to a conversation
   let layout = getLayout();   // "inverse" (box on top, newest first) or "classic"; D-046
 
@@ -540,11 +541,16 @@ export function mount(root) {
         await open(d.session.id);
       }
       input.value = ""; help.sent(text);
-      const steering = busy, sid = current;
-      const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send" });
-      if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; drawSteers(); }
+      await deliver(text, current);
       flash("");
     } catch (e) { fail(e); }
+  }
+
+  // Your words to a thread: a new turn, or a steer when a turn is running there.
+  async function deliver(text, sid) {
+    const steering = busy && sid === current;
+    const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/send", { text, mode: steering ? "steer" : "send" });
+    if (steering && d && d.message_id && !landed.has(d.message_id)) { steers[d.message_id] = { id: d.message_id, text, session: sid }; drawSteers(); }
   }
 
   // Queued steers (D-045): a message sent while a turn runs waits for the next tool round. Until it lands the
@@ -589,11 +595,29 @@ export function mount(root) {
     try { await api("POST", "/api/ui/respond", { panel_id: p.panel_id, action, value }); }
     catch (e) { if (!quiet) fail(e); }
   }
-  function panelAct(p, value) { respondPanel(p, "acted", value); }
-  async function panelDismiss(p) {
-    await respondPanel(p, "dismissed", {});
+  function panelAct(p, value, label) {
+    if (p.kind === "choice" && value && value.choice != null) { pickChoice(p, value, label); return; }
+    respondPanel(p, "acted", value);
+  }
+  function closePanel(p) {
+    bus.forget(p.panel_id);   // so a later ui.panel event does not bring it back
     panelsOpen = panelsOpen.filter((x) => x.panel_id !== p.panel_id);
     drawSide();
+  }
+  // A pick on a choice panel (D-066): the panel's ui.respond "acted" {choice} is a learning signal only, so the
+  // label also goes to the thread as your reply. Once: a second click, or a click on a stale copy, sends nothing.
+  async function pickChoice(p, value, label) {
+    if (picked.has(p.panel_id)) return;
+    picked.add(p.panel_id);
+    closePanel(p);
+    await respondPanel(p, "acted", { choice: value.choice });
+    const sid = p.session || current;
+    if (!sid) return;
+    try { await deliver(String(label || value.choice), sid); } catch (e) { fail(e); }
+  }
+  async function panelDismiss(p) {
+    await respondPanel(p, "dismissed", {});
+    closePanel(p);
   }
 
   // ---------------------------------------------------------------- start

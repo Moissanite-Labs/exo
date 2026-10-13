@@ -188,8 +188,9 @@ async def _ui_respond(c, p, q, body):
     action = _choice(body, "action", PANEL_ACTIONS)
     pid = _str(body, "panel_id", required=True)
     res = await c.source.call(s.UiRespond(panel_id=pid, action=action, value=value))
-    if action == "dismissed":
-        c.panels.pop(pid, None)
+    if action == "dismissed" or (action == "acted" and "choice" in value
+                                 and c.panels.get(pid, {}).get("kind") == "choice"):
+        c.panels.pop(pid, None)  # a dismissed panel, or a choice that has its answer (D-066), is closed
     return res
 
 

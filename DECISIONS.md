@@ -1374,9 +1374,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   stays open for a typed answer). Esc never stops a turn (D-043).
 - **Palette.** Checked for the same problem: it was fine (its input keeps focus, arrows and Enter are bound on the
   screen, a click selects). A test now holds that.
-- **Not changed.** The core: `ui.respond` stays a learning signal and the `ui` tool schema is unchanged. The web client
-  still sends only `ui.respond` for a choice, so the same "agent never hears it" gap exists there; left for a web
-  change.
+- **Not changed.** The core: `ui.respond` stays a learning signal and the `ui` tool schema is unchanged.
+- **Web client, same gap, same fix.** A pick on a web choice panel sent only `ui.respond`, so the agent never heard
+  it. `chat.js` `pickChoice` now sends `ui.respond` `acted` `{choice: id}` and the label as the user's reply (a new
+  turn, or a steer while a turn runs) exactly once, and closes the panel in the page and on the server
+  (`plugins/exo-command/tests/test_choice_web.py`).
 - **Numbering.** D-057 to D-064 are taken or held, D-065 by `feat/permissions-bypass`, so this is D-066.
 - **Validation.** `tests/clients/tui/test_choice.py` (12 tests: focus, arrows and Enter sending once, digits, click, Esc
   without a stop, a draft not hijacked, `ctrl+f` to the choice and between cards, letters to the composer, a question
