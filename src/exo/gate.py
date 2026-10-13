@@ -1097,8 +1097,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if any(".ssh" in a or a.endswith((".pem", ".key")) for a in argv):
             return [_make("credentials", summary=f"{prog} on key material", command=cmd)]
         return [_make("shell", summary=prog, command=cmd)]
-    if prog == "crontab" and _has(argv, "-l"):
-        return [_make("read", summary="crontab -l", command=cmd)]
+    if prog == "crontab":
+        if _has(argv, "-l"):
+            return [_make("read", summary="crontab -l", command=cmd)]
+        return [_opaque("crontab changes scheduled jobs", cmd)]
     if (prog, sub) in SUBCOMMANDS:
         return [_make(SUBCOMMANDS[(prog, sub)], summary=f"{prog} {sub}", command=cmd)]
     if prog in PROGRAMS:
@@ -1652,7 +1654,12 @@ def classify(action: Any) -> Classification:
             c = _make("read", summary="list message targets")
     elif tool == "cronjob_manage":
         action = str(args.get("action", "")).lower()
-        c = _make("read" if action in ("list", "get", "status", "") else "schedule", summary=f"cron {action}")
+        if action in ("list", "get", "status", ""):
+            c = _make("read", tool=tool, summary=f"cron {action}")
+        else:
+            operation = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+            c = _opaque(f"cronjob_manage mutation: {action}", operation)
+            c.tool = tool
     else:
         cat = TOOLS.get(tool) or classify_by_name(tool)
         secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""
