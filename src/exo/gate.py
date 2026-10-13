@@ -28,9 +28,9 @@ import json
 import os
 import re
 import shlex
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 from urllib.parse import urlparse
 
 REVERSIBILITY = ("reversible", "costly", "irreversible")
@@ -113,10 +113,14 @@ class Classification:
     text_file: str = ""               # body read from a file (the caller may load it)
     command: str = ""                 # shell command text, if any
     signals: list[str] = field(default_factory=list)
+    # The simple commands a compound line was built from (D-075). `decide` checks reserved and deny
+    # entries against each of them, so a denied action cannot ride along with a more severe one.
+    parts: list["Classification"] = field(default_factory=list, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
+        d.pop("parts", None)
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -1216,6 +1220,7 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
     store = [p for p in parts if p.category == "store_write"]
     c = credentials[0] if credentials else (store[0] if store else (_most_severe(parts) or _make("shell", command=cmd)))
     c.signals = list(dict.fromkeys(c.signals + signals))
+    c.parts = c.parts + [p for p in parts if p is not c]    # keep what the chosen part was itself built from
     return c
 
 
@@ -1255,6 +1260,7 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
+        c.parts = list(parts)
     c.command = cmd
     # Outbound text: if several gh segments post text, keep the most severe one's text.
     bodies = [h.body for k in cmds for h in k.heredocs]
@@ -1850,6 +1856,28 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
     return ""
 
 
+def _scoped(c: Classification, scopes: Mapping) -> Classification:
+    """``c`` with the principal's scopes applied, and the same for every simple command it was built from."""
+    exposure, third = apply_scopes(c, scopes)
+    return replace(c, exposure=exposure, third_party=third, parts=[_scoped(p, scopes) for p in c.parts])
+
+
+def _each_part(c: Classification) -> Iterator[Classification]:
+    """The classification and every simple command it was built from, nested ones included."""
+    yield c
+    for p in c.parts:
+        yield from _each_part(p)
+
+
+def _any_part_matches(entries: Iterable, c: Classification) -> str:
+    """A reserved or deny entry that matches the combined classification or any one of its parts (D-075):
+    a compound line is denied when any simple command on it is."""
+    for p in _each_part(c):
+        if (hit := _list_matches(entries, p)):
+            return hit
+    return ""
+
+
 def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
     """Effective (exposure, third_party) after the principal's own scopes."""
     if c.target and _glob_any(c.target, scopes.get("private") or []):
@@ -1906,8 +1934,7 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
     gates, budget, posting = pol["gates"], pol["budget"], pol["posting"]
     ctx = dict(context or {})
-    exposure, third = apply_scopes(c, gates.get("scopes") or {})
-    eff = Classification(**{**asdict(c), "exposure": exposure, "third_party": third})
+    eff = _scoped(c, gates.get("scopes") or {})
 
     outcome = gates["matrix"][eff.reversibility][eff.exposure]
     reason, rule = f"{eff.reversibility} and {eff.exposure}", "matrix"
@@ -1934,7 +1961,7 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     if (eff.category == "opaque_exec" or "indirection" in eff.signals) and not opaque_named:
         bump("ask", "runs code the gate cannot fully see (" + (c.summary or "indirection") + ")", "opaque")
-    hit = _list_matches(gates.get("reserved") or [], eff)
+    hit = _any_part_matches(gates.get("reserved") or [], eff)
     if hit:
         bump("ask", f"reserved for the principal ({hit})", "reserved")
     esc = gates.get("escalate") or {}
@@ -1973,7 +2000,7 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     if eff.category == "store_write":
         bump("ask", "writes to the Exo store; only the principal approves, every time", "floor")
 
-    hit = _list_matches(gates.get("deny") or [], eff)
+    hit = _any_part_matches(gates.get("deny") or [], eff)
     if hit:
         outcome, reason, rule = "deny", f"denied by policy ({hit})", "deny"
     return Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,

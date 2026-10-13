@@ -1300,3 +1300,22 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Limits:** trust on first use of the pin; SSH signatures only; commit signatures, not tags; `uv tool` installs
   cannot be verified. A key compromise needs the pin edited by hand.
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
+
+## D-075 (2026-10-13) A deny or reserved entry matches any simple command on a line
+- **Why:** the 2026-10-13 review. `classify_shell` reduces a compound line to its most severe part, and `decide`
+  checked the principal's `deny` and `reserved` lists against that one part only. With `vcs_push` in `deny`,
+  `git push origin main` alone was denied, but `git push origin main && rm -rf build` was an `ask` for the delete,
+  `git push origin main; cat ~/.ssh/id_rsa` an `ask` for the credential read, and `git push origin main && gh pr
+  comment 3 --body hi` an `ask` for the post. The card named the other action, and the denied push ran once it was
+  approved. Only `command:<regex>` entries were immune, because they see the whole line.
+- **Decision:** a classification keeps the simple commands it was built from (`parts`, nested through `bash -c`,
+  `python -c`, `eval`, `xargs` and the rest). `decide` applies the principal's scopes to each and checks `reserved`
+  and `deny` entries against the combined result and every part; a hit on any part denies (or reserves) the line.
+  The most severe part still sets the card, the category and everything else. The ledger view (`as_dict`) leaves
+  the parts out, so approval bindings and trace rows are unchanged.
+- **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
+  `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
+  under two policies while a change is pending).
+- **Revisit if:** a principal wants a denied action to be allowed when it is part of a longer line. None asked;
+  the entry format says "no agent may take" the action.
+
