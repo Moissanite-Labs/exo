@@ -25,10 +25,8 @@ from typing import Any, Optional
 from exo.core.slots import MemoryProvider, RecallStatus
 
 try:
-    from exo import crypto
-    from exo.capture import (CORRECTION, DECISION, RULING, clip, extract_signals, is_trivial, normalize,
+    from exo.capture import (CORRECTION, clip, extract_signals, is_trivial, normalize,
                              render_block, to_event)
-    from exo.ledger import Ledger
     from exo.provenance import principal_view
     from exo.retrieve import assemble
     from exo.store import PrincipalStore
@@ -151,12 +149,10 @@ class _Runtime:
         self.root = root
         self.store = PrincipalStore(root)
         kp = C.key_path(cfg, agent)
-        if not kp.exists():
-            if not cfg["auto_keygen"]:
-                raise RuntimeError(f"no signing key at {kp}; run: exo keygen {agent}")
-            crypto.save_key(crypto.keygen(), kp)
-        self.signer = crypto.Signer(agent, crypto.load_key(kp))
-        self.ledger = Ledger(self.store.ledger_path, self.signer)
+        from exo.ledger_authority.factory import open_writable_ledger
+        self.ledger = open_writable_ledger(self.store.ledger_path, agent, kp,
+                                           writer="exo-memory", auto_keygen=cfg["auto_keygen"])
+        self.signer = self.ledger.signer
         self.lock = threading.RLock()
         self.episodic = None
         self.episodic_error = ""

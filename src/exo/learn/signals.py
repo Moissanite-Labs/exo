@@ -38,7 +38,7 @@ def ensure_utterance(rt: Runtime, session: str | None, role: str, text: str, mes
     body = {"text": text or "(empty)", "role": role, "source": "learn_backfill"}
     if message_id:
         body["message_id"] = message_id
-    return rt.ledger.append("utterance", body, rt.signer.author if role != "user" else PRINCIPAL,
+    return rt.ledger.append("utterance", body, rt.ledger.author if role != "user" else PRINCIPAL,
                             session=session)["id"]
 
 

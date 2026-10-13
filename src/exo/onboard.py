@@ -24,9 +24,9 @@ import re
 import shutil
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from . import crypto
 from .consolidate import event_ref
@@ -282,11 +282,9 @@ def interview(bank: Bank, known: set[str], ask: AskFn, max_questions: int = DEFA
 
 # --- writing answers ------------------------------------------------------------------
 
-def _signer(name: str) -> crypto.Signer:
-    path = exo_home() / 'keys' / f'{name}.key'
-    if not path.exists():
-        crypto.save_key(crypto.keygen(), path)
-    return crypto.Signer.from_file(name, path)
+def _writable_ledger(path, name):
+    from .ledger_authority.factory import open_writable_ledger
+    return open_writable_ledger(path, name, exo_home() / 'keys' / f'{name}.key', auto_keygen=True)
 
 
 def record(store: PrincipalStore, principal: str, bank: Bank, turns: list[Turn],
@@ -294,18 +292,16 @@ def record(store: PrincipalStore, principal: str, bank: Bank, turns: list[Turn],
     """Append a `question` and an `answer` event per answered turn. Returns the answer events."""
     out = []
     session = session or f'onboard-{crypto.now_ts()[:19].replace(":", "")}'
-    asker, said = _signer(INTERVIEWER), _signer(principal)
-    with Ledger(store.ledger_path, asker) as led:
+    with _writable_ledger(store.ledger_path, INTERVIEWER) as asker, \
+            _writable_ledger(store.ledger_path, principal) as said:
         for t in turns:
             if t.answer is None:
                 continue
             q = t.question
-            led.signer = asker
-            qev = led.append('question', {'question_id': q.id, 'text': q.ask, 'section': q.section,
+            qev = asker.append('question', {'question_id': q.id, 'text': q.ask, 'section': q.section,
                                           'why': q.why, 'voi': t.score, 'source': 'onboard'},
                              INTERVIEWER, session=session)
-            led.signer = said
-            out.append(led.append('answer', {'question_id': q.id, 'question': q.ask, 'answer': t.answer,
+            out.append(said.append('answer', {'question_id': q.id, 'question': q.ask, 'answer': t.answer,
                                              'section': q.section, 'facets': list(q.facets),
                                              'node': bank.node_for(q), 'source': 'onboard'},
                                   principal, session=session, refs=[qev['id']]))
@@ -565,7 +561,7 @@ def import_store(src: str | os.PathLike, dest: str | os.PathLike, include_privat
     os.chmod(private, 0o700)
     store = PrincipalStore(dest)
     led_new = not store.ledger_path.exists()
-    with Ledger(store.ledger_path, _signer(INTERVIEWER)) as led:
+    with _writable_ledger(store.ledger_path, INTERVIEWER) as led:
         led.append('ingest', {'adapter': 'import-store', 'source': str(src), 'files': stats['files'],
                               'bytes': stats['bytes'], 'include_private': include_private,
                               'skipped': stats['skipped'], 'symlinks_skipped': stats['symlinks'],
