@@ -1,5 +1,5 @@
 // The read-mostly command centre view (approvals, decisions, sessions, tasks, projects, cost).
-// Drawn as an instrument panel (D-060): a page head, six gauges, then one hairline section per source.
+// Drawn as an instrument panel (D-061): a page head, six gauges, then one hairline section per source.
 // mount(el) draws into el; the returned function stops its timers and stream.
 import { api, stream, pageHead, readout, pill } from "./dom.js";
 

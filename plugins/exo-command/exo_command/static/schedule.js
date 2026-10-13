@@ -1,5 +1,5 @@
 // Schedule view: list, add, pause, resume, run now and remove jobs through schedule.edit.
-// Drawn like the site's roadmap cards (D-060): each job a card with its clock, state, next and last run.
+// Drawn like the site's roadmap cards (D-061): each job a card with its clock, state, next and last run.
 import { h, api, short, errorBox, pageHead, readout, pill, emptyState, stamp, until } from "./dom.js";
 
 export function mount(root) {
