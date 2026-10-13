@@ -1092,3 +1092,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Documentation corrections:** the approval focus shortcut is ctrl+f. Ctrl+g opens the composer. Undo hides log
   entries and invalidates covering summaries, matching D-041 and the implementation.
 - **Docs:** `docs/DEVELOPER-GUIDE.md`, `docs/UI.md`, `docs/MEMORY-MODEL.md`.
+
+## D-054 (2026-10-12) Ruling citations do not waive mandatory learning checks
+- **Why:** the direct-ruling shortcut ran before the guarded-domain and evaluation rules. A reviewer could cite
+  a real but unrelated principal statement and install a derived skill or guarded lesson without those checks.
+- **Decision:** held conflicts, guarded proposals and mandatory evaluation checks run before the shortcut.
+  Skills always need evaluation, even if the configured type list omits them. Configured high-impact or gated
+  lessons retain their critic, evidence-weight and session-count requirements. Missing held-out cases cannot pass.
+  Rule numbers stay stable in the ledger. Ordinary unguarded taste and fact lessons retain the direct-ruling path.
+- **Principal control:** original rulings remain available in the ledger and context. Explicit acceptance of a
+  concrete proposal remains a separate path. A reviewer merely citing a ruling does not exercise that authority.
+- **Validation:** regressions prove unrelated ruling citations cannot bypass skill evaluation or guarded review,
+  and cover configured gates, evaluation success and failure, critic objections, held conflicts and direct acceptance.
+- **Limit:** citation authorship alone does not establish semantic support for an ordinary unguarded lesson.
+  Binding derived claims to the cited words still needs a separate design and evaluation.
+- **Docs:** `docs/LEARNING.md`, `research/LEARNING-LOOP.md`.

@@ -323,9 +323,11 @@ Weight comes from `exo.taste.combine`: noisy-or of decayed evidence strengths. L
 more, medium at 0.45 or more (`src/exo/taste.py:26-27`). Half-life 30 days for preferences, none for
 rulings.
 
-Promotion rules, in order:
+Promotion rule numbers are stable for ledger records. Mandatory constraints (3, 2 and 5) are checked
+before the direct-ruling shortcut (1), then ordinary evidence (4) and waiting (6):
 
-1. **Principal said it** (a ruling, an answer, or the principal accepts the proposal): promote now.
+1. **Principal said it** (a ruling or answer among the evidence): promote an ordinary unguarded,
+   ungated lesson now. Explicit principal acceptance is a separate path, not a reviewer shortcut.
 2. **Guarded** (touches irreversible, public, financial or third-party acts; A's list lives in his
    store): never auto-promote. Becomes a question or waits for review.
 3. **Conflict** with an existing belief: the store's conflict rule. Default newer wins unless the older
@@ -333,7 +335,8 @@ Promotion rules, in order:
 4. **Taste or fact, not guarded, weight high, at least 2 independent evidence events from different
    sessions, and no critic objection:** auto-promote, logged and shown in the next brief as "learned".
 5. **Skill patch:** promote only if the eval gate passes (Section 6). Skills change behavior most, so
-   they carry the strictest gate.
+   they carry the strictest gate, even with principal evidence. Configured high-impact domains and
+   gated proposal types also require the gate. Non-skill lessons need high weight and two sessions.
 6. **Everything else** stays a proposal. Medium weight may enter the pack as a hint. Low weight waits.
    If it sits open past a staleness window (14 days) and the value of information is high, it becomes a
    question; otherwise it decays away.
@@ -503,9 +506,9 @@ Promotion rule 5 (skills) and any auto-promotion of a high-impact taste rule mus
 - **No guarded-domain regression** at all (public posts, spend, irreversible acts).
 - **Pinned cases.** A small set of must-pass items the principal marked as critical. Always run.
 
-A failed gate turns the proposal into a held proposal with the failing items attached. If the
-principal explicitly ruled the lesson, it is promoted anyway (the principal outranks the eval) and the
-failing items are flagged as possibly stale gold.
+A failed gate leaves the proposal open and returns the failing items. Citing a principal ruling
+does not waive the gate for a derived skill or high-impact lesson. The principal can explicitly accept
+the proposal through the separate acceptance path. Original rulings remain in the ledger and context.
 
 ### 6.6 Scoreboard over time
 

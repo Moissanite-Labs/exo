@@ -127,3 +127,4 @@ real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Still open:
 | D-051 muse-cli: a Muse Code subscription through the `muse` CLI (keyless, text only, gate treats `muse login`, `auth`, `logout` as credentials) | `docs/PROVIDERS.md` "Use a Muse Code subscription", `docs/GATE.md` "Muse CLI credentials", `docs/TOOLS.md` | `docs/PROVIDERS.md` (linked from §1) | §9 "Add a CLI-backed provider" | WP §13.1 |
 | D-052 Principal authority for turn authorship, learning, settings and policy adoption | `docs/GATE.md`, `docs/MEMORY-MODEL.md` | n/a | n/a | n/a |
 | D-053 Hermetic terminal preferences and corrected approval and undo documentation | `docs/DEVELOPER-GUIDE.md`, `docs/UI.md`, `docs/MEMORY-MODEL.md` | n/a | n/a | n/a |
+| D-054 Mandatory learning checks precede ruling citations, with explicit acceptance separate | `docs/LEARNING.md`, `research/LEARNING-LOOP.md` | n/a | n/a | n/a |
