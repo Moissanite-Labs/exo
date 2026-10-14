@@ -185,15 +185,28 @@ A command is `allow` only when every program in it is known and nothing is hidde
   git aliases and command-running git config; gh aliases and extensions; an unknown program.
 - Where the gate can see inside (a `bash -c` string, a heredoc or pipe fed to a shell, the code
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
-  `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
-  the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+  `uv run`) it classifies the inner text too, within a bounded inspection depth. The result is
+  the most severe part, and it keeps the `indirection` signal, so `decide` asks even when the
+  inner part alone would only log.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
 - The principal can lower `opaque_exec` only by naming it: `categories: {opaque_exec: act}` or a
   rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
 
-Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
+Known limits. Shell inspection is bounded by `_DEPTH = 4`. For example, `gh pr comment 3 --body hi` wrapped in up to four nested
+`bash -c` strings is still classified as `github_post`. At five wrappers, the inner
+post is no longer inspected: the result is `opaque_exec` with the `indirection` signal,
+and default policy asks for approval. Its summary can say `bash runs shell commands`
+without identifying the depth limit or the hidden post.
+
+Category denies apply to the forms the gate inspects. With `github_post: deny`, the
+four-wrapper example is denied, while the five-wrapper example asks as `opaque_exec`.
+Approving opaque code can therefore execute an operation that would be denied if visible.
+Review the entire command before approving it. An opaque approval does not prove that all
+nested operations satisfy category policy.
+
+A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
 `npm install` runs package scripts) can run code the agent wrote earlier with a local write.
 The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
 
