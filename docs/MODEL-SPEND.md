@@ -72,8 +72,11 @@ missing journal. Example **synthetic test configuration**, not advertised prices
 All four prices are explicit USD per million tokens. This configuration attests
 that reasoning is included in output tokens and that
 these four token rates bound **all** charges for this text-only request, including
-long-context premiums, cache writes and any relay markup. Use worst-case rates
-when a price tier varies. A low input estimate is not a valid `input_bound`: code refuses a value below the
+long-context premiums, cache writes and any relay markup. When a price tier varies,
+pin the worst-case rate: for routes with an audited tier in `NATIVE_TIERS`
+(currently `claude-haiku-5-5`, which bills $0.50/$2.50 per MTok input/output above
+100K prompt tokens), code refuses a pin below the audited worst-case tier, both at
+policy validation time and at request admission. A low input estimate is not a valid `input_bound`: code refuses a value below the
 checked-in full native context ceiling, including wrappers and tool schemas.
 Unknown contracts must remain absent. There is no automatic catalog-price or
 "probably free" exemption. Endpoint, wire model, transport and price snapshot

@@ -548,3 +548,45 @@ def test_required_decision_missing_policy_is_a_hard_gate_refusal(monkeypatch):
     monkeypatch.setenv('EXO_MODEL_SPEND_REQUIRED', '1')
     with pytest.raises(SpendDenied): asyncio.run(ask_choice_result(r, 's', 'q', ['a', 'b']))
     assert not fake.calls
+
+
+def test_admission_refuses_pin_below_audited_tier(tmp_path, monkeypatch):
+    from types import MappingProxyType
+    from exo.model_spend import billing
+    monkeypatch.setattr(billing, 'NATIVE_TIERS', MappingProxyType({
+        ('openai', 'https://api.openai.com/v1', 'm'): (100_000, (2_000_000_000, None, None, None)),
+    }))
+    cfg = policy(tmp_path)
+    seen = []
+    r = router(cfg, lambda req: seen.append(req) or response())
+    event = call(r)[-1]
+    assert event.kind == 'error' and not event.retryable
+    assert event.attempts == [{'route': 'test:m', 'outcome': 'spend_refused'}]
+    assert 'tier' in event.error
+    assert not seen and not rows(cfg)
+
+
+def test_long_prompt_settles_below_tier_price_without_refusal():
+    from exo.model_spend.billing import Price, check_tier_rates
+    headline = Price.parse({'contract': 'text-tokens-v1', 'transport': 'anthropic',
+                            'base_url': 'https://api.anthropic.com', 'model': 'claude-haiku-5-5',
+                            'input_bound': 1_000_000, 'max_output': 128_000,
+                            'input': '0.10', 'output': '0.50',
+                            'cache_read': '0.01', 'cache_write': '0.12'})
+    settled = headline.charge((500_000, 1_000, 0, 0))
+    assert settled == 50_500_000
+    assert settled < 500_000 * 500_000_000 // 1_000_000  # what the $0.50 tier bills
+    with pytest.raises(ValueError, match='tier'):
+        check_tier_rates(headline)
+
+
+def test_tier_compliant_pin_keeps_flat_accounting():
+    from exo.model_spend.billing import Price, check_tier_rates
+    pinned = Price.parse({'contract': 'text-tokens-v1', 'transport': 'anthropic',
+                          'base_url': 'https://api.anthropic.com', 'model': 'claude-haiku-5-5',
+                          'input_bound': 1_000_000, 'max_output': 128_000,
+                          'input': '0.50', 'output': '2.50',
+                          'cache_read': '0.05', 'cache_write': '0.60'})
+    check_tier_rates(pinned)
+    assert pinned.maximum(100) == 600_250_000
+    assert pinned.charge((10_000, 100, 0, 0)) == 5_250_000
