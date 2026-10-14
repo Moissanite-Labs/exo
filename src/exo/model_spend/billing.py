@@ -32,6 +32,23 @@ NATIVE_BOUNDS = MappingProxyType({
     ("anthropic", "https://api.anthropic.com", "claude-haiku-5-5"): (1_000_000, 128_000),
 })
 
+# Audited 2026-10-14. Tiered long-prompt pricing for native routes, keyed like
+# NATIVE_BOUNDS. Value: (prompt-token threshold, worst-case tier rates).
+# Worst-case rates are nano-USD per million tokens, (input, output, cache_read,
+# cache_write); a class set to None has no audited tier and is not checked.
+# The pin must cover the worst case because input_bound admits prompts above the
+# threshold, so maximum() and charge() would otherwise under-price them.
+# Routes with a single documented tier have no entry.
+# Haiku 5.5 bills $0.10/$0.50 per MTok input/output up to 100K prompt tokens
+# (cache reads and writes count toward the threshold; each request is priced on
+# its own) and $0.50/$2.50 above it. Opus 5.5 and Sonnet 5.5 bill their full 1M
+# context window at flat standard rates; gpt-4.1-2025-04-14 has a single tier in
+# the audited snapshot.
+NATIVE_TIERS = MappingProxyType({
+    ("anthropic", "https://api.anthropic.com", "claude-haiku-5-5"):
+        (100_000, (500_000_000, 2_500_000_000, None, None)),
+})
+
 
 class SpendDenied(RuntimeError):
     """Nonretryable request refusal; it does not itself stop other requests."""
@@ -96,3 +113,22 @@ class Price:
             raise SpendDenied("provider exceeded the pinned token contract")
         # Contract includes all reasoning in output. Never trust provider-reported cost_usd.
         return self.charge((fresh, usage.output_tokens, usage.cache_read_tokens, usage.cache_write_tokens))
+
+
+_TIER_CLASS_NAMES = ("input", "output", "cache_read", "cache_write")
+
+
+def check_tier_rates(price: Price) -> None:
+    """Refuse a pin below the audited worst-case tier rate for a route.
+
+    A flat per-class pin must not under-price any prompt size the provider bills
+    at a higher tier. Raises ValueError naming the class and model. Routes with
+    no entry in NATIVE_TIERS have a single audited tier and are not checked.
+    """
+    entry = NATIVE_TIERS.get((price.transport, price.base_url, price.model))
+    if entry is None:
+        return
+    _, worst = entry
+    for name, pinned, floor in zip(_TIER_CLASS_NAMES, price.rates, worst):
+        if floor is not None and pinned < floor:
+            raise ValueError(f"pinned {name} rate below audited tier rate for {price.model}")
