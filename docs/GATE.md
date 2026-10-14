@@ -166,6 +166,19 @@ targets with `footer_exposures: [public]`.
 
 ## Shell commands: an allowlist (D-038)
 
+Command regexes in `deny` and `reserved` match both the original command and an additional
+literal-word view from the shell lexer. Thus `command:rm -rf` also vetoes `r"m" -"rf" ~`,
+quoted words and backslash/ANSI-C escapes. Mapping entries use the same veto matching.
+Allow rules and grants retain their original command matching. The extra view preserves
+operators and word boundaries; whitespace, control characters and shell syntax inside a
+word are escaped, and dynamic words remain opaque. It does not expand variables or run a shell.
+Nested views come only from execution text the existing classifier inspects, such as command
+substitutions, `bash -c`, `eval` and shell stdin, with its existing depth limit of four.
+Quoted text passed to `echo` alone is not recursively interpreted. These remain regex
+policies, not a complete shell sandbox: original-text matches still apply, spelling variants
+outside literal quoting require appropriate patterns, and deeper or dynamic execution asks
+through `opaque_exec` rather than guaranteeing a command-regex veto.
+
 The shell classifier used to name dangerous programs and let everything else through as `shell`.
 Any indirection walked past it. It now works the other way round. A small lexer
 (`exo.gate._Lexer`) reads quotes, escapes, `$( )`, backticks, `$VAR`, redirections and heredocs,

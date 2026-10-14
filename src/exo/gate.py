@@ -113,10 +113,12 @@ class Classification:
     text_file: str = ""               # body read from a file (the caller may load it)
     command: str = ""                 # shell command text, if any
     signals: list[str] = field(default_factory=list)
+    _command_views: list[str] = field(default_factory=list, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
+        d.pop("_command_views")
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -1256,6 +1258,10 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
     c.command = cmd
+    c._command_views = list(dict.fromkeys([
+        _policy_command_view(cmd),
+        *(view for part in parts for view in part._command_views),
+    ]))
     # Outbound text: if several gh segments post text, keep the most severe one's text.
     bodies = [h.body for k in cmds for h in k.heredocs]
     if not c.text and c.category in OUTBOUND and bodies and c.category != "web_post":
@@ -1808,7 +1814,41 @@ def _as_list(v: Any) -> list:
     return v if isinstance(v, list) else [v]
 
 
-def _rule_matches(match: Mapping, c: Classification) -> bool:
+def _policy_command_view(command: str) -> str:
+    """Decode literal shell words without turning word contents into shell syntax.
+
+    This is an additional veto view, never an authorization view. Dynamic words stay
+    opaque. Execution strings get their own views only through classify_shell recursion.
+    """
+    tokens = _Lexer(command).run()
+    rendered = []
+    for kind, value in tokens:
+        if kind == "w":
+            if value.dynamic:
+                rendered.append("<dynamic-word>")
+            elif not value.text:
+                rendered.append("''")
+            else:
+                rendered.append("".join(
+                    f"\\x{ord(ch):02x}" if ch.isspace() or ord(ch) < 32 or ch in "\\'\";&|()<>" else ch
+                    for ch in value.text
+                ))
+        elif kind in ("op", "redir"):
+            rendered.append(value)
+        elif kind == "hd":
+            rendered.append("<heredoc>")
+    return " ".join(rendered)
+
+
+def _command_matches(pattern: str, c: Classification, *, veto: bool = False) -> bool:
+    regex = re.compile(pattern)
+    texts = [c.command or ""]
+    if veto:
+        texts.extend(c._command_views)
+    return any(regex.search(text) for text in texts)
+
+
+def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False) -> bool:
     for k, want in match.items():
         if k == "category" and c.category not in [str(x) for x in _as_list(want)]:
             return False
@@ -1816,7 +1856,7 @@ def _rule_matches(match: Mapping, c: Classification) -> bool:
             return False
         if k == "target" and not _glob_any(c.target, _as_list(want)):
             return False
-        if k == "command" and not any(re.search(str(p), c.command or "") for p in _as_list(want)):
+        if k == "command" and not any(_command_matches(str(p), c, veto=veto) for p in _as_list(want)):
             return False
         if k == "exposure" and c.exposure not in _as_list(want):
             return False
@@ -1834,7 +1874,7 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
     or a mapping like a rule's match. Plain prose that matches none of these is ignored."""
     for e in entries:
         if isinstance(e, Mapping):
-            if e and _rule_matches(e.get("match", e), c):
+            if e and _rule_matches(e.get("match", e), c, veto=True):
                 return str(e.get("reason") or e)
             continue
         s = str(e).strip()
@@ -1845,7 +1885,7 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
             return s
         if kind == "target" and _glob_any(c.target, [val.strip()]):
             return s
-        if kind == "command" and val.strip() and re.search(val.strip(), c.command or ""):
+        if kind == "command" and val.strip() and _command_matches(val.strip(), c, veto=True):
             return s
     return ""
 
