@@ -1434,9 +1434,9 @@ _STORE_PROTECTED = ("policies", "state", "keys")
 
 def _store_roots() -> list[tuple[str, tuple, bool]]:
     """(root, protected top-level names, has principals/<name>/ stores below it)."""
-    roots = [(os.path.normpath(_exo_home()), _HOME_PROTECTED, True)]
+    roots = [(_exo_home(), _HOME_PROTECTED, True)]
     if os.environ.get("EXO_PRINCIPAL_STORE"):
-        roots.append((os.path.normpath(os.path.expanduser(os.environ["EXO_PRINCIPAL_STORE"])), _STORE_PROTECTED,
+        roots.append((os.path.expanduser(os.environ["EXO_PRINCIPAL_STORE"]), _STORE_PROTECTED,
                       False))
     return roots
 
@@ -1454,21 +1454,26 @@ def is_store_path(path: str, ancestors: bool = False) -> bool:
         return True
     if not p.startswith("/"):
         return False                     # relative: names only; the tool's working folder is not known here
-    p = os.path.normpath(p)
-    for root, names, principals in _store_roots():
-        for r in {root, os.path.realpath(root)}:
-            if ancestors and (r == p or r.startswith(p.rstrip("/") + "/")):
-                return True
-            if not p.startswith(r + "/"):
-                continue
-            parts = p[len(r) + 1:].split("/")
-            if _protected_rel(parts, names):
-                return True
-            if principals and parts[0] == "principals":
-                if len(parts) <= 2 and ancestors:
+    # Resolve the original spelling: normpath first would erase symlink/.. traversal.
+    # Keep the lexical candidate too, including protected paths that link out of the store.
+    candidates = {os.path.normpath(p), os.path.realpath(p)}
+    for candidate in candidates:
+        if _STORE_NAMES.search(candidate):
+            return True
+        for root, names, principals in _store_roots():
+            for r in {os.path.normpath(root), os.path.realpath(root)}:
+                if ancestors and (r == candidate or r.startswith(candidate.rstrip("/") + "/")):
                     return True
-                if _protected_rel(parts[2:], _STORE_PROTECTED):
+                if not candidate.startswith(r.rstrip("/") + "/"):
+                    continue
+                parts = candidate[len(r.rstrip("/")) + 1:].split("/")
+                if _protected_rel(parts, names):
                     return True
+                if principals and parts[0] == "principals":
+                    if len(parts) <= 2 and ancestors:
+                        return True
+                    if _protected_rel(parts[2:], _STORE_PROTECTED):
+                        return True
     return False
 
 
@@ -1478,7 +1483,8 @@ def _in_store_dir(path: str) -> bool:
     if not p.startswith("/"):
         return bool(re.search(r"(^|/)\.exo(/|$)", p))
     p = os.path.normpath(p)
-    return any(p == r or p.startswith(r + "/") for r, _, _ in _store_roots())
+    return any(p == os.path.normpath(r) or p.startswith(os.path.normpath(r) + "/")
+               for r, _, _ in _store_roots())
 
 
 _PATCH_PATHS = re.compile(r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$|^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$",

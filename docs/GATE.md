@@ -205,6 +205,13 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 `seat.toml`, and `$EXO_PRINCIPAL_STORE`. Distinctive names match anywhere, so a relative
 `policies/gates.yaml` or `state/approval-grants.json` counts too.
 
+Absolute paths are checked in both their lexical form and their resolved symlink form, including
+missing final components. This catches file and directory aliases into protected stores and aliases
+used to delete a store or its ancestors. Resolution preserves `symlink/..` filesystem order; lexical
+protection still applies when a protected path links outside the store. Relative paths only use the
+distinctive-name checks because the tool's working directory is unknown here. These are classification
+checks, not a filesystem sandbox: a symlink can change between classification and execution (TOCTOU).
+
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
 `sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
