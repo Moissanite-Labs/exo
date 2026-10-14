@@ -191,12 +191,13 @@ def test_core_line_budget():
 
     Wave 1 shipped under 8k. STANDALONE.md section 6 allows 15k by the end of wave 3; delegation (D-016)
     is a wave 3 item, so the budget moved to 15k on 2026-10-12. Raised to 16k the same day for the audit
-    security wave (D-038..D-042). The old 15k goal remains unmet; moving engine methods alone does not reduce
-    this total. Issue #46 and docs/ENGINE-SPLIT.md track the proposed split and budget policy."""
+    security wave (D-038..D-042). Engine split step 4 (D-067) brought it under the old 15k goal, and the ceiling
+    went back to 15k on 2026-10-13 to keep that gain (docs/ENGINE-SPLIT.md "Budget policy"). Issue #46 tracks the
+    rest of the split."""
     files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
              if "generated" not in p.parts]
     total = sum(len(p.read_text().splitlines()) for p in files)
-    assert total < 16000, total
+    assert total < 15000, total
 
 
 def test_dependencies_are_listed():

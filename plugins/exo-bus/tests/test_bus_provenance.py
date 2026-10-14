@@ -70,7 +70,7 @@ def test_a_bus_message_is_held_for_the_principal_and_never_a_principal_turn(rela
         assert await chan.poll_once() == 1
         await _settle(eng)
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not eng._approvals:  # the hold asks the principal in the background
+        while time.monotonic() < deadline and not eng.approvals.open:  # the hold asks the principal in the background
             await asyncio.sleep(0.01)
         [call] = [e.body for e in eng.hub.since(0) if isinstance(e.body, s.ApprovalRequested)]
         sid = chan._by_chat["alpha"]

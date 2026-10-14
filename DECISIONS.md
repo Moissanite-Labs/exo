@@ -319,8 +319,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   configured it is the D-040 local key path unchanged: pinned keys, head anchor, `exo log verify`. With
   `EXO_LEDGER_AUTHORITY` set, an installed backend signs and commits each event and checkpoint before
   replying; verification replays its pinned identity read-only and never falls back to local keys. Enabling
-  it on an existing store fails closed (unconfirmed local tail); there is no migration. An independent witness is future work. See
-  `docs/LEDGER-AUTHORITY.md`.
+  it on an existing store fails closed (unconfirmed local tail). There is no migration. The separate
+  `exo-witness` transport is implemented but disabled by default. It starts only when invoked explicitly.
+  No endpoint or receipt-delivery worker is enabled by core startup. Deployment and Exo OS delivery remain separate work. See `docs/LEDGER-AUTHORITY.md`
+  and `docs/WITNESS-TRANSPORT.md`.
 - **Lead call:** nothing on the Linux test machine's live OS changes in phase 0. It is someone's working machine
   (CRM, messaging, assistants). Where the OS first runs is A's call after the design.
 
@@ -1238,3 +1240,107 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the snapshot cursor, the publication failure, heartbeat starvation, the frame deadline and no-resend. The D-039
   and D-052 attack scripts now steal the record's real token.
 - **Docs:** `docs/GATE.md` "Unix peer authentication", `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-061 (2026-10-13) Web sub-pages to the site v2 standard
+- **Why:** the chat page and the site v2 (front page, roadmap) set a high bar; Tasks, Schedule, Command and Providers
+  still looked like a debug console: small mono panel titles, cramped lanes, colour-only status, plain one-line empty
+  states, no 400px layout for the nav, and a DOM quirk that printed `null` above the lists.
+- **Decision:** every sub-page gets the site's section head (mono eyebrow with an orange rule, Inter display title,
+  one line of purpose, a readout on the right), a designed empty state that says what will appear and how to start,
+  status as a pill whose led form carries the state (filled, hollow, dashed, crossed, barred) next to the word,
+  tabular numbers, and a working 400px layout (the nav wraps to two rows). Tasks and Schedule read like the roadmap
+  grid and cards; Command and Providers like an instrument panel. The lattice egg (`site/brand/egg.js`, copied
+  byte for byte to `static/egg.js`) appears once, in the Tasks empty state. Presentation only: no route, protocol,
+  token (D-039), approval (D-045), layout (D-046) or completion (D-037) behaviour changes; element ids stay.
+- **Numbering:** D-057 to D-059 may be held by draft PRs #107 and #108, so this is D-061.
+- **Validation:** `plugins/exo-command/tests/test_subpages_static.py` (egg copy matches the site, used once, every
+  sub-page has a head and an empty state, every pill state has a led form, no `null` children); plugin and root
+  suites; before and after screenshots from `scripts/shots_web_tabs.py`.
+- **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)".
+
+## D-067 (2026-10-13) Engine split step 4: delete what is unused, move peers and the scheduler out of the core
+- **Why:** issue #46. The counted core sat about 24 lines under its 16,000-line cap, so every new core feature was
+  blocked. The first pass of `docs/ENGINE-SPLIT.md` only moved the engine's diagnostics and factory, which the plan
+  itself says does not reduce code.
+- **Decision:** reduce the counted core by real cuts first, then by two seams the plan already names.
+  - Delete code that grep shows nothing outside tests uses, and collapse duplicates. Examples: the decision models'
+    score and noul asks, unreachable fuzzy strategies, a second `_maybe_await` and its inline copies, a copy of
+    `HubBus`, duplicated CLI provider process code, the per-session-tree branch the engine never takes, and 59
+    `@dataclass` lines the protocol decorators now apply.
+  - Open approvals become `ApprovalDesk` (`exo.core.approvals`), one record per request instead of five dicts.
+  - The peer transport moves to `exo.peers` (step 3's "peer transport"). The scheduler moves to `exo.scheduler`.
+    `exo.compose` attaches both (`attach_peers`, `attach_scheduler`) at the same point in construction as before,
+    so tool order and prompts do not change. `PeerConfig` and `EngineTarget` stay in the core, because bus ingress
+    and jobs use them.
+  - Members that the outside code needs get public names: `run_turn`, `channels`, `Delegator.route`.
+  - The memory and context slot defaults that Exo never calls stay, because exo-context and exo-memory also run
+    under Hermes, which does call them.
+- **Rejected:** removing `exo upstream merge` or echo engine commands (user-facing behaviour), moving trace
+  rendering out again (a view move, not a seam), raising the cap.
+- **Budget (lead call, 2026-10-13):** the core cap goes from 16,000 to 15,000 lines to keep the gain
+  (`tests/integration/test_wave1_acceptance.py`). Step 4's completion criteria (private-state reads, inward product
+  imports) remain open under #46.
+- **Behaviour:** no protocol, event or command changes. D-033, D-038, D-039, D-040, D-045 and D-052 to D-054 checks
+  run as before, and required-executor mode (#70) still fails closed. An engine built without composition no longer
+  has peers or a scheduler: `peers` and `schedule.edit` answer `unsupported` there.
+- **Numbers:** 15,986 counted lines on main before, 14,812 after (1,174 fewer): about 300 deleted, 561 moved with peers, about 320 moved
+  with the scheduler, 20 added by the approvals desk.
+- **Validation:** root suite (twice) and every plugin suite, `ruff check`, the mypy baseline (it shrank from 277 to
+  249 entries; no new ones), `python -m exo.protocol.export --check`.
+- **Docs:** `docs/ENGINE-SPLIT.md` "Progress", `docs/DEVELOPER-GUIDE.md` §1, `docs/CORE.md`, `docs/PEERS.md`,
+  `docs/SCHEDULE.md`, `CHANGELOG.md`.
+
+## D-068 (2026-10-13) Turns do not wait for memory upkeep
+- **Why:** `build` waited up to `settle_timeout` (60 s) for pending summaries before every model call, so slow
+  bookkeeping delayed replies (issue #99).
+- **Decision:** build the prompt from ready summaries plus the verbatim tail and let summaries and merges finish in
+  the background. Only when that view would overflow `view_budget` does the turn wait, for `overflow_settle` (5 s)
+  at most. A summary node turns `done` in one step and `build` reads in one synchronous stretch, so a turn sees
+  either the old view or the merged one, never a mix. Logic is in `src/exo/turn_settle.py`, outside the counted core.
+- **Validation:** `tests/core/test_turn_settle.py`, `tests/core/loop/test_loop.py`.
+- **Docs:** `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep".
+
+## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
+- **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It
+  calls `update_session(title=...)` and announces the change with the existing `session.updated` event. The protocol
+  stays at its cap of 30 commands and 30 events. Only the principal may rename (D-052); anyone else gets `forbidden`.
+- **Why:** issue #98. Titles are what make `/sessions` and `/resume` scannable, and the title is already stored in SQLite.
+  A new command type would have broken the cap; the `unsteer` pattern (D-045) already shows the way.
+- **Clients:** the TUI has `/rename`; the web page has `/rename` and a double-click on a thread in the list
+  (`POST /api/chat/sessions/<id>/rename`). Auto-titling from the first message is out of scope.
+- **Numbering:** D-062 to D-068 may be held by open PRs, so this is D-069.
+- **Validation:** `tests/core/test_rename.py`, `plugins/exo-command/tests/test_ghost.py`.
+- **Docs:** `docs/COMMANDS.md`, `docs/USER-GUIDE.md`, `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-070 (2026-10-13) Inspect, steer and stop running subagents without a new protocol command (issue #97)
+- **Why:** a delegated child is a real session with a live loop, but the principal saw only the final receipt. A
+  child going wrong could be stopped only by stopping the parent.
+- **Decision:** one built-in `command.run` name, `subagent`, with verbs `list`, `open`, `send` and `stop`. The protocol
+  stays at its 30 commands and 30 events. The rules live in `src/exo/subagents.py`, outside the counted core. The core
+  hook is a `marks` dict on the `Delegator` and two lines in `_receipt`.
+- **Who may act (D-052):** the principal, or the task's parent session (a tool in that session calls
+  `subagents.steer(..., by=<parent id>)`). Local callers and other sessions get `forbidden`.
+- **Who wrote it (D-040):** a principal caller typed the note, so it is stored with author `principal`. The parent
+  session speaks as `delegate`. Neither path can write a message the principal did not type under the principal's name.
+- **Finished children:** a child that is done, failed or cancelled is locked. Steering or stopping it fails with
+  `conflict` and a message naming the status. Nothing is written.
+- **Receipt:** the child's receipt summary gets a line, `[steered by principal]` or `[stopped by parent]`, and a
+  `task.updated` event carries the same words while the child runs.
+- **Clients:** TUI `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>`; web Tasks cards (Open, Steer, Stop)
+  over `/api/tasks/<task>[/steer|/stop]`. `/open` reads the child with `session.get`, not `session.resume`, so a live
+  loop is never repaired mid-turn.
+- **Limits:** child approvals shown in the parent, and `followup` or `resume`, are follow-ups. Typing straight into a
+  child's session still steers it through `turn.send`; that path works but leaves no note on the receipt.
+- **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-073 (2026-10-13) Signed updates verify against a pinned trust list (issue #42)
+- **Decision:** `update.require_signed` (default false) makes `exo update` verify the upstream tip with
+  `git verify-commit` (SSH signatures) against `$EXO_HOME/update/allowed_signers`, then merge exactly that sha. The
+  repo's `trust/allowed_signers` is only the source for the pin; `exo update --pin-trust [REV]` copies it, by hand.
+  Code: `src/exo/update_verify.py`, two hooks in `src/exo/update_cmd.py`.
+- **Why:** the repo cannot be its own root of trust. If the check read the list from the commit being installed, an
+  attacker who can push could add their own key. A local pin makes the first trust decision a human one and makes
+  every later key change visible. Opt-in because the project does not sign releases yet.
+- **Limits:** trust on first use of the pin; SSH signatures only; commit signatures, not tags; `uv tool` installs
+  cannot be verified. A key compromise needs the pin edited by hand.
+- **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.

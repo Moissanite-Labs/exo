@@ -32,11 +32,11 @@ def test_gates_validation_broker_handler_and_post_order():
     async def approve(call, spec, ctx):
         seen.append("approval")
         await asyncio.sleep(0)
-        call.arguments["value"] = 7
+        assert call.arguments["value"] == 7
 
     reg.add_hook(PRE_TOOL_CALL, approve)
     reg.add_hook(POST_TOOL_CALL, lambda call, result, ctx: seen.append(("post", result.text())))
-    result = reg.call_sync(ToolCall("c", "t", {"value": "rewritten"}))
+    result = reg.call_sync(ToolCall("c", "t", {"value": 7}))
     assert result.text() == "done"
     assert seen == ["approval", ("broker", "t", 7), ("handler", 7), ("post", "done")]
 
@@ -106,6 +106,38 @@ def test_unknown_tool_and_name_rewrite_fail_closed():
     assert "call identity" in reg.call_sync(ToolCall("c", "t")).text()
 
 
+@pytest.mark.parametrize('field', ['arguments', 'nested', 'id', 'name', 'cwd', 'session', 'number_type'])
+def test_required_registry_hook_cannot_change_bound_request(field):
+    class Never(Broker):
+        async def execute(self, *args): pytest.fail('mutated request dispatched')
+    reg = Registry(executor=Never(), executor_required=True)
+    reg.tool('t', 'demo')(lambda *args: pytest.fail('mutated handler ran'))
+    def mutate(call, spec, ctx):
+        if field == 'arguments': call.arguments = {'changed': True}
+        elif field == 'nested': call.arguments['items'][0]['value'] = 'changed'
+        elif field == 'number_type': call.arguments['n'] = True  # True == 1 must not bypass binding
+        elif field in ('id', 'name'): setattr(call, field, 'changed')
+        else: setattr(ctx, field, 'changed')
+    reg.add_hook(PRE_TOOL_CALL, mutate)
+    result = reg.call_sync(ToolCall('c', 't', {'items': [{'value': 'original'}], 'n': 1}), ToolContext())
+    assert result.call_id == 'c' and result.is_error and 'cannot change' in result.text()
+
+
+def test_caller_mutation_during_approval_cannot_change_snapshot():
+    original = ToolCall('c', 't', {'items': ['original']})
+    seen = []
+    reg = Registry(executor=Broker(), executor_required=True)
+    reg.tool('t', 'demo')(lambda args, ctx: seen.append(args) or 'done')
+    async def approve(call, spec, ctx):
+        original.id, original.name = 'other', 'unknown'
+        original.arguments['items'][0] = 'changed'
+        await asyncio.sleep(0)
+        assert call.id == 'c' and call.arguments == {'items': ['original']}
+    reg.add_hook(PRE_TOOL_CALL, approve)
+    result = reg.call_sync(original)
+    assert result.call_id == 'c' and seen == [{'items': ['original']}]
+
+
 def test_cancel_propagates_and_never_falls_back():
     async def main():
         entered = asyncio.Event()
@@ -119,13 +151,13 @@ def test_cancel_propagates_and_never_falls_back():
         reg.tool("t", "demo")(lambda *args: pytest.fail("handler ran"))
         ctx = ToolContext()
         task = asyncio.create_task(reg.call(ToolCall("c", "t"), ctx))
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), 5)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await asyncio.wait_for(task, 5)
         assert ctx.cancel.is_set()
 
-    asyncio.run(main())
+    asyncio.run(asyncio.wait_for(main(), 5))
 
 
 def test_request_rejects_non_json_and_freezes_constructed_values():

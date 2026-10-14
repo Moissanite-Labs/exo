@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
 from contextlib import aclosing
@@ -32,7 +33,7 @@ from typing import Any, AsyncGenerator, AsyncIterator, Mapping, cast
 import httpx
 
 from exo.core.models.base import StreamState, error_event
-from exo.core.models.anthropic import sanitize_tool_id
+from exo.core.models.anthropic import normalize_schema, sanitize_tool_id
 from exo.core.trace import scrub
 from exo.core.types import Message, ProviderEvent, ToolCall, ToolSpec, Usage
 
@@ -51,23 +52,16 @@ CLEANUP_TIMEOUT = 2.0
 STDERR_BYTES = 4096
 
 
-def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
+def child_env(env: Mapping[str, str] | None = None, *, drop: tuple[str, ...] = DROP_ENV,
+              extra: Mapping[str, str] = CHILD_ENV) -> dict[str, str]:
     """The CLI's environment (D-039): an explicit minimal set from the caller's (``exo.envscrub.minimal_env``:
     PATH, HOME, locale, terminal, CLAUDE_CONFIG_DIR, proxies, CA bundles), never an API credential (OAuth login
-    only, so nothing in DROP_ENV), plus fixed switches. The parent's other variables never reach the CLI."""
+    only, so nothing in DROP_ENV), plus fixed switches. The parent's other variables never reach the CLI.
+    ``drop`` and ``extra`` let another CLI provider reuse this with its own credential names and switches."""
     from exo.envscrub import minimal_env
 
-    out = {k: v for k, v in minimal_env(os.environ if env is None else env).items() if k not in DROP_ENV}
-    out.update(CHILD_ENV)
-    return out
-
-
-def _schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Anthropic rejects top-level oneOf/allOf/anyOf and an object without properties."""
-    out = {k: v for k, v in (schema or {}).items() if k not in ("oneOf", "allOf", "anyOf")}
-    out.setdefault("type", "object")
-    if out["type"] == "object" and not isinstance(out.get("properties"), dict):
-        out["properties"] = {}
+    out = {k: v for k, v in minimal_env(os.environ if env is None else env).items() if k not in drop}
+    out.update(extra)
     return out
 
 
@@ -134,7 +128,7 @@ def workdir() -> str:
     return tempfile.mkdtemp(prefix="claude-cli-cwd-")
 
 
-def kill_group(proc: asyncio.subprocess.Process) -> None:
+def kill_group(proc: asyncio.subprocess.Process | subprocess.Popen) -> None:
     """SIGKILL the CLI's whole process group (node and MCP children); it leads its own session."""
     try:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -161,21 +155,37 @@ async def stop_group(proc: asyncio.subprocess.Process) -> None:
         transport.close()  # bound cleanup if a detached descendant retains the captured pipes
 
 
-class ClaudeCliProvider:
-    """Provider over a ``claude`` executable. ``command`` is its path; the model is an alias (sonnet, opus, haiku)."""
+_UNSET: Any = object()
 
-    name = "claude-cli"
 
-    def __init__(self, command: str = "claude", *, name: str | None = None, model: str | None = None,
-                 env: Mapping[str, str] | None = None, read_timeout: float | None = 60.0,
+class CliProvider:
+    """Shared constructor of the CLI providers. ``command`` is the executable; ``model`` is optional.
+    Subclasses set ``name``, ``default_command`` and ``default_read`` (the per-line read timeout)."""
+
+    name = "cli"
+    default_command = ""
+    default_read = 60.0
+
+    def __init__(self, command: str | None = None, *, name: str | None = None, model: str | None = None,
+                 env: Mapping[str, str] | None = None, read_timeout: float | None = _UNSET,
                  timeout: float = 600.0) -> None:
-        self.command = command
+        if read_timeout is _UNSET:
+            read_timeout = self.default_read
+        self.command = self.default_command if command is None else command
         self.model = model
         self.env = env
         self._timeout = httpx.Timeout(timeout, read=read_timeout or timeout)  # the router quotes ``_timeout.read``
         self._read = read_timeout or timeout
         if name:
             self.name = name
+
+
+class ClaudeCliProvider(CliProvider):
+    """Provider over a ``claude`` executable. ``command`` is its path; the model is an alias (sonnet, opus, haiku)."""
+
+    name = "claude-cli"
+    default_command = "claude"
+    default_read = 60.0
 
     def _diagnostic(self, text: Any, limit: int = 300) -> str:
         # Scrub token/header patterns and credentials already in the caller's environment. Do not read a key
@@ -194,7 +204,7 @@ class ClaudeCliProvider:
         except ValueError as exc:
             yield error_event(f"claude-cli: {exc}", 400, retryable=False)
             return
-        manifest = [{"name": t.name, "description": t.description, "inputSchema": _schema(t.parameters)}
+        manifest = [{"name": t.name, "description": t.description, "inputSchema": normalize_schema(t.parameters)}
                     for t in tools or []]
         body: dict[str, Any] = {"tools": [{"name": PREFIX + t["name"], "description": t["description"],
                                            "input_schema": t["inputSchema"]} for t in manifest]}

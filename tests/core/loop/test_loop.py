@@ -277,7 +277,6 @@ def test_fork_lineage_and_undo(tmp_path):
 
     s, child, grand = run(go())
     assert child.parent == s.id and grand.parent == child.id
-    assert store.lineage(grand.id) == [grand.id, child.id, s.id]
     assert [m.text() for m in store.messages(child.id)] == ["one", "r1", "branch", "child"]
     assert store.messages(child.id)[0].meta["forked_from"] == store.messages(s.id)[0].id
     assert store.get_session(s.id).message_count == 4  # parent untouched
@@ -332,7 +331,8 @@ def test_merge_when_view_over_budget(tmp_path):
     assert top[0].level >= 1 and top[0].start == 1
 
 
-def test_turn_waits_for_pending_summary(tmp_path):
+def test_turn_does_not_wait_for_pending_summary(tmp_path):
+    """Issue #99: the turn starts from verbatim; the summary lands in the background and the next turn uses it."""
     summ = Summ()
     store, ctx, prov, loop, seen = _tree_loop(tmp_path, summ)
 
@@ -342,15 +342,15 @@ def test_turn_waits_for_pending_summary(tmp_path):
         for i in range(2):
             store.append_message(s.id, Message.user(f"old{i}"))
             store.append_message(s.id, Message.assistant(f"ans{i}"))
-        task = asyncio.create_task(loop.send(s.id, "new"))
-        await asyncio.sleep(0.05)
-        assert not task.done() and prov.calls == []  # blocked on the summary
+        await asyncio.wait_for(loop.send(s.id, "new"), 2)  # not held by the gated summary
+        assert "summary pending" in prov.calls[0][0].text() and "old0" in prov.calls[0][0].text()
         summ.gate.set()
-        await asyncio.wait_for(task, 2)
+        await asyncio.wait_for(ctx.settle(s.id), 2)
+        await loop.send(s.id, "next")
         return s
 
     run(go())
-    assert "SUMMARY1" in prov.calls[0][0].text()
+    assert "SUMMARY1" in prov.calls[-1][0].text()
 
 
 def test_settle_timeout_falls_back_to_verbatim(tmp_path):

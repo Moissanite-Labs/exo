@@ -19,6 +19,9 @@ the protocol and the running core in `docs/CORE-V2-INTERFACES.md`, the command l
 | `exo.cli` | The `exo` command. Every subcommand is in `docs/COMMANDS.md`. |
 
 The package holds much more than these four. `exo.core` is the loop, engine, tools and plugin loader.
+`exo.compose` builds the engine `exo serve` runs and attaches `exo.peers` (the peer transport) and `exo.scheduler`
+(scheduled jobs), which sit outside the core since D-067 (`docs/ENGINE-SPLIT.md`). The counted core (`exo.core`,
+`exo.protocol`, `exo.server` and two command-line modules) stays under 15,000 lines, enforced by a test.
 `exo.protocol` and `exo.server` carry the wire. `exo.learn`, `exo.consolidate`, `exo.ask`, `exo.eval` and
 `exo.brief` are the learning side (`docs/LEARNING.md`, `docs/TOOLS-CLI.md`). `exo.bus` is the signed relay between
 seats. `exo.gate` is the action gate (`docs/GATE.md`). `exo.ingest` imports past conversations.

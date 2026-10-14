@@ -6,19 +6,16 @@ Wire format, from https://docs.typesafe.ai/api.md and checked live:
     POST {base_url}/systemone        Authorization: Bearer <key>
     {"state": ..., "model": "jev-latest", "questions": {id: question}}
     question: {"type": "choice", "instructions": str, "criteria": {option: description | null}}
-              {"type": "score",  "instructions": str, "criteria": [level description, ...]}
               {"type": "noul",   "instructions": str, "criteria": {"true": str, "false": str}}  (criteria optional)
     reply:    {"model", "usage": {input_tokens, output_tokens}, "answers": {id: answer}}
     answers:  choice {"choice", "probabilities": {option: p}, "confidence"}
-              score  {"score", "legend", "probabilities": {level: p}, "confidence"}
               noul   {"noul": p_yes}
 
 Public API for the gate and the learning loop (all async, routed through the router's ``decision``
 role with fallback to aux then main):
 
-    ask_choice(router, state, question, options, role="decision") -> {option: probability}
-    ask_score(router, state, question, levels, role="decision")   -> ScoreResult
-    ask_choice_result / ask_noul give the typed result with ``source``, ``route``, ``confidence``.
+    ask_choice_result(router, state, question, options, role="decision") -> ChoiceResult
+        the typed result with ``probabilities``, ``source``, ``route``, ``confidence``.
 
 When the route is a generative chat model the same API asks for a JSON answer and reports the chosen
 option as probability 1.0 with ``source="generative"``. Per D-015 a decision model may only make a gate
@@ -29,7 +26,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, AsyncIterator, Mapping, Sequence
 
 import httpx
@@ -39,7 +36,6 @@ from exo.core.types import Message, ProviderEvent, ToolSpec
 
 DEFAULT_MODEL = "jev-latest"
 MAX_OPTIONS = 255
-SCORE_LEVELS = (2, 10)
 GATE_ORDER = ("allow", "log", "ask", "deny")  # loosest to strictest (exo.gate.OUTCOMES)
 
 
@@ -65,19 +61,11 @@ class ChoiceAnswer:
 
 
 @dataclass
-class ScoreAnswer:
-    score: float
-    probabilities: dict[str, float]
-    legend: dict[str, str] = field(default_factory=dict)
-    confidence: float | None = None
-
-
-@dataclass
 class NoulAnswer:
     noul: float  # probability of yes
 
 
-Answer = ChoiceAnswer | ScoreAnswer | NoulAnswer
+Answer = ChoiceAnswer | NoulAnswer
 
 
 @dataclass
@@ -97,22 +85,6 @@ class ChoiceResult:
     confidence: float | None = None
 
 
-@dataclass
-class ScoreResult:
-    score: float
-    probabilities: dict[str, float]
-    source: str
-    route: str = ""
-    confidence: float | None = None
-
-
-@dataclass
-class NoulResult:
-    probability: float  # of yes
-    source: str
-    route: str = ""
-
-
 # --- question builders -------------------------------------------------------------------------
 
 def choice_question(instructions: Any, options: Sequence[str] | Mapping[str, Any]) -> dict[str, Any]:
@@ -121,12 +93,6 @@ def choice_question(instructions: Any, options: Sequence[str] | Mapping[str, Any
     if not 2 <= len(crit) <= MAX_OPTIONS:
         raise ValueError(f"choice needs 2 to {MAX_OPTIONS} options, got {len(crit)}")
     return {"type": "choice", "instructions": instructions, "criteria": crit}
-
-
-def score_question(instructions: Any, levels: Sequence[Any]) -> dict[str, Any]:
-    if not SCORE_LEVELS[0] <= len(levels) <= SCORE_LEVELS[1]:
-        raise ValueError(f"score needs {SCORE_LEVELS[0]} to {SCORE_LEVELS[1]} levels, got {len(levels)}")
-    return {"type": "score", "instructions": instructions, "criteria": list(levels)}
 
 
 def noul_question(instructions: Any, true: str | None = None, false: str | None = None) -> dict[str, Any]:
@@ -142,9 +108,6 @@ def parse_answer(raw: Mapping[str, Any]) -> Answer:
         if kind == "choice":
             return ChoiceAnswer(str(raw["choice"]), {str(k): float(v) for k, v in raw["probabilities"].items()},
                                 _num(raw.get("confidence")))
-        if kind == "score":
-            return ScoreAnswer(float(raw["score"]), {str(k): float(v) for k, v in (raw.get("probabilities") or {}).items()},
-                               {str(k): str(v) for k, v in (raw.get("legend") or {}).items()}, _num(raw.get("confidence")))
         if kind == "noul":
             return NoulAnswer(float(raw["noul"]))
     except (KeyError, TypeError, ValueError, AttributeError) as e:
@@ -234,8 +197,9 @@ def _error_text(resp: httpx.Response) -> str:
 
 # --- routed API --------------------------------------------------------------------------------
 
-async def _run(router: Any, role: str, state: Any, question: dict[str, Any], kind: str) -> tuple[Any, str, str]:
+async def _run(router: Any, role: str, state: Any, question: dict[str, Any]) -> tuple[ChoiceAnswer, str, str]:
     """Try each route of ``role`` in order. Returns (answer, source, route ref)."""
+    router.check_spend_policy()
     last: DecisionError | None = None
     tried = 0
     for route in router.chain(role):
@@ -245,16 +209,21 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any], kin
             tried += 1
             try:
                 if getattr(cred.provider, "is_decision", False):
+                    if router.spend_enforced:
+                        from exo.model_spend import SpendDenied
+                        raise SpendDenied("typed decision pricing is unbounded; ask the principal to review the route")
                     reply = await cred.provider.decide(state, {"q": question}, model=route.model)
                     ans = reply.answers.get("q")
-                    if ans is None or ans.__class__ is not {"choice": ChoiceAnswer, "score": ScoreAnswer,
-                                                            "noul": NoulAnswer}[kind]:
-                        raise DecisionError(f"reply lacks a {kind} answer", None, True)
+                    if not isinstance(ans, ChoiceAnswer):
+                        raise DecisionError("reply lacks a choice answer", None, True)
                     router.record_success(cred.id, route.model)
                     return ans, "decision", route.ref
-                ans = await _generative(router, route, cred, sole, state, question, kind)
+                ans = await _generative(router, route, cred, sole, state, question)
                 return ans, "generative", route.ref
             except DecisionError as e:
+                if getattr(router, "spend", None) is not None:
+                    from exo.model_spend import SpendDenied
+                    raise SpendDenied(str(e)) from e
                 last = e
                 if e.status in (400, 413, 422):  # the question itself is bad; another route will fail too
                     raise
@@ -267,99 +236,58 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any], kin
                         " (no credentials: set the provider key or start the local server)"), None, False)
 
 
-async def _generative(router: Any, route: Any, cred: Any, sole: bool, state: Any, question: dict[str, Any],
-                      kind: str) -> Any:
+async def _generative(router: Any, route: Any, cred: Any, sole: bool, state: Any,
+                      question: dict[str, Any]) -> ChoiceAnswer:
     """Ask a chat model for a JSON answer and map it onto the decision shapes (probability 1.0)."""
-    messages = [Message.system(_system_prompt(kind)), Message.user(_user_prompt(state, question))]
+    messages = [Message.system(_SYSTEM_PROMPT), Message.user(_user_prompt(state, question))]
     text: list[str] = []
     failed: list[ProviderEvent] = []
     async for ev in router._attempt(route, cred, sole, messages, [], {"max_tokens": 200, "temperature": 0}, failed):
         if ev.kind == "text":
             text.append(ev.text)
         elif ev.kind == "error":
+            if getattr(router, "spend", None) is not None:
+                from exo.model_spend import SpendDenied
+                raise SpendDenied(ev.error or "model spend stopped")
             raise DecisionError(ev.error or "model error", ev.status, bool(ev.retryable), ev.retry_after)
         elif ev.kind == "done" and ev.message is not None and not text:
             text.append(ev.message.text())
     if failed:
         f = failed[0]
         raise DecisionError(f.error or "model error", f.status, bool(f.retryable), f.retry_after)
-    return _parse_generative("".join(text), question, kind)
+    return _parse_generative("".join(text), question)
 
 
-def _system_prompt(kind: str) -> str:
-    shape = {"choice": '{"choice": "<exactly one option name>"}',
-             "score": '{"score": <the number of one level, counting from 0>}',
-             "noul": '{"noul": <probability of yes, 0 to 1>}'}[kind]
-    return f"You are a decision function. Answer with one JSON object and nothing else, shaped {shape}."
+_SYSTEM_PROMPT = ("You are a decision function. Answer with one JSON object and nothing else, "
+                  'shaped {"choice": "<exactly one option name>"}.')
 
 
 def _user_prompt(state: Any, question: dict[str, Any]) -> str:
     st = state if isinstance(state, str) else json.dumps(state, ensure_ascii=False)
     crit = question.get("criteria")
-    if question["type"] == "score":
-        crit_s = "\n".join(f"{i}: {d}" for i, d in enumerate(crit))
-    elif question["type"] == "choice":
-        crit_s = "\n".join(f"- {k}: {v}" if v not in (None, k) else f"- {k}" for k, v in crit.items())
-    else:
-        crit_s = json.dumps(crit) if crit else ""
+    crit_s = "\n".join(f"- {k}: {v}" if v not in (None, k) else f"- {k}" for k, v in crit.items())
     ins = question["instructions"]
     ins = ins if isinstance(ins, str) else json.dumps(ins, ensure_ascii=False)
     return f"State:\n{st}\n\nQuestion: {ins}\n\n" + (f"Options:\n{crit_s}\n" if crit_s else "")
 
 
-def _parse_generative(text: str, question: dict[str, Any], kind: str) -> Any:
+def _parse_generative(text: str, question: dict[str, Any]) -> ChoiceAnswer:
     m = re.search(r"\{.*\}", text, re.S)
     try:
         obj = json.loads(m.group(0)) if m else {}
     except ValueError:
         obj = {}
-    if not isinstance(obj, dict) or kind not in obj:
+    if not isinstance(obj, dict) or "choice" not in obj:
         raise DecisionError("model did not return the requested JSON answer", None, True)
-    val = obj[kind]
-    if kind == "choice":
-        options = list(question["criteria"])
-        pick = next((o for o in options if o == val), None) or next((o for o in options if str(o).lower() == str(val).strip().lower()), None)
-        if pick is None:
-            raise DecisionError(f"model chose {str(val)[:60]!r}, not one of the options", None, True)
-        return ChoiceAnswer(pick, {o: 1.0 if o == pick else 0.0 for o in options}, None)
-    if kind == "score":
-        n = len(question["criteria"])
-        try:
-            s = float(val)
-        except (TypeError, ValueError):
-            raise DecisionError("model score is not a number", None, True) from None
-        if not 0 <= s <= n - 1:
-            raise DecisionError(f"model score {s} is outside 0..{n - 1}", None, True)
-        lvl = min(range(n), key=lambda i: abs(i - s))
-        return ScoreAnswer(s, {str(i): 1.0 if i == lvl else 0.0 for i in range(n)},
-                           {str(i): str(d) for i, d in enumerate(question["criteria"])}, None)
-    try:
-        p = float(val)
-    except (TypeError, ValueError):
-        raise DecisionError("model noul is not a number", None, True) from None
-    return NoulAnswer(min(1.0, max(0.0, p)))
+    val = obj["choice"]
+    options = list(question["criteria"])
+    pick = next((o for o in options if o == val), None) or next((o for o in options if str(o).lower() == str(val).strip().lower()), None)
+    if pick is None:
+        raise DecisionError(f"model chose {str(val)[:60]!r}, not one of the options", None, True)
+    return ChoiceAnswer(pick, {o: 1.0 if o == pick else 0.0 for o in options}, None)
 
 
 async def ask_choice_result(router: Any, state: Any, question: Any, options: Sequence[str] | Mapping[str, Any], *,
                             role: str = "decision") -> ChoiceResult:
-    ans, source, route = await _run(router, role, state, choice_question(question, options), "choice")
+    ans, source, route = await _run(router, role, state, choice_question(question, options))
     return ChoiceResult(ans.choice, ans.probabilities, source, route, ans.confidence)
-
-
-async def ask_choice(router: Any, state: Any, question: Any, options: Sequence[str] | Mapping[str, Any], *,
-                     role: str = "decision") -> dict[str, float]:
-    """``{option: probability}``. A generative fallback gives 1.0 to its pick and 0.0 to the rest."""
-    return (await ask_choice_result(router, state, question, options, role=role)).probabilities
-
-
-async def ask_score(router: Any, state: Any, question: Any, levels: Sequence[Any], *,
-                    role: str = "decision") -> ScoreResult:
-    """Score on ordered ``levels`` (2 to 10). The score is a level index counted from the first level."""
-    ans, source, route = await _run(router, role, state, score_question(question, levels), "score")
-    return ScoreResult(ans.score, ans.probabilities, source, route, ans.confidence)
-
-
-async def ask_noul(router: Any, state: Any, question: Any, *, role: str = "decision", true: str | None = None,
-                   false: str | None = None) -> NoulResult:
-    ans, source, route = await _run(router, role, state, noul_question(question, true, false), "noul")
-    return NoulResult(ans.noul, source, route)
