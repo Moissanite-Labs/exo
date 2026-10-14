@@ -90,16 +90,65 @@ def writer_holder(home: Path, agent: str) -> str | None:
     return None
 
 
-def _spawn(home: Path) -> subprocess.Popen:
-    log = log_path(home)
-    out = open(private_file(log), "ab")
-    try:
-        proc = subprocess.Popen([sys.executable, "-m", "exo.cli", "serve"], stdin=subprocess.DEVNULL, stdout=out,
-                                stderr=out, start_new_session=True, env=dict(os.environ, EXO_HOME=str(home)))
-    finally:
-        out.close()
-    private_file(pid_path(home)).write_text(f"{proc.pid}\n")
-    return proc
+def _daemonize(home: Path) -> None:
+    """Fork only in a fresh helper interpreter, never in a threaded client.
+
+    setsid alone leaves the core a client descendant on macOS. Reparent it
+    before exec so principal authority can still distinguish clients from tools.
+    """
+    os.setsid()
+    pid = os.fork()
+    if pid:
+        os.write(1, f"{pid}\n".encode())
+        os._exit(0)
+    # Close the PID channel immediately, including on an exec failure.
+    out = os.open(private_file(log_path(home)), os.O_WRONLY | os.O_APPEND)
+    os.dup2(out, 1)
+    os.dup2(out, 2)
+    os.close(out)
+    os.execvpe(sys.executable, [sys.executable, "-m", "exo.cli", "serve"],
+               dict(os.environ, EXO_HOME=str(home)))
+
+
+_DAEMONIZE_SRC = ("import pathlib, sys; from exo.ensure_core import _daemonize;"
+                  "_daemonize(pathlib.Path(sys.argv[1]))")
+
+
+class _DetachedCore:
+    """The helper's successful exit does not mean the detached core exited."""
+
+    def __init__(self, pid: int):
+        self.pid = pid
+
+    def poll(self) -> int | None:
+        try:
+            os.kill(self.pid, 0)
+        except ProcessLookupError:
+            return 1
+        return None
+
+
+def _spawn(home: Path, timeout: float = START_TIMEOUT) -> _DetachedCore:
+    with open(private_file(log_path(home)), "ab") as out:
+        proc = subprocess.Popen([sys.executable, "-c", _DAEMONIZE_SRC, str(home)],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=out,
+                                env=dict(os.environ, EXO_HOME=str(home)))
+        try:
+            result, _ = proc.communicate(timeout=max(0.001, timeout))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            # Do not read until EOF: a broken helper may have leaked the pipe
+            # into a descendant which remains alive after the helper is killed.
+            if proc.stdout is not None:
+                proc.stdout.close()
+            raise CoreUnavailable(f"Exo core startup helper timed out. See {log_path(home)}") from None
+    pid = result.strip()
+    if proc.returncode or not pid.isdigit() or int(pid) <= 1:
+        raise CoreUnavailable(f"Exo core startup helper failed (exit {proc.returncode}). "
+                              f"See {log_path(home)}:\n{_tail(log_path(home))}")
+    private_file(pid_path(home)).write_text(f"{int(pid)}\n")
+    return _DetachedCore(int(pid))
 
 
 def _tail(path: Path, n: int = 6) -> str:
@@ -130,12 +179,11 @@ def startup_lock(home: Path, timeout: float = START_TIMEOUT) -> Iterator[None]:
 
 
 def ensure_core(home: Path | None = None, agent: str | None = None, timeout: float = START_TIMEOUT,
-                say: Callable[[str], None] | None = None, spawn: Callable[[Path], subprocess.Popen] | None = None
+                say: Callable[[str], None] | None = None, spawn: Callable[[Path], subprocess.Popen | _DetachedCore] | None = None
                 ) -> Path:
     """Socket of a core for this agent, starting ``exo serve`` in the background if none is running."""
     home = home or home_dir()
     agent = agent or agent_name()
-    spawn = spawn or _spawn
     if (found := find_core(home, agent)) is not None:
         return found
     deadline = time.monotonic() + timeout
@@ -150,7 +198,7 @@ def ensure_core(home: Path | None = None, agent: str | None = None, timeout: flo
                 exod_socket(home).unlink(missing_ok=True)
             if say:
                 say("Exo core is not running, starting it...")
-            proc = spawn(home)
+            proc = spawn(home) if spawn else _spawn(home, deadline - time.monotonic())
         elif say:
             say(f"Agent {agent} is held by process {holder}; waiting for it to share it...")
         while time.monotonic() < deadline:

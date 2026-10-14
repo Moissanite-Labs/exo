@@ -1,4 +1,8 @@
 """D-036: `exo web` and `exo` share one core in any order."""
+import asyncio
+import json
+import os
+import signal
 import shutil
 import socket
 import subprocess
@@ -121,7 +125,12 @@ def test_real_exod_starts_detached_and_stops(home, monkeypatch):
     sock = ensure.ensure_core(home, "default", timeout=30)
     try:
         assert sock == ensure.exod_socket(home) and ensure.probe(sock) == "alive"
-        assert ensure.pid_path(home).read_text().strip().isdigit()
+        pid = int(ensure.pid_path(home).read_text().strip())
+        from exo.principal import descends_from, _ppid
+        assert not descends_from(pid, os.getpid())
+        if sys.platform == "darwin":
+            assert _ppid(pid) == 1  # macOS launchd adopts detached cores
+        assert pid != os.getpid()
         assert ensure.ensure_core(home, "default", timeout=5) == sock  # second client attaches
     finally:
         msg = ensure.stop_core(home)
@@ -183,3 +192,79 @@ def test_start_lock_releases_on_failure_and_timeout_is_bounded(home):
                 pytest.fail("another owner cannot acquire the starter lock")
     with ensure.startup_lock(home, timeout=0.01):
         pass  # failure and timeout did not leave a held lock
+
+
+def test_startup_helper_failure_is_prompt_and_reports_log(home, monkeypatch):
+    monkeypatch.setattr(ensure, "_DAEMONIZE_SRC", "import sys; sys.stderr.write('helper boom\\n'); sys.exit(7)")
+    started = time.monotonic()
+    with pytest.raises(ensure.CoreUnavailable, match="helper boom"):
+        ensure.ensure_core(home, timeout=0.5)
+    assert time.monotonic() - started < 1.0
+    assert not ensure.pid_path(home).exists()
+
+
+def test_leaked_pid_pipe_cannot_deadlock_startup(home, monkeypatch):
+    # Deliberately broken helper: a child retains stdout after its parent dies.
+    child_file = home / "child.pid"
+    script = ("import os,time,pathlib; pid=os.fork(); "
+              f"pathlib.Path({str(child_file)!r}).write_text(str(os.getpid())) if pid == 0 else None; "
+              "time.sleep(10)")
+    monkeypatch.setattr(ensure, "_DAEMONIZE_SRC", script)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ensure.CoreUnavailable, match="helper timed out"):
+            ensure.ensure_core(home, timeout=0.3)
+        assert time.monotonic() - started < 1.0
+        assert not ensure.pid_path(home).exists()
+        with ensure.startup_lock(home, timeout=0.1):
+            pass
+    finally:
+        if child_file.exists():
+            os.kill(int(child_file.read_text()), signal.SIGKILL)
+
+
+def test_auto_started_core_preserves_principal_and_tool_boundary(home, monkeypatch):
+    from exo.protocol.client import Client
+    from exo.protocol import schema as s
+
+    result_file = home / "tool-result.json"
+    child = r"""
+import json,sys,time
+from pathlib import Path
+from exo.protocol import schema as s
+import httpx
+sock, result = sys.argv[1:]
+key = Path(sock[:-len('.sock')] + '.principal.key')
+for _ in range(100):
+    if Path(sock).exists() and key.exists():
+        break
+    time.sleep(.05)
+with httpx.Client(transport=httpx.HTTPTransport(uds=sock), base_url='http://exod') as c:
+    response = c.post('/command', content=s.Command.of(s.ModelsSet(model='fake:x')).to_json(),
+                      headers={'X-Exo-Principal': key.read_text().strip(), 'X-Exo-Client': 'web'}).json()
+Path(result).write_text(json.dumps(response))
+"""
+    factory = home / "startup_engine.py"
+    factory.write_text(
+        "import os,sys,subprocess\nfrom pathlib import Path\nfrom exo.core.engine import CoreEngine\n"
+        "def create():\n    home=Path(os.environ['EXO_HOME'])\n"
+        "    eng=CoreEngine(home, {'roles': {'main': ['fake:x']}, 'fake': {'reply': 'ok'}}, env={})\n"
+        f"    subprocess.Popen([sys.executable, '-c', {child!r}, str(home/'run'/'exod.sock'), {str(result_file)!r}])\n"
+        "    return eng\n")
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(home), os.environ.get("PYTHONPATH", "")]))
+    monkeypatch.setenv("EXO_ENGINE", "startup_engine:create")
+    sock = ensure.ensure_core(home, timeout=10)
+    try:
+        async def set_model():
+            async with Client(socket=str(sock), principal="web") as client:
+                return await client.send(s.ModelsSet(model="fake:x"))
+        response = asyncio.run(set_model())
+        assert response.ok, response.error
+        assert response.result["routes"][0] == "fake:x"
+        deadline = time.monotonic() + 5
+        while not result_file.exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        tool_response = json.loads(result_file.read_text())
+        assert not tool_response["ok"] and tool_response["error"]["code"] == "forbidden"
+    finally:
+        ensure.stop_core(home)
