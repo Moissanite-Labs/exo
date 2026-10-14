@@ -109,17 +109,20 @@ A value item may ship only when it passes all of these:
 4. **Many people could hold it.** It is phrased at the level of a general principle, not a narrow conviction
    that points to one person.
 
-**How a value is generalised.** The export keeps the principle and drops everything that ties it to its
-holder. Concretely, for each value item:
+**How a value is prepared for export.** The exporter makes limited mechanical edits to the claim; it does not
+infer or write a general principle from a personal story. Before exporting, the principal must rephrase a
+candidate as a general working principle in the source store. The exporter then:
 
-- take only the claim, never its evidence, quotes, dates or links;
-- rewrite it as a working principle in the second person neutral form ("Weigh evidence above who said it"),
-  removing any example, story, cause or named target from the claim;
-- if the claim cannot be stated without its example (the example *is* the value), drop the item.
+- Keep only the claim, never its evidence, quotes, dates or links.
+- Replace references to "the principal" with "the user".
+- For a value, remove a parenthetical example, a "for example" tail and the clause after "because".
+- If the candidate needs its example to make sense, rephrase it in the source store before export; the
+  exporter cannot infer or supply the missing principle.
 
-So the principal's "my years at a firm that hid bad numbers taught me to show the bad news first" ships, if
-at all, as "Lead with bad news; do not bury it." The lesson travels; the firm, the years and the person do
-not.
+For example, the principal should edit "My years at a firm that hid bad numbers taught me to show the bad
+news first" into a general claim such as "Lead with bad news; do not bury it" before export. The exporter
+does not make that semantic rewrite. If a first-person claim remains, the tighter value check rejects it and
+the export fails closed without writing a pack; rephrase the source claim and run the export again.
 
 **The tighter check for the value domain.** On top of the general privacy check (section 1, "The export",
 step 3), every value item must also pass:
@@ -141,10 +144,11 @@ step 3), every value item must also pass:
    `work`, `systems` and `mind`. Value items: type value in any of those domains, and worldview beliefs in
    `mind`. Confidence medium or higher, stability core or durable, current weight at least 0.45. Drop
    anything excluded above, including guarded items.
-2. **Neutralise.** Rewrite each claim in neutral form ("The principal" and any name become "the user"); for
-   value items, also generalise as above. Drop sources, quotes and dates; keep only the evidence count.
-   Compute the signature with `exo.taste.signature`. The item id is a hash of the normalised claim, so it is
-   stable across exports.
+2. **Normalise.** Replace "the principal" with "the user"; for values, remove examples and the causal clause
+   as described above. This is mechanical cleanup, not a semantic rewrite. The principal must rephrase any
+   first-person value claim in the source store before export. Drop sources, quotes and dates; keep only the
+   evidence count. Compute the signature with `exo.taste.signature`. The item id is a hash of the normalised
+   claim, so it is stable across exports.
 3. **Privacy check.** The export fails, and writes nothing, if any line hits:
    - the store's leak patterns (`exo.store.LEAKS`: phone numbers, keys, tokens, passwords);
    - the gate's internal-name sweep (seat names, registry names, agent names, home paths, internal ids,
@@ -156,6 +160,9 @@ step 3), every value item must also pass:
      value items);
    - for value items, the tighter check above.
 
+   A first-person value claim that survives mechanical cleanup fails this check. Nothing is written until
+   the principal rephrases the source claim and reruns the export.
+
    An optional decision-model pass asks of each item "does this name or point to a real person, company,
    place or account?" It can only hold an item, never pass one (the D-015 rule: stricter, never looser).
 4. **Write.** `MANIFEST.json` (version, script version, item count, a sha256 of each file, and the sha256 of
@@ -165,8 +172,12 @@ step 3), every value item must also pass:
    principal to read. Publishing is a public, irreversible act, so it goes through the gate and needs the
    principal's approval each release.
 
-**Reproducible:** the same store snapshot and script version give byte-identical output. A test runs the
-export twice and compares bytes.
+**Reproducible:** byte-identical output requires the same store snapshot, exporter/runtime code and data,
+explicit export inputs, privacy-check inputs and results, checkout skill manifest, and (when `--decision` is
+used) the same decision-model results. Privacy inputs include the store's identity and allow lists, the
+configured Exo home, bus registry and internal-name sources, and the bundled model catalog. Only sorted
+skill names are serialized; an installed wheel without `skills/MANIFEST.json` records `skills: []`. With
+those inputs and results held fixed, a test runs the export twice and compares bytes.
 
 ## 2. Layers and how a lookup resolves
 
@@ -630,7 +641,8 @@ All in `policies/consolidate.yaml`, `taste:` table.
 **Wave 1: layers and export.**
 `src/exo/baseline/` (loader, read-only pack with method and value classes, resolution with provenance tags),
 `exo taste export-house` with the privacy check and the tighter value check, the taste block in the prompt,
-the first pack exported and reviewed. Tests: the export is byte-identical when run twice; a planted name,
+the first pack exported and reviewed. Tests: the export is byte-identical when run twice with the same
+snapshot, inputs, privacy-check results and checkout; a planted name,
 email, seat name, phone number or person node fails the check; for value items, a planted religion, party,
 nationality, place or "when I" line fails, and a capitalised unknown word fails rather than holds; excluded
 types, guarded items and policy files never appear; resolution order (ruling, pin, learned, scoped, house);
@@ -670,7 +682,7 @@ thresholds; `/taste` renders a pending line with the right weeks and estimate.
 | Shipped pack | `baseline/house-taste/` | An empty placeholder, version 0.0.0, so the house layer is off everywhere until the principal exports, reviews and releases the first pack. No pack built from real data is in the repo. |
 | Layers and lookup | `baseline/layers.py` | Ruling, pin, learned (or scoped), house; every entry has a source tag. `P_base(t) = max(0.3, 0.7 * 2^(-t/365))`; house value items start at 0.5 inside the getting-to-know window. |
 | Privacy check | `baseline/privacy.py` | The general check, the store deny list and the value-domain check (section 1). |
-| Export | `baseline/export.py` | `exo taste export-house`. Writes nothing on any fail; byte-identical on rerun. |
+| Export | `baseline/export.py` | `exo taste export-house`. Writes nothing on any fail; byte-identical when its source, code, explicit inputs, privacy-check results and skill manifest match. |
 | Review and release | `baseline/review.py` | `exo taste review OUT --tick ID`, then `--final`. |
 | Prompt block | `plugins/exo-memory` | The taste block sits in the system message after the principal pack, under `taste_budget` (400 tokens; 0 turns it off). Built once per process. |
 | Listing | `baseline/cli.py` | `exo taste`: house on or off (and why), then each item with weight, class and source. The `/taste` view comes in wave 3. |

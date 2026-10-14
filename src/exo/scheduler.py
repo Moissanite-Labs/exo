@@ -4,21 +4,25 @@ Jobs live in ``$EXO_HOME/schedule.sqlite``. ``when`` is a 5-field cron line (min
 month day-of-week; ``*``, lists, ranges, steps) or ``every <n>m|h|d``. A run is a new session at the
 job's tier; the final answer goes out as a ``notice`` (deliver="notice") or to a channel by id.
 Runs missed while the engine was down happen once on start, not once per missed slot.
+
+A product feature on the engine's public turn API, outside the core (docs/ENGINE-SPLIT.md, step 4): the
+composition layer builds it (``CoreEngine(attach_scheduler=Scheduler)``), and the engine only calls ``start``,
+``stop``, ``interrupt`` and ``edit`` (the ``schedule.edit`` command).
 """
 
 from __future__ import annotations
 
 import asyncio
-import inspect
 import re
 import sqlite3
 import time
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any, Callable, TypeAlias
 
 from exo.core import trace
 from exo.core.agents.delegate import BLOCKED_TOOLS
+from exo.core.hooks import maybe_await
 from exo.core.loop import Loop
 from exo.core.private import private_file
 from exo.core.models.router import TIERS
@@ -29,6 +33,9 @@ COLS = ("id", "title", "when", "prompt", "seat", "tier", "deliver", "paused", "l
 EVERY = re.compile(r"^every\s+(\d+)\s*([mhd])$", re.I)
 UNIT = {"m": 60, "h": 3600, "d": 86400}
 RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
+# Aliases: the method Scheduler.list shadows the builtin in the annotations that follow it.
+Jobs: TypeAlias = list[dict[str, Any]]
+Strs: TypeAlias = list[str]
 PROMPT = "You are running a scheduled job unattended. Do the task, then reply with a short plain-English result."
 
 
@@ -86,14 +93,6 @@ def next_run(when: str, after: float) -> float:
     raise ValueError("this cron line never fires")
 
 
-class _Bus:
-    def __init__(self, engine: Any) -> None:
-        self.engine = engine
-
-    async def emit(self, body: Any, session: str | None = None) -> s.Event:
-        return self.engine.hub.publish(body, session)
-
-
 class Scheduler:
     def __init__(self, engine: Any, clock: Callable[[], float] = time.time) -> None:
         self.engine, self.clock = engine, clock
@@ -104,7 +103,9 @@ class Scheduler:
                         ' paused INTEGER NOT NULL DEFAULT 0, last_run REAL, next_run REAL, last_status TEXT)')
         self.db.commit()
         self.running: dict[str, asyncio.Task] = {}
-        self._wake, self._main = asyncio.Event(), None
+        self.loops: dict[str, Loop] = {}  # scheduled child session -> live turn loop
+        self._wake = asyncio.Event()
+        self._main: asyncio.Future[None] | None = None
         self.error_pause = 5.0  # seconds to wait after a failed tick, so a persistent fault does not spin
 
     # ------------------------------------------------------------ jobs
@@ -148,11 +149,11 @@ class Scheduler:
 
     # ------------------------------------------------------------ running
 
-    def due(self, now: float | None = None) -> list[dict[str, Any]]:
+    def due(self, now: float | None = None) -> Jobs:
         now = self.clock() if now is None else now
         return [j for j in self.list() if not j["paused"] and j["next_run"] is not None and j["next_run"] <= now]
 
-    async def tick(self) -> list[str]:
+    async def tick(self) -> Strs:
         """Start every due job (once each, however many slots were missed); returns the job ids started."""
         started = []
         for job in self.due():
@@ -170,33 +171,46 @@ class Scheduler:
             return None
         task_id = new_id("t")
         t = self.running[job["id"]] = asyncio.ensure_future(self.run(job, task_id))
-        t.add_done_callback(lambda _t, j=job["id"]: self.running.pop(j, None))
+        t.add_done_callback(lambda _t: self.running.pop(job["id"], None))
         return task_id
 
     def _emit(self, job: dict[str, Any], task_id: str, status: str, detail: str, child: str | None = None) -> None:
         self.engine.hub.publish(s.TaskUpdated(task_id=task_id, title=job["title"], status=status,
                                               child_session=child, detail=detail))
 
+    def interrupt(self, session: str) -> bool:
+        loop = self.loops.get(session)
+        return bool(loop and loop.interrupt(session))
+
     async def run(self, job: dict[str, Any], task_id: str) -> str:
         e, sid, status, answer = self.engine, None, "failed", ""
         self._emit(job, task_id, "queued", f"Scheduled job {job['title']!r} is waiting to start.")
         try:
-            provider, model = e.agents._route(job["tier"])
+            provider, model = e.agents.route(job["tier"])
             names = sorted(n for n in e.registry.names() if n not in BLOCKED_TOOLS)
             # same turn path as every other turn (audit 2026-10-12): the engine's context tree and memory,
-            # its soul refresh and system extras, and the turn hooks (through ``e._turn``). Only the model,
+            # its soul refresh and system extras, and the turn hooks (through ``e.run_turn``). Only the model,
             # the narrowed toolset and the unattended-job prompt differ.
-            loop = Loop(e.store, provider, bus=_Bus(e), context=e.loop.context, memory=e.loop.memory,
+            loop = Loop(e.store, provider, bus=e.loop.bus, context=e.loop.context, memory=e.loop.memory,
                         tool_specs=lambda: e.registry.specs(names=names), run_tool=e.run_tool,
                         system_prompt="\n\n".join(p for p in (e.loop.system_prompt, PROMPT) if p), model=model,
                         max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
             loop.approval_ms, loop.on_turn_end = e.loop.approval_ms, e.observe_turn
-            loop.before_turn, loop.system_extra = e.loop.before_turn, e.loop.system_extra
+
+            def refresh_prompt() -> str:
+                soul = e.loop.before_turn() if e.loop.before_turn is not None else ""
+                # Refresh may replace the main prompt. Rebuild this run's snapshot afterward; never append to
+                # the main prompt or to the child's previous snapshot (which already carries PROMPT).
+                loop.system_prompt = "\n\n".join(p for p in (e.loop.system_prompt, PROMPT) if p)
+                return soul or ""
+
+            loop.before_turn, loop.system_extra = refresh_prompt, e.loop.system_extra
             info = await loop.create_session(title=f"scheduled: {job['title'][:60]}", model=model, cwd=e.cwd,
                                              agent=getattr(e, "agent", None), kind="scheduled")
             sid = info.id
+            self.loops[sid] = loop
             self._emit(job, task_id, "running", f"Running {job['title']!r}.", sid)
-            res = await e._turn(s.TurnSend(session=sid, text=job["prompt"]), meta={"author": "schedule"},
+            res = await e.run_turn(s.TurnSend(session=sid, text=job["prompt"]), meta={"author": "schedule"},
                                 loop=loop)  # D-041 normal path; D-040 not a live principal turn
             answer = res.message.text() if res is not None and res.message is not None else ""
             stop = getattr(res, "stop_reason", "error")
@@ -210,6 +224,8 @@ class Scheduler:
         except Exception as exc:
             answer = f"{type(exc).__name__}: {exc}"
         finally:
+            if sid is not None:
+                self.loops.pop(sid, None)  # cleanup must happen even if final database bookkeeping fails
             self.db.execute("UPDATE jobs SET last_run=?, last_status=? WHERE id=?", (self.clock(), status, job["id"]))
             self.db.commit()
             ok = status == "done"
@@ -223,12 +239,10 @@ class Scheduler:
     async def _deliver(self, job: dict[str, Any], text: str) -> None:
         e, to = self.engine, job["deliver"]
         msg = f"{job['title']}: {text}"
-        chan = e._channels.get(to) if to != "notice" else None
+        chan = e.channels.get(to) if to != "notice" else None
         if chan is not None and hasattr(chan, "deliver"):
             try:
-                r = chan.deliver(msg)
-                if inspect.isawaitable(r):
-                    await r
+                await maybe_await(chan.deliver(msg))
                 return
             except Exception as exc:
                 e.hub.publish(s.Notice(text=f"Could not deliver to {to!r}: {exc}", level="warn"))
@@ -268,14 +282,14 @@ class Scheduler:
         while True:
             try:
                 await self.tick()
+                nxt = [j["next_run"] for j in self.list() if not j["paused"] and j["next_run"] is not None]
+                delay = max(0.0, min(nxt) - self.clock()) if nxt else 3600.0
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # one bad tick (a bad row, a full disk) must not end every future job
                 trace.report("scheduler tick", exc)
                 await asyncio.sleep(self.error_pause)
                 continue
-            nxt = [j["next_run"] for j in self.list() if not j["paused"] and j["next_run"] is not None]
-            delay = max(0.0, min(nxt) - self.clock()) if nxt else 3600.0
             self._wake.clear()
             try:
                 await asyncio.wait_for(self._wake.wait(), min(delay, 3600.0) + 0.05)
@@ -283,12 +297,13 @@ class Scheduler:
                 pass
 
 
-async def handle_schedule_edit(engine: Any, body: Any) -> dict[str, Any]:
-    """schedule.edit: list, add, remove, pause, resume, run_now. The scheduler is ``engine.scheduler`` (made on first use)."""
-    b = asdict(body) if is_dataclass(body) else dict(body)
-    sch = getattr(engine, "scheduler", None)
-    if sch is None:
-        sch = engine.scheduler = Scheduler(engine)
+    async def edit(self, body: Any) -> dict[str, Any]:
+        """The ``schedule.edit`` command; ``{"error": ...}`` for a bad request."""
+        return await handle_schedule_edit(self, body)
+
+async def handle_schedule_edit(sch: Scheduler, body: Any) -> dict[str, Any]:
+    """schedule.edit: list, add, remove, pause, resume, run_now (``Scheduler.edit``)."""
+    b = asdict(body) if is_dataclass(body) and not isinstance(body, type) else dict(body)
     act = b.get("action")
     try:
         if act == "list":

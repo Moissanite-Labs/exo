@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
 
 from exo.core.context import SUMMARIZER_PREAMBLE, VIEW_HEADER
 from exo.core.engine import CoreEngine

@@ -105,6 +105,21 @@ instruction, or an instruction that never reaches the principal store. Three par
 
 Same commands and events as before: no protocol change for capture.
 
+## A turn does not wait for memory upkeep (D-068, issue #99)
+
+A turn is built from the summaries that are ready plus the verbatim tail. A span whose summary is still running
+stays verbatim in the view ("summary pending"); the summary and merge work goes on in the background and the next
+turn picks it up. Nothing the turn says is delayed by bookkeeping.
+
+The one exception is size. If that view (finished summaries, unfinished spans verbatim, and the tail) is over
+`view_budget`, the turn waits for pending summaries, but only for `overflow_settle` seconds (5 by default, never
+more than `settle_timeout`), then builds with what is ready. The rule lives in `src/exo/turn_settle.py`.
+
+The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
+summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf
+summaries or the finished summary. Messages are never both summarized and verbatim, and never neither. Memory
+content is the same once the summaries finish. Tests: `tests/core/test_turn_settle.py`.
+
 ## Undo and failed summaries (D-041)
 
 - **Undo.** Undo hides the entries of the undone turns. It also deletes every tree node whose range reaches the

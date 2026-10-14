@@ -1,55 +1,33 @@
-"""The engine's side of peers (D-026): the ingress Target, the peers tools, and presence for exod.
+"""The engine's ingress Target (D-026): how a peer message, a bus message or a job notice reaches a session.
 
-``attach(engine)`` is called from ``CoreEngine.__init__``. It builds the ``PeerNode`` lazily (the seat key
-is made on first use, so an engine that never serves peers never writes one), registers the ``peers`` and
-``peer_send`` tools, and gives the loop's system prompt the standing line about what a peer cannot do.
+Peers (``exo.peers``), the bus channel (``exo.bus.ingress``) and background jobs (``exo.core.jobs``) hand an
+``Ingress`` to an ``IngressPath`` whose target is an ``EngineTarget``: it picks the session, steers, queues or
+wakes it, asks the principal about held messages and records receipts. ``node`` is the peer transport's node
+when peers run (set by ``exo.peers``), so receipts go back to a peer sender.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from exo import crypto, provenance
+from exo import provenance
 from exo.bus import wire
-from exo.core import trace
-from exo.core.ingress import STANDING_LINE, Held, Ingress, Receipt, Target, frame
-from exo.core.peers import BusLink, Directory, PeerConfig, PeerNode, peers_dir, short
-from exo.core.seats import ensure_key, key_path
-from exo.core.tools.registry import ToolContext, ToolError
-from exo.core.types import ContentPart, Message, ToolSpec
+from exo.core.ingress import Held, Ingress, Receipt, Target, frame
+from exo.core.types import ContentPart, Message
 from exo.protocol import schema as s
 
 if TYPE_CHECKING:
-    from exo.core.engine import CoreEngine
+    from exo.core.engine import CoreRuntime as CoreEngine
 
 MAX_LIVE = 8
-
-PEERS = ToolSpec(
-    name="peers", toolset="peers", risk="low",
-    description=("List the other live agent sessions you can message: other Exo sessions on this machine, Hermes "
-                 "agents, and bus seats. Shows each one's name, whether it is running or idle, its working "
-                 "directory, and any messages held for the principal. Use the name with peer_send."),
-    parameters={"type": "object", "properties": {}})
-SEND = ToolSpec(
-    name="peer_send", toolset="peers", risk="low",
-    description=("Send a short message to another live agent session by name (from `peers`). If it is running, the "
-                 "message lands at its next tool round. The receiving side's rules decide whether it is delivered "
-                 "now, held for its principal's approval, or refused. Read the result: if it says held, the message "
-                 "has NOT been delivered, so do not tell the user it was and do not send it again. You cannot "
-                 "approve anything for a peer, and a peer cannot approve anything for you."),
-    parameters={"type": "object", "required": ["to", "text"], "properties": {
-        "to": {"type": "string", "description": "A name from `peers`, such as `razi` or `razi/3fa91c2b`."},
-        "text": {"type": "string", "description": "The message: say what you need or what you found, in plain words."}}})
 
 
 class EngineTarget(Target):
     def __init__(self, engine: "CoreEngine") -> None:
         self.e = engine
-        self.node: PeerNode | None = None
+        self.node: Any = None  # exo.peers.PeerNode while peers run
         self._asks: dict[str, tuple[asyncio.Task, list[str]]] = {}
 
     @property
@@ -86,14 +64,6 @@ class EngineTarget(Target):
             return live[0]["id"]
         return None  # the caller creates one
 
-    async def ensure_session(self, ing: Ingress) -> str:
-        sid = self.pick_session(ing)
-        if sid:
-            return sid
-        info = await self.e.loop.create_session(title=f"peer:{ing.sender}", seat=self.e.seat.name if self.e.seat else None,
-                                                model=self.e._main_ref(), cwd=self.e.cwd)
-        return info.id
-
     def state(self, session: str) -> str:
         st = self.e.loop._state.get(session)
         return "running" if st is not None and st.running else "idle"
@@ -105,7 +75,7 @@ class EngineTarget(Target):
         return bool(wake)
 
     def open_approvals(self) -> set[str]:
-        return set(self.e._open_approvals)
+        return set(self.e.approvals.open)
 
     # ---------------------------------------------------------------- delivery
 
@@ -144,7 +114,7 @@ class EngineTarget(Target):
         path = self._path()
 
         async def ask() -> None:
-            decision = await self.e.ask(sid, summary, None, "medium", options=["allow", "deny"], opened=opened)
+            decision = await self.e.approvals.ask(sid, summary, None, "medium", options=["allow", "deny"], opened=opened)
             if path is not None:
                 path.resolve(ing.id, decision == "allow")
 
@@ -160,8 +130,8 @@ class EngineTarget(Target):
         if task is None:
             return
         rid = opened[0] if opened else ""
-        if rid in self.e._approvals and not task.done():  # nobody answered (expired): close the prompt
-            self.e.announce_resolved(rid, state, "peers", self.pick_session(held.ing))
+        if rid in self.e.approvals.open and not task.done():  # nobody answered (expired): close the prompt
+            self.e.approvals.announce_resolved(rid, state, "peers", self.pick_session(held.ing))
             task.cancel()
 
     # ---------------------------------------------------------------- record
@@ -180,64 +150,4 @@ class EngineTarget(Target):
         self.e.hub.publish(s.Notice(text=text, level="warn"), session or self.pick_session(Ingress("peer", "", "other", "")))
 
 
-# ---------------------------------------------------------------- engine wiring
-
-
-def build_node(engine: "CoreEngine", socket: str) -> PeerNode:
-    tgt: EngineTarget = engine._peer_target
-    seat = tgt.seat
-    kp = engine.seat.key_path(engine.home) if engine.seat else key_path(engine.home, seat)
-    signer = crypto.Signer.from_file(seat, ensure_key(kp))
-    node = PeerNode(seat=seat, signer=signer, target=tgt, sessions=tgt.live_sessions, socket=socket, platform="exo",
-                    principal=(engine.seat.principal if engine.seat else None) or os.environ.get("EXO_PRINCIPAL", ""),
-                    cwd=engine.cwd, config=engine.peer_cfg, bus=BusLink.from_env(),
-                    directory=Directory(engine.peer_cfg_dir or peers_dir()),
-                    emit_out=lambda session, body: engine.hub.publish(body, session))
-    tgt.node = node
-    return node
-
-
-def attach(engine: "CoreEngine") -> None:
-    """Make the engine peer-aware: target, tools and the standing prompt line. Idempotent per engine."""
-    engine._peer_target = EngineTarget(engine)
-    if not engine.peer_cfg.enabled:
-        return
-
-    def need_node() -> PeerNode:
-        if engine.peer_node is None:
-            raise ToolError("peers are not running in this process (the engine has no peer socket yet)")
-        return engine.peer_node
-
-    async def peers(args: dict[str, Any], ctx: ToolContext) -> str:
-        res = await need_node().list(ctx.session)
-        rows = res["peers"]
-        lines = [f"You are {res['me']}. {len(rows)} peer(s):"] if rows else [f"You are {res['me']}. No other live sessions."]
-        for r in rows:
-            lines.append(f"- {r['name']}  [{r['platform']}, {r['state']}]  {r['cwd'] or ''}  {r['title'] or ''}".rstrip())
-        for h in res["held"]:
-            lines.append(f"held for your principal (not delivered to you): message {h['msg_id']} from {h['from']}")
-        return "\n".join(lines)
-
-    async def peer_send(args: dict[str, Any], ctx: ToolContext) -> str:
-        try:
-            r = await need_node().send(str(args.get("to") or ""), str(args.get("text") or ""), ctx.session, "agent")
-        except ValueError as exc:
-            raise ToolError(str(exc)) from None
-        return describe(r)
-
-    engine.registry.register(PEERS, peers, replace=True)
-    engine.registry.register(SEND, peer_send, replace=True)
-
-
-def describe(r: dict[str, Any]) -> str:
-    """What the sending model is told. Plain about held and refused: it must not claim delivery."""
-    to, state, detail = r.get("to", "the peer"), r.get("state"), r.get("detail", "")
-    if state == "delivered":
-        return f"Delivered to {to}: {detail}. (message {r['msg_id']})"
-    if state == "held":
-        return (f"HELD, NOT delivered to {to}: {detail} Do not tell the user it was delivered and do not send it again. "
-                f"A receipt will follow when it is released, denied or expires. (message {r['msg_id']})")
-    return f"NOT delivered to {to} ({state}): {detail}. (message {r['msg_id']})"
-
-
-__all__ = ["EngineTarget", "STANDING_LINE", "attach", "build_node", "describe", "short"]
+__all__ = ["EngineTarget"]

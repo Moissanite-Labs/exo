@@ -27,7 +27,9 @@ exo web                        # the web client: opens http://127.0.0.1:7342/#to
 ```
 
 The page needs the token in that link for every request (D-039): `exo web` prints the link and opens it in your
-browser; open the printed link yourself after `--no-open` or a restart. See `docs/ui/WEB.md`.
+browser; open the latest complete printed link yourself after `--no-open` or a restart.
+The bare URL has no token. Each web launch creates a new token; old links expire. The tab keeps it in
+`sessionStorage` only, never permanent browser storage. See `docs/ui/WEB.md`.
 
 `exo web` finds this folder (`$EXO_PLUGIN_DIRS`, `$EXO_HOME/plugins`, then the repo's `plugins/`) and
 calls `exo_command.__main__.main()`; arguments after `web` go to it. `python -m exo_command` still works
@@ -74,7 +76,8 @@ and nothing loaded from another site. It follows the system light or dark settin
 - **Schedule:** `schedule.edit` list, add, pause, resume, run now, remove.
 
 The server relays the protocol, it adds no state of its own beyond a ring of the last 3000 events and the
-list of open panels. Routes (`api.py` has the table): `GET /api/events` (SSE of every event, `?since=`,
+list of open panels. When a resume cursor falls outside that ring, SSE signals the gap, replays the
+core’s durable event log, and the page refreshes its transcript, live sessions, panels and approvals. Routes (`api.py` has the table): `GET /api/events` (SSE of every event, `?since=`,
 `?session=` or `Last-Event-ID`), `/api/chat/sessions`, `/api/chat/sessions/<id>` (+ `/send`, `/interrupt`),
 `/api/chat/panels`, `/api/complete/commands`, `/api/complete/files` (guarded, D-037), `/api/feedback`, `/api/ui/respond`, `/api/tasks`, `/api/schedule`. Every write checks
 its input, refuses a request from another origin, and answers 501 if the core does not handle that

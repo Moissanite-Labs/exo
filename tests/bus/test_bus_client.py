@@ -1,5 +1,4 @@
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -43,7 +42,7 @@ def test_cli_end_to_end(bus, tmp_path):
 
 def test_client_api_post_inbox_thread_verify(bus):
     beta, gamma = bus.client("beta"), bus.client("gamma")
-    first = beta.post("team:core", "opening", thread="t-1")
+    _first = beta.post("team:core", "opening", thread="t-1")
     beta.post(["gamma"], "reply", thread="t-1")
     gamma.post("beta", "sealed", enc_to="beta")
     assert [m["body"] for m in gamma.inbox()][:2] == ["opening", "reply"]

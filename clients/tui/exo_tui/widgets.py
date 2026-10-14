@@ -247,7 +247,7 @@ class Composer(TextArea):
         self.key_hook: Any = None
         self.pane = False  # the big editor is open: Enter is a newline, ctrl+s sends, markdown is lightly coloured
         self.ghost = ""
-        self.last_typed = float("-inf")  # monotonic time of the last printable key; the approval card waits on it
+        self.last_typed = float("-inf")  # monotonic time of the last printable key
 
     def at_end(self) -> bool:
         return self.cursor_location == self.document.end
@@ -482,8 +482,11 @@ class StatusStrip(Widget):
         frac = d["ctx"] / d["window"] if d["window"] else 0.0
         sep()
         label("MEM")
-        t.append_text(gauge(frac, 10, "accent2" if frac >= 0.85 else "cold"))
-        t.append(f" {min(999, round(100 * frac))}%", style=rich_style("fg2"))
+        if d["window"]:
+            t.append_text(gauge(frac, 10, "accent2" if frac >= 0.85 else "cold"))
+            t.append(f" {min(999, round(100 * frac))}%", style=rich_style("fg2"))
+        else:
+            t.append("capacity unknown", style=rich_style("fg2"))
         if w >= 70 and d["ctx"]:
             t.append(f" {human_tokens(d['ctx'])}", style=rich_style("fg3"))
         if w >= 56:
@@ -545,16 +548,7 @@ class ApprovalCard(Vertical, can_focus=True):
 
     def on_mount(self) -> None:
         self.query_one("#deny-note").display = False
-        if not self.app.composer_typed_recently():  # never steal focus from a message being typed (D-043)
-            self.focus()
-        self.set_interval(0.3, self._claim_focus)
         reveal(self)
-
-    def _claim_focus(self) -> None:
-        """Take focus once the composer is empty and quiet, so a plain o answers when nobody is typing."""
-        if not self.has_focus and not self.noting and self.app.focused is not None \
-                and isinstance(self.app.focused, Composer) and not self.app.composer_typed_recently():
-            self.focus()
 
     def _redraw(self) -> None:
         self.query_one("#approval-body", Static).update(self.body())
@@ -571,7 +565,15 @@ class ApprovalCard(Vertical, can_focus=True):
         self.post_message(self.Answered(self.req.request_id, decision, note))
 
     def on_key(self, event: events.Key) -> None:
-        if self.noting or not self.has_focus:  # single keys only act when the card has focus
+        if self.noting:
+            if event.key == "escape":
+                self.noting = False
+                self.query_one("#deny-note").display = False
+                self.focus()
+                self._redraw()
+                event.stop()
+            return
+        if not self.has_focus:  # editable inputs never authorize; only a deliberately focused card acts
             return
         k = event.key
         opts = self.req.options
@@ -584,11 +586,9 @@ class ApprovalCard(Vertical, can_focus=True):
             return
         if k == "o" and "allow" in opts:
             self._answer("allow")
-        elif k == "a" and "allow_always" in opts:
+        elif k in ("a", "A", "shift+a") and "allow_always" in opts:
             self.confirming = True
             self._redraw()
-        elif k in ("A", "shift+a") and "allow_always" in opts:
-            self._answer("allow_always")
         elif k == "d":
             self.noting = True
             self.query_one("#approval-body", Static).update(self.body())
@@ -596,6 +596,9 @@ class ApprovalCard(Vertical, can_focus=True):
             box.display = True
             box.focus()
         else:
+            if k == "escape":
+                self.app.query_one(Composer).focus()
+                event.stop()
             return  # esc included: it never answers for you
         event.stop()
 

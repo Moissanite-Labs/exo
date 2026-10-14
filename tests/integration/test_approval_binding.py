@@ -157,6 +157,6 @@ def test_matching_binding_is_accepted_and_always_is_kept_by_the_gate(tmp_path):
 
     asyncio.run(run())
     assert holder["resp"].ok and sent == ["we shipped"]
-    assert not eng._always  # no unscoped in-memory allow: the gate keeps a text-bound grant instead
+    assert not eng.approvals.always  # no unscoped in-memory allow: the gate keeps a text-bound grant instead
     grants = json.loads((Path(os.environ["EXO_HOME"]) / "state" / "gate-grants.json").read_text())
     assert grants[0]["rule"] == "message_send" and grants[0]["binding"] == holder["req"].binding

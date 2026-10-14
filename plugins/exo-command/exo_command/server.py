@@ -283,10 +283,14 @@ class WebServer:
                      b"Connection: close\r\n\r\n: exo-command events\n\n")
         q = self.centre.subscribe_events()
         try:
-            sent = since
-            for ev in self.centre.events_since(since, session):
+            events, gap = await self.centre.replay_events(since, session)
+            sent = 0 if gap and gap["reset"] else since
+            if gap:
+                writer.write(b"event: gap\ndata: " + json.dumps(gap).encode() + b"\n\n")
+            for ev in events:
                 writer.write(_frame(ev))
                 sent = ev["seq"]
+            writer.write(b'event: synced\ndata: {}\n\n')
             await writer.drain()
             while True:
                 try:

@@ -7,13 +7,17 @@ provider-stated reset is re-probed after max(60 s, 2% of the open window), never
 past the reset, and each failed probe re-stamps a shorter window. Credentials with
 siblings, and billing failures, keep the provider reset.
 
-Keys: environment, then the macOS Keychain (macOS only), then ~/.config/exo/keys.env (see keys.py).
+Keys: environment, then the macOS Keychain, Linux Secret Service when `secret-tool` is available, then
+`~/.config/exo/keys.env` (mode 0600; override with `EXO_KEYS_FILE`; see keys.py).
 """
 
 from __future__ import annotations
 
 import os
+import asyncio
+import concurrent.futures
 import shutil
+import threading
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -47,6 +51,7 @@ BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
+CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
 
 
 def load_catalog(path: Path | str = CATALOG_PATH) -> dict[str, Any]:
@@ -86,6 +91,7 @@ class Breaker:
     level: int = 0
     until: float = 0.0
     trial: bool = False
+    last_failed: float = 0.0
 
 
 @dataclass
@@ -142,11 +148,15 @@ class Router:
         self.client = client
         self.cooldowns: dict[str, Cooldown] = {}
         self.breakers: dict[str, Breaker] = {}  # route ref -> state; in memory, per process
+        self._forced_probes: set[str] = set()  # live last-resort probes, independent of the bounded trial lease
         b = breaker or {}
         self.breaker_failures = max(1, int(b.get("failures") or BREAKER_FAILURES))
         self.breaker_cooldown_s = float(b.get("cooldown_s") or BREAKER_COOLDOWN_S)
         self.breaker_max_s = max(self.breaker_cooldown_s, float(b.get("max_cooldown_s") or BREAKER_MAX_S))
         self._creds: dict[str, list[Credential]] = {}
+        self._cred_lock = threading.Lock()
+        self._cred_versions: dict[str, int] = {}
+        self._cred_pending: dict[tuple[str, int], concurrent.futures.Future] = {}
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any] | None, **kw: Any) -> Router:
@@ -220,26 +230,46 @@ class Router:
         self.set_role(role, [ref, *[r for r in self.roles.get(role, []) if r != ref]])
 
     def credentials(self, provider: str) -> list[Credential]:
-        if provider in self._creds:
-            return self._creds[provider]
+        """Synchronous cached lookup. Coordinate workers without holding a lock across secret-store I/O.
+        Reload advances a generation so an in-flight lookup cannot restore credentials that were invalidated."""
+        while True:
+            with self._cred_lock:
+                if provider in self._creds:
+                    return self._creds[provider]
+                version = self._cred_versions.get(provider, 0)
+                token = (provider, version)
+                owner = token not in self._cred_pending
+                pending = self._cred_pending.setdefault(token, concurrent.futures.Future())
+            if not owner:
+                pending.result()
+                continue
+            try:
+                creds = self._load_credentials(provider)
+            except BaseException as exc:
+                with self._cred_lock:
+                    self._cred_pending.pop(token, None)
+                    pending.set_exception(exc)
+                raise
+            with self._cred_lock:
+                if self._cred_versions.get(provider, 0) == version:
+                    self._creds[provider] = creds
+                self._cred_pending.pop(token, None)
+                pending.set_result(None)
+            # A reload during I/O discards this result and resolves the new generation.
+
+    def _load_credentials(self, provider: str) -> list[Credential]:
         creds: list[Credential] = []
+        spec = self.providers.get(provider)
+        timeout = {"read_timeout": float(spec["read_timeout"])} if spec and spec.get("read_timeout") else {}
         if provider in self.instances:
             creds = [Credential(provider, None, self.instances[provider])]
-        elif (spec := self.providers.get(provider)) is not None and spec.get("transport") == "claude-cli":
-            # No key: the CLI's own OAuth login is the credential. Available only if the binary is on PATH.
-            exe = shutil.which(spec.get("command", "claude"), path=self.env.get("PATH", ""))
+        elif spec is not None and spec.get("transport") in CLI_TRANSPORTS:
+            # No key: the CLI's own login is the credential (D-051 for muse). Available only if the binary is on PATH.
+            cls = CLI_TRANSPORTS[spec["transport"]]
+            exe = shutil.which(spec.get("command", cls.default_command), path=self.env.get("PATH", ""))
             if exe:
-                prov = ClaudeCliProvider(exe, name=provider, env=self.env,
-                                         **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
-                creds = [Credential(provider, None, prov)]
-        elif (spec := self.providers.get(provider)) is not None and spec.get("transport") == "muse-cli":
-            # No key: the muse CLI's own login is the credential (D-051). Available only if the binary is on PATH.
-            exe = shutil.which(spec.get("command", "muse"), path=self.env.get("PATH", ""))
-            if exe:
-                prov = MuseCliProvider(exe, name=provider, env=self.env,
-                                       **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
-                creds = [Credential(provider, None, prov)]
-        elif (spec := self.providers.get(provider)) is not None:
+                creds = [Credential(provider, None, cls(exe, name=provider, env=self.env, **timeout))]
+        elif spec is not None:
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
@@ -247,18 +277,20 @@ class Router:
             for i, key in enumerate(keys):
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
-                                 headers=spec.get("headers"), session_header=spec.get("session_header"),
-                                 **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
+                                 headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout)
                 creds.append(Credential(cid, key, prov))
-        self._creds[provider] = creds
         return creds
 
     def reload_credentials(self, provider: str | None = None) -> list[str]:
         """Forget cached credentials (and their cooldowns) so the next call reads keys again: after a key was
         added or removed with `exo providers`, the TUI or the web client (D-034). Returns the providers reset."""
-        names = [provider] if provider else list(self._creds)
+        with self._cred_lock:
+            names = [provider] if provider else list(dict.fromkeys([*self._creds,
+                                                                   *(n for n, _ in self._cred_pending)]))
+            for n in names:
+                self._cred_versions[n] = self._cred_versions.get(n, 0) + 1
+                self._creds.pop(n, None)
         for n in names:
-            self._creds.pop(n, None)
             for k in [k for k in self.cooldowns if k == n or k.startswith((n + "|", n + "#"))]:
                 self.cooldowns.pop(k, None)
             for k in [k for k in self.breakers if k.startswith(n + ":")]:
@@ -274,7 +306,18 @@ class Router:
 
     def _pick(self, route: Route, now: float) -> tuple[Credential, bool] | None:
         creds = self.credentials(route.provider)
+        return self._choose(route, now, creds)
+
+    async def _pick_async(self, route: Route, *, failed: set[str] | None = None,
+                          attempted: set[tuple[str, str]] | None = None) -> tuple[Credential, bool] | None:
+        creds = await asyncio.to_thread(self.credentials, route.provider)
+        return self._choose(route, self.clock(), creds, failed=failed, attempted=attempted)
+
+    def _choose(self, route: Route, now: float, creds: list[Credential], *, failed: set[str] | None = None,
+                attempted: set[tuple[str, str]] | None = None) -> tuple[Credential, bool] | None:
         for c in creds:
+            if (failed and c.id in failed) or (attempted and (c.id, route.model) in attempted):
+                continue
             if self._available(c.id, now) and self._available(f"{c.id}|{route.model}", now):
                 return c, len(creds) == 1
         return None
@@ -302,6 +345,8 @@ class Router:
     # --- route circuit breaker -----------------------------------------------------
     def route_open(self, ref: str, now: float) -> bool:
         """True while the route's breaker is open. After the cool-down one caller gets the trial call (a 60 s lease)."""
+        if ref in self._forced_probes:
+            return True
         b = self.breakers.get(ref)
         if b is None or b.level == 0:
             return False
@@ -313,6 +358,7 @@ class Router:
     def route_failed(self, ref: str, now: float) -> float | None:
         """Count a retryable failure; returns the cool-down in seconds if this one opens the breaker."""
         b = self.breakers.setdefault(ref, Breaker())
+        b.last_failed = now
         b.fails = self.breaker_failures if b.trial else b.fails + 1  # a failed trial reopens at once
         if b.fails < self.breaker_failures:
             return None
@@ -347,32 +393,96 @@ class Router:
         tried: list[str] = []
         attempts: list[dict[str, Any]] = []  # every try, for the model.call record (D-025)
         last: ProviderEvent | None = None
+        failed_credentials: set[str] = set()
+        attempted_credentials: set[tuple[str, str]] = set()
         chain = self.chain(role)
-        usable = [r for r in chain if self._pick(r, self.clock()) is not None]
-        skip = {r.ref for r in usable if self.route_open(r.ref, self.clock())}
-        skip = set() if len(skip) == len(usable) else skip  # all cooling down: try them anyway
-        for i, route in enumerate(chain):
+        # Breaker state is cheap; resolve credentials only when reaching a route, off the event loop.
+        skip = {r.ref for r in chain if self.route_open(r.ref, self.clock())}
+        pending_routes, i = chain, 0
+        last_resort = False
+        forced_pick = None
+        resort_notice = None
+        while True:
+            if i >= len(pending_routes):
+                candidate = None
+                if skip and not last_resort and (last is None or last.retryable):
+                    # One last chance on the oldest failure. Credential cooldowns and attempts within this call
+                    # still apply: an open breaker does not make an auth/billing/rate-limited credential usable.
+                    skipped = sorted(((r, self.breakers.get(r.ref)) for r in chain if r.ref in skip),
+                                     key=lambda pair: pair[1].last_failed if pair[1] else float("inf"))
+                    for route, state in skipped:
+                        if state is None or route.ref in self._forced_probes:
+                            continue
+                        picked = await self._pick_async(route, failed=failed_credentials,
+                                                        attempted=attempted_credentials)
+                        now = self.clock()
+                        # Another stream can recover/reload the route, or claim its trial, during lookup.
+                        if self.breakers.get(route.ref) is not state or route.ref in self._forced_probes \
+                                or (state.trial and state.until > now):
+                            continue
+                        if picked is not None:
+                            state.trial, state.until = True, now + 60.0
+                            self._forced_probes.add(route.ref)
+                            forced_pick = picked
+                            candidate = route
+                            break
+                if candidate is not None:
+                    if last is not None:
+                        resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} failed ({(last.error or '')[:80]}); "
+                                                       f"trying {candidate.ref} as a last resort")
+                    pending_routes = [candidate]
+                    skip.clear()
+                    last_resort = True
+                    i = 0
+                else:
+                    break
+            route = pending_routes[i]
+            i += 1
             if route.ref in skip:
                 continue
-            while (picked := self._pick(route, self.clock())) is not None:
+            while (picked := forced_pick or await self._pick_async(route, failed=failed_credentials,
+                                                                  attempted=attempted_credentials)) is not None:
+                selected = forced_pick is not None
+                if last_resort and not selected and route.ref in self._forced_probes:
+                    break  # a later sibling lookup yielded while another caller claimed a probe
+                forced = last_resort
+                forced_pick = None
+                if forced:
+                    self._forced_probes.add(route.ref)
                 cred, sole = picked
+                attempted_credentials.add((cred.id, route.model))
                 tried.append(route.ref)
                 failed: list[ProviderEvent] = []
-                async for ev in self._attempt(route, cred, sole, messages, tools, opts, failed, attempts):
-                    yield ev
+                try:
+                    if resort_notice is not None:
+                        yield resort_notice
+                        resort_notice = None
+                    async for ev in self._attempt(route, cred, sole, messages, tools, opts, failed, attempts):
+                        yield ev
+                finally:
+                    if forced:
+                        self._forced_probes.discard(route.ref)
                 if not failed:
                     return
                 last = failed[0]
-                nxt = next((r for r in chain[i:] if r.ref not in skip and self._pick(r, self.clock())), None)
-                if nxt is None:
-                    if attempts[-1]["outcome"] == "fallback":
-                        attempts[-1]["outcome"] = "error"  # nothing left to fall back to
+                # A missing/unavailable model can fall back to another model on the same valid credential.
+                # Other failures exclude that credential for this call, even if its timer expires meanwhile.
+                if last.status != 404 and last.status not in NO_FALLBACK_STATUS:
+                    failed_credentials.add(cred.id)
+                nxt = None
+                for candidate in pending_routes[i - 1:]:
+                    if candidate.ref not in skip and await self._pick_async(
+                            candidate, failed=failed_credentials, attempted=attempted_credentials) is not None:
+                        nxt = candidate
+                        break
                 if nxt is not None:  # tell the user why the wait ended and where the call goes next
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
                     yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}")
                 if attempts and (cs := attempts[-1].get("cooldown_s")):
                     yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for {cs / 60:.0f} min")
+        if attempts and attempts[-1]["outcome"] == "fallback":
+            attempts[-1]["outcome"] = "error"  # normal routes and the optional last resort are exhausted
         end = self._exhausted(role, tried, last)
         end.attempts = attempts
         yield end
@@ -412,7 +522,11 @@ class Router:
                 if fallback:
                     self.record_failure(cred.id, route.model, ev.status, retry_after, sole,
                                         model_only=ev.status in NO_FALLBACK_STATUS)  # an upstream 400 is this model's
-                    if ev.retryable:
+                    if ev.status == 429:
+                        # A responding rate limiter is reachable. Retry-After belongs to the credential cooldown,
+                        # not the outage breaker (including a trial lease left over from an earlier outage).
+                        self.route_ok(route.ref)
+                    elif ev.retryable:
                         cool = self.route_failed(route.ref, self.clock())
                 if started or not fallback:
                     note("error", ev.error or "")
@@ -442,9 +556,11 @@ class Router:
         waits = [cd.until - now for cd in self.cooldowns.values() if cd.until > now]
         wait = min(waits) if waits else None
         if not self.chain(role):
-            return error_event(f"no model configured for role {role!r}", None, retryable=False)
+            return error_event(f"no model configured for role {role!r}; use /providers and choose a default model",
+                               None, retryable=False)
         if not tried and not waits:
-            return error_event(f"no credentials for role {role!r}: set the provider key_env variables",
+            return error_event(f"no credentials for role {role!r}: set the provider key_env variables, "
+                               "or use /providers to add a provider and choose its model",
                                None, retryable=False)
         why = f"; last error: {last.error}" if last is not None else ""
         hint = f"; next route reopens in {wait:.0f}s" if wait else ""
@@ -530,9 +646,6 @@ _BG: dict[str, Any] = {}
 def aux_sync(router: Router, prompt: str | list[Message], *, timeout: float | None = 120.0, **kw: Any) -> str:
     """Blocking ``aux`` for sync callers (plugin threads). Runs on one shared background event loop so the
     router's HTTP clients stay bound to a single loop. Never call it from that loop."""
-    import asyncio
-    import threading
-
     if "loop" not in _BG:
         loop = asyncio.new_event_loop()
         threading.Thread(target=loop.run_forever, name="exo-aux-loop", daemon=True).start()

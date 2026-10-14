@@ -125,11 +125,11 @@ def test_bash_tool_subprocess_cannot_answer_its_own_approval(tmp_path, sock_dir)
                                                  and e.body.call and e.body.call.name == "send_message"), None))
                 await _until(out.exists)
                 await asyncio.sleep(0.1)
-                assert req.request_id in eng._approvals and not eng._approvals[req.request_id][0].done()
+                assert req.request_id in eng.approvals.open and not eng.approvals.open[req.request_id].future.done()
                 # the real principal, a separate client outside the core's process tree, still can
                 while eng._tasks:
-                    for rid, (fut, _sid) in list(eng._approvals.items()):
-                        if not fut.done():
+                    for rid, p in list(eng.approvals.open.items()):
+                        if not p.future.done():
                             await me.call(s.ApprovalRespond(request_id=rid, decision="deny", client="exo-tui"))
                     await asyncio.sleep(0.02)
         finally:

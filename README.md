@@ -16,7 +16,7 @@ Exo is early and in active build. Waves 1 to 3 are built and in daily use on one
 [`DECISIONS.md`](DECISIONS.md) for every significant choice, with the reason and what was rejected.
 
 <p align="center">
-  <img src="docs/media/exo-session.svg" alt="An animated terminal session: a prompt, tool lines ticking in, an approval panel for a git push, a signed answer and the status strip." width="860">
+  <img src="docs/media/exo-session.svg" alt="Hand-authored illustration of a terminal session: a prompt, tool lines ticking in, an example approval panel for a git push, a signed answer and the status strip." width="860">
 </p>
 
 ## What is in it
@@ -24,7 +24,7 @@ Exo is early and in active build. Waves 1 to 3 are built and in daily use on one
 | | |
 |---|---|
 | **One agent, one memory** | A seat is one agent with one append-only, hash-chained log and one summary tree. Windows, channels, scheduled runs and peer messages are threads of it. `/context` shows what the next call carries. [`docs/MEMORY-MODEL.md`](docs/MEMORY-MODEL.md) |
-| **A harness that watches itself** | Every model call records its route, timing and cost. Eight anomaly rules turn the trace into findings. A finding marked fixed is measured again and reopens if it returns. [`docs/TRACE.md`](docs/TRACE.md) |
+| **A harness that watches itself** | Every model call records its route, timing and cost. Anomaly rules turn the trace into findings. A finding marked fixed is measured again and reopens if it returns. [`docs/TRACE.md`](docs/TRACE.md) |
 | **A gate with exact-text approvals** | For outward acts the gate hashes the exact text, target and arguments. Edit one character and it asks again. Seats sign their answers, and standing grants belong to the principal and expire. [`docs/GATE.md`](docs/GATE.md) |
 | **Background jobs** | A long build or test run does not hold the turn. It is a job the agent owns, and the agent gets a notice when it ends. [`docs/JOBS.md`](docs/JOBS.md) |
 | **Peers** | Sessions message each other through one ingress path with a trust policy. A peer message is input, never consent. [`docs/PEERS.md`](docs/PEERS.md) |
@@ -32,13 +32,17 @@ Exo is early and in active build. Waves 1 to 3 are built and in daily use on one
 | **Two clients** | A terminal client (`exo-tui`) and a web client (`exo web`), both drawn from one protocol and one design language. [`docs/UI.md`](docs/UI.md), [`docs/ui/WEB.md`](docs/ui/WEB.md) |
 | **Fits one person, works for anyone** | The core is generic. Everything about a person lives in their own store, built by an onboarding interview. A fresh install with an empty store runs end to end. |
 
-Also built: a signed ledger and personal store, a learning loop that keeps a lesson only if it scores better on
-held-out cases, decision models for small choices, subagents on the cheapest model that can do the job, and
-a provider-agnostic model router with fallback.
+Also built: a signed ledger and personal store, a learning loop with explicit promotion rules and a gated
+path that uses held-out evaluation, decision models for small choices, subagents on the cheapest model that
+can do the job, and a provider-agnostic model router with fallback. Other promotion paths use principal
+rulings or repeated, high-confidence evidence.
 
 ## Screenshots
 
-The demo agent is `atlas`, fixing a failing test in a small library. Text is scripted. The layout is the real client.
+These are historical screenshots driven by scripted test data for a demo agent named `atlas`, fixing a failing
+test in a small library. They may not show current controls or the default layout; the older approval image
+still shows the former Esc stop hint. The main terminal screenshot set uses the classic layout; the separate
+D-046 inverse-layout example is listed in [`docs/media/README.md`](docs/media/README.md).
 
 **Terminal client**
 
@@ -79,6 +83,8 @@ through to the client: `exo --resume` (or `exo resume`), `exo --seat NAME`, `exo
 For the web client, run `exo web` (it starts the shared core if none runs; `exo stop` ends it), then open
 `http://127.0.0.1:7342`. Options, what each install step does, safety rules and re-runs are in
 [`docs/INSTALL.md`](docs/INSTALL.md). To add a model key, see [`docs/PROVIDERS.md`](docs/PROVIDERS.md).
+Provider keys are read from the environment first, then the macOS Keychain or Linux Secret Service (when
+`secret-tool` is available), then a mode-0600 `keys.env` file. `EXO_KEYS_FILE` can point to another file.
 
 The first time `exo` runs on an `EXO_HOME`, the agent gives a short orientation (`/intro`) and turns on
 tutorial mode: small tips the first time something comes up. `/tutorial off` turns them off, and

@@ -10,7 +10,7 @@ from textual import events
 
 from exo_tui.app import SCAFFOLD
 from exo_tui.prefs import DEFAULT_LAYOUT, Prefs
-from exo_tui.widgets import Block, Composer, ToolBlock
+from exo_tui.widgets import Block
 from test_tui import long_history, run, send, until
 
 
@@ -260,6 +260,7 @@ def test_inverse_puts_the_input_on_top_and_stacks_newest_first(tmp_path, monkeyp
     async def sc(app, pilot, client, eng):
         assert app.inverse
         assert app.query_one("#compose").region.y < app.transcript.region.y
+        assert app.strip.region.y < app.query_one("#compose").region.y  # the status strip moved up with the input
         await send(app, pilot, "hello")
         await until(lambda: "friend" in app.transcript_text(), pilot)
         await pilot.pause(0.2)
@@ -301,10 +302,13 @@ def test_layout_command_flips_in_place_and_is_saved(tmp_path, monkeypatch):
         await pilot.pause(0.2)
         assert [w.text for w in app.transcript.children if w.kind in ("user", "assistant")] == ["first", "second"]
         assert app.query_one("#compose").region.y > app.transcript.region.y
+        assert app.strip.region.y > app.query_one("#compose").region.y  # and the status strip went back down
         assert json.loads(Prefs(os.environ["EXO_HOME"]).path.read_text())["layout"] == "classic"
         assert Prefs(os.environ["EXO_HOME"]).layout() == "classic"
         await send(app, pilot, "/layout inverse")
         await until(lambda: app.inverse, pilot)
+        await pilot.pause(0.2)
+        assert app.strip.region.y < app.query_one("#compose").region.y
         assert Prefs(os.environ["EXO_HOME"]).layout() == "inverse"
         await send(app, pilot, "/layout sideways")
         await pilot.pause(0.1)

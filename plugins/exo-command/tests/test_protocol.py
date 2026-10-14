@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+from exo.core.approvals import Pending
 from exo.core.engine import CoreEngine
 from exo.core.models.fake import FakeProvider, tool_turn
 from exo.protocol import schema as s
@@ -43,6 +44,7 @@ class Keyed:
 def make(tmp_path, rules):
     (tmp_path / ".git").mkdir(exist_ok=True)  # a repo: no cwd guard notice (D-032) among the events counted
     eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={})
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     eng.loop.provider = Keyed(rules)
     return eng, Dispatcher(eng)
 
@@ -126,8 +128,9 @@ def test_approvals_listed_and_answered(tmp_path):
         await centre.bootstrap()
         sid = (await centre.source.call(s.SessionCreate(title="gated")))["session"]["id"]
         fut = asyncio.get_running_loop().create_future()
-        eng._approvals["r1"] = (fut, sid)
-        eng.hub.publish(s.ApprovalRequested(request_id="r1", summary="run rm -rf build", risk="high"), sid)
+        req = s.ApprovalRequested(request_id="r1", summary="run rm -rf build", risk="high")
+        eng.approvals.open["r1"] = Pending(fut, sid, req)
+        eng.hub.publish(req, sid)
         await centre.sync()
         snap = centre.snapshot()
         pend = snap["approvals"]["pending"]
@@ -199,8 +202,9 @@ def test_web_server_serves_snapshot_stream_and_answers_approvals(tmp_path):
 
         sid = (await centre.source.call(s.SessionCreate(title="g")))["session"]["id"]
         fut = asyncio.get_running_loop().create_future()
-        eng._approvals["r9"] = (fut, sid)
-        eng.hub.publish(s.ApprovalRequested(request_id="r9", summary="write file"), sid)
+        req = s.ApprovalRequested(request_id="r9", summary="write file")
+        eng.approvals.open["r9"] = Pending(fut, sid, req)
+        eng.hub.publish(req, sid)
         await centre.sync()
         assert (await http(port, "POST", "/api/approvals/r9", {"decision": "maybe"}))[0] == 400
         assert (await http(port, "POST", "/api/approvals/r9", {"decision": "allow"},

@@ -1,8 +1,7 @@
 import asyncio
-import json
 
 from exo import eval as E
-from exo.consolidate import load_state, proposals_list
+from exo.consolidate import proposals_list
 from exo.learn import nightly
 from exo.learn.climb import check_regression, current_config
 from exo.learn.promote import apply_policy
