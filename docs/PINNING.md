@@ -61,8 +61,8 @@ See `patches/README.md` for the live list and its status. The rules:
 
 `tests/contract/` checks that the plugin surfaces Exo uses still exist on a checkout:
 `MemoryProvider` and `ContextEngine` methods, the `PluginContext.register_*` functions, the hook
-names in `VALID_HOOKS` and the middleware kinds. They also fail if either base class gains an
-abstract method Exo does not implement. Without `EXO_HERMES_DIR` they skip.
+names in Hermes's `hermes_cli.plugins.VALID_HOOKS` and the middleware kinds. They also fail if either
+base class gains an abstract method Exo does not implement. Without `EXO_HERMES_DIR` they skip.
 
 Run them with a Python that has Hermes's dependencies, and keep Hermes away from any real home:
 

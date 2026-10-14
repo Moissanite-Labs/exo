@@ -12,7 +12,7 @@ tool up itself. A tool the classifier does not know and the registry calls high 
 never an allow.
 
 Decision model (D-015), on by default (``decision_model``, or ``EXO_GATE_DECISION_MODEL=0`` to turn it off): the async hook
-``apre_tool_call`` asks the router's ``decision`` role ``ask_choice(router, state, question,
+``apre_tool_call`` asks the router's ``decision`` role ``ask_choice_result(router, state, question,
 ["allow", "log", "ask", "deny"])`` after the rules ran, takes the top option and keeps the stricter of the
 two with ``tighten_only(rule_outcome, verdict)``. A model never loosens an outcome, is never asked about a
 call the rules already deny, and a failure or timeout keeps the rule outcome. The core awaits async hooks,

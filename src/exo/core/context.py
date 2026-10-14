@@ -24,7 +24,9 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from exo.core import trace
+from exo.core.hooks import maybe_await
 from exo.core.types import Message, Provider
+from exo.turn_settle import settle_for_turn
 
 # ---------------------------------------------------------------- lifted prompt text
 
@@ -196,11 +198,13 @@ def render_message(msg: Message, limit: int = 4000) -> str:
     return f"[{label}] " + "\n".join(lines)
 
 
-async def _maybe_await(value: Any) -> Any:
-    return await value if asyncio.iscoroutine(value) or isinstance(value, asyncio.Future) else value
-
-
 # ---------------------------------------------------------------- compressor
+
+
+class SummaryError(RuntimeError):
+    def __init__(self, message: str, *, retryable: bool = True):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class DefaultCompressor:
@@ -246,7 +250,7 @@ class DefaultCompressor:
                 return out
             if not retryable:
                 break
-        raise RuntimeError(f"summary failed: {last_error}")
+        raise SummaryError(f"summary failed: {last_error}", retryable=retryable)
 
 
 # ---------------------------------------------------------------- tree
@@ -268,7 +272,7 @@ class SummaryNode:
     lane: str = "live"
     principal: int = 0  # leaves: principal messages in the span (D-032)
     captured: int = 0   # leaves: how many of them the principal store's capture hook took before summarizing
-    attempts: int = 0   # failed summary tries; at the cap the node is skipped and stays verbatim
+    attempts: int = 0   # failed tries; only non-retryable failures become permanently skipped
 
 
 Summarizer = Callable[..., Awaitable[str]]
@@ -331,8 +335,8 @@ class TreeContext:
         self.settle_timeout = settle_timeout
         self.render_limit = render_limit
         self.min_compact_tokens = min_compact_tokens  # a span smaller than this is never summarized
-        self.max_attempts = max_attempts  # a node whose summary fails this often is skipped: verbatim for good
-        self.retry_backoff = retry_backoff  # seconds before the second try; doubles each time
+        self.max_attempts = max_attempts  # cap for explicitly non-retryable failures
+        self.retry_backoff = retry_backoff  # doubles up to five minutes; transient outages remain eligible
         self._retry_at: dict[str, float] = {}  # failed node id -> monotonic time of its next try
         self._lanes = {"live": asyncio.Semaphore(live_parallel),
                        "import": asyncio.Semaphore(import_parallel)}
@@ -387,7 +391,7 @@ class TreeContext:
                     principal = [m for m in msgs if is_principal(m)]
                     extra = ""
                     if self.on_pre_compress is not None:
-                        extra = str(await _maybe_await(self.on_pre_compress(self._hook_session(node.session), msgs)) or "")
+                        extra = str(await maybe_await(self.on_pre_compress(self._hook_session(node.session), msgs)) or "")
                     await self._capture(node, principal, msgs)  # D-032: still before anything is summarized
                     text = "" if estimate_tokens(source) < self.min_compact_tokens else \
                         await self._summarize(node.session, source, extra=extra)
@@ -409,13 +413,20 @@ class TreeContext:
             except Exception as exc:
                 node.status, node.text = "failed", str(exc)
                 node.attempts += 1
-                if node.attempts >= self.max_attempts:  # give up: keep the span verbatim, say so once
+                transient = getattr(exc, "retryable", True)
+                if not transient and node.attempts >= self.max_attempts:
                     node.status, node.text = "skipped", ""
                     self._retry_at.pop(node.id, None)
                     trace.report("summary", f"summary node {node.start}-{node.end} of {node.session} cannot be summarized "
                                  f"after {node.attempts} tries, kept verbatim: {exc}", self._event_session(node.session))
                 else:
-                    self._retry_at[node.id] = time.monotonic() + self.retry_backoff * 2 ** (node.attempts - 1)
+                    delay = min(300.0, self.retry_backoff * 2 ** min(node.attempts - 1, 16))
+                    if transient:
+                        delay = max(1.0, delay)  # a zero/negative setting must not turn an outage into a hot loop
+                    self._retry_at[node.id] = time.monotonic() + delay
+                    if transient and node.attempts == 1:
+                        trace.report("summary", f"summary node {node.start}-{node.end} temporarily unavailable; "
+                                     f"kept verbatim, will retry: {exc}", self._event_session(node.session))
             if not self.store.has_summary(node.id):  # undo dropped this node while it ran: do not bring it back
                 return
             self.store.save_summary(node)
@@ -429,10 +440,11 @@ class TreeContext:
                                     self._event_session(node.session))
             if self.on_compacted is not None:
                 try:
-                    await _maybe_await(self.on_compacted(self._hook_session(node.session), node))
+                    await maybe_await(self.on_compacted(self._hook_session(node.session), node))
                 except Exception:  # a plugin hook never breaks upkeep
                     pass
         if node.status in ("done", "skipped"):
+            self._retry_at.pop(node.id, None)
             self._maybe_merge(node.session)
 
     async def _capture(self, node: SummaryNode, principal: list[Message], context: list[Message]) -> None:
@@ -445,7 +457,7 @@ class TreeContext:
         if self.on_capture is None:
             return
         try:
-            took = await _maybe_await(self.on_capture(self._hook_session(node.session), context))
+            took = await maybe_await(self.on_capture(self._hook_session(node.session), context))
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -607,7 +619,7 @@ class TreeContext:
         """Fresh model input: system prompt with the view appended, then the verbatim tail."""
         self.note(session)
         if settle:
-            await self.settle(session)
+            await settle_for_turn(self, session)
         top = self._top(session)
         frontier = top[-1].end if top else 0
         parts = self._view_parts(top)
@@ -766,7 +778,7 @@ class AgentContext(TreeContext):
         taken = 0
         if todo and self.on_capture is not None:
             try:
-                ok = await _maybe_await(self.on_capture(self._hook_session(key), self._with_context(key, todo)))
+                ok = await maybe_await(self.on_capture(self._hook_session(key), self._with_context(key, todo)))
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -931,7 +943,7 @@ class AgentContext(TreeContext):
             return await super().build(session, system, settle)
         self.note(key)
         if settle:
-            await self.settle(key)
+            await settle_for_turn(self, key)
         top, frontier, parts = self._view(key)
         text = system
         if parts:

@@ -66,10 +66,29 @@ count, status, fixed_in. One row per signature; a recurrence bumps the count.
 - The agent files with `exo_harness_report(title, detail, severity)`; the same title dedups.
 - `feedback.send` with reject or should_have_been files a principal finding (the learning step still runs).
 
-Lifecycle: `open`, then `fixed` (`exo findings fix ID --in SHA`), then `verified` after 20 quiet turns
-(`verify_turns`) or 3 days (`verify_days`) on a harness at or after SHA. The same signature coming back on such
-a harness makes it `reopened`. On an older harness it only counts, and the quiet clock restarts. "At or after"
-is a git ancestor check on the source tree; when it cannot be told, the fix is assumed live.
+Lifecycle: `open`, then `fixed` (`exo findings fix ID --in SHA`), then `verified` after 20 quiet eligible turns
+(`verify_turns`) or 3 quiet days of activity (`verify_days`) on a harness at or after SHA. The same signature
+coming back on such a harness makes it `reopened`. On an older harness it only counts, and the quiet clock
+restarts from zero. "At or after" is a git ancestor check on the source tree; when it cannot be told, the fix is
+assumed live.
+
+Only a turn that could have tripped the signature is evidence the fix held (`trace.eligible`; subagent turns count
+as part of their parent's turn):
+
+| signature | an eligible turn |
+|---|---|
+| `turn.slow`, `turn.wall` | any finished turn |
+| `model.slow:<route>`, `model.wait:<route>`, `model.fallback:<route>`, `model.timeout:<route>` | made a model call that tried that route |
+| `model.mismatch` | had a served model call |
+| `tool.error:<tool>:<kind>`, `tool.repeat:<tool>` | called that tool |
+| `shell.masked_exit` | called `bash` |
+| `subagent.slow` | ran a subagent task |
+| `harness.error:...`, an agent's or the principal's report | no rule can tell: counts toward days only |
+
+A quiet eligible turn adds one to the turn count and marks its day (UTC). A turn where no rule can tell marks the
+day but adds no turn, so a report with no rule is verified only by days. An unrelated turn, a turn that tripped the
+signature, and a turn on a harness older than the fix count for nothing. A day of activity is a day with at least
+one counted turn, so idle days do not verify anything. The count and days are kept per finding in `quiet`.
 
 ## Commands
 - `exo trace [SESSION] [--last N] [--json]`
@@ -78,4 +97,4 @@ is a git ancestor check on the source tree; when it cannot be told, the fix is a
 - `exo findings export --md` (digest for the developer, grouped by severity, newest first)
 - In the TUI: `/trace`, `/findings`; the status line shows the serving route and the open-findings count.
 
-The count reconciles by state. `exo trace`, `/trace` and `exo_trace` start with `findings 7: 3 open, 2 fixed (awaiting re-verification), 1 verified, 1 reopened` (`exo trace --json` has the same under `findings`). A finding that was fixed moves from open to fixed, so the open count drops without any being lost; `/findings` and `exo findings` list fixed and verified ones too, and say what moved since you last looked (`open -> fixed`, `new`). The status-line badge counts open plus reopened.
+The count reconciles by state. `exo trace`, `/trace` and `exo_trace` start with `findings 7: 3 open, 2 fixed (awaiting re-verification), 1 verified, 1 reopened` (`exo trace --json` has the same under `findings`). Without a session, they list up to five open or reopened findings by id and title (issue #100); the summary line counts the rest. A finding that was fixed moves from open to fixed, so the open count drops without any being lost; `/findings` and `exo findings` list fixed and verified ones too, and say what moved since you last looked (`open -> fixed`, `new`). The status-line badge counts open plus reopened.

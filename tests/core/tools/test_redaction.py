@@ -3,7 +3,6 @@ import asyncio
 
 from exo.core.models import keys
 from exo.core.tools import ToolContext, default_registry
-from exo.core.tools.registry import Registry
 from exo.core.types import ToolCall
 
 SECRET = "sk-test-0123456789abcdef"

@@ -1,0 +1,1067 @@
+{
+  "schema": 1,
+  "mypy": "2.4.0",
+  "python": "3.11",
+  "platform": "linux",
+  "targets": [
+    "src/exo",
+    "clients/tui/exo_tui"
+  ],
+  "search_paths": [
+    "src",
+    "clients/tui",
+    "plugins/exo-command"
+  ],
+  "diagnostics": [
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "\"Widget\" has no attribute \"update\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument \"action\" to \"UiRespond\" has incompatible type \"str\"; expected \"Literal['opened', 'dismissed', 'acted', 'ignored']\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument \"decision\" to \"ApprovalRespond\" has incompatible type \"str\"; expected \"Literal['allow', 'deny', 'allow_always']\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument \"session\" to \"FeedbackSend\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument \"session\" to \"SessionFork\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument \"session\" to \"SessionGet\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument \"session\" to \"SessionUndo\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument \"session\" to \"TurnSend\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 3
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument \"verdict\" to \"FeedbackSend\" has incompatible type \"str\"; expected \"Literal['accept', 'edit', 'reject', 'should_have_been']\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument 1 to \"load_session\" of \"ExoApp\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument 2 to \"push_screen\" of \"App\" has incompatible type \"Callable[[Any], Any | Worker[Any]]\"; expected \"Callable[[Any | None], None] | Callable[[Any | None], Awaitable[None]] | None\"",
+      "code": "arg-type",
+      "count": 3
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument 2 to \"push_screen\" of \"App\" has incompatible type \"Callable[[Any], Composer]\"; expected \"Callable[[Any | None], None] | Callable[[Any | None], Awaitable[None]] | None\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Argument 2 to \"push_screen\" of \"App\" has incompatible type \"Callable[[Any], Literal[False] | Worker[None]]\"; expected \"Callable[[Any | None], None] | Callable[[Any | None], Awaitable[None]] | None\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Incompatible types in assignment (expression has type \"DOMNode | None\", variable has type \"Widget\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/app.py",
+      "message": "Incompatible types in assignment (expression has type \"ToolBlock | None\", variable has type \"ToolBlock\")",
+      "code": "assignment",
+      "count": 2
+    },
+    {
+      "path": "clients/tui/exo_tui/hero.py",
+      "message": "Need type annotation for \"edges\" (hint: \"edges: set[<type>] = ...\")",
+      "code": "var-annotated",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/panels.py",
+      "message": "Argument 1 to \"float\" has incompatible type \"Any | None\"; expected \"str | Buffer | SupportsFloat | SupportsIndex\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/providers.py",
+      "message": "\"App[Any]\" has no attribute \"client\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/providers.py",
+      "message": "\"App[Any]\" has no attribute \"sent\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/providers.py",
+      "message": "Argument 2 to \"push_screen\" of \"App\" has incompatible type \"Callable[[Any], Any | Worker[Any]]\"; expected \"Callable[[Any | None], None] | Callable[[Any | None], Awaitable[None]] | None\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/restart.py",
+      "message": "Incompatible types in assignment (expression has type \"_Environ[str] | dict[str, str]\", variable has type \"dict[str, str] | None\")",
+      "code": "assignment",
+      "count": 3
+    },
+    {
+      "path": "clients/tui/exo_tui/restart.py",
+      "message": "Item \"None\" of \"dict[str, str] | None\" has no attribute \"get\"",
+      "code": "union-attr",
+      "count": 5
+    },
+    {
+      "path": "clients/tui/exo_tui/restart.py",
+      "message": "Item \"None\" of \"dict[str, str] | None\" has no attribute \"items\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/widgets.py",
+      "message": "\"App[Any]\" has no attribute \"action_ctrl_c\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/widgets.py",
+      "message": "\"App[Any]\" has no attribute \"edit_in_editor\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "clients/tui/exo_tui/widgets.py",
+      "message": "\"App[Any]\" has no attribute \"toggle_numbers\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "plugins/exo-command/exo_command/api.py",
+      "message": "Incompatible return value type (got \"Any | None\", expected \"str\")",
+      "code": "return-value",
+      "count": 1
+    },
+    {
+      "path": "plugins/exo-command/exo_command/projects.py",
+      "message": "Name \"groups\" already defined on line <line>",
+      "code": "no-redef",
+      "count": 1
+    },
+    {
+      "path": "plugins/exo-command/exo_command/server.py",
+      "message": "List item 0 has incompatible type \"None\"; expected \"str\"",
+      "code": "list-item",
+      "count": 1
+    },
+    {
+      "path": "plugins/exo-command/exo_command/service.py",
+      "message": "Argument \"decision\" to \"ApprovalRespond\" has incompatible type \"str\"; expected \"Literal['allow', 'deny', 'allow_always']\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ask.py",
+      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ask.py",
+      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"datetime | None\"; expected \"datetime\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ask.py",
+      "message": "Argument 1 to \"float\" has incompatible type \"dict[Any, Any] | Any\"; expected \"str | Buffer | SupportsFloat | SupportsIndex\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ask.py",
+      "message": "Incompatible types in assignment (expression has type \"float\", target has type \"int\")",
+      "code": "assignment",
+      "count": 3
+    },
+    {
+      "path": "src/exo/baseline/layers.py",
+      "message": "Incompatible default for parameter \"offs\" (default has type \"frozenset[Never]\", parameter has type \"set[str]\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/baseline/layers.py",
+      "message": "Incompatible default for parameter \"pins\" (default has type \"frozenset[Never]\", parameter has type \"set[str]\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/baseline/privacy.py",
+      "message": "Need type annotation for \"words\" (hint: \"words: set[<type>] = ...\")",
+      "code": "var-annotated",
+      "count": 1
+    },
+    {
+      "path": "src/exo/brief.py",
+      "message": "Argument 1 to \"get\" of \"dict\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 2
+    },
+    {
+      "path": "src/exo/bus/client.py",
+      "message": "Argument 1 to \"make_envelope\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/bus/client.py",
+      "message": "Argument 1 to \"request_headers\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/bus/client.py",
+      "message": "Argument 2 to \"verify_doc\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/bus/client.py",
+      "message": "Incompatible types in assignment (expression has type \"str\", target has type \"int\")",
+      "code": "assignment",
+      "count": 2
+    },
+    {
+      "path": "src/exo/bus/config.py",
+      "message": "Argument \"bind\" to \"RelayConfig\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/bus/config.py",
+      "message": "Argument \"title\" to \"RelayConfig\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/bus/config.py",
+      "message": "Argument \"url\" to \"ClientConfig\" has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/bus/config.py",
+      "message": "Argument 1 to \"Path\" has incompatible type \"str | None\"; expected \"str | PathLike[str]\"",
+      "code": "arg-type",
+      "count": 2
+    },
+    {
+      "path": "src/exo/bus/config.py",
+      "message": "Value of type variable \"AnyStr\" of \"expanduser\" cannot be \"str | None\"",
+      "code": "type-var",
+      "count": 2
+    },
+    {
+      "path": "src/exo/bus/ingress.py",
+      "message": "\"CoreEngine\" has no attribute \"_bus_target\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "src/exo/bus/mcp_server.py",
+      "message": "Value of type \"Mapping[str, str] | None\" is not indexable",
+      "code": "index",
+      "count": 1
+    },
+    {
+      "path": "src/exo/bus/store.py",
+      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"str\"; expected \"int\"",
+      "code": "arg-type",
+      "count": 2
+    },
+    {
+      "path": "src/exo/bus/tools.py",
+      "message": "Incompatible default for parameter \"seats\" (default has type \"tuple[()]\", parameter has type \"list[str] | list[dict[Any, Any]]\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/capture.py",
+      "message": "Incompatible types in assignment (expression has type \"int | None\", target has type \"None\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/cli_chat.py",
+      "message": "Argument \"decision\" to \"ApprovalRespond\" has incompatible type \"str\"; expected \"Literal['allow', 'deny', 'allow_always']\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/complete.py",
+      "message": "Unsupported operand types for > (\"int\" and \"None\")",
+      "code": "operator",
+      "count": 1
+    },
+    {
+      "path": "src/exo/config.py",
+      "message": "Unsupported target for indexed assignment (\"dict[Any, Any] | None\")",
+      "code": "index",
+      "count": 1
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Argument \"domain\" to \"Belief\" has incompatible type \"Any | str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Argument 1 to \"Evidence\" has incompatible type \"**dict[str, object]\"; expected \"float\"",
+      "code": "arg-type",
+      "count": 2
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Argument 1 to \"Evidence\" has incompatible type \"**dict[str, object]\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 2
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Argument 1 to \"age_days\" has incompatible type \"object\"; expected \"str | datetime\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 2
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Argument 1 to \"get\" of \"Ledger\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Argument 1 to \"get\" of \"dict\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 2
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Argument 10 to \"Proposal\" has incompatible type \"Any | str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Argument 2 to \"_archive\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Argument 6 to \"Reflection\" has incompatible type \"Any | str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Generator has incompatible item type \"tuple[object, float]\"; expected \"tuple[float, float]\"",
+      "code": "misc",
+      "count": 1
+    },
+    {
+      "path": "src/exo/consolidate.py",
+      "message": "Invalid index type \"Any | None\" for \"dict[str, dict[Any, Any]]\"; expected type \"str\"",
+      "code": "index",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/agents/delegate.py",
+      "message": "Argument \"bus\" to \"Loop\" has incompatible type \"_Bus\"; expected \"EventBus | None\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/agents/delegate.py",
+      "message": "Function \"exo.core.agents.delegate.Delegator.list\" is not valid as a type",
+      "code": "valid-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/context.py",
+      "message": "Argument 2 has incompatible type \"str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/findings.py",
+      "message": "Function \"exo.core.findings.Findings.list\" is not valid as a type",
+      "code": "valid-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/ingress.py",
+      "message": "Argument \"default\" to \"field\" has incompatible type \"None\"; expected \"Future[Any]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/loop.py",
+      "message": "Argument 2 to \"_emit\" of \"Loop\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/loop.py",
+      "message": "Argument 3 to \"build\" of \"TreeContext\" has incompatible type \"**dict[str, str]\"; expected \"bool\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/loop.py",
+      "message": "Incompatible types in assignment (expression has type \"str\", target has type \"int\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/loop.py",
+      "message": "Need type annotation for \"history\" (hint: \"history: list[<type>] = ...\")",
+      "code": "var-annotated",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/models/anthropic.py",
+      "message": "Argument 2 to \"map_finish_reason\" has incompatible type \"dict[str, str]\"; expected \"dict[str, Literal['end', 'tool_use', 'max_tokens', 'interrupted', 'error']]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/models/base.py",
+      "message": "Argument \"type\" to \"ContentPart\" has incompatible type \"str\"; expected \"Literal['text', 'image', 'reasoning']\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/models/base.py",
+      "message": "Need type annotation for \"data\" (hint: \"data: list[<type>] = ...\")",
+      "code": "var-annotated",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/models/claude_cli.py",
+      "message": "Argument 1 to \"get\" of \"dict\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/models/claude_cli.py",
+      "message": "Unsupported operand types for + (\"str\" and \"Collection[str]\")",
+      "code": "operator",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/models/claude_cli_mcp.py",
+      "message": "Dict entry 0 has incompatible type \"str\": \"bool\"; expected \"str\": \"Collection[str]\"",
+      "code": "dict-item",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/models/claude_cli_mcp.py",
+      "message": "List item 0 has incompatible type \"dict[str, str]\"; expected \"str\"",
+      "code": "list-item",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/models/decision.py",
+      "message": "Item \"None\" of \"Any | None\" has no attribute \"items\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/models/muse_cli.py",
+      "message": "Argument 1 to \"classify_failure\" has incompatible type \"int | None\"; expected \"int\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/models/openai_chat.py",
+      "message": "Argument 2 to \"map_finish_reason\" has incompatible type \"dict[str, str]\"; expected \"dict[str, Literal['end', 'tool_use', 'max_tokens', 'interrupted', 'error']]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/plugins.py",
+      "message": "Argument 3 to \"_track\" of \"PluginContext\" has incompatible type \"Callable[[], ChannelEntry | None]\"; expected \"Callable[[], None]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/plugins.py",
+      "message": "Argument 3 to \"_track\" of \"PluginContext\" has incompatible type \"Callable[[], CommandEntry | None]\"; expected \"Callable[[], None]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/plugins.py",
+      "message": "Argument 3 to \"_track\" of \"PluginContext\" has incompatible type \"Callable[[], SkillEntry | None]\"; expected \"Callable[[], None]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/sessions.py",
+      "message": "Argument 3 to \"_chain\" has incompatible type \"Any | int | None\"; expected \"int\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/sessions.py",
+      "message": "Incompatible return value type (got \"int | None\", expected \"int\")",
+      "code": "return-value",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/skills.py",
+      "message": "Incompatible types in assignment (expression has type \"_Environ[str] | dict[str, str]\", variable has type \"dict[str, str] | None\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/skills.py",
+      "message": "Item \"None\" of \"dict[str, str] | None\" has no attribute \"get\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/skills.py",
+      "message": "Value of type \"dict[str, str] | None\" is not indexable",
+      "code": "index",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/tools/builtin/codefind.py",
+      "message": "Need type annotation for \"errors\" (hint: \"errors: list[<type>] = ...\")",
+      "code": "var-annotated",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/tools/builtin/patch.py",
+      "message": "Incompatible types in assignment (expression has type \"str | None\", variable has type \"str\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/tools/builtin/shell.py",
+      "message": "\"IO[Any]\" has no attribute \"read1\"; maybe \"read\"?",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/tools/builtin/ui.py",
+      "message": "Argument \"kind\" to \"UiPanel\" has incompatible type \"Any | str\"; expected \"Literal['markdown', 'diff', 'table', 'tasks', 'approval', 'taste', 'choice', 'file', 'chart']\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/trace.py",
+      "message": "Argument 1 to \"detect\" has incompatible type \"tuple[str, str, int]\"; expected \"TurnTrace\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/trace.py",
+      "message": "Argument 1 to \"get\" of \"dict\" has incompatible type \"tuple[str, str, int]\"; expected \"tuple[str, str]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/trace.py",
+      "message": "Incompatible types in assignment (expression has type \"TurnTrace\", variable has type \"tuple[str, str, int]\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/trace.py",
+      "message": "Invalid index type \"tuple[str, str, int]\" for \"dict[tuple[str, str], int]\"; expected type \"tuple[str, str]\"",
+      "code": "index",
+      "count": 1
+    },
+    {
+      "path": "src/exo/core/trace.py",
+      "message": "Need more than 2 values to unpack (3 expected)",
+      "code": "misc",
+      "count": 1
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Argument 1 to \"_round\" has incompatible type \"bool | str | Any | None\"; expected \"float\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"bool | str | Any | None\"; expected \"float\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Argument 1 to \"get\" of \"dict\" has incompatible type \"bool | str | Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 2
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Argument 2 to \"score\" has incompatible type \"list[Mapping[Any, Any] | dict[Any, Any]]\"; expected \"list[dict[Any, Any]]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Argument 2 to \"score\" has incompatible type \"list[Mapping[Any, Any]]\"; expected \"list[dict[Any, Any]]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Dict entry 0 has incompatible type \"str\": \"list[Mapping[Any, Any]]\"; expected \"str\": \"list[dict[Any, Any]]\"",
+      "code": "dict-item",
+      "count": 1
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Dict entry 1 has incompatible type \"str\": \"list[Mapping[Any, Any]]\"; expected \"str\": \"list[dict[Any, Any]]\"",
+      "code": "dict-item",
+      "count": 1
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Dict entry 2 has incompatible type \"str\": \"list[Mapping[Any, Any]]\"; expected \"str\": \"list[dict[Any, Any]]\"",
+      "code": "dict-item",
+      "count": 1
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Generator has incompatible item type \"bool | str | Any | None\"; expected \"float\"",
+      "code": "misc",
+      "count": 1
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Generator has incompatible item type \"float\"; expected \"bool\"",
+      "code": "misc",
+      "count": 2
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Invalid index type \"bool | str | Any | None\" for \"dict[str, list[float]]\"; expected type \"str\"",
+      "code": "index",
+      "count": 1
+    },
+    {
+      "path": "src/exo/eval.py",
+      "message": "Value of type variable \"SupportsRichComparisonT\" of \"sorted\" cannot be \"bool | str | Any | None\"",
+      "code": "type-var",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Argument 1 to \"_backtick\" of \"_Lexer\" has incompatible type \"_Word | None\"; expected \"_Word\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Argument 1 to \"_dollar\" of \"_Lexer\" has incompatible type \"_Word | None\"; expected \"_Word\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Argument 1 to \"_dquote\" of \"_Lexer\" has incompatible type \"_Word | None\"; expected \"_Word\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"tuple[str, tuple[str, str, str], bool]\"; expected \"tuple[str, tuple[str, str, str, str, str], bool]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Incompatible types in assignment (expression has type \"bool\", target has type \"_Word | None\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Incompatible types in assignment (expression has type \"dict[Never, Never]\", variable has type \"list[Any]\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Item \"None\" of \"Any | list[Any | None] | None\" has no attribute \"__iter__\" (not iterable)",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Item \"None\" of \"_Word | None\" has no attribute \"dynamic\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Item \"None\" of \"_Word | None\" has no attribute \"glob\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Item \"None\" of \"_Word | None\" has no attribute \"quoted\"",
+      "code": "union-attr",
+      "count": 3
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Item \"None\" of \"_Word | None\" has no attribute \"started\"",
+      "code": "union-attr",
+      "count": 8
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Item \"None\" of \"_Word | None\" has no attribute \"text\"",
+      "code": "union-attr",
+      "count": 5
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Need type annotation for \"out\" (hint: \"out: list[<type>] = ...\")",
+      "code": "var-annotated",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "No overload variant of \"__setitem__\" of \"list\" matches argument types \"str\", \"Any\"",
+      "code": "call-overload",
+      "count": 1
+    },
+    {
+      "path": "src/exo/gate.py",
+      "message": "Value expression in dictionary comprehension has incompatible type \"frozenset[str]\"; expected type \"str\"",
+      "code": "misc",
+      "count": 1
+    },
+    {
+      "path": "src/exo/handoff.py",
+      "message": "Argument 1 to \"message_text\" has incompatible type \"Mapping[str, Any]\"; expected \"dict[Any, Any]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/handoff.py",
+      "message": "Incompatible types in assignment (expression has type \"None\", variable has type \"list[str]\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/handoff.py",
+      "message": "Need type annotation for \"out\" (hint: \"out: list[<type>] = ...\")",
+      "code": "var-annotated",
+      "count": 2
+    },
+    {
+      "path": "src/exo/ingest/claude_code.py",
+      "message": "Argument \"text\" to \"emit\" of \"Run\" has incompatible type \"Any | str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ingest/claude_code.py",
+      "message": "Item \"None\" of \"Any | str | None\" has no attribute \"lstrip\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ingest/claude_code.py",
+      "message": "Item \"None\" of \"Any | str | None\" has no attribute \"strip\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ingest/common.py",
+      "message": "Incompatible types in assignment (expression has type \"int\", target has type \"dict[Any, Any] | str | None\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ingest/common.py",
+      "message": "Incompatible types in assignment (expression has type \"str\", target has type \"int\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ingest/hermes_dashboard.py",
+      "message": "\"object\" has no attribute \"append\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ingest/hermes_dashboard.py",
+      "message": "Unsupported target for indexed assignment (\"object\")",
+      "code": "index",
+      "count": 1
+    },
+    {
+      "path": "src/exo/learn/climb.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"agent\"",
+      "code": "union-attr",
+      "count": 2
+    },
+    {
+      "path": "src/exo/learn/climb.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"ledger\"",
+      "code": "union-attr",
+      "count": 10
+    },
+    {
+      "path": "src/exo/learn/climb.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"lock\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/learn/climb.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"root\"",
+      "code": "union-attr",
+      "count": 11
+    },
+    {
+      "path": "src/exo/learn/climb.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"store\"",
+      "code": "union-attr",
+      "count": 3
+    },
+    {
+      "path": "src/exo/learn/learner.py",
+      "message": "Cannot infer type of lambda",
+      "code": "misc",
+      "count": 1
+    },
+    {
+      "path": "src/exo/learn/promote.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"ledger\"",
+      "code": "union-attr",
+      "count": 4
+    },
+    {
+      "path": "src/exo/learn/promote.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"root\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/learn/promote.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"store\"",
+      "code": "union-attr",
+      "count": 2
+    },
+    {
+      "path": "src/exo/learn/review.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"agent\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/learn/review.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"ledger\"",
+      "code": "union-attr",
+      "count": 3
+    },
+    {
+      "path": "src/exo/learn/review.py",
+      "message": "Item \"None\" of \"Runtime | None\" has no attribute \"store\"",
+      "code": "union-attr",
+      "count": 3
+    },
+    {
+      "path": "src/exo/learn/signals.py",
+      "message": "Argument 2 to \"_answer_and_context\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ledger.py",
+      "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"int\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ledger.py",
+      "message": "Argument 2 to \"Head\" has incompatible type \"list[str] | Mapping[Any, Any] | str | None\"; expected \"str | None\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/ledger.py",
+      "message": "Argument 2 to \"chain_hash\" has incompatible type \"list[str] | Mapping[Any, Any] | str | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/onboard.py",
+      "message": "\"object\" has no attribute \"append\"",
+      "code": "attr-defined",
+      "count": 5
+    },
+    {
+      "path": "src/exo/onboard.py",
+      "message": "Need type annotation for \"out\" (hint: \"out: list[<type>] = ...\")",
+      "code": "var-annotated",
+      "count": 1
+    },
+    {
+      "path": "src/exo/onboard.py",
+      "message": "Unsupported operand types for + (\"object\" and \"int\")",
+      "code": "operator",
+      "count": 2
+    },
+    {
+      "path": "src/exo/principal.py",
+      "message": "\"None\" has no attribute \"proc_pidinfo\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "src/exo/principal.py",
+      "message": "\"object\" has no attribute \"getsockopt\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "src/exo/principal.py",
+      "message": "Incompatible types in assignment (expression has type \"CDLL\", variable has type \"None\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/principal.py",
+      "message": "Item \"None\" of \"str | None\" has no attribute \"encode\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/protocol/schema.py",
+      "message": "Argument \"type\" to \"Command\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/protocol/schema.py",
+      "message": "Argument \"type\" to \"Event\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/protocol/schema.py",
+      "message": "Argument 1 to \"get\" of \"dict\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 2
+    },
+    {
+      "path": "src/exo/provenance.py",
+      "message": "Item \"None\" of \"Mapping[str, Any] | None\" has no attribute \"get\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/provenance.py",
+      "message": "Unsupported operand types for in (\"Any | None\" and \"set[str]\")",
+      "code": "operator",
+      "count": 1
+    },
+    {
+      "path": "src/exo/server/app.py",
+      "message": "\"Engine\" has no attribute \"start_channels\"",
+      "code": "attr-defined",
+      "count": 1
+    },
+    {
+      "path": "src/exo/server/app.py",
+      "message": "Value of type \"tuple[str, int] | None\" is not indexable",
+      "code": "index",
+      "count": 1
+    },
+    {
+      "path": "src/exo/server/engine.py",
+      "message": "Argument 1 to \"wait_for\" has incompatible type \"Coroutine[Any, Any, Event | None]\"; expected \"Future[Event] | Generator[Any, None, Event] | Awaitable[Event]\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/upstream.py",
+      "message": "Argument 1 to \"add\" of \"set\" has incompatible type \"Any | None\"; expected \"str\"",
+      "code": "arg-type",
+      "count": 1
+    },
+    {
+      "path": "src/exo/upstream.py",
+      "message": "Incompatible default for parameter \"baselines\" (default has type \"tuple[()]\", parameter has type \"list[str]\")",
+      "code": "assignment",
+      "count": 1
+    },
+    {
+      "path": "src/exo/upstream.py",
+      "message": "Item \"None\" of \"Match[str] | None\" has no attribute \"groups\"",
+      "code": "union-attr",
+      "count": 1
+    },
+    {
+      "path": "src/exo/upstream.py",
+      "message": "Item \"Watch\" of Module | Watch has no attribute \"mode\"",
+      "code": "union-attr",
+      "count": 1
+    }
+  ]
+}

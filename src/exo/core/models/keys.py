@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Mapping
+from typing import Iterator, Mapping
 
 log = logging.getLogger("exo.keys")
 KEYCHAIN_SERVICE = "exo"
@@ -33,17 +33,22 @@ def keys_file_path() -> Path:
     return Path(os.environ.get("EXO_KEYS_FILE") or "~/.config/exo/keys.env").expanduser()
 
 
-def keychain_get(name: str) -> str | None:
-    """Read one item from the macOS Keychain. Quiet on a miss, on other systems and on timeout."""
-    if sys.platform != "darwin" or os.environ.get("EXO_NO_KEYCHAIN"):
-        return None
+def _run_lookup(argv: list[str]) -> str | None:
+    """Run one secret-store lookup command. Quiet on a miss, a missing tool and a timeout."""
     try:
-        out = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", name, "-w"],
-                             capture_output=True, text=True, timeout=KEYCHAIN_TIMEOUT, stdin=subprocess.DEVNULL)
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=KEYCHAIN_TIMEOUT,
+                             stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
         return None
     value = out.stdout.strip() if out.returncode == 0 else ""
     return value or None
+
+
+def keychain_get(name: str) -> str | None:
+    """Read one item from the macOS Keychain. Quiet on a miss, on other systems and on timeout."""
+    if sys.platform != "darwin" or os.environ.get("EXO_NO_KEYCHAIN"):
+        return None
+    return _run_lookup(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", name, "-w"])
 
 
 def secret_service_get(name: str) -> str | None:
@@ -55,13 +60,21 @@ def secret_service_get(name: str) -> str | None:
     exe = shutil.which("secret-tool")
     if not exe:
         return None
-    try:
-        out = subprocess.run([exe, "lookup", "service", KEYCHAIN_SERVICE, "account", name],
-                             capture_output=True, text=True, timeout=KEYCHAIN_TIMEOUT, stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    value = out.stdout.strip() if out.returncode == 0 else ""
-    return value or None
+    return _run_lookup([exe, "lookup", "service", KEYCHAIN_SERVICE, "account", name])
+
+
+def _file_pairs(text: str) -> Iterator[tuple[str, str]]:
+    """``(name, value)`` for each ``NAME=value`` line: comments and blanks skipped, ``export`` and
+    matching quotes around the value removed."""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        yield k.strip().removeprefix("export ").strip(), v
 
 
 def file_get(name: str, path: Path | None = None) -> str | None:
@@ -81,16 +94,8 @@ def file_get(name: str, path: Path | None = None) -> str | None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, _, v = line.partition("=")
-        k = k.strip().removeprefix("export ").strip()
+    for k, v in _file_pairs(text):
         if k == name:
-            v = v.strip()
-            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
-                v = v[1:-1]
             return v or None
     return None
 
@@ -100,32 +105,32 @@ _SECRET_NAME = ("_KEY", "_KEYS", "_TOKEN", "_SECRET", "_PASSWORD", "_PASSWD", "_
 MIN_SECRET_LEN = 8
 
 
+def _find(name: str, env: Mapping[str, str] | None, sources: bool) -> tuple[str | None, str | None]:
+    """``(where, value)`` for ``name``: ``env``, ``keychain``, ``secret-service`` or ``file``, first hit wins;
+    ``(None, None)`` on a miss. ``sources=False`` reads ``env`` only. A value found is remembered for redaction."""
+    env = os.environ if env is None else env
+    where, value = "env", env.get(name)
+    for src, get in (("keychain", keychain_get), ("secret-service", secret_service_get), ("file", file_get)):
+        if value or not sources:
+            break
+        where, value = src, get(name)  # looked up at call time: tests patch these module globals
+    if not value:
+        return None, None
+    if len(value) >= MIN_SECRET_LEN:
+        _loaded.add(value)
+    return where, value
+
+
 def lookup_key(name: str, env: Mapping[str, str] | None = None, *, sources: bool = True) -> str | None:
     """The key for variable ``name``, or None. ``sources=False`` reads ``env`` only
     (tests and sandboxes)."""
-    env = os.environ if env is None else env
-    value = env.get(name) or (keychain_get(name) or secret_service_get(name) or file_get(name) if sources else None)
-    if value and len(value) >= MIN_SECRET_LEN:
-        _loaded.add(value)
-    return value or None
+    return _find(name, env, sources)[1]
 
 
 def key_source(name: str, env: Mapping[str, str] | None = None, *, sources: bool = True) -> str | None:
     """Where the key for ``name`` comes from: ``env``, ``keychain``, ``secret-service``, ``file``, or None.
     Never the value. A value found here is remembered for redaction like any lookup."""
-    env = os.environ if env is None else env
-    found: list[tuple[str, str | None]] = [("env", env.get(name))]
-    if sources:
-        for where, get in (("keychain", keychain_get), ("secret-service", secret_service_get), ("file", file_get)):
-            if found[-1][1]:
-                break
-            found.append((where, get(name)))
-    where, value = found[-1]
-    if not value:
-        return None
-    if len(value) >= MIN_SECRET_LEN:
-        _loaded.add(value)
-    return where
+    return _find(name, env, sources)[0]
 
 
 def remember_secret(value: str) -> None:
@@ -140,15 +145,7 @@ def _keys_file_values(path: Path | None = None) -> list[str]:
         text = (path or keys_file_path()).read_text(encoding="utf-8")
     except OSError:
         return []
-    out = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        v = line.partition("=")[2].strip()
-        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
-            v = v[1:-1]
-        out.append(v)
+    out = [v for _, v in _file_pairs(text)]
     return [v for v in out if len(v) >= MIN_SECRET_LEN]
 
 
@@ -170,6 +167,3 @@ def redact_secrets(text: str, values: list[str] | None = None) -> str:
             text = text.replace(v, "[redacted]")
     return text
 
-
-def key_found(name: str, env: Mapping[str, str] | None = None, *, sources: bool = True) -> bool:
-    return lookup_key(name, env, sources=sources) is not None

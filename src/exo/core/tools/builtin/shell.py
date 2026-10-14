@@ -16,7 +16,6 @@ import os
 import shutil
 import signal
 import subprocess
-import sys
 import threading
 import tempfile
 import time
@@ -82,20 +81,7 @@ def _wait_for_group_exit(proc: subprocess.Popen, pgid: int, timeout: float) -> b
 
 def kill_process_group(proc: subprocess.Popen, grace: float = TERM_GRACE) -> None:
     """TERM the child's process group, wait ``grace`` seconds, then KILL it."""
-    if sys.platform == "win32":
-        proc.kill()
-        return
-    pgid = getattr(proc, "_exo_pgid", None)
-    if pgid is None:
-        try:
-            pgid = os.getpgid(proc.pid)
-        except ProcessLookupError:
-            return
-    if pgid == os.getpgrp():
-        # Child shares our group (spawner skipped setsid): killpg would hit us. Kill by PID.
-        with contextlib.suppress(Exception):
-            proc.kill()
-        return
+    pgid = proc.pid  # every spawner uses start_new_session, so the child leads its own group
     try:
         os.killpg(pgid, signal.SIGTERM)
         if not _wait_for_group_exit(proc, pgid, grace):
@@ -205,9 +191,6 @@ def run_command(command: str, cwd: str, timeout: float = DEFAULT_TIMEOUT, cap: i
             os.unlink(side_path)
         raise
     os.close(side_fd)
-    if sys.platform != "win32":
-        with contextlib.suppress(ProcessLookupError):
-            proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
     out = _Capped(cap)
     drain = threading.Thread(target=_drain, args=(proc, out, emit), daemon=True)
     drain.start()
@@ -257,11 +240,17 @@ def _start_job(args: dict[str, Any], ctx: ToolContext, cwd: Any) -> str:
             "with other work. `jobs` lists jobs, `job_output` reads output.")
 
 
+def timeout_arg(args: dict[str, Any], check: bool = True) -> float:
+    """The ``timeout`` argument in seconds (default DEFAULT_TIMEOUT); rejected outside 1..MAX_TIMEOUT when ``check``."""
+    timeout = float(args.get("timeout") or DEFAULT_TIMEOUT)
+    if check and not 0 < timeout <= MAX_TIMEOUT:
+        raise ToolError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
+    return timeout
+
+
 def bash(args: dict[str, Any], ctx: ToolContext) -> str:
     background = args.get("background") is True
-    timeout = float(args.get("timeout") or DEFAULT_TIMEOUT)
-    if not background and not 0 < timeout <= MAX_TIMEOUT:
-        raise ToolError(f"timeout must be between 1 and {MAX_TIMEOUT} seconds")
+    timeout = timeout_arg(args, check=not background)
     cwd = ctx.resolve(args.get("cwd") or ".")
     if not cwd.is_dir():
         raise ToolError(f"cwd is not a folder: {cwd}")

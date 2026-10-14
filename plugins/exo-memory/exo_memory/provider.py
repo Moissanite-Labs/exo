@@ -344,6 +344,27 @@ class ExoMemoryProvider(MemoryProvider):
                 body["parent_session"] = kwargs["parent_session_id"]
             self._safe(lambda: self._append(st, "note", body, st.agent, sid))
 
+    def _ensure_initialized(self, **kwargs) -> Optional[str]:
+        """Start the provider on first tool call when no session did. Returns None when the
+        provider is ready, otherwise a specific error naming the reason."""
+        home = kwargs.get("exo_home") or _home_default()
+        key = _home_key(home)
+        with self._lock:
+            n = len(self._states)
+            if (key and key in self._states) or n == 1:
+                return None  # already initialized, or the single state serves any home
+            if n > 1:
+                return ("exo-memory: more than one home is initialized and this call names no matching home; "
+                        "pass exo_home to pick one")
+        init_kw = dict(kwargs)
+        session_id = init_kw.pop("session_id", "") or ""
+        try:
+            self.initialize(session_id, **init_kw)
+        except Exception as exc:
+            reason = str(exc) or type(exc).__name__
+            return f"exo-memory: cannot initialize: {reason}"
+        return None
+
     @staticmethod
     def _pin_principal(st: _State) -> None:
         """D-040: ledger events this provider writes as the configured principal are the principal's voice; the
@@ -697,9 +718,16 @@ class ExoMemoryProvider(MemoryProvider):
         return tools
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs) -> str:
-        st = self._state()
+        st = self._state(kwargs.get("exo_home"))
         if st is None:
-            return json.dumps({"error": "exo-memory is not initialized for this profile"})
+            # The tools may be served by a bridge that never ran initialize(): start the
+            # provider lazily from the config on first call instead of failing outright.
+            err = self._ensure_initialized(**kwargs)
+            if err is not None:
+                return json.dumps({"error": err})
+            st = self._state(kwargs.get("exo_home"))
+        if st is None:
+            return json.dumps({"error": "exo-memory: initialization did not produce a usable state"})
         args = args or {}
         try:
             if tool_name == "exo_recall":

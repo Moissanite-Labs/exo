@@ -7,7 +7,7 @@ open-source library. Nothing is captured from a real home directory or account.
 | File | What | How it is made |
 |---|---|---|
 | `exo-banner.svg` | Animated banner: a rotating shell of nodes around an orange core, packets travelling in. | `python3 scripts/make_media_banner.py` (stdlib only, deterministic) |
-| `exo-session.svg` | Animated terminal session, 16 s loop: prompt, tools, approval, signed answer, status strip. | `python3 scripts/make_media_session.py` (stdlib only) |
+| `exo-session.svg` | Hand-authored terminal-session illustration, animated in a 16 s loop: prompt, tools, example approval, signed answer, status strip. | `python3 scripts/make_media_session.py` (stdlib only) |
 | `tui-01-start.png` to `tui-05-job.png` | Terminal client: start, a turn, approval, `/context`, a background job. | `.venv/bin/python scripts/promo_shots.py` |
 | `tui-06-slash.png` to `tui-09-guidance.png` | Completion (D-037): the `/co` menu with ghost text, `/model ` arguments, `@s` files, the guidance line. | `.venv/bin/python scripts/promo_shots.py` |
 | `web-01-start.png` to `web-04-memory.png` | Web client: start, a turn, approval, memory column. | `.venv/bin/python scripts/promo_shots_web.py` |
@@ -30,3 +30,7 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[tui]" -e clients/tui
 
 The screenshot scripts use the in-process core with a scripted model and a stand-in source, so they need no
 network and no keys. Keep each PNG under 400 KB. To publish on the site, copy the files into `site/media/`.
+The PNGs are historical screenshots rendered from fixture-backed scripted sessions. The older terminal
+approval image predates the current shortcut hints, and the main terminal screenshot set selects the classic
+layout even though inverse is the current default. A separate D-046 image shows inverse layout. Check the
+source and current `/help` before relying on a pictured control or layout.

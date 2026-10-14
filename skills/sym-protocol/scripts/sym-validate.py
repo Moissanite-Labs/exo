@@ -35,7 +35,6 @@ import argparse
 import datetime as _dt
 import io
 import json
-import os
 import re
 import sys
 

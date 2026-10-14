@@ -44,6 +44,12 @@ def home():
     work.mkdir()
     (work / "notes.txt").write_text("hello world\n")
     (d / "config.json").write_text(json.dumps({"version": 1, "cwd": str(work), "models": {"fake": FAKE}}))
+    # This fixture exercises persistence with scripted tools, independently of gate policy.
+    plugin = d / "plugins" / "test-allow"
+    plugin.mkdir(parents=True)
+    (plugin / "plugin.yaml").write_text("name: test-allow\n")
+    (plugin / "__init__.py").write_text(
+        'def register(ctx):\n    ctx.register_hook("pre_tool_call", lambda **kw: None)\n')
     yield d
     shutil.rmtree(d, ignore_errors=True)
 
@@ -185,11 +191,13 @@ def test_core_line_budget():
 
     Wave 1 shipped under 8k. STANDALONE.md section 6 allows 15k by the end of wave 3; delegation (D-016)
     is a wave 3 item, so the budget moved to 15k on 2026-10-12. Raised to 16k the same day for the audit
-    security wave (D-038..D-042); the way back down is the CoreEngine split the 2026-10-12 audit asks for."""
+    security wave (D-038..D-042). Engine split step 4 (D-067) brought it under the old 15k goal, and the ceiling
+    went back to 15k on 2026-10-13 to keep that gain (docs/ENGINE-SPLIT.md "Budget policy"). Issue #46 tracks the
+    rest of the split."""
     files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
              if "generated" not in p.parts]
     total = sum(len(p.read_text().splitlines()) for p in files)
-    assert total < 16000, total
+    assert total < 15000, total
 
 
 def test_dependencies_are_listed():
@@ -223,7 +231,7 @@ def test_no_owner_names_in_new_files():
 
 def test_model_defaults_from_environment_only(tmp_path):
     cfg = Config(home=tmp_path)
-    assert cfg.models(env={})["roles"]["main"] == ["fake:scripted"]
+    assert cfg.models(env={}) == {}  # real catalog; no credentials never selects the fake
     assert cfg.models(env={"ANTHROPIC_API_KEY": "x"}) == {}  # catalog routes, Anthropic first
     cfg.data["models"] = {"local": {"base_url": "http://127.0.0.1:8080/v1", "model": "qwen"}}
     m = cfg.models(env={"ANTHROPIC_API_KEY": "x"})

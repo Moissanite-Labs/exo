@@ -17,7 +17,6 @@ import contextlib
 import os
 import re
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -36,7 +35,6 @@ if TYPE_CHECKING:
     from exo.core.engine import CoreEngine
 
 ACTIVE = "running"
-ENDED = ("done", "failed", "killed", "timeout", "lost")
 KEEP_DAYS = 14
 
 
@@ -200,9 +198,6 @@ class JobManager:
                 raise
             finally:
                 os.close(side_fd)
-            if sys.platform != "win32":
-                with contextlib.suppress(ProcessLookupError):
-                    proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
             h = Handle(job_id, proc, session, command, time.time(), side=side)
             self.live[job_id] = h
         self.e.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, pid, started, log) "
@@ -280,12 +275,12 @@ class JobManager:
         task.add_done_callback(self._tasks.discard)
 
     async def _announce(self, h: Handle, state: str, code: int, ended: float, detail: str) -> None:
-        mode = ""
+        _mode = ""
         if state != "killed" or h.kill_by != "job_kill":  # an agent that killed it knows: no notice for that
             try:
                 rec = await self.path.submit(self._notice(h.id, state, code, h.command, h.started, ended, h.session,
                                                           detail))
-                mode = rec.mode or rec.state
+                _mode = rec.mode or rec.state
                 detail = (detail + "; " if detail else "") + f"notice {rec.mode or rec.state}"
             except Exception as exc:  # a delivery problem never loses the job's end
                 from exo.core import trace

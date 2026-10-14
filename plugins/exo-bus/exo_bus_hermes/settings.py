@@ -1,5 +1,6 @@
 """Settings and shared state for the exo-bus plugin. Values come from the channel's own config, then
-the core key lookup (environment, macOS Keychain (macOS only), keys file; exo.core.models.keys)."""
+the core key lookup (environment, macOS Keychain, Linux Secret Service when `secret-tool` is available,
+then keys.env mode 0600 with EXO_KEYS_FILE override; exo.core.models.keys)."""
 from __future__ import annotations
 
 import json
@@ -10,7 +11,7 @@ from exo.bus import Client
 from exo.bus.config import exo_home
 from exo.core.models.keys import lookup_key
 
-SECRET_NAMES = ()  # no bus setting is a secret (seat keys live in files); only these may hit the Keychain
+SECRET_NAMES = ()  # no bus setting is a provider secret; seat keys live in files, outside this lookup
 NAMES = ("URL", "SEAT", "KEYS_DIR", "STATE_DIR", "POLL_SECONDS", "HOME_CHANNEL")
 
 
