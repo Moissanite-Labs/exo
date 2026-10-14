@@ -1,5 +1,6 @@
 """Synthetic keys and disposable stores only; no production provisioning or network."""
 import concurrent.futures
+import copy
 import sqlite3
 
 import pytest
@@ -7,7 +8,7 @@ import pytest
 from exo import crypto
 from exo.ledger import Ledger
 from exo.ledger_authority import (AppendOutcomeUnknown, AuthorityError, AuthorityUnavailable, HeadConflict,
-                                 ProjectionPending, canonical, verify_record)
+                                 ProjectionPending, canonical, validate_identity, verify_record)
 from exo.ledger_authority.factory import open_writable_ledger
 from exo.ledger_authority.journal import AuthorityJournal, JournalClient
 from exo.ledger_authority.projection import verify_projection
@@ -32,6 +33,36 @@ def intent(text="one", author="memory", refs=()):
 def head(journal):
     cp = journal.head()
     return {"seq": cp["seq"], "chain": cp["chain"]}
+
+
+def public_key_alias(pub, padding_bits=1):
+    """Change only unused base64 padding bits, leaving the 32-byte key intact."""
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    alias = pub[:-2] + alphabet[alphabet.index(pub[-2]) | padding_bits] + "="
+    assert alias != pub and crypto.unb64(alias) == crypto.unb64(pub)
+    return alias
+
+
+@pytest.mark.parametrize("aliased_role", ["checkpoint", "writer"])
+@pytest.mark.parametrize("padding_bits", [1, 2, 3])
+def test_authority_identity_rejects_same_signing_key_under_base64_alias(provisioned, aliased_role, padding_bits):
+    _, original, _, _ = provisioned
+    identity = copy.deepcopy(original)
+    if aliased_role == "checkpoint":
+        identity["checkpoint_pub"] = public_key_alias(identity["writers"]["memory"]["pub"], padding_bits)
+    else:
+        identity["writers"]["memory"]["pub"] = public_key_alias(identity["checkpoint_pub"], padding_bits)
+    with pytest.raises(AuthorityError, match="checkpoint and event keys must be separate"):
+        validate_identity(identity)
+
+
+def test_authority_identity_preserves_existing_aliases_of_distinct_keys(provisioned):
+    _, original, _, _ = provisioned
+    identity = copy.deepcopy(original)
+    identity["checkpoint_pub"] = public_key_alias(identity["checkpoint_pub"])
+    for writer in identity["writers"].values():
+        writer["pub"] = public_key_alias(writer["pub"])
+    assert validate_identity(identity) == identity
 
 
 def test_idempotent_portable_event_and_independent_writer_attribution(provisioned, tmp_path):

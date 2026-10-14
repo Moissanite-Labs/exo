@@ -18,7 +18,7 @@ from exo.core.peer_target import EngineTarget
 from exo.protocol import schema as s
 
 if TYPE_CHECKING:
-    from exo.core.engine import CoreEngine
+    from exo.core.engine import CoreRuntime as CoreEngine
 
 
 class BusTarget(EngineTarget):

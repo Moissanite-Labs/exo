@@ -9,7 +9,7 @@ Hook points (names match the Hermes hooks Exo plugins already use):
 
 - ``pre_tool_call(call, spec, ctx)``: return ``Block(reason)`` (or a plain
   string reason) to stop the call; the model gets an error result with the
-  reason. Return ``None`` to allow. A hook may rewrite ``call.arguments``.
+  reason. Return ``None`` to allow. Only ordinary mode permits argument rewrites.
 - ``post_tool_call(call, result, ctx)``: return a ``ToolResult`` to replace the
   result, or ``None`` to keep it.
 
@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from exo.core.hooks import maybe_await
 from exo.core.types import ContentPart, ToolCall, ToolResult, ToolSpec, to_dict
 from exo.core.tools.executor import (
     ExecutionBroker, ExecutionRequest, thaw_arguments, validate_executor,
@@ -170,10 +172,6 @@ def validate_args(schema: dict[str, Any], args: Any) -> str | None:
     return None
 
 
-async def _maybe_await(value: Any) -> Any:
-    return await value if inspect.isawaitable(value) else value
-
-
 class Registry:
     def __init__(self, *, executor: ExecutionBroker | None = None,
                  executor_required: bool = False) -> None:
@@ -261,15 +259,30 @@ class Registry:
             return ToolResult.of_text(call.id, f"Tool {call.name!r} is not available here",
                                       is_error=True)
         identity = (call.id, call.name)
+        request = None
+        if self.executor_required:
+            try:
+                request = ExecutionRequest(call.id, call.name, call.arguments, ctx.cwd, ctx.session)
+                call = ToolCall(request.call_id, request.tool_name, thaw_arguments(request.arguments))
+                bound_arguments = json.dumps(call.arguments, sort_keys=True, allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                return ToolResult.of_text(call.id, f"Invalid executor request: {exc}", is_error=True)
         for hook in list(self._hooks[PRE_TOOL_CALL]):
             try:
-                verdict = await _maybe_await(hook(call, tool.spec, ctx))
+                verdict = await maybe_await(hook(call, tool.spec, ctx))
+                if request is not None and ((call.id, call.name, ctx.cwd, ctx.session) !=
+                        (request.call_id, request.tool_name, request.cwd, request.session)
+                        or json.dumps(call.arguments, sort_keys=True, allow_nan=False) != bound_arguments):
+                    verdict = Block("required pre_tool_call hooks cannot change call identity, arguments or context")
             except Exception as exc:  # a broken hook fails closed
                 verdict = Block(f"pre_tool_call hook failed: {exc}")
             if isinstance(verdict, str):
                 verdict = Block(verdict)
             if isinstance(verdict, Block):
-                result = ToolResult.of_text(call.id, f"Blocked: {verdict.reason}", is_error=True)
+                if request is not None:
+                    call = ToolCall(request.call_id, request.tool_name, thaw_arguments(request.arguments))
+                    ctx.cwd, ctx.session = request.cwd, request.session
+                result = ToolResult.of_text(identity[0], f"Blocked: {verdict.reason}", is_error=True)
                 return await self._post(call, result, ctx)
         if (call.id, call.name) != identity:
             return await self._post(call, ToolResult.of_text(identity[0],
@@ -279,18 +292,19 @@ class Registry:
             return await self._post(call, ToolResult.of_text(
                 call.id, f"Invalid arguments for {call.name}: {err}", is_error=True), ctx)
         if self.executor is not None or self.executor_required:
-            result = await self._execute(tool, call, ctx)
+            result = await self._execute(tool, call, ctx, request)
         else:
             result = await self._run(tool, call, ctx)
         return await self._post(call, result, ctx)
 
-    async def _execute(self, tool: Tool, call: ToolCall, ctx: ToolContext) -> ToolResult:
+    async def _execute(self, tool: Tool, call: ToolCall, ctx: ToolContext,
+                       request: ExecutionRequest | None = None) -> ToolResult:
         """The broker is the only dispatch authority once configured or required."""
         call_id, tool_name = call.id, call.name
         try:
             if self.executor is None:
                 raise ToolError("Required tool executor is unavailable")
-            request = ExecutionRequest(call.id, call.name, call.arguments, ctx.cwd, ctx.session)
+            request = request or ExecutionRequest(call.id, call.name, call.arguments, ctx.cwd, ctx.session)
             trusted_ctx = ToolContext(cwd=request.cwd, session=request.session, call_id=request.call_id,
                                      cancel=ctx.cancel, emit=ctx.emit, meta=dict(ctx.meta))
 
@@ -319,7 +333,7 @@ class Registry:
                 out = await tool.handler(args, ctx)
             else:
                 out = await asyncio.to_thread(tool.handler, args, ctx)
-                out = await _maybe_await(out)
+                out = await maybe_await(out)
         except asyncio.CancelledError:
             ctx.cancel.set()
             raise
@@ -332,14 +346,12 @@ class Registry:
             out.call_id = call.id
             return _cap_result(out)
         text = out if isinstance(out, str) else str(out)
-        if len(text) > MAX_RESULT_CHARS:
-            text = text[:MAX_RESULT_CHARS] + f"\n[truncated {len(text) - MAX_RESULT_CHARS} chars]"
-        return ToolResult.of_text(call.id, text)
+        return _cap_result(ToolResult.of_text(call.id, text))
 
     async def _post(self, call: ToolCall, result: ToolResult, ctx: ToolContext) -> ToolResult:
         for hook in list(self._hooks[POST_TOOL_CALL]):
             try:
-                replaced = await _maybe_await(hook(call, result, ctx))
+                replaced = await maybe_await(hook(call, result, ctx))
             except Exception:
                 continue  # post hooks observe; a failure must not lose the result
             if isinstance(replaced, ToolResult):

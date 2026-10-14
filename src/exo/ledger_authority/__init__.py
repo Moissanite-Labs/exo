@@ -91,11 +91,16 @@ def validate_identity(identity: dict) -> dict:
             raise AuthorityError("writer attribution is not provisioned")
         pubs.append(config["pub"])
     try:
-        if any(not isinstance(pub, str) or len(crypto.unb64(pub)) != 32 for pub in pubs):
+        if any(not isinstance(pub, str) for pub in pubs):
+            raise ValueError()
+        decoded_pubs = [crypto.unb64(pub) for pub in pubs]
+        if any(len(pub) != 32 for pub in decoded_pubs):
             raise ValueError()
     except (ValueError, TypeError) as exc:
         raise AuthorityError("invalid pinned public key") from exc
-    if identity["checkpoint_pub"] in pubs[1:]:
+    # Unused base64 padding bits can differ without changing the Ed25519 key.
+    # Compare key material without rewriting the pinned identity document.
+    if decoded_pubs[0] in decoded_pubs[1:]:
         raise AuthorityError("checkpoint and event keys must be separate")
     return json.loads(canonical(identity))
 

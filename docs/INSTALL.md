@@ -47,11 +47,25 @@ The updater refuses environment overrides that redirect Git, package sources/con
 Python and shell execution (including `GIT_CONFIG*`, `PIP_INDEX_URL`, `UV_INDEX`, `PYTHONPATH`,
 `PYTHONHOME`, `EXO_PYTHON`, `EXO_VENV`, `BASH_ENV`, `ENV`); its error names the variables to unset.
 Cache and progress settings remain usable. Git subprocesses disable
-checkout hooks and fsmonitor. These guards do **not** authenticate the remote or the pulled commit:
-there is no signed-release or pinned-commit trust chain yet. The remote's build code and, for
-installer-managed installs, its `install.sh` still execute after a pull. A clean checkout does not
-prove its contents are safe. Signature verification and protection of the source checkout remain
-open work ([issue #42](https://github.com/aska-digital/exo/issues/42)).
+checkout hooks and fsmonitor. These guards do **not** authenticate the remote or the pulled commit.
+By default the remote's build code and, for installer-managed installs, its `install.sh` still execute after a
+pull, and a clean checkout does not prove its contents are safe. To authenticate the target, turn on the signed-update check.
+
+### Signed updates (opt-in)
+
+`update.require_signed` in `$EXO_HOME/config.json` (default `false`; set it with
+`python -m exo.config set update.require_signed true`). When true, `exo update` fetches, then verifies the
+upstream tip with `git verify-commit` (SSH signatures, `ssh-keygen`) against a **pinned** signers file,
+`$EXO_HOME/update/allowed_signers`. Only if the signature is good does it run `git merge --ff-only <that sha>`
+and continue; otherwise it stops before changing the tree. It applies to checkout and installer installs, not
+`uv tool` installs. The project does not sign releases yet, so leave it off until it does.
+
+The pin is separate from the repo on purpose: a new commit that edits `trust/allowed_signers` cannot make
+itself trusted. You create it once with `exo update --pin-trust`, which copies `trust/allowed_signers` from
+`HEAD` (the code you already run) and prints it; read it before relying on it. After a key rotation, the new
+list arrives in a signed commit that the old pin still verifies; fetch, review `git show @{u}:trust/allowed_signers`, and
+run `exo update --pin-trust @{u}`. Until then, updates signed only by the new key are refused. Tag
+signatures are not consulted: the tip commit must be signed.
 
 ## What it does
 

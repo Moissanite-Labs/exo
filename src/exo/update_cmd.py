@@ -194,11 +194,34 @@ def _restart_note() -> None:
           '`exo` or `exo web` to start the shared core with the updated code.')
 
 
+def _pin_trust(args: list[str]) -> int:
+    root = plan().get('checkout')
+    if not root:
+        print('exo update: --pin-trust needs a checkout install', file=sys.stderr)
+        return 1
+    from .update_verify import pin_trust
+    return pin_trust(root, *args)
+
+
+def _require_signed(p: dict) -> None:
+    """Opt-in (`update.require_signed`): verify the upstream tip, then pull exactly that commit."""
+    from . import update_verify
+    if not update_verify.required():
+        return
+    if p['mode'] not in ('checkout', 'installer'):
+        raise ValueError('update.require_signed needs a checkout install; nothing updated')
+    sha = update_verify.verify_target(p['checkout'])
+    p['steps'][0] = _git(p['checkout'], 'merge', '--ff-only', sha)
+
+
 def cmd_update(argv: list[str], run: Runner = _run, *, read: Runner | None = None) -> int:
     if any(a in ('-h', '--help') for a in argv):
-        print('usage: exo update [--dry-run]\nUpgrade Exo in place after a local preflight, then self-check.\n'
+        print('usage: exo update [--dry-run | --pin-trust [REV]]\nUpgrade Exo in place after a local preflight, then self-check.\n'
+              '--pin-trust pins the signers list for update.require_signed (docs/INSTALL.md).\n'
               'Restart the shared core and clients after updating (see docs/INSTALL.md).')
         return 0
+    if argv[:1] == ['--pin-trust'] and len(argv) <= 2:
+        return _pin_trust(argv[1:])
     if any(a not in ('--dry-run', '-n') for a in argv):
         print('exo update: unknown option (see --help)', file=sys.stderr)
         return 1
@@ -218,6 +241,7 @@ def cmd_update(argv: list[str], run: Runner = _run, *, read: Runner | None = Non
     changed = False
     try:
         _preflight(p, reader)
+        _require_signed(p)
         old = version_string(reader)
         print(f'exo update ({p["mode"]} install, now {old})')
         for step in p['steps']:

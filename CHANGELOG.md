@@ -6,12 +6,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Added
+- Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
+  signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
 
 ### Changed
+- A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,
   `/findings`, handoff facts) moved to `exo.diagnostics`, and the engine factory moved to `exo.compose:create`, the
   new `exo serve` default. `exo.core.engine:create` still works. No behaviour change.
+- Engine split, step 4 (#46, D-067): the counted core went from 15,986 to 14,812 lines. Dead code and duplicates went
+  (about 300 lines), the peer transport moved to `exo.peers` and the scheduler to `exo.scheduler` (composition
+  attaches both), and open approvals moved to `ApprovalDesk`. No protocol, event or command changes. The core
+  line cap is now 15,000 (was 16,000).
+- Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
+  (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
+  findings by default and counts the rest.
 
 ## [0.2.0] (egg) - 2026-10-13
 

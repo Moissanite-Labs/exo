@@ -352,9 +352,9 @@ def test_failed_request_publication_leaves_no_pending_row(tmp_path):
     async def main():
         eng.hub.publish = boom
         with pytest.raises(RuntimeError):
-            await eng.ask("s1", "do it")
+            await eng.approvals.ask("s1", "do it")
     asyncio.run(main())
-    assert not eng._approvals and not eng._open_approvals and not eng._approval_rules
+    assert not eng.approvals.open
 
 
 def test_filtered_subscription_heartbeat_is_not_starved_by_other_sessions():
