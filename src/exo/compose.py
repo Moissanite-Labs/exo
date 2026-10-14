@@ -50,6 +50,7 @@ def create(seat: str | None = None) -> CoreEngine:
         if st.principal and not os.environ.get("EXO_PRINCIPAL"):
             os.environ["EXO_PRINCIPAL"] = st.principal
     pm = PluginManager(config=cfg.data.get("plugin_config") or {},
+                       executor_required=executor_required,
                        memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
     enabled = st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins")
     plugin_dirs = None
@@ -70,7 +71,7 @@ def create(seat: str | None = None) -> CoreEngine:
         required_plugins = tuple(dict.fromkeys(("exo-gate", *raw_required)))
         if enabled is not None and not set(required_plugins).issubset(enabled):
             raise ExecutorConfigurationError("plugin configuration disables a required executor plugin")
-    pm.load_all(dirs=plugin_dirs, enabled=enabled)
+    pm.load_all(dirs=plugin_dirs, enabled=enabled, entry_points=not executor_required)
     if executor_required:
         missing = [name for name in required_plugins if name not in pm.plugins or pm.plugins[name].error]
         if missing:
