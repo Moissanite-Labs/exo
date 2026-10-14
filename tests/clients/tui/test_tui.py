@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from exo.core.approvals import Pending
 from exo.core.engine import CoreEngine
 from exo.core.plugins import Manifest, PluginManager
 from exo.protocol import schema as s
@@ -48,6 +49,12 @@ def make_engine(tmp_path) -> CoreEngine:
     pm._run_register(Manifest(name="t"), "dir", register)
     return CoreEngine(tmp_path / "home", {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
                       plugins=pm, cwd=str(tmp_path), env={})
+
+
+def pending_approval(eng, session, req):
+    """Synthetic presentation requests still exist in the fake core, so periodic reconciliation is real."""
+    eng.approvals.open[req.request_id] = Pending(asyncio.get_running_loop().create_future(), session, req)
+    eng.hub.publish(req, session)
 
 
 async def until(cond, pilot, timeout=5.0):
@@ -105,6 +112,7 @@ def test_approval_card_allow_and_deny_note(tmp_path):
         await send(app, pilot, "ask")
         await until(lambda: app.card is not None, pilot)
         assert isinstance(app.card, ApprovalCard)
+        await pilot.press("ctrl+f")
         await pilot.press("o")
         await until(lambda: any(isinstance(b, s.ApprovalRespond) for b in app.sent), pilot)
         r = [b for b in app.sent if isinstance(b, s.ApprovalRespond)][0]
@@ -114,6 +122,7 @@ def test_approval_card_allow_and_deny_note(tmp_path):
 
         await send(app, pilot, "ask again")  # runs the same rule; "always" was not chosen
         await until(lambda: app.card is not None, pilot)
+        await pilot.press("ctrl+f")
         await pilot.press("d")
         await pilot.pause()
         for ch in "nope":
@@ -260,6 +269,7 @@ def test_fuzzy_and_tool_collapse(tmp_path):
     async def sc(app, pilot, client, eng):
         await send(app, pilot, "ask")
         await until(lambda: app.card is not None, pilot)
+        await pilot.press("ctrl+f")
         await pilot.press("o")
         await until(lambda: "after ask" in app.transcript_text(), pilot)
         tb = next(iter(app.tools.values()))
@@ -365,7 +375,8 @@ def test_copy_to_clipboard_also_uses_pbcopy(tmp_path, monkeypatch):
     import subprocess
     calls = []
     monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/pbcopy")
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append((a, k)))
+    from types import SimpleNamespace
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (calls.append((a, k)), SimpleNamespace(returncode=0))[1])
 
     async def sc(app, pilot, client, eng):
         app.copy_to_clipboard("héllo")
@@ -447,31 +458,34 @@ def test_peers_command_send_and_inline_peer_message(tmp_path):
     import tempfile
 
     from exo.core.seats import Seat
+    from exo.peers import attach
     from exo.server.app import Dispatcher, HttpServer
 
     d = tempfile.mkdtemp(prefix="exot", dir="/tmp")  # short: unix socket paths
     try:
         models = {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
-        mine = CoreEngine(tmp_path / "h1", models, cwd=str(tmp_path), env={}, seat=Seat(name="tester"), peers_dir=d)
-        other = CoreEngine(tmp_path / "h2", models, cwd=str(tmp_path), env={}, seat=Seat(name="razi"), peers_dir=d)
+        mine = CoreEngine(tmp_path / "h1", models, cwd=str(tmp_path), env={}, seat=Seat(name="tester"), peers_dir=d,
+                          attach_peers=attach)
+        other = CoreEngine(tmp_path / "h2", models, cwd=str(tmp_path), env={}, seat=Seat(name="razi"), peers_dir=d,
+                           attach_peers=attach)
         client = FakeServerClient(mine)
 
         async def main():
             srv = HttpServer(Dispatcher(other, other.hub))
             await srv.start_unix(f"{d}/razi.sock")
-            await other.start_peers(f"{d}/razi.sock")
+            await other.peers.start(f"{d}/razi.sock")
             sb = (await other.loop.create_session(title="razi work")).id
             app = ExoApp(client, seat="tester")
             async with app.run_test(size=(120, 40)) as pilot:
                 await asyncio.wait_for(app.ready.wait(), 5)
-                await mine.start_peers(f"{d}/tester.sock")  # the TUI's own engine serves no socket here; give it one
+                await mine.peers.start(f"{d}/tester.sock")  # the TUI's own engine serves no socket here; give it one
                 srv2 = HttpServer(Dispatcher(mine, mine.hub))
                 await srv2.start_unix(f"{d}/tester.sock")
                 await send(app, pilot, "/peers")
                 await until(lambda: "razi" in app.transcript_text(), pilot)
                 await send(app, pilot, "/send razi are you free?")
                 await until(lambda: any("are you free?" in m.text() for m in other.store.messages(sb)), pilot)
-                await other.peer_node.send("tester", "yes, go ahead", sb, "agent")
+                await other.peers.node.send("tester", "yes, go ahead", sb, "agent")
                 await until(lambda: "peer message from razi" in app.transcript_text(), pilot)
                 assert "yes, go ahead" in app.transcript_text()
                 assert "/peers" in app.help_text() and "/send" in app.help_text()
@@ -561,7 +575,6 @@ def test_load_earlier_adds_a_page_and_drops_the_row_at_the_end(tmp_path):
 
 def test_streaming_block_is_throttled_and_ends_as_markdown(tmp_path):
     from rich.padding import Padding
-    from rich.markdown import Markdown
     from exo_tui import app as appmod
 
     async def sc(app, pilot, client, eng):
@@ -616,4 +629,102 @@ def test_copy_all_and_last_include_unmounted_history(tmp_path):
         app.copy_command("last")
         assert got[-1].startswith("answer 1")
 
+    run(tmp_path, sc)
+
+
+def test_literal_paths_and_known_command_usage_do_not_collide(tmp_path):
+    async def sc(app, pilot, client, eng):
+        await app.submit("/etc/hosts is broken")
+        await until(lambda: not app.busy and not eng._tasks, pilot)
+        assert any(isinstance(b, s.TurnSend) and b.text == "/etc/hosts is broken" for b in app.sent)
+        assert not any(isinstance(b, s.CommandRun) and b.name == "etc/hosts" for b in app.sent)
+        for line in ("/context/file is broken", "/layout/file is broken", "/new/file is broken", "/frobnicate is literal"):
+            await app.submit(line)
+            await until(lambda: not eng._tasks, pilot)
+            assert any(isinstance(b, s.TurnSend) and b.text == line for b in app.sent)
+        old = app.session
+        await app.submit("/new private extra")
+        await pilot.pause()
+        assert app.session == old and "usage: /new" in app.transcript_text()
+        await app.submit("/context broken")
+        await pilot.pause()
+        assert "usage: /context" in app.transcript_text()
+        await app.submit("/contex")
+        await pilot.pause()
+        assert app.composer.text == "/context" and "did you mean /context" in app.transcript_text()
+        await app.submit("/new private")
+        assert app.session != old and eng.store.get_session(app.session).kind == "private"
+    run(tmp_path, sc)
+
+
+def test_context_capacity_and_fallback_model_are_typed(tmp_path):
+    async def sc(app, pilot, client, eng):
+        assert app.window == 0 and "capacity unknown" in app.status_text()
+        eng.router.models["fake:x"] = {"context": 8192}
+        await app.submit("hello")
+        await until(lambda: not app.busy and "friend" in app.transcript_text(), pilot)
+        await app.submit("/context")
+        assert app.window == 8192 and app.ctx_tokens > 0
+        assert any(isinstance(b, s.CommandRun) and b.name == "context" and b.args == "json" for b in app.sent)
+        app.capacities["fake:small"] = 4096
+        app.handle(s.Event.of(s.ModelCall(route="fake:small", requested="fake:x"), seq=100, session=app.session))
+        assert app.window == 4096 and app.model == "fake:small"
+        app.handle(s.Event.of(s.ModelCall(route="fake:unknown", requested="fake:x"), seq=101, session=app.session))
+        assert app.window == 0 and "capacity unknown" in app.status_text()
+    run(tmp_path, sc)
+
+
+def test_windowed_older_tool_receives_live_updates_before_being_mounted(tmp_path):
+    from exo.core.types import ContentPart, ToolResult
+    from exo_tui import app as appmod
+    from exo_tui.widgets import ToolBlock
+
+    async def sc(app, pilot, client, eng):
+        app.clear_transcript()
+        messages = [{"id": "m-tool", "role": "assistant", "content": [],
+                     "tool_calls": [{"id": "c-old", "name": "bash", "arguments": {"command": "fake"}}]}]
+        messages += long_history(appmod.WINDOW + 5)
+        app.render_history(messages)
+        await pilot.pause()
+        assert "c-old" not in app.tools
+        app.handle(s.Event.of(s.ToolOutput(call_id="c-old", text="streamed"), seq=100, session=app.session))
+        assert "streamed" in app.transcript_text()
+        app.handle(s.Event.of(s.ToolCompleted(result=ToolResult(call_id="c-old", content=[ContentPart.of_text("final output")]),
+                                             duration_ms=10), seq=101, session=app.session))
+        assert "final output" in app.transcript_text() and "streamed" not in app.transcript_text()
+        app.action_load_earlier()
+        await until(lambda: not app.older, pilot)
+        tool = next(w for w in app.transcript.children if isinstance(w, ToolBlock))
+        assert tool.output == "final output" and tool.status == "done"
+    run(tmp_path, sc)
+
+
+def test_clipboard_helpers_fall_back_and_osc52_receipt_is_not_claimed(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from textual.app import App
+    import subprocess
+
+    calls, osc = [], []
+    monkeypatch.setattr(App, "copy_to_clipboard", lambda app, text: osc.append(text))
+    monkeypatch.setattr("shutil.which", lambda name: "/fake/" + name if name in {"wl-copy", "xclip", "xsel"} else None)
+
+    def native(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0 if "xclip" in argv[0] else 1)
+
+    monkeypatch.setattr(subprocess, "run", native)
+
+    async def sc(app, pilot, client, eng):
+        app.add(Block("héllo", "assistant"))
+        app.copy_command("last")
+        assert [a[0][0] for a in calls] == ["/fake/wl-copy", "/fake/xclip"]
+        assert calls[-1][0][1:] == ["-selection", "clipboard"]
+        assert calls[-1][1]["input"] == "héllo".encode() and app.clipboard_verified and not osc
+        await pilot.pause()
+        assert "copied last answer" in app.transcript_text()
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1))
+        app.copy_command("last")
+        assert osc == ["héllo"] and not app.clipboard_verified
+        await pilot.pause()
+        assert "via OSC52; clipboard receipt cannot be verified" in app.transcript_text()
     run(tmp_path, sc)

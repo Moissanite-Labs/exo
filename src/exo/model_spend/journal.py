@@ -12,13 +12,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Mapping
 
 from .billing import SCALE, Price, SpendDenied, SpendStopped, _money
 
 
 class SpendJournal:
-    def __init__(self, config: dict, *, clock=time.time, _review: bool = False, _readonly: bool = False):
+    def __init__(self, config: Mapping[str, Any], *, clock=time.time, _review: bool = False, _readonly: bool = False):
         self.path = Path(config["journal"]).absolute()
         self.principal = str(config["principal"])
         self.identity = str(uuid.UUID(config["journal_id"]))
@@ -102,7 +102,7 @@ class SpendJournal:
                 "pending_reserved_usd": money(pending), "pending_count": count, "stop_reason": reason}
 
     @classmethod
-    def inspect(cls, config: dict) -> dict:
+    def inspect(cls, config: Mapping[str, Any]) -> dict:
         """Public read-only inspection, including stopped journals; never provisions or resumes."""
         return cls(config, _readonly=True).status()
 
@@ -141,7 +141,7 @@ class SpendJournal:
                        (actual, day, month, token))
 
     @classmethod
-    def operator_review(cls, config: dict, *, settlements: dict[str, Any] | None = None,
+    def operator_review(cls, config: Mapping[str, Any], *, settlements: dict[str, Any] | None = None,
                         resume: bool = False):
         """Explicit trusted operator action with engines stopped; never exposed to model tools.
 
@@ -169,8 +169,15 @@ class SpendJournal:
             self._identity(db, check_block=False)
             db.execute("UPDATE identity SET blocked=?", (reason,))
 
+    def freeze_uncertain(self, reason: str) -> None:
+        """Keep the durable reservation even if recording a stop fails."""
+        try:
+            self.freeze(reason)
+        except Exception:
+            pass  # admission still checks the existing durable reservation
 
-def configured(config: dict | None, *, required: bool = False) -> SpendJournal | None:
+
+def configured(config: Mapping[str, Any] | None, *, required: bool = False) -> SpendJournal | None:
     if config is None:
         if required:
             raise SpendDenied("required model-spend policy is missing; ask the principal to configure it")

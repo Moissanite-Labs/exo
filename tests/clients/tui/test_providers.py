@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
+import httpx
 import pytest
 from test_tui import FakeServerClient, make_engine, send, until
 
 from exo import providers_setup as ps
+from exo.core.models.router import load_catalog
 from exo.protocol import schema as s
 from exo_tui.app import COMMANDS, ExoApp
 from exo_tui.providers import KeyScreen, ProvidersScreen, refuse_key_in_composer
@@ -61,9 +64,24 @@ def fakes(monkeypatch):
     return calls
 
 
-def run(tmp_path, scenario, **kw):
+def run(tmp_path, scenario, main_state=None, models=None, prepare=None, **kw):
     eng = make_engine(tmp_path)
+    if prepare:
+        prepare(eng)
     client = FakeServerClient(eng)
+    real_call = client.call
+
+    async def call(body):
+        if (main_state is not False and isinstance(body, s.CommandRun)
+                and body.name == "providers" and not body.args):
+            # The panel's existing fake readiness feeds the core status response.
+            state = main_state(eng) if main_state else {"ready": ps.any_ready(), "needs_model": []}
+            return {"output": {"providers": ps.rows(), "main": state}}
+        if isinstance(body, s.ModelsList) and models is not None:
+            return models
+        return await real_call(body)
+
+    client.call = call
 
     async def main():
         app = ExoApp(client, seat="tester", home=str(tmp_path / "exo-state"), **kw)
@@ -153,6 +171,37 @@ def test_key_error_shows_class_only(tmp_path, fakes, monkeypatch):
     run(tmp_path, sc)
 
 
+@pytest.mark.parametrize("effective,warning", [
+    ("file", ""),
+    ("keychain", "The keychain key still wins; the saved file key is shadowed. Update the effective key "
+     "with exo providers add openai --store keychain, or remove only that item, then restart Exo."),
+])
+def test_file_save_reports_actual_source_and_visible_warning(tmp_path, fakes, monkeypatch, effective, warning):
+    def save(provider, value, **kw):
+        return {"provider": provider, "var": "OPENAI_API_KEY", "stored_in": "file",
+                "effective_source": effective, "shadowed_by": effective if effective != "file" else None,
+                "shadowed_by_env": False, "warning": warning}
+
+    monkeypatch.setattr(ps, "set_key", save)
+
+    async def sc(app, pilot, client, eng):
+        scr = await open_panel(app, pilot)
+        await pilot.press("down", "a")
+        await until(lambda: isinstance(app.screen, KeyScreen), pilot)
+        key_text = " ".join(str(w.render()) for w in app.screen.query("Static"))
+        assert "owner-only keys.env" in key_text and "system key store" not in key_text
+        app.screen.query_one("Input").value = FAKE_KEY
+        await pilot.press("enter")
+        await until(lambda: "effective source:" in scr.plain, pilot)
+        assert "saved in file" in scr.plain and f"effective source: {effective}" in scr.plain
+        assert warning in scr.plain and not leaked(app, scr.plain)
+        if warning:
+            await pilot.pause(0.05)
+            assert scr.query_one("#prov-msg").size.height > 1
+
+    run(tmp_path, sc)
+
+
 def test_composer_key_is_refused(tmp_path, fakes):
     async def sc(app, pilot, client, eng):
         assert refuse_key_in_composer(f"/providers add openai {FAKE_KEY}")
@@ -220,7 +269,7 @@ def test_set_default_uses_the_model_palette(tmp_path, fakes, monkeypatch):
             return {"models": [{"route": "openai:gpt-x", "role": "main"}, {"route": "fake:x", "role": "main"}],
                     "available": []}
 
-        scr = await open_panel(app, pilot)
+        _scr = await open_panel(app, pilot)
         real = client.call
 
         async def call(body):
@@ -248,7 +297,7 @@ def test_first_run_note(tmp_path, monkeypatch, ready, shown):
     run(tmp_path, sc, provider_check=True)
 
 
-def test_first_run_check_failure_is_silent(tmp_path, monkeypatch):
+def test_first_run_check_failure_reports_setup_status(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("x")
 
@@ -256,7 +305,7 @@ def test_first_run_check_failure_is_silent(tmp_path, monkeypatch):
 
     async def sc(app, pilot, client, eng):
         await pilot.pause(0.3)
-        assert "provider" not in app.transcript_text()
+        assert "Could not check the main model route" in app.transcript_text()
 
     run(tmp_path, sc, provider_check=True)
 
@@ -301,3 +350,44 @@ def test_first_run_with_provider_goes_straight_to_the_intro(tmp_path, monkeypatc
         assert not isinstance(app.screen, ProvidersScreen)
 
     run(tmp_path, sc, provider_check=True, auto_intro=True)
+
+
+def test_new_openai_provider_requires_model_choice_before_real_intro(tmp_path, fakes, monkeypatch):
+    table = [r for r in demo_rows() if r["provider"] == "openai"]
+    table[0]["transport"] = "openai"
+    monkeypatch.setattr(ps, "rows", lambda *a, **k: table)
+    model = {"provider": "openai", "route": "openai:user-chosen-chat"}
+    monkeypatch.setattr("exo.models_cmd.available_models", lambda *a, **k: [model])
+    requests = []
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        payload = {"choices": [{"delta": {"content": "Orientation from chosen provider"}, "finish_reason": "stop"}]}
+        return httpx.Response(200, text="data: " + json.dumps(payload) + "\n\ndata: [DONE]\n\n",
+                              headers={"content-type": "text/event-stream"})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    def prepare(eng):
+        eng.router.roles["main"] = load_catalog()["roles"]["main"]
+        eng.router.env = {"OPENAI_API_KEY": FAKE_KEY, "PATH": ""}
+        eng.router.client = http
+        eng._automatic_main = True
+        eng.loop.model = eng._main_ref()
+
+    async def sc(app, pilot, client, eng):
+        await until(lambda: isinstance(app.screen, Palette), pilot)
+        assert [r[1] for r in app.screen.items] == ["openai:user-chosen-chat"]
+        assert not [b for b in app.sent if isinstance(b, s.TurnSend)]
+        assert not app.onb.onboarded
+        await pilot.press("enter")
+        await until(lambda: "Orientation from chosen provider" in app.transcript_text() and not app.busy, pilot)
+        assert eng.router.roles["main"][0] == "openai:user-chosen-chat"
+        assert app.onb.onboarded
+        assert sum(isinstance(b, s.TurnSend) for b in app.sent) == 1
+        assert len(requests) == 1 and requests[0]["model"] == "user-chosen-chat"
+
+    try:
+        run(tmp_path, sc, main_state=False, prepare=prepare, provider_check=True, auto_intro=True)
+    finally:
+        asyncio.run(http.aclose())

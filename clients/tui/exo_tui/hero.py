@@ -12,7 +12,7 @@ import math
 from rich.text import Text
 from textual.widgets import Static
 
-from exo_tui.theme import ACCENT, BG, no_color, reduced_motion, rich_style
+from exo_tui.theme import ACCENT, no_color, reduced_motion, rich_style
 
 FRAMES = 48  # one full turn
 FPS = 3.0  # 16 s a turn: slow on purpose

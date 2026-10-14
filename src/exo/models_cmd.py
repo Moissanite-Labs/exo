@@ -15,7 +15,7 @@ from .core.models.router import Router
 
 def build_router(env: dict | None = None) -> Router:
     from .config import Config
-    return Router.from_config(Config.load().data.get('models'), env=env)
+    return Router.from_config(Config.load().models(), env=env)
 
 
 def render(router: Router) -> str:
@@ -74,7 +74,7 @@ def available_models(router: Router, home: Path, *, get: Callable[..., Any] | No
     for st in router.providers_status():
         name, spec = st['provider'], router.providers.get(st['provider'], {})
         if spec.get('transport') in ('claude-cli', 'muse-cli'):  # static list; offered only when the binary is on PATH
-            if router.credentials(name):
+            if router._allows(name, "main") and router.credentials(name):
                 out += [{'route': f'{name}:{m}', 'provider': name} for m in spec.get('models') or []]
             continue
         if (spec.get('transport', 'openai') != 'openai' or spec.get('local') or st.get('key') != 'yes'

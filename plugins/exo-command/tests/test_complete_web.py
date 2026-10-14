@@ -58,7 +58,7 @@ def repo(tmp_path):
 def test_commands_route_lists_what_the_composer_runs():
     code, d = dispatch(Src(), "/api/complete/commands")
     names = [c["name"] for c in d["commands"]]
-    assert code == 200 and names == ["context", "findings", "trace", "new", "layout"]
+    assert code == 200 and names == ["context", "findings", "trace", "new", "rename", "layout"]
     trace = next(c for c in d["commands"] if c["name"] == "trace")
     assert trace["args"] == "[last N turns]" and [x["value"] for x in trace["choices"]] == ["5", "10", "25"]
     assert d["guidance"] is True
@@ -245,10 +245,9 @@ console.log(JSON.stringify({out, lines}));''')
 
 
 def test_escape_never_stops_a_turn_in_the_page():
-    """D-043: the only Escape handler closes the completion menu; Stop is a button."""
-
+    """D-043: Escape closes/cancels local UI, never interrupts a turn. DOM stopPropagation is harmless."""
     static = Path(__file__).resolve().parents[1] / "exo_command" / "static"
     for js in static.glob("*.js"):
         for line in js.read_text(encoding="utf-8").splitlines():
             if "Escape" in line:
-                assert "interrupt" not in line and "stop" not in line.lower(), (js.name, line)
+                assert not re.search(r"\b(?:interrupt|stopTurn)\s*\(|/interrupt", line), (js.name, line)

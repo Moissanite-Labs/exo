@@ -12,7 +12,7 @@ import pytest
 
 from exo.core.models.router import Router, aux
 from exo.model_spend import SpendDenied, SpendJournal, configured
-from exo.core.models.decision import ask_choice
+from exo.core.models.decision import ask_choice_result
 from exo.core.types import Message, Usage
 from .conftest import collect
 
@@ -389,7 +389,7 @@ def test_aux_and_generative_decisions_share_journal(tmp_path):
     assert asyncio.run(aux(r, 'summarize')) == 'hi'
     assert len(rows(cfg)) == 1
     # Generative decision parses after admission; both calls remain accounted.
-    with pytest.raises(Exception): asyncio.run(ask_choice(r, 's', 'q', ['a', 'b']))
+    with pytest.raises(Exception): asyncio.run(ask_choice_result(r, 's', 'q', ['a', 'b']))
     assert len(rows(cfg)) == 2 and all(actual is not None for _, actual in rows(cfg))
     assert r.spend.status()['stop_reason'] == ''
     assert call(r)[-1].kind == 'done'
@@ -401,7 +401,7 @@ def test_typed_decision_and_live_setup_probe_refused(tmp_path):
     r = router(cfg, lambda req: seen.append(req) or response())
     r.providers['typed'] = {'transport': 'decision', 'base_url': 'https://typed'}
     r.roles['decision'] = ['typed:m']
-    with pytest.raises(SpendDenied): asyncio.run(ask_choice(r, 's', 'q', ['a', 'b']))
+    with pytest.raises(SpendDenied): asyncio.run(ask_choice_result(r, 's', 'q', ['a', 'b']))
     assert probe('test', router=r, save=False)['error_class'] == 'spend_boundary'
     assert not seen and r.spend.status()['stop_reason'] == ''
     assert call(r)[-1].kind == 'done'
@@ -546,5 +546,5 @@ def test_required_decision_missing_policy_is_a_hard_gate_refusal(monkeypatch):
     fake = FakeProvider(['should not run'])
     r = Router(roles={'decision': ['fake:m']}, catalog={}, env={}, instances={'fake': fake})
     monkeypatch.setenv('EXO_MODEL_SPEND_REQUIRED', '1')
-    with pytest.raises(SpendDenied): asyncio.run(ask_choice(r, 's', 'q', ['a', 'b']))
+    with pytest.raises(SpendDenied): asyncio.run(ask_choice_result(r, 's', 'q', ['a', 'b']))
     assert not fake.calls

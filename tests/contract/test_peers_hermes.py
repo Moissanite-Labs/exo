@@ -50,9 +50,9 @@ def test_plugin_loads_registers_and_receives(hermes_import, scratch):
         assert registry.get_entry("peers") is not None and registry.get_entry("peer_send") is not None
 
         from exo import crypto
-        from exo.core.ingress import Ingress, Receipt, Target
-        from exo.core.peers import Directory, PeerConfig, PeerNode, call_socket
-        from exo.protocol import schema as s
+        from exo.core.ingress import Target
+        from exo.core.ingress import PeerConfig
+        from exo.peers import Directory, PeerNode
 
         (hermes,) = Directory(scratch / "peers").scan()
         assert hermes.platform == "hermes" and hermes.seat == "hermes-scratch"

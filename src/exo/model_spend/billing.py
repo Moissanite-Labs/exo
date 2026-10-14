@@ -76,7 +76,7 @@ class Price:
             raise ValueError("billing contract must pin endpoint and wire model")
         return cls(raw["base_url"].rstrip("/"), raw["model"], raw["transport"],
                    positive_tokens(raw["input_bound"]), positive_tokens(raw["max_output"]),
-                   tuple(_money(raw[k]) for k in ("input", "output", "cache_read", "cache_write")))
+                   (_money(raw["input"]), _money(raw["output"]), _money(raw["cache_read"]), _money(raw["cache_write"])))
 
     def charge(self, counts: tuple[int, int, int, int]) -> int:
         return (sum(n * rate for n, rate in zip(counts, self.rates)) + 999_999) // 1_000_000

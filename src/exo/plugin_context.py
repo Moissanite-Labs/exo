@@ -10,7 +10,8 @@ from typing import Any
 
 from exo import provenance
 from exo.core import trace
-from exo.core.context import ContextTree, _maybe_await, apply_selection
+from exo.core.context import ContextTree, apply_selection
+from exo.core.hooks import maybe_await
 from exo.core.plugins import call_plugin, safe_plugin_call
 from exo.core.types import Message, Usage
 
@@ -59,7 +60,7 @@ class ContextAdapter:
                 for m in msgs]  # a user message that is not the principal (peer, bus, job notice) says so
         try:
             out = call_plugin(self.memory.capture_principal, flat, session_id=session, source="leaf")
-            out = await _maybe_await(out)
+            out = await maybe_await(out)
         except Exception as exc:
             trace.report(f"{type(self.memory).__name__}.capture_principal", exc, session)
             return False
@@ -102,7 +103,7 @@ class ContextAdapter:
             return msgs
         flat = [{"role": m.role, "content": m.text()} for m in msgs]
         try:
-            out = await _maybe_await(call_plugin(pick, flat, conversation_messages=flat, budget_tokens=0,
+            out = await maybe_await(call_plugin(pick, flat, conversation_messages=flat, budget_tokens=0,
                                            session_id=session))
         except Exception as exc:
             trace.report("context engine select_context", exc, session)
