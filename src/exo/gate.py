@@ -240,6 +240,8 @@ class _Lexer:
         self.i = 0
         self.subs: list[str] = []          # sources of $( ), ` ` and <( ) met at this level
         self.pending: list[_Heredoc] = []
+        self.scan_depth = 0
+        self.opaque = False
 
     def run(self, closer: bool = False) -> list:
         s, toks = self.s, []
@@ -324,6 +326,8 @@ class _Lexer:
                 w.started = True
                 self.i += 1
         flush()
+        if closer:
+            self.opaque = True
         return toks
 
     def _read_heredocs(self) -> None:
@@ -362,7 +366,7 @@ class _Lexer:
                     w.text += nxt
                 self.i += 2
             elif ch == "$":
-                self._dollar(w)
+                self._dollar(w, double=True)
             elif ch == "`":
                 self._backtick(w)
             else:
@@ -379,15 +383,52 @@ class _Lexer:
             out.append(s[j])
             j += 1
         inner = "".join(out)
+        if j >= len(s):
+            self.opaque = True
         self.subs.append(inner)
         self.i = j + 1
         w.text += "`" + inner + "`"
         w.dynamic = w.started = True
 
-    def _dollar(self, w: _Word) -> None:
+    def _parameter(self, double: bool = False) -> None:
+        """Scan an expansion word without treating its punctuation as shell operators."""
+        s = self.s
+        self.i += 2
+        quote = ""
+        while self.i < len(s):
+            ch = s[self.i]
+            if ch == "\\" and quote != "'":
+                self.i += 2
+            elif quote == "'":
+                self.i += 1
+                if ch == "'":
+                    quote = ""
+            elif ch == "'" and not quote and not double:
+                quote = "'"
+                self.i += 1
+            elif ch == '"':
+                quote = "" if quote else '"'
+                self.i += 1
+            elif ch == "}" and not quote:
+                self.i += 1
+                return
+            elif ch == "$":
+                self._dollar(_Word(), double=double or bool(quote))
+            elif ch == "`":
+                self._backtick(_Word())
+            else:
+                self.i += 1
+        self.opaque = True  # Unclosed expansion or quote cannot be a read allow.
+
+    def _dollar(self, w: _Word, double: bool = False) -> None:
         s, i = self.s, self.i
         nxt = s[i + 1:i + 2]
         w.started = True
+        if nxt in ("(", "{") and self.scan_depth >= 32:
+            self.opaque = True
+            self.i = len(s)
+            w.dynamic = True
+            return
         if s.startswith("$((", i):
             depth, j = 0, i + 1
             while j < len(s):
@@ -406,7 +447,11 @@ class _Lexer:
         elif nxt == "(":
             self.i = i + 2
             start = self.i
+            mark = len(self.subs)
+            self.scan_depth += 1
             toks = self.run(closer=True)
+            self.scan_depth -= 1
+            del self.subs[mark:]  # The outer source owns its nested substitutions.
             inner = s[start:max(start, self.i - 1)]
             lit = _literal_heredoc(toks)
             if lit is not None:
@@ -416,12 +461,12 @@ class _Lexer:
                 w.text += "$(" + inner + ")"
                 w.dynamic = True
         elif nxt == "{":
-            j = s.find("}", i)
-            j = len(s) - 1 if j < 0 else j
-            w.text += s[i:j + 1]
+            self.scan_depth += 1
+            self._parameter(double=double)
+            self.scan_depth -= 1
+            w.text += s[i:self.i]
             w.dynamic = True
-            self.i = j + 1
-        elif nxt == "'":                       # $'..' (ANSI-C quoting): decode the escapes
+        elif nxt == "'" and not double:        # $'..' (ANSI-C quoting): decode the escapes
             j, out = i + 2, []
             while j < len(s) and s[j] != "'":
                 step = 2 if s[j] == "\\" else 1
@@ -457,8 +502,8 @@ def _literal_heredoc(toks: list) -> str | None:
     return None
 
 
-def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
-    """(simple commands, substitution sources, defines a function)."""
+def _parse(src: str) -> tuple[list[_Cmd], list[str], bool, bool]:
+    """(simple commands, substitution sources, defines a function, opaque syntax)."""
     lx = _Lexer(src or "")
     toks = lx.run()
     cmds: list[_Cmd] = []
@@ -495,12 +540,12 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
             cur.words.append(v)
         i += 1
     end()
-    return cmds, lx.subs, func
+    return cmds, lx.subs, func, lx.opaque
 
 
 def split_commands(cmd: str) -> tuple[list[list[str]], list[str]]:
     """Argv lists of a command line's simple commands, and its heredoc bodies."""
-    cmds, _, _ = _parse(cmd)
+    cmds, _, _, _ = _parse(cmd)
     return [[w.text for w in k.words] for k in cmds if k.words], [h.body for k in cmds for h in k.heredocs]
 
 
@@ -1234,7 +1279,7 @@ def _piped_text(k: _Cmd) -> str | None:
 
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part."""
-    cmds, subs, func = _parse(cmd or "")
+    cmds, subs, func, opaque = _parse(cmd or "")
     ctx: dict = {}
     parts: list[Classification] = []
     prev: _Cmd | None = None
@@ -1244,6 +1289,8 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         prev = k
     for sub in subs:
         parts.append(classify_shell(sub, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
+    if opaque:
+        parts.append(_opaque("unclosed or excessively nested shell expansion", cmd))
     if func:
         parts.append(_opaque("defines a shell function", cmd))
     c = _combine(parts, cmd)

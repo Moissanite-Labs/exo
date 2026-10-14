@@ -7,6 +7,22 @@ each call, records the decision in the signed ledger, and turns an ask into the 
 it, how long "always" lasts, and the sweep for internal names in outbound posts. D-038 made the
 shell classifier an allowlist and put the store itself behind the gate (see the last three sections).
 
+## Shell parameter expansion
+
+The shell lexer balances `${...}` through quotes, escapes, nested parameter words,
+command substitutions and backticks. Executable substitutions in defaults,
+alternatives, error words and pattern replacements receive the same classification
+as visible commands. Quoted braces cannot hide a following command. Single-quoted
+literal expansion words stay literal; inside an enclosing double quote, single
+quotes do not suppress command substitution.
+
+Scanning has a separate 32-level expansion nesting limit. Unclosed expansions,
+substitutions and backticks, or input beyond that limit, add opaque execution and
+ask under the default policy. The classifier does not evaluate variables or choose
+which conditional expansion branch runs; it checks every executable branch it can
+read. Nested command sources are classified once per level, with the existing
+classification depth limit still applying.
+
 ## Required executor audit
 
 With a required tool executor, the gate refuses execution unless its signed
