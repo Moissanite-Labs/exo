@@ -2,6 +2,7 @@
 // composer, and the side panel area on the right. All state comes from /api/chat/* and the /api/events stream.
 import { h, api, short, when, partsText, tag, empty } from "./dom.js";
 import * as bus from "./bus.js";
+import { renderMarkdown } from "./markdown.js";
 import { renderPanel } from "./panels.js";
 import { createHero } from "./hero.js";
 import { attachComposer } from "./composer.js";
@@ -287,7 +288,7 @@ export function mount(root) {
     if (it.kind === "user") {
       el = h("div", { class: "xc-msg xc-user" + fresh }, h("span", { class: "xc-prompt" }, "\u203A"), h("span", { class: "xc-text" }, it.text));
     } else if (it.kind === "assistant") {
-      it.textEl = h("div", { class: "xc-text" }, it.text);
+      it.textEl = h("div", { class: "xc-text" }, it.streaming ? it.text : renderMarkdown(it.text));
       el = h("div", { class: "xc-msg xc-asst" + (it.streaming ? " xc-streaming" : "") + fresh }, it.textEl, it.streaming ? null : feedbackBar(it));
     } else if (it.kind === "sys") {
       el = h("div", { class: "xc-msg xc-sysline" + (it.tone === "tip" ? " xc-tip" : "") + fresh },

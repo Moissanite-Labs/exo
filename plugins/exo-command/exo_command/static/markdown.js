@@ -1,5 +1,5 @@
 // A small, safe markdown renderer for panels: headings, lists, code fences, bold, italics, inline
-// code and http(s) links. It builds DOM nodes, so nothing the model writes can become markup.
+// code, pipe tables and http(s) links. It builds DOM nodes, so nothing the model writes can become markup.
 import { h } from "./dom.js";
 
 function inline(text) {
@@ -18,6 +18,29 @@ function inline(text) {
   return out;
 }
 
+// Split only unescaped pipes. Outer pipes are optional; escaped pipes stay cell text.
+function tableRow(line) {
+  const cells = [];
+  let text = "", pipes = 0;
+  const src = line.trim();
+  for (let i = 0; i < src.length; i++) {
+    if (src[i] === "\\" && (src[i + 1] === "|" || src[i + 1] === "\\")) { text += src[++i]; }
+    else if (src[i] === "|") { cells.push(text.trim()); text = ""; pipes++; }
+    else text += src[i];
+  }
+  cells.push(text.trim());
+  if (!pipes) return null;
+  if (src.startsWith("|")) cells.shift();
+  if (src.endsWith("|") && cells[cells.length - 1] === "") cells.pop();
+  return cells.length ? cells : null;
+}
+
+function tableStart(lines, i) {
+  const head = tableRow(lines[i]), rule = i + 1 < lines.length ? tableRow(lines[i + 1]) : null;
+  if (!head || !rule || head.length !== rule.length || !rule.every(x => /^:?-+:?$/.test(x))) return null;
+  return { head, aligns: rule.map(x => x.startsWith(":") ? (x.endsWith(":") ? "center" : "left") : (x.endsWith(":") ? "right" : "left")) };
+}
+
 export function renderMarkdown(src) {
   const root = h("div", { class: "xc-md" });
   const lines = String(src || "").replace(/\r/g, "").split("\n");
@@ -26,13 +49,31 @@ export function renderMarkdown(src) {
   const flushList = () => { if (list) { root.appendChild(list); list = null; } };
   while (i < lines.length) {
     const ln = lines[i];
-    if (/^```/.test(ln)) {
+    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(ln);
+    if (fence) {
       flushPara(); flushList();
       const buf = [];
       i++;
-      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+      const close = new RegExp("^ {0,3}" + fence[1][0] + "{" + fence[1].length + ",}\\s*$");
+      while (i < lines.length && !close.test(lines[i])) buf.push(lines[i++]);
       root.appendChild(h("pre", { class: "xc-code" }, buf.join("\n")));
       i++;
+      continue;
+    }
+    const start = tableStart(lines, i);
+    if (start) {
+      flushPara(); flushList();
+      const cell = (tag, text, column) => h(tag, { "data-align": start.aligns[column], ...(tag === "th" ? { scope: "col" } : {}) }, h("div", { class: "xc-table-cell" }, inline(text)));
+      const body = h("tbody");
+      const table = h("table", null, h("thead", null, h("tr", null, start.head.map((text, column) => cell("th", text, column)))), body);
+      i += 2;
+      while (i < lines.length && lines[i].trim() && !/^ {0,3}(`{3,}|~{3,})/.test(lines[i])) {
+        const row = tableRow(lines[i]);
+        if (!row) break;
+        body.appendChild(h("tr", null, start.head.map((_, column) => cell("td", row[column] || "", column))));
+        i++;
+      }
+      root.appendChild(h("div", { class: "xc-table-scroll", role: "region", "aria-label": "Table", tabindex: "0" }, table));
       continue;
     }
     const hd = /^(#{1,4})\s+(.*)$/.exec(ln);
