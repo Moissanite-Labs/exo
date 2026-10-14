@@ -59,6 +59,14 @@ def load(home: str | os.PathLike | None, overrides: dict | None = None) -> dict:
         except (OSError, ValueError):
             pass
     cfg.update({k: v for k, v in (overrides or {}).items() if k in DEFAULTS})
+    if not cfg.get("principal") and not cfg.get("store_root"):
+        # Fall back to the principal the core config names (`exo config set principal <id>`).
+        try:
+            core = json.loads((exo_home(cfg) / "config.json").read_text("utf-8"))
+            if isinstance(core, dict) and isinstance(core.get("principal"), str):
+                cfg["principal"] = core["principal"]
+        except (OSError, ValueError):
+            pass
     for k in INTS:
         cfg[k] = int(cfg[k])
     for k in BOOLS:

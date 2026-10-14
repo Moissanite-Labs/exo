@@ -4,19 +4,21 @@ One row per signature in the ``findings`` table of sessions.sqlite (not a separa
 upsert in one transaction, the server and the CLI can both write, and a copy of sessions.sqlite carries the
 findings with the sessions they came from).
 
-Lifecycle: open -> fixed (``fix``, with the commit) -> verified (quiet for ``verify_turns`` turns or
-``verify_days`` days on a harness at or after that commit) or reopened (the same signature came back on such a
-harness). A recurrence on an older harness only bumps the count and restarts the quiet clock.
+Lifecycle: open -> fixed (``fix``, with the commit) -> verified (quiet for ``verify_turns`` eligible turns or on
+``verify_days`` days of activity, on a harness at or after that commit; ``trace.eligible`` says which turns count) or
+reopened (the same signature came back on such a harness). A recurrence on an older harness only bumps the count and
+restarts the quiet clock.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import secrets
 from datetime import datetime, timezone
 from typing import Any
 
-from exo.core.trace import Flag, Thresholds, at_or_after, harness_version, scrub
+from exo.core.trace import Flag, Thresholds, TurnTrace, at_or_after, eligible, harness_version, scrub
 from exo.protocol.schema import now_ts
 
 SEVERITIES = ("blocker", "bug", "papercut", "idea")
@@ -70,8 +72,7 @@ class Findings:
                 if at_or_after(self.version, row["fixed_in"]):
                     sets["status"] = "reopened"
                 else:  # an older harness still shows it: the fix is not live there, restart the quiet clock
-                    sets["fixed_turns"] = self._turns(db)
-                    sets["fixed_at"] = now
+                    sets["quiet"], sets["fixed_at"] = None, now
             db.execute(f"UPDATE findings SET {', '.join(k + '=?' for k in sets)} WHERE id=?", (*sets.values(), row["id"]))
             return row["id"]
 
@@ -83,31 +84,32 @@ class Findings:
                          session=f.session or None, turn=f.turn or None, model=f.model or None)
 
     def fix(self, fid: str, sha: str) -> dict[str, Any]:
-        """Mark a finding fixed in commit ``sha``; the quiet clock starts now."""
+        """Mark a finding fixed in commit ``sha``; the quiet clock starts now, from zero."""
         row = self.get(fid)
         if row is None:
             raise KeyError(fid)
-        self.store._q("UPDATE findings SET status='fixed', fixed_in=?, fixed_at=?, fixed_turns=? WHERE id=?",
-                      (sha.strip(), now_ts(), self._turns(), row["id"]))
+        self.store._q("UPDATE findings SET status='fixed', fixed_in=?, fixed_at=?, quiet=NULL WHERE id=?",
+                      (sha.strip(), now_ts(), row["id"]))
         return self.get(row["id"])  # type: ignore[return-value]
 
-    def sweep(self) -> list[str]:
-        """Move fixed findings that stayed quiet long enough to verified. Returns their ids."""
-        rows = self.store._q("SELECT * FROM findings WHERE status='fixed'")
-        if not rows or not any(at_or_after(self.version, r["fixed_in"]) for r in rows):
-            return []
-        turns, done = self._turns(), []
-        for r in rows:
-            if not at_or_after(self.version, r["fixed_in"]):
-                continue  # the fix is not running here, so quiet proves nothing
-            if turns - (r["fixed_turns"] or 0) >= self.th.verify_turns or _age_days(r["fixed_at"]) >= self.th.verify_days:
-                self.store._q("UPDATE findings SET status='verified' WHERE id=?", (r["id"],))
-                done.append(r["id"])
-        return done
+    def observe(self, t: TurnTrace, tripped: set[str]) -> list[str]:
+        """Count a finished turn toward verifying fixed findings (D-025); ``tripped``: the signatures it flagged.
 
-    def _turns(self, db: Any = None) -> int:
-        q = "SELECT COUNT(*) FROM events WHERE type='turn.completed'"
-        return (db.execute(q).fetchone() if db is not None else self.store._q(q)[0])[0]
+        Verified after ``verify_turns`` eligible turns, or on ``verify_days`` distinct days with a counting turn, all
+        quiet and on a harness at or after the fix. A turn that could not have tripped the signature counts for
+        neither; one where no rule can tell (``eligible`` is None) counts only as a day. Returns the verified ids."""
+        day, need, done = now_ts()[:10], max(1, math.ceil(self.th.verify_days)), []
+        for r in self.store._q("SELECT * FROM findings WHERE status='fixed'"):
+            ok = eligible(r["signature"], t)
+            if ok is False or r["signature"] in tripped or not at_or_after(self.version, r["fixed_in"]):
+                continue  # unrelated turn, it came back (``file`` reopened it), or the fix is not running here
+            q = json.loads(r["quiet"] or "{}")
+            n, days = q.get("turns", 0) + bool(ok), sorted({*q.get("days", []), day})[-need:]
+            yes = n >= self.th.verify_turns or len(days) >= need
+            self.store._q("UPDATE findings SET quiet=?, status=? WHERE id=?",
+                          (json.dumps({"turns": n, "days": days}), "verified" if yes else "fixed", r["id"]))
+            done += [r["id"]] if yes else []
+        return done
 
     # ---------------------------------------------------------------- read
 

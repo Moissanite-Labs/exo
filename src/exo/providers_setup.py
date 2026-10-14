@@ -17,15 +17,19 @@ Error text is built from classes and status codes, never from exception text tha
 """
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
@@ -35,6 +39,7 @@ from .core.models import keys as keys_mod
 from .core.models import muse_cli
 from .core.models.keys import KEYCHAIN_SERVICE, keys_file_path, redact_secrets, remember_secret
 from .core.models.router import Router
+from .core.private import private_dir
 
 STORES = ("keychain", "secret-service", "file")
 MIN_KEY, MAX_KEY = keys_mod.MIN_SECRET_LEN, 4096
@@ -63,7 +68,7 @@ def _run(argv: list[str], stdin: str | None = None) -> subprocess.CompletedProce
 
 
 def build_router(home: str | os.PathLike | None = None, env: Mapping[str, str] | None = None) -> Router:
-    return Router.from_config(Config.load(home).data.get("models"), env=env)
+    return Router.from_config(Config.load(home).models(), env=env)
 
 
 def key_vars(spec: Mapping[str, Any]) -> list[str]:
@@ -155,11 +160,33 @@ def _save_state(home: str | os.PathLike | None, provider: str, record: dict[str,
 
 # --- key stores --------------------------------------------------------------------------------
 
+@contextmanager
+def _keys_file_lock(path: Path):
+    """Serialize cooperating file writers on a persistent, owner-only lock inode."""
+    private_dir(path.parent)
+    lock = path.with_name(path.name + ".lock")
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        mode = os.fstat(fd).st_mode
+        if not stat.S_ISREG(mode):
+            raise OSError(errno.EINVAL, "keys lock must be a regular file")
+        if stat.S_IMODE(mode) != 0o600:
+            os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # never unlink: another writer may already be waiting on this inode
+
+
 def _keyfile_lines(path: Path, drop: str) -> list[str]:
     try:
-        text = path.read_text(encoding="utf-8")
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return []
+    with os.fdopen(fd, encoding="utf-8") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise OSError(errno.EINVAL, "keys file must be a regular file")
+        text = fh.read()
     out = []
     for line in text.splitlines():
         k = line.strip().partition("=")[0].strip().removeprefix("export ").strip()
@@ -170,22 +197,24 @@ def _keyfile_lines(path: Path, drop: str) -> list[str]:
 
 
 def write_keys_file(name: str, value: str, path: Path | None = None) -> Path:
-    """Set ``name`` in keys.env (other lines kept), atomically, mode 0600."""
+    """Set ``name`` in keys.env under a process-safe lock, atomically, mode 0600."""
     path = path or keys_file_path()
-    lines = _keyfile_lines(path, name) + [f"{name}={value}"]
-    _atomic_write(path, "\n".join(lines) + "\n")
+    with _keys_file_lock(path):
+        lines = _keyfile_lines(path, name) + [f"{name}={value}"]
+        _atomic_write(path, "\n".join(lines) + "\n")
     return path
 
 
 def remove_from_keys_file(name: str, path: Path | None = None) -> bool:
     path = path or keys_file_path()
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return False
-    before = _keyfile_lines(path, "\0")
-    after = _keyfile_lines(path, name)
-    if before == after:
-        return False
-    _atomic_write(path, "\n".join(after) + ("\n" if after else ""))
+    with _keys_file_lock(path):
+        before = _keyfile_lines(path, "\0")
+        after = _keyfile_lines(path, name)
+        if before == after:
+            return False
+        _atomic_write(path, "\n".join(after) + ("\n" if after else ""))
     return True
 
 
@@ -252,8 +281,29 @@ def set_key(provider: str, value: str, *, router: Router | None = None, home: st
     except Exception as e:  # never str(e): an OS error could quote a path or a buffer
         raise SetupError(f"could not store the key ({type(e).__name__})") from None
     _save_state(home, provider, None)  # an older test result says nothing about this key
-    env = os.environ if env is None else env
-    return {"provider": provider, "var": name, "stored_in": where, "shadowed_by_env": bool(env.get(name))}
+    env = router.env if env is None else env
+    effective = keys_mod.key_source(name, env, sources=router.key_sources)
+    priority = ("env", *STORES)
+    shadow = effective if effective and priority.index(effective) < priority.index(where) else None
+    warning = ""
+    if shadow == "env":
+        warning = (f"The environment variable {name} wins over the saved key. Update it, or unset it in the "
+                   "shell that launches Exo and restart Exo.")
+    elif shadow:
+        remove = (f"security delete-generic-password -s {KEYCHAIN_SERVICE} -a {name}" if shadow == "keychain"
+                  else f"secret-tool clear service {KEYCHAIN_SERVICE} account {name}")
+        warning = (f"The {shadow} key still wins; the saved {where} key is shadowed. Update the effective key "
+                   f"with `exo providers add {provider} --store {shadow}`, or remove only that item with "
+                   f"`{remove}`, then reload or restart Exo.")
+    elif effective is None:
+        warning = ("This router reads environment credentials only; the saved key is not used here."
+                   if not router.key_sources else
+                   "The key was saved, but no readable effective key was found. Check the store and reload or restart Exo.")
+    elif effective != where:
+        warning = (f"Lookup currently uses {effective}; the saved {where} key was not confirmed readable. "
+                   f"Check or unlock {where}, then reload or restart Exo.")
+    return {"provider": provider, "var": name, "stored_in": where, "shadowed_by_env": bool(env.get(name)),
+            "effective_source": effective, "shadowed_by": shadow, "warning": warning}
 
 
 def remove_key(provider: str, *, router: Router | None = None, home: str | os.PathLike | None = None,
@@ -361,6 +411,27 @@ def any_ready(router: Router | None = None, home: str | os.PathLike | None = Non
         if r["ready"] and (not r["roles"] or "main" in r["roles"]) and r["transport"] != "decision":
             return True
     return False
+
+
+def main_status(router: Router, home: str | os.PathLike, *, automatic: bool = False,
+                table: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Configured main readiness; call off the event loop (keys/local probes).
+
+    Credentials without a known main model require the existing model chooser.
+    Only Claude's chat-only static catalog supplies an automatic missing route.
+    """
+    table = rows(router, home, prober=probe) if table is None else table
+    ready = {r["provider"] for r in table if r["ready"] and
+             (not r["roles"] or "main" in r["roles"]) and r["transport"] != "decision"}
+    route = next((r.ref for r in router.chain("main") if r.provider in ready), "")
+    suggested = ""
+    if not route and automatic:
+        for name, spec in router.providers.items():
+            if name in ready and spec.get("transport") == "claude-cli" and spec.get("models"):
+                suggested = f"{name}:{spec['models'][0]}"
+                break
+    return {"ready": bool(route or suggested), "route": route or suggested, "suggested": suggested,
+            "needs_model": sorted(ready) if not route and not suggested else []}
 
 
 def render(table: list[dict[str, Any]]) -> str:

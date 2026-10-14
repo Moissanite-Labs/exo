@@ -1,9 +1,63 @@
 import json
+import asyncio
+
+import httpx
 
 from exo.core.models.openai_chat import OpenAIChatProvider, convert_messages
+from exo.core.models.base import HttpTransport
 from exo.core.types import ContentPart, Message, ToolCall, ToolResult, ToolSpec
 
 from .conftest import Recorder, collect, fixture_bytes
+
+
+def test_http_error_names_the_requested_model_without_mutating_provider():
+    rec = Recorder((400, b'{"error":{"message":"missing tags"}}', {}))
+    prov = OpenAIChatProvider("https://example.invalid/v1", "k", name="nous-custom", client=rec.client())
+    end = collect(prov.stream([Message.user("hi")], [], model="requested/free-model"))[-1]
+    assert "upstream for requested/free-model is unavailable" in end.error
+    assert "this model" not in end.error and prov.model is None
+
+
+def test_concurrent_http_errors_keep_their_own_request_model():
+    async def go():
+        both_started = asyncio.Event()
+        models = []
+
+        async def respond(request):
+            models.append(json.loads(request.content)["model"])
+            if len(models) == 2:
+                both_started.set()
+            await both_started.wait()
+            return httpx.Response(400, json={"error": {"message": "missing tags"}})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            prov = OpenAIChatProvider("https://example.invalid/v1", "k", name="nous-custom",
+                                      model="provider-default", client=client)
+            async def call(model):
+                return [e async for e in prov.stream([Message.user("hi")], [], model=model)]
+            a, b = await asyncio.gather(call("model-a"), call("model-b"))
+            assert "upstream for model-a is unavailable" in a[-1].error
+            assert "upstream for model-b is unavailable" in b[-1].error
+            assert "model-b" not in a[-1].error and "model-a" not in b[-1].error
+            assert prov.model == "provider-default"
+    asyncio.run(go())
+
+
+def test_legacy_two_argument_error_hook_still_runs():
+    class CustomProvider(HttpTransport):
+        def headers(self):
+            return {}
+
+        def build_body(self, messages, tools, **opts):
+            return {"model": opts.get("model")}
+
+        def explain_error(self, status, text):
+            return "custom explanation: " + text
+
+    rec = Recorder((400, b'{"error":{"message":"bad request"}}', {}))
+    prov = CustomProvider("https://example.invalid/v1", client=rec.client())
+    end = collect(prov.stream([Message.user("hi")], [], model="requested"))[-1]
+    assert end.error == "HTTP 400: custom explanation: bad request"
 
 
 def test_stream_assembles_interleaved_tool_call_deltas():

@@ -1,13 +1,13 @@
 """The real Engine behind exod: router, tools, loop, sessions and plugins wired together.
 
-``create()`` is the factory ``exo serve`` loads by default (``exo.core.engine:create``).
+``exo.compose.create()`` is the factory ``exo serve`` loads by default; it builds a ``CoreEngine``.
 Everything lives under ``$EXO_HOME``: ``config.json`` (models, plugins) and
 ``sessions.sqlite`` (messages and the event log, so events replay across restarts).
 
 Adapters kept here so the parts stay independent of each other:
 - ``SqliteLog``: the server's EventLog over sessions.sqlite; the Hub numbers events.
 - ``HubBus``: the loop's event bus, publishing through the Hub (written before sent).
-- ``ContextAdapter``: the loop's context calls on top of TreeContext plus an optional
+- ``ContextAdapter``: the loop's context calls on top of AgentContext plus an optional
   Hermes-shaped ContextEngine plugin (select_context, update_from_response, on_turn_complete).
 - tool bridge: one ToolContext per call (cwd, cancel, emit) and the plugin hook names
   ``pre_tool_call`` / ``post_tool_call`` / ``transform_tool_result`` on Registry hooks.
@@ -18,36 +18,32 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
-import json
 import os
 import time
 from pathlib import Path
 from typing import Any, Iterable
 
-from exo import provenance
+from exo import diagnostics, provenance
 from exo.core import trace, workspace
 from exo.core.agents import Delegator
 from exo.core import agentlog
-from exo.core.context import AgentContext, DefaultCompressor, TreeContext, _maybe_await
-from exo.core.findings import STATUSES, Findings
+from exo.core.context import AgentContext, DefaultCompressor
+from exo.core.hooks import accepted, maybe_await
+from exo.core.findings import Findings
 from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
 from exo.core.models.router import Router
 from exo.core import jobs as jobs_mod
-from exo.core import peer_target
-from exo.core.ingress import STANDING_LINE
-from exo.core.peers import PeerConfig
+from exo.core.peer_target import EngineTarget
+from exo.core.ingress import STANDING_LINE, PeerConfig
 from exo.core.plugins import PluginManager
-from exo.core.scheduler import Scheduler, handle_schedule_edit
 from exo.config import Config, ConfigError, check_not_secret, redact
-from exo.gate import approver_allowed, approver_identity
-from exo.principal import current_caller, ingress_author, is_principal, principal_as, require_principal
-from exo.core.approvals import verify_approval
-from exo.core.seats import Seat, SeatError, list_seats
-from exo.core.seats import load as load_seat
+from exo.principal import current_caller, ingress_author, is_principal, require_principal
+from exo.core.approvals import ApprovalDesk
+from exo.core.seats import Seat, list_seats
 from exo.core.sessions import SessionLocked, SessionStore
-from exo.core.skills import SkillIndex, pack_dir, register_skill_tool
+from exo.core.skills import SkillIndex, register_skill_tool
 from exo.core.tools.builtin import harness as harness_tool
 from exo.core.tools.builtin import ui as ui_tool
 from exo.core.tools.registry import Block, Registry, ToolContext, default_registry
@@ -101,59 +97,12 @@ def _usage_dict(u: Usage | None) -> dict[str, int]:
             "total_tokens": u.input_tokens + u.output_tokens}
 
 
-def _tok(n: int) -> str:
-    return str(n)
-
-
-def render_context(r: dict[str, Any], tree: AgentContext) -> str:
-    t, tr, nodes = r["tokens"], r["tree"], r["nodes"]
-    levels = ", ".join(f"L{n}" for n in tr["levels"]) or "none"
-    note = f"{r['notes']['stored']} stored" + (", news from other threads waiting" if r["notes"]["unseen"] else "")
-    lines = [f"Next call for thread {r['thread'][-8:]} of agent {r['agent']} (estimates, about 4 characters per token):",
-             f"  system        {_tok(t['system']):>7}   prompt and memory block",
-             f"  summary tree  {_tok(t['tree']):>7}   {tr['summaries']} summaries over {tr['nodes']} nodes, levels {levels}"
-             + (f", log 1-{tr['covers'][1]}" if tr["covers"] else ""),
-             f"  other threads {_tok(t['notes']):>7}   {note}",
-             f"  recent tail   {_tok(t['tail']):>7}   {r['tail']['messages']} messages of this thread",
-             f"  total         {_tok(t['total']):>7}",
-             f"Tree nodes: {nodes['done']} done, {nodes['pending']} pending ({nodes['running']} running), "
-             f"{nodes['skipped']} skipped (kept verbatim: too small or not shorter), {nodes['failed']} failed.",
-             f"Log: {r['log_entries']} entries; summarized up to {r['frontier']}. /compact would fold "
-             f"{r['eligible']['leaves']} leaf chunk(s) now ({r['eligible']['leaves_after_tail_wait']} are due anyway; "
-             f"a chunk is {tree.leaf_size} entries, the tail wait is {tree.tail_messages}).",
-             _capture_line(r["capture"])]
-    return "\n".join(lines)
-
-
-def _capture_line(c: dict[str, Any]) -> str:
-    if not c["store"]:
-        return (f"Principal messages not yet captured: {c['uncaptured']} (no principal store is attached, so nothing "
-                "captures them; the log still holds them verbatim).")
-    return (f"Principal messages not yet captured: {c['uncaptured']} (a leaf offers its principal messages to the "
-            "principal store before it is summarized; /compact captures all of them first).")
-
-
-def render_compact(res: dict[str, Any]) -> str:
-    b, a, f = res["before"]["tokens"]["total"], res["after"]["tokens"]["total"], res["folded"]
-    cap = res["captured"]
-    lines = [f"Compacted: {len(f)} node(s) folded, {res['skipped']} left verbatim; context {b} to {a} tokens.",
-             f"Principal capture: {cap['taken']} message(s) captured first; {cap['uncaptured']} still not captured"
-             + ("." if cap["store"] else " (no principal store is attached).")]
-    lines += [f"  L{n['level']} log {n['start']}-{n['end']}: {n['before_tokens']} to {n['after_tokens']} tokens" for n in f]
-    if not f and not res["skipped"] and not res["failed"]:
-        lines.append("  nothing eligible: every full chunk is already summarized, or too small to be worth it")
-    lines += [f"  failed: {e}" for e in res["failed"]]
-    if not res["complete"]:
-        lines.append("  some summaries are still running; /context shows progress")
-    return "\n".join(lines)
-
-
 class ContextAdapter:
-    """TreeContext for the loop, plus a plugin ContextEngine when one fills the slot."""
+    """The agent's AgentContext for the loop, plus a plugin ContextEngine when one fills the slot."""
 
     RECENT = 40  # messages of transcript handed to hooks that take one
 
-    def __init__(self, tree: TreeContext, plugin: Any = None, memory: Any = None) -> None:
+    def __init__(self, tree: AgentContext, plugin: Any = None, memory: Any = None) -> None:
         self.tree = tree
         self.plugin = plugin
         self.memory = memory
@@ -186,7 +135,7 @@ class ContextAdapter:
                 for m in msgs]  # a user message that is not the principal (peer, bus, job notice) says so
         try:
             out = _call(self.memory.capture_principal, flat, session_id=session, source="leaf")
-            out = await _maybe_await(out)
+            out = await maybe_await(out)
         except Exception as exc:
             trace.report(f"{type(self.memory).__name__}.capture_principal", exc, session)
             return False
@@ -208,8 +157,7 @@ class ContextAdapter:
         self.tree.on_event = fn
 
     def cache_key(self, session: str) -> str:
-        key = getattr(self.tree, "cache_key", None)
-        return key(session) if callable(key) else session
+        return self.tree.cache_key(session)
 
     def note(self, session: str) -> None:
         self.tree.note(session)
@@ -218,18 +166,13 @@ class ContextAdapter:
             _safe(self.plugin, "on_session_start", session, platform="exo")
 
     async def build(self, session: str, system: str, **kw: Any) -> list[Message]:
-        if "recall" in inspect.signature(self.tree.build).parameters:
-            msgs = await self.tree.build(session, system, **kw)
-        else:  # a per-session tree: recall goes in the system message, as before D-028
-            recall = kw.get("recall") or ""
-            msgs = await self.tree.build(session, (system + "\n\n" if system else "") + "# Recalled memory\n" + recall
-                                         if recall else system)
+        msgs = await self.tree.build(session, system, **kw)  # AgentContext places recall itself (D-028)
         pick = getattr(self.plugin, "select_context", None)
         if pick is None:
             return msgs
         flat = [{"role": m.role, "content": m.text()} for m in msgs]
         try:
-            out = await _maybe_await(_call(pick, flat, conversation_messages=flat, budget_tokens=0,
+            out = await maybe_await(_call(pick, flat, conversation_messages=flat, budget_tokens=0,
                                            session_id=session))
         except Exception as exc:
             trace.report("context engine select_context", exc, session)
@@ -264,13 +207,7 @@ def _apply_selection(msgs: list[Message], flat: list[dict[str, Any]], out: list[
 
 def _call(fn: Any, *args: Any, **kw: Any) -> Any:
     """Call a plugin hook with the keyword arguments it accepts (all of them when it takes **kwargs)."""
-    try:
-        params = inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        return fn(*args, **kw)
-    if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
-        kw = {k: v for k, v in kw.items() if k in params}
-    return fn(*args, **kw)
+    return fn(*args, **accepted(fn, kw))
 
 
 def _safe(obj: Any, method: str, *args: Any, **kw: Any) -> Any:
@@ -295,7 +232,8 @@ class CoreEngine:
                  channels: dict[str, dict[str, Any]] | None = None,
                  tree_cfg: dict[str, Any] | None = None, schedule: bool = False,
                  trace_cfg: dict[str, Any] | None = None, peers: dict[str, Any] | None = None,
-                 jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None, **loop_kw: Any) -> None:
+                 jobs: dict[str, Any] | None = None, peers_dir: str | os.PathLike | None = None,
+                 attach_peers: Any = None, attach_scheduler: Any = None, **loop_kw: Any) -> None:
         # Fail before opening stores, loading adapters or registering host handlers.
         required = executor_required or os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
         if executor is not None:
@@ -328,6 +266,7 @@ class CoreEngine:
         self.executor_required = required
         self.home = Path(home)
         self.cwd_note = ""  # why the default cwd is not the one asked for (shown at session start)
+        self.memory_init_error = ""  # why exo-memory failed to start (shown at session start)
         self.cwd = self._seat_cwd(seat) or cwd or os.getcwd()  # the seat's own folder beats the shared default
         self._cwd_seen: dict[str, set[str]] = {}  # session -> folders already warned about (D-032)
         self.handoff_sources: dict[str, Any] = {"jobs": lambda session: []}  # D-032: facts for /handoff; key -> fn(session)
@@ -341,18 +280,14 @@ class CoreEngine:
         self._writer: Any = None  # the agent's writer lock, taken by claim_writer() (create() does)
         models = {**(models or {}), **(seat.models if seat else {})}
         self.router = Router.from_config(models, instances={"fake": RuleFake(models.get("fake"))}, env=env)
+        self._automatic_main = "main" not in (models.get("roles") or {}) and not (seat and seat.tier)
         self.registry = registry or default_registry(executor=executor, executor_required=required)
         self.registry.executor = executor
         self.registry.executor_required = required or executor is not None
         self.plugins = plugins
         self.plugins.router = self.router  # plugins reach it as ctx.router
-        self._approvals: dict[str, tuple[asyncio.Future, str | None]] = {}
-        self._open_approvals: dict[str, s.ApprovalRequested] = {}  # what approvals.list shows
-        self._announced: set[str] = set()  # approval ids whose ApprovalResolved went out (D-045)
-        self._always: set[str] = set()
-        self._approval_rules: dict[str, tuple[list[str], str]] = {}  # rid -> (approvers, binding), D-033
-        self._deciders: dict[str, str] = {}
-        self._channels: dict[str, Any] = {}
+        self.approvals = ApprovalDesk(lambda body, sid: self.hub.publish(body, sid), self._approval_waited)
+        self.channels: dict[str, Any] = {}  # running channel plugins by name
         self._channel_cfg: dict[str, dict[str, Any]] = {**(channels or {}), **(seat.channels if seat else {})}
         self._tasks: set[asyncio.Task] = set()
         trace_cfg = {**(trace_cfg or {}), **(seat.trace if seat else {})}  # the seat's [trace] wins (D-032)
@@ -362,9 +297,6 @@ class CoreEngine:
         trace.add_sink(self._on_harness_error)
         self.peer_cfg = PeerConfig.of({**(peers or {}), **(seat.peers if seat else {})})  # D-026
         self.peer_cfg_dir = peers_dir
-        self.peer_node: Any = None
-        self._peer_server: Any = None
-        self.peer_autostart = False  # create() turns it on: a real daemon or in-process TUI announces itself
         self._bridge_plugins()
         if seat and seat.tier and self.router.roles.get(seat.tier):
             self.router.set_role("main", list(self.router.roles[seat.tier]))
@@ -375,7 +307,8 @@ class CoreEngine:
         if self.registry.get("ui") is None:
             ui_tool.register(self.registry, lambda body, sid: self.hub.publish(body, sid))  # D-014 panels
         harness_tool.register(self.registry, self.trace_text, self.findings.file)  # D-025
-        peer_target.attach(self)  # D-026: peers and peer_send tools
+        self._peer_target = EngineTarget(self)  # peers, bus and job notices reach sessions through it
+        self.peers = attach_peers(self) if attach_peers else None  # D-026: exo.peers.PeerService, from exo.compose
         self.jobs = jobs_mod.attach(self, {**(jobs or {}), **(seat.jobs if seat else {})})  # D-032: background jobs
         self.handoff_sources["jobs"] = self._open_jobs  # /handoff lists the agent's running background jobs
         self.mcp = McpManager(mcp_cfg, env)
@@ -405,7 +338,7 @@ class CoreEngine:
                 signer = None
         self.agents = Delegator(self, delegation, signer=signer)  # the delegate tool and the tasks table
         self.agents.install()
-        self.scheduler = Scheduler(self)
+        self.scheduler = attach_scheduler(self) if attach_scheduler else None  # exo.scheduler, from exo.compose
         self._schedule = schedule  # serve turns the cron loop on; tests and one-shot engines leave it off
 
     def _compose_prompt(self) -> str:
@@ -449,14 +382,28 @@ class CoreEngine:
     async def start(self) -> None:
         """Connect MCP servers once (idempotent; the first command triggers it)."""
         if self._started is None:
-            if self.peer_autostart:
-                await self.start_peers()
+            if self.peers is not None and self.peers.autostart:
+                await self.peers.start()
             if self._writer is not None:  # only the one writer may call a running job lost
                 await self.jobs.recover()
-            self._started = asyncio.ensure_future(self.mcp.start(self.registry))
-            if self._schedule:
+            self._started = asyncio.ensure_future(self._start_runtime())
+            if self._schedule and self.scheduler is not None:
                 self.scheduler.start()
         await asyncio.shield(self._started)
+
+    async def _main_status(self, table: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        from exo import providers_setup
+        state = await asyncio.to_thread(providers_setup.main_status, self.router, self.home,
+                                        automatic=self._automatic_main, table=table)
+        if state["suggested"] and self._automatic_main:
+            self.router.prefer("main", state["suggested"])
+            self.loop.model = self._main_ref()
+        return state
+
+    async def _start_runtime(self) -> None:
+        if self._automatic_main:
+            await self._main_status()
+        await self.mcp.start(self.registry)
 
     async def start_channels(self, link: Any) -> dict[str, str | None]:
         """Run ``factory(link, **config)`` for each channel the seat enables; ``link`` is a protocol Client
@@ -464,13 +411,13 @@ class CoreEngine:
         out: dict[str, str | None] = {}
         for name, cfg in self._channel_cfg.items():
             entry = self.plugins.channels.get(name)
-            if entry is None or name in self._channels:
+            if entry is None or name in self.channels:
                 out[name] = None if entry else "no plugin registered this channel"
                 continue
             try:
-                chan = await _maybe_await(entry.factory(link, **(cfg or {})))
-                await _maybe_await(chan.start())
-                self._channels[name] = chan
+                chan = await maybe_await(entry.factory(link, **(cfg or {})))
+                await maybe_await(chan.start())
+                self.channels[name] = chan
                 out[name] = None
             except Exception as exc:  # one bad channel never stops the server
                 out[name] = f"{type(exc).__name__}: {exc}"
@@ -478,12 +425,12 @@ class CoreEngine:
         return out
 
     async def stop_channels(self) -> None:
-        for name, chan in list(self._channels.items()):
+        for name, chan in list(self.channels.items()):
             try:
-                await _maybe_await(chan.stop())
+                await maybe_await(chan.stop())
             except Exception as exc:
                 trace.report(f"channel {name} stop", exc)
-            self._channels.pop(name, None)
+            self.channels.pop(name, None)
 
     def claim_writer(self) -> None:
         """Become the one writer of this agent's log and tree (raises agentlog.WriterBusy if another process is)."""
@@ -495,9 +442,11 @@ class CoreEngine:
         self._writer = None
         trace.remove_sink(self._on_harness_error)
         await self.stop_channels()
-        await self.stop_peers()
+        if self.peers is not None:
+            await self.peers.stop()
         await self.jobs.close()  # jobs end with exod
-        await self.scheduler.stop()
+        if self.scheduler is not None:
+            await self.scheduler.stop()
         if self._started is not None:
             await self.mcp.close()
             self._started = None
@@ -515,15 +464,23 @@ class CoreEngine:
         for slot in (pm.slots.memory, pm.slots.context):
             if slot is None:
                 continue
-            if slot is pm.slots.memory:  # agent_log: the one log, so the provider keeps no second one (D-028)
-                _safe(slot, "initialize", "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
-                      agent_log=self.log_view)
+            if slot is pm.slots.memory:  # agent_log: the one log, so the provider keeps no second one (D-028), lazy start too
+                fn = getattr(slot, "initialize", None)
+                if fn is not None:
+                    try:
+                        _call(fn, "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
+                              agent_log=self.log_view)
+                    except Exception as exc:
+                        # Loud at session start, not on the first exo_note: record why memory is down.
+                        trace.report("memory.initialize", exc, None)
+                        self.memory_init_error = str(exc) or type(exc).__name__
             for schema in _safe(slot, "get_tool_schemas") or []:
                 spec = ToolSpec(name=schema["name"], description=schema.get("description", ""),
                                 parameters=schema.get("parameters") or {"type": "object", "properties": {}},
                                 toolset="memory" if slot is pm.slots.memory else "context")
-                handler = (lambda o, n: lambda args, ctx: o.handle_tool_call(n, args, session_id=ctx.session))(
-                    slot, spec.name)
+                kw = {"exo_home": str(self.home), "agent_log": self.log_view} if slot is pm.slots.memory else {}
+                handler = (lambda o, n, kw: lambda args, ctx: o.handle_tool_call(n, args, session_id=ctx.session, **kw))(
+                    slot, spec.name, kw)
                 self.registry.register(spec, handler, replace=True)
         self.registry.add_hook("pre_tool_call", self._pre_hook)
         self.registry.add_hook("post_tool_call", self._post_hook)
@@ -544,7 +501,11 @@ class CoreEngine:
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
         bound_mode = self.registry.executor_required
-        required_hooks = frozenset({"exo-gate"}) if bound_mode else frozenset()
+        if not self.executor_required and not self.plugins.hooks.has("pre_tool_call"):  # required: create() checks
+            return Block("No tool approval gate is available. Reinstall Exo's plugins or enable exo-gate "
+                         "in core_plugins (and the seat's plugins list), then restart Exo.")
+        # A configured broker binds arguments without relaxing optional policy hooks.
+        required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()
         for verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
                                                      _isolate_arguments=bound_mode,
                                                      **self._hook_kw(call, ctx)):
@@ -555,22 +516,23 @@ class CoreEngine:
             if verdict.get("action") == "approve":
                 key = "plugin_rule:" + str(verdict.get("rule_key") or call.name)
                 once = bool(verdict.get("once"))  # e.g. credentials: asked every time, never a standing allow
-                if key in self._always and not once:
+                if key in self.approvals.always and not once:
                     continue
                 who: list[str] = []
-                bound = {k: v for k, v in (("approvers", [str(a) for a in verdict.get("approvers") or []]),
-                                           ("binding", str(verdict.get("binding") or ""))) if v}  # D-033
-                decision = await self.ask(ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
-                                          options=["allow", "deny"] if once else None, **bound)
+                decision = await self.approvals.ask(  # D-033: who may answer, and the exact text it binds to
+                    ctx.session, str(verdict.get("message") or call.name), call, spec.risk, who,
+                    options=["allow", "deny"] if once else None, approvers=[str(a) for a in verdict.get("approvers") or []],
+                    binding=str(verdict.get("binding") or ""))
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
                 correlation = {"approval_key": verdict["approval_key"]} if verdict.get("approval_key") else {}
+                # Never dispatch a broker-bound call after its gate approval callback failed.
                 await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
-                                               _fail_closed_plugins=required_hooks,
+                                               _fail_closed_plugins=frozenset({"exo-gate"}) if bound_mode else frozenset(),
                                                decided_by=who[0] if who else "unknown", session_id=ctx.session or "",
                                                **correlation)
                 if decision == "allow_always" and not once:
                     if not verdict.get("persist"):  # a plugin that sets persist keeps its own scoped grants (D-033)
-                        self._always.add(key)
+                        self.approvals.always.add(key)
                 elif decision != "allow":
                     return Block("the user denied this call")
         return None
@@ -636,52 +598,8 @@ class CoreEngine:
         if (note := workspace.cwd_notice(where, "bash")) and where.is_dir():
             self.hub.publish(s.Notice(text=note, level="warn"), session)
 
-    async def ask(self, session: str | None, summary: str, call: ToolCall | None = None,
-                  risk: str = "medium", decided_by: list[str] | None = None, options: list[str] | None = None,
-                  opened: list[str] | None = None, approvers: list[str] | None = None, binding: str = "") -> str:
-        """Publish an approval request and wait for ``approval.respond``.
-
-        ``decided_by`` (optional out list) receives the id of the client that answered. ``approvers`` limits who
-        may answer (``principal``, ``seat:<name>``; empty = any local client that is not a peer). ``binding`` is the
-        hash of the exact outbound text; an answer that names a different hash is refused (D-033)."""
-        rid, t0 = s.new_id("a"), time.monotonic()
-        fut: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._approvals[rid] = (fut, session)
-        req = s.ApprovalRequested(request_id=rid, summary=summary, risk=risk, call=call)
-        if options:
-            req.options = list(options)
-        if approvers:
-            req.approvers = list(approvers)
-        if binding:
-            req.binding = binding
-        self._approval_rules[rid] = (list(approvers or []), binding)
-        if opened is not None:
-            opened.append(rid)
-        self._open_approvals[rid] = req
-        self.hub.publish(req, session)
-        answered = False
-        try:
-            decision = await fut
-            answered = True
-            if decided_by is not None:
-                decided_by.append(self._deciders.pop(rid, "unknown"))
-            return decision
-        finally:
-            if not answered:  # the turn was stopped or the ask cancelled: close the card in every client (D-045)
-                self.announce_resolved(rid, "cancelled", "core", session)
-            if session:  # the turn summary reports this apart from tool time
-                self.loop.approval_ms[session] = self.loop.approval_ms.get(session, 0) + int((time.monotonic() - t0) * 1000)
-            self._announced.discard(rid)
-            self._approvals.pop(rid, None)
-            self._open_approvals.pop(rid, None)
-            self._deciders.pop(rid, None)
-            self._approval_rules.pop(rid, None)
-
-    def announce_resolved(self, rid: str, decision: str, by: str, session: str | None) -> None:
-        """Tell every client an approval is closed, once per request."""
-        if rid not in self._announced:
-            self._announced.add(rid)
-            self.hub.publish(s.ApprovalResolved(request_id=rid, decision=decision, by=by), session)
+    def _approval_waited(self, session: str, ms: int) -> None:
+        self.loop.approval_ms[session] = self.loop.approval_ms.get(session, 0) + ms
 
     # ------------------------------------------------------------ dispatch
 
@@ -708,6 +626,10 @@ class CoreEngine:
         if note := workspace.cwd_notice(info.cwd or self.cwd, why):  # D-032: at session start
             self._cwd_seen.setdefault(info.id, set()).add(str(Path(info.cwd or self.cwd).resolve()))
             self.hub.publish(s.Notice(text=note, level="warn"), info.id)
+        if self.memory_init_error:  # the provider failed before any session: say so up front
+            self.hub.publish(s.Notice(
+                text=f"exo-memory did not start: {self.memory_init_error}; "
+                     "memory tools will fail until it is fixed", level="warn"), info.id)
         return {"session": to_dict(info)}
 
     async def _session_list(self, b: s.SessionList) -> dict[str, Any]:
@@ -719,13 +641,7 @@ class CoreEngine:
         return {"sessions": rows}
 
     async def _approvals_list(self, b: s.ApprovalsList) -> dict[str, Any]:
-        out = []
-        for rid, req in self._open_approvals.items():
-            fut, sid = self._approvals.get(rid, (None, None))
-            if fut is None or fut.done() or (b.session and sid != b.session):
-                continue
-            out.append({**to_dict(req), "session": sid})
-        return {"approvals": out}
+        return {"approvals": self.approvals.listing(b.session)}
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
         info = self._info(b.session)
@@ -762,19 +678,19 @@ class CoreEngine:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
-        task = asyncio.create_task(self._turn(b, meta))
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._spawn_turn(b, meta)
         return {"accepted": True}
 
     def start_turn(self, session: str, text: str, meta: dict[str, Any] | None = None) -> None:
         """Start a turn in the background (a peer woke an idle session)."""
-        b = s.TurnSend(session=session, text=text)
-        task = asyncio.create_task(self._turn(b, meta))
+        self._spawn_turn(s.TurnSend(session=session, text=text), meta)
+
+    def _spawn_turn(self, b: s.TurnSend, meta: dict[str, Any] | None) -> None:
+        task = asyncio.create_task(self.run_turn(b, meta))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
+    async def run_turn(self, b: s.TurnSend, meta: dict[str, Any] | None = None, loop: Loop | None = None) -> Any:
         """One turn with the lifecycle hooks around it (the learning loop listens on these). ``loop`` is the
         scheduler's per-run loop; it shares this engine's context and memory."""
         meta = dict(meta or {})
@@ -790,32 +706,6 @@ class CoreEngine:
 
     # ------------------------------------------------------------ peers (D-026)
 
-    async def start_peers(self, socket: str | os.PathLike | None = None) -> None:
-        """Write this daemon's presence file. ``socket`` is exod's own socket; without one (an in-process core)
-        the engine serves a small socket of its own in the peers directory."""
-        if self.peer_node is not None or not self.peer_cfg.enabled:
-            return
-        from exo.core.peers import peers_dir
-        from exo.server.app import Dispatcher, HttpServer
-        path = str(socket) if socket else ""
-        if not path:
-            d = Path(self.peer_cfg_dir or peers_dir())
-            path = str(d / f"exo-{os.getpid()}.sock")
-            self._peer_server = HttpServer(Dispatcher(self, self.hub))
-            await self._peer_server.start_unix(path)
-        node = peer_target.build_node(self, path)
-        self.peer_node = node
-        node.start()
-
-    async def stop_peers(self) -> None:
-        if self.peer_node is not None:
-            self.peer_node.stop()
-            await self.peer_node.path.close()
-            self.peer_node = None
-        if self._peer_server is not None:
-            await self._peer_server.close()
-            self._peer_server = None
-
     async def _peers(self, b: s.Peers) -> dict[str, Any]:
         if b.action == "bus":  # D-040: the bus channel's inbound path, whether or not peers are on
             from exo.bus.ingress import bus_ingress
@@ -823,22 +713,13 @@ class CoreEngine:
                 return await bus_ingress(self, b)
             except ValueError as exc:
                 raise CommandFailed("bad_request", str(exc)) from None
-        if self.peer_node is None and self.peer_autostart:
-            await self.start_peers()
-        node = self.peer_node
-        if node is None:
+        if self.peers is None or not await self.peers.ready():
             raise CommandFailed("unsupported", "peers are turned off for this seat")
+        if b.action == "send" and b.session:
+            self._info(b.session)
+        via = b.via if is_principal(current_caller()) else "agent"  # "human" is a body claim (D-039)
         try:
-            if b.action == "list":
-                return await node.list(b.session, b.local_only)
-            if b.action == "send":
-                if b.session:
-                    self._info(b.session)
-                via = b.via if is_principal(current_caller()) else "agent"  # "human" is a body claim (D-039)
-                return await node.send(b.to, b.text, b.session, via)
-            if b.action == "deliver":
-                return await node.deliver(b.envelope)
-            return await node.receipt(b.envelope)
+            return await self.peers.command(b, via)
         except ValueError as exc:
             raise CommandFailed("bad_request", str(exc)) from None
 
@@ -861,44 +742,14 @@ class CoreEngine:
 
     async def _turn_interrupt(self, b: s.TurnInterrupt) -> dict[str, Any]:
         self._info(b.session)
-        return {"interrupted": int(self.loop.interrupt(b.session) or self.agents.interrupt(b.session))}
+        return {"interrupted": int(self.loop.interrupt(b.session) or self.agents.interrupt(b.session)
+                                   or bool(self.scheduler and self.scheduler.interrupt(b.session)))}
 
     async def _tasks_list(self, b: s.TasksList) -> dict[str, Any]:
         return {"tasks": self.agents.list(b.session)}
 
     async def _approval_respond(self, b: s.ApprovalRespond) -> dict[str, Any]:
-        """D-039: who answered comes from the connection, never from the body. A principal connection answers as
-        the principal (``client`` is only a display label). Any other connection answers only as a seat, with a
-        D-033 signature, and never with ``allow_always``."""
-        if (b.client or "").lower().startswith(("peer", "ingress")):  # D-026: input from outside is never consent
-            raise CommandFailed("forbidden", "a peer cannot answer an approval")
-        fut, sid = self._approvals.get(b.request_id, (None, None))
-        if fut is None or fut.done():
-            raise CommandFailed("not_found", f"no open approval {b.request_id}")
-        approvers, binding = self._approval_rules.get(b.request_id, ([], ""))
-        caller = current_caller()
-        if is_principal(caller):
-            ident = by = principal_as(caller.partition(":")[2] or b.client)
-        elif (b.client or "").strip().lower().startswith("seat:"):
-            ident = by = approver_identity(b.client)
-        else:
-            raise CommandFailed("forbidden", "this connection cannot answer approvals: answer in the Exo window or "
-                                             "the web page, or sign as a seat")
-        if not approver_allowed(ident, approvers):  # D-033: who may answer, by category
-            raise CommandFailed("forbidden", f"{approver_identity(ident)} may not answer this approval; "
-                                             f"it needs {' or '.join(approvers)}")
-        if b.binding and binding and b.binding != binding:
-            raise CommandFailed("stale", "the text changed after it was shown; read the new request and answer that")
-        if not is_principal(caller):  # D-033: a seat signs its answer; a seat never gives a standing grant
-            if not verify_approval(b.sig, b.request_id, b.decision, binding, ident[5:]):
-                raise CommandFailed("forbidden", f"{ident} must sign its answer with its seat key "
-                                                 "(request id, decision, binding)")
-            if b.decision == "allow_always":
-                raise CommandFailed("forbidden", "only the principal can give a standing grant; "
-                                                 "a seat approves one exact text with allow")
-        self._deciders[b.request_id] = by
-        fut.set_result(b.decision)
-        self.announce_resolved(b.request_id, b.decision, by, sid)
+        self.approvals.respond(b)
         return {}
 
     async def _search(self, b: s.Search) -> dict[str, Any]:
@@ -919,6 +770,7 @@ class CoreEngine:
         except ValueError as exc:
             raise CommandFailed("bad_model", str(exc)) from None
         if b.role == "main":
+            self._automatic_main = False
             self.loop.model = self._main_ref()
         if b.session:
             self.store.update_session(self._info(b.session).id, model=b.model)
@@ -952,147 +804,43 @@ class CoreEngine:
         """After a turn: apply the anomaly rules (no model call), file findings, verify fixed ones."""
         if not self._trace_on:
             return
-        for f in trace.turn_flags(self.store, session, self.thresholds):
+        if (t := trace.last_turn(self.store, session)) is None:
+            return
+        flags = trace.detect(t, self.thresholds)
+        for f in flags:
             self.findings.file_flag(f)
-        self.findings.sweep()
+        self.findings.observe(t, {f.signature for f in flags})
 
     def trace_text(self, session: str | None, last: int = 10, calls: bool = False) -> str:
-        """What ``exo_trace`` and ``/trace`` show: the model this session runs on, then the per-turn table."""
-        info = self.store.get_session(session) if session else None
-        calls = self.store._q("SELECT body FROM events WHERE session=? AND type='model.call' ORDER BY seq DESC LIMIT 1",
-                              (session,)) if session else []
-        served = (json.loads(calls[0]["body"]).get("route") if calls else "") or "no model call recorded yet"
-        head = [f"running on: {self.loop.model or '-'} (session model {info.model if info else '-'}, last call served "
-                f"by {served}); chain: {', '.join(r.ref for r in self.router.chain('main')) or '-'}",
-                f"harness {self.findings.version}; {self.findings.summary()}"]
-        if fixed := self.findings.list("fixed")[:5]:
-            head.append("fixed, awaiting re-verification: " + ", ".join(f"{r['id']} (in {r['fixed_in']})" for r in fixed))
-        if not session:
-            return "\n".join(head)
-        peers = trace.peer_text(self.store, session)
-        jobs = jobs_mod.job_text(self.store, session)
-        return "\n".join(head + ["", trace.table(trace.build(self.store, session, last, self.thresholds), calls=calls)]
-                         + (["", peers] if peers else []) + (["", jobs] if jobs else []))
-
-    def _agent_ctx(self, session: str | None) -> AgentContext:
-        tree = getattr(self.loop.context, "tree", self.loop.context)
-        if not session or self.store.get_session(session) is None:
-            raise CommandFailed("bad_request", "no thread to look at")
-        if not isinstance(tree, AgentContext) or tree._agent_key(session) is None:
-            raise CommandFailed("bad_request", "this thread has no shared memory (a subagent or plain session)")
-        return tree
+        """What ``exo_trace`` and ``/trace`` show (exo.diagnostics.trace_text)."""
+        return diagnostics.trace_text(self, session, last, calls)
 
     async def context_text(self, session: str | None) -> str:
-        """``/context``: what the next model call for this thread carries. Read-only."""
-        tree = self._agent_ctx(session)
-        r = tree.report(session, await self.loop.base_system())
-        return render_context(r, tree)
+        return await diagnostics.context_text(self, session)
+
+    async def context_report(self, session: str | None) -> dict[str, Any]:
+        return await diagnostics.context_report(self, session)
 
     async def compact_text(self, session: str | None) -> str:
-        """``/compact``: summarize now what is eligible for this agent. Runs here, in the process that holds the
-        agent lock, so a joining window never writes the tree itself."""
-        tree = self._agent_ctx(session)
-        st = self.loop._state.get(session)
-        if st is not None and st.running:
-            raise CommandFailed("busy", "a turn is running in this thread; try again when it ends")
-        res = await tree.compact(session, await self.loop.base_system())
-        return render_compact(res)
+        return await diagnostics.compact_text(self, session)
 
     async def handoff_facts(self, session: str | None, path_arg: str = "") -> dict[str, Any]:
-        """What the agent needs to write a handoff (D-032, ``/handoff``): the thread, git state of its cwd, open
-        findings and tasks, recent summaries from the tree, the last turns of the trace, and one key per entry of
-        ``self.handoff_sources`` (``jobs`` today is empty; background jobs register themselves there).
-        Reads only; the agent writes the file through its normal write tool and the gate."""
-        info = self._info(session) if session else None
-        if info is None:
-            raise CommandFailed("bad_request", "no thread to hand off")
-        cwd = info.cwd or self.cwd
-        facts: dict[str, Any] = {
-            "date": time.strftime("%Y-%m-%d"), "seat": self.agent,
-            "path": str(workspace.handoff_path(self.agent, path_arg)),
-            "thread": {"id": info.id, "title": info.title, "model": info.model, "kind": info.kind,
-                       "cwd": cwd, "created": info.created,
-                       "user_turns": sum(1 for m in self.store.messages(info.id) if m.role == "user"
-                                         and not m.meta.get("note"))},
-            # Even read-only Git commands can execute workspace .git/config fsmonitor hooks.
-            "git": ({"repo": None, "unavailable": "Git facts unavailable: required executor has no isolated Git facts operation"}
-                    if self.executor_required else workspace.git_facts(cwd)),
-            "findings": [{"id": r["id"], "severity": r["severity"], "title": r["title"][:100]}
-                         for r in self.findings.list("open")[:10]],
-        }
-        latest: dict[str, dict[str, Any]] = {}
-        for e in self.store.events_since(0, info.id, limit=1 << 30):
-            if isinstance(e.body, s.TaskUpdated):
-                latest[e.body.task_id] = {"id": e.body.task_id, "title": e.body.title[:100], "status": e.body.status}
-        facts["tasks"] = [t for t in latest.values() if t["status"] in ("queued", "running")]
-        try:
-            tree = self._agent_ctx(info.id)
-            _, frontier, parts = tree._view(tree._agent_key(info.id))
-            facts["decisions"] = [p[:1500] for p in parts[-2:]]
-            facts["context"] = {"log_entries": tree._last(tree._agent_key(info.id)), "summarized_to": frontier}
-        except CommandFailed:
-            facts["decisions"] = []
-        facts["trace"] = self.trace_text(info.id, 3)
-        for key, fn in self.handoff_sources.items():
-            try:
-                facts[key] = await _maybe_await(fn(info.id))
-            except Exception as exc:  # a broken source must not block the handoff
-                trace.report(f"handoff source {key}", exc, info.id)
-                facts[key] = []
-        return facts
-
-    async def _builtin_command(self, b: s.CommandRun) -> Any:
-        if b.name == "context":
-            return await self.context_text(b.session)
-        if b.name == "compact":
-            return await self.compact_text(b.session)
-        if b.name == "trace":
-            return self.trace_text(b.session, int(b.args) if b.args.strip().isdigit() else 10)
-        if b.name == "findings":
-            arg = b.args.strip()
-            if arg == "count":  # "open" is what needs work (open + reopened); by_state reconciles every finding
-                return {"open": self.findings.open_count(), "by_state": self.findings.counts()}
-            return self.findings.text(arg if arg in STATUSES else "all", viewer=b.session or "ui")
-        if b.name == "unsteer":  # D-045: pull a queued steer message back; args is its id, empty means the newest
-            if not b.session:
-                raise CommandFailed("bad_request", "unsteer needs a session")
-            gone = self.loop.unsteer(b.session, b.args.strip(), principal=is_principal(current_caller()))
-            for m in gone:
-                self.hub.publish(s.SteerCancelled(message_id=m.id or "", text=m.text()), b.session)
-            return {"cancelled": [{"id": m.id, "text": m.text()} for m in gone]}
-        if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
-            word, _, rest = b.args.strip().partition(" ")
-            if word == "reload":
-                name = rest.strip() or None
-                if name and name not in self.router.providers:
-                    raise CommandFailed("not_found", f"unknown provider {name!r}")
-                return {"reloaded": self.router.reload_credentials(name)}
-            from exo import providers_setup
-            return {"providers": await asyncio.to_thread(providers_setup.rows, self.router, self.home)}
-        if b.name == "handoff_facts":  # D-032: the facts /handoff gives the agent; the client sends the turn
-            return await self.handoff_facts(b.session, b.args)
-        if b.name == "harness_error":  # a client (the TUI) reporting an exception it caught
-            try:
-                d = json.loads(b.args)
-            except ValueError:
-                d = {"where": "client", "message": b.args}
-            trace.report(str(d.get("where") or "client"), str(d.get("message") or ""), b.session,
-                         error_type=str(d.get("error_type") or ""), tb=str(d.get("traceback") or ""))
-            return None
-        return _MISSING
+        return await diagnostics.handoff_facts(self, session, path_arg)
 
     async def _command_run(self, b: s.CommandRun) -> dict[str, Any]:
-        out = await self._builtin_command(b)
-        if out is not _MISSING:
+        out = await diagnostics.builtin_command(self, b)
+        if out is not diagnostics.MISSING:
             return {"output": out}
         cmd = self.plugins.commands.get(b.name)
         if cmd is None:
             raise CommandFailed("not_found", f"no command /{b.name}")
-        out = await _maybe_await(cmd.handler(b.args))
+        out = await maybe_await(cmd.handler(b.args))
         return {"output": out if isinstance(out, (str, dict, list)) or out is None else str(out)}
 
     async def _schedule_edit(self, b: s.ScheduleEdit) -> dict[str, Any]:
-        out = await handle_schedule_edit(self, b)
+        if self.scheduler is None:
+            raise CommandFailed("unsupported", "scheduled jobs are not available in this engine")
+        out = await self.scheduler.edit(b)
         if "error" in out:
             raise CommandFailed("bad_request", out["error"])
         return out
@@ -1103,7 +851,7 @@ class CoreEngine:
     async def _seat_list(self, b: s.SeatList) -> dict[str, Any]:
         return {"active": self.seat.name if self.seat else None, "seats": list_seats(self.home),
                 "mcp": self.mcp.status(),
-                "channels": {n: n in self._channels for n in self._channel_cfg}}
+                "channels": {n: n in self.channels for n in self._channel_cfg}}
 
     def _tutorial_line(self) -> str:
         """D-030: one stable line while tutorial mode is on, appended after the rest of the stable system text.
@@ -1138,62 +886,9 @@ class CoreEngine:
 
 
 def create(seat: str | None = None) -> CoreEngine:
-    """Factory for ``exo serve --engine exo.core.engine:create``: reads ``$EXO_HOME/config.json``.
-
-    ``seat`` (or ``$EXO_SEAT``, which ``exo serve --seat`` sets) names a file in ``$EXO_HOME/seats``."""
-    cfg = Config.load()
-    executor, executor_required = load_executor()  # required failures precede all plugin imports
-    st = None
-    if seat or os.environ.get("EXO_SEAT"):
-        try:
-            st = load_seat(cfg.home, seat or os.environ["EXO_SEAT"])
-        except SeatError as exc:
-            raise SystemExit(f"exo: {exc}") from None
-        if st.principal and not os.environ.get("EXO_PRINCIPAL"):
-            os.environ["EXO_PRINCIPAL"] = st.principal
-    pm = PluginManager(config=cfg.data.get("plugin_config") or {},
-                       executor_required=executor_required,
-                       memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
-    enabled = st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins")
-    plugin_dirs = None
-    if executor_required:
-        # The installed executor owns this trusted inventory; user discovery is disabled.
-        raw_dirs = getattr(executor, "trusted_plugin_dirs", ())
-        if not isinstance(raw_dirs, (tuple, list)):
-            raise ExecutorConfigurationError("executor trusted_plugin_dirs must be a tuple/list of absolute paths")
-        plugin_dirs = tuple(raw_dirs)
-        if not all(isinstance(path, str) and Path(path).is_absolute() for path in plugin_dirs):
-            raise ExecutorConfigurationError("executor trusted_plugin_dirs must contain absolute paths")
-        raw_required = getattr(executor, "required_plugins", ())
-        if not isinstance(raw_required, (tuple, list)):
-            raise ExecutorConfigurationError("executor required_plugins must be a tuple/list of plugin names")
-        if not all(isinstance(name, str) and name for name in raw_required):
-            raise ExecutorConfigurationError("executor required_plugins must contain plugin names")
-        # The gate supplies the committed decision/approval evidence required mode promises.
-        required_plugins = tuple(dict.fromkeys(("exo-gate", *raw_required)))
-        if enabled is not None and not set(required_plugins).issubset(enabled):
-            raise ExecutorConfigurationError("plugin configuration disables a required executor plugin")
-    pm.load_all(dirs=plugin_dirs, enabled=enabled, entry_points=not executor_required)
-    if executor_required:
-        missing = [name for name in required_plugins if name not in pm.plugins or pm.plugins[name].error]
-        if missing:
-            raise ExecutorConfigurationError(f"required executor plugins failed to load: {', '.join(missing)}")
-    models = cfg.models()
-    folders = [*(st.skill_folders if st else []), cfg.home / "skills"]
-    if pack := pack_dir():
-        folders.append(pack)
-    eng = CoreEngine(cfg.home, models, plugins=pm, executor=executor, executor_required=executor_required,
-                      cwd=cfg.get("cwd"), seat=st, skill_folders=folders,
-                      mcp=cfg.get("mcp"), channels=cfg.get("channels"), system_prompt=cfg.get("system_prompt") or SYSTEM_PROMPT,
-                      delegation=cfg.get("delegation"), trace_cfg=cfg.get("trace"), schedule=cfg.get("schedule", True) is not False, peers=cfg.get("peers"), jobs=cfg.get("jobs"),
-                      tree_cfg={k: v for k, v in (cfg.get("compression") or {}).items()
-                            if k in ("leaf_size", "tail_messages", "view_budget", "min_compact_tokens")})
-    eng.claim_writer()  # the one writer of this agent's log and tree (D-028); WriterBusy if another process is
-    eng.peer_autostart = True
-    if cfg.get("learn", {}).get("enabled", True) is not False:
-        from exo import learn
-        learn.attach(eng)
-    return eng
+    """Compatibility path for ``--engine exo.core.engine:create``; the factory lives in ``exo.compose``."""
+    from exo.compose import create as compose
+    return compose(seat)
 
 
 __all__ = ["ContextAdapter", "CoreEngine", "HubBus", "SqliteLog", "create"]

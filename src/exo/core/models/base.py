@@ -167,6 +167,10 @@ class HttpTransport:
         """Hook: rewrite a provider's raw HTTP error into something a user can act on."""
         return text
 
+    def explain_request_error(self, status: int, text: str, *, model: str | None) -> str:
+        """Request-local error context. The default preserves existing two-argument provider hooks."""
+        return self.explain_error(status, text)
+
     def upstream_down(self, status: int, text: str) -> bool:
         """Hook: True when an HTTP error (even a 400) means the provider's own upstream is unavailable, so the call
         is retryable on another route and counts toward the route circuit breaker."""
@@ -187,7 +191,8 @@ class HttpTransport:
                 if resp.status_code >= 400:
                     raw = (await resp.aread()).decode("utf-8", "replace")
                     msg = self.error_text(raw)
-                    yield error_event(f"HTTP {resp.status_code}: {self.explain_error(resp.status_code, msg)}", resp.status_code,
+                    explained = self.explain_request_error(resp.status_code, msg, model=body.get("model") or self.model)
+                    yield error_event(f"HTTP {resp.status_code}: {explained}", resp.status_code,
                                       retryable=True if self.upstream_down(resp.status_code, msg) else None,
                                       retry_after=parse_retry_after(resp.headers.get("retry-after")))
                     return

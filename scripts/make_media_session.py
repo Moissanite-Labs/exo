@@ -100,15 +100,17 @@ ay = 270
 panel = (f'<rect x="{TX-22}" y="{ay}" width="{right-TX+22}" height="116" fill="#ff5b14" fill-opacity=".06" stroke="#ff5b14"/>'
          f'<text x="{TX-2}" y="{ay+28}" font-size="12" letter-spacing="2.4" fill="#ff5b14">APPROVAL · HIGH RISK</text>'
          f'<text x="{TX-2}" y="{ay+58}" font-size="16" fill="#eceae4">git push origin fix/unicode-slugs</text>')
-chips = [("y", "allow", TX - 2), ("n", "deny", TX + 130), ("a", "allow always", TX + 250)]
+chips = [("o", "once", TX - 2), ("a", "always", TX + 130), ("d", "deny", TX + 250)]
 for k, lab, cx in chips:
     panel += (f'<rect x="{cx}" y="{ay+76}" width="26" height="24" fill="none" stroke="#343a41"/>'
-              + (f'<rect class="key" x="{cx}" y="{ay+76}" width="26" height="24" fill="#ff5b14"/>' if k == "y" else "")
-              + f'<text x="{cx+13}" y="{ay+93}" font-size="13" text-anchor="middle" fill="{"#08090a" if k=="y" else "#eceae4"}"'
-              + (' class="keyt"' if k == "y" else "") + f'>{k}</text>'
+              + (f'<rect class="key" x="{cx}" y="{ay+76}" width="26" height="24" fill="#ff5b14"/>' if k == "o" else "")
+              + f'<text x="{cx+13}" y="{ay+93}" font-size="13" text-anchor="middle" fill="{"#08090a" if k=="o" else "#eceae4"}"'
+              + (' class="keyt"' if k == "o" else "") + f'>{k}</text>'
               f'<text x="{cx+36}" y="{ay+93}" font-size="13" fill="#b4b3ad">{lab}</text>')
+panel += (f'<text x="{TX+358}" y="{ay+93}" font-size="12" fill="#b4b3ad">'
+          "a then Enter confirms always</text>")
 L.append(el("g", 9.0, "", panel, dy=6))
-# key-press text must stay legible over the highlight: redraw y on top
+# key-press text must stay legible over the highlight: redraw o on top
 css.append(f"@keyframes keyt{{0%,{pct(12.0)}{{fill:#eceae4}}{pct(12.1)},100%{{fill:#08090a}}}}.keyt{{animation:keyt {T}s linear infinite}}")
 css.append("@media (prefers-reduced-motion: reduce){.keyt{animation:none!important;fill:#08090a}}")
 

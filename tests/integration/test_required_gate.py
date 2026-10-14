@@ -78,7 +78,7 @@ def test_broker_gate_cannot_audit_observer_arguments_then_dispatch_restored_comm
     async def deny(*args, **kwargs):
         asked.append(True)
         return "deny"
-    monkeypatch.setattr(engine, "ask", deny)
+    monkeypatch.setattr(engine.approvals, "ask", deny)
     result = invoke(engine, ToolCall("c", "bash", {"command": "rm -rf cache"}))
     # The shell handler is a recording stub. The dangerous string never executes.
     assert (inspected, asked, broker.seen, ran) == (["rm -rf cache"], [True], [], [])
@@ -106,7 +106,7 @@ def test_plugin_cannot_rewrite_arguments_seen_by_gate_or_executor(tmp_path, monk
     gate_entry.callback = record
     async def no_approval(*args, **kw):
         pytest.fail('an unrelated hook changed the approved request into an approval prompt')
-    monkeypatch.setattr(engine, 'ask', no_approval)
+    monkeypatch.setattr(engine.approvals, 'ask', no_approval)
     args = {'command': 'ls', 'nested': {'items': ['original']}}
     result = invoke(engine, ToolCall('c', 'bash', args))
     assert not result.is_error
@@ -184,10 +184,10 @@ async def approved_call(engine):
     sid = (await dispatcher.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
     task = asyncio.create_task(engine.run_tool(ToolCall("c", "bash", {"command": "rm -rf cache"}), {"session": sid}))
     deadline = time.monotonic() + 5
-    while not engine._approvals and not task.done() and time.monotonic() < deadline:
+    while not engine.approvals.open and not task.done() and time.monotonic() < deadline:
         await asyncio.sleep(0.001)
-    assert engine._approvals, "gate must record the decision before asking"
-    rid = next(iter(engine._approvals))
+    assert engine.approvals.open, "gate must record the decision before asking"
+    rid = next(iter(engine.approvals.open))
     response = await dispatcher.run(s.Command.of(s.ApprovalRespond(request_id=rid, decision="allow")), "principal:tui")
     assert response.ok
     return await asyncio.wait_for(task, 5)
@@ -231,7 +231,8 @@ def test_required_gate_callback_exception_cannot_be_swallowed(tmp_path, monkeypa
         try:
             result = (await approved_call(engine) if phase == "post_approval_response"
                       else await engine.run_tool(ToolCall("c", "read_file", {"path": "safe"}), {}))
-            assert result.is_error and "required security hook failed" in result.text()
+            expected = "Tool approval hook failed" if mode == "configured" and phase == "pre_tool_call" else "required security hook failed"
+            assert result.is_error and expected in result.text()
             assert "private callback" not in result.text()
             assert broker.seen == [] and ran == []
         finally:
@@ -302,7 +303,7 @@ def test_required_body_file_blocks_without_host_read_even_when_inspection_disabl
     seen.clear()
     async def no_approval(*args, **kw):
         pytest.fail('uninspected body-file request reached approval instead of being refused')
-    monkeypatch.setattr(engine, 'ask', no_approval)
+    monkeypatch.setattr(engine.approvals, 'ask', no_approval)
     result = invoke(engine, ToolCall("c", "bash", {"command": command}))
     assert result.is_error and "OUTSIDE-CANARY" not in result.text()
     assert seen == [] and broker.seen == [] and ran == []
@@ -325,10 +326,10 @@ def test_identical_concurrent_approvals_keep_session_call_and_audit_refs(tmp_pat
                 tasks[call_id] = asyncio.create_task(engine.run_tool(
                     ToolCall(call_id, "bash", {"command": "rm -rf cache"}), {"session": sessions[call_id]}))
             deadline = time.monotonic() + 5
-            while len(engine._approvals) < 2 and time.monotonic() < deadline:
+            while len(engine.approvals.open) < 2 and time.monotonic() < deadline:
                 await asyncio.sleep(0.001)
-            assert len(engine._approvals) == 2
-            requests = {request.call.id: rid for rid, request in engine._open_approvals.items()}
+            assert len(engine.approvals.open) == 2
+            requests = {p.request.call.id: rid for rid, p in engine.approvals.open.items()}
             for call_id, response in responses:
                 result = await dispatcher.run(s.Command.of(s.ApprovalRespond(
                     request_id=requests[call_id], decision=response)), "principal:tui")
@@ -365,11 +366,11 @@ def test_required_observe_mode_still_asks_before_executor(tmp_path, monkeypatch)
             task = asyncio.create_task(engine.run_tool(ToolCall("c", "bash", {"command": "rm -rf cache"}),
                                                        {"session": sid}))
             deadline = time.monotonic() + 5
-            while not engine._approvals and not task.done() and time.monotonic() < deadline:
+            while not engine.approvals.open and not task.done() and time.monotonic() < deadline:
                 await asyncio.sleep(0.001)
-            assert engine._approvals and not task.done(), "required mode must ask even in observe mode"
+            assert engine.approvals.open and not task.done(), "required mode must ask even in observe mode"
             assert broker.seen == [] and ran == []
-            rid = next(iter(engine._approvals))
+            rid = next(iter(engine.approvals.open))
             await dispatcher.run(s.Command.of(s.ApprovalRespond(request_id=rid, decision="deny")), "principal:tui")
             result = await asyncio.wait_for(task, 5)
             assert result.is_error and broker.seen == [] and ran == []
@@ -382,3 +383,36 @@ def test_ordinary_observe_mode_still_runs_without_asking(tmp_path, monkeypatch):
     engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, "ordinary", observe=True)
     result = invoke(engine, ToolCall("c", "bash", {"command": "rm -rf cache"}))
     assert not result.is_error and ran == [{"command": "rm -rf cache"}]
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "configured", "injected"])
+def test_non_gate_policy_failure_blocks_optional_engines(tmp_path, monkeypatch, mode):
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, mode)
+    def broken_policy(**kwargs):
+        raise RuntimeError("policy unavailable")
+    engine.plugins.hooks.register("pre_tool_call", broken_policy, "policy")
+    result = invoke(engine, ToolCall("c", "read_file", {"path": "safe"}))
+    if mode == "injected":
+        # A required gate provides committed evidence; unrelated observers are best effort.
+        assert not result.is_error and broker.seen == ["read_file"] and ran
+    else:
+        assert result.is_error and "Tool approval hook failed" in result.text()
+        assert (broker is None or broker.seen == []) and ran == []
+
+
+def test_pinned_required_manager_makes_engine_required(tmp_path, monkeypatch, trusted_gate):
+    monkeypatch.delenv("EXO_TOOL_EXECUTOR_REQUIRED", raising=False)
+    broker = Broker()
+    engine = CoreEngine(tmp_path / "home", plugins=trusted_gate, executor=broker)
+    try:
+        assert engine.executor_required
+        assert engine.registry.executor_required
+        gate = trusted_gate.hooks.entries("pre_tool_call")[0].callback.__self__
+        gate.settings.mode = "observe"
+        trusted_gate.executor_required = False
+        gate.required_getter = lambda: False
+        verdict = gate.pre_tool_call("bash", {"command": "rm -rf cache"}, tool_call_id="c")
+        assert verdict["action"] == "approve"
+        assert broker.seen == []
+    finally:
+        asyncio.run(asyncio.wait_for(engine.close(), 5))

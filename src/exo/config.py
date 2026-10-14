@@ -9,6 +9,8 @@ It holds the machine-level choices the installer and the plugins share:
     plugins       the Exo plugins installed into hermes_home
     plugin_config per-plugin settings, keyed by plugin name
     principals    optional explicit store roots, keyed by principal id
+    update        `exo update` settings: `update.require_signed` (default false) refuses a target
+                  commit not signed by a key in the pinned trust list (docs/INSTALL.md, D-073)
 
 Resolution for each value, first hit wins: the environment, then the file, then the default.
 The environment never leaks into the file: `save()` writes only what was set on the object.
@@ -50,7 +52,7 @@ class ConfigError(ValueError):
 
 # Secrets never go through the file API: names that look like one (`api_key`, `token`, ...), unless
 # the name ends in `_env` (the NAME of an environment variable). Under `env` and `headers` any
-# literal is refused; use "${VAR}" so the secret stays in the environment, the macOS Keychain or keys.env.
+# literal is refused; use "${VAR}" so the secret stays in the environment, a platform key store, or keys.env.
 SECRET_NAME = re.compile(r'(^|[_-])(key|token|secret|password|passwd|credentials?|authorization|bearer)s?($|[_-])'
                          r'|api_?key', re.I)
 _SECRET_VALUE = re.compile(r'(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{10,}|'
@@ -104,6 +106,7 @@ def _defaults(home: Path) -> dict[str, Any]:
         'plugins': list(DEFAULT_PLUGINS),
         'plugin_config': {},
         'principals': {},
+        'update': {'require_signed': False},
     }
 
 
@@ -247,17 +250,17 @@ class Config:
     def models(self, env: dict | None = None) -> dict:
         """The `models` table for the core Router, with a working default.
 
-        First hit wins: explicit `models.roles`; a scripted `models.fake`; a local
-        OpenAI-compatible server in `models.local` ({"base_url", "model"}); the catalog
-        (Anthropic) when ANTHROPIC_API_KEY is set; else the offline fake model.
-        Keys: environment, then the macOS Keychain (macOS only), then ~/.config/exo/keys.env (core/models/keys.py).
+        Preserve explicit roles, an explicitly configured fake, or a local server.
+        Otherwise use the real catalog. Credential resolution belongs to runtime
+        setup, not this synchronous configuration view.
+        Keys: environment, then macOS Keychain, Linux Secret Service when `secret-tool` is available, then
+        `~/.config/exo/keys.env` (mode 0600; override with `EXO_KEYS_FILE`; see core/models/keys.py).
         """
-        env = os.environ if env is None else env
         m = copy.deepcopy(self.data.get('models') or {})
         if m.get('roles'):
             return m
         fake = {'roles': {'main': ['fake:scripted'], 'aux': ['fake:scripted'], 'decision': []}}
-        if m.get('fake'):
+        if isinstance(m.get('fake'), dict):
             return {**m, **fake}
         local = m.get('local')
         if isinstance(local, dict) and local.get('base_url') and local.get('model'):
@@ -267,10 +270,7 @@ class Config:
             ref = f"local:{local['model']}"
             return {**m, 'providers': {**(m.get('providers') or {}), 'local': prov},
                     'roles': {'main': [ref], 'aux': [ref], 'decision': []}}
-        from .core.models.keys import lookup_key
-        if lookup_key('ANTHROPIC_API_KEY', env, sources=env is os.environ):
-            return m
-        return {**m, **fake}
+        return m
 
     def plugin_config(self, name: str) -> dict:
         return copy.deepcopy((self.data.get('plugin_config') or {}).get(name) or {})

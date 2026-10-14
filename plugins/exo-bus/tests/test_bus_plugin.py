@@ -2,7 +2,6 @@
 import asyncio
 import json
 
-import pytest
 
 from exo.bus import wire
 from exo_bus_hermes import adapter, settings, tools

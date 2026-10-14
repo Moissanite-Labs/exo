@@ -23,10 +23,13 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
   `API_KEY`, `PRIVATE_KEY`, `ACCESS_KEY` or `_KEY_`;
 - `AWS_*`, `GH_*`, `GITHUB_TOKEN`, names ending `DATABASE_URL`;
 - the bus identity (`EXO_BUS_*`) and the core's socket and credential (`EXOD_*`, `EXO_PRINCIPAL*`, `EXO_*SOCK*`);
+- known credential/configuration names such as `MYSQL_PWD`, `DB_PASS`, `STRIPE_SK`, `TWILIO_AUTH`,
+  `NPM_CONFIG__AUTH`, `DOCKER_AUTH_CONFIG`, `KUBECONFIG`, and PostgreSQL credential/key file fields;
+- recognized token/private-key value formats, and URL/URI/proxy fields with userinfo or credential query/fragment fields;
 - anything the seat lists in `[tools] env_deny` (exact names or patterns like `COMPANY_*`).
 
 A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_deny` wins over `env_allow`. This is
-a heuristic: a secret under an innocent name still passes, so keep keys in the key store. `EXO_HOME` stays: tools
+a heuristic: an unrecognized secret under an innocent name still passes, so keep keys in the key store. `EXO_HOME` stays: tools
 run `exo` commands, and the default path is no secret.
 
 Model providers read the real environment. The claude-cli and muse-cli providers do not pass it on: the child gets an
@@ -57,6 +60,10 @@ Every tool result is cut at 100,000 characters (`MAX_RESULT_CHARS`) with a `[tru
 for results a handler returns as a `ToolResult` (the MCP client does) as well as plain strings: the cap is shared
 across the result's text parts.
 
+Image results have a separate 4 MiB aggregate cap on UTF-8 `data` and `url` field payload. Over-budget parts are
+omitted whole with a visible marker, even when the text budget is exhausted. Base64 is never truncated. This
+caps inline/URL payload, not remote asset download sizes; metadata and serialization overhead are separate.
+
 ## code_find (D-029)
 
 `code_find(question, path=".", page=1, timeout=120)` runs [jevgrep](https://github.com/dzhng/jevgrep) (`jg`, MIT)
@@ -68,7 +75,8 @@ ranked file list and verbatim excerpts. Use it for unfamiliar code and "where or
   startup. If Node 22+ or both runners are missing the tool is hidden, and `exo models` says why on its
   `code_find:` line.
 - **Backend:** TypeSafe Jev with the key Exo's jev provider uses (`TYPESAFE_API_KEY`: environment, macOS Keychain
-  service `exo`, or `~/.config/exo/keys.env`). If Jev fails or no key exists, local Laya through jg's custom
+  service `exo`, Linux Secret Service when `secret-tool` is available, or `~/.config/exo/keys.env` mode 0600
+  with `EXO_KEYS_FILE` override). If Jev fails or no key exists, local Laya through jg's custom
   endpoint (the same `/v1/systemone` API), when `providers.laya` is configured, on loopback, and listening.
   The first line of the result names the backend: `[code_find backend=jev duration_ms=15010]`. A fallback adds
   `fallback_from=...`; a search jg marks incomplete adds `incomplete`.

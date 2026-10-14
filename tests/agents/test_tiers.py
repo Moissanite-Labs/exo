@@ -39,6 +39,7 @@ class ByModel:
 def make(tmp_path, parent_script, roles=None, **cfg):
     eng = CoreEngine(tmp_path / "home", {"roles": roles or TIER_ROLES}, cwd=str(tmp_path), env={},
                      delegation={"max_turns": 2, **cfg})
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     fake = ByModel(parent_script)
     eng.router.instances["fake"] = fake
     eng.loop.provider = eng.router.provider("main")

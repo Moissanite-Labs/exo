@@ -15,9 +15,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --frozen --all-extras --python 3.13
-      # Pyflakes rules only (F, set in pyproject.toml). --exit-zero for now: the tree still has unused imports
-      # (F401) that other branches are editing. Remove --exit-zero once they are cleaned up.
-      - run: uv run ruff check --exit-zero .
+      - run: uv run --frozen --all-extras ruff check .
+
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --frozen --all-extras --python 3.11
+      - run: uv run --frozen --all-extras python scripts/check_types.py
 
   test:
     name: test (${{ matrix.os }}, py${{ matrix.python }})

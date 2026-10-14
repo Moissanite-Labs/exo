@@ -201,10 +201,14 @@ def test_unknown_command_suggests_instead_of_erroring(tmp_path):
     run(tmp_path, sc)
 
 
-def test_unknown_with_nothing_close_still_goes_to_the_core(tmp_path):
+def test_unknown_without_a_close_command_match_is_sent_as_literal_message(tmp_path):
     async def sc(app, pilot, client, eng):
-        await send(app, pilot, "/qqqqqqq")
-        await until(lambda: any(isinstance(b, s.CommandRun) and b.name == "qqqqqqq" for b in app.sent), pilot)
+        text = "/qqqqqqq"
+        await send(app, pilot, text)
+        await until(lambda: any(isinstance(b, s.TurnSend) and b.text == text for b in app.sent), pilot)
+        sent = next(b for b in app.sent if isinstance(b, s.TurnSend) and b.text == text)
+        assert sent.session == app.session and sent.mode == "send"
+        assert not any(isinstance(b, s.CommandRun) and b.name == "qqqqqqq" for b in app.sent)
 
     run(tmp_path, sc)
 
