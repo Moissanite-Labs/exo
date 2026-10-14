@@ -978,6 +978,13 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
 
     if prog in _OPAQUE_PROGRAMS:
         parts = [_opaque(f"{prog}: {_OPAQUE_PROGRAMS[prog]}", cmd)]
+        if prog == "coproc":
+            # A name is optional only before a compound command. Keep the
+            # original words so quotes, expansion flags and stdin survive.
+            body = words[1:]
+            if len(body) > 1 and body[1].text == "{" and not body[1].quoted:
+                body = body[1:]
+            parts += inner_words(body)
         if prog == "trap" and len(argv) > 1 and depth < _DEPTH:
             parts.append(classify_shell(argv[1], inner_depth))
         return parts

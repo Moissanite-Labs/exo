@@ -187,6 +187,10 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- `coproc` inspects the inner command's original words, preserving quotes and heredocs,
+  while retaining `indirection`. An optional name is skipped only before an unquoted `{`.
+  Visible deletion can therefore match `deny: [delete]`; matching every category in a compound
+  command still depends on the separate classification-parts change in PR #126.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
