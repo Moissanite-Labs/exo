@@ -12,7 +12,7 @@ SECRETS = {
     "AWS_SECRET_ACCESS_KEY": "s", "AWS_PROFILE": "p", "DATABASE_URL": "postgres://u:p@h/d", "SENTRY_DSN": "s",
     "GH_TOKEN": "s", "GH_ENTERPRISE_TOKEN": "s", "GITHUB_TOKEN": "s", "EXO_BUS_SEAT": "x", "EXO_KEYS_FILE": "/f",
     "EXOD_TOKEN": "t", "EXO_PRINCIPAL_TOKEN": "t", "EXO_SOCKET": "/s", "SECRET_KEY_BASE": "s",
-    "STRIPE_APIKEY": "s",
+    "STRIPE_APIKEY": "s", "BASH_ENV": "/startup", "ENV": "/startup",
 }
 KEEP = {"PATH": "/bin", "HOME": "/h", "LANG": "C", "EXO_HOME": "/h/.exo", "EXO_SEAT": "a", "KEEP_ME": "1",
         "EDITOR": "vi", "SSH_AUTH_SOCK": "/tmp/agent"}
@@ -117,3 +117,61 @@ def test_noncredential_urls_and_unknown_opaque_values_are_preserved():
            "DOCS_URL": "https://example.com/?page=1", "INNOCENT": "opaque-not-recognized"}
     assert envscrub.scrub_env(src) == src  # deliberate heuristic limit, not an arbitrary-secret guarantee
     assert "HTTPS_PROXY" not in envscrub.minimal_env({"HTTPS_PROXY": "http://u:p@127.0.0.1:8080"})
+
+
+@pytest.mark.parametrize("name", ["BASH_ENV", "ENV"])
+def test_shell_startup_hooks_follow_exact_allow_and_deny_precedence(name):
+    src = {name: "/benign/startup"}
+    assert envscrub.scrub_env(src) == {}
+    assert envscrub.scrub_env(src, allow=[name]) == src
+    assert envscrub.scrub_env(src, allow=["*"]) == {}
+    assert envscrub.scrub_env(src, allow=[name], deny=[name]) == {}
+    assert envscrub.scrub_env(src, allow=[name], deny=["*"]) == {}
+
+
+@pytest.mark.parametrize("background", [False, True], ids=["foreground", "background"])
+@pytest.mark.parametrize("policy,expected", [("default", "unset:unset"),
+                                              ("allow", "set:set"), ("deny", "unset:unset")])
+def test_shell_startup_file_is_not_sourced_without_explicit_allow(tmp_path, monkeypatch, background, policy, expected):
+    import asyncio
+    import shlex
+    import time
+
+    from exo.core.engine import CoreEngine
+    from exo.core.seats import Seat
+    from exo.core.tools.builtin.shell import run_command
+
+    marker = tmp_path / "startup-sourced"
+    startup = tmp_path / "startup.sh"
+    startup.write_text("printf sourced > " + shlex.quote(str(marker)) + "\n")
+    for name in ("BASH_ENV", "ENV"):
+        monkeypatch.setenv(name, str(startup))
+    allow = ["BASH_ENV", "ENV"] if policy != "default" else []
+    deny = ["BASH_*", "ENV"] if policy == "deny" else []
+    command = ('if [ -n "${BASH_ENV+x}" ]; then printf set; else printf unset; fi; printf :; '
+               'if [ -n "${ENV+x}" ]; then printf set; else printf unset; fi')
+
+    async def run_background():
+        eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
+                         cwd=str(tmp_path), env={}, seat=Seat(name="tester", env_allow=allow, env_deny=deny),
+                         jobs={"wake": False})
+        try:
+            job = eng.jobs.start(command, str(tmp_path), session=None, timeout=5)
+            deadline = time.monotonic() + 5
+            while eng.jobs.get(job["id"])["state"] == "running":
+                assert time.monotonic() < deadline, "shell job did not finish"
+                await asyncio.sleep(0.01)
+            assert eng.jobs.get(job["id"])["exit_code"] == 0
+            return eng.jobs.log_path(job["id"]).read_text()
+        finally:
+            await eng.close()
+
+    if background:
+        output = asyncio.run(run_background())
+    else:
+        code, output, status = run_command(command, str(tmp_path), timeout=5, env_allow=allow, env_deny=deny)
+        assert (code, status) == (0, "ok")
+    assert output == expected
+    assert marker.exists() is (policy == "allow")
+    if policy == "allow":
+        assert marker.read_text() == "sourced"

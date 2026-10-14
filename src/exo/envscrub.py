@@ -1,4 +1,4 @@
-"""One secret scrub for every subprocess Exo starts for the model (D-039).
+"""One environment scrub for every subprocess Exo starts for the model (D-039).
 
 Used by the bash tool and background jobs (``tool_env``) and by ``code_find``. The ``claude`` CLI provider does not
 start from the parent environment at all: it gets ``minimal_env`` (a short allowlist) plus its own switches.
@@ -10,6 +10,7 @@ A variable is dropped when any of these holds:
 - it contains TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL, APIKEY, API_KEY, PRIVATE_KEY, ACCESS_KEY or _KEY_;
 - it starts with AWS_, GH_, EXO_BUS_, EXOD_ or EXO_PRINCIPAL, or is GITHUB_TOKEN or ends in DATABASE_URL;
 - it is an EXO_ variable that names a socket (contains SOCK): the core's socket and credential stay out of tools;
+- it is a shell startup hook (``BASH_ENV`` or ``ENV``), which can run code before the command;
 - it is a known credential/configuration name (including database passwords, package/docker auth and kube config);
 - its value has a recognized token/private-key format, or its URL/URI/proxy value carries userinfo or a credential query;
 - it matches the seat's ``[tools] env_deny`` (exact names or shell patterns like ``COMPANY_*``).
@@ -33,7 +34,7 @@ WORDS = ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "APIKEY", "API_K
          "_KEY_")
 PREFIXES = ("AWS_", "GH_", "EXO_BUS_", "EXOD_", "EXO_PRINCIPAL")
 NAMES = frozenset({"GITHUB_TOKEN", "STRIPE_SK", "NPM_CONFIG__AUTH", "DOCKER_AUTH_CONFIG", "KUBECONFIG",
-                   "PGPASSFILE", "PGSERVICEFILE", "PGSSLKEY", "SLACK_WEBHOOK_URL"})
+                   "PGPASSFILE", "PGSERVICEFILE", "PGSSLKEY", "SLACK_WEBHOOK_URL", "BASH_ENV", "ENV"})
 VALUE_SECRET = re.compile(r"^(?:sk-|gh[pousr]_|xox[baprs]-|whsec_)[A-Za-z0-9_-]{16,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----")
 URL_SECRETS = frozenset({"token", "access_token", "api_key", "apikey", "password", "passwd", "secret",
                         "auth", "authorization", "key", "signature", "sig"})
@@ -88,7 +89,7 @@ def is_secret_value(name: str, value: str) -> bool:
 
 def scrub_env(src: Mapping[str, str] | None = None, allow: Iterable[str] = (),
               deny: Iterable[str] = ()) -> dict[str, str]:
-    """A copy of ``src`` (default ``os.environ``) without secrets; see the module docstring for the rules."""
+    """A copy of ``src`` (default ``os.environ``) without secrets or shell startup hooks; see the module docstring for the rules."""
     src = os.environ if src is None else src
     allowed = {str(a) for a in allow or ()}
     denied = [str(d) for d in deny or () if str(d)]

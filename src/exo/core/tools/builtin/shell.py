@@ -98,7 +98,7 @@ def kill_process_group(proc: subprocess.Popen, grace: float = TERM_GRACE) -> Non
 
 def tool_env(base: dict[str, str] | None = None, allow: Iterable[str] = (), deny: Iterable[str] = ()) -> dict[str, str]:
     """The environment a tool subprocess gets (bash and background jobs): ``exo.envscrub.scrub_env`` (D-039),
-    so no provider key, token, cloud credential, bus identity or core socket/credential variable. ``allow`` and
+    so no provider key, token, cloud credential, bus identity, core socket/credential or shell startup hook. ``allow`` and
     ``deny`` are the seat's ``[tools] env_allow`` and ``env_deny``. Only a copy is filtered: model providers read
     the real environment and keep their keys."""
     from exo.envscrub import scrub_env

@@ -17,6 +17,7 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 `bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,
 `exo.envscrub.scrub_env` (D-039). Removed:
 
+- `BASH_ENV` and `ENV`, shell startup hooks that can run code before the command;
 - every provider key named by `key_env` in the model catalog;
 - names ending `_API_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, `_CREDENTIALS`, `_KEY`, `_KEYS`, `_KEYS_DIR`,
   `_KEYS_FILE` or `_DSN`, and names containing `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY`,
@@ -28,7 +29,8 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 - recognized token/private-key value formats, and URL/URI/proxy fields with userinfo or credential query/fragment fields;
 - anything the seat lists in `[tools] env_deny` (exact names or patterns like `COMPANY_*`).
 
-A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_deny` wins over `env_allow`. This is
+A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_deny` wins over `env_allow`.
+Allowing `BASH_ENV` or `ENV` also allows shell startup code; only allow a startup file you trust. This is
 a heuristic: an unrecognized secret under an innocent name still passes, so keep keys in the key store. `EXO_HOME` stays: tools
 run `exo` commands, and the default path is no secret.
 
