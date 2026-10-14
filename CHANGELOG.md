@@ -5,6 +5,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Security
+- Inspect commands inside `coproc` without losing quotes or heredocs, while retaining the
+  indirection floor (#131). Denying every category in compound commands depends on PR #126.
+
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
