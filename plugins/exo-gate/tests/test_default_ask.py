@@ -5,6 +5,7 @@ table adds the indirection forms the audit named. The everyday table is the cost
 commands must stay `allow`, or the gate asks so often that people learn to click yes.
 """
 import json
+import shlex
 
 import pytest
 
@@ -58,6 +59,18 @@ def test_audit_table(action, category, want):
         assert c.category == category, c
     assert decide(c).outcome == want, c
     assert decide(c, load_policies(TEMPLATE)).outcome == want, c
+
+
+@pytest.mark.parametrize("wrappers,category,want", [(4, "github_post", "deny"), (5, "opaque_exec", "ask")])
+def test_shell_inspection_depth_limit(wrappers, category, want):
+    """Pin the documented boundary without executing the command or sending a post."""
+    command = GH
+    for _ in range(wrappers):
+        command = "bash -c " + shlex.quote(command)
+    c = classify(sh(command))
+    assert c.category == category
+    assert "indirection" in c.signals
+    assert decide(c, gate.normalize_policies({"gates": {"categories": {"github_post": "deny"}}})).outcome == want
 
 
 # Indirection: none of these may run without the principal. Where the gate can see inside, the inner

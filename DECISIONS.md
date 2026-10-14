@@ -769,6 +769,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (`pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test`...). New asks a user will see:
   `make`, `npm run`/`npm test`, scripts, `python -c`, unknown programs such as `kill` or `open`, and any write to the
   store. Each opaque ask is bound to the exact command.
+- **Known inspection limit:** `_DEPTH = 4` bounds recursive shell inspection. A GitHub comment inside four
+  nested `bash -c` strings remains `github_post`. At five wrappers it becomes `opaque_exec` and asks by default.
+  The summary need not name the depth limit. Category denies cover inspected forms, so approving opaque code
+  can execute a hidden operation that would be denied if visible. This records the limit of the existing decision.
 - **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
