@@ -273,7 +273,8 @@ class Gate:
         self.settings = settings
         self.router_getter = router_getter
         self.risk_lookup = risk_lookup
-        self._required_at_load = os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
+        self._required_at_load = (os.environ.get("EXO_TOOL_EXECUTOR_REQUIRED") == "1"
+                                 or bool(required_getter and required_getter()))
         self.required_getter = required_getter
         self.sink = sink if sink is not None else LedgerSink(settings)
         self._policies: Optional[dict] = None      # pinned: the policy in force for this session

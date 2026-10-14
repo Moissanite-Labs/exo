@@ -243,12 +243,25 @@ class CoreEngine:
         else:
             executor, loaded_required = load_executor()
             required = required or loaded_required
-        required = required or bool(registry and registry.executor_required)
+        required = required or bool(registry and registry.executor_required) or bool(plugins and plugins.executor_required)
         if required and executor is None:
             raise ExecutorConfigurationError("Required tool executor is unavailable")
         mcp_cfg = {**(mcp or {}), **(seat.mcp if seat else {})}
         if required and mcp_cfg and getattr(executor, "supports_mcp_startup", False) is not True:
             raise ExecutorConfigurationError("Required tool executor does not support MCP transport startup")
+        plugins = plugins or PluginManager()
+        plugins.executor_required = required
+        if required:
+            gate = plugins.plugins.get("exo-gate")
+            roots = getattr(executor, "trusted_plugin_dirs", ())
+            if not isinstance(roots, (tuple, list)) or not all(
+                    isinstance(p, str) and Path(p).is_absolute() for p in roots):
+                raise ExecutorConfigurationError("executor trusted_plugin_dirs must contain absolute paths")
+            if (gate is None or not gate.ok or gate.source != "dir" or gate.manifest.path is None
+                    or not any(gate.manifest.path.resolve().is_relative_to(Path(p).resolve()) for p in roots)
+                    or any(not any(e.plugin == "exo-gate" for e in plugins.hooks.entries(point))
+                           for point in ("pre_tool_call", "post_approval_response"))):
+                raise ExecutorConfigurationError("Required executor needs a trusted folder exo-gate with security hooks")
         self.executor = executor
         self.executor_required = required
         self.home = Path(home)
@@ -271,8 +284,7 @@ class CoreEngine:
         self.registry = registry or default_registry(executor=executor, executor_required=required)
         self.registry.executor = executor
         self.registry.executor_required = required or executor is not None
-        self.plugins = plugins or PluginManager()
-        self.plugins.executor_required = required
+        self.plugins = plugins
         self.plugins.router = self.router  # plugins reach it as ctx.router
         self.approvals = ApprovalDesk(lambda body, sid: self.hub.publish(body, sid), self._approval_waited)
         self.channels: dict[str, Any] = {}  # running channel plugins by name
@@ -488,11 +500,14 @@ class CoreEngine:
                 "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low"}
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
+        bound_mode = self.registry.executor_required
         if not self.executor_required and not self.plugins.hooks.has("pre_tool_call"):  # required: create() checks
             return Block("No tool approval gate is available. Reinstall Exo's plugins or enable exo-gate "
                          "in core_plugins (and the seat's plugins list), then restart Exo.")
+        # A configured broker binds arguments without relaxing optional policy hooks.
         required_hooks = frozenset({"exo-gate"}) if self.executor_required else frozenset()
         for verdict in await self.plugins.hooks.afire("pre_tool_call", _fail_closed_plugins=required_hooks,
+                                                     _isolate_arguments=bound_mode,
                                                      **self._hook_kw(call, ctx)):
             if not isinstance(verdict, dict):
                 continue
@@ -510,8 +525,9 @@ class CoreEngine:
                     binding=str(verdict.get("binding") or ""))
                 choice = {"allow": "once", "allow_always": "always"}.get(decision, "deny")
                 correlation = {"approval_key": verdict["approval_key"]} if verdict.get("approval_key") else {}
+                # Never dispatch a broker-bound call after its gate approval callback failed.
                 await self.plugins.hooks.afire("post_approval_response", pattern_key=key, choice=choice,
-                                               _fail_closed_plugins=required_hooks,
+                                               _fail_closed_plugins=frozenset({"exo-gate"}) if bound_mode else frozenset(),
                                                decided_by=who[0] if who else "unknown", session_id=ctx.session or "",
                                                **correlation)
                 if decision == "allow_always" and not once:
