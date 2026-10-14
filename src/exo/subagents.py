@@ -21,7 +21,7 @@ from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
 
 if TYPE_CHECKING:
-    from exo.core.engine import CoreEngine
+    from exo.core.engine import CoreRuntime as CoreEngine
 
 USAGE = "usage: subagent list | open <task> | send <task> <text> | stop <task>"
 

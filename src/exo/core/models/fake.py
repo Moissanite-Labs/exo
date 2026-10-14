@@ -84,8 +84,8 @@ class RuleFake:
     """
 
     name = "fake"
-    DEFAULT = ("Exo is running on the offline fake model. Set ANTHROPIC_API_KEY, or models "
-               "in config.json, to use a real model.")
+    DEFAULT = ("Exo is running on the deterministic offline model. A real model requires a provider "
+               "configuration and, when spend protection is enforced, an administrator-approved billing policy.")
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         config = config or {}
@@ -110,4 +110,4 @@ class RuleFake:
         return self.reply
 
     def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
-        return FakeProvider([self._turn(messages)]).stream(messages, tools, **opts)
+        return FakeProvider([RuleFake._turn(self, messages)]).stream(messages, tools, **opts)
