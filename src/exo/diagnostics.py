@@ -23,7 +23,7 @@ from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
 
 if TYPE_CHECKING:
-    from exo.core.engine import CoreEngine
+    from exo.core.engine import CoreRuntime as CoreEngine
 
 MISSING = object()
 
@@ -95,7 +95,7 @@ def trace_text(eng: CoreEngine, session: str | None, last: int = 10, calls: bool
                      + (["", peers] if peers else []) + (["", jobs] if jobs else []))
 
 def agent_ctx(eng: CoreEngine, session: str | None) -> AgentContext:
-    tree = getattr(eng.loop.context, "tree", eng.loop.context)
+    tree = eng.context_tree
     if not session or eng.store.get_session(session) is None:
         raise CommandFailed("bad_request", "no thread to look at")
     if not isinstance(tree, AgentContext) or tree._agent_key(session) is None:

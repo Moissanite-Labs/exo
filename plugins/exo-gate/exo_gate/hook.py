@@ -416,7 +416,10 @@ class Gate:
             res = await asyncio.wait_for(
                 ask_choice_result(router, state, "How strictly should this tool call be gated?",
                                   list(gate.OUTCOMES)), timeout=20)
-        except Exception:
+        except Exception as exc:
+            from exo.model_spend import SpendDenied
+            if isinstance(exc, SpendDenied):
+                raise
             logger.warning("exo-gate: decision model failed; keeping the rule outcome", exc_info=True)
             return None
         probs = res.probabilities
@@ -445,7 +448,10 @@ class Gate:
                 c, d = self._rules(tool_name, args, risk_s)
                 if d.outcome != "deny":
                     verdict = await self._verdict(d, c, risk_s, tool_name)  # (option, via) or None
-            except Exception:
+            except Exception as exc:
+                from exo.model_spend import SpendDenied
+                if isinstance(exc, SpendDenied):
+                    return {"action": "block", "message": str(exc)}
                 logger.exception("exo-gate: rules failed before the decision model on %s", tool_name)
                 if self.executor_required:
                     return {"action": "block", "message": "Required gate checks failed"}

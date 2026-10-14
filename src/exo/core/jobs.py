@@ -32,7 +32,7 @@ from exo.core.types import ContentPart, Message, ToolSpec
 from exo.protocol import schema as s
 
 if TYPE_CHECKING:
-    from exo.core.engine import CoreEngine
+    from exo.core.engine import CoreRuntime as CoreEngine
 
 ACTIVE = "running"
 KEEP_DAYS = 14

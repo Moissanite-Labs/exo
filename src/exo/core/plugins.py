@@ -21,7 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from exo.core.hooks import HookRegistry
+from exo.core import trace
+from exo.core.hooks import HookRegistry, accepted
 from exo.core.slots import Slots
 from exo.core.types import Risk, ToolSpec
 
@@ -29,6 +30,20 @@ logger = logging.getLogger(__name__)
 
 ENTRY_POINT_GROUP = "exo.plugins"
 MANIFEST = "plugin.yaml"
+
+
+def call_plugin(fn: Any, *args: Any, **kw: Any) -> Any:
+    """Call a plugin hook with the keyword arguments it accepts (all of them when it takes **kwargs)."""
+    return fn(*args, **accepted(fn, kw))
+
+
+def safe_plugin_call(obj: Any, method: str, *args: Any, **kw: Any) -> Any:
+    fn = getattr(obj, method, None)
+    try:
+        return call_plugin(fn, *args, **kw) if fn else None
+    except Exception as exc:  # a plugin failure never breaks a turn, but it is recorded
+        trace.report(f"{type(obj).__name__}.{method}", exc, kw.get("session_id"))
+        return None
 
 
 class PluginError(RuntimeError):
