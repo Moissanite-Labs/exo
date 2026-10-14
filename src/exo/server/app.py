@@ -334,7 +334,7 @@ async def serve_stdio(dispatcher: Dispatcher) -> None:
 # ---------------------------------------------------------------- entry
 
 
-DEFAULT_ENGINE = "exo.core.engine:create"
+DEFAULT_ENGINE = "exo.compose:create"
 
 
 def load_engine(spec: str = DEFAULT_ENGINE) -> Engine:
@@ -371,8 +371,8 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
         srv = HttpServer(dispatcher, principal=True)
         await srv.start_unix(socket)
         servers.append(srv)
-        if (start_peers := getattr(engine, "start_peers", None)) is not None:
-            await start_peers(socket)  # D-026: presence file so other daemons find this one
+        if (peers := getattr(engine, "peers", None)) is not None:
+            await peers.start(socket)  # D-026: presence file so other daemons find this one
         if ready:
             ready(f"unix:{socket}")
     if tcp:

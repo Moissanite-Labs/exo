@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import re
 import secrets
 import socket
+import sqlite3
 import ssl
 import tempfile
 import time
@@ -21,6 +23,8 @@ MAX_HEADERS = 4096
 MAX_LINE = 1024
 MAX_EXPORT_BYTES = 64 * 1024 * 1024
 DEFAULT_TIMEOUT = 5.0
+
+logger = logging.getLogger(__name__)
 
 
 def _document(raw: bytes):
@@ -261,6 +265,11 @@ class WitnessServer:
                         else:
                             raise AuthorityError("unsupported witness endpoint")
                         wire.send("HTTP/1.1 200 OK", response)
+                    except sqlite3.Error as exc:
+                        # Report storage faults locally, but never return a receipt or retry/reseed state.
+                        logger.error("witness journal request failed: %s", exc)
+                        wire.send("HTTP/1.1 503 Service Unavailable",
+                                  {"error": "witness journal unavailable; request outcome may be unknown"})
                     except WitnessConflict:
                         wire.send("HTTP/1.1 409 Conflict", {"error": "checkpoint conflicts with witnessed prefix"})
                     except AuthorityError:
@@ -409,7 +418,7 @@ def main(argv=None):
             print(canonical(result).decode())
     except KeyboardInterrupt:
         return 130
-    except (AuthorityError, OSError, ValueError) as exc:
+    except (AuthorityError, OSError, ValueError, sqlite3.Error) as exc:
         parser.exit(1, f"exo-witness: {exc}\n")
     return 0
 

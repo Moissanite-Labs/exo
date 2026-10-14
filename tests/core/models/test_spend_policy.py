@@ -279,12 +279,12 @@ def test_root_floor_ignores_seat_and_user_spend_policies(protected, tmp_path):
 
 
 def test_typed_decision_and_setup_probes_use_resolved_floor(protected):
-    from exo.core.models.decision import ask_choice
+    from exo.core.models.decision import ask_choice_result
     from exo.providers_setup import test_provider as probe
     seen = []
     router = Router(roles={'decision': ['typed:m']}, providers={'typed': {'transport': 'decision', 'base_url': 'https://typed'}},
                     catalog={}, env={}, client=httpx.AsyncClient(transport=httpx.MockTransport(lambda req: seen.append(req))))
-    with pytest.raises(SpendDenied): asyncio.run(ask_choice(router, 's', 'q', ['a', 'b']))
+    with pytest.raises(SpendDenied): asyncio.run(ask_choice_result(router, 's', 'q', ['a', 'b']))
     assert probe('typed', router=router, save=False)['error_class'] == 'spend_boundary'
     assert not seen
 
@@ -327,7 +327,7 @@ def test_stopped_engine_factory_keeps_status_and_transcripts_available(protected
     monkeypatch.setenv('EXO_HOME', str(home))
     monkeypatch.setattr('exo.models_cmd.available_models', lambda *a: [])
     eng = create('seat')
-    eng.peer_autostart = False
+    eng.peers.autostart = False
     async def scenario():
         try:
             dispatcher = Dispatcher(eng)

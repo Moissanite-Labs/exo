@@ -14,7 +14,7 @@ authors = [{ name = "Aska Digital" }]
 dependencies = ["pynacl>=1.5", "httpx>=0.27"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.6"]
+dev = ["pytest>=7", "ruff>=0.6", "mypy==2.4.0"]
 # httpx2 is imported directly for MCP servers that need request headers; mcp 2 also depends on it.
 mcp = ["mcp>=2,<3", "httpx2>=2"]
 # rich is imported directly by the terminal client; textual depends on it too.
@@ -34,9 +34,11 @@ packages = ["src/exo", "clients/tui/exo_tui"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "real_claude: runs one real turn through the claude CLI; needs EXO_TEST_REAL_CLAUDE=1 and claude on PATH",
+]
 
-# Lint: pyflakes rules only (F). CI runs `ruff check` with --exit-zero until the existing unused imports
-# (F401) are cleaned up, so a finding does not fail the build yet. New code should be clean.
+# Lint: pyflakes rules only (F). Findings fail CI.
 [tool.ruff]
 target-version = "py311"
 extend-exclude = ["patches", "research", ".venv"]

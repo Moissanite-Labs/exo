@@ -31,10 +31,10 @@ def _ensure_exo_importable() -> None:
 _ensure_exo_importable()
 
 try:
-    from .exo_context import ExoContextEngine, handle
+    from .exo_context import ExoContextEngine, handle as handle
 except ImportError:  # loaded as a plain module rather than a package
     sys.path.insert(0, str(_HERE))
-    from exo_context import ExoContextEngine, handle  # type: ignore[no-redef]
+    from exo_context import ExoContextEngine, handle as handle  # type: ignore[no-redef]
 
 
 def register(ctx) -> None:

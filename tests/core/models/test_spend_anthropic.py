@@ -111,3 +111,20 @@ def test_repeated_start_cannot_reuse_previous_complete_delta(tmp_path, monkeypat
     monkeypatch.setattr(f'{__name__}.stream_response', repeat)
     router, journal, requests = native_router(tmp_path, complete_start(), [{'output_tokens': 10}])
     assert_frozen(router, journal, requests)
+
+
+def test_repeated_start_followed_by_valid_delta_cannot_reset_usage(tmp_path, monkeypatch):
+    """A final delta cannot make a second start's cheaper counters trustworthy."""
+    original = stream_response
+    def repeat_then_complete(start, deltas):
+        response = original(start, deltas)
+        repeated = [
+            {'type': 'message_start', 'message': {'usage': complete_start(input_tokens=1)}},
+            {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}, 'usage': {'output_tokens': 20}},
+        ]
+        extra = ''.join('data: ' + json.dumps(event) + '\n\n' for event in repeated)
+        return httpx.Response(200, text=response.text.replace(
+            'data: {"type": "message_stop"}', extra + 'data: {"type": "message_stop"}'))
+    monkeypatch.setattr(f'{__name__}.stream_response', repeat_then_complete)
+    router, journal, requests = native_router(tmp_path, complete_start(), [{'output_tokens': 10}])
+    assert_frozen(router, journal, requests)

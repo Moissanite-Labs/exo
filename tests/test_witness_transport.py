@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import json
 import socket
+import sqlite3
 import ssl
 import subprocess
 import sys
@@ -450,3 +451,104 @@ def test_missing_established_journal_during_runtime_is_refused(state, certificat
         with pytest.raises(AuthorityError):
             c.head()
         assert not state[1].path.exists()
+
+
+def test_locked_journal_refuses_observe_then_accepts_healthy_request(state, certificates, monkeypatch, caplog):
+    journal = state[1]
+    checkpoint = append(state[0])
+    inode = journal.path.stat().st_ino
+    original_db = journal._db
+    @contextlib.contextmanager
+    def short_lock_wait():
+        # Exercise a real competing SQLite writer without a ten-second test delay.
+        with original_db() as db:
+            db.execute("PRAGMA busy_timeout=50")
+            yield db
+    monkeypatch.setattr(journal, "_db", short_lock_wait)
+    with running(state, certificates) as server:
+        c = client(state, certificates, server)
+        initial = c.head()
+        with sqlite3.connect(journal.path, isolation_level=None) as lock:
+            lock.execute("BEGIN IMMEDIATE")
+            try:
+                with pytest.raises(AuthorityError, match="witness rejected request"):
+                    c.observe(checkpoint, initial)
+                assert c.head() == initial
+                assert journal.lookup(1) is None and journal.path.stat().st_ino == inode
+                assert "database is locked" in caplog.text
+            finally:
+                lock.execute("ROLLBACK")
+        receipt = c.observe(checkpoint, initial)
+        verify_receipt(state[2], checkpoint, receipt, c.pub, initial)
+        assert receipt == c.head() == journal.lookup(1)
+
+
+@pytest.mark.parametrize("endpoint", ["head", "observe"])
+def test_broken_runtime_schema_never_succeeds_or_reseeds_then_explicit_repair_recovers(
+        state, certificates, caplog, endpoint):
+    journal = state[1]
+    checkpoint = append(state[0])
+    inode = journal.path.stat().st_ino
+    with running(state, certificates) as server:
+        c = client(state, certificates, server)
+        initial = c.head()
+        with sqlite3.connect(journal.path) as db:
+            metadata = db.execute("SELECT * FROM metadata").fetchall()
+            rows = db.execute("SELECT * FROM witnessed").fetchall()
+            db.execute("DROP TABLE witnessed")
+        for _ in range(2):
+            with pytest.raises(AuthorityError, match="witness rejected request"):
+                c.head() if endpoint == "head" else c.observe(checkpoint, initial)
+        assert "no such table: witnessed" in caplog.text
+        with sqlite3.connect(journal.path) as db:
+            assert db.execute("SELECT * FROM metadata").fetchall() == metadata
+            assert db.execute("SELECT name FROM sqlite_master WHERE name='witnessed'").fetchall() == []
+            assert journal.path.stat().st_ino == inode
+            # Explicit fixture administration restores established signed rows, never the service.
+            db.execute("CREATE TABLE witnessed (seq INTEGER PRIMARY KEY, checkpoint TEXT NOT NULL, receipt TEXT NOT NULL)")
+            db.executemany("INSERT INTO witnessed VALUES (?,?,?)", rows)
+        assert c.head() == initial
+        receipt = c.observe(checkpoint, initial)
+        verify_receipt(state[2], checkpoint, receipt, c.pub, initial)
+        assert receipt == c.head() == journal.lookup(1)
+
+
+def test_cli_corrupt_journal_refuses_startup_without_traceback_or_reseed(state, certificates, tmp_path, capsys):
+    identity, genesis, key = (tmp_path / name for name in ("identity.json", "genesis.json", "witness.key"))
+    identity.write_bytes(canonical(state[2]))
+    genesis.write_bytes(canonical(state[3]))
+    key.write_text(crypto.b64(bytes(state[6])))
+    key.chmod(0o600)
+    corrupt = tmp_path / "corrupt.sqlite"
+    damaged = b"not an established SQLite journal"
+    corrupt.write_bytes(damaged)
+    with pytest.raises(SystemExit) as exc:
+        wt.main(["serve", "--identity", str(identity), "--genesis", str(genesis), "--journal", str(corrupt),
+                 "--witness-key", str(key), "--ca", str(certificates["ca"]), "--cert", str(certificates["server"]["cert"]),
+                 "--tls-key", str(certificates["server"]["key"]), "--client-cert-sha256", certificates["client"]["pin"], "--port", "9443"])
+    assert exc.value.code == 1
+    error = capsys.readouterr().err
+    assert "exo-witness:" in error and "not a database" in error and "Traceback" not in error
+    assert corrupt.read_bytes() == damaged
+
+
+def test_database_error_after_commit_returns_failure_without_automatic_retry(state, certificates, caplog):
+    checkpoint = append(state[0])
+    commits = []
+    def fail_after_commit(point):
+        if point == "after_commit":
+            commits.append(True)
+            raise sqlite3.OperationalError("journal failed after commit")
+    state[1].fault = fail_after_commit
+    with running(state, certificates) as server:
+        c = client(state, certificates, server)
+        initial = c.head()
+        with pytest.raises(AuthorityError, match="witness rejected request"):
+            c.observe(checkpoint, initial)
+        assert commits == [True] and "journal failed after commit" in caplog.text
+        committed = c.head()
+        verify_receipt(state[2], checkpoint, committed, c.pub, initial)
+        assert committed == state[1].lookup(1)
+        # Only this explicit identical retry returns the already committed receipt.
+        assert c.observe(checkpoint, initial) == committed
+        assert commits == [True] and state[1].lookup(2) is None

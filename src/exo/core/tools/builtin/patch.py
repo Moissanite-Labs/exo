@@ -168,7 +168,7 @@ def _update(content: str, op: PatchOperation) -> tuple[str, list[str]]:
         elif not is_already_applied(content, pattern, replacement):
             label = f"'{h.context_hint}'" if h.context_hint else "(no hint)"
             errors.append(f"{op.file_path}: hunk {i} {label} not found: {err}"
-                          + format_no_match_hint(err, 0, pattern, content))
+                          + format_no_match_hint(err, pattern, content))
     if not changed:
         errors.append(f"{op.file_path}: hunks contain no changes")
     return content, errors

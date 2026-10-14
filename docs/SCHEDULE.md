@@ -2,7 +2,7 @@
 
 A scheduled job is a prompt that runs by itself on a timer. Each run is a fresh session of kind `scheduled`
 (see MEMORY-MODEL.md). The run reports through `task.updated`, and the final answer goes out as a `notice`
-or to a channel. Code: `src/exo/core/scheduler.py`.
+or to a channel. Code: `src/exo/scheduler.py` (outside the core since D-067; `exo.compose` attaches it to the engine).
 
 ## Make and manage jobs
 
@@ -28,7 +28,14 @@ Jobs live in `$EXO_HOME/schedule.sqlite`. `exo serve` runs the timer. A one-shot
 - It is an ordinary turn of the agent (D-041): it uses the engine's context tree and memory provider, the soul
   refresh and system extras, and fires the `on_turn_start` and `on_turn_end` hooks. Only the model (the job's tier),
   the narrowed toolset and the unattended-job prompt differ.
-- The timer loop survives a failing check: the error is recorded as a `harness.error` (`scheduler tick`) and the loop
-  waits a few seconds and goes on. If the loop ever ends by itself, that is recorded too (`scheduler loop`) and a
+- Each scheduled turn refreshes `SOUL.md` before copying the current composed system prompt. Its
+  `turn.started` soul hash and the text sent to the model refer to the same soul; the unattended instruction
+  is added once to that run, never to the interactive prompt.
+- `turn.interrupt` for the run's child session (Ctrl+C or `/stop` in that thread) stops its model call, tool or
+  approval wait through the ordinary turn loop. Other threads and background shell jobs keep running.
+  Completion, failure and cancellation remove the live scheduled loop; cancellation also reaps pending work.
+- The timer loop survives a failing check or next-run database listing: the error is recorded as a
+  `harness.error` (`scheduler tick`) and the loop waits a few seconds and goes on. If the loop ever ends by
+  itself, that is recorded too (`scheduler loop`) and a
   warning notice is shown.
 - Runs missed while the engine was down happen once at start, not once per missed slot.

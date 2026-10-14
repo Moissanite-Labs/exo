@@ -13,8 +13,10 @@ FAKE = {"rules": [{"match": "hello", "steps": ["hi"]},
 
 
 def engine(tmp_path) -> CoreEngine:
-    return CoreEngine(tmp_path / "home", {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
-                      cwd=str(tmp_path), env={})
+    eng = CoreEngine(tmp_path / "home", {"fake": FAKE, "roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
+                     cwd=str(tmp_path), env={})
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
+    return eng
 
 
 def events_of(hub, kind):
@@ -26,7 +28,7 @@ def test_cancelled_ask_publishes_resolved(tmp_path):
         eng = engine(tmp_path)
         d = Dispatcher(eng, caller="principal:tui")
         sid = (await d.run(s.Command.of(s.SessionCreate(title="t")))).result["session"]["id"]
-        task = asyncio.ensure_future(eng.ask(sid, "run it?", ToolCall(id="c1", name="bash", arguments={})))
+        task = asyncio.ensure_future(eng.approvals.ask(sid, "run it?", ToolCall(id="c1", name="bash", arguments={})))
         await asyncio.sleep(0.05)
         (req,) = events_of(d.hub, "approval.requested")
         task.cancel()  # a stopped turn cancels the call that waits on the card
@@ -43,7 +45,7 @@ def test_answered_ask_publishes_resolved_once(tmp_path):
         eng = engine(tmp_path)
         d = Dispatcher(eng, caller="principal:tui")
         sid = (await d.run(s.Command.of(s.SessionCreate(title="t")))).result["session"]["id"]
-        task = asyncio.ensure_future(eng.ask(sid, "run it?", None))
+        task = asyncio.ensure_future(eng.approvals.ask(sid, "run it?", None))
         await asyncio.sleep(0.05)
         (req,) = events_of(d.hub, "approval.requested")
         r = await d.run(s.Command.of(s.ApprovalRespond(request_id=req.body.request_id, decision="allow")))

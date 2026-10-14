@@ -15,7 +15,8 @@ async def admitted_stream(journal: SpendJournal, route: str, provider: Any,
     from exo.core.models.fake import RuleFake
     from exo.core.models.base import error_event
 
-    token, settled, stream = None, False, None
+    token, settled = None, False
+    stream: Any = None
     try:
         journal.check()
         if type(provider) is RuleFake:
@@ -78,10 +79,7 @@ async def admitted_stream(journal: SpendJournal, route: str, provider: Any,
         uncertain = token is not None and not settled
         stopped = uncertain or isinstance(exc, SpendStopped)
         if uncertain:
-            try:
-                journal.freeze(message)
-            except Exception:
-                pass
+            journal.freeze_uncertain(message)
         label = "Model spend stopped" if stopped else "Model request refused"
         event = error_event(f"{label}: {message}. Ask the principal to review the policy/journal; "
                             "approval replies cannot raise the cap.", None, retryable=False)
@@ -91,9 +89,6 @@ async def admitted_stream(journal: SpendJournal, route: str, provider: Any,
     finally:
         if token is not None and not settled:
             # Cancellation, failed accounting, and unknown network outcomes require explicit reconciliation.
-            try:
-                journal.freeze("uncertain model spend; ask the principal to reconcile retained reservations")
-            except Exception:
-                pass  # original reservation is already durable; subsequent admission still checks the journal
+            journal.freeze_uncertain("uncertain model spend; ask the principal to reconcile retained reservations")
         if stream is not None:
             await stream.aclose()

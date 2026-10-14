@@ -8,13 +8,11 @@ import pytest
 
 from exo.cli import main
 from exo.core.models import FakeProvider, Router
-from exo.core.models.decision import (DecisionError, DecisionProvider, ask_choice, ask_choice_result, ask_noul,
-                                      ask_score, choice_question, noul_question, score_question, tighten_only)
+from exo.core.models.decision import (DecisionError, DecisionProvider, ask_choice_result, choice_question,
+                                      noul_question, tighten_only)
 
 CHOICE = {"type": "choice", "choice": "high", "probabilities": {"low": 0.17, "medium": 0.29, "high": 0.54},
           "confidence": 0.31}
-SCORE = {"type": "score", "score": 1.43, "probabilities": {"0": 0.08, "1": 0.41, "2": 0.51},
-         "legend": {"0": "harmless", "1": "recoverable", "2": "destructive"}, "confidence": 0.15}
 NOUL = {"type": "noul", "noul": 0.98}
 
 
@@ -53,10 +51,7 @@ def test_decide_request_and_choice_shape():
     assert (rep.model, rep.input_tokens, rep.output_tokens) == ("jev-1.13.0", 3, 4)
 
 
-def test_score_and_noul_shapes():
-    p = DecisionProvider("https://x/v1", client=client(lambda r: reply(SCORE)))
-    a = asyncio.run(p.decide("s", {"q": score_question("bad?", ["harmless", "recoverable", "destructive"])})).answers["q"]
-    assert a.score == 1.43 and a.legend["2"] == "destructive" and a.probabilities["2"] == 0.51
+def test_noul_shape():
     p = DecisionProvider("https://x/v1", client=client(lambda r: reply(NOUL)))
     assert asyncio.run(p.decide("s", {"q": noul_question("delete?")})).answers["q"].noul == 0.98
     assert noul_question("x", true="yes")["criteria"] == {"true": "yes"}
@@ -65,8 +60,6 @@ def test_score_and_noul_shapes():
 def test_question_validation():
     with pytest.raises(ValueError):
         choice_question("x", ["only"])
-    with pytest.raises(ValueError):
-        score_question("x", ["a"] * 11)
 
 
 @pytest.mark.parametrize("status,retryable", [(401, False), (422, False), (429, True), (529, True), (500, True)])
@@ -94,15 +87,7 @@ def test_ask_choice_routes_through_decision_role():
     r = router(lambda req: reply(CHOICE))
     res = asyncio.run(ask_choice_result(r, "s", "risk?", ["low", "medium", "high"]))
     assert res.source == "decision" and res.route == "jev:jev-latest" and res.choice == "high"
-    assert asyncio.run(ask_choice(r, "s", "risk?", ["low", "medium", "high"])) == CHOICE["probabilities"]
-
-
-def test_ask_score_and_noul():
-    r = router(lambda req: reply(SCORE))
-    res = asyncio.run(ask_score(r, "s", "bad?", ["a", "b", "c"]))
-    assert res.score == 1.43 and res.source == "decision"
-    r = router(lambda req: reply(NOUL))
-    assert asyncio.run(ask_noul(r, "s", "delete?")).probability == 0.98
+    assert res.probabilities == CHOICE["probabilities"]
 
 
 def test_generative_fallback_when_decision_route_is_down():
@@ -117,14 +102,13 @@ def test_generative_fallback_when_decision_route_is_down():
     assert r.cooldowns["jev"].status == 503  # the failed route cools down
 
 
-def test_generative_only_route_choice_score_and_bad_answers():
-    chat = FakeProvider(['{"choice": "HIGH"}', '{"score": 2}', "no json here", '{"choice": "banana"}'], name="chat")
+def test_generative_only_route_choice_and_bad_answers():
+    chat = FakeProvider(['{"choice": "HIGH"}', "no json here", '{"choice": "banana"}'], name="chat")
     r = Router(roles={"decision": ["chat:small"]}, env={}, instances={"chat": chat}, catalog={"providers": {}})
-    assert asyncio.run(ask_choice(r, "s", "q", ["low", "high"])) == {"low": 0.0, "high": 1.0}
-    sc = asyncio.run(ask_score(r, "s", "q", ["a", "b", "c"]))
-    assert sc.score == 2.0 and sc.source == "generative" and sc.probabilities["2"] == 1.0
+    res = asyncio.run(ask_choice_result(r, "s", "q", ["low", "high"]))
+    assert res.probabilities == {"low": 0.0, "high": 1.0} and res.source == "generative"
     with pytest.raises(DecisionError):
-        asyncio.run(ask_choice(r, "s", "q", ["low", "high"]))
+        asyncio.run(ask_choice_result(r, "s", "q", ["low", "high"]))
 
 
 def test_bad_question_422_does_not_fall_back():
@@ -132,14 +116,14 @@ def test_bad_question_422_does_not_fall_back():
     r = router(lambda req: httpx.Response(422, json={"detail": "bad"}),
                roles={"decision": ["jev:jev-latest"], "aux": ["chat:small"]}, chat=chat)
     with pytest.raises(DecisionError) as e:
-        asyncio.run(ask_choice(r, "s", "q", ["a", "b"]))
+        asyncio.run(ask_choice_result(r, "s", "q", ["a", "b"]))
     assert e.value.status == 422 and not chat.calls
 
 
 def test_no_route_error_is_clear():
     r = Router(roles={}, env={}, catalog={"providers": {}})
     with pytest.raises(DecisionError, match="no decision route"):
-        asyncio.run(ask_choice(r, "s", "q", ["a", "b"]))
+        asyncio.run(ask_choice_result(r, "s", "q", ["a", "b"]))
 
 
 def test_chat_stream_of_decision_provider_reports_nonfatal_error():
@@ -168,7 +152,6 @@ def test_default_catalog_routes_decision_to_jev_then_laya():
 
 
 def test_cli_decide(monkeypatch, capsys):
-    import exo.decide_cmd as dc
     r = router(lambda req: reply(CHOICE))
     monkeypatch.setattr("exo.models_cmd.build_router", lambda env=None: r)
     assert main(["decide", "risk?", "--options", "low,medium,high", "--state", "rm -rf build"]) == 0

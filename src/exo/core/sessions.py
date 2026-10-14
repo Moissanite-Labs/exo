@@ -6,12 +6,11 @@ the entry before, so the log can be verified. Undo hides log entries instead of 
 core codec (``to_dict`` / ``from_dict``). Events get their ``seq`` from the
 database, so an event is durable before anyone sees it (``EventBus.emit``
 writes, then publishes). Forks copy the parent's messages up to the fork point
-and record ``parent`` and ``fork_seq`` for lineage.
+and record ``parent`` and ``fork_seq``.
 """
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import os
@@ -21,6 +20,8 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from exo.core import trace
+from exo.core.hooks import maybe_await
 from exo.core.private import private_file
 from exo.core.types import Message, from_dict, to_dict
 from exo.protocol.schema import EVENTS, Event, SessionInfo, now_ts
@@ -72,7 +73,8 @@ UPGRADES = (("sessions", "agent", "TEXT"), ("sessions", "kind", "TEXT NOT NULL D
             ("messages", "hidden", "INTEGER NOT NULL DEFAULT 0"),
             ("summaries", "principal", "INTEGER NOT NULL DEFAULT 0"),  # D-032: principal messages in a leaf
             ("summaries", "captured", "INTEGER NOT NULL DEFAULT 0"),   # ... and how many the capture hook took
-            ("summaries", "attempts", "INTEGER NOT NULL DEFAULT 0"))   # failed summary tries so far
+            ("summaries", "attempts", "INTEGER NOT NULL DEFAULT 0"),   # failed summary tries so far
+            ("findings", "quiet", "TEXT"))  # D-025: {"turns", "days"} quiet since the fix (fixed_turns is unused)
 LOGGED_KINDS = ("thread", "scheduled", "private")  # thread kinds whose messages enter the agent log
 SCHEMA_VERSION = 2
 
@@ -241,18 +243,6 @@ class SessionStore:
         if reason:
             raise SessionLocked(f"session {sid} is finished ({reason}) and takes no new turns; fork it to continue")
 
-    def fork_point(self, sid: str) -> tuple[str | None, int | None]:
-        rows = self._q("SELECT parent, fork_seq FROM sessions WHERE id=?", (sid,))
-        return (rows[0]["parent"], rows[0]["fork_seq"]) if rows else (None, None)
-
-    def lineage(self, sid: str) -> list[str]:
-        """This session and its ancestors, nearest first."""
-        out, cur = [], sid
-        while cur and cur not in out:
-            out.append(cur)
-            cur = self.fork_point(cur)[0]
-        return out
-
     # ---------------------------------------------------------------- messages
 
     def last_seq(self, sid: str) -> int:  # counts hidden rows too, so a seq is never reused
@@ -388,11 +378,6 @@ class SessionStore:
                        (agent, since, upto if upto is not None else 2**62))
         return [LogEntry(r["pos"], r["session"], r["kind"] or "", r["created"],
                          from_dict(Message, json.loads(r["data"])), bool(r["hidden"])) for r in rows]
-
-    def first_pos_after(self, sid: str, after_pos: int) -> int | None:
-        """The seq of this thread's first log entry with pos > after_pos (None if there is none)."""
-        rows = self._q("SELECT MIN(seq) AS seq FROM messages WHERE session=? AND pos>?", (sid, after_pos))
-        return rows[0]["seq"] if rows and rows[0]["seq"] is not None else None
 
     def last_logged_seq(self, sid: str, upto_pos: int) -> int:
         """The seq of this thread's last log entry with pos <= upto_pos (0 if none)."""
@@ -554,11 +539,7 @@ class EventBus:
         ev = self.store.append_event(body, session)  # durable first
         for fn in list(self._subs):
             try:
-                out = fn(ev)
-                if asyncio.iscoroutine(out):
-                    await out
+                await maybe_await(fn(ev))
             except Exception as exc:  # a broken client must not break the turn, but it is recorded
-                from exo.core import trace
-
                 trace.report(f"event subscriber on {ev.type}", exc, session)
         return ev

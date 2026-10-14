@@ -16,8 +16,9 @@ import socket as _socket
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 from exo.core.agentlog import lock_path, socket_path
 from exo.core.private import private_dir, private_file
@@ -108,6 +109,26 @@ def _tail(path: Path, n: int = 6) -> str:
         return ""
 
 
+@contextmanager
+def startup_lock(home: Path, timeout: float = START_TIMEOUT) -> Iterator[None]:
+    """Shared TUI/exod starter gate; the writer lock remains the ownership authority."""
+    private_dir(home / "run")
+    deadline = time.monotonic() + timeout
+    with open(private_file(home / "run" / "exod-start.lock"), "a+") as gate:
+        while True:
+            try:
+                fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise CoreUnavailable("another process has been starting Exo's core for too long; try again")
+                time.sleep(0.1)
+        try:
+            yield
+        finally:
+            fcntl.flock(gate, fcntl.LOCK_UN)
+
+
 def ensure_core(home: Path | None = None, agent: str | None = None, timeout: float = START_TIMEOUT,
                 say: Callable[[str], None] | None = None, spawn: Callable[[Path], subprocess.Popen] | None = None
                 ) -> Path:
@@ -117,21 +138,10 @@ def ensure_core(home: Path | None = None, agent: str | None = None, timeout: flo
     spawn = spawn or _spawn
     if (found := find_core(home, agent)) is not None:
         return found
-    private_dir(home / "run")
     deadline = time.monotonic() + timeout
     proc = None
     holder = None
-    with open(private_file(home / "run" / "exod-start.lock"), "a+") as gate:
-        while True:  # one starter at a time; the others wait here, then find its socket
-            try:
-                fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if (found := find_core(home, agent)) is not None:
-                    return found
-                if time.monotonic() > deadline:
-                    raise CoreUnavailable("another process has been starting Exo's core for too long; try again")
-                time.sleep(0.1)
+    with startup_lock(home, timeout):
         if (found := find_core(home, agent)) is not None:
             return found
         holder = writer_holder(home, agent)

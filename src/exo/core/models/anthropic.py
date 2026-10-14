@@ -263,9 +263,9 @@ class AnthropicProvider(HttpTransport):
         if wire_tools:
             body["tools"] = wire_tools
         body.update(thinking_params(model, opts.get("reasoning"), max_tokens))
-        if opts.get("temperature") is not None and (is_legacy(model) or any(s in model for s in _NO_XHIGH)):
-            if "thinking" not in body:
-                body["temperature"] = opts["temperature"]
+        if (opts.get("temperature") is not None and (is_legacy(model) or any(s in model for s in _NO_XHIGH))
+                and "thinking" not in body):
+            body["temperature"] = opts["temperature"]
         if opts.get("stop"):
             body["stop_sequences"] = list(opts["stop"])
         return body

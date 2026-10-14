@@ -43,7 +43,7 @@ the middle dot as separator come straight from the site.
 2. Transcript: `›` and your text for a prompt (`steer ›` when sent mid-turn); agent text in fg-2 as Markdown;
    one line per tool with state glyph, name, short args, line count and elapsed time (ctrl+o expands); system
    lines dim; tips as `tip · ...` in dim italic; `memory · log 1-16 folded · 1781 → 153 tok` as a cold line.
-3. Panels: approval (orange rule, `APPROVAL · <risk>`, key chips `[o] once [a] always [d] deny`; `a` asks for Enter, `A` is immediate; the card keeps out of a composer being typed in and says "tab, click or ctrl+f to answer"; it is removed when the core closes the request, when the turn is stopped, and by a check against `approvals.list` every few seconds), taste,
+3. Panels: approval (orange rule, `APPROVAL · <risk>`, key chips `[o] once [a] always [d] deny`; both `a` and `A` wait for Enter; the card never takes focus automatically and says "tab, click or ctrl+f to answer"; it is removed when the core closes the request, when the turn is stopped, and by a check against `approvals.list` every few seconds), taste,
    finding and `/context` report (cold rule), peer message (double cold rule, sender and trust in the header,
    never styled as you). The side panel for `ui.panel` uses the same header and rule.
 4. Activity: a wire with a travelling packet and `waiting for <model> 12s`, `running tool`.
@@ -52,6 +52,7 @@ the middle dot as separator come straight from the site.
    the selected row, a dim argument shape, up to eight rows then `N matches`. Ghost text is drawn dim after the caret.
    The placeholder doubles as the one-line guidance (`job j1 finished: ask for its job_output · tab fills it in`).
    No animation: the menu and the line change only on keys and events, so reduced motion needs no special case.
+   Subagent commands (D-070): `/tasks` lists the tasks this session handed out, `/open <task>` shows the child's session (read-only look; the child's loop is not resumed), `/steer <task> <text>` sends a running child a note and `/stop <task>` stops it. A bare `/stop` still stops the running turn.
 6. Status strip: `MODEL` (the route that served, in orange with `← requested` when it fell back), `MEM` gauge,
    `CACHE` share of the last call, `COST`, open findings.
 7. Start: the site's hero motif in braille (`exo_tui/hero.py`): a shell of linked nodes around an orange core,
@@ -87,10 +88,10 @@ one note says to type `/providers`.
   it), Esc to close with the draft kept (the menu and ghost text close first; Esc never stops a turn), `ctrl+l` line numbers,
   `ctrl+t` or `/compose edit` for `$VISUAL`/`$EDITOR`, `/compose task` for the four headings. A long paste stays whole.
   Slash, argument and `@` completion work as in the one-line composer; up and down move the caret and do not recall history.
-- **Inverse layout** (`docs/media/tui-11-inverse.png`): input under the brand bar, then the menu, approval card and activity
-  line, then the transcript with the newest item first. Text inside one message still reads top to bottom. A thread opens on
-  its newest item at the top. `/layout classic` restores the usual order (`docs/media/tui-12-classic-bottom.png`: a long
-  thread opens at the bottom). The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
+- **Inverse layout** (`docs/media/tui-11-inverse.png`): the status strip under the brand bar, then the input, the menu,
+  approval card and activity line, then the transcript with the newest item first. Text inside one message still reads top to bottom. A thread opens on
+  its newest item at the top. `/layout classic` restores the usual order with the status strip at the bottom
+  (`docs/media/tui-12-classic-bottom.png`: a long thread opens at the bottom). `/layout` moves the strip live. The choice is saved in `$EXO_HOME/state/ui.json`; `EXO_LAYOUT=classic` overrides for one run.
   Inverse is the default only for the experiment: set `DEFAULT_LAYOUT = "classic"` in `exo_tui/prefs.py` to flip it back.
 
 ## Switches

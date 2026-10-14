@@ -69,7 +69,10 @@ peer client is refused. The system prompt carries a standing line saying the sam
 
 - Each exod writes a presence file in `$EXO_PEERS_DIR`, else `$XDG_RUNTIME_DIR/exo/peers`, else
   `~/.exo-peers` (mode 0600, removed on exit, pruned when its pid is gone). `exo serve` with no running
-  daemon in the TUI starts a small socket of its own so the TUI is also reachable.
+  daemon in the TUI starts a small socket of its own so the TUI is also reachable. A Unix socket path must stay
+  under 104 bytes: when a long `HOME` would push `exo-<pid>.sock` past that, the core uses
+  `<tmp>/exo-<uid>/peers` (mode 0700) instead, and says nothing is lost but discovery by peers that use the default
+  folder; set `EXO_PEERS_DIR` to a short path to share one.
 - A message is a bus-format envelope signed with the sender seat's key. Sender session, target session,
   who wrote it and a nonce are inside the signed `attach`. The receiver checks id, signature (key from the
   sender's presence file), age and replay.
@@ -78,8 +81,9 @@ peer client is refused. The system prompt carries a standing line saying the sam
   left). Events:
   `peer.message` and `peer.delivery`. Both land in the events table and in `exo trace`.
 - Code: `core/ingress.py` (one path for anything outside your keyboard: policy, hold, deliver, receipt; peers, job
-  notices and the bus channel use it, the scheduler and MCP Events can plug in later), `core/peers.py`,
-  `core/peer_target.py`, `bus/ingress.py`, `gate.decide_peer`. Every message delivered this way carries its author
+  notices and the bus channel use it, the scheduler and MCP Events can plug in later), `exo/peers.py` (the
+  transport and `PeerService`, outside the core since D-067), `core/peer_target.py` (`EngineTarget`, the engine's
+  ingress target), `bus/ingress.py`, `gate.decide_peer`. Every message delivered this way carries its author
   (`peer:<name>`, `bus:<seat>`, `job`; MEMORY-MODEL.md "Who wrote it").
 
 ## Hermes

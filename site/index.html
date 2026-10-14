@@ -92,12 +92,12 @@
       <p class="sec-lede">Exo runs now, in a terminal and in a local browser, on the same core and the same memory. This is what is built and in daily use. The delivery order is core verification, browser polish, then Electron desktop packaging. <a href="roadmap/#sequence">See the next steps and their exit criteria.</a></p>
     </header>
     <figure class="media reveal">
-      <img src="media/exo-session.svg" width="960" height="540" alt="An animated terminal session: a prompt, tool lines ticking in, an approval panel for a git push, a seat-signed answer, and the status strip." loading="lazy">
-      <figcaption>A turn, end to end: prompt, tools, an approval that is bound to the exact text, and the cost of the call.</figcaption>
+      <img src="media/exo-session.svg" width="960" height="540" alt="Hand-authored illustration of a terminal session: a prompt, tool lines, an example approval panel, a seat-signed answer, and the status strip." loading="lazy">
+      <figcaption>Hand-authored illustration of a prompt, tool calls, an example exact-text approval, and call cost.</figcaption>
     </figure>
     <div class="grid grid--3 feat">
       <article class="card reveal"><p class="card__k">One agent, one memory</p><p>Windows, channels, scheduled runs and peer messages are threads of one agent with one append-only, hash-chained log and one summary tree. <code>/new</code> starts a thread, not a blank mind.</p></article>
-      <article class="card reveal"><p class="card__k">A harness that watches itself</p><p>Every model call records the route that served it, timing and cost. Eight anomaly rules turn that trace into findings. A finding marked fixed is measured again and reopens if it comes back.</p></article>
+      <article class="card reveal"><p class="card__k">A harness that watches itself</p><p>Every model call records the route that served it, timing and cost. Anomaly rules turn that trace into findings. A finding marked fixed is measured again and reopens if it comes back.</p></article>
       <article class="card reveal"><p class="card__k">Approvals tied to the exact text</p><p>For anything that posts, sends or pays, the gate hashes the exact text, target and arguments. Edit one character and it asks again. Seats sign their answers. Standing grants belong to the principal and expire.</p></article>
       <article class="card reveal"><p class="card__k">Background jobs</p><p>A long build or test run does not hold the turn. It runs as a job that belongs to the agent. When it ends, the agent gets a notice in the thread that started it.</p></article>
       <article class="card reveal"><p class="card__k">Peers</p><p>Sessions can message each other through one ingress path with a trust policy. A peer message is input, never consent, and it never looks like you.</p></article>
@@ -107,6 +107,7 @@
       <a class="shot reveal" href="cli/"><img src="media/tui-02-turn.png" width="1939" height="1504" alt="The Exo terminal client during a turn with tool lines, a status strip and a memory gauge." loading="lazy"><span class="shot__k">Terminal client <b>→</b></span><span class="shot__t">Textual, no build step, draws the site's language in the terminal.</span></a>
       <a class="shot reveal" href="app/"><img src="media/web-04-memory.png" width="1440" height="900" alt="The Exo web client with the transcript and the memory column on the right." loading="lazy"><span class="shot__k">Web app <b>→</b></span><span class="shot__t">Plain JavaScript on the same protocol, with a memory column.</span></a>
     </div>
+    <p class="note">These are historical screenshots rendered from fixture-backed scripted sessions. They may not show current shortcuts or default layout.</p>
   </div>
 </section>
 
@@ -195,7 +196,7 @@
     <header class="sec-head">
       <p class="sec-num">05 / How it works</p>
       <h2 id="system-title">A signed record at the bottom. Everything else is a view you can rebuild.</h2>
-      <p class="sec-lede">Read the stack from the bottom up. The ledger is a record of every event that can grow but never be edited. Your store holds what Exo has worked out about you from that record. The learning loop tests new lessons before they count.</p>
+      <p class="sec-lede">Read the stack from the bottom up. The ledger is a record of every event that can grow but never be edited. Your store holds what Exo has worked out about you from that record. Its promotion rules include a held-out evaluation path for selected changes.</p>
       <p class="sec-lede">The core does the work: it talks to models, runs tools and keeps sessions. At the top, every screen you use talks to the core in one shared format, called the protocol.</p>
     </header>
 
@@ -242,8 +243,8 @@
         <h3>The personal store</h3>
         <p class="part__why">What Exo knows about you should belong to you, move with you, and be quick to search.</p>
         <p>So it lives in one folder you can copy: a one-page summary called the pack, an index called the router that says where each kind of knowledge lives, beliefs (claims about you, each with its evidence and how sure Exo is), imported items such as notes and bookmarks, and the ledger itself.</p>
-        <p>Search works two ways at once. Keyword search finds exact words. Embeddings find meaning: a small model turns each passage into a list of numbers, so passages about the same idea sit close together even when they share no words. "My flight home" finds a note about "the return trip".</p>
-        <p>Exo merges both results, follows links to related notes, and stops at a token budget. A token is a piece of a word, and the budget caps how much text the model is handed. The embedding model runs on your machine, so your text is never sent away to be searched.</p>
+        <p>Search currently uses keyword retrieval to find matching notes. Embedding search, which can find related meaning even when words differ, and link-following are designed next steps, not built features.</p>
+        <p>The current search stops at a token budget. A token is a piece of a word, and the budget caps how much text the model is handed. No embedding model is currently run by Exo.</p>
       </article>
       <article class="part part--wide reveal">
         <p class="part__n">03</p>
@@ -278,8 +279,8 @@
         <h3>Decision models for small choices</h3>
         <p class="part__why">Many choices in a session are small: which tool, which model, which label, whether to open a panel. Asking a large model each time is slow and costly, and it answers in prose that then has to be read.</p>
         <p>A firm does not ask a senior partner which folder a letter goes in.</p>
-        <p>Exo sends these choices to a decision model: a small model that is given a fixed list of options and returns how likely each one is to be right, such as "tool A 0.82, tool B 0.11". The numbers show how sure it is, so Exo can act when it is confident and ask when it is not.</p>
-        <p>The default is Laya, which runs on your machine, free and private. Users can switch to TypeSafe Jev, a hosted model, instead. A decision model may make a gate stricter, never looser. Every decision is logged so the learning loop can score it.</p>
+        <p>Decision models are intended for choices with fixed options, such as which tool or panel fits a turn. A model scores the options, for example "tool A 0.82, tool B 0.11". The numbers estimate confidence; Exo can use them to choose or ask when confidence is low.</p>
+        <p>Today the gate uses the decision role to tighten its rule-based outcome, never to loosen it. The router tries TypeSafe Jev first when configured, then local Laya, before falling through to other routes. You can also call <code>exo decide</code> or use a decision model as an optional export judge. Tool, model and panel selection through decision models remains a design direction.</p>
       </article>
       <article class="part reveal">
         <p class="part__n">07</p>
@@ -294,7 +295,7 @@
         <h3>Lifted with credit, improved on purpose</h3>
         <p class="part__why">Writing everything from scratch wastes years. Forking a large project, which means copying it and changing the copy, brings all its weight and slowly drifts away from the original.</p>
         <p>Exo is its own harness. It lifts a small set of proven modules from Hermes Agent (MIT licence) and writes the rest small. Every lifted file carries a header and a row in a provenance file, which records where it came from and the exact version.</p>
-        <p>Each week Exo compares those files with the original project and proposes fixes worth bringing over. Good changes still flow in, by choice rather than by dependency.</p>
+        <p>The <code>exo upstream</code> commands can compare those files with the original project and report possible changes for review. A weekly comparison job is not set up; good changes flow in by choice rather than by dependency.</p>
       </article>
     </div>
     <p class="note reveal">This page is the overview. The <a href="whitepaper/">whitepaper</a> covers each part in depth, with the reasoning and the trade-offs.</p>
@@ -306,8 +307,8 @@
   <div class="wrap">
     <header class="sec-head">
       <p class="sec-num">06 / The learning loop</p>
-      <h2 id="loop-title">It learns from you. Then it proves the lesson helps.</h2>
-      <p class="sec-lede">Many assistants that "learn" save notes and hope they help. But a lesson can make things worse. "Keep it short" may improve your emails and ruin your contracts. Exo treats each lesson the way a cook treats a change to a recipe: make it both ways, taste blind, and keep the new version only if it wins.</p>
+      <h2 id="loop-title">It learns from you. Some changes are tested before promotion.</h2>
+      <p class="sec-lede">Many assistants that "learn" save notes and hope they help. But a lesson can make things worse. "Keep it short" may improve your emails and ruin your contracts. Exo has explicit promotion rules, including a held-out evaluation path for selected changes; other paths use principal rulings or repeated, high-confidence evidence.</p>
     </header>
 
     <div class="loop">
@@ -315,7 +316,7 @@
         <li class="reveal"><span class="loop__n">1</span><div><h3>Capture</h3><p>Corrections, edits, accepts, rejections, direct requests and outcomes are written to the ledger. A correction teaches the most, because it shows exactly where Exo was wrong.</p></div></li>
         <li class="reveal"><span class="loop__n">2</span><div><h3>Review</h3><p>A reviewer works in the background, apart from your conversation, and turns those events into proposed lessons, each with its evidence and confidence. It only proposes. It never changes anything in silence.</p></div></li>
         <li class="reveal"><span class="loop__n">3</span><div><h3>Climb</h3><p>This is hill climbing. Imagine finding the top of a hill in fog: take one step, check whether you went up, and keep the step only if you did. Each proposal becomes a candidate, the current setup with one change, and is scored on a test built from your past decisions.</p></div></li>
-        <li class="reveal"><span class="loop__n">4</span><div><h3>Keep or drop</h3><p>A candidate is kept only if it scores better on held-out cases, which were set aside and never used to write the lesson. It must also pass regression checks, which confirm that nothing that worked before now fails. Otherwise it is dropped, or it becomes one clear question for you.</p></div></li>
+        <li class="reveal"><span class="loop__n">4</span><div><h3>Evaluate gated changes</h3><p>Some proposed changes go through held-out and regression gates before promotion. Other paths use explicit principal rulings or repeated, high-confidence evidence. Remaining proposals are held, become a question, or expire under the promotion policy.</p></div></li>
         <li class="reveal"><span class="loop__n">5</span><div><h3>Show</h3><p>Learned taste appears in the chat, linked to a plain file you can edit. Undoing a lesson adds a new entry and deletes nothing, so every lesson can be traced.</p></div></li>
       </ol>
 
@@ -366,7 +367,7 @@
       <p>Text is the fastest way to ask for work, but it is a poor way to review a change to a file or read a chart. Apps are good at those and slow at everything else. Most tools make you pick one, or ship a command-line tool and a separate app.</p>
       <p>Exo ships one surface. The base is a calm prompt and transcript, like a terminal. Three prefixes and one palette get you started: <code>/</code> runs a command, <code>@</code> attaches a file or note, <code>!</code> runs a system command, and <kbd>ctrl+p</kbd> opens a searchable list of every action.</p>
       <p>Richer views are panels the model opens when they help: a diff viewer that shows what changed line by line, a task board, an approval card, a taste card, a chart. Each client shows what it can. The web client shows full panels and the terminal shows a compact form. A planned device client could show a card or speak.</p>
-      <p>You can always open or close a panel yourself. Those choices feed the learning loop too: a panel you ignore teaches as much as one you open.</p>
+      <p>You can always open or close a panel yourself. Exo records those responses as ledger events; the learning loop does not yet consume them as lessons.</p>
     </div>
     <figure class="term reveal" aria-label="Concept illustration of the Exo surface">
       <div class="term__bar"><span></span><span></span><span></span><b>exo</b></div>
@@ -443,7 +444,7 @@
         <ul class="ticks">
           <li>A terminal client (<a href="cli/">exo-tui</a>) with a boot sequence, instruments and panels</li>
           <li>A web client (<a href="app/">exo web</a>) with a memory column and approvals</li>
-          <li>The learning loop: capture, review, test on held-out cases, keep or drop</li>
+          <li>The learning loop: capture, review, policy-based promotion, and held-out gates for selected changes</li>
           <li>Signed, chained ledger and the personal store, with importers for common chat exports</li>
           <li>An onboarding interview, and an agent-led first run with tips</li>
         </ul>
@@ -453,7 +454,7 @@
     <ol class="waves" aria-label="Five build waves">
       <li class="wave wave--done reveal"><p class="wave__n">Wave 1 · <b>Built</b></p><h3>Core skeleton</h3><p>Turn loop, model providers, tools, sessions, plugin slots, protocol server, provenance.</p></li>
       <li class="wave wave--done reveal"><p class="wave__n">Wave 2 · <b>Built</b></p><h3>Re-home</h3><p>Memory, context, gates, command centre and agent messaging on the new core. Skills, and MCP, a standard way to plug in outside tools.</p></li>
-      <li class="wave wave--done reveal"><p class="wave__n">Wave 3 · <b>Built</b></p><h3>UI and learning</h3><p>Terminal and web clients, panels the model opens, the learning loop with hill-climbing tests. In daily use on one canary agent.</p></li>
+      <li class="wave wave--done reveal"><p class="wave__n">Wave 3 · <b>Built</b></p><h3>UI and learning</h3><p>Terminal and web clients, panels the model opens, and policy-based learning with held-out evaluation for selected changes. In daily use on one canary agent.</p></li>
       <li class="wave wave--next reveal"><p class="wave__n">Wave 4 · <b>Next</b></p><h3>Channels and cutover</h3><p>Chat channel adapters, history import, and existing agents moving over, each with a way back.</p></li>
       <li class="wave reveal"><p class="wave__n">Wave 5 · Planned</p><h3>Device</h3><p>Size audit, small local models by default, the core on a small board, a thin device client.</p></li>
     </ol>
@@ -473,13 +474,13 @@
       <li class="reveal"><a href="https://opencode.ai" rel="noopener"><span class="credits__who">opencode</span><span class="credits__what">opencode.ai</span></a><p>The model for a simple surface: a client and server split, a few prefixes and one menu.</p></li>
       <li class="reveal"><a href="https://commandcode.ai" rel="noopener"><span class="credits__who">Command Code</span><span class="credits__what">commandcode.ai</span></a><p>Taste learning shown in the chat, with a file you can edit. A calm, quiet feed.</p></li>
       <li class="reveal"><a href="https://uniichat.com" rel="noopener"><span class="credits__who">Victor Taelin, Higher Order Company</span><span class="credits__what">OptChat and UniiChat</span></a><p>The word-for-word log and summary tree, and a fresh call every turn. Exo reimplements the ideas, not the code.</p></li>
-      <li class="reveal"><a href="https://typesafe.ai" rel="noopener"><span class="credits__who">TypeSafe</span><span class="credits__what">Jev</span></a><p>A hosted model for small, typed decisions. The first of its kind we used, the idea behind Exo's decision role, and a provider users can choose.</p></li>
-      <li class="reveal"><a href="https://huggingface.co/convaiinnovations/laya" rel="noopener"><span class="credits__who">Convai Innovations</span><span class="credits__what">Laya</span></a><p>Open-weight, Apache 2.0, runs locally. Exo's default decision model, and the base for a future fine-tune.</p></li>
-      <li class="reveal"><a href="https://huggingface.co/google/embeddinggemma-300m" rel="noopener"><span class="credits__who">Google</span><span class="credits__what">EmbeddingGemma</span></a><p>Small enough for phones and boards, and works in many languages. Exo's default local embedding model.</p></li>
+      <li class="reveal"><a href="https://typesafe.ai" rel="noopener"><span class="credits__who">TypeSafe</span><span class="credits__what">Jev</span></a><p>A hosted model for small, typed decisions. It is Exo's first configured decision route when credentials are available.</p></li>
+      <li class="reveal"><a href="https://huggingface.co/convaiinnovations/laya" rel="noopener"><span class="credits__who">Convai Innovations</span><span class="credits__what">Laya</span></a><p>Open-weight, Apache 2.0, runs locally. Exo's configured fallback decision model.</p></li>
+      <li class="reveal"><a href="https://huggingface.co/google/embeddinggemma-300m" rel="noopener"><span class="credits__who">Google</span><span class="credits__what">EmbeddingGemma</span></a><p>A planned local embedding model; Exo does not yet run embedding search.</p></li>
       <li class="reveal"><a href="https://github.com/letta-ai/letta-code" rel="noopener"><span class="credits__who">Letta</span><span class="credits__what">Letta Code</span></a><p>Strong memory design ideas: memory blocks, memory kept in version control, and tidying memory while idle.</p></li>
       <li class="reveal"><a href="https://gwern.net/doc/sociology/technology/1983-bainbridge.pdf" rel="noopener"><span class="credits__who">Lisanne Bainbridge</span><span class="credits__what">"Ironies of Automation" (1983)</span></a><p>Why approve-every-step flows fail, and why Exo budgets your attention.</p></li>
       <li class="reveal"><a href="https://arxiv.org/abs/1011.0686" rel="noopener"><span class="credits__who">Ross, Gordon and Bagnell</span><span class="credits__what">DAgger</span></a><p>Learning from corrections made on the agent's own output, in the exact state it was in.</p></li>
-      <li class="reveal"><a href="https://huggingface.co/Qwen/Qwen3-Embedding-0.6B" rel="noopener"><span class="credits__who">Qwen team</span><span class="credits__what">Qwen3-Embedding</span></a><p>Apache 2.0. The fallback local embedding model, stronger on long text.</p></li>
+      <li class="reveal"><a href="https://huggingface.co/Qwen/Qwen3-Embedding-0.6B" rel="noopener"><span class="credits__who">Qwen team</span><span class="credits__what">Qwen3-Embedding</span></a><p>Apache 2.0. A planned alternative embedding model; Exo does not yet run embedding search.</p></li>
       <li class="reveal credits__more"><p class="credits__who">And many more</p><p>The background reading covered dozens of essays and papers. Every source, with its link and how it applies to Exo, is listed in the research notes in the repository.</p></li>
     </ul>
   </div>
