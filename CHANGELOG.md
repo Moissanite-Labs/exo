@@ -5,6 +5,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Security
+- Tool subprocesses drop `BASH_ENV` and `ENV` by default so inherited shell startup files cannot run before the
+  command (#135). Exact `env_allow` overrides remain available; `env_deny` wins.
+
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
