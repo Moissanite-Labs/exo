@@ -106,7 +106,8 @@ class KeyScreen(ModalScreen):
         with Vertical(id="key-box"):
             yield Static(header_rule(f"KEY {DOT} {self.provider}", "accent", 60), id="key-head")
             yield Static(Text(f"Paste the API key{f' for {self.var}' if self.var else ''}. It is hidden as you type "
-                              "and stored in the system key store, never shown.", style=rich_style("fg2")))
+                              "and never shown. Saving reports whether it went to the Keychain, Secret Service, "
+                              "or owner-only keys.env, and which source is effective.", style=rich_style("fg2")))
             yield Input(password=True, placeholder="paste key, then enter", id="key-input")
             yield Static(chips([("enter", "save"), ("esc", "cancel")]), id="key-keys")
 
@@ -134,7 +135,7 @@ class ProvidersScreen(ModalScreen):
     DEFAULT_CSS = """
     ProvidersScreen { align: center middle; background: $background 70%; }
     #prov-box { width: 94%; height: auto; max-height: 90%; border-left: outer $cold; background: $surface;
-                padding: 0 1; }
+                padding: 0 1; overflow-y: auto; }
     #prov-rows, #prov-msg, #prov-keys { height: auto; }
     """
 
@@ -191,7 +192,7 @@ class ProvidersScreen(ModalScreen):
         lines = [row_line(r, i == self.idx, w) for i, r in enumerate(self.table)]
         self.query_one("#prov-rows", Static).update(Group(*lines) if lines else Text(self.msg or "loading...",
                                                                                       style=rich_style("fg3")))
-        msg = Text(self.msg if lines else "", style=rich_style("fg2"), no_wrap=True, overflow="ellipsis")
+        msg = Text(self.msg if lines else "", style=rich_style("fg2"), no_wrap=False, overflow="fold")
         self.plain = "\n".join([header_rule("PROVIDERS", "cold", 20).plain, *(ln.plain for ln in lines), self.msg])
         if self.confirm:
             msg = Text(f"remove the stored key for {self.confirm}?  ", style=rich_style("accent"))
@@ -278,8 +279,10 @@ class ProvidersScreen(ModalScreen):
                 return
             finally:
                 value = ""
-            shadow = f" {DOT} an env var of the same name still wins" if out.get("shadowed_by_env") else ""
-            self.say(f"key for {name} saved in {out.get('stored_in')}{shadow}")
+            warning = out.get("warning") or ("an env var of the same name still wins" if out.get("shadowed_by_env") else "")
+            effective = out.get("effective_source") or "not confirmed"
+            self.say(f"key for {name} saved in {out.get('stored_in')} {DOT} effective source: {effective}"
+                     + (f" {DOT} {warning}" if warning else ""))
             await self.tell_core(name)
             await self.reload()
         finally:

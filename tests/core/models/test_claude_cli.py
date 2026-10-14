@@ -1,10 +1,17 @@
-"""claude-cli provider against a fake ``claude`` script: no network, no real CLI."""
+"""Synthetic Claude stream-json fixture contract v1: no network, real CLI or vendor wire certification."""
 import asyncio
 import json
 import os
 import stat
+import subprocess
+import signal
 import sys
 import time
+
+import pytest
+
+from exo.core.models import claude_cli
+from exo.core.models.base import StreamState
 
 from exo.core.models.fake import FakeProvider
 from exo.core.models.router import Router
@@ -18,11 +25,24 @@ import json, os, sys, time
 cfg = json.load(open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "fake.json")))
 mode = cfg["mode"]
 out = lambda d: print(json.dumps(d), flush=True)
+if mode == "chattyfail":
+    sys.stderr.write("Z" * 10000 + "\\nboom token=sk-cli-fixture-secret-123456789\\n")
+    sys.exit(3)
+if mode in ("orphan", "orphanfail", "orphansleep"):
+    import subprocess
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], stdout=subprocess.DEVNULL)
+    open(cfg["pid"], "w").write(str(child.pid))
+    out({{"type": "system", "subtype": "fixture_ready"}})
+    if mode == "orphanfail":
+        sys.stderr.write("boom\\n"); sys.exit(3)
+    if mode == "orphansleep":
+        time.sleep(60)
 if mode == "fail":
     sys.stderr.write("boom\\n")
     sys.exit(3)
 if mode == "sleep":
     open(cfg["pid"], "w").write(str(os.getpid()))
+    out({{"type": "system", "subtype": "fixture_ready"}})
     time.sleep(60)
 frames = []
 for line in sys.stdin:
@@ -39,17 +59,17 @@ if mode == "nologin":
     out({{"type": "result", "subtype": "success", "is_error": True}})
     sys.exit(1)
 usage = None if mode == "nousage" else {{"input_tokens": 3, "output_tokens": 2, "cache_read_input_tokens": 5}}
-if mode == "tool":
+if mode in ("tool", "tool_error", "tool_wrong_exit"):
     blocks = [{{"type": "tool_use", "id": "tu_1", "name": "mcp__hermes__get_weather", "input": {{"city": "Paris"}}}}]
 else:
     blocks = [{{"type": "text", "text": "hi there"}}]
     out({{"type": "stream_event", "event": {{"type": "content_block_delta", "delta": {{"type": "text_delta", "text": "hi "}}}}}})
 out({{"type": "stream_event", "event": {{"type": "message_stop"}}}})
 out({{"type": "assistant", "message": {{"content": blocks}}}})
-res = {{"type": "result", "subtype": "error_max_turns" if mode == "tool" else "success",
-       "is_error": False, "usage": usage}}
+res = {{"type": "result", "subtype": "error_max_turns" if mode in ("tool", "tool_error", "tool_wrong_exit", "limit_without_tools") else "success",
+       "is_error": mode == "tool_error", "usage": usage}}
 out(res)
-sys.exit(1 if mode == "tool" else 0)
+sys.exit(1 if mode in ("tool", "tool_error", "limit_without_tools") else 0)
 """
 TOOL = ToolSpec(name="get_weather", description="weather", parameters={"type": "object", "properties": {"city": {"type": "string"}}})
 
@@ -107,8 +127,9 @@ def test_success_argv_env_and_isolation(tmp_path):
     assert s["frames"] == [{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]}}]
 
 
-def test_tool_call_mapped_and_history_replayed(tmp_path):
-    r = router(tmp_path, "tool")
+@pytest.mark.parametrize("mode", ["tool", "tool_error"])
+def test_tool_call_mapped_and_history_replayed(tmp_path, mode):
+    r = router(tmp_path, mode)
     hist = [Message.user("weather?")]
     evs = run(r, hist, [TOOL])
     calls = [e.tool_call for e in evs if e.kind == "tool_call"]
@@ -123,6 +144,12 @@ def test_tool_call_mapped_and_history_replayed(tmp_path):
                                              "input": {"city": "Paris"}}
     assert fr[2]["message"]["content"][0]["tool_use_id"] == "tu_1" and "shouldQuery" not in fr[2]
     assert fr[0]["shouldQuery"] is False
+
+
+@pytest.mark.parametrize("mode", ["tool_wrong_exit", "limit_without_tools"])
+def test_only_the_pinned_tool_boundary_is_accepted(tmp_path, mode):
+    events = run(router(tmp_path, mode), [Message.user("hi")], [TOOL])
+    assert events[-1].kind == "error" and not [e for e in events if e.kind == "tool_call"]
 
 
 def test_nonzero_exit_is_error_and_falls_back(tmp_path):
@@ -189,12 +216,168 @@ def test_cancel_kills_process_group(tmp_path):
     assert _wait_dead(int(pidf.read_text()))
 
 
-def test_idle_timeout_kills_and_reports(tmp_path):
+def test_idle_timeout_kills_and_reports(tmp_path, monkeypatch):
     r = router(tmp_path, "sleep")
     r.providers["claude-cli"] = {**r.providers["claude-cli"], "read_timeout": 0.5}
+    provider = r.credentials("claude-cli")[0].provider
+    read = provider._read_line
+    first = True
+    async def ready_then_read(proc):
+        nonlocal first
+        if first:
+            first = False
+            line = await asyncio.wait_for(proc.stdout.readline(), 5)  # startup is not the idle-timeout assertion
+            assert json.loads(line)["subtype"] == "fixture_ready"
+            return line
+        return await read(proc)
+    monkeypatch.setattr(provider, "_read_line", ready_then_read)
     end = run(r, [Message.user("hi")])[-1]
     assert end.kind == "error" and "ReadTimeout" in end.error
     assert _wait_dead(int((tmp_path / "pid").read_text()))
+
+
+@pytest.mark.parametrize("mode", ["normal", "timeout", "pipe", "cancel", "close"])
+def test_stderr_reader_is_cancelled_and_awaited_on_every_exchange_exit(mode):
+    async def go():
+        entered, closed = asyncio.Event(), asyncio.Event()
+        class Reader:
+            async def read(self, *args):
+                entered.set()
+                try:
+                    await asyncio.Event().wait()  # a descendant can hold stderr open after leader exit
+                finally:
+                    closed.set()
+        class Writer:
+            def write(self, data):
+                pass
+            async def drain(self):
+                await entered.wait()
+                if mode == "pipe":
+                    raise OSError("broken pipe token=sk-cli-fixture-secret-123456789")
+            def close(self):
+                pass
+        class Proc:
+            def __init__(self):
+                self.stdin, self.stderr, self.stdout = Writer(), Reader(), asyncio.StreamReader()
+                if mode in ("normal", "close"):
+                    frames = [{"type": "stream_event", "event": {"type": "message_stop"}},
+                              {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}},
+                              {"type": "result", "subtype": "success", "is_error": False}]
+                    self.stdout.feed_data("".join(json.dumps(f) + "\n" for f in frames).encode())
+                    self.stdout.feed_eof()
+            returncode = 0  # the leader has exited
+            async def wait(self):
+                await asyncio.Event().wait()  # asyncio's wait() also waits for the pipe the descendant holds
+        p = claude_cli.ClaudeCliProvider(env={}, read_timeout=.02 if mode == "timeout" else 5)
+        frames = [{"type": "user", "message": {"role": "user", "content": []}}]
+        stream = p._run(Proc(), frames, set(), StreamState())
+        async def consume():
+            return [e async for e in stream]
+        if mode == "cancel":
+            task = asyncio.create_task(consume())
+            await entered.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        elif mode == "close":
+            await anext(stream)
+            await stream.aclose()
+        else:
+            events = await asyncio.wait_for(consume(), .5)
+            assert events[-1].kind == ("done" if mode == "normal" else "error")
+            assert "sk-cli-fixture-secret-123456789" not in (events[-1].error or "")
+        assert closed.is_set()  # before asyncio.run's shutdown can hide a leaked reader
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("mode", ["orphan", "orphanfail"])
+def test_descendant_stderr_does_not_hold_terminal_output_open_and_is_killed(tmp_path, mode):
+    r = router(tmp_path, mode)
+    pidf = tmp_path / "pid"
+    try:
+        async def go():
+            return await asyncio.wait_for(_collect(r.stream("main", [Message.user("hi")], [])), 5)
+        events = asyncio.run(go())
+        assert events[-1].kind == ("done" if mode == "orphan" else "error")
+        assert _wait_dead(int(pidf.read_text()))
+    finally:
+        if pidf.exists():
+            try:
+                os.kill(int(pidf.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_cancelling_cli_stops_its_descendant(tmp_path):
+    r = router(tmp_path, "orphansleep")
+    pidf = tmp_path / "pid"
+    async def go():
+        task = asyncio.create_task(_collect(r.stream("main", [Message.user("hi")], [])))
+        async def ready():
+            while not pidf.exists() or not pidf.read_text():
+                await asyncio.sleep(.01)
+        await asyncio.wait_for(ready(), 5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert _wait_dead(int(pidf.read_text()))
+    try:
+        asyncio.run(go())
+    finally:
+        if pidf.exists():
+            try:
+                os.kill(int(pidf.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_cleanup_timeout_closes_transport_when_pipe_stays_open(monkeypatch):
+    closed, killed = [], []
+    class Transport:
+        def close(self):
+            closed.append(True)
+    class Proc:
+        _transport = Transport()
+        async def wait(self):
+            await asyncio.Event().wait()
+    proc = Proc()
+    monkeypatch.setattr(claude_cli, "kill_group", lambda child: killed.append(child))
+    monkeypatch.setattr(claude_cli, "CLEANUP_TIMEOUT", .01)
+    asyncio.run(claude_cli.stop_group(proc))
+    assert killed == [proc] and closed == [True]
+
+
+async def _collect(stream):
+    return [e async for e in stream]
+
+
+def test_stderr_tail_is_bounded_useful_and_scrubbed(tmp_path):
+    end = run(router(tmp_path, "chattyfail"), [Message.user("hi")])[-1]
+    assert end.kind == "error" and "boom" in end.error and "[redacted]" in end.error
+    assert "sk-cli-fixture-secret-123456789" not in end.error and len(end.error) < 500
+
+
+def test_inert_mcp_survives_blank_malformed_and_invalid_input(tmp_path):
+    manifest = tmp_path / "tools.json"
+    manifest.write_text(json.dumps([{"name": "fixture_tool", "inputSchema": {"type": "object"}}]))
+    rows = ["\n", "  \n", "not json token=sk-cli-fixture-secret-123456789\n", "[]\n", "null\n",
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "unknown"},
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": "bad"},
+            {"jsonrpc": "2.0", "id": 4, "method": "tools/list"},
+            {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "fixture_tool"}}]
+    payload = "".join(r if isinstance(r, str) else json.dumps(r) + "\n" for r in rows)
+    result = subprocess.run([sys.executable, str(claude_cli.MCP_SERVER), str(manifest)], input=payload,
+                            capture_output=True, text=True, timeout=5,
+                            env={"HOME": str(tmp_path / "empty-home"), "PATH": "/usr/bin:/bin"})
+    assert result.returncode == 0 and not result.stderr
+    replies = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [r["error"]["code"] for r in replies if "error" in r] == [-32700, -32600, -32600, -32601, -32602]
+    assert [r["id"] for r in replies if "result" in r] == [1, 4, 5]
+    assert replies[-2]["result"]["tools"][0]["name"] == "fixture_tool"
+    assert replies[-1]["result"]["isError"] is True
+    assert "sk-cli-fixture-secret-123456789" not in result.stdout
 
 
 def test_foreign_tool_ids_are_sanitized_and_paired(tmp_path):

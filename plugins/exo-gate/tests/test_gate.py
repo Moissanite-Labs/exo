@@ -59,7 +59,7 @@ CLASSIFY = [
     (("read_file", {"path": "x"}), "read", "reversible", "private"),
     (("web_extract", {"urls": ["https://example.org/a"]}), "web_read", "reversible", "private"),
     (("browser_vault_fill", {}), "credentials", "costly", "private"),
-    (("cronjob_manage", {"action": "create"}), "schedule", "costly", "private"),
+    (("cronjob_manage", {"action": "create"}), "opaque_exec", "costly", "private"),
     (("mcp_github_create_issue", {"repo": "o/r", "title": "t", "body": "b"}), "github_post", "costly", "public"),
     (("mcp_github_merge_pull_request", {"repo": "o/r"}), "vcs_merge", "costly", "internal"),
     (("mcp_stripe_create_payment", {"amount": "12.50"}), "payment", "irreversible", "public"),

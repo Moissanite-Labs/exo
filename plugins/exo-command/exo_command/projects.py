@@ -29,8 +29,7 @@ import sqlite3
 import time
 import uuid
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from exo.ingest.hermes_dashboard import ProfileDb, columns, ro, select_cols

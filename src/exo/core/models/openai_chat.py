@@ -86,8 +86,8 @@ class OpenAIChatProvider(HttpTransport):
         return (self.name.startswith(("opencode-go", "nous")) and status in (400, 429, 502, 503)
                 and any(m in text.lower() for m in self._UPSTREAM_MARKS))
 
-    def explain_error(self, status: int, text: str) -> str:
-        low, model = text.lower(), self.model or "this model"
+    def explain_request_error(self, status: int, text: str, *, model: str | None) -> str:
+        low, model = text.lower(), model or "this model"
         if self.name.startswith("opencode-go"):
             if "does not support this protocol" in low or "requires a credential" in low:
                 return (f"model {model} is not served by Exo's OpenCode Go adapter yet "

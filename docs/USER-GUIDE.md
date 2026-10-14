@@ -44,6 +44,7 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
 | typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
+| `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>` | List the subagents your session handed work to, watch one's session, send a running one a note (it lands at its next tool step) or stop it. A finished subagent answers with a clear error and nothing changes. The parent's receipt says it was steered or stopped. On the web page the Tasks cards have Open, Steer and Stop. |
 | `ctrl+f` | Puts the focus on an approval card, wherever you are. Your draft stays. |
 | `@path` | Adds that file to your message. |
 | `!command` | Asks the agent to run that shell command and show the output. |
@@ -52,6 +53,9 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `ctrl+y`, `ctrl+e`, `ctrl+r` | Accept, edit or reject the last answer. This is feedback the learning loop uses. |
 | `ctrl+g` or `/compose` | Opens the big editor for a long, structured prompt. Enter adds a line. **`ctrl+s` sends** (`ctrl+enter` too, on terminals that report it). `Esc` closes it and your draft stays. `ctrl+l` shows line numbers, `ctrl+t` edits in `$EDITOR`. `/compose task` starts you with Goal, Context, Constraints and Done when headings. Slash and `@` completion work inside it. |
 | `/layout inverse` or `classic` | Inverse puts the input on top and the newest message directly under it, so a thread opens on its latest. Classic is the usual order. Your choice is saved. |
+
+`/copy` tries `pbcopy`, `wl-copy`, `xclip`, then `xsel` when available. Without a successful helper it sends OSC52
+and reports that clipboard receipt cannot be verified; a terminal can ignore that escape sequence.
 
 Click anywhere on the transcript and you are typing again; keys typed while nothing else has focus go to the composer.
 
@@ -81,6 +85,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
 | `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |
+| `/rename <title>` | Rename this thread. The new title shows in `/sessions`, `/resume` and the web thread list, where a double-click on a thread renames it too. |
 | `/undo` | Undo the last turn. |
 | `/clear` | Clear the transcript view. History is kept. |
 | `/cwd` | Show this thread's working folder. |
@@ -131,7 +136,8 @@ Different seats are different agents. They share your store and talk through pee
 - A thread is a focus. `/new` starts one. Memory carries over.
 - The log keeps every word, word for word. Nothing is lost when the context is compacted.
 - Old parts of the log are folded into summaries so the model call stays small. This happens by itself.
-  `/compact` does it now.
+  `/compact` does it now. A temporary provider failure keeps those words verbatim and retries on later upkeep,
+  with delays up to five minutes. Only explicitly non-retryable summary failures reach the permanent attempt cap.
 - `/context` shows the parts of the next call: the system text, the summary tree, news from other threads, and this
   thread's recent messages.
 - Your rulings and corrections are kept verbatim in summaries and are copied to your principal store, so a
@@ -185,13 +191,13 @@ grants become active only after their required authorization audit succeeds.
 Some actions wait for you. The gate looks at each tool call and decides: allow, log, ask or deny, from your policy
 files (`policies/gates.yaml` in your store). When it asks, a panel shows what the agent wants to do and why.
 
-In the terminal: `o` allows once, `a` then Enter allows always (or `A` at once), `d` denies. Esc never answers. The keys only
-act when the card has focus, and the card does not take focus while you have text in the composer or typed in the last
-second and a half, so a letter typed into a message never answers a gate. Press Tab, click the card, or press
+Both clients use `o` to allow once, `a` to choose always, and `d` to deny with an optional note. Choosing always,
+including uppercase `A` or clicking Always, waits for a separate Enter or Confirm always button. Escape cancels;
+it never answers. The keys act only inside a deliberately focused card. Cards never take focus automatically,
+even when the composer is empty. Typing in an editable field cannot authorize. Press Tab, click the card, or press
 `ctrl+f` to move to it. A card goes away the moment the request is closed, whoever closed it, and also when you stop
 the turn that was waiting. Each window also checks its card against the core every few seconds, so a card the core no
-longer holds never stays on screen. On the web page: `y`, `a`, `n`, which are ignored while you type in a field. If you
-answer a card that was already closed, the page drops it and says so.
+longer holds never stays on screen. If you answer a web card that was already closed, the page drops it and says so.
 
 What the gate asks about, and why:
 

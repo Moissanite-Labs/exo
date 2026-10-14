@@ -157,7 +157,7 @@ def test_bus_reopens_a_closed_stream_from_the_last_seq(tmp_path):
     (tmp_path / "bus.mjs").write_text(text("bus.js").replace("./dom.js", "./dom.mjs"))
     (tmp_path / "t.mjs").write_text('''
 const made = [];
-class ES { constructor(url) { this.url = url; this.readyState = 1; made.push(this); } close() { this.readyState = 2; } }
+class ES { addEventListener(type, fn) { this[type] = fn; } constructor(url) { this.url = url; this.readyState = 1; made.push(this); } close() { this.readyState = 2; } }
 globalThis.EventSource = ES;
 globalThis.sessionStorage = { getItem: () => "tok" };
 globalThis.fetch = async (path) => ({ ok: true, status: 200, json: async () => (path.includes("panels") ? { panels: [], seq: 5 } : { ok: true }) });
@@ -181,3 +181,14 @@ process.exit(0);
     res = json.loads(out.stdout)
     assert len(res["urls"]) == 2 and "since=6" in res["urls"][1] and "token=tok" in res["urls"][1]
     assert res["got"] == [6, 7]  # 5 and 6 are replays the page already handled
+
+
+def test_rename_route_runs_the_core_rename_command():
+    src = FakeSource({"command.run": {"output": {"session": {"id": "s1", "title": "New name"}}}})
+    c = CommandCentre(load_settings({}), src)
+    code, out = asyncio.run(api.dispatch(c, "POST", "/api/chat/sessions/s1/rename", {}, {"title": "New name"}))
+    assert code == 200 and out["session"]["title"] == "New name"
+    cmd = src.calls[-1]
+    assert isinstance(cmd, s.CommandRun) and (cmd.name, cmd.args, cmd.session) == ("rename", "New name", "s1")
+    assert asyncio.run(api.dispatch(c, "POST", "/api/chat/sessions/s1/rename", {}, {}))[0] == 400
+    assert "/rename" in text("chat.js") and "dblclick" in text("chat.js")

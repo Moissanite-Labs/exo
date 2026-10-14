@@ -20,6 +20,7 @@ MODELS = {"fake": {"rules": []}, "roles": {"main": ["fake:x"], "aux": ["fake:x"]
 
 def _engine(home, memory=None) -> CoreEngine:
     pm = PluginManager()
+    pm.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     if memory is not None:
         pm.slots.memory = memory
     return CoreEngine(home, MODELS, plugins=pm, cwd=str(home))

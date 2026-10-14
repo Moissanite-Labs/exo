@@ -1097,8 +1097,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         if any(".ssh" in a or a.endswith((".pem", ".key")) for a in argv):
             return [_make("credentials", summary=f"{prog} on key material", command=cmd)]
         return [_make("shell", summary=prog, command=cmd)]
-    if prog == "crontab" and _has(argv, "-l"):
-        return [_make("read", summary="crontab -l", command=cmd)]
+    if prog == "crontab":
+        if _has(argv, "-l"):
+            return [_make("read", summary="crontab -l", command=cmd)]
+        return [_opaque("crontab changes scheduled jobs", cmd)]
     if (prog, sub) in SUBCOMMANDS:
         return [_make(SUBCOMMANDS[(prog, sub)], summary=f"{prog} {sub}", command=cmd)]
     if prog in PROGRAMS:
@@ -1329,7 +1331,8 @@ TOOLS: dict[str, str] = {
 # is_sensitive_path() because they can sit anywhere.
 _SENSITIVE_PATH = re.compile(
     r"(^|/)(\.ssh|\.gnupg|\.aws|\.config/gcloud|\.config/muse|\.netrc|\.npmrc|\.pypirc|\.env(\.[\w-]+)?|"
-    r"credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|"
+    r"\.?credentials(\.json)?|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|[^/]+\.pem|[^/]+\.key|"
+    r"\.claude(/[^/]*)*|"
     r"keys\.env|\.config/exo/keys(\.env)?|\.exo/keys|\.divan/[^/]+\.key|auth\.json|"
     r"client_secret[^/]*\.json|\.unii/[^/]+/token|[^/]*token[^/]*\.(json|txt|pickle|ya?ml)|[^/]+\.token|"
     r"\.config/gh/hosts\.yml|\.git-credentials|\.docker/config\.json|\.kube/config|"
@@ -1360,6 +1363,8 @@ def _expand_text(text: str) -> str:
         text = re.sub(r"\$\{?EXO_PRINCIPAL_STORE\}?", lambda m: os.path.expanduser(store), text)
     text = re.sub(r"\$\{?EXO_HOME\}?", lambda m: exo, text)
     text = re.sub(r"\$\{?HOME\}?", lambda m: home, text)
+    claude_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home, ".claude")
+    text = re.sub(r"\$\{?CLAUDE_CONFIG_DIR\}?", lambda m: os.path.expanduser(claude_dir), text)
     return re.sub(r"(^|(?<=[\s'\"=:<>]))~(?=/|$|\s|['\"])", lambda m: m.group(1) + home, text)
 
 
@@ -1367,6 +1372,8 @@ def _dynamic_secret_paths() -> list[str]:
     paths = [os.path.join(_exo_home(), "keys")]
     kf = os.environ.get("EXO_KEYS_FILE")
     paths.append(os.path.expanduser(kf) if kf else os.path.join(_home(), ".config", "exo", "keys.env"))
+    claude_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(_home(), ".claude")
+    paths.append(os.path.expanduser(claude_dir))
     return paths
 
 
@@ -1418,7 +1425,8 @@ def _glob_hits_secret(tok: str) -> bool:
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
-    r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|ledger\.sqlite(-wal|-shm|-journal)?$|"
+    r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
+    r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
     r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
 _HOME_PROTECTED = ("policies", "state", "keys", "run", "seats")
 _STORE_PROTECTED = ("policies", "state", "keys")
@@ -1434,7 +1442,7 @@ def _store_roots() -> list[tuple[str, tuple, bool]]:
 
 
 def _protected_rel(parts: list[str], names: tuple) -> bool:
-    return bool(parts) and (parts[0] in names or parts[0].startswith("ledger.sqlite"))
+    return bool(parts) and (parts[0] in names or parts[0].startswith(("ledger.sqlite", "schedule.sqlite")))
 
 
 def is_store_path(path: str, ancestors: bool = False) -> bool:
@@ -1652,7 +1660,12 @@ def classify(action: Any) -> Classification:
             c = _make("read", summary="list message targets")
     elif tool == "cronjob_manage":
         action = str(args.get("action", "")).lower()
-        c = _make("read" if action in ("list", "get", "status", "") else "schedule", summary=f"cron {action}")
+        if action in ("list", "get", "status", ""):
+            c = _make("read", tool=tool, summary=f"cron {action}")
+        else:
+            operation = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+            c = _opaque(f"cronjob_manage mutation: {action}", operation)
+            c.tool = tool
     else:
         cat = TOOLS.get(tool) or classify_by_name(tool)
         secret = args_sensitive(args) if cat in ("read", "local_write", "unknown", "remote_write", "delete") else ""

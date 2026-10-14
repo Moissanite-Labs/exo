@@ -9,7 +9,6 @@ from conftest import PLUGIN_ROOT
 from exo.core.engine import CoreEngine
 from exo.core.plugins import PluginManager
 from exo.core.slots import MemoryProvider
-from exo.protocol import schema as s
 
 MODELS = {"fake": {"reply": "Noted."},
           "roles": {"main": ["fake:scripted"], "aux": ["fake:scripted"], "decision": []}}

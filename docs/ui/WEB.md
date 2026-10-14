@@ -22,7 +22,8 @@ With `--socket` or `--url` nothing is started; the page says the core is not rea
 the token in the URL fragment, `http://127.0.0.1:7342/#token=...`, and, when run in a terminal, opens that address
 in the browser. A fragment is never sent to a server or written to a server log. The page moves the token to
 `sessionStorage` (this tab only) and takes it out of the address bar. A new launch makes a new token, so open the
-new link after a restart; `--no-open` prints the link without opening it.
+latest complete link after a restart; the bare URL shows instructions rather than a usable client. Tokens are
+not persisted across launches. Opening a new token fragment in the same tab reconnects it with that token; `--no-open` prints the link without opening it.
 
 Every `/api/` route needs the token: the page sends it as `X-Exo-Token` on every fetch (`api()` in `dom.js`) and as
 `?token=` on the two event streams (`stream()` in `dom.js`; a browser EventSource cannot send headers). The Host
@@ -33,6 +34,12 @@ the page shell (`/`, `/static/`) loads without the token. Responses carry `Refer
 The web process answers approvals as the principal: it reads the core's principal credential
 (`run/<socket>.principal.key`) on each request, so it re-joins a core that restarted with a new one. The optional
 ASGI app (`asgi.py`) is gone: it re-exposed the routes with no checks.
+
+The stream resumes through the core’s durable event log when its cursor has fallen outside the web event ring.
+After replay the page refreshes durable messages, session activity, open panels and pending approvals. Composer
+drafts and unfinished streamed output survive that refresh. `/context` uses typed token counts (`command.run`,
+`args="json"`), while the default core command still returns the human-readable report. `/new private` creates a
+private session; malformed known commands show usage. Literal paths such as `/etc/hosts is broken` remain messages.
 
 ## Screens
 
@@ -47,20 +54,28 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   pulses orange while a turn runs and is hollow when idle.
 - **Status strip** (one line, hairline above): state, served model (and `← fallback` in orange when the route
   that served differs from the one asked, from `model.call`), memory gauge (tokens the last call carried, bar
-  against a nominal 200k window, from `usage.updated`), cache share of that call, session cost. While busy a
+  against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
+  `/context` reports), cache share of that call, session cost. While busy a
   packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
 - **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed;
   click to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded ·
   1781 → 153 tok` and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic
   (a `notice` that starts with `tip`).
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
-  `[y] allow [n] deny [a] allow always`; the keys work when the composer is not focused. The page replaces its cards with the server's list on every thread open and every stream reconnect, and the server asks the core first, so a card the core no longer holds is dropped (D-045). Taste, diff and the
+  `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
+  automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
+  a focused button shortcut, or clicking Always) requires a separate Enter or Confirm always button; Escape,
+  another key, Cancel, or leaving the card cancels confirmation. Deny opens an optional note. The page reconciles
+  its cards with the server's list on every thread open and stream reconnect, and the server asks the core first,
+  so a card the core no longer holds is dropped (D-045). Taste, diff and the
   other panels are cold. A peer message has the sender in the header, a grey rule and the line "from another
   session, not from you": it never looks like the user. Panels and new transcript items reveal on arrival.
 - **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
   `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
   (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it.
+- **Thread list.** Double-click a thread to rename it (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
+  the core `rename` built-in, principal only (D-069).
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
@@ -102,8 +117,8 @@ Screenshots: `docs/media/web-05-guidance.png`, `web-06-slash.png`, `web-07-files
 
 ## Layout: inverse or classic (D-046)
 
-The chat has two layouts. **Inverse** (the experiment's default) puts the message box at the top, with the approval cards
-under it, then the thread with the newest item first and the status strip at the bottom; text inside one message reads
+The chat has two layouts. **Inverse** (the experiment's default) puts the status strip and then the message box at the top,
+with the approval cards under it, then the thread with the newest item first; classic keeps the strip under the thread; text inside one message reads
 top to bottom, and a thread opens on its newest item at the top (`docs/media/web-08-inverse.png`). **Classic** is the usual
 order, and a long thread now opens at its newest message at the bottom (`docs/media/web-09-classic-bottom.png`). Switch with
 the "Layout" button under the thread list or `/layout inverse|classic`; the choice is saved in this browser
@@ -132,6 +147,42 @@ token: `exo web` prints a link with `#token=...`; the page moves it to `sessionS
 removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider routes also
 need a loopback peer). Without a token the tab only asks you to open that link. When no provider is ready, the Chat view shows one quiet line with a
 link to this tab.
+
+## Sub-pages (D-061)
+
+Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.css`, `site/roadmap/roadmap.css`).
+
+- **Head.** Each page opens with a mono eyebrow and an orange rule (`02 / Tasks`), an Inter display title, one line of
+  purpose, and a readout on the right (Tasks: open, failed, done; Schedule: jobs, active, next run; Command: core and
+  seq with Refresh; Providers: ready count and default). Shared helpers in `dom.js`: `pageHead`, `readout`, `pill`,
+  `emptyState`, `stamp`, `until`.
+- **Status in form.** A pill (`.xc-st[data-s]`) or led (`.xc-led[data-s]`) carries the state in its shape and the word
+  names it; colour only confirms. run: dashed orange, blinking led. queue: hollow. done: filled cold. fail: crossed.
+  stop: dashed. on: filled orange. ok: filled green. known: tinted cold. pause: two bars. warn: half filled. alert:
+  filled with a ring. Numbers are tabular.
+- **Tasks** reads like the roadmap chart: a tally bar with a key, then one hairline lane per status with cards whose
+  top rule repeats the state. Under 760px the lanes stack. The empty state shows the lattice egg at stage 0
+  (`static/egg.js`, a byte-for-byte copy of `site/brand/egg.js`, checked by a test); this is the only place it appears.
+- **Task controls (D-070).** A card whose task has a child session gets Open, which shows that session in Chat. A running
+  card also gets a note box with Steer, and Stop. They call `GET /api/tasks/<task>` and `POST /api/tasks/<task>/steer`
+  or `/stop`, which run the core's `subagent` built-in. The core allows the principal only and its refusal (403, or 409
+  for a finished child) shows on the card. A half-typed note survives the next event.
+- **Schedule** shows each job as a card in a hairline grid: the clock line in mono, the title, the prompt, then next,
+  last and tier as a readout (local date and time plus "in 2h"), and the actions. A paused job's top rule is dashed.
+  The form sits beside the list, with labelled fields; under 1100px it follows the list.
+- **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
+  hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
+  At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
+  Empty sections say what will appear and how.
+- **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count
+  and roles as labelled values, with the key field and buttons under them. The default model has its own panel.
+- **Focus and motion.** Every control keeps the orange focus ring (inset on tabs and gauges). The page head reveals
+  once; the running led blinks. All of it stops under `prefers-reduced-motion`.
+- **Fix found on the way.** `replaceChildren(err ? box : null, ...)` drew the text `null` above Tasks, Schedule and
+  Command; the lists are filtered first now.
+
+Screenshots: `python scripts/shots_web_tabs.py OUTDIR` serves the client over demo data (no core, no Exo home, provider
+table and snapshot stubbed, no key read) and shoots every tab with data and empty, at 1440 and 400px, full page.
 
 ## Motion and accessibility
 
