@@ -42,7 +42,7 @@ from exo.core.types import ToolSpec
 from exo.protocol import schema as s
 
 if TYPE_CHECKING:
-    from exo.core.engine import CoreEngine
+    from exo.core.engine import CoreRuntime as CoreEngine
 
 REPLAY_MINUTES = 5
 ASK_TIMEOUT = 2.0  # seconds to wait on another daemon when listing
