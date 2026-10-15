@@ -76,6 +76,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Scheduled jobs | `docs/SCHEDULE.md` | MISSING (no user entry point is documented yet) | MISSING | WP §13.2, §24, §29 (brief) |
 | Handoff | `docs/HANDOFF.md` | §3 (`/handoff`) | n/a | WP §24 |
 | Signed ledger, crypto and the principal store | `docs/CORE.md`, `docs/STORE-V2.md` | §11 | MISSING | WP §19, §20 |
+| Opt-in independent witness transport | `docs/WITNESS-TRANSPORT.md`, `docs/LEDGER-AUTHORITY.md` | n/a (disabled by default, administrator invocation only) | Setup and recovery in the technical doc | MISSING (independent witness transport) |
 | Retrieval | `docs/STORE-V2.md` §3, `docs/CORE.md` "Python API" | §11 (`exo find`, `exo ctx`) | MISSING | WP §21 |
 | Eval, ask queue, brief, consolidate | `docs/TOOLS-CLI.md` | MISSING (a pointer in §11 only) | §9 "Work on the learning loop" (consolidate and proposals) | WP §6, §22 |
 | D-035 Typing `exo` opens Exo: bare command, installer on PATH, `exo update` | `docs/INSTALL.md` "The `exo` command", `docs/COMMANDS.md` Part 2 "Running Exo" | §1 | n/a | n/a |

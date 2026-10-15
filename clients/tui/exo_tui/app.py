@@ -232,7 +232,8 @@ class ExoApp(App):
         self.catalog: list[cm.Item] = cm.build_catalog(LOCAL_COMMANDS)
         self.arg_ctx: dict[str, list[cm.Item]] = {}  # cached argument data by kind; fetched once when first needed
         self.arg_at: dict[str, float] = {}
-        self.files = cm.FileIndex(os.getcwd())
+        self.files = cm.FileIndex(os.getcwd(), executor_required=bool(
+            getattr(getattr(client, "engine", None), "executor_required", True)))
         self.sug = cm.Suggestion()
         self.sel = 0
         self.sug_text = ""

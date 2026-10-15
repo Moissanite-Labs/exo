@@ -21,11 +21,11 @@ import json
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Protocol
 
 from exo.core import trace
 from exo.core.hooks import maybe_await
-from exo.core.types import Message, Provider
+from exo.core.types import ContentPart, Message, Provider
 from exo.turn_settle import settle_for_turn
 
 # ---------------------------------------------------------------- lifted prompt text
@@ -315,6 +315,42 @@ def missing_directives(summary: str, principal: list[Message]) -> list[str]:
     return out
 
 
+class TurnContext(Protocol):
+    """Minimal context view used by a turn; recall/cache/turn callbacks are optional."""
+
+    on_event: Callable[[Any, str], Awaitable[Any]] | None
+
+    def note(self, session: str) -> None: ...
+    async def build(self, session: str, system: str) -> list[Message]: ...
+
+
+class ContextTree(TurnContext, Protocol):
+    """Core-owned tree interface: callbacks and recent messages, with storage and capture owned by the tree."""
+
+    on_pre_compress: Callable[[str, list[Message]], Any] | None
+    on_capture: Callable[[str, list[Message]], Any] | None
+    on_compacted: Callable[[str, SummaryNode], Any] | None
+
+    def transcript(self, session: str, last: int) -> list[Message]: ...
+
+
+def apply_selection(msgs: list[Message], flat: list[dict[str, Any]], out: list[dict[str, Any]]) -> list[Message]:
+    """Turn a ``select_context`` result back into messages. The hook sees text only, so a dict it passes through
+    unchanged maps back to the original Message (its tool calls and results survive); only changed or new dicts
+    (an injected system block, an edited turn) become plain text messages. A tool message it did not keep goes."""
+    out_msgs: list[Message] = []
+    at = 0
+    for d in out:
+        role = d.get("role")
+        hit = next((j for j in range(at, len(flat)) if flat[j]["role"] == role and flat[j]["content"] == (d.get("content") or "")), None)
+        if hit is not None:
+            out_msgs.append(msgs[hit])
+            at = hit + 1
+        elif role in ("system", "user", "assistant"):
+            out_msgs.append(Message(role=role, content=[ContentPart.of_text(str(d.get("content") or ""))]))
+    return out_msgs
+
+
 class TreeContext:
     """Default context engine: summary tree plus verbatim tail, built fresh each turn.
 
@@ -352,6 +388,10 @@ class TreeContext:
         # D-032: on_capture(session, messages) offers a span holding the principal's own messages (and the agent
         # output they answer) to the principal store before a leaf is summarized; true when the store took them.
         self.on_capture: Callable[[str, list[Message]], Any] | None = None
+
+    def transcript(self, session: str, last: int) -> list[Message]:
+        """Recent original messages, including provenance, tool calls and results."""
+        return self.store.messages(session)[-last:]
 
     async def _summarize(self, session: str, content: str, previous: str | None = None, extra: str = "") -> str:
         """Call the compressor with the kwargs it accepts (session, extra); older compressors take neither."""
