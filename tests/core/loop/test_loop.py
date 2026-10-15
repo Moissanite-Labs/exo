@@ -729,3 +729,32 @@ def test_transient_summary_zero_backoff_still_has_a_retry_floor(tmp_path, monkey
         await ctx.settle(session.id)
         assert comp.calls == 4
     run(go())
+
+
+def test_steer_during_turn_completion_runs_a_new_turn(tmp_path):
+    """Finalization still owns the lock, but it can no longer consume a steer."""
+    prov = Script(reply("first answer"), reply("late answer"))
+    store, loop, seen = make(tmp_path, prov)
+
+    async def go():
+        closing, release = asyncio.Event(), asyncio.Event()
+        async def observer(session, turn_id):
+            if not closing.is_set():
+                closing.set()
+                await release.wait()
+        loop.on_turn_end = observer
+        s = await loop.create_session()
+        first = asyncio.create_task(loop.send(s.id, "start"))
+        await asyncio.wait_for(closing.wait(), 2)
+        second = asyncio.create_task(loop.send(s.id, "late note", mode="steer"))
+        await asyncio.sleep(0)
+        assert not second.done(), "the completed turn must queue a new turn, not accept an orphan steer"
+        release.set()
+        await first
+        result = await asyncio.wait_for(second, 2)
+        assert result.message.text() == "late answer"
+        assert not loop.state(s.id).steer
+        return s
+
+    s = run(go())
+    assert [(m.role, m.text()) for m in store.messages(s.id)][-2:] == [("user", "late note"), ("assistant", "late answer")]

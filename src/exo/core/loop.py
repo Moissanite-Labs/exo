@@ -73,6 +73,7 @@ class _SessionState:
         self.interrupt = asyncio.Event()
         self.steer: list[Message] = []
         self.running = False
+        self.accepting_steers = False
         self.total = Usage()
         self.stats: dict[str, int] = {}  # this turn's timing summary, filled as it runs (D-025)
 
@@ -140,7 +141,7 @@ class Loop:
         """Put a message into the running turn at its next tool round. False when no turn is running
         (the caller queues it instead): unlike ``send(mode="steer")`` this never starts a turn."""
         st = self.state(session)
-        if not st.running:
+        if not st.accepting_steers:
             return False
         st.steer.append(msg)
         return True
@@ -175,16 +176,18 @@ class Loop:
         # scheduler, a delegation) names it; an untagged call keeps the old reading of its ingress tags.
         msg.meta.setdefault("author", provenance.infer("user", msg.meta))
         st = self.state(session)
-        if mode == "steer" and st.running:
+        if mode == "steer" and st.accepting_steers:
             msg.id = msg.id or new_id("m")  # a client can name it to cancel it (D-045)
             st.steer.append(msg)
             return None
         async with st.lock:
             st.running = True
+            st.accepting_steers = True
             st.interrupt.clear()
             try:
                 return await self._turn(session, msg, st)
             finally:
+                st.accepting_steers = False
                 st.running = False
                 st.interrupt.clear()
 
@@ -234,6 +237,9 @@ class Loop:
             result.stop_reason, result.error = "error", str(exc) or type(exc).__name__
             await self._emit(ev.Error(code="turn_failed", message=result.error), session)
             await self._emit(trace.error_body("turn loop", exc), session)
+        # No more rounds can consume a steer. Later arrivals must wait for a new turn,
+        # including while completion hooks await with the session lock still held.
+        st.accepting_steers = False
         if st.steer:  # a message that arrived after the last tool round is context for the next turn, not lost
             for m in st.steer:
                 await self._add(session, m, turn_id)

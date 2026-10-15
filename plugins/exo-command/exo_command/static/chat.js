@@ -77,6 +77,8 @@ export function mount(root) {
   function fail(e) { flash(e && e.message ? e.message : String(e)); }
 
   function fromMessages(msgs) {
+    for (const m of msgs) if (m.role === "user" && m.id) { landed.add(m.id); delete steers[m.id]; }
+    drawSteers();
     const out = [];
     const byCall = {};
     for (const m of msgs) {
@@ -113,7 +115,6 @@ export function mount(root) {
       landed.add(b.message.id);   // the event can beat the reply to the send
       if (steers[b.message.id]) { delete steers[b.message.id]; drawSteers(); }
     }
-    if (ev.type === "turn.completed" && Object.keys(steers).length) { for (const k of Object.keys(steers)) if (steers[k].session === ev.session) delete steers[k]; drawSteers(); }
     switch (ev.type) {
       case "steer.cancelled": if (steers[b.message_id]) { delete steers[b.message_id]; drawSteers(); } return;
       case "session.created": case "session.updated": refreshSessions(); return;
@@ -421,7 +422,7 @@ export function mount(root) {
   async function open(id) {
     const generation = ++snapshotGeneration;
     capacity = null;
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; steers = {}; flash("");
+    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
