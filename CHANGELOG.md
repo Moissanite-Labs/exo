@@ -69,6 +69,8 @@ First tracked version. It covers everything on main since the 0.1.0 scaffold (D-
 
 The public site at exo.askaconsult.com. Versions are `site-vMAJOR.MINOR` (docs/VERSIONING.md).
 
+- **Unreleased**: a waitlist form, a founder section and a footer Contact link on the home page, set at deploy time
+  through `window.EXO_SITE` (docs/SITE-STATUS.md). The home nav gains Get Exo and Founder links.
 - **v2.0** (2026-10-13, live): the lattice redesign. The living lattice egg on the home page, the roadmap page with linked nodes, the brand page, credits limited to open source and genuine innovators.
 - **v2.0-rc.1** (2026-10-13, staging): the approved redesign candidate, commit `6b8800f`.
 - **v1.0** (2026-10-12, live): the first public site, commit `8d54b55`. Archive: tag `site-live-2026-10-13`.

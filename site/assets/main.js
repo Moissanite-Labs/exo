@@ -35,6 +35,59 @@
     Object.keys(map).forEach(function (id) { var s = document.getElementById(id); if (s) navIO.observe(s); });
   }
 
+  /* ---------- Site links and the waitlist (window.EXO_SITE, set in index.html) ----------
+     waitlist: a form endpoint; contact: a mailto: or page URL; founder: a URL. All default to "". */
+  var site = window.EXO_SITE || {};
+  var setting = function (k) { return typeof site[k] === "string" ? site[k].trim() : ""; };
+  var waitlistUrl = setting("waitlist"), contactUrl = setting("contact");
+  var contactIsMail = /^mailto:/i.test(contactUrl);
+
+  // Links that follow a setting: href from it when set; otherwise hidden, unless the markup gives a default href.
+  Array.prototype.forEach.call(document.querySelectorAll("[data-site-link]"), function (a) {
+    var url = setting(a.getAttribute("data-site-link"));
+    if (url) { a.href = url; a.hidden = false; }
+    else if (!a.getAttribute("href")) { a.hidden = true; }
+  });
+
+  var form = document.getElementById("waitlist");
+  if (form) {
+    var mode = waitlistUrl ? "post" : contactIsMail ? "mailto" : "none";
+    form.parentNode.classList.add("is-" + mode);
+    var email = form.querySelector('input[type="email"]');
+    var trap = form.querySelector(".waitlist__hp input");
+    var button = form.querySelector('[type="submit"]');
+    var msg = form.querySelector(".waitlist__msg");
+    var say = function (text, state) { msg.textContent = text; msg.className = "waitlist__msg" + (state ? " is-" + state : ""); };
+    if (mode === "post") form.action = waitlistUrl;
+    if (mode === "mailto") form.action = contactUrl;
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      if (mode === "none") return;
+      var addr = email.value.trim();
+      if (!addr || (email.checkValidity && !email.checkValidity())) { say("Enter an email address.", "err"); email.focus(); return; }
+      if (trap && trap.value) { say("Thanks. You are on the list.", "ok"); form.reset(); return; }  // a filled trap is a bot
+      if (mode === "mailto") {
+        var sep = contactUrl.indexOf("?") < 0 ? "?" : "&";
+        say("Your mail app should open with the subject filled in. Send it and you are on the list.", "ok");
+        location.href = contactUrl + sep + "subject=" + encodeURIComponent("Exo waitlist") +
+          "&body=" + encodeURIComponent("Please add " + addr + " to the Exo waitlist.");
+        return;
+      }
+      var body = new URLSearchParams();
+      body.append("email", addr);
+      button.disabled = true;
+      say("Sending.");
+      fetch(waitlistUrl, { method: "POST", body: body, headers: { "Accept": "application/json" }, credentials: "omit" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("status " + r.status);
+          say("Thanks. You are on the list. One message when Exo opens, nothing else.", "ok");
+          form.reset();
+        })
+        .catch(function () { say("That did not go through. Try again in a moment, or write to us.", "err"); })
+        .then(function () { button.disabled = false; });
+    });
+  }
+
   /* ---------- Ledger ticker (schematic) ---------- */
   var track = document.querySelector(".ticker__track");
   if (track) {

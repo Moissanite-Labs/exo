@@ -28,12 +28,23 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="stylesheet" href="assets/style.css">
 <script>document.documentElement.classList.add("js")</script>
+<!-- Site configuration, read by assets/main.js. Leave a value empty to turn that part off.
+     waitlist: a form endpoint URL that accepts a POST with an "email" field (a Formspree form, a Buttondown
+               embed-subscribe endpoint, or your own). The form sends the email field form-encoded and asks for JSON back.
+               Empty, with a mailto: contact below: the form opens that address with the subject "Exo waitlist".
+               Both empty: the form is hidden and the section shows a "Write to us" link.
+               Visitors without JavaScript see the form only when the same URL is also in the form's action
+               attribute (id="waitlist", below). Otherwise they see the link.
+     contact:  a mailto: address or a page URL for the Contact link in the footer. Empty: the Aska Digital site.
+     founder:  a URL for the "Meet the founder" link. Empty: the link stays hidden.
+     Keep personal names, addresses and phone numbers out of the repository; set these at deploy time. -->
+<script>window.EXO_SITE = { waitlist: "", contact: "", founder: "" };</script>
 <script src="assets/main.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 
-<header class="nav" id="top">
+<header class="nav nav--long" id="top">
   <div class="wrap nav__in">
     <a class="brand" href="#top" aria-label="Project Exo, back to top">
       <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg>
@@ -47,6 +58,8 @@
         <li><a href="#loop">Learning</a></li>
         <li><a href="#principles">Principles</a></li>
         <li><a href="#status">Status</a></li>
+        <li><a href="#get-exo">Get Exo</a></li>
+        <li><a href="#founder">Founder</a></li>
         <li><a href="#credits">Credits</a></li>
         <li><a class="nav__page" href="cli/">Terminal</a></li>
         <li><a class="nav__page" href="app/">Web app</a></li>
@@ -70,6 +83,7 @@
     <p class="hero__lede">Exo is one system for working well with models. It keeps a signed record of your work, builds a model of you from it, remembers what matters, learns your taste and grows with you. Built to fit one person deeply. Built to work for anyone.</p>
     <div class="hero__cta">
       <a class="btn btn--primary" href="#system">See how it works <span aria-hidden="true">→</span></a>
+      <a class="btn" href="#get-exo">Get Exo</a>
       <a class="btn" href="cli/">Terminal</a>
       <a class="btn" href="app/">Web app</a>
       <a class="btn" href="whitepaper/">Whitepaper</a>
@@ -461,11 +475,77 @@
   </div>
 </section>
 
+<!-- GET EXO -->
+<section class="section section--alt" id="get-exo" aria-labelledby="get-title">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">10 / Get Exo</p>
+      <h2 id="get-title">Run it today if you have access. Hear first when it opens.</h2>
+      <p class="sec-lede">Exo installs from the repository, which is a private preview during the early build. If you have access, the quick start is the whole install. If not, the next step is the waitlist or a note to us. This page runs no tracking.</p>
+    </header>
+    <div class="grid grid--2 get">
+      <div class="get__cell reveal">
+        <p class="card__k">Waitlist</p>
+        <form class="waitlist" id="waitlist" method="post" action="" aria-label="Join the Exo waitlist">
+          <label class="waitlist__label" for="waitlist-email">Email</label>
+          <div class="waitlist__row">
+            <input class="waitlist__input" id="waitlist-email" name="email" type="email" inputmode="email" autocomplete="email" spellcheck="false" required placeholder="Your email address" aria-describedby="waitlist-note">
+            <button class="btn btn--primary" type="submit">Join the waitlist <span aria-hidden="true">→</span></button>
+          </div>
+          <div class="waitlist__hp" aria-hidden="true">
+            <label for="waitlist-site">Leave this field empty</label>
+            <input id="waitlist-site" name="website" type="text" tabindex="-1" autocomplete="off">
+          </div>
+          <p class="waitlist__msg" role="status" aria-live="polite"></p>
+          <p class="waitlist__small" id="waitlist-note">One message when Exo opens to new users. Your address is used for nothing else.</p>
+        </form>
+        <p class="waitlist__alt">The waitlist is not open yet. <a href="https://digital.askaconsult.com" rel="noopener">Write to us</a> and we will keep you posted.</p>
+      </div>
+      <div class="get__cell reveal">
+        <p class="card__k">Quick start</p>
+        <p>Needs <code>git</code> and Python 3.11 or newer, on macOS or Linux. The installer prints its plan first, and <code>--dry-run</code> changes nothing.</p>
+        <div class="cmd"><span class="c"># the repository is private during the early build, access on request</span>
+<span class="t-p">$</span> git clone https://github.com/aska-digital/exo &amp;&amp; cd exo
+<span class="t-p">$</span> scripts/install.sh --dry-run
+<span class="t-p">$</span> scripts/install.sh
+<span class="t-p">$</span> exo</div>
+        <p class="waitlist__small">The <a href="cli/#install">terminal page</a> explains each step. For the browser, <a href="app/">the web app</a> runs on the same core.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FOUNDER -->
+<section class="section" id="founder" aria-labelledby="founder-title">
+  <div class="wrap">
+    <header class="sec-head">
+      <p class="sec-num">11 / Who is building this</p>
+      <h2 id="founder-title">Built by the person it was first fitted to.</h2>
+      <p class="sec-lede">Exo is built by Aska Digital. Its first user is its author: a serial founder who runs their company with a team of agents and went looking for a system that keeps a record, remembers, learns and asks before it acts. It did not exist. So they built it, and run their own work through it first.</p>
+    </header>
+    <div class="grid grid--3 founder">
+      <article class="card reveal">
+        <p class="card__k">User zero</p>
+        <p>The founder is the first principal. Exo is fitted to one person while it is built, and that person runs each wave on their own work before the roadmap calls it built. That is why the goal reads <em>fit one person deeply</em> before <em>work for anyone</em>.</p>
+      </article>
+      <article class="card reveal">
+        <p class="card__k">Build, not buy</p>
+        <p>A company run with a multi-agent team needs one record of what was decided and why, memory that outlives a session, and gates that ask about the few steps that matter. Agents, memory, sessions and notes were separate tools, and none of them shared what it knew. Exo is the system that work needed and could not buy.</p>
+      </article>
+      <article class="card reveal">
+        <p class="card__k">Generic by rule</p>
+        <p>A rule from the first day of the decision record (D-004): nothing in the core may assume the founder's accounts, machines, agents or names. The core is generic, and everything about the first principal lives in their own store, the same way it will for you.</p>
+        <p class="founder__link"><a class="btn" data-site-link="founder" rel="noopener" hidden>Meet the founder <span aria-hidden="true">↗</span></a></p>
+      </article>
+    </div>
+  </div>
+</section>
+
 <!-- CREDITS -->
 <section class="section section--alt" id="credits" aria-labelledby="credits-title">
   <div class="wrap">
     <header class="sec-head">
-      <p class="sec-num">10 / Credits and inspirations</p>
+      <p class="sec-num">12 / Credits and inspirations</p>
       <h2 id="credits-title">Built on the shoulders of others. With thanks.</h2>
     </header>
     <ul class="credits">
@@ -503,7 +583,7 @@
 <footer class="foot">
   <div class="wrap foot__in">
     <a class="brand" href="#top"><svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 9.5 23 13.5v5L16 22.5 9 18.5v-5z" fill="currentColor"/></svg><span>EXO</span></a>
-    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a> · <a href="cli/">Terminal</a> · <a href="app/">Web app</a> · <a href="roadmap/">Roadmap</a> · <a href="whitepaper/">Whitepaper</a></p>
+    <p>Built by <a href="https://digital.askaconsult.com" rel="noopener">Aska Digital</a> · <a href="cli/">Terminal</a> · <a href="app/">Web app</a> · <a href="roadmap/">Roadmap</a> · <a href="whitepaper/">Whitepaper</a> · <a href="https://digital.askaconsult.com" data-site-link="contact" rel="noopener">Contact</a></p>
     <p class="foot__small">Exo is early and in active development. This page describes the design as of October 2026 and will change.</p>
   </div>
 </footer>
