@@ -206,11 +206,24 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 `policies/gates.yaml` or `state/approval-grants.json` counts too.
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
-missing final components. This catches file and directory aliases into protected stores and aliases
-used to delete a store or its ancestors. Resolution preserves `symlink/..` filesystem order; lexical
-protection still applies when a protected path links outside the store. Relative paths only use the
-distinctive-name checks because the tool's working directory is unknown here. These are classification
-checks, not a filesystem sandbox: a symlink can change between classification and execution (TOCTOU).
+missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
+directory aliases into protected stores, aliases used to delete a store or its ancestors, a `cd` into
+an alias of the store, and `//` or `/proc/self/root` spellings. Resolution preserves `symlink/..`
+filesystem order; lexical protection still applies when a protected path links outside the store. A
+path that cannot be resolved (a NUL byte) keeps its lexical check, so the floor never depends on
+resolution working. `cp -s` and `cp -l` count as writes to whatever they alias, and a relative `ln -s`
+target is read against the link's folder in the two-operand form (`ln -s TARGET LINK`). Relative paths only use the distinctive-name checks because
+the tool's working directory is unknown here.
+
+Known limits. These are classification checks, not a filesystem sandbox: a symlink can change
+between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
+without a link to resolve, so only distinctive names catch a write through it. Only the store roots
+are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
+write to the outside spelling is a local write. Name and prefix checks are case-sensitive, so a
+case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob or brace spelling
+(`sta*/gate-grants.json`, `{state,x}/...`) is expanded by the shell, not seen here. A link planted
+and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
+followed, and the bash tool's `cwd` argument is not read.
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
