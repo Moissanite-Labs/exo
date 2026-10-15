@@ -68,7 +68,7 @@ def edit_file(args: dict[str, Any], ctx: ToolContext) -> str:
     updated, count, strategy, err = fuzzy_find_and_replace(
         content, old, new, replace_all=bool(args.get("replace_all", False)))
     if err:
-        raise ToolError(err + format_no_match_hint(err, count, old, content))
+        raise ToolError(err + format_no_match_hint(err, old, content))
     write_atomic(ctx.resolve(path), updated)
     how = "" if strategy == "exact" else f" (matched via {strategy})"
     return f"Edited {path}: {count} replacement{'s' if count != 1 else ''}{how}"

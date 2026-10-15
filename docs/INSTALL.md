@@ -30,10 +30,42 @@ export PATH="$HOME/.local/bin:$PATH"   # zsh: ~/.zshrc, bash: ~/.bashrc, fish: f
 `~/.local/bin/exo` that is not this installer's link is left alone, with a warning. The installer never reads or
 writes model keys; the first `exo` run with no working provider opens the providers panel (`/providers`).
 
-`exo update` upgrades in place and prints `old -> new`, then checks that `import exo` works, the protocol export
-is current and `exo models` answers. It reads `install` in `config.json` (written by the installer): it pulls the
-checkout and re-runs `install.sh`. For a `pip install -e` checkout it pulls and reinstalls; for a `uv tool install`
-it runs `uv tool upgrade exo`. `exo update --dry-run` prints the steps and changes nothing.
+`exo update` checks the checkout for tracked changes, untracked files and ignored source files before pulling with
+`--ff-only`. Commit, stash (including untracked files), or remove local changes before updating. It
+checks the target Python for pip first; when pip is absent (for example after `uv sync`), it uses
+`uv pip --python` for that same environment. If neither installer is available, it stops before the
+pull. Installer-managed installs also refresh their plugins with `install.sh --no-pip --no-interview`.
+For a `uv tool install`, it runs `uv tool upgrade exo`. After installation a fresh Python process checks
+imports, the protocol export and `exo models`. `exo update --dry-run` only prints the plan: it runs no
+subprocesses, preflight probes, upgrades or checks.
+
+After updating, finish active turns, close your clients, run `exo stop`, then reopen `exo` or `exo web`.
+The running shared core and clients retain their loaded code until restarted. The updater prints this
+instruction and leaves stopping the core to you.
+
+The updater refuses environment overrides that redirect Git, package sources/configuration, or
+Python and shell execution (including `GIT_CONFIG*`, `PIP_INDEX_URL`, `UV_INDEX`, `PYTHONPATH`,
+`PYTHONHOME`, `EXO_PYTHON`, `EXO_VENV`, `BASH_ENV`, `ENV`); its error names the variables to unset.
+Cache and progress settings remain usable. Git subprocesses disable
+checkout hooks and fsmonitor. These guards do **not** authenticate the remote or the pulled commit.
+By default the remote's build code and, for installer-managed installs, its `install.sh` still execute after a
+pull, and a clean checkout does not prove its contents are safe. To authenticate the target, turn on the signed-update check.
+
+### Signed updates (opt-in)
+
+`update.require_signed` in `$EXO_HOME/config.json` (default `false`; set it with
+`python -m exo.config set update.require_signed true`). When true, `exo update` fetches, then verifies the
+upstream tip with `git verify-commit` (SSH signatures, `ssh-keygen`) against a **pinned** signers file,
+`$EXO_HOME/update/allowed_signers`. Only if the signature is good does it run `git merge --ff-only <that sha>`
+and continue; otherwise it stops before changing the tree. It applies to checkout and installer installs, not
+`uv tool` installs. The project does not sign releases yet, so leave it off until it does.
+
+The pin is separate from the repo on purpose: a new commit that edits `trust/allowed_signers` cannot make
+itself trusted. You create it once with `exo update --pin-trust`, which copies `trust/allowed_signers` from
+`HEAD` (the code you already run) and prints it; read it before relying on it. After a key rotation, the new
+list arrives in a signed commit that the old pin still verifies; fetch, review `git show @{u}:trust/allowed_signers`, and
+run `exo update --pin-trust @{u}`. Until then, updates signed only by the new key are refused. Tag
+signatures are not consulted: the tip commit must be signed.
 
 ## What it does
 

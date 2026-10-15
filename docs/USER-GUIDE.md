@@ -44,6 +44,7 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
 | typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
+| `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>` | List the subagents your session handed work to, watch one's session, send a running one a note (it lands at its next tool step) or stop it. A finished subagent answers with a clear error and nothing changes. The parent's receipt says it was steered or stopped. On the web page the Tasks cards have Open, Steer and Stop. |
 | `ctrl+f` | Puts the focus on an approval card, wherever you are. Your draft stays. |
 | `@path` | Adds that file to your message. |
 | `!command` | Asks the agent to run that shell command and show the output. |
@@ -52,6 +53,9 @@ Both clients speak the same protocol to the same core. Use either, or both at on
 | `ctrl+y`, `ctrl+e`, `ctrl+r` | Accept, edit or reject the last answer. This is feedback the learning loop uses. |
 | `ctrl+g` or `/compose` | Opens the big editor for a long, structured prompt. Enter adds a line. **`ctrl+s` sends** (`ctrl+enter` too, on terminals that report it). `Esc` closes it and your draft stays. `ctrl+l` shows line numbers, `ctrl+t` edits in `$EDITOR`. `/compose task` starts you with Goal, Context, Constraints and Done when headings. Slash and `@` completion work inside it. |
 | `/layout inverse` or `classic` | Inverse puts the input on top and the newest message directly under it, so a thread opens on its latest. Classic is the usual order. Your choice is saved. |
+
+`/copy` tries `pbcopy`, `wl-copy`, `xclip`, then `xsel` when available. Without a successful helper it sends OSC52
+and reports that clipboard receipt cannot be verified; a terminal can ignore that escape sequence.
 
 Click anywhere on the transcript and you are typing again; keys typed while nothing else has focus go to the composer.
 
@@ -81,6 +85,7 @@ The technical reference, with arguments and where each command is implemented, i
 | `/new private` | Start a thread that is not remembered. Its words never enter shared memory or search. |
 | `/sessions`, `/resume [thread]` | Pick one of this agent's threads to switch to, or name one by id or title. |
 | `/fork [title]` | Fork this session. |
+| `/rename <title>` | Rename this thread. The new title shows in `/sessions`, `/resume` and the web thread list, where a double-click on a thread renames it too. |
 | `/undo` | Undo the last turn. |
 | `/clear` | Clear the transcript view. History is kept. |
 | `/cwd` | Show this thread's working folder. |
@@ -131,7 +136,8 @@ Different seats are different agents. They share your store and talk through pee
 - A thread is a focus. `/new` starts one. Memory carries over.
 - The log keeps every word, word for word. Nothing is lost when the context is compacted.
 - Old parts of the log are folded into summaries so the model call stays small. This happens by itself.
-  `/compact` does it now.
+  `/compact` does it now. A temporary provider failure keeps those words verbatim and retries on later upkeep,
+  with delays up to five minutes. Only explicitly non-retryable summary failures reach the permanent attempt cap.
 - `/context` shows the parts of the next call: the system text, the summary tree, news from other threads, and this
   thread's recent messages.
 - Your rulings and corrections are kept verbatim in summaries and are copied to your principal store, so a

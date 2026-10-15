@@ -106,7 +106,6 @@ def cmd_findings(a) -> int:
         row = fnd.file(sig, a.id, source='principal', severity=a.severity, detail=a.detail)
         print(f"{row['id']} {row['status']} x{row['count']} {row['severity']}  {row['title']}")
         return 0
-    fnd.sweep()
     if a.action == 'export':
         print(fnd.export_md(a.status), end='')
     elif a.json:

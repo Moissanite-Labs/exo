@@ -1,5 +1,10 @@
 """Peers: live agent sessions messaging each other (D-026). Inspired by Claude Code's cross-session messages.
 
+The peer transport, outside the core (docs/ENGINE-SPLIT.md, step 4). The engine holds an optional
+``PeerService`` that the composition layer attaches (``attach(engine)``); the engine itself only knows that
+service's ``start``, ``stop``, ``ready`` and ``command``. Delivery goes through the core's ingress path and the
+engine's ingress target (``exo.core.peer_target.EngineTarget``), so policy, holding and receipts stay there.
+
 Three parts, none of which knows whether it runs in exod or inside a Hermes plugin:
 
 - ``Directory``: one small presence file per daemon in a shared runtime dir. A daemon writes its file
@@ -21,16 +26,23 @@ import os
 import secrets
 import time
 from collections import OrderedDict
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from exo import crypto, gate
 from exo.bus import wire
 from exo.core import trace
-from exo.core.ingress import Ingress, IngressPath, Receipt, Target
+from exo.core.hooks import maybe_await
+from exo.core.ingress import Ingress, IngressPath, PeerConfig, Receipt, Target
+from exo.core.seats import ensure_key, key_path
 from exo.core.sessions import new_id
+from exo.core.tools.registry import ToolContext, ToolError
+from exo.core.types import ToolSpec
 from exo.protocol import schema as s
+
+if TYPE_CHECKING:
+    from exo.core.engine import CoreRuntime as CoreEngine
 
 REPLAY_MINUTES = 5
 ASK_TIMEOUT = 2.0  # seconds to wait on another daemon when listing
@@ -42,12 +54,12 @@ GENESIS = crypto.GENESIS
 
 def peers_dir(env: dict[str, str] | None = None) -> Path:
     """``$EXO_PEERS_DIR``, else ``$XDG_RUNTIME_DIR/exo/peers``, else ``~/.exo-peers``."""
-    env = os.environ if env is None else env
-    if env.get("EXO_PEERS_DIR"):
-        return Path(env["EXO_PEERS_DIR"]).expanduser()
-    if env.get("XDG_RUNTIME_DIR"):
-        return Path(env["XDG_RUNTIME_DIR"]) / "exo" / "peers"
-    return Path(env.get("HOME") or Path.home()) / ".exo-peers"
+    e = os.environ if env is None else env
+    if e.get("EXO_PEERS_DIR"):
+        return Path(e["EXO_PEERS_DIR"]).expanduser()
+    if e.get("XDG_RUNTIME_DIR"):
+        return Path(e["XDG_RUNTIME_DIR"]) / "exo" / "peers"
+    return Path(e.get("HOME") or Path.home()) / ".exo-peers"
 
 
 @dataclass
@@ -196,12 +208,12 @@ class BusLink:
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "BusLink | None":
-        env = os.environ if env is None else env
-        if not (env.get("EXO_BUS_URL") and env.get("EXO_BUS_SEAT")):
+        e = os.environ if env is None else env
+        if not (e.get("EXO_BUS_URL") and e.get("EXO_BUS_SEAT")):
             return None
         try:
             from exo.bus import Client
-            return cls(Client(env["EXO_BUS_URL"], env["EXO_BUS_SEAT"], timeout=3))
+            return cls(Client(e["EXO_BUS_URL"], e["EXO_BUS_SEAT"], timeout=3))
         except Exception as exc:
             trace.report("peers bus link", exc)
             return None
@@ -239,23 +251,6 @@ async def call_socket(path: str, body: Any, timeout: float = ASK_TIMEOUT) -> dic
 
 
 Rpc = Callable[[str, Any], Awaitable[dict[str, Any]]]
-
-
-@dataclass
-class PeerConfig:
-    policy: dict[str, str] = field(default_factory=dict)  # trust level -> auto|hold|deny
-    rules: list[dict[str, str]] = field(default_factory=list)
-    hold_minutes: float = 30.0
-    wake: bool | None = None  # None: off for an interactive seat, on for a headless one
-    active_hours: float = 12.0  # a session idle longer than this is not "live"
-    enabled: bool = True
-
-    @classmethod
-    def of(cls, raw: dict[str, Any] | None) -> "PeerConfig":
-        raw = raw or {}
-        return cls(policy=dict(raw.get("policy") or {}), rules=list(raw.get("rules") or []),
-                   hold_minutes=float(raw.get("hold_minutes") or 30), wake=raw.get("wake"),
-                   active_hours=float(raw.get("active_hours") or 12), enabled=raw.get("enabled", True) is not False)
 
 
 class PeerNode:
@@ -410,10 +405,9 @@ class PeerNode:
 
     async def _publish_out(self, session: str | None, r: dict[str, Any]) -> None:
         if self.emit_out is not None and session:
-            res = self.emit_out(session, s.PeerDelivery(msg_id=r["msg_id"], state=r["state"], peer=r.get("to", ""),
-                                                        direction="out", detail=r.get("detail", "")))
-            if asyncio.iscoroutine(res):
-                await res
+            await maybe_await(self.emit_out(session, s.PeerDelivery(msg_id=r["msg_id"], state=r["state"],
+                                                                    peer=r.get("to", ""), direction="out",
+                                                                    detail=r.get("detail", ""))))
 
     # ---------------------------------------------------------------- inbound
 
@@ -460,3 +454,125 @@ class PeerNode:
         session, peer = self._sent[mid]
         await self._publish_out(session, {"msg_id": mid, "state": doc["state"], "to": peer, "detail": doc.get("detail", "")})
         return {"ok": True}
+
+
+# ---------------------------------------------------------------- the engine's peers (attached by exo.compose)
+
+PEERS = ToolSpec(
+    name="peers", toolset="peers", risk="low",
+    description=("List the other live agent sessions you can message: other Exo sessions on this machine, Hermes "
+                 "agents, and bus seats. Shows each one's name, whether it is running or idle, its working "
+                 "directory, and any messages held for the principal. Use the name with peer_send."),
+    parameters={"type": "object", "properties": {}})
+SEND = ToolSpec(
+    name="peer_send", toolset="peers", risk="low",
+    description=("Send a short message to another live agent session by name (from `peers`). If it is running, the "
+                 "message lands at its next tool round. The receiving side's rules decide whether it is delivered "
+                 "now, held for its principal's approval, or refused. Read the result: if it says held, the message "
+                 "has NOT been delivered, so do not tell the user it was and do not send it again. You cannot "
+                 "approve anything for a peer, and a peer cannot approve anything for you."),
+    parameters={"type": "object", "required": ["to", "text"], "properties": {
+        "to": {"type": "string", "description": "A name from `peers`, such as `razi` or `razi/3fa91c2b`."},
+        "text": {"type": "string", "description": "The message: say what you need or what you found, in plain words."}}})
+
+
+class PeerService:
+    """An engine's peers: the node (presence, list, send, deliver, receipt), the ``peers`` and ``peer_send``
+    tools, and, for an in-process core with no exod socket, a small socket of its own in the peers directory.
+    The node is built on first start: the seat key is made then, so an engine that never serves peers never
+    writes one."""
+
+    def __init__(self, engine: CoreEngine) -> None:
+        self.e = engine
+        self.node: PeerNode | None = None
+        self.autostart = False  # exo.compose turns it on: a real daemon or in-process TUI announces itself
+        self._server: Any = None
+        engine.registry.register(PEERS, self._list_tool, replace=True)
+        engine.registry.register(SEND, self._send_tool, replace=True)
+
+    async def start(self, socket: str | os.PathLike | None = None) -> None:
+        """Write this daemon's presence file. ``socket`` is exod's own socket; without one (an in-process core)
+        serve a small socket of its own in the peers directory."""
+        if self.node is not None:
+            return
+        e, path = self.e, str(socket) if socket else ""
+        if not path:
+            from exo.server.app import Dispatcher, HttpServer
+            path = str(Path(e.peer_cfg_dir or peers_dir()) / f"exo-{os.getpid()}.sock")
+            self._server = HttpServer(Dispatcher(e, e.hub))
+            await self._server.start_unix(path)
+        tgt = e._peer_target
+        seat = tgt.seat
+        kp = e.seat.key_path(e.home) if e.seat else key_path(e.home, seat)
+        signer = crypto.Signer.from_file(seat, ensure_key(kp))
+        self.node = tgt.node = PeerNode(
+            seat=seat, signer=signer, target=tgt, sessions=tgt.live_sessions, socket=path, platform="exo",
+            principal=(e.seat.principal if e.seat else None) or os.environ.get("EXO_PRINCIPAL", ""),
+            cwd=e.cwd, config=e.peer_cfg, bus=BusLink.from_env(), directory=Directory(e.peer_cfg_dir or peers_dir()),
+            emit_out=lambda session, body: e.hub.publish(body, session))
+        self.node.start()
+
+    async def stop(self) -> None:
+        if self.node is not None:
+            self.node.stop()
+            await self.node.path.close()
+            self.node = None
+        if self._server is not None:
+            await self._server.close()
+            self._server = None
+
+    async def ready(self) -> bool:
+        """True when the node runs (started now if ``autostart`` is on and it was not yet)."""
+        if self.node is None and self.autostart:
+            await self.start()
+        return self.node is not None
+
+    async def command(self, b: s.Peers, via: str) -> dict[str, Any]:
+        """The ``peers`` protocol command (not ``bus``, which the engine routes to bus ingress). Call after
+        ``ready()``. ``via`` is what the engine allows the caller to claim (D-039)."""
+        node = self._need()
+        if b.action == "list":
+            return await node.list(b.session, b.local_only)
+        if b.action == "send":
+            return await node.send(b.to, b.text, b.session, via)
+        if b.action == "deliver":
+            return await node.deliver(b.envelope)
+        return await node.receipt(b.envelope)
+
+    def _need(self) -> PeerNode:
+        if self.node is None:
+            raise ToolError("peers are not running in this process (the engine has no peer socket yet)")
+        return self.node
+
+    async def _list_tool(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        res = await self._need().list(ctx.session)
+        rows = res["peers"]
+        lines = [f"You are {res['me']}. {len(rows)} peer(s):"] if rows else [f"You are {res['me']}. No other live sessions."]
+        for r in rows:
+            lines.append(f"- {r['name']}  [{r['platform']}, {r['state']}]  {r['cwd'] or ''}  {r['title'] or ''}".rstrip())
+        for h in res["held"]:
+            lines.append(f"held for your principal (not delivered to you): message {h['msg_id']} from {h['from']}")
+        return "\n".join(lines)
+
+    async def _send_tool(self, args: dict[str, Any], ctx: ToolContext) -> str:
+        try:
+            r = await self._need().send(str(args.get("to") or ""), str(args.get("text") or ""), ctx.session, "agent")
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        return describe(r)
+
+
+def attach(engine: CoreEngine) -> PeerService | None:
+    """The engine's peers when its config enables them (``CoreEngine(attach_peers=attach)``, as exo.compose does)."""
+    return PeerService(engine) if engine.peer_cfg.enabled else None
+
+
+def describe(r: dict[str, Any]) -> str:
+    """What the sending model is told. Plain about held and refused: it must not claim delivery."""
+    to, state, detail = r.get("to", "the peer"), r.get("state"), r.get("detail", "")
+    if state == "delivered":
+        return f"Delivered to {to}: {detail}. (message {r['msg_id']})"
+    if state == "held":
+        return (f"HELD, NOT delivered to {to}: {detail} Do not tell the user it was delivered and do not send it again. "
+                f"A receipt will follow when it is released, denied or expires. (message {r['msg_id']})")
+    return f"NOT delivered to {to} ({state}): {detail}. (message {r['msg_id']})"

@@ -14,7 +14,7 @@ A client reads the line and decides. Three things can answer:
 1. **The client itself.** The terminal client (TUI) handles these in `ExoApp.slash` in
    `clients/tui/exo_tui/app.py`. They are listed in its `COMMANDS` table, and `/help` is built from that table.
 2. **The core, as a built-in.** The client sends the protocol command `command.run` with `name`, `args` and
-   `session`. `CoreEngine._builtin_command` in `src/exo/core/engine.py` answers a few names. It returns text, a dict
+   `session`. `builtin_command` in `src/exo/diagnostics.py` answers a few names. It returns text, a dict
    or nothing, wrapped as `{"output": ...}`.
 3. **A plugin.** If the core has no built-in with that name, `command.run` looks in the plugin registry
    (`ctx.register_command` in `src/exo/core/plugins.py`) and calls the handler with the raw argument string. An
@@ -44,6 +44,7 @@ These exist only in the terminal client. Each one is a row in `COMMANDS` and a b
 | `/cwd` | Show this session's working folder. | none | `session.get` |
 | `/restart` | Reopen this session in a new terminal tab and quit this one. | none | `ExoApp.restart`, `clients/tui/exo_tui/restart.py` |
 | `/stop` | Stop the running turn (same as ctrl+c). | none | `ExoApp.stop_turn` |
+| `/rename` | Give this thread a new title; it shows in `/sessions`, `/resume` and the web list. Principal only (D-069). | title | `command.run` built-in `rename` (`session.updated`) |
 | `/unsteer` | Pull your newest queued steer message back into the composer, if it has not landed yet (Up in an empty composer does the same). Never stops the turn. | none | `ExoApp.unsteer` (`command.run` built-in `unsteer`) |
 | `/exit` | Quit. | none | `ExoApp.slash` |
 | `/quit` | Same as `/exit`. | none | same |
@@ -102,7 +103,7 @@ through `GET /api/complete/files`, ghost text, history for the page's life and t
 
 ### Core built-ins (`command.run`)
 
-All in `CoreEngine._builtin_command`, `src/exo/core/engine.py`.
+All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._command_run`).
 
 | Name | What it does | Arguments | Returns |
 |---|---|---|---|
@@ -111,10 +112,11 @@ All in `CoreEngine._builtin_command`, `src/exo/core/engine.py`.
 | `trace` | The model this session runs on, then the per-turn table: timing, route, estimated cost, flags. | a number N for the last N turns (default 10) | text (`trace_text`) |
 | `findings` | The harness's findings by state. | `count` returns `{"open": N, "by_state": {open, fixed, verified, reopened, total}}` (`open` is what needs work: open plus reopened). Anything else returns text: the per-state summary, what changed since this session last looked, then every finding with its state and fixed-in commit. `open`, `fixed`, `verified` or `reopened` limits the list. | text or dict |
 | `handoff_facts` | The facts the agent needs to write a handoff: thread, git state of the folder, open findings and tasks, recent summaries, last turns. Reads only. | optional path | dict (`handoff_facts`) |
+| `subagent` | Inspect, steer and stop a subagent a session handed work to (D-070). The verb is the first word of the arguments; the task is a task id, a unique prefix of it, or the child's session id. Only the principal or the task's parent session may steer or stop; any other caller gets `forbidden`. A finished child answers `conflict`. No protocol command or event was added. | `list` (this session's tasks), `open <task>`, `send <task> <text>`, `stop <task>` | dict: `list` gives `{"tasks": [{task_id, parent, child_session, status, title, live}]}`; `open` gives the task row, `steerable`, the child's session and the tail of its messages; `send` gives `{steered, author}`; `stop` gives `{stopped}` |
 | `harness_error` | A client reports an exception it caught, so the core files a finding. Not for people. | JSON with `where`, `message`, `error_type`, `traceback`. Plain text also works. | nothing |
 
-Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `handoff_facts` and `harness_error` are
-for clients to call.
+Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `handoff_facts`, `harness_error` and `subagent` are
+for clients to call (`/tasks`, `/open`, `/steer` and `/stop <task>` in the TUI, the Tasks page on the web).
 
 ### Plugin commands
 
@@ -203,7 +205,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
-| `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.core.engine:create`, or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). | `cmd_serve` in `src/exo/cli_chat.py` |
+| `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.compose:create`; `exo.core.engine:create` still works; or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). | `cmd_serve` in `src/exo/cli_chat.py` |
 | `exo chat` | A line client for `exod`. Sends `/name args` lines as `command.run`. `/quit` and `/exit` leave. | `--socket PATH`, `--url URL`, `--token-file PATH`, `--session ID`, `--resume`, `--title T` | `cmd_chat` in `src/exo/cli_chat.py` |
 | `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `main` and `cmd_tui` in `src/exo/cli.py` |
 | `exo resume` | Reopens the last session in the terminal client: `exo --resume`. Other flags pass through (`exo resume --seat X`). | same as `exo` | `main` in `src/exo/cli.py` |

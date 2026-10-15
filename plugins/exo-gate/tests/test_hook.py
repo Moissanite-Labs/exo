@@ -423,3 +423,16 @@ def test_mode_is_read_once_at_load(keyed_store, monkeypatch):
     monkeypatch.setenv("EXO_GATE_MODE", "observe")
     assert g.settings.mode == "enforce"
     assert call(ctx, "terminal", {"command": "rm -rf build"})["action"] == "approve"
+
+
+def test_spend_denial_never_falls_back_to_allow(keyed_store, monkeypatch):
+    from exo.model_spend import SpendDenied
+    from exo.core.models import decision
+    async def denied(*args, **kwargs):
+        raise SpendDenied('principal model-spend cap reached')
+    monkeypatch.setattr(decision, 'ask_choice_result', denied)
+    store, key = keyed_store
+    calls = []
+    ctx = gated(store, key, decision_router('allow', calls))
+    result = call(ctx, 'read_file', {'path': 'x'})
+    assert result['action'] == 'block' and 'spend' in result['message'] and not calls

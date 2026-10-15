@@ -17,7 +17,6 @@ import contextlib
 import os
 import re
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -33,10 +32,9 @@ from exo.core.types import ContentPart, Message, ToolSpec
 from exo.protocol import schema as s
 
 if TYPE_CHECKING:
-    from exo.core.engine import CoreEngine
+    from exo.core.engine import CoreRuntime as CoreEngine
 
 ACTIVE = "running"
-ENDED = ("done", "failed", "killed", "timeout", "lost")
 KEEP_DAYS = 14
 
 
@@ -200,9 +198,6 @@ class JobManager:
                 raise
             finally:
                 os.close(side_fd)
-            if sys.platform != "win32":
-                with contextlib.suppress(ProcessLookupError):
-                    proc._exo_pgid = os.getpgid(proc.pid)  # type: ignore[attr-defined]
             h = Handle(job_id, proc, session, command, time.time(), side=side)
             self.live[job_id] = h
         self.e.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, pid, started, log) "

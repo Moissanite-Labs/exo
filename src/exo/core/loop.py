@@ -29,7 +29,8 @@ from typing import Any, Awaitable, Callable, Iterable
 
 from exo import provenance
 from exo.core import trace
-from exo.core.context import TreeContext, _maybe_await
+from exo.core.context import TreeContext
+from exo.core.hooks import accepted, maybe_await
 from exo.core.sessions import EventBus, SessionStore, new_id
 from exo.core.types import ContentPart, Message, Provider, ToolCall, ToolResult, ToolSpec, Usage
 from exo.protocol import schema as ev
@@ -126,7 +127,7 @@ class Loop:
             raise KeyError(session)
         await self._repair(session)
         if hasattr(self.context, "note"):
-            await _maybe_await(self.context.note(session))
+            await maybe_await(self.context.note(session))
         return self.store.get_session(session)  # type: ignore[return-value]
 
     def interrupt(self, session: str) -> bool:
@@ -251,7 +252,7 @@ class Loop:
             recent = [provenance.flat(m) for m in self.store.messages(session)[-40:]]  # D-040: author per message
             await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
         if hasattr(self.context, "on_turn_complete"):
-            await _maybe_await(self.context.on_turn_complete(session, result.usage))
+            await maybe_await(self.context.on_turn_complete(session, result.usage))
         info = self.store.update_session(session, **({"model": self.model} if self.model else {}))
         await self._emit(ev.SessionUpdated(session=info), session)
         if self.on_turn_end is not None:
@@ -291,7 +292,7 @@ class Loop:
         extra = {"recall": recall, "turn_id": turn_id} if self._takes_recall() else {}
         for _ in range(self.max_iterations):
             if hasattr(self.context, "note"):
-                await _maybe_await(self.context.note(session))
+                await maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)
             msg_id = new_id("m")
             stream = await self._call(session, messages, msg_id, st, result)
@@ -307,7 +308,10 @@ class Loop:
                     partial.meta["interrupted"] = True
                     partial.meta["error"] = trace.scrub(result.error, 300)
                     result.message = await self._add(session, partial, turn_id)
-                await self._emit(ev.Error(code="provider_error", message=result.error,
+                outcomes = {a.get("outcome") for a in stream.error.attempts}
+                code = ("model_spend_stopped" if "spend_stopped" in outcomes else
+                        "model_spend_refused" if "spend_refused" in outcomes else "provider_error")
+                await self._emit(ev.Error(code=code, message=result.error,
                                           retryable=stream.error.retryable), session)
                 return
             reply = self._assemble(stream, msg_id)
@@ -322,6 +326,14 @@ class Loop:
                     st.steer.clear()
                     continue
                 return
+            spend = getattr(getattr(self.provider, "router", None), "spend", None)
+            if spend is not None:
+                try:
+                    spend.check()
+                except Exception:
+                    result.stop_reason, result.error = "error", "Model spend stopped; ask the principal to review the journal"
+                    await self._emit(ev.Error(code="model_spend_stopped", message=result.error, retryable=False), session)
+                    return
             await self._tools(session, turn_id, reply.tool_calls, st)
             if st.steer:
                 for m in st.steer:
@@ -448,6 +460,10 @@ class Loop:
         stop = asyncio.ensure_future(st.interrupt.wait())
         try:
             await asyncio.wait({task, stop}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
         finally:
             stop.cancel()
         if task.done():
@@ -486,6 +502,12 @@ class Loop:
             await self._add(session, Message.tool(results), turn_id)
 
     async def _run_one(self, session: str, turn_id: str, call: ToolCall) -> ToolResult:
+        spend = getattr(getattr(self.provider, "router", None), "spend", None)
+        if spend is not None:
+            try:
+                spend.check()
+            except Exception:
+                return ToolResult.of_text(call.id, "Model spend stopped; ask the principal to review the journal", True)
         if self.run_tool is None:
             return ToolResult.of_text(call.id, f"no tool runner; cannot run {call.name}", True)
 
@@ -494,7 +516,7 @@ class Loop:
 
         ctx = {"session": session, "turn_id": turn_id, "emit_output": output, "store": self.store}
         try:
-            res = await _maybe_await(self.run_tool(call, ctx))
+            res = await maybe_await(self.run_tool(call, ctx))
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # the registry turns tool failures into results, so this is a harness bug
@@ -517,14 +539,9 @@ class Loop:
         fn = getattr(self.memory, method, None) if self.memory is not None else None
         if fn is None:
             return None
+        kw = accepted(fn, kw)  # an older provider: drop what it does not take
         try:
-            params = inspect.signature(fn).parameters
-            if not any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
-                kw = {k: v for k, v in kw.items() if k in params}  # an older provider: drop what it does not take
-        except (TypeError, ValueError):
-            pass
-        try:
-            return await _maybe_await(fn(*args, **kw))
+            return await maybe_await(fn(*args, **kw))
         except Exception as exc:  # memory is best effort; a failing provider never breaks a turn, but it is recorded
             await self._emit(trace.error_body(f"memory.{method}", exc), kw.get("session_id"))
             return None
