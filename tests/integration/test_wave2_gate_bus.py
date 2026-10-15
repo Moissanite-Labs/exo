@@ -57,7 +57,7 @@ async def _run_gated_turn(eng: CoreEngine, answer: str) -> list[s.Event]:
     answered = False
     while eng._tasks and time.monotonic() < deadline:
         for ev in eng.hub.since(0):
-            if isinstance(ev.body, s.ApprovalRequested) and ev.body.request_id in eng._approvals and not answered:
+            if isinstance(ev.body, s.ApprovalRequested) and ev.body.request_id in eng.approvals.open and not answered:
                 # the turn is paused here: the tool has not run
                 assert ev.body.risk == "high" and ev.body.call.name == "send_message"
                 assert eng.hub.since(0) and not [e for e in eng.hub.since(0) if isinstance(e.body, s.ToolCompleted)]

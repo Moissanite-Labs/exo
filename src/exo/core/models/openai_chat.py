@@ -86,9 +86,6 @@ class OpenAIChatProvider(HttpTransport):
         return (self.name.startswith(("opencode-go", "nous")) and status in (400, 429, 502, 503)
                 and any(m in text.lower() for m in self._UPSTREAM_MARKS))
 
-    def explain_error(self, status: int, text: str) -> str:
-        return self.explain_request_error(status, text, model=self.model)
-
     def explain_request_error(self, status: int, text: str, *, model: str | None) -> str:
         low, model = text.lower(), model or "this model"
         if self.name.startswith("opencode-go"):
@@ -139,6 +136,8 @@ class OpenAIChatProvider(HttpTransport):
             yield error_event(f"provider error: {err.get('message', err)}", status)
             return
         if u := d.get("usage"):
+            st.meta["_usage_complete"] = all(type(u.get(k)) is int and u[k] >= 0
+                                             for k in ("prompt_tokens", "completion_tokens"))
             st.usage = Usage(
                 input_tokens=u.get("prompt_tokens") or 0, output_tokens=u.get("completion_tokens") or 0,
                 cache_read_tokens=(u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0,

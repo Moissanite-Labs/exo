@@ -319,8 +319,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   configured it is the D-040 local key path unchanged: pinned keys, head anchor, `exo log verify`. With
   `EXO_LEDGER_AUTHORITY` set, an installed backend signs and commits each event and checkpoint before
   replying; verification replays its pinned identity read-only and never falls back to local keys. Enabling
-  it on an existing store fails closed (unconfirmed local tail); there is no migration. An independent witness is future work. See
-  `docs/LEDGER-AUTHORITY.md`.
+  it on an existing store fails closed (unconfirmed local tail). There is no migration. The separate
+  `exo-witness` transport is implemented but disabled by default. It starts only when invoked explicitly.
+  No endpoint or receipt-delivery worker is enabled by core startup. Deployment and Exo OS delivery remain separate work. See `docs/LEDGER-AUTHORITY.md`
+  and `docs/WITNESS-TRANSPORT.md`.
 - **Lead call:** nothing on the Linux test machine's live OS changes in phase 0. It is someone's working machine
   (CRM, messaging, assistants). Where the OS first runs is A's call after the design.
 
@@ -1214,6 +1216,48 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   suites; before and after screenshots from `scripts/shots_web_tabs.py`.
 - **Docs:** `docs/ui/WEB.md` "Sub-pages (D-061)".
 
+## D-067 (2026-10-13) Engine split step 4: delete what is unused, move peers and the scheduler out of the core
+- **Why:** issue #46. The counted core sat about 24 lines under its 16,000-line cap, so every new core feature was
+  blocked. The first pass of `docs/ENGINE-SPLIT.md` only moved the engine's diagnostics and factory, which the plan
+  itself says does not reduce code.
+- **Decision:** reduce the counted core by real cuts first, then by two seams the plan already names.
+  - Delete code that grep shows nothing outside tests uses, and collapse duplicates. Examples: the decision models'
+    score and noul asks, unreachable fuzzy strategies, a second `_maybe_await` and its inline copies, a copy of
+    `HubBus`, duplicated CLI provider process code, the per-session-tree branch the engine never takes, and 59
+    `@dataclass` lines the protocol decorators now apply.
+  - Open approvals become `ApprovalDesk` (`exo.core.approvals`), one record per request instead of five dicts.
+  - The peer transport moves to `exo.peers` (step 3's "peer transport"). The scheduler moves to `exo.scheduler`.
+    `exo.compose` attaches both (`attach_peers`, `attach_scheduler`) at the same point in construction as before,
+    so tool order and prompts do not change. `PeerConfig` and `EngineTarget` stay in the core, because bus ingress
+    and jobs use them.
+  - Members that the outside code needs get public names: `run_turn`, `channels`, `Delegator.route`.
+  - The memory and context slot defaults that Exo never calls stay, because exo-context and exo-memory also run
+    under Hermes, which does call them.
+- **Rejected:** removing `exo upstream merge` or echo engine commands (user-facing behaviour), moving trace
+  rendering out again (a view move, not a seam), raising the cap.
+- **Budget (lead call, 2026-10-13):** the core cap goes from 16,000 to 15,000 lines to keep the gain
+  (`tests/integration/test_wave1_acceptance.py`). Step 4's completion criteria (private-state reads, inward product
+  imports) remain open under #46.
+- **Behaviour:** no protocol, event or command changes. D-033, D-038, D-039, D-040, D-045 and D-052 to D-054 checks
+  run as before, and required-executor mode (#70) still fails closed. An engine built without composition no longer
+  has peers or a scheduler: `peers` and `schedule.edit` answer `unsupported` there.
+- **Numbers:** 15,986 counted lines on main before, 14,812 after (1,174 fewer): about 300 deleted, 561 moved with peers, about 320 moved
+  with the scheduler, 20 added by the approvals desk.
+- **Validation:** root suite (twice) and every plugin suite, `ruff check`, the mypy baseline (it shrank from 277 to
+  249 entries; no new ones), `python -m exo.protocol.export --check`.
+- **Docs:** `docs/ENGINE-SPLIT.md` "Progress", `docs/DEVELOPER-GUIDE.md` §1, `docs/CORE.md`, `docs/PEERS.md`,
+  `docs/SCHEDULE.md`, `CHANGELOG.md`.
+
+## D-068 (2026-10-13) Turns do not wait for memory upkeep
+- **Why:** `build` waited up to `settle_timeout` (60 s) for pending summaries before every model call, so slow
+  bookkeeping delayed replies (issue #99).
+- **Decision:** build the prompt from ready summaries plus the verbatim tail and let summaries and merges finish in
+  the background. Only when that view would overflow `view_budget` does the turn wait, for `overflow_settle` (5 s)
+  at most. A summary node turns `done` in one step and `build` reads in one synchronous stretch, so a turn sees
+  either the old view or the merged one, never a mix. Logic is in `src/exo/turn_settle.py`, outside the counted core.
+- **Validation:** `tests/core/test_turn_settle.py`, `tests/core/loop/test_loop.py`.
+- **Docs:** `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep".
+
 ## D-069 (2026-10-13) Session rename is a built-in command.run, not a protocol command
 - **Decision:** `/rename <title>` is the built-in `rename` of `command.run`, answered in `src/exo/diagnostics.py`. It
   calls `update_session(title=...)` and announces the change with the existing `session.updated` event. The protocol
@@ -1246,3 +1290,47 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Limits:** child approvals shown in the parent, and `followup` or `resume`, are follow-ups. Typing straight into a
   child's session still steers it through `turn.send`; that path works but leaves no note on the receipt.
 - **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
+
+## D-073 (2026-10-13) Signed updates verify against a pinned trust list (issue #42)
+- **Decision:** `update.require_signed` (default false) makes `exo update` verify the upstream tip with
+  `git verify-commit` (SSH signatures) against `$EXO_HOME/update/allowed_signers`, then merge exactly that sha. The
+  repo's `trust/allowed_signers` is only the source for the pin; `exo update --pin-trust [REV]` copies it, by hand.
+  Code: `src/exo/update_verify.py`, two hooks in `src/exo/update_cmd.py`.
+- **Why:** the repo cannot be its own root of trust. If the check read the list from the commit being installed, an
+  attacker who can push could add their own key. A local pin makes the first trust decision a human one and makes
+  every later key change visible. Opt-in because the project does not sign releases yet.
+- **Limits:** trust on first use of the pin; SSH signatures only; commit signatures, not tags; `uv tool` installs
+  cannot be verified. A key compromise needs the pin edited by hand.
+- **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
+
+## D-077 (2026-10-15) Core budget: a ratchet with headroom, functionality and robustness first
+- **Status:** Accepted 2026-10-15. The principal's ruling: "important to be lean and optimized but not at the cost of
+  functionality and robustness and product-market fit". It replaces the budget part of D-067 (the hard 15,000-line
+  ceiling). D-067's cuts and seams stand.
+- **Why:** after #124 the count was 14,813. #91 (required executor boundary) added 46 lines and #87 (model spend
+  boundary) added 140, so main stands at 14,999, one line under the wall. The next fix would have waited for a cut.
+  A line count is a signal of a lean core. The aim is structure, and security, robustness and product work must not
+  be blocked by the signal.
+- **Decision:** `tests/integration/test_wave1_acceptance.py` records `CORE_FLOOR = 14813` and `CORE_HEADROOM = 1000`
+  and asserts only `total < CORE_FLOOR + CORE_HEADROOM` (ceiling 15,813).
+  - The floor ratchets down: every real reduction PR (deletions, simplification, real seams per ENGINE-SPLIT) sets it
+    to its post-merge count in the same PR. It never goes up.
+  - Headroom is for shipping: fixes and features land inside it with no ceremony. The test prints the count, the
+    floor and the headroom left, and its failure message shows them.
+  - Security and robustness fixes are never blocked. If one would cross the ceiling, its PR raises `CORE_HEADROOM` by
+    the minimum needed with a one-line note here, and the lead schedules a reduction within the week. A feature that
+    would cross the ceiling waits for a reduction or carries a recorded decision.
+  - The goal is structural (ENGINE-SPLIT step 4: no private-state reads across module boundaries, no product imports
+    into the engine, one responsibility per module). The test also prints the largest counted files and flags any
+    above 1,000 lines, as information only.
+  - The `CORE` list is never edited to dodge the count.
+- **Rejected:** keeping the wall and raising it by a step each time (the count chases the work, with no pressure to
+  cut); retiring the count (ENGINE-SPLIT asks for import-direction checks first, and none exist); excluding modules
+  or moving code to dodge the count.
+- **Numbering:** D-074 and D-075 are held by open PRs (#125, #126) and D-076 by a parallel reduction PR, so this is D-077.
+- **Numbers:** floor 14,813 is the count at the merge of #124 (D-067 recorded 14,812 on the branch before its last
+  merge from main). Main (859fbcc) is at 14,999, so 814 lines are left. No source changed.
+- **Revisit if:** the headroom is raised more than once for non-security work, or the floor stops falling for a long time.
+- **Validation:** the budget test, `tests/docs`, `tests/test_privacy.py`, `tests/test_versioning.py`, `ruff check`.
+- **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
+  §11 and §27, `CHANGELOG.md`.

@@ -36,7 +36,9 @@ batched per wave: each batch is a new version (`vX.Y`), with its own header, cha
 
 | Path | What lives there |
 |---|---|
-| `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, jobs, peers, scheduler, plugin loader. Small on purpose. |
+| `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, approvals, ingress, jobs, plugin loader. Small on purpose. |
+| `src/exo/compose.py` | Builds the engine `exo serve` runs and attaches what lives outside the core: peers, the scheduler, learning. |
+| `src/exo/peers.py`, `src/exo/scheduler.py` | The peer transport (D-026) and scheduled jobs (D-022), outside the core since D-067. |
 | `src/exo/protocol/` | The wire protocol: `schema.py` (commands and events), `client.py`, `export.py`, `generated/`. |
 | `src/exo/server/` | The server that carries the protocol (Unix socket, TCP with a token, or stdio). |
 | `src/exo/compose.py` | `create()`, the factory `exo serve` runs: config, seat, executor, plugins, product integrations. |
@@ -70,6 +72,25 @@ code. The protocol has its own cap (section 2).
 **Core, plugins, clients.** The core does the work and holds the state. Plugins add tools, commands, hooks, a memory
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
 program's database. Nothing in the core may assume one person's names, accounts or machines (D-004).
+
+**The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
+commands. Its collaborators have small interfaces:
+
+- `engine.approvals` is an `ApprovalDesk` (`src/exo/core/approvals.py`): `ask`, `listing`, `respond` and
+  `announce_resolved`, one `Pending` record per open request. Code that needs a human answer calls
+  `engine.approvals.ask(...)`. A test that fakes an open request puts a `Pending` in `engine.approvals.open`.
+- `engine.peers` is the `PeerService` from `exo.peers`, or `None`. `exo.compose` passes
+  `attach_peers=exo.peers.attach`. A test that needs peers does the same, then calls `await engine.peers.start(sock)`.
+- `engine.scheduler` is the `Scheduler` from `exo.scheduler`, or `None`. `exo.compose` passes
+  `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`.
+- `engine.run_turn(body, meta)` runs one turn with the lifecycle hooks around it. Product code outside the core
+  (the scheduler) uses it, not the loop's private state.
+- A plugin callback that may be sync or async goes through `exo.core.hooks.maybe_await`. One that may not declare
+  every keyword goes through `exo.core.hooks.accepted`. Do not write a new copy of either.
+
+A new subsystem that is a product feature built on the engine (like the scheduler) goes outside `src/exo/core` and
+is attached by `exo.compose`, at the point in `CoreEngine.__init__` where its tools must register, so the tool order
+the model sees stays the same.
 
 ## 2. The protocol
 
@@ -305,13 +326,34 @@ Plugin suites are separate. They need a bus address that goes nowhere and a seat
 
 Run each plugin folder you changed: `plugins/<name>/tests`.
 
+One test is opt-in because it spends money and needs a logged-in CLI: `tests/core/models/test_claude_cli_real.py`
+(marker `real_claude`) runs one tiny real turn through the claude-cli provider, to catch a Claude CLI release that
+changes the stream-json envelope. It is skipped unless `EXO_TEST_REAL_CLAUDE=1` is set and `claude` is on PATH. Default
+runs and CI never run it.
+
 If you changed the protocol schema, also run `python -m exo.protocol.export --check`.
 
-Rules that tests enforce: the protocol caps, the core line budget, the TUI colour tokens against the site's
+Rules that tests enforce: the protocol caps, the core line budget (a ratchet with headroom, explained below), the
+TUI colour tokens against the site's
 `style.css`, that every `/help` command appears in the intro skill, and the docs map (`tests/docs/test_docs_map.py`).
 Tests use fake models and no network. The conftest fixtures isolate `EXO_HOME`, the bus identity and the peers
 folder, so a test never reads your real setup. The root fixture also clears inherited `NO_COLOR` so terminal
 settings cannot change the expected TUI theme. Tests that need no-colour mode set `NO_COLOR` themselves.
+
+**The core line budget (D-077).** `test_core_line_budget` (`tests/integration/test_wave1_acceptance.py`) counts the
+lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`,
+generated files excluded. It is a ratchet with headroom, not a wall. The test records `CORE_FLOOR` and
+`CORE_HEADROOM` and fails when the count reaches their sum. Run it with `-s` or `-rP` to see the count, the headroom
+left and the largest counted files. The rules are in `docs/ENGINE-SPLIT.md` "Budget policy":
+
+- Fixes and features land inside the headroom with no ceremony.
+- A PR that makes a real reduction (deletions, simplification, a real seam from the engine split) sets `CORE_FLOOR` to
+  its post-merge count in the same PR. The floor never goes up.
+- A security or robustness fix is never blocked. If it would cross the ceiling, raise `CORE_HEADROOM` by the minimum
+  that the failure message names, and add a one-line note to `DECISIONS.md`. A reduction follows within the week.
+- A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+- Never edit the `CORE` list to dodge the count. The goal is structural: no private-state reads across module
+  boundaries, no product imports into the engine, one responsibility per module. The count is a signal for it.
 
 Check your prose before you commit docs:
 
@@ -446,6 +488,15 @@ Export with `exo taste export-house --version X.Y.Z`, review and tick the pack, 
 Unmerged work counts as in progress, even when it was tested locally (`docs/SITE-STATUS.md`). Do not describe it as
 built in any doc.
 
+**Signing releases (D-073).** Users who set `update.require_signed` (`docs/INSTALL.md`) accept only commits signed
+by a key in `trust/allowed_signers`, in the format `ssh-keygen -Y verify` reads: `<principal> <key type> <public key>`,
+one per line (add `namespaces="git"` after the principal to limit the key to git). Sign the commits that land on
+main (`git config gpg.format ssh`, `git config user.signingkey ~/.ssh/<key>.pub`, `git config commit.gpgsign true`;
+for merges made on GitHub, use a merge you sign locally, since GitHub's web signature is not an SSH key). Also sign the
+tag, `git tag -s exo-vX.Y.Z`, for people who check it by hand. To change keys, add the new key in a commit signed by an
+old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the list. Never remove the
+old key from the list in the same commit that the old key must sign.
+
 ## 9. Recipes
 
 Short, working patterns for things people ask about. Each one names the file to read next.
@@ -496,17 +547,12 @@ A decision model returns probabilities, not prose (`docs/PROVIDERS.md`). The cal
 `aux`, then `main`.
 
 ```python
-from exo.core.models.decision import ask_choice_result, ask_score, tighten_only, DecisionError
+from exo.core.models.decision import ask_choice_result, tighten_only, DecisionError
 
 res = await ask_choice_result(router, state, "How strictly should this call be gated?",
                               ["allow", "log", "ask", "deny"])
 res.choice, res.probabilities, res.source, res.route, res.confidence
 #   source is "decision" (a probability model) or "generative" (a chat model fallback, probability 1.0 on its pick)
-
-sc = await ask_score(router, state, "How risky is this?", ["harmless", "minor", "serious"])
-sc.score         # a level index counted from 0; it can fall between levels, such as 1.43. Use 2 to 10 levels.
-
-probs = await ask_choice(router, state, "Which fits?", ["a", "b"])   # just {option: probability}
 ```
 
 - `state` is the context the question is about. It can be a string or JSON. `router` comes from the plugin context
