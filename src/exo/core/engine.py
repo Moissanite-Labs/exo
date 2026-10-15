@@ -557,7 +557,7 @@ class CoreRuntime:
         except SessionLocked as exc:  # a finished child session takes no new turns
             raise CommandFailed("session_locked", str(exc)) from None
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
-        if b.mode == "steer" and self.loop.state(b.session).running:
+        if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
