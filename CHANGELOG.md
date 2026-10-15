@@ -5,14 +5,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Security
+- Absolute symlink aliases into protected Exo stores retain the principal-only write approval floor (#130),
+  including missing leaves, deletion of store ancestors, and `cd`, `pushd` or `git -C` into an alias of the store.
+  A path the gate cannot resolve (a NUL byte) keeps its lexical check instead of raising. `cp -s`, `cp -l` and a
+  relative `ln -s` target that alias the store ask too. `docs/GATE.md` lists what stays open (hardlinks, protected
+  entries that link out of the store, case-insensitive filesystems, glob and brace spellings).
+
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
-
-### Fixed
-- Absolute symlink aliases into protected Exo stores retain the principal-only write approval floor (#130),
-  including missing leaves and deletion of store ancestors.
 
 ### Changed
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).

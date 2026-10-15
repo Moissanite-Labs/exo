@@ -61,7 +61,7 @@ def test_symlink_dotdot_uses_filesystem_order(store, tmp_path):
 def test_root_and_ancestor_deletion_aliases(store, tmp_path):
     root = tmp_path / "root-alias"
     root.symlink_to(store, target_is_directory=True)
-    assert_floor(root, deletion=True)
+    assert_floor(root, deletion=True)        # `rm <alias>` only removes the link; asking anyway is deliberate
     ancestor = tmp_path / "ancestor-alias"
     ancestor.symlink_to(tmp_path, target_is_directory=True)
     assert_floor(ancestor, deletion=True)
