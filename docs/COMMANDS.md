@@ -28,6 +28,10 @@ Any client can use categories 2 and 3 with no client code. Only category 1 is sp
 `exo chat` has no client-side commands except `/quit` and `/exit`. It sends every other `/name args` line straight to
 `command.run`, so `/new` or `/model` there fail with `not_found`, while `/context` and `/grants` work.
 The web client (`exo web`) runs `/context`, `/findings` and `/trace` from its composer the same way.
+It also supports `/model [ref]`, `/model default [ref]` and `/default [ref]`: without a reference they open a picker.
+As in the TUI, model selection changes the shared main route; `/model` also records the choice on the open thread.
+Unknown slash commands stay in the composer with an error instead of starting a model turn. Paths such as `/etc/hosts`
+remain ordinary message text.
 
 ### Client commands (TUI)
 

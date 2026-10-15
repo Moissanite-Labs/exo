@@ -108,6 +108,52 @@ def test_read_only_command_route():
     assert [(b.name, b.args, b.session) for b in src.calls] == [("context", "", "s1"), ("findings", "count", "s1")]
 
 
+def test_session_model_route_is_scoped_and_preserves_core_refusals():
+    src = FakeSource({"models.list": {"models": [{"route": "fake:x"}]}})
+    c = centre(src)
+    assert call(c, "GET", "/api/chat/models") == (200, {"models": [{"route": "fake:x"}]})
+    assert call(c, "POST", "/api/chat/sessions/s1/model", {"model": "fake:y", "role": "deep", "session": "s2"})[0] == 200
+    cmd = src.calls[-1]
+    assert isinstance(cmd, s.ModelsSet) and (cmd.model, cmd.session, cmd.role) == ("fake:y", "s1", "main")
+    assert call(c, "POST", "/api/chat/sessions/s1/model", {"model": ""})[0] == 400
+    assert call(c, "GET", "/api/chat/sessions/s1/model")[0] == 405
+    src.fail["models.set"] = "forbidden"
+    assert call(c, "POST", "/api/chat/sessions/s1/model", {"model": "fake:y"})[0] == 403
+    src.fail["session.get"] = "not_found"
+    before = sum(isinstance(cmd, s.ModelsSet) for cmd in src.calls)
+    assert call(c, "POST", "/api/chat/sessions/missing/model", {"model": "fake:y"})[0] == 404
+    assert sum(isinstance(cmd, s.ModelsSet) for cmd in src.calls) == before
+    assert not any(isinstance(cmd, s.TurnSend) for cmd in src.calls)
+
+
+def test_model_change_http_requires_page_token_and_same_origin():
+    async def go():
+        src = FakeSource()
+        web = WebServer(centre(src), token="model-test-token")
+        port = await web.start("127.0.0.1", 0)
+        async def request(headers):
+            r, w = await asyncio.open_connection("127.0.0.1", port)
+            body = json.dumps({"model": "fake:y"})
+            h = {"Host": f"127.0.0.1:{port}", "Content-Length": str(len(body)), **headers}
+            w.write(("POST /api/chat/sessions/s1/model HTTP/1.1\r\n" +
+                     "".join(f"{k}: {v}\r\n" for k, v in h.items()) + "\r\n" + body).encode())
+            await w.drain()
+            response = await r.read()
+            w.close()
+            await w.wait_closed()
+            return int(response.split(b" ", 2)[1])
+        try:
+            assert await request({}) == 403
+            assert await request({"X-Exo-Token": "wrong"}) == 403
+            assert await request({"X-Exo-Token": "model-test-token", "Origin": "https://evil.example"}) == 403
+            assert src.calls == []
+            assert await request({"X-Exo-Token": "model-test-token"}) == 200
+            assert isinstance(src.calls[-1], s.ModelsSet) and src.calls[-1].session == "s1"
+        finally:
+            await web.close()
+    run(go())
+
+
 def test_methods_and_unknown_paths():
     c = centre()
     assert call(c, "GET", "/api/feedback")[0] == 405
