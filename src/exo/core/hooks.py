@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -127,12 +128,15 @@ class HookRegistry:
         return out
 
     async def afire(self, name: str, *, _fail_closed_plugins: frozenset[str] = frozenset(),
+                    _isolate_arguments: bool = False,
                     **kwargs: Any) -> list[Any]:
         """Like ``fire``; the engine can require a trusted security hook to succeed."""
         out = []
         for e in self.entries(name):
             try:
-                r = await maybe_await(e.callback(**kwargs))
+                # Broker-bound tool hooks inspect independent JSON copies of the request.
+                call_kw = {**kwargs, "args": deepcopy(kwargs["args"])} if _isolate_arguments else kwargs
+                r = await maybe_await(e.callback(**call_kw))
             except Exception as exc:
                 logger.warning("hook %s from %s failed", name, e.plugin or "?", exc_info=True)
                 trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)

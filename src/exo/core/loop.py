@@ -308,7 +308,10 @@ class Loop:
                     partial.meta["interrupted"] = True
                     partial.meta["error"] = trace.scrub(result.error, 300)
                     result.message = await self._add(session, partial, turn_id)
-                await self._emit(ev.Error(code="provider_error", message=result.error,
+                outcomes = {a.get("outcome") for a in stream.error.attempts}
+                code = ("model_spend_stopped" if "spend_stopped" in outcomes else
+                        "model_spend_refused" if "spend_refused" in outcomes else "provider_error")
+                await self._emit(ev.Error(code=code, message=result.error,
                                           retryable=stream.error.retryable), session)
                 return
             reply = self._assemble(stream, msg_id)
@@ -323,6 +326,14 @@ class Loop:
                     st.steer.clear()
                     continue
                 return
+            spend = getattr(getattr(self.provider, "router", None), "spend", None)
+            if spend is not None:
+                try:
+                    spend.check()
+                except Exception:
+                    result.stop_reason, result.error = "error", "Model spend stopped; ask the principal to review the journal"
+                    await self._emit(ev.Error(code="model_spend_stopped", message=result.error, retryable=False), session)
+                    return
             await self._tools(session, turn_id, reply.tool_calls, st)
             if st.steer:
                 for m in st.steer:
@@ -491,6 +502,12 @@ class Loop:
             await self._add(session, Message.tool(results), turn_id)
 
     async def _run_one(self, session: str, turn_id: str, call: ToolCall) -> ToolResult:
+        spend = getattr(getattr(self.provider, "router", None), "spend", None)
+        if spend is not None:
+            try:
+                spend.check()
+            except Exception:
+                return ToolResult.of_text(call.id, "Model spend stopped; ask the principal to review the journal", True)
         if self.run_tool is None:
             return ToolResult.of_text(call.id, f"no tool runner; cannot run {call.name}", True)
 
