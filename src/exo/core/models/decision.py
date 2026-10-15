@@ -199,6 +199,7 @@ def _error_text(resp: httpx.Response) -> str:
 
 async def _run(router: Any, role: str, state: Any, question: dict[str, Any]) -> tuple[ChoiceAnswer, str, str]:
     """Try each route of ``role`` in order. Returns (answer, source, route ref)."""
+    router.check_spend_policy()
     last: DecisionError | None = None
     tried = 0
     for route in router.chain(role):
@@ -208,6 +209,9 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any]) -> 
             tried += 1
             try:
                 if getattr(cred.provider, "is_decision", False):
+                    if router.spend_enforced:
+                        from exo.model_spend import SpendDenied
+                        raise SpendDenied("typed decision pricing is unbounded; ask the principal to review the route")
                     reply = await cred.provider.decide(state, {"q": question}, model=route.model)
                     ans = reply.answers.get("q")
                     if not isinstance(ans, ChoiceAnswer):
@@ -217,6 +221,9 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any]) -> 
                 ans = await _generative(router, route, cred, sole, state, question)
                 return ans, "generative", route.ref
             except DecisionError as e:
+                if getattr(router, "spend", None) is not None:
+                    from exo.model_spend import SpendDenied
+                    raise SpendDenied(str(e)) from e
                 last = e
                 if e.status in (400, 413, 422):  # the question itself is bad; another route will fail too
                     raise
@@ -239,6 +246,9 @@ async def _generative(router: Any, route: Any, cred: Any, sole: bool, state: Any
         if ev.kind == "text":
             text.append(ev.text)
         elif ev.kind == "error":
+            if getattr(router, "spend", None) is not None:
+                from exo.model_spend import SpendDenied
+                raise SpendDenied(ev.error or "model spend stopped")
             raise DecisionError(ev.error or "model error", ev.status, bool(ev.retryable), ev.retry_after)
         elif ev.kind == "done" and ev.message is not None and not text:
             text.append(ev.message.text())

@@ -19,7 +19,7 @@ from exo.core.types import ContentPart, Message
 from exo.protocol import schema as s
 
 if TYPE_CHECKING:
-    from exo.core.engine import CoreEngine
+    from exo.core.engine import CoreRuntime as CoreEngine
 
 MAX_LIVE = 8
 

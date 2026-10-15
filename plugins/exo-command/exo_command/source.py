@@ -39,6 +39,8 @@ class Source(Protocol):
 class ClientSource:
     """Over HTTP + SSE, through ``exo.protocol.client.Client``."""
 
+    executor_required = True  # remote completion has no authority to execute workspace Git
+
     def __init__(self, socket: Optional[str] = None, url: Optional[str] = None, token: Optional[str] = None):
         from exo.protocol.client import Client
         self.socket = socket
@@ -65,6 +67,10 @@ class DispatcherSource:
 
     def __init__(self, dispatcher: Any):
         self.dispatcher = dispatcher
+
+    @property
+    def executor_required(self) -> bool:
+        return bool(getattr(self.dispatcher.engine, "executor_required", True))
 
     async def call(self, body: Any) -> Dict[str, Any]:
         resp = await self.dispatcher.run(s.Command.of(body), "principal:web")
