@@ -138,6 +138,18 @@ class CommandCentre:
     def events_since(self, since: int = 0, session: Optional[str] = None) -> List[Dict[str, Any]]:
         return [e for e in self.ring if e["seq"] > since and (session is None or e.get("session") in (None, session))]
 
+    async def replay_events(self, since: int, session: Optional[str] = None):
+        """The ring is a cache; an expired cursor resumes from the core's durable event log."""
+        gap = bool((self.ring and since < self.ring[0]["seq"] - 1) or since > self._ring_seq)
+        if not gap:
+            return self.events_since(since, session), None
+        res = await self._need_source().call(s.EventsSubscribe(since=since, session=session))
+        frontier = int(res.get("seq") or 0)
+        reset = since > frontier
+        if reset:
+            res = await self._need_source().call(s.EventsSubscribe(since=0, session=session))
+        return res.get("events") or [], {"since": since, "reset": reset}
+
     def subscribe_events(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self._event_subs.append(q)

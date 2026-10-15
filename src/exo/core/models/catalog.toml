@@ -85,6 +85,7 @@ models = ["sonnet", "opus", "haiku"]
 transport = "muse-cli"
 command = "muse"
 models = ["default"]
+roles = ["aux"]
 
 # TypeSafe Jev: a decision model (probabilities, not text), so decision role only.
 # Verified https://docs.typesafe.ai/api.md : POST https://api.typesafe.ai/v1/systemone,

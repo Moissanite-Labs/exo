@@ -66,7 +66,7 @@ def test_card_closes_when_the_core_no_longer_has_the_approval(tmp_path):
         await send(app, pilot, "ask")
         await until(lambda: app.card is not None, pilot)
         rid = app.card.req.request_id
-        fut, _sid = eng._approvals[rid]
+        fut = eng.approvals.open[rid].future
         fut.set_result("allow")  # resolved behind the clients' backs: no ApprovalResolved goes out
         app.reconcile_every = 0.1
         await until(lambda: app.card is None, pilot)

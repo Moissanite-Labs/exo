@@ -16,12 +16,12 @@ body that tries to answer an approval, and the engine refuses ``approval.respond
 from __future__ import annotations
 
 import asyncio
-import inspect
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from exo.core.hooks import maybe_await
 from exo.core.sessions import new_id
 
 HOLD_SECONDS = 30 * 60
@@ -38,6 +38,23 @@ STANDING_LINE = (
 _APPROVE_ID = re.compile(r"\ba_[0-9a-f]{8,}\b")
 _APPROVE_CALL = re.compile(r"approval\.respond|\b(approve|allow|grant|authori[sz]e)\b[^.\n]{0,40}\b(pending|open|waiting)\b"
                            r"[^.\n]{0,30}\b(gate|approval|request|permission|prompt)s?\b", re.I)
+
+
+@dataclass
+class PeerConfig:
+    policy: dict[str, str] = field(default_factory=dict)  # trust level -> auto|hold|deny
+    rules: list[dict[str, str]] = field(default_factory=list)
+    hold_minutes: float = 30.0
+    wake: bool | None = None  # None: off for an interactive seat, on for a headless one
+    active_hours: float = 12.0  # a session idle longer than this is not "live"
+    enabled: bool = True
+
+    @classmethod
+    def of(cls, raw: dict[str, Any] | None) -> PeerConfig:
+        raw = raw or {}
+        return cls(policy=dict(raw.get("policy") or {}), rules=list(raw.get("rules") or []),
+                   hold_minutes=float(raw.get("hold_minutes") or 30), wake=raw.get("wake"),
+                   active_hours=float(raw.get("active_hours") or 12), enabled=raw.get("enabled", True) is not False)
 
 
 @dataclass
@@ -137,8 +154,7 @@ class Target:
 
 
 async def _call(fn: Callable[..., Any], *args: Any) -> Any:
-    out = fn(*args)
-    return await out if inspect.isawaitable(out) else out
+    return await maybe_await(fn(*args))
 
 
 class IngressPath:

@@ -346,8 +346,19 @@ to model providers). The HTTP server inside `exod` is written on the standard li
 no web framework. Storage is SQLite files and plain Markdown files.
 
 The core has a line budget. A test counts the lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`
-and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3. The budget is now 16,000 and the test fails above that. Today the count is about 15,836, so the next large addition must either remove something or argue for a higher budget. The budget exists so that growth is a decision, and so the core can
-later shrink onto a small device (section 27).
+and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3. The budget
+rose to 16,000 during the security wave. Engine split step 4 (D-067) cut the count to about 14,800 by deleting
+unused code and moving the peer transport and the scheduler out of the core.
+
+The budget is now a ratchet with headroom (D-077). The test records a floor, the count after the last real
+reduction, and allows 1,000 lines above it. Each real reduction lowers the floor, and the floor never rises. Fixes
+and features fit inside the headroom with no ceremony, and a security or robustness fix is never blocked by the
+budget. A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+
+The reason is a ruling that the core should be lean and optimized, but not at the cost of functionality, robustness
+and product-market fit. The count is only a signal. The goal is structure: no module reads another's private state,
+no product code is imported into the engine, each module has one job. Growth stays visible, and the core can later
+shrink onto a small device (section 27).
 
 Repository layout, in short:
 
@@ -712,18 +723,21 @@ it was slower and no more correct. A native version waits for a measured win on 
 
 #### 15.2 Hooks
 
-Named hook points let plugins watch and steer. The names follow Hermes so existing plugins keep working. The
-engine fires these today **[built]**:
+Named hook points let plugins watch and steer. Their names are familiar to Hermes plugin authors, but Exo
+accepts only hooks its core actually fires. These six are supported today **[built]**:
 
 - `pre_tool_call`: may return `block` (the model receives the reason as an error result) or `approve` (ask
   the person first).
 - `post_approval_response`: told what the person chose.
 - `post_tool_call`: sees the result.
 - `transform_tool_result`: may rewrite the result text.
+- `on_turn_start` and `on_turn_end`: bracket each turn.
 
-More names are reserved and validated (for model calls, turns, sessions, compaction, commands, subagents and
-skills) but not yet fired by the loop. A failing hook is logged and skipped, so one broken plugin never
-breaks a turn. A block decision is still honoured.
+Names declared in Hermes contracts or earlier Exo versions for model calls, session lifecycle, compaction,
+commands, subagents, gateway and auxiliary calls, kanban, and skills are known but not fired by Exo. The
+default registry rejects these registrations so plugins cannot silently subscribe to a hook that never runs.
+A failing supported hook is logged and skipped, so one broken plugin does not break a turn. A block decision
+is still honoured.
 
 #### 15.3 The approval flow
 
@@ -1525,8 +1539,8 @@ store and grows with them. The near-term design rules that keep that path open:
 
 - **The store is one folder.** Pack, nodes, items, ledger and indexes are plain files and SQLite. Copy the
   folder and the person moves.
-- **The core stays small.** Under 16,000 lines (about 15,836 today), enforced by a test. Two runtime
-  dependencies. The terminal client is Python too, so the core and its main client need no Node, no browser
+- **The core stays small.** About 15,000 lines today, held by a test that allows a recorded floor plus 1,000 lines
+  (section 11). The floor only goes down. Two runtime dependencies. The terminal client is Python too, so the core and its main client need no Node, no browser
   engine and no containers. One optional tool, `code_find`, needs Node and hides itself when Node is
   missing. The planned idle memory target is under 80 MB **[not measured]**.
 - **A small-model path from day one.** The OpenAI-compatible transport already talks to local servers

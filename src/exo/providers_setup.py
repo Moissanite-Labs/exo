@@ -68,7 +68,7 @@ def _run(argv: list[str], stdin: str | None = None) -> subprocess.CompletedProce
 
 
 def build_router(home: str | os.PathLike | None = None, env: Mapping[str, str] | None = None) -> Router:
-    return Router.from_config(Config.load(home).data.get("models"), env=env)
+    return Router.from_config(Config.load(home).models(), env=env)
 
 
 def key_vars(spec: Mapping[str, Any]) -> list[str]:
@@ -413,6 +413,27 @@ def any_ready(router: Router | None = None, home: str | os.PathLike | None = Non
     return False
 
 
+def main_status(router: Router, home: str | os.PathLike, *, automatic: bool = False,
+                table: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Configured main readiness; call off the event loop (keys/local probes).
+
+    Credentials without a known main model require the existing model chooser.
+    Only Claude's chat-only static catalog supplies an automatic missing route.
+    """
+    table = rows(router, home, prober=probe) if table is None else table
+    ready = {r["provider"] for r in table if r["ready"] and
+             (not r["roles"] or "main" in r["roles"]) and r["transport"] != "decision"}
+    route = next((r.ref for r in router.chain("main") if r.provider in ready), "")
+    suggested = ""
+    if not route and automatic:
+        for name, spec in router.providers.items():
+            if name in ready and spec.get("transport") == "claude-cli" and spec.get("models"):
+                suggested = f"{name}:{spec['models'][0]}"
+                break
+    return {"ready": bool(route or suggested), "route": route or suggested, "suggested": suggested,
+            "needs_model": sorted(ready) if not route and not suggested else []}
+
+
 def render(table: list[dict[str, Any]]) -> str:
     """The `exo providers` table: plain text, no secrets."""
     lines = [f"{'provider':<13} {'status':<18} {'key':<26} {'models':>6}  default"]
@@ -497,6 +518,10 @@ def test_provider(provider: str, *, router: Router | None = None, home: str | os
     """One tiny live call. Returns ``{provider, ok, latency_ms, error_class, detail, models}``; never the key,
     and ``detail`` is built from the status code or error class only."""
     router = router or build_router(home)
+    if router.spend_enforced:
+        return {"provider": provider, "ok": False, "latency_ms": None, "error_class": "spend_boundary",
+                "detail": "Live setup probes have no bounded billing contract; use the guarded model router.",
+                "models": None, "at": int(time.time())}
     spec = _spec(router, provider)
     transport = spec.get("transport", "openai")
     res: dict[str, Any] = {"provider": provider, "ok": False, "latency_ms": None, "error_class": "",

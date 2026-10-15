@@ -214,10 +214,10 @@ def test_page_answers_as_the_principal_and_reattaches_to_a_restarted_core(tmp_pa
 
     async def ask(text):
         sid = (await eng.handle(s.Command.of(s.SessionCreate()), eng.hub))["session"]["id"]
-        n = len(eng._approvals)
+        n = len(eng.approvals.open)
         await Dispatcher(eng).run(s.Command.of(s.TurnSend(session=sid, text=text)))
-        await _until(lambda: len(eng._approvals) > n)
-        return [rid for rid, (f, _) in eng._approvals.items() if not f.done()][-1]
+        await _until(lambda: len(eng.approvals.open) > n)
+        return [rid for rid, p in eng.approvals.open.items() if not p.future.done()][-1]
 
     async def go():
         srv, task = await serve()
@@ -230,8 +230,8 @@ def test_page_answers_as_the_principal_and_reattaches_to_a_restarted_core(tmp_pa
             no = (await raw(port, "POST", "/api/approvals/" + rid, {}, {"decision": "allow_always"}))[0]
             yes = (await raw(port, "POST", "/api/approvals/" + rid, {"X-Exo-Token": TOKEN}, {"decision": "allow"}))
             await _until(lambda: sent)
-            # let the first turn finish: a turn still open when the next starts reaches it as a
-            # 'meanwhile' note (D-028), which the scripted model would read as a new request
+            # Finish the first scripted turn before opening another thread: a late shared-memory
+            # note would look like a new user prompt to RuleFake and repeat its tool step.
             await _until(lambda: not eng._tasks)
             # the core restarts: a new principal credential; the web reads it again and still answers
             task.cancel()

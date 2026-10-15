@@ -19,7 +19,7 @@ import json
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Literal, TypeVar
+from typing import Any, Callable, Literal, TypeVar, dataclass_transform
 
 from exo.core.types import ContentPart, Message, ToolCall, ToolResult, Usage, from_dict, to_dict
 
@@ -49,6 +49,7 @@ def _register(table: dict[str, type], name: str, cap: int) -> Callable[[type[T]]
             raise RuntimeError(f"duplicate protocol type {name}")
         if len(table) >= cap:
             raise RuntimeError(f"protocol cap {cap} reached; add fields, not types")
+        dataclass(cls)
         cls.TYPE = name  # type: ignore[attr-defined]
         table[name] = cls
         return cls
@@ -56,10 +57,12 @@ def _register(table: dict[str, type], name: str, cap: int) -> Callable[[type[T]]
     return deco
 
 
+@dataclass_transform()
 def command(name: str) -> Callable[[type[T]], type[T]]:
     return _register(COMMANDS, name, MAX_COMMANDS)
 
 
+@dataclass_transform()
 def event(name: str) -> Callable[[type[T]], type[T]]:
     return _register(EVENTS, name, MAX_EVENTS)
 
@@ -102,7 +105,6 @@ class ErrorInfo:
 
 
 @command("hello")
-@dataclass
 class Hello:
     """Handshake. Server replies with its protocol version and capabilities."""
 
@@ -113,7 +115,6 @@ class Hello:
 
 
 @command("session.create")
-@dataclass
 class SessionCreate:
     """Start a thread of the agent: a new focus in the same memory (D-028). ``kind="private"`` makes a thread
     whose entries are logged but never enter the agent's tree, other threads or search."""
@@ -126,14 +127,12 @@ class SessionCreate:
 
 
 @command("session.list")
-@dataclass
 class SessionList:
     limit: int = 50
     seat: str | None = None
 
 
 @command("approvals.list")
-@dataclass
 class ApprovalsList:
     """Approvals still waiting for an answer (a client that connects late can show and answer them)."""
 
@@ -141,13 +140,11 @@ class ApprovalsList:
 
 
 @command("session.get")
-@dataclass
 class SessionGet:
     session: str
 
 
 @command("session.fork")
-@dataclass
 class SessionFork:
     session: str
     at_message: str | None = None  # fork after this message id; None = at the end
@@ -155,20 +152,17 @@ class SessionFork:
 
 
 @command("session.resume")
-@dataclass
 class SessionResume:
     session: str
 
 
 @command("session.undo")
-@dataclass
 class SessionUndo:
     session: str
     turns: int = 1
 
 
 @command("turn.send")
-@dataclass
 class TurnSend:
     """Send user input. mode: send (start a turn), queue (run after the current
     turn), steer (inject into the running turn at the next tool boundary)."""
@@ -180,13 +174,11 @@ class TurnSend:
 
 
 @command("turn.interrupt")
-@dataclass
 class TurnInterrupt:
     session: str
 
 
 @command("approval.respond")
-@dataclass
 class ApprovalRespond:
     request_id: str
     decision: Literal["allow", "deny", "allow_always"]
@@ -197,20 +189,19 @@ class ApprovalRespond:
 
 
 @command("question.answer")
-@dataclass
 class QuestionAnswer:
     question_id: str
     answer: str
 
 
 @command("command.run")
-@dataclass
 class CommandRun:
     """Run a slash command, e.g. name="exo", args="handoff". The core answers some built-in commands itself
     (the command cap is full, so new ones go here, not in new command types): ``trace``, ``findings``,
     ``context`` (what the next model call for ``session`` carries, read-only) and ``compact`` (summarize now
     what is eligible in the agent's memory; runs in the core that holds the agent lock) and ``unsteer`` (pull
-    back a queued steer message before it is delivered: args is its id, empty means the newest, D-045)."""
+    back a queued steer message before it is delivered: args is its id, empty means the newest, D-045) and ``rename``
+    (set the session title to args, principal only, announced as ``session.updated``, D-069)."""
 
     name: str
     args: str = ""
@@ -218,13 +209,11 @@ class CommandRun:
 
 
 @command("commands.list")
-@dataclass
 class CommandsList:
     session: str | None = None
 
 
 @command("events.subscribe")
-@dataclass
 class EventsSubscribe:
     """Stream events with seq > since. session=None means all sessions."""
 
@@ -233,7 +222,6 @@ class EventsSubscribe:
 
 
 @command("search")
-@dataclass
 class Search:
     query: str
     scope: Literal["sessions", "store", "all"] = "all"
@@ -241,26 +229,22 @@ class Search:
 
 
 @command("config.get")
-@dataclass
 class ConfigGet:
     key: str | None = None  # None = whole effective config
 
 
 @command("config.set")
-@dataclass
 class ConfigSet:
     key: str
     value: Any = None
 
 
 @command("models.list")
-@dataclass
 class ModelsList:
     pass
 
 
 @command("models.set")
-@dataclass
 class ModelsSet:
     model: str
     role: str = "main"  # router role, e.g. main, summarize, review
@@ -268,37 +252,31 @@ class ModelsSet:
 
 
 @command("tools.list")
-@dataclass
 class ToolsList:
     session: str | None = None
 
 
 @command("skills.list")
-@dataclass
 class SkillsList:
     pass
 
 
 @command("tasks.list")
-@dataclass
 class TasksList:
     session: str | None = None
 
 
 @command("seat.list")
-@dataclass
 class SeatList:
     pass
 
 
 @command("taste.list")
-@dataclass
 class TasteList:
     pass
 
 
 @command("taste.edit")
-@dataclass
 class TasteEdit:
     action: Literal["add", "update", "remove"]
     rule_id: str | None = None
@@ -306,7 +284,6 @@ class TasteEdit:
 
 
 @command("feedback.send")
-@dataclass
 class FeedbackSend:
     """The principal's verdict on an answer: the learning loop's main signal (D-009, D-022).
     edit and should_have_been carry the better version in text."""
@@ -318,7 +295,6 @@ class FeedbackSend:
 
 
 @command("ui.respond")
-@dataclass
 class UiRespond:
     """What the user did with a panel. Dismissed and ignored panels teach too (D-014)."""
 
@@ -328,7 +304,6 @@ class UiRespond:
 
 
 @command("schedule.edit")
-@dataclass
 class ScheduleEdit:
     """Cron jobs. A run is a fresh session that reports through task.updated (D-022).
     when: a 5-field cron line ("0 9 * * *") or "every <n>m|h|d"."""
@@ -344,7 +319,6 @@ class ScheduleEdit:
 
 
 @command("peers")
-@dataclass
 class Peers:
     """Live sessions messaging each other (D-026). One command with an action, because the command cap leaves
     one slot: ``list`` shows peers, ``send`` posts a message from this daemon (``via`` says whether a person
@@ -366,19 +340,16 @@ class Peers:
 
 
 @event("session.created")
-@dataclass
 class SessionCreated:
     session: SessionInfo
 
 
 @event("session.updated")
-@dataclass
 class SessionUpdated:
     session: SessionInfo
 
 
 @event("turn.started")
-@dataclass
 class TurnStarted:
     turn_id: str
     model: str = ""
@@ -386,7 +357,6 @@ class TurnStarted:
 
 
 @event("turn.completed")
-@dataclass
 class TurnCompleted:
     turn_id: str
     stop_reason: str = "end"
@@ -396,34 +366,29 @@ class TurnCompleted:
 
 
 @event("message.delta")
-@dataclass
 class MessageDelta:
     message_id: str
     text: str
 
 
 @event("message.completed")
-@dataclass
 class MessageCompleted:
     message: Message
 
 
 @event("reasoning.delta")
-@dataclass
 class ReasoningDelta:
     message_id: str
     text: str
 
 
 @event("tool.started")
-@dataclass
 class ToolStarted:
     call: ToolCall
     risk: str = "low"
 
 
 @event("tool.output")
-@dataclass
 class ToolOutput:
     """Partial output while a tool runs (shell stdout, progress)."""
 
@@ -432,7 +397,6 @@ class ToolOutput:
 
 
 @event("tool.completed")
-@dataclass
 class ToolCompleted:
     result: ToolResult
     duration_ms: int = 0
@@ -440,7 +404,6 @@ class ToolCompleted:
 
 
 @event("approval.requested")
-@dataclass
 class ApprovalRequested:
     """Server-to-client request; any client answers with approval.respond."""
 
@@ -456,7 +419,6 @@ class ApprovalRequested:
 
 
 @event("approval.resolved")
-@dataclass
 class ApprovalResolved:
     request_id: str
     decision: str
@@ -464,7 +426,6 @@ class ApprovalResolved:
 
 
 @event("steer.cancelled")
-@dataclass
 class SteerCancelled:
     """A queued steer message was pulled back before it was delivered (D-045); clients drop its pending line.
     A delivered one shows up as ``message.completed`` instead."""
@@ -474,7 +435,6 @@ class SteerCancelled:
 
 
 @event("question.asked")
-@dataclass
 class QuestionAsked:
     question_id: str
     text: str
@@ -482,7 +442,6 @@ class QuestionAsked:
 
 
 @event("context.compacted")
-@dataclass
 class ContextCompacted:
     before_tokens: int
     after_tokens: int
@@ -490,7 +449,6 @@ class ContextCompacted:
 
 
 @event("memory.summarized")
-@dataclass
 class MemorySummarized:
     """One node of a summary tree finished (D-028): a leaf over log entries ``start``-``end`` or a merge of two
     nodes. Upkeep of memory, not a compaction of the live context (that is ``context.compacted``)."""
@@ -505,7 +463,6 @@ class MemorySummarized:
 
 
 @event("job.updated")
-@dataclass
 class JobUpdated:
     """A background shell job changed state (D-032, docs/JOBS.md): ``running`` when it starts, then one of
     ``done`` (exit 0), ``failed`` (non-zero exit), ``killed``, ``timeout`` or ``lost`` (exod restarted).
@@ -521,14 +478,12 @@ class JobUpdated:
 
 
 @event("handoff.written")
-@dataclass
 class HandoffWritten:
     path: str
     summary: str = ""
 
 
 @event("task.updated")
-@dataclass
 class TaskUpdated:
     """Subagents and board tasks."""
 
@@ -541,7 +496,6 @@ class TaskUpdated:
 
 
 @event("usage.updated")
-@dataclass
 class UsageUpdated:
     usage: Usage  # this call
     session_total: Usage | None = None
@@ -549,7 +503,6 @@ class UsageUpdated:
 
 
 @event("decision.queued")
-@dataclass
 class DecisionQueued:
     decision_id: str
     title: str
@@ -558,7 +511,6 @@ class DecisionQueued:
 
 
 @event("taste.updated")
-@dataclass
 class TasteUpdated:
     """Learned taste shown inline with a link to the editable file (D-012)."""
 
@@ -569,7 +521,6 @@ class TasteUpdated:
 
 
 @event("ui.panel")
-@dataclass
 class UiPanel:
     """A panel the model (via the ui tool) or a command opens beside the transcript (D-014).
     Every client renders what it can: full panel, compact text, or a link. data is kind-specific
@@ -585,7 +536,6 @@ class UiPanel:
 
 
 @event("peer.message")
-@dataclass
 class PeerMessage:
     """A message from another session reached this one (D-026). Clients show it with the sender, never as the
     user. ``trust`` is principal, same-principal, other, remote or unverified."""
@@ -599,7 +549,6 @@ class PeerMessage:
 
 
 @event("peer.delivery")
-@dataclass
 class PeerDelivery:
     """Where a peer message stands (D-026). ``direction`` out is the sender's receipt, in is the receiver's own
     record. held waits for the principal; released, denied and expired close it."""
@@ -612,7 +561,6 @@ class PeerDelivery:
 
 
 @event("model.call")
-@dataclass
 class ModelCall:
     """One model call as the harness saw it (D-025): what was asked, which route served it, every attempt.
     attempts: [{route, outcome: ok|timeout|error|fallback, error, ms}]. ttft_ms is None when nothing streamed."""
@@ -631,7 +579,6 @@ class ModelCall:
 
 
 @event("harness.error")
-@dataclass
 class HarnessError:
     """An exception the harness caught in a hook, handler, plugin or client event path (D-025).
     Never holds keys, headers or environment values (scrubbed before it is written)."""
@@ -643,14 +590,12 @@ class HarnessError:
 
 
 @event("notice")
-@dataclass
 class Notice:
     text: str
     level: Literal["info", "warn"] = "info"
 
 
 @event("error")
-@dataclass
 class Error:
     code: str
     message: str

@@ -8,9 +8,12 @@ import { attachComposer } from "./composer.js";
 import { attachApprovals } from "./approvals.js";
 import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOUTS } from "./layout.js";
 
+import { contextMetrics, mergeTranscript, slashInput, commandUsage } from "./chat_state.js";
+
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
+  let capacity = null, capacities = {}, snapshotGeneration = 0;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
   const landed = new Set();   // user messages the core has added to a conversation
@@ -79,9 +82,9 @@ export function mount(root) {
     for (const m of msgs) {
       if (m.role === "user" || m.role === "assistant") {
         const text = partsText(m.content);
-        if (text || m.role === "user") out.push({ kind: m.role, id: m.id || "m" + out.length, text });
+        if (text || m.role === "user") out.push({ kind: m.role, id: m.id || "m" + out.length, text, complete: true });
         for (const c of m.tool_calls || []) {
-          const it = { kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "done" };
+          const it = { kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "running" };
           byCall[c.id] = it;
           out.push(it);
         }
@@ -124,7 +127,7 @@ export function mount(root) {
     }
     if (!mine) return;
     switch (ev.type) {
-      case "turn.started": busy = true; help.note({ busy: true }); if (b.model) { model = b.model; requested = b.model; } drawStatus(); break;
+      case "turn.started": busy = true; help.note({ busy: true }); if (b.model) { model = b.model; requested = b.model; capacity = capacities[model] || null; } drawStatus(); break;
       case "turn.completed": {
         busy = false; drawStatus(); loadContext();
         const tm = b.timing || {};
@@ -138,7 +141,7 @@ export function mount(root) {
       }
       case "model.call":
         help.note({ providerError: !!b.error });
-        if (b.route) model = b.route;
+        if (b.route) { model = b.route; capacity = capacities[model] || null; }
         if (b.requested) requested = b.requested;
         if (b.usage) instruments(b.usage);
         calls.unshift({ route: b.route || "", requested: b.requested || "", ttft: b.ttft_ms, ms: b.total_ms, cache: b.usage ? cacheOf(b.usage) : null, cost: b.usage ? b.usage.cost_usd : undefined, error: b.error });
@@ -162,7 +165,7 @@ export function mount(root) {
       case "message.delta": delta(b); break;
       case "message.completed": completed(b.message || {}); break;
       case "tool.started": if (!find(b.call.id)) push({ kind: "tool", id: b.call.id, name: b.call.name, args: b.call.arguments || {}, output: "", status: "running", risk: b.risk }); break;
-      case "tool.output": { const t = find(b.call_id); if (t) { t.output += b.text; redraw(t); } break; }
+      case "tool.output": { const t = find(b.call_id); if (t && t.status === "running") { t.output += b.text; redraw(t); } break; }
       case "tool.completed": {
         const t = find(b.result.call_id);
         if (t) { t.output = partsText(b.result.content); t.status = b.result.is_error ? "error" : "done"; t.ms = b.duration_ms; redraw(t); }
@@ -176,6 +179,7 @@ export function mount(root) {
   function delta(b) {
     let it = find(b.message_id);
     if (!it) { it = { kind: "assistant", id: b.message_id, text: "", streaming: true }; push(it); }
+    if (it.complete) return;
     it.text += b.text;
     if (it.textEl) it.textEl.textContent = it.text; else redraw(it);
     stick();
@@ -186,8 +190,8 @@ export function mount(root) {
     if (m.role === "assistant") {
       const text = partsText(m.content);
       const it = find(m.id);
-      if (it) { it.text = text || it.text; it.streaming = false; redraw(it); }
-      else if (text) push({ kind: "assistant", id: m.id, text });
+      if (it) { it.text = text || it.text; it.streaming = false; it.complete = true; redraw(it); }
+      else if (text) push({ kind: "assistant", id: m.id, text, complete: true });
       for (const c of m.tool_calls || []) if (!find(c.id)) push({ kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "running" });
     } else if (m.role === "tool") {
       for (const r of m.tool_results || []) {
@@ -212,19 +216,20 @@ export function mount(root) {
     const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(current) + "/command", { name, args: args || "" });
     return d.output;
   }
-  function parseContext(t) {
-    const n = (re) => { const m = re.exec(t); return m ? Number(m[1]) : 0; };
-    const nodes = /Tree nodes: (\d+) done, (\d+) pending/.exec(t);
-    return { system: n(/system\s+(\d+)/), tree: n(/summary tree\s+(\d+)/), notes: n(/other threads\s+(\d+)/), tail: n(/recent tail\s+(\d+)/), total: n(/total\s+(\d+)/),
-      summaries: n(/(\d+) summaries over/), nodes: n(/summaries over (\d+) nodes/), done: nodes ? +nodes[1] : 0, pending: nodes ? +nodes[2] : 0, log: n(/Log: (\d+) entries/), frontier: n(/summarized up to (\d+)/) };
+  function applyContext(out) {
+    const metrics = contextMetrics(out);
+    if (!metrics) return;
+    ctx = metrics; ctxTokens = ctx.total; capacity = ctx.capacity;
+    capacities[ctx.model] = ctx.capacity;
+    drawStatus(); drawSide(true);
   }
   async function loadContext() {
     const id = current;
     if (!id) return;
     try {
-      const out = await runCommand("context");
-      if (id !== current || typeof out !== "string") return;
-      ctx = parseContext(out); ctxTokens = ctx.total || ctxTokens;
+      const out = await runCommand("context", "json");
+      if (id !== current) return;
+      applyContext(out);
       drawStatus(); drawSide(true); if (!items.length) drawHero();
     } catch (e) { /* older core: the instruments fall back to what the events carry */ }
     try {
@@ -337,10 +342,10 @@ export function mount(root) {
       out.push(m);
     }
     if (ctxTokens != null) {
-      const pct = Math.min(100, Math.round(ctxTokens / 2000));   // against a nominal 200k window
+      const pct = capacity ? Math.min(100, Math.round(100 * ctxTokens / capacity)) : 0;
       out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "memory"),
-        h("span", { class: "xc-gauge" + (pct > 80 ? " hot" : ""), title: "context for the next call, nominal 200k window" }, h("i", { style: "width:" + pct + "%" })),
-        h("span", { class: "xc-v" }, fmtTok(ctxTokens))));
+        h("span", { class: "xc-gauge" + (pct > 80 ? " hot" : ""), title: capacity ? "context capacity: " + fmtTok(capacity) + " tokens" : "context capacity unknown" }, h("i", { style: "width:" + pct + "%" })),
+        h("span", { class: "xc-v" }, fmtTok(ctxTokens) + (capacity ? " / " + fmtTok(capacity) : " · capacity unknown"))));
     }
     if (cacheShare != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "cache"), h("span", { class: "xc-v" }, Math.round(cacheShare * 100) + "%")));
     if (findings != null) out.push(h("span", { class: "xc-opt" }, h("span", { class: "xc-i" }, "findings"), h("span", { class: "xc-v" + (findings ? " xc-via" : "") }, String(findings))));
@@ -366,7 +371,9 @@ export function mount(root) {
   function drawSessions() {
     const waiting = new Set(Object.values(approvals).map((a) => a.session));
     listEl.replaceChildren(...(sessions.length ? sessions.map((s) =>
-      h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id) },
+      h("button", { class: "xc-sess" + (s.id === current ? " on" : ""), onclick: () => open(s.id),
+        title: "Double-click to rename (also /rename <title>)",
+        ondblclick: () => { const t = window.prompt("Rename thread", s.title || ""); if (t !== null) rename(s.id, t); } },
         h("span", { class: "xc-sess-title" }, short(s.title || s.id, 40)),
         h("span", { class: "xc-dim" }, [s.status === "live" ? "running" : "", waiting.has(s.id) ? h("span", { class: "xc-needs" }, "needs you") : "", when(s.updated)].filter(Boolean).flatMap((x, i) => (i ? [" \u00B7 ", x] : [x]))))) : [empty("No threads yet.")]));
     drawWhere();
@@ -412,11 +419,13 @@ export function mount(root) {
   }
 
   async function open(id) {
+    const generation = ++snapshotGeneration;
+    capacity = null;
     current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; steers = {}; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
-      if (current !== id) return;
+      if (current !== id || generation !== snapshotGeneration) return;
       items = fromMessages(d.messages || []);
       loadedSeq = d.seq || 0;
       const live = sessions.find((s) => s.id === id);
@@ -428,6 +437,31 @@ export function mount(root) {
     const buffered = pending; pending = [];
     buffered.forEach(handle);
     syncApprovals();
+  }
+
+  async function recover() {
+    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq();
+    loading = true;
+    try {
+      const freshSessions = (await api("GET", "/api/chat/sessions")).sessions || [];
+      const d = id ? await api("GET", "/api/chat/sessions/" + encodeURIComponent(id)) : null;
+      if (id !== current || generation !== snapshotGeneration) return;
+      sessions = freshSessions;
+      if (d) {
+        items = mergeTranscript(fromMessages(d.messages || []), items);
+        loadedSeq = Math.min(cutoff, d.seq || 0);
+        busy = sessions.some((s) => s.id === id && s.status === "live");
+        model = d.session.model || model;
+      }
+      panelsOpen = bus.openPanels();
+    } catch (e) { fail(e); }
+    finally {
+      if (id === current && generation === snapshotGeneration) {
+        loading = false; drawSessions(); drawLog(); drawStatus(); drawSide();
+        const buffered = pending; pending = []; buffered.forEach(handle);
+        syncApprovals(); loadContext();
+      }
+    }
   }
 
   // The server's list is the truth (it asks the core): replace what we hold, so a card the core no longer has goes (D-045).
@@ -443,9 +477,19 @@ export function mount(root) {
     } catch (e) { /* approvals still arrive by event */ }
   }
 
-  async function create() {
+  // D-069: rename is command.run "rename" on the core (principal only); the session.updated event redraws the list
+  async function rename(id, title) {
+    title = (title || "").trim();
+    if (!id || !title) return;
     try {
-      const d = await api("POST", "/api/chat/sessions", {});
+      await api("POST", "/api/chat/sessions/" + encodeURIComponent(id) + "/rename", { title });
+      await refreshSessions();
+    } catch (e) { fail(e); }
+  }
+
+  async function create(kind = "") {
+    try {
+      const d = await api("POST", "/api/chat/sessions", { kind });
       await refreshSessions();
       if (d.session) open(d.session.id);
     } catch (e) { fail(e); }
@@ -454,13 +498,15 @@ export function mount(root) {
   async function send() {
     const text = input.value.trim();
     if (!text) return;
-    const typo = help.typo(text);
+    const command = slashInput(text);
+    const typo = command && help.typo(text);
     if (typo) {   // D-037: a mistyped command gets a suggestion, not a message to the agent
       flash("unknown command " + text.split(/\s/)[0] + ". did you mean /" + typo.guess + "? It is in the box: Enter runs it.");
       input.value = typo.line; input.setSelectionRange(input.value.length, input.value.length); input.dispatchEvent(new Event("input"));
       return;
     }
-    const lay = /^\/layout\b\s*(\S*)\s*$/.exec(text);
+    if (command && commandUsage(command)) { flash(commandUsage(command)); return; }
+    const lay = command && command.name === "layout" ? [null, command.args] : null;
     if (lay) {
       input.value = ""; help.sent(text);
       if (!lay[1]) flash("layout: " + layout + ". /layout inverse puts the box on top with the newest message under it; /layout classic is the usual order.");
@@ -468,14 +514,19 @@ export function mount(root) {
       else flash("usage: /layout inverse|classic");
       return;
     }
-    if (/^\/new\s*$/.test(text)) { input.value = ""; help.sent(text); create(); return; }
-    const slash = /^\/(context|findings|trace)\b\s*(.*)$/.exec(text);
-    if (slash && current) {
+    if (command && command.name === "rename") {
+      if (!current) { flash("open a thread first for /rename"); return; }
+      input.value = ""; help.sent(text); rename(current, command.args); return;
+    }
+    if (command && command.name === "new") { input.value = ""; help.sent(text); create(command.args); return; }
+    const slash = command && ["context", "findings", "trace"].includes(command.name) ? [null, command.name, command.args] : null;
+    if (slash) {
+      if (!current) { flash("open a thread first for /" + slash[1]); return; }
       input.value = ""; help.sent(text);
       try {
-        const out = await runCommand(slash[1], slash[2]);
-        if (slash[1] === "context" && typeof out === "string") { ctx = parseContext(out); ctxTokens = ctx.total || ctxTokens; drawStatus(); drawSide(true); }
-        push({ kind: "report", id: "rep" + Date.now(), title: slash[1] + (slash[1] === "context" ? " \u00B7 next call" : ""), text: typeof out === "string" ? out : JSON.stringify(out, null, 1) });
+        const out = await runCommand(slash[1], slash[1] === "context" ? "json" : slash[2]);
+        if (slash[1] === "context") applyContext(out);
+        push({ kind: "report", id: "rep" + Date.now(), title: slash[1] + (slash[1] === "context" ? " \u00B7 next call" : ""), text: typeof out === "string" ? out : (out && out.text) || JSON.stringify(out, null, 1) });
       } catch (e) { fail(e); }
       return;
     }
@@ -544,11 +595,19 @@ export function mount(root) {
 
   // ---------------------------------------------------------------- start
 
+  api("GET", "/api/providers/models").then((d) => {
+    for (const m of d.models || []) if (m.route) capacities[m.route] = m.context || null;
+    capacity = capacities[model] || capacity; drawStatus();
+  }).catch(() => {});
   const offBus = bus.on(handle);
-  let resumed = 0;
-  const offState = bus.onState((st) => { if (st.resumed !== resumed) { resumed = st.resumed; if (current) syncApprovals(); } });
-  const off = () => { offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
+  let synced = bus.lastSeq() ? -1 : 0;
+  const offState = bus.onState((st) => {
+    if (st.synced !== synced) { synced = st.synced; recover(); }
+  });
+  const off = () => { ++snapshotGeneration; offBus(); offState(); help.stop(); approvalView.stop(); const l = document.getElementById("xc-live"); if (l) l.classList.remove("on"); };
   drawLog(); drawStatus(); drawApprovals(); drawSide();
-  refreshSessions().then(() => { if (!current && sessions.length) open(sessions[0].id); });
+  const asked = sessionStorage.getItem("xc-open");   // the Tasks page's Open button names a subagent's session (#97)
+  sessionStorage.removeItem("xc-open");
+  refreshSessions().then(() => { if (!current && (asked || sessions.length)) open(asked || sessions[0].id); });
   return off;
 }

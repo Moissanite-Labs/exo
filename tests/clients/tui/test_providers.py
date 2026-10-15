@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
+import httpx
 import pytest
 from test_tui import FakeServerClient, make_engine, send, until
 
 from exo import providers_setup as ps
+from exo.core.models.router import load_catalog
 from exo.protocol import schema as s
 from exo_tui.app import COMMANDS, ExoApp
 from exo_tui.providers import KeyScreen, ProvidersScreen, refuse_key_in_composer
@@ -61,9 +64,24 @@ def fakes(monkeypatch):
     return calls
 
 
-def run(tmp_path, scenario, **kw):
+def run(tmp_path, scenario, main_state=None, models=None, prepare=None, **kw):
     eng = make_engine(tmp_path)
+    if prepare:
+        prepare(eng)
     client = FakeServerClient(eng)
+    real_call = client.call
+
+    async def call(body):
+        if (main_state is not False and isinstance(body, s.CommandRun)
+                and body.name == "providers" and not body.args):
+            # The panel's existing fake readiness feeds the core status response.
+            state = main_state(eng) if main_state else {"ready": ps.any_ready(), "needs_model": []}
+            return {"output": {"providers": ps.rows(), "main": state}}
+        if isinstance(body, s.ModelsList) and models is not None:
+            return models
+        return await real_call(body)
+
+    client.call = call
 
     async def main():
         app = ExoApp(client, seat="tester", home=str(tmp_path / "exo-state"), **kw)
@@ -279,7 +297,7 @@ def test_first_run_note(tmp_path, monkeypatch, ready, shown):
     run(tmp_path, sc, provider_check=True)
 
 
-def test_first_run_check_failure_is_silent(tmp_path, monkeypatch):
+def test_first_run_check_failure_reports_setup_status(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("x")
 
@@ -287,7 +305,7 @@ def test_first_run_check_failure_is_silent(tmp_path, monkeypatch):
 
     async def sc(app, pilot, client, eng):
         await pilot.pause(0.3)
-        assert "provider" not in app.transcript_text()
+        assert "Could not check the main model route" in app.transcript_text()
 
     run(tmp_path, sc, provider_check=True)
 
@@ -332,3 +350,44 @@ def test_first_run_with_provider_goes_straight_to_the_intro(tmp_path, monkeypatc
         assert not isinstance(app.screen, ProvidersScreen)
 
     run(tmp_path, sc, provider_check=True, auto_intro=True)
+
+
+def test_new_openai_provider_requires_model_choice_before_real_intro(tmp_path, fakes, monkeypatch):
+    table = [r for r in demo_rows() if r["provider"] == "openai"]
+    table[0]["transport"] = "openai"
+    monkeypatch.setattr(ps, "rows", lambda *a, **k: table)
+    model = {"provider": "openai", "route": "openai:user-chosen-chat"}
+    monkeypatch.setattr("exo.models_cmd.available_models", lambda *a, **k: [model])
+    requests = []
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        payload = {"choices": [{"delta": {"content": "Orientation from chosen provider"}, "finish_reason": "stop"}]}
+        return httpx.Response(200, text="data: " + json.dumps(payload) + "\n\ndata: [DONE]\n\n",
+                              headers={"content-type": "text/event-stream"})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    def prepare(eng):
+        eng.router.roles["main"] = load_catalog()["roles"]["main"]
+        eng.router.env = {"OPENAI_API_KEY": FAKE_KEY, "PATH": ""}
+        eng.router.client = http
+        eng._automatic_main = True
+        eng.loop.model = eng._main_ref()
+
+    async def sc(app, pilot, client, eng):
+        await until(lambda: isinstance(app.screen, Palette), pilot)
+        assert [r[1] for r in app.screen.items] == ["openai:user-chosen-chat"]
+        assert not [b for b in app.sent if isinstance(b, s.TurnSend)]
+        assert not app.onb.onboarded
+        await pilot.press("enter")
+        await until(lambda: "Orientation from chosen provider" in app.transcript_text() and not app.busy, pilot)
+        assert eng.router.roles["main"][0] == "openai:user-chosen-chat"
+        assert app.onb.onboarded
+        assert sum(isinstance(b, s.TurnSend) for b in app.sent) == 1
+        assert len(requests) == 1 and requests[0]["model"] == "user-chosen-chat"
+
+    try:
+        run(tmp_path, sc, main_state=False, prepare=prepare, provider_check=True, auto_intro=True)
+    finally:
+        asyncio.run(http.aclose())
