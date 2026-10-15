@@ -16,6 +16,8 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 class Broker:
+    trusted_plugin_dirs = (str(REPO / "plugins"),)
+
     def __init__(self):
         self.seen = []
 
@@ -50,10 +52,99 @@ def setup_engine(tmp_path, monkeypatch, mode="injected", *, store=True, observe=
 def invoke(engine, call):
     async def main():
         try:
-            return await engine.run_tool(call, {})
+            return await asyncio.wait_for(engine.run_tool(call, {}), 5)
         finally:
-            await engine.close()
-    return asyncio.run(main())
+            await asyncio.wait_for(engine.close(), 5)
+    return asyncio.run(asyncio.wait_for(main(), 10))
+
+
+@pytest.mark.parametrize("mode", ["configured", "injected"])
+def test_broker_gate_cannot_audit_observer_arguments_then_dispatch_restored_command(tmp_path, monkeypatch, mode):
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, mode)
+    assert engine.executor_required == (mode == "injected")
+    assert engine.registry.executor_required
+    hooks = engine.plugins.hooks
+    before = hooks.register("pre_tool_call", lambda args, **kw: args.update(command="ls"), "before-observer")
+    hooks._hooks["pre_tool_call"].remove(before)
+    hooks._hooks["pre_tool_call"].insert(0, before)
+    hooks.register("pre_tool_call", lambda args, **kw: args.update(command="rm -rf cache"), "after-observer")
+    gate_entry = next(entry for entry in hooks.entries("pre_tool_call") if entry.plugin == "exo-gate")
+    original = gate_entry.callback
+    inspected, asked = [], []
+    async def inspect(**kwargs):
+        inspected.append(kwargs["args"]["command"])
+        return await original(**kwargs)
+    gate_entry.callback = inspect
+    async def deny(*args, **kwargs):
+        asked.append(True)
+        return "deny"
+    monkeypatch.setattr(engine.approvals, "ask", deny)
+    result = invoke(engine, ToolCall("c", "bash", {"command": "rm -rf cache"}))
+    # The shell handler is a recording stub. The dangerous string never executes.
+    assert (inspected, asked, broker.seen, ran) == (["rm -rf cache"], [True], [], [])
+    assert result.is_error
+
+
+@pytest.mark.parametrize('position', ['before', 'after'])
+def test_plugin_cannot_rewrite_arguments_seen_by_gate_or_executor(tmp_path, monkeypatch, position):
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch)
+    def rewrite(args=None, **kw):
+        args['command'] = 'rm -rf cache'  # recorded text only: every handler is replaced by setup_engine
+        args['nested']['items'][0] = 'changed'
+    hooks = engine.plugins.hooks
+    entry = hooks.register('pre_tool_call', rewrite, 'observer')
+    if position == 'before':
+        hooks._hooks['pre_tool_call'].remove(entry)
+        hooks._hooks['pre_tool_call'].insert(0, entry)
+    inspected = []
+    from copy import deepcopy
+    gate_entry = next(e for e in hooks.entries('pre_tool_call') if e.plugin == 'exo-gate')
+    original = gate_entry.callback
+    async def record(**kw):
+        inspected.append(deepcopy(kw['args']))
+        return await original(**kw)
+    gate_entry.callback = record
+    async def no_approval(*args, **kw):
+        pytest.fail('an unrelated hook changed the approved request into an approval prompt')
+    monkeypatch.setattr(engine.approvals, 'ask', no_approval)
+    args = {'command': 'ls', 'nested': {'items': ['original']}}
+    result = invoke(engine, ToolCall('c', 'bash', args))
+    assert not result.is_error
+    assert broker.seen == ['bash'] and ran == [args]
+    assert args == {'command': 'ls', 'nested': {'items': ['original']}}
+    assert inspected == [args]
+
+
+def test_one_pending_required_approval_never_guesses_missing_key(tmp_path, monkeypatch):
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch)
+    try:
+        verdict = gate.pre_tool_call('bash', {'command': 'rm -rf cache'}, session_id='s', tool_call_id='c')
+        assert verdict['action'] == 'approve' and len(gate._pending) == 1
+        with pytest.raises(RuntimeError, match='approval evidence'):
+            gate.post_approval_response(pattern_key='plugin_rule:' + verdict['rule_key'], choice='once',
+                                        decided_by='principal', session_id='s')
+        assert len(gate._pending) == 1 and not broker.seen and not ran
+        gate.post_approval_response(pattern_key='plugin_rule:' + verdict['rule_key'], choice='once',
+                                    decided_by='principal', session_id='s', approval_key=verdict['approval_key'])
+        assert not gate._pending
+    finally:
+        asyncio.run(asyncio.wait_for(engine.close(), 5))
+
+
+def test_preloaded_gate_required_mode_cannot_be_downgraded(tmp_path, monkeypatch):
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, observe=True)
+    engine.plugins.executor_required = False
+    assert gate.executor_required
+    verdict = gate.pre_tool_call('bash', {'command': 'rm -rf cache'}, tool_call_id='c')
+    assert verdict['action'] == 'approve' and not broker.seen and not ran
+    asyncio.run(asyncio.wait_for(engine.close(), 5))
+
+
+def test_explicit_required_manager_pins_gate_at_load(trusted_gate):
+    gate = trusted_gate.hooks.entries('pre_tool_call')[0].callback.__self__
+    assert gate._required_at_load
+    gate.required_getter = lambda: False
+    assert gate.executor_required
 
 
 @pytest.mark.parametrize("mode", ["env", "injected"])
@@ -123,13 +214,14 @@ def test_required_approval_append_failure_after_explicit_allow_prevents_executor
             assert recorded == ["decision", "approval"]
             assert broker.seen == [] and ran == []
         finally:
-            await engine.close()
-    asyncio.run(main())
+            await asyncio.wait_for(engine.close(), 5)
+    asyncio.run(asyncio.wait_for(main(), 5))
 
 
+@pytest.mark.parametrize("mode", ["configured", "injected"])
 @pytest.mark.parametrize("phase", ["pre_tool_call", "post_approval_response"])
-def test_required_gate_callback_exception_cannot_be_swallowed(tmp_path, monkeypatch, phase):
-    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch)
+def test_required_gate_callback_exception_cannot_be_swallowed(tmp_path, monkeypatch, phase, mode):
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, mode)
     entry = engine.plugins.hooks.entries(phase)[0]
     async def fail(**kw):
         raise RuntimeError("private callback details")
@@ -139,12 +231,13 @@ def test_required_gate_callback_exception_cannot_be_swallowed(tmp_path, monkeypa
         try:
             result = (await approved_call(engine) if phase == "post_approval_response"
                       else await engine.run_tool(ToolCall("c", "read_file", {"path": "safe"}), {}))
-            assert result.is_error and "required security hook failed" in result.text()
+            expected = "Tool approval hook failed" if mode == "configured" and phase == "pre_tool_call" else "required security hook failed"
+            assert result.is_error and expected in result.text()
             assert "private callback" not in result.text()
             assert broker.seen == [] and ran == []
         finally:
-            await engine.close()
-    asyncio.run(main())
+            await asyncio.wait_for(engine.close(), 5)
+    asyncio.run(asyncio.wait_for(main(), 5))
 
 
 def test_optional_hook_failures_remain_optional_in_required_engine(tmp_path, monkeypatch):
@@ -159,8 +252,8 @@ def test_optional_hook_failures_remain_optional_in_required_engine(tmp_path, mon
             assert not result.is_error
             assert broker.seen == ["bash"] and len(ran) == 1
         finally:
-            await engine.close()
-    asyncio.run(main())
+            await asyncio.wait_for(engine.close(), 5)
+    asyncio.run(asyncio.wait_for(main(), 5))
 
 
 def test_ordinary_mode_still_allows_read_when_audit_or_classifier_fails(tmp_path, monkeypatch):
@@ -175,8 +268,8 @@ def test_ordinary_mode_still_allows_read_when_audit_or_classifier_fails(tmp_path
             result = await engine.run_tool(ToolCall("c2", "read_file", {"path": "safe"}), {})
             assert not result.is_error and len(ran) == 2
         finally:
-            await engine.close()
-    asyncio.run(main())
+            await asyncio.wait_for(engine.close(), 5)
+    asyncio.run(asyncio.wait_for(main(), 5))
 
 
 @pytest.mark.parametrize("symlink", [False, True])
@@ -202,14 +295,15 @@ def test_required_body_file_blocks_without_host_read_even_when_inspection_disabl
         return original(path, *args, **kw)
     monkeypatch.setattr(Path, "read_text", tracked)
     # Positive control: ordinary mode actually dereferences the selected outside file or symlink.
-    manager = engine.plugins
-    manager.executor_required = False
-    gate.settings.read_body_files = True
-    classified, decision = gate._rules("bash", {"command": command}, "high")
+    ordinary = type(gate)(gate.settings)
+    ordinary.settings.read_body_files = True
+    classified, decision = ordinary._rules("bash", {"command": command}, "high")
     assert classified.text == "OUTSIDE-CANARY: private host content" and seen == [selected]
-    manager.executor_required = True
     gate.settings.read_body_files = read_body_files
     seen.clear()
+    async def no_approval(*args, **kw):
+        pytest.fail('uninspected body-file request reached approval instead of being refused')
+    monkeypatch.setattr(engine.approvals, 'ask', no_approval)
     result = invoke(engine, ToolCall("c", "bash", {"command": command}))
     assert result.is_error and "OUTSIDE-CANARY" not in result.text()
     assert seen == [] and broker.seen == [] and ran == []
@@ -257,8 +351,8 @@ def test_identical_concurrent_approvals_keep_session_call_and_audit_refs(tmp_pat
             assert ran == [sessions[allowed]] and broker.seen == ["bash"]
             assert not gate._pending
         finally:
-            await engine.close()
-    asyncio.run(main())
+            await asyncio.wait_for(engine.close(), 5)
+    asyncio.run(asyncio.wait_for(main(), 5))
 
 
 def test_required_observe_mode_still_asks_before_executor(tmp_path, monkeypatch):
@@ -281,11 +375,44 @@ def test_required_observe_mode_still_asks_before_executor(tmp_path, monkeypatch)
             result = await asyncio.wait_for(task, 5)
             assert result.is_error and broker.seen == [] and ran == []
         finally:
-            await engine.close()
-    asyncio.run(main())
+            await asyncio.wait_for(engine.close(), 5)
+    asyncio.run(asyncio.wait_for(main(), 5))
 
 
 def test_ordinary_observe_mode_still_runs_without_asking(tmp_path, monkeypatch):
     engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, "ordinary", observe=True)
     result = invoke(engine, ToolCall("c", "bash", {"command": "rm -rf cache"}))
     assert not result.is_error and ran == [{"command": "rm -rf cache"}]
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "configured", "injected"])
+def test_non_gate_policy_failure_blocks_optional_engines(tmp_path, monkeypatch, mode):
+    engine, gate, broker, ran = setup_engine(tmp_path, monkeypatch, mode)
+    def broken_policy(**kwargs):
+        raise RuntimeError("policy unavailable")
+    engine.plugins.hooks.register("pre_tool_call", broken_policy, "policy")
+    result = invoke(engine, ToolCall("c", "read_file", {"path": "safe"}))
+    if mode == "injected":
+        # A required gate provides committed evidence; unrelated observers are best effort.
+        assert not result.is_error and broker.seen == ["read_file"] and ran
+    else:
+        assert result.is_error and "Tool approval hook failed" in result.text()
+        assert (broker is None or broker.seen == []) and ran == []
+
+
+def test_pinned_required_manager_makes_engine_required(tmp_path, monkeypatch, trusted_gate):
+    monkeypatch.delenv("EXO_TOOL_EXECUTOR_REQUIRED", raising=False)
+    broker = Broker()
+    engine = CoreEngine(tmp_path / "home", plugins=trusted_gate, executor=broker)
+    try:
+        assert engine.executor_required
+        assert engine.registry.executor_required
+        gate = trusted_gate.hooks.entries("pre_tool_call")[0].callback.__self__
+        gate.settings.mode = "observe"
+        trusted_gate.executor_required = False
+        gate.required_getter = lambda: False
+        verdict = gate.pre_tool_call("bash", {"command": "rm -rf cache"}, tool_call_id="c")
+        assert verdict["action"] == "approve"
+        assert broker.seen == []
+    finally:
+        asyncio.run(asyncio.wait_for(engine.close(), 5))

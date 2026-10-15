@@ -14,13 +14,15 @@ from pathlib import Path
 
 from exo import peers
 from exo.config import Config
-from exo.core.engine import SYSTEM_PROMPT, CoreEngine
+from exo.core.engine import SYSTEM_PROMPT
+from exo.application import CoreEngine
 from exo.core.plugins import PluginManager
 from exo.core.seats import SeatError
 from exo.core.seats import load as load_seat
 from exo.core.skills import pack_dir
 from exo.core.tools.executor import ExecutorConfigurationError, load_executor
 from exo.scheduler import Scheduler
+from exo.model_spend import configured, resolve_spend_policy
 
 
 def fitting_peers_dir(env: Mapping[str, str] | None = None) -> Path | None:
@@ -47,9 +49,17 @@ def create(seat: str | None = None) -> CoreEngine:
             st = load_seat(cfg.home, seat or os.environ["EXO_SEAT"])
         except SeatError as exc:
             raise SystemExit(f"exo: {exc}") from None
-        if st.principal and not os.environ.get("EXO_PRINCIPAL"):
-            os.environ["EXO_PRINCIPAL"] = st.principal
+    if st and st.principal and os.environ.get("EXO_PRINCIPAL") not in (None, "", st.principal):
+        raise ValueError("seat principal conflicts with EXO_PRINCIPAL")
+    principal = (st.principal if st else None) or cfg.principal
+    selection = resolve_spend_policy((cfg.data.get("models") or {}).get("spend"), principal=principal)
+    spend = configured(selection.config, required=selection.required)
+    if spend is not None and spend.principal != principal:
+        raise ValueError("model-spend policy principal does not match the configured principal")
+    if st and st.principal and not os.environ.get("EXO_PRINCIPAL"):
+        os.environ["EXO_PRINCIPAL"] = st.principal
     pm = PluginManager(config=cfg.data.get("plugin_config") or {},
+                       executor_required=executor_required,
                        memory_choice=cfg.get("memory_provider"), context_choice=cfg.get("context_engine"))
     enabled = st.plugins if st and st.plugins is not None else cfg.data.get("core_plugins")
     plugin_dirs = None
@@ -70,7 +80,7 @@ def create(seat: str | None = None) -> CoreEngine:
         required_plugins = tuple(dict.fromkeys(("exo-gate", *raw_required)))
         if enabled is not None and not set(required_plugins).issubset(enabled):
             raise ExecutorConfigurationError("plugin configuration disables a required executor plugin")
-    pm.load_all(dirs=plugin_dirs, enabled=enabled)
+    pm.load_all(dirs=plugin_dirs, enabled=enabled, entry_points=not executor_required)
     if executor_required:
         missing = [name for name in required_plugins if name not in pm.plugins or pm.plugins[name].error]
         if missing:

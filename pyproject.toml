@@ -24,6 +24,7 @@ bus = ["fastapi>=0.110", "starlette>=0.37", "uvicorn>=0.29", "websockets>=12"]
 
 [project.scripts]
 exo = "exo.cli:main"
+exo-witness = "exo.ledger_authority.witness_transport:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/exo", "clients/tui/exo_tui"]
