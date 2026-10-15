@@ -402,11 +402,19 @@ to model providers). The HTTP server inside `exod` is written on the standard li
 no web framework. Storage is SQLite files and plain Markdown files.
 
 The core has a line budget. A test counts the lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`
-and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3. The
-budget was raised to 16,000 for the security wave, and the test fails above that. Today the count is just
-under 16,000. The policy now is not to raise it again for a feature, and not to stop counting a file to make
-the test pass. New work goes outside the counted core, or something is removed. The budget exists so that
-growth is a decision, and so the core can later shrink onto a small device (section 27).
+and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3. The budget
+rose to 16,000 during the security wave. Engine split step 4 (D-067) cut the count to about 14,800 by deleting
+unused code and moving the peer transport and the scheduler out of the core.
+
+The budget is now a ratchet with headroom (D-077). The test records a floor, the count after the last real
+reduction, and allows 1,000 lines above it. Each real reduction lowers the floor, and the floor never rises. Fixes
+and features fit inside the headroom with no ceremony, and a security or robustness fix is never blocked by the
+budget. A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+
+The reason is a ruling that the core should be lean and optimized, but not at the cost of functionality, robustness
+and product-market fit. The count is only a signal. The goal is structure: no module reads another's private state,
+no product code is imported into the engine, each module has one job. Growth stays visible, and the core can later
+shrink onto a small device (section 27).
 
 **The engine split.** The audit also found that the engine class did too many jobs: it built the
 application, ran turns, answered protocol commands and drew diagnostic reports. A split has started, one
@@ -1355,7 +1363,8 @@ checkpoint alone does not prove the copy is current.
 What this does not do: it cannot stop an authorized but compromised core from submitting invented events,
 leaving actions out, or ceasing to send checkpoints. It does stop anyone from extracting the protected keys
 or creating two conflicting histories through the service. An independent witness on another machine, which
-could expose a rollback, is future work. The service is built and tested in this repository with disposable
+could expose a rollback, now has an opt-in transport (an independent witness reached over mutual authentication,
+switched on by an administrator and off by default), though no witness is run for you. The service is built and tested in this repository with disposable
 stores. Running it under its own account is the operating system's job.
 
 ### 21. Retrieval
@@ -1885,8 +1894,8 @@ store and grows with them. The near-term design rules that keep that path open:
 
 - **The store is one folder.** Pack, nodes, items, ledger and indexes are plain files and SQLite. Copy the
   folder and the person moves.
-- **The core stays small.** Under 16,000 lines (just under that today), enforced by a test. Two runtime
-  dependencies. The terminal client is Python too, so the core and its main client need no Node, no browser
+- **The core stays small.** About 15,000 lines today, held by a test that allows a recorded floor plus 1,000 lines
+  (section 11). The floor only goes down. Two runtime dependencies. The terminal client is Python too, so the core and its main client need no Node, no browser
   engine and no containers. One optional tool, `code_find`, needs Node and hides itself when Node is
   missing. The planned idle memory target is under 80 MB **[not measured]**.
 - **A small-model path from day one.** The OpenAI-compatible transport already talks to local servers
@@ -2079,13 +2088,23 @@ their next call, and the log verified after a restart.
 | Snapshot undo of files | 17 | not scheduled |
 | Device footprint audit, device client and idle memory measurement | 27 | 5 |
 | An operating-system sandbox for tool processes | 15.4, 26 | with Exo OS |
-| The rest of the engine split: public queries, a protocol adapter, injected interfaces | 11 | next |
+| The rest of the engine split: public queries, a protocol adapter, injected interfaces (steps 1 to 4 are on main) | 11 | next |
 | House taste adaptation: sustained-change rule, value step back, ask or silent mode, `/taste` | 22.7 | in progress (30.1) |
-| An independent witness for the ledger authority | 20.2 | not scheduled |
+| An independent witness for the ledger authority | 20.2 | transport built, opt-in; running a witness is not scheduled |
 | A composer pane on the web page | 24 | not scheduled |
 | Exo OS | 27 | design only, though the broker seam (15.6) and ledger authority (20.2) are built on the Exo side |
 
 #### 30.1 In progress
+
+Merged to the main branch since the first draft of this paper, and so no longer in progress: engine split step 4,
+which cut the counted core by 1,174 lines (D-067, #124); a reservation of the principal's model spend before a
+bounded provider call (#87); the opt-in mutually authenticated witness transport (#88); binding the required
+executor's request before approval hooks (#91); lazy start of `exo-memory` with specific errors (#114); findings
+that verify on eligible quiet turns or days of activity, with open findings listed in the trace (#115); the
+long-`HOME` socket fallback (#117); watching, opening, steering and stopping subagents from the parent (#118); the
+`/rename` built-in (D-069, #119); turns that build from ready summaries and do not wait for memory upkeep (D-068,
+#120); an opt-in real-CLI contract test for the claude-cli provider (#121); and the opt-in signed-update check
+against a pinned trust list (D-073, #122). The core budget is now a ratchet with headroom (D-077).
 
 The items below are being built in separate branches. Some have been tried by the principal on a local test
 build. None is part of Exo yet, and none of the sections above relies on them. They are listed so the reader
@@ -2107,7 +2126,7 @@ knows where the work is going, and they may change before they land.
   the `/taste` view of section 22.7.
 - **Event activation.** A design in which an event, such as a changed folder or a new message, can start a
   run, the way a schedule does today, with the event's sensitive fields masked until the gate sees them.
-  It is a design only.
+  It is a design only (D-057 to D-059, with the community egg and the live egg on the same pull request).
 
 Nothing in this paper reports a benchmark, an accuracy figure or a speed-up for Exo itself, beyond the small
 live checks named above. The numbers quoted for decision models and embedding models come from their vendors'
@@ -2360,7 +2379,7 @@ threads and steering subagents.
 - Section 24: typing help, safe keys, the composer pane, the two layouts, `/rename`, the web sub-pages and a
   stream that resumes.
 - Sections 26 and 27: the security model and the Exo OS seams updated.
-- Part III: what is now built, an "In progress" section (30.1), the security wave and versioning in section
+- Part III: what is now built, an "In progress" section (30.1) that also names what has merged since the draft, the security wave and versioning in section
   31, two new open questions. Glossary entries for the new terms.
 
 **Version 0.2 (October 2026).** Brought the paper up to date with the store, one continuous memory, the

@@ -25,15 +25,13 @@ import asyncio
 import json
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any, AsyncIterator, Mapping
 
-import httpx
-
+from exo.core.models import claude_cli
 from exo.core.models.base import StreamState, error_event
 from exo.core.types import Message, ProviderEvent, ToolSpec
 
@@ -41,7 +39,6 @@ from exo.core.types import Message, ProviderEvent, ToolSpec
 DROP_ENV = ("META_API_KEY",)
 PROBE_PROMPT = "Reply with the single word: ok"
 NOT_SIGNED = "not signed at all"
-CLEANUP_TIMEOUT = 2.0
 MACHO_MAGICS = frozenset(bytes.fromhex(m) for m in (
     "feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca"))
 
@@ -49,15 +46,7 @@ MACHO_MAGICS = frozenset(bytes.fromhex(m) for m in (
 def child_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
     """The CLI's environment (D-039 style): the minimal allowlisted set, never an API key. HOME stays so the
     CLI finds its own config and keychain."""
-    from exo.envscrub import minimal_env
-
-    return {k: v for k, v in minimal_env(os.environ if env is None else env).items() if k not in DROP_ENV}
-
-
-def auth_path(env: Mapping[str, str] | None = None) -> Path:
-    env = os.environ if env is None else env
-    base = env.get("XDG_CONFIG_HOME") or os.path.join(env.get("HOME") or os.path.expanduser("~"), ".config")
-    return Path(base) / "muse" / "auth.json"
+    return claude_cli.child_env(env, drop=DROP_ENV, extra={})
 
 
 def login_state(env: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -66,8 +55,10 @@ def login_state(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     Reads ``providers.meta.mechanism`` and ``providers.meta.subs_active`` and nothing else; the rest of the file
     (which holds personal metadata) is dropped at once. Never touches the keychain, so a stale file can say
     "logged in" when the keychain entry is gone: the test call is what proves the login works."""
+    env = os.environ if env is None else env
+    base = env.get("XDG_CONFIG_HOME") or os.path.join(env.get("HOME") or os.path.expanduser("~"), ".config")
     try:
-        meta = (json.loads(auth_path(env).read_text(encoding="utf-8")).get("providers") or {}).get("meta") or {}
+        meta = (json.loads((Path(base) / "muse" / "auth.json").read_text(encoding="utf-8")).get("providers") or {}).get("meta") or {}
         mechanism, subs = meta.get("mechanism"), meta.get("subs_active")
     except (OSError, ValueError, AttributeError):
         return {"logged_in": False, "subs_active": None}
@@ -126,9 +117,7 @@ def probe(exe: str, env: Mapping[str, str] | None = None, timeout: float = 60.0)
     if signature_state(exe) == "unsigned":
         return {"error_class": "unsigned", "detail": unsigned_detail(exe)}
     with tempfile.TemporaryDirectory(prefix="muse-cli-") as tmp:
-        argv = [exe, "exec", "--no-session-log", "--disable-shell", "--disable-write", "--disable-web-tools",
-                "--disable-reminders", "--no-foreign-personal-context", "--approval-mode", "never",
-                "--workspace", tmp, "--prompt-file", _write(tmp, PROBE_PROMPT)]
+        argv = _exec_argv(exe, tmp, PROBE_PROMPT)
         try:
             proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                     encoding="utf-8", errors="replace", cwd=tmp, env=child_env(env),
@@ -153,6 +142,13 @@ def probe(exe: str, env: Mapping[str, str] | None = None, timeout: float = 60.0)
     return {"error_class": "", "detail": "muse exec answered (its own login is the credential)"}
 
 
+def _exec_argv(exe: str, tmp: str, prompt: str) -> list[str]:
+    """``muse exec`` with every tool and personal-context switch off, in the private workspace ``tmp``."""
+    return [exe, "exec", "--no-session-log", "--disable-shell", "--disable-write", "--disable-web-tools",
+            "--disable-reminders", "--no-foreign-personal-context", "--approval-mode", "never",
+            "--workspace", tmp, "--prompt-file", _write(tmp, prompt)]
+
+
 def _write(tmp: str, text: str) -> str:
     path = os.path.join(tmp, "prompt.txt")
     with open(path, "w", encoding="utf-8") as f:
@@ -172,54 +168,28 @@ def build_prompt(messages: list[Message]) -> str:
     return ("\n\n".join(system) + "\n\n" + body) if system else body
 
 
-def kill_group(proc: asyncio.subprocess.Process | subprocess.Popen) -> None:
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
-
-
 def stop_sync(proc: subprocess.Popen) -> None:
     """Stop descendants too, even if the leader has exited; bound both draining and reaping."""
-    kill_group(proc)
+    claude_cli.kill_group(proc)
     try:
-        proc.communicate(timeout=CLEANUP_TIMEOUT)
+        proc.communicate(timeout=claude_cli.CLEANUP_TIMEOUT)
     except subprocess.TimeoutExpired:
         # A descendant that detached from the group may still hold the captured pipes. Do not wait for it.
         for pipe in (proc.stdout, proc.stderr):
             if pipe:
                 pipe.close()
         try:
-            proc.wait(timeout=CLEANUP_TIMEOUT)
+            proc.wait(timeout=claude_cli.CLEANUP_TIMEOUT)
         except subprocess.TimeoutExpired:
             pass
 
 
-async def stop_async(proc: asyncio.subprocess.Process) -> None:
-    kill_group(proc)
-    try:
-        await asyncio.wait_for(proc.wait(), CLEANUP_TIMEOUT)
-    except asyncio.TimeoutError:
-        # asyncio exposes no public close for subprocess output pipes; release them if a detached child holds
-        # them open. The transport also kills a still-running leader. Waiting for EOF must stay bounded.
-        proc._transport.close()
-
-
-class MuseCliProvider:
+class MuseCliProvider(claude_cli.CliProvider):
     """Provider over a ``muse`` executable. ``model`` is optional; unset leaves the CLI's own default."""
 
     name = "muse-cli"
-
-    def __init__(self, command: str = "muse", *, name: str | None = None, model: str | None = None,
-                 env: Mapping[str, str] | None = None, read_timeout: float | None = 300.0,
-                 timeout: float = 600.0) -> None:
-        self.command = command
-        self.model = model
-        self.env = env
-        self._timeout = httpx.Timeout(timeout, read=read_timeout or timeout)  # the router quotes ``_timeout.read``
-        self._read = read_timeout or timeout
-        if name:
-            self.name = name
+    default_command = "muse"
+    default_read = 300.0
 
     async def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
         if tools:  # 501 is not in NO_FALLBACK_STATUS: the router moves to the next route
@@ -234,14 +204,11 @@ class MuseCliProvider:
             yield error_event(f"muse-cli: {unsigned_detail(self.command)}", None, retryable=True)
             return
         model = opts.get("model") or self.model
-        effort = {"ultra": "ultra"}.get(opts.get("reasoning"), opts.get("reasoning"))
+        effort = opts.get("reasoning")
         st = StreamState()
         with tempfile.TemporaryDirectory(prefix="muse-cli-") as tmp:
             # An empty private workspace: the run has no files of Exo's or the user's to read.
-            argv = [self.command, "exec", "--no-session-log", "--disable-shell", "--disable-write",
-                    "--disable-web-tools", "--disable-reminders", "--no-foreign-personal-context",
-                    "--approval-mode", "never", "--workspace", tmp,
-                    "--prompt-file", _write(tmp, prompt)]
+            argv = _exec_argv(self.command, tmp, prompt)
             if model and model != "default":
                 argv += ["--model", str(model)]
             if effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
@@ -259,7 +226,7 @@ class MuseCliProvider:
             except asyncio.TimeoutError:
                 timed_out = True
             finally:  # also runs on cancel (a stop), and after an exited leader with live descendants
-                await asyncio.shield(stop_async(proc))
+                await asyncio.shield(claude_cli.stop_group(proc))
             if timed_out:
                 yield error_event(f"ReadTimeout: muse sent nothing for {self._read:.0f} s", None, retryable=True)
                 return

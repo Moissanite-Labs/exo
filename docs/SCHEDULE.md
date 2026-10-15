@@ -2,7 +2,7 @@
 
 A scheduled job is a prompt that runs by itself on a timer. Each run is a fresh session of kind `scheduled`
 (see MEMORY-MODEL.md). The run reports through `task.updated`, and the final answer goes out as a `notice`
-or to a channel. Code: `src/exo/core/scheduler.py`.
+or to a channel. Code: `src/exo/scheduler.py` (outside the core since D-067; `exo.compose` attaches it to the engine).
 
 ## Make and manage jobs
 

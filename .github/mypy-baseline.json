@@ -296,12 +296,6 @@
       "count": 2
     },
     {
-      "path": "src/exo/bus/ingress.py",
-      "message": "\"CoreEngine\" has no attribute \"_bus_target\"",
-      "code": "attr-defined",
-      "count": 1
-    },
-    {
       "path": "src/exo/bus/mcp_server.py",
       "message": "Value of type \"Mapping[str, str] | None\" is not indexable",
       "code": "index",
@@ -434,18 +428,6 @@
       "count": 1
     },
     {
-      "path": "src/exo/core/engine.py",
-      "message": "Argument 7 to \"ask\" of \"CoreEngine\" has incompatible type \"**dict[str, list[str] | str]\"; expected \"list[str] | None\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/engine.py",
-      "message": "Argument 7 to \"ask\" of \"CoreEngine\" has incompatible type \"**dict[str, list[str] | str]\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
       "path": "src/exo/core/findings.py",
       "message": "Function \"exo.core.findings.Findings.list\" is not valid as a type",
       "code": "valid-type",
@@ -525,20 +507,8 @@
     },
     {
       "path": "src/exo/core/models/decision.py",
-      "message": "Argument 1 to \"enumerate\" has incompatible type \"Any | None\"; expected \"Iterable[Any]\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/models/decision.py",
       "message": "Item \"None\" of \"Any | None\" has no attribute \"items\"",
       "code": "union-attr",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/models/muse_cli.py",
-      "message": "\"Process\" has no attribute \"_transport\"",
-      "code": "attr-defined",
       "count": 1
     },
     {
@@ -548,58 +518,10 @@
       "count": 1
     },
     {
-      "path": "src/exo/core/models/muse_cli.py",
-      "message": "Argument 1 to \"get\" of \"dict\" has incompatible type \"Any | None\"; expected \"str\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
       "path": "src/exo/core/models/openai_chat.py",
       "message": "Argument 2 to \"map_finish_reason\" has incompatible type \"dict[str, str]\"; expected \"dict[str, Literal['end', 'tool_use', 'max_tokens', 'interrupted', 'error']]\"",
       "code": "arg-type",
       "count": 1
-    },
-    {
-      "path": "src/exo/core/models/router.py",
-      "message": "Argument 4 to \"ClaudeCliProvider\" has incompatible type \"**dict[str, float]\"; expected \"str | None\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/models/router.py",
-      "message": "Argument 4 to \"MuseCliProvider\" has incompatible type \"**dict[str, float]\"; expected \"str | None\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/models/router.py",
-      "message": "Incompatible types in assignment (expression has type \"MuseCliProvider\", variable has type \"ClaudeCliProvider\")",
-      "code": "assignment",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/peer_target.py",
-      "message": "\"CoreEngine\" has no attribute \"_peer_target\"",
-      "code": "attr-defined",
-      "count": 2
-    },
-    {
-      "path": "src/exo/core/peers.py",
-      "message": "Incompatible types in assignment (expression has type \"_Environ[str] | dict[str, str]\", variable has type \"dict[str, str] | None\")",
-      "code": "assignment",
-      "count": 2
-    },
-    {
-      "path": "src/exo/core/peers.py",
-      "message": "Item \"None\" of \"dict[str, str] | None\" has no attribute \"get\"",
-      "code": "union-attr",
-      "count": 4
-    },
-    {
-      "path": "src/exo/core/peers.py",
-      "message": "Value of type \"dict[str, str] | None\" is not indexable",
-      "code": "index",
-      "count": 3
     },
     {
       "path": "src/exo/core/plugins.py",
@@ -620,48 +542,6 @@
       "count": 1
     },
     {
-      "path": "src/exo/core/scheduler.py",
-      "message": "\"None\" has no attribute \"add_done_callback\"",
-      "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "\"list?[dict[str, Any]]\" has no attribute \"__iter__\" (not iterable)",
-      "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "Argument \"bus\" to \"Loop\" has incompatible type \"_Bus\"; expected \"EventBus | None\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "Argument 1 to \"asdict\" has incompatible type \"DataclassInstance | type[DataclassInstance]\"; expected \"DataclassInstance\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "Cannot infer type of lambda",
-      "code": "misc",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "Function \"exo.core.scheduler.Scheduler.list\" is not valid as a type",
-      "code": "valid-type",
-      "count": 2
-    },
-    {
-      "path": "src/exo/core/scheduler.py",
-      "message": "Incompatible types in assignment (expression has type \"Task[None]\", variable has type \"None\")",
-      "code": "assignment",
-      "count": 1
-    },
-    {
       "path": "src/exo/core/sessions.py",
       "message": "Argument 3 to \"_chain\" has incompatible type \"Any | int | None\"; expected \"int\"",
       "code": "arg-type",
@@ -671,12 +551,6 @@
       "path": "src/exo/core/sessions.py",
       "message": "Incompatible return value type (got \"int | None\", expected \"int\")",
       "code": "return-value",
-      "count": 1
-    },
-    {
-      "path": "src/exo/core/sessions.py",
-      "message": "Incompatible types in assignment (expression has type \"str | None\", variable has type \"str\")",
-      "code": "assignment",
       "count": 1
     },
     {

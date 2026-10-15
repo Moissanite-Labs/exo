@@ -284,11 +284,12 @@ def test_once_verdict_is_never_a_standing_allow(tmp_path):
     eng = _eng(tmp_path, register=register)
     asked = []
 
-    async def fake_ask(session, summary, call=None, risk="medium", decided_by=None, options=None, opened=None):
+    async def fake_ask(session, summary, call=None, risk="medium", decided_by=None, options=None, opened=None,
+                       approvers=None, binding=""):
         asked.append(options)
         return "allow_always"
 
-    eng.ask = fake_ask
+    eng.approvals.ask = fake_ask
 
     async def main():
         spec = ToolSpec(name="x", description="", parameters={})
