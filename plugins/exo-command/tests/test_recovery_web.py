@@ -52,15 +52,19 @@ globalThis.document={getElementById:()=>null,addEventListener(){},removeEventLis
 globalThis.sessionStorage={getItem:k=>k==="xc-token"?"tok":null,removeItem(){}}; globalThis.requestAnimationFrame=f=>f();
 let messages=[{id:"u1",role:"user",content:[{text:"hello"}]},{id:"a1",role:"assistant",content:[{text:"original answer"}]}], status="idle", hold=null, snapshotSeq=100;
 const requests=[];
+let refuseModel=false, holdModel=null;
 const report={schema_version:1,model:"fake:x",capacity:8192,text:"A report with no parseable token labels",tokens:{system:1,tree:2,notes:3,tail:4194,total:4200},tree:{summaries:1,nodes:2},nodes:{done:2,pending:0},log_entries:4,frontier:2};
 globalThis.mockApi=async (method,path,body)=>{
   requests.push({method,path,body});
+  if(path.endsWith("/model") && refuseModel)throw Error("principal required");
+  if(path.endsWith("/model") && holdModel)await holdModel;
   if(path==="/api/chat/sessions" && method==="GET"){if(hold) await hold; return {sessions:[{id:"s1",model:"fake:x",status}]};}
   if(path==="/api/chat/sessions" && method==="POST")return {session:{id:"s1"}};
   if(path.endsWith("/command"))return {output:body.name==="context"?report:{open:0}};
   if(path==="/api/chat/sessions/s1")return {session:{id:"s1",model:"fake:x"},messages,seq:snapshotSeq};
   if(path==="/api/section/approvals")return {pending:[]};
   if(path==="/api/providers/models")return {models:[{route:"fake:x",context:8192}]};
+  if(path==="/api/chat/models")return {models:[{route:"fake:x",role:"main"}],available:[{route:"fake:y"},{route:"fake:x"}]};
   return {};
 };
 const {h}=await import("./dom.mjs"), chat=await import("./chat.mjs"), bus=await import("./bus.mjs");
@@ -82,11 +86,41 @@ bus.emit({seq:103,session:"s1",type:"message.delta",body:{message_id:"a1",text:"
 assert.ok(!log.textContent.includes("duplicated"));
 status="idle"; report.capacity=null;bus.recover();await settle();
 assert.match(strip.textContent,/idle/);assert.match(strip.textContent,/capacity unknown/);
-for(const line of ["/etc/hosts is broken", "/context/file is broken", "/layout/file is broken", "/new/file is broken", "/frobnicate is literal"]){
+for(const line of ["/etc/hosts is broken", "/context/file is broken", "/layout/file is broken", "/new/file is broken"]){
   input.value=line;await send.attrs.onclick();await settle();
   assert.equal(requests.findLast(x=>x.path.endsWith("/send")).body.text,line);
 }
 let count=requests.filter(x=>x.path.endsWith("/send")).length;
+for(const line of ["/frobnicate", "/unknown-command", "/MODEL fake:y"]){
+  input.value=line;await send.attrs.onclick();await settle();
+  assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);
+}
+assert.deepEqual(requests.findLast(x=>x.path.endsWith("/model")).body,{model:"fake:y"});
+input.value="/model";await send.attrs.onclick();await settle();
+const picker=nodes.find(x=>x.attrs.class==="xc-model-picker"); assert.equal(picker.hidden,false);
+const select=nodes.findLast(x=>x.attrs["aria-label"]==="Main model");
+assert.equal(select.children.length,2);select.value="fake:x";
+await nodes.findLast(x=>x.textContent==="Use model").attrs.onclick();await settle();
+assert.equal(picker.hidden,true);assert.deepEqual(requests.findLast(x=>x.path.endsWith("/model")).body,{model:"fake:x"});
+input.value="/model default fake:y";await send.attrs.onclick();await settle();
+assert.deepEqual(requests.findLast(x=>x.path==="/api/providers/default").body,{ref:"fake:y",role:"main"});
+input.value="/default";await send.attrs.onclick();await settle();
+assert.equal(nodes.findLast(x=>x.attrs["aria-label"]==="Default model").tagName,"SELECT");
+const before=requests.length;input.value="/model -bad";await send.attrs.onclick();assert.equal(requests.length,before);
+input.value="/frobnicate keep draft";await send.attrs.onclick();assert.equal(input.value,"/frobnicate keep draft");
+assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);
+refuseModel=true;input.value="/model fake:y";await send.attrs.onclick();
+assert.equal(input.value,"/model fake:y");assert.match(strip.textContent,/principal required/);refuseModel=false;
+let releaseModel;holdModel=new Promise(r=>releaseModel=r);
+input.value="/model fake:y";const slowModel=send.attrs.onclick();await settle();
+input.value="a newer draft";releaseModel();await slowModel;holdModel=null;
+assert.equal(input.value,"a newer draft");
+bus.emit({seq:104,session:"s1",type:"turn.started",body:{model:"fake:x"}});
+const interrupts=requests.filter(x=>x.path.endsWith("/interrupt")).length;
+input.value="/model fake:y";await send.attrs.onclick();await settle();
+assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);
+assert.equal(requests.filter(x=>x.path.endsWith("/interrupt")).length,interrupts);
+bus.emit({seq:105,session:"s1",type:"turn.completed",body:{}});
 input.value="/new private";await send.attrs.onclick();await settle();
 assert.equal(requests.findLast(x=>x.path==="/api/chat/sessions" && x.method==="POST").body.kind,"private");
 assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);

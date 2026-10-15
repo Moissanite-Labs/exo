@@ -328,6 +328,13 @@ body { margin: 0; background: #08090a; }
 .xc-composer .xc-input::placeholder { color: var(--fg-3); }
 .xc-composer .xc-btnrow { flex-wrap: nowrap; flex: none; padding-top: 2px; }
 .xc-composer .xc-btn { padding: 10px 14px; }
+.xc-composer:has(.xc-model-picker:not([hidden])) { flex-wrap: wrap; }
+.xc-model-picker { flex: 0 0 100%; min-width: 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.xc-model-picker[hidden] { display: none; }
+.xc-model-picker label { flex: 1 1 240px; min-width: 0; }
+.xc-model-picker select { display: block; width: 100%; max-width: 100%; }
+.xc-model-picker p { flex: 0 0 100%; color: var(--fg-3); margin: 0; }
+.xc-model-picker :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .xc-composer.xc-steer .xc-cp { color: var(--accent-2); }
 
 /* side panels */

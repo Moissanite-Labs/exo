@@ -29,8 +29,9 @@ export function mount(root) {
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
   const stopBtn = h("button", { class: "xc-btn", onclick: () => interrupt() }, "Stop");
   const promptEl = h("span", { class: "xc-cp", "aria-hidden": "true" }, "\u203A");
+  const modelPicker = h("div", { class: "xc-model-picker", hidden: true, "aria-label": "Model picker" });
   const inputWrap = h("div", { class: "xc-inwrap" }, input);
-  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn));
+  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn), modelPicker);
   const help = attachComposer({ input, composer, getSession: () => current,
     reducedMotion: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches });
   const approvalView = attachApprovals({ root: apprEl, composer: input, answer });
@@ -419,6 +420,8 @@ export function mount(root) {
   }
 
   async function open(id) {
+    modelPicker.hidden = true;
+    modelPicker.replaceChildren();
     const generation = ++snapshotGeneration;
     capacity = null;
     current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; steers = {}; flash("");
@@ -495,6 +498,43 @@ export function mount(root) {
     } catch (e) { fail(e); }
   }
 
+  async function chooseModel(ref, defaults, sid) {
+    if (defaults) await api("POST", "/api/providers/default", { ref, role: "main" });
+    else await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/model", { model: ref });
+    if (!defaults && current === sid) { model = ref; capacity = capacities[ref] || null; requested = ""; drawStatus(); }
+    modelPicker.hidden = true;
+    await refreshSessions();
+    flash((defaults ? "Default model: " : "Main model: ") + ref);
+  }
+
+  async function modelCommand(args, defaults = false) {
+    const sid = current;
+    if (!defaults && !sid) { flash("open a thread first for /model; /default sets the model for new threads"); return; }
+    try {
+      if (args) { await chooseModel(args, defaults, sid); return true; }
+      const d = await api("GET", "/api/chat/models");
+      if (sid !== current) return;
+      const rows = [...(Array.isArray(d.models) ? d.models : []), ...(Array.isArray(d.available) ? d.available : [])];
+      const routes = [...new Set(rows.map(m => m && m.route).filter(ref => typeof ref === "string" && ref))];
+      if (!routes.length) { flash("No models listed. Open Providers to set up a provider."); return; }
+      const select = h("select", { class: "xc-field", "aria-label": defaults ? "Default model" : "Main model" },
+        ...routes.map(ref => h("option", { value: ref, selected: ref === model }, ref)));
+      select.value = routes.includes(model) ? model : routes[0];
+      const apply = h("button", { class: "xc-btn", onclick: async () => {
+        if (sid !== current) { modelPicker.hidden = true; return; }
+        apply.disabled = true;
+        try { await chooseModel(select.value, defaults, sid); } catch (e) { fail(e); }
+        finally { apply.disabled = false; }
+      } }, defaults ? "Set default" : "Use model");
+      modelPicker.replaceChildren(h("label", null, defaults ? "Default model for new threads" : "Main model", select),
+        h("p", null, "Changes the shared main route; existing fallbacks remain."), apply,
+        h("button", { class: "xc-btn", onclick: () => { modelPicker.hidden = true; input.focus(); } }, "Cancel"));
+      modelPicker.hidden = false;
+      select.focus();
+      return true;
+    } catch (e) { fail(e); return false; }
+  }
+
   async function send() {
     const text = input.value.trim();
     if (!text) return;
@@ -506,6 +546,13 @@ export function mount(root) {
       return;
     }
     if (command && commandUsage(command)) { flash(commandUsage(command)); return; }
+    if (command && ["model", "default"].includes(command.name)) {
+      let args = command.args, defaults = command.name === "default";
+      if (command.name === "model" && /^default(?:\s|$)/.test(args)) { defaults = true; args = args.slice(7).trim(); }
+      if (args && (args.startsWith("-") || /\s/.test(args))) { flash("usage: /model [provider:model] or /model default [provider:model]"); return; }
+      if (await modelCommand(args, defaults)) { if (input.value.trim() === text) input.value = ""; help.sent(text); }
+      return;
+    }
     const lay = command && command.name === "layout" ? [null, command.args] : null;
     if (lay) {
       input.value = ""; help.sent(text);
@@ -530,6 +577,7 @@ export function mount(root) {
       } catch (e) { fail(e); }
       return;
     }
+    if (command) { flash("unknown command /" + command.name + ". Type / to see supported commands."); return; }
     try {
       if (!current) {
         const d = await api("POST", "/api/chat/sessions", { title: short(text, 60) });

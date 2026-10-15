@@ -105,6 +105,7 @@ def _route(method: str, p: list, key: str):
     get, post = method == "GET", method == "POST"
     table = {
         "chat/sessions": (_sessions, _create),
+        "chat/models": (_models, None),
         "chat/panels": (_panels, None),
         "feedback": (None, _feedback),
         "ui/respond": (None, _ui_respond),
@@ -122,8 +123,8 @@ def _route(method: str, p: list, key: str):
         return _task_open if get else False
     if len(p) == 3 and p[0] == "tasks" and p[2] in ("steer", "stop"):
         return ({"steer": _task_steer, "stop": _task_stop}[p[2]]) if post else False
-    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command", "unsteer", "rename"):
-        return ({"send": _send, "interrupt": _interrupt, "command": _command, "unsteer": _unsteer, "rename": _rename}[p[3]]) if post else False
+    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command", "unsteer", "rename", "model"):
+        return ({"send": _send, "interrupt": _interrupt, "command": _command, "unsteer": _unsteer, "rename": _rename, "model": _model}[p[3]]) if post else False
     return None
 
 
@@ -153,6 +154,18 @@ async def _send(c, p, q, body):
     text = _str(body, "text", required=True, limit=MAX_TEXT)
     mode = _choice(body, "mode", MODES, "send")
     return await c.source.call(s.TurnSend(session=p[2], text=text, mode=mode))
+
+
+async def _models(c, p, q, body):
+    return await c.source.call(s.ModelsList())
+
+
+async def _model(c, p, q, body):
+    # The core validates the route and enforces principal authority, just as for the TUI.
+    model = _str(body, "model", required=True, limit=300)
+    # Validate the target before models.set changes the shared router (the core checks it afterwards).
+    await c.source.call(s.SessionGet(session=p[2]))
+    return await c.source.call(s.ModelsSet(model=model, session=p[2]))
 
 
 async def _command(c, p, q, body):
@@ -248,6 +261,8 @@ async def _schedule_edit(c, p, q, body):
 
 # ---------------------------------------------------------------- completion (D-037)
 WEB_COMMANDS = {"context": "what the next model call carries, part by part",
+                "model": "pick or set the shared main model; default <ref> saves the default",
+                "default": "pick or set the default model for new threads",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
                 "new": "start a new thread", "rename": "give this thread a new title",
                 "layout": "inverse puts the box on top with the newest message under it; classic is the usual order"}
