@@ -27,6 +27,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- A client that stops reading the event stream can no longer grow the core's memory (D-079). The hub queued every
+  event for every subscriber without a limit. Now a subscriber 4,096 unread events behind has its stream ended
+  after the last event it read, and it resumes with `since`. Every client in the repo resumes and misses nothing:
+  the protocol client with `reconnect`, the terminal window (run in process, joined or taken over), stdio, the
+  exo-bus link, and `exo web`, which now replays from the last event it applied instead of the newest 5,000.
+- A shell command that prints fast no longer floods the event stream. Its output chunks went out as one
+  `tool.output` (and one database write) each, and one command could queue thousands before any client read one.
+  The chunks queued between two loop turns now go out as one event.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

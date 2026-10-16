@@ -1334,3 +1334,28 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** the budget test, `tests/docs`, `tests/test_privacy.py`, `tests/test_versioning.py`, `ruff check`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
+
+## D-079 (2026-10-16) A stalled event subscriber is ended and resumes with since
+- **Status:** Accepted 2026-10-16.
+- **Why:** `Hub.publish` put every event in an unbounded queue per subscriber. A client that stops reading blocks
+  its SSE loop in `drain()`, so its queue grew one for one with the stream and one stalled client could grow the
+  core's memory without bound (the audit of main 35b7de8 left 29,792 of 30,000 notices queued).
+- **Decision:** a subscriber whose queue holds `MAX_LAG` (4,096) unread events is ended on the next publish. The hub
+  drops what it has not read and queues the end marker it already uses on shutdown, so the stream closes right after
+  the last event the client read and the publisher never waits. `Hub.closed` tells this close from a shutdown.
+  - Every client in the repo resumes with `since`: the protocol client with `reconnect`, the exo-bus link, the
+    terminal window's `LocalClient` and stdio `serve_lines` (they subscribe again until the hub closes, so a window
+    that took over keeps its core), and `exo web`, whose re-bootstrap replays from the last event it applied.
+  - A reader that keeps up must stay far below the cap. Tool threads hand output to the loop with
+    `call_soon_threadsafe`, and every callback queued between two loop turns runs before any reader does. On main one
+    chatty shell command queued 7,946 publishes in one turn. `run_tool` now joins a thread's chunks into one
+    `tool.output` per loop turn, so a turn publishes a handful: a delta per provider chunk, an output per running tool.
+- **Rejected:** dropping the oldest events, since a gap with no close corrupts a client's view. Blocking the
+  publisher, since one slow client would stall every turn and every other client. Refilling the stalled
+  subscription from the event log inside the hub, which hides the stall from a remote client and moves reconnect
+  logic into the hub. Closing on a stall measured in seconds, since one long loop turn looks the same and memory
+  still grows while the timer runs.
+- **Revisit if:** a client that keeps up is ever ended in normal use, or new code publishes from a thread once per
+  item instead of once per loop turn.
+- **Docs:** `docs/CORE-V2-INTERFACES.md` `events.subscribe` and `tool.output`, `docs/STANDALONE.md` §5.1,
+  `docs/ui/WEB.md`, `plugins/exo-command/README.md`, `CHANGELOG.md`.

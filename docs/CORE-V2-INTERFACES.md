@@ -75,7 +75,10 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `question.answer` QuestionAnswer: question_id, answer
 - `command.run` CommandRun: name, args = "", session?. Built-ins: trace, findings, context, compact (the cap is full; new commands go here)
 - `commands.list` CommandsList: session?
-- `events.subscribe` EventsSubscribe: since = 0 (events with seq > since), session? (None = all)
+- `events.subscribe` EventsSubscribe: since = 0 (events with seq > since), session? (None = all). A live
+  subscriber 4,096 unread events behind (`MAX_LAG` in `exo.server.engine`) has stalled: the core ends its stream
+  after the last event it read, and the client resumes with `since` and misses nothing (D-079). In process, the
+  terminal window and stdio subscribe again on their own, and their stream ends only when the core shuts down.
 - `search` Search: query, scope `sessions/store/all` = all, limit = 20
 - `config.get` ConfigGet: key? (None = whole config)
 - `config.set` ConfigSet: key, value: Any
@@ -97,7 +100,7 @@ Events (21): the 20 from 5.2 plus `taste.updated` (D-012 inline taste).
 - `message.completed` MessageCompleted: message: Message
 - `reasoning.delta` ReasoningDelta: message_id, text
 - `tool.started` ToolStarted: call: ToolCall, risk = "low"
-- `tool.output` ToolOutput: call_id, text (partial output)
+- `tool.output` ToolOutput: call_id, text (partial output: what a tool printed since the last loop turn, D-079)
 - `tool.completed` ToolCompleted: result: ToolResult, duration_ms = 0
 - `approval.requested` ApprovalRequested: request_id, summary, risk = "medium", call?, options =
   [allow, deny, allow_always], approvers: list[str] = [] (`principal`, `seat:<name>`; empty = any local

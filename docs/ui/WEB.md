@@ -15,6 +15,8 @@ two clients never start two. While it starts, the page shows "Exo core is not ru
 start, the page shows the reason and the log path. If the agent is held by a window that is not sharing it, the page
 says to close that window or run `exo stop`. The background core stays up after the page closes (`exo stop` ends it).
 With `--socket` or `--url` nothing is started; the page says the core is not reachable.
+When the core ends the event stream (a restart, or a stream 4,096 events behind, D-079), `exo web` reconnects and
+replays from the last event it applied, so no reply or approval card is lost.
 
 ## Opening the page and the page token (D-039)
 
