@@ -1310,14 +1310,38 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   drop `exo-gate` from `core_plugins`, change the gate's own `plugin_config`, swap `models`, or point `install.venv`
   at an interpreter that `exo update` then runs as the principal before any check. The same held for
   `$EXO_HOME/update/allowed_signers`, the trust root for signed updates (D-073).
-- **Decision:** `$EXO_HOME/config.json` and `$EXO_HOME/update/` join the protected list. Any write is `store_write`:
-  it asks, no policy lowers it, no standing grant covers it, only the principal may answer, and observe mode enforces
-  it. Reads stay `read`. `exo config set` and `exo update --pin-trust` were already `opaque_exec`. Only the home's
-  own `config.json` counts; a project's `config.json` or one under `plugins/` is unchanged.
+- **Decision:** `$EXO_HOME/config.json` and `$EXO_HOME/update/` join the protected list. Any write the gate can see
+  is `store_write`: it asks, no policy lowers it, no standing grant covers it, only the principal may answer, and
+  observe mode enforces it. Reads stay `read`. Seen: the file tools, a redirection, a writing program with the path
+  as an argument, the home or `update/` as a destination folder (`cp x ~/.exo/`, `cp -t`, `install -t`, `tar -C`
+  when extracting, `unzip -d`, with the folder as its own word, attached to the option or named in old-style
+  `tar xCf`, and a relative `.exo` or `.exo/`), a folder named like the home copied into the home's parent
+  (`cp -r /tmp/.exo ~/` merges into it), a relative name after `cd` into the store, after `env -C` (also in a
+  cluster, `env -iC`), or with the bash tool's `cwd` there, a leading `//`, and `exo config set`/`unset`,
+  `python -m exo.config set`/`unset` and
+  `exo update --pin-trust`, which were `opaque_exec` (a category a policy, a rule or `approvals.yaml` can lower)
+  and are `store_write` now.
+  `update/allowed_signers` is distinctive, so like `policies/gates.yaml` it matches anywhere. Only the home's own
+  `config.json` counts; a project's `config.json`, one under `plugins/`, or a `config.json.bak` beside it is
+  unchanged. A symlink to either file is the job of the store-path resolution of issue #130, not of this list.
+- **Limits:** the gate matches the text of a command. A glob or brace spelling (`~/.exo/conf*.json`,
+  `~/.exo/{config,x}.json`), a case variant on a case-insensitive filesystem (`Config.json` on APFS),
+  `${EXO_HOME:-$HOME/.exo}` or a path built from another variable, `cp -s`/`cp -l` link trees, an archiver whose
+  destination the gate does not read (`7z x -o`, `cpio -i`, `pax -r`, `bsdtar`) and a folder destination that
+  spells a custom home relatively (`cd ~ && cp x my-exo/`) pass as ordinary writes. So does an abbreviated GNU long
+  option (`tar --dir <home>`, `tar --directo=<home>`, `cp --target <home>`, `env --chd <home>`, `tar --extr`),
+  which getopt_long accepts as an unambiguous prefix but no long-option check in the gate reads, this rule or any
+  other; and so do the archive forms where the member names decide where a file lands (`tar --one-top-level=DIR`,
+  `tar -P`/`--absolute-names` with absolute or `..` members). `plugins/`, `venv/`, `src/`,
+  `bin/` and `env.sh` under the home are not protected: a write there changes the code that runs as the principal,
+  but the home is an install folder, not the store, and that is a scope decision, not a gap this decision claims
+  to close; a sandbox is the real fix. The reverse holds too: a `.exo/config.json` in a project folder matches by
+  name and asks.
 - **Rejected:** moving these settings under `policies/` (a migration for every install, for the same effect); having
   `exo update` validate the interpreter instead (it would still run whatever `models` and `core_plugins` say).
 - **Revisit if:** a tool needs to write `config.json` as part of normal work. None does today; the core writes it in
   process.
+- **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `docs/USER-GUIDE.md` §6 and §10, `CHANGELOG.md`.
 
 ## D-077 (2026-10-15) Core budget: a ratchet with headroom, functionality and robustness first
 - **Status:** Accepted 2026-10-15. The principal's ruling: "important to be lean and optimized but not at the cost of

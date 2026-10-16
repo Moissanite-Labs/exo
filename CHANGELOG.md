@@ -7,8 +7,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ### Security
 - `$EXO_HOME/config.json` and `$EXO_HOME/update/` (the pinned trust list) are protected store paths (D-074). A write
-  to either from a tool asks the principal and no policy or standing grant lowers it. Before, a plain local write
-  could drop the gate plugin from `core_plugins` or point `exo update` at another interpreter without an ask.
+  to either from a tool asks the principal and no policy or standing grant lowers it: the file tools, redirections,
+  writing programs, the home as a destination folder (`cp x ~/.exo/`, `cp -t`, `tar -xC`, `unzip -d`, however the
+  folder is attached; a relative `.exo` counts by name), a folder named like the home copied into its parent
+  (`cp -r /tmp/.exo ~/`), relative names under the bash tool's `cwd` or `env -C` (also `env -iC`), and
+  `exo config set`/`unset` and `exo update --pin-trust`, which were `opaque_exec`. Before, a plain local write
+  could drop the gate plugin from `core_plugins` or point `exo update` at another interpreter without an ask. Not
+  covered: glob, brace, case and `${VAR:-...}` spellings, abbreviated long options (`tar --dir`), archivers other
+  than `tar` and `unzip`, a custom home spelled relatively, and `plugins/`, `venv/`, `src/` and `bin/` under the
+  home (`docs/GATE.md`, "Limits").
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit

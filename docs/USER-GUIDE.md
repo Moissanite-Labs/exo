@@ -213,8 +213,8 @@ What the gate asks about, and why:
   function, `source`, or a program the gate does not know: each asks once, for that exact command. Plain work still
   runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like.
 - **Your store is like a key (D-038).** A write to your store's `policies/`, `state/` (your standing grants), the
-  ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always" covers it. Reading your
-  policies does not ask.
+  ledger, `keys/`, seat files, `config.json`, `update/` (the trust list for signed updates) or the core's socket
+  asks you every time, and no "always" covers it. Reading your policies does not ask.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
@@ -269,7 +269,7 @@ Details and the cost rules: `docs/TRACE.md`.
 |---|---|
 | No model answers | Run `exo providers`. It shows which providers have keys and whether a test call worked; `exo providers test <name>` says why one fails. Add a key with `exo providers add <name>` or `/providers`. |
 | A second `exo serve` refuses to start | One process writes an agent's log. Another `exo serve` or `exo tui` for that seat already holds it. Use that one, or stop it. |
-| Cost shows `unknown` | The route has no price. Add one under `models.models` in `config.json` (`docs/TRACE.md`). |
+| Cost shows `unknown` | The route has no price. Add one under `models.models` in `config.json` (`docs/TRACE.md`). If you ask the agent to add it, it asks you first: `config.json` is part of your store (§6). |
 | `code_find` is missing | It needs Node.js 22 or newer. `exo models` says why on its `code_find:` line (`docs/TOOLS.md`). |
 | Learning does nothing | It needs a principal store. Without one it is off and says so once (`docs/LEARNING.md`). |
 | A peer message never arrived | It may be held. Look for an approval card. Held messages expire after 30 minutes (`docs/PEERS.md`). |
