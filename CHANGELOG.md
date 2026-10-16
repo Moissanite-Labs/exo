@@ -27,6 +27,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Command centre cost panel: a finished subagent's spend counted twice. The core rolls the child's total into its
+  parent's `session_total`, and the panel then added the child's own row again, in the total, the seat and model
+  bars and the session counts. A delegated child at $0.05 under a $0.10 parent showed $0.20 instead of $0.15. The
+  child's row now reads `in parent` and is left out of the sums. A running child, a scheduled job and a fork are
+  still summed, since nothing rolls them up.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

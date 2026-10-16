@@ -166,7 +166,8 @@ export function mount(app) {
         h("tbody", null, d.top.map(function (s) {
           return h("tr", null, h("td", { title: s.session_id }, short(s.title || s.session_id, 48)), h("td", null, s.seat), h("td", null, short(s.models.join(", "), 28)),
             h("td", { class: "xc-num" }, tok(s.input_tokens) + " / " + tok(s.output_tokens)), h("td", { class: "xc-num" }, s.messages),
-            h("td", { class: "xc-num" + (s.priced ? "" : " xc-faint") }, s.priced ? usd(s.cost_usd) : "unpriced"), h("td", { class: "xc-dim" }, ago(s.last_activity)));
+            h("td", { class: "xc-num" + (s.priced && !s.rolled_up ? "" : " xc-faint"), title: s.rolled_up ? "Counted in its parent session's cost" : null },
+              s.priced ? usd(s.cost_usd) : "unpriced", s.rolled_up ? " in parent" : null), h("td", { class: "xc-dim" }, ago(s.last_activity)));
         })))));
     return panel("costs", "Cost per session", "last " + d.window_days + "d, " + usd(d.total_usd) + " over " + d.priced_sessions + " priced sessions", body);
   }

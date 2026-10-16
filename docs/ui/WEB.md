@@ -132,6 +132,8 @@ DevTools (`tests/browser.py`, skipped when Chrome is missing). The page has no b
 
 Cost in the strip is the session total from `usage.updated`; each row of last calls shows that call's
 `usage.cost_usd` from `model.call`. A call or session the core could not price reads `unknown`, never `$0`.
+A parent's session total includes its finished subagents, which the core rolls up, so the Command page's cost
+panel lists such a child as `in parent` and does not add it again.
 `job.updated` shows as one dim line with a cold label: `job · pytest -q · done · 12.4s`, with the exit code
 when it is not zero.
 
