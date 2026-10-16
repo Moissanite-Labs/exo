@@ -208,14 +208,39 @@ Distinctive names match anywhere, so a relative `policies/gates.yaml` or
 plugins the core loads (this gate among them), the plugin config, the models and the interpreter
 `exo update` runs; `update/` holds the pinned trust list for signed updates (D-073, D-074).
 
-Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
-non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
-`sqlite3`, `touch`, `ln`), a connection to the socket (`nc -U`, `curl --unix-socket`, `socat`),
-`exo log append`, `exo keygen`, `exo init`, `git -C <store>` with a writing subcommand, and any
-writing command after `cd` into the store. `rm -rf ~/.exo` counts (an ancestor). A
+Any write the gate can see is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a
+redirection, a non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`,
+`chmod`, `sqlite3`, `touch`, `ln`), a copy or extraction whose destination folder is the home,
+the principal store or a protected folder in them (`cp x ~/.exo/`, `cp -t`, `install -t`,
+`tar -C` when extracting, `unzip -d`; the folder as its own word, attached to the option, named
+in old-style `tar xCf`, or a relative `.exo` or `.exo/`), a folder named like the home copied
+into the home's parent (`cp -r /tmp/.exo ~/` merges into it), a connection to the socket
+(`nc -U`, `curl --unix-socket`, `socat`),
+`exo log append`, `exo keygen`, `exo init`, `exo config set`/`unset` (also `python -m exo.config`),
+`exo update --pin-trust`, `git -C <store>` with a writing subcommand, and any writing command
+after `cd` into the store, after `env -C <store>` (also in a cluster, `env -iC <store>`), or
+with the bash tool's `cwd` argument there.
+A leading `//` is the same path. `rm -rf ~/.exo` counts (an ancestor). A symlink that points at a
+store path is the job of the store-path resolution of issue #130, not of this list. A
 `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. Reads of the store stay `read`, except `keys/`, which stays `credentials`.
+
+Limits. The match is on the text of the command. A glob or brace spelling (`~/.exo/conf*.json`,
+`~/.exo/{config,x}.json`), a case variant on a case-insensitive filesystem (`~/.exo/Config.json`
+on APFS), `${EXO_HOME:-$HOME/.exo}` or a path built from another variable
+(`D=~/.exo; cp x $D/config.json`), `cp -s`/`cp -l` link trees, an archiver whose destination the
+gate does not read (`7z x -o`, `cpio -i`, `pax -r`, `bsdtar`) and a folder destination that spells a
+custom home relatively (`cd ~ && cp x my-exo/`) pass as ordinary writes. So does an abbreviated
+GNU long option (`tar --dir <home>`, `tar --directo=<home>`, `cp --target <home>`,
+`env --chd <home>`, `tar --extr`), which getopt_long accepts as an unambiguous prefix but no
+long-option check in the gate reads, this rule or any other; and so do the archive forms where
+the member names decide where a file lands (`tar --one-top-level=DIR`, `tar -P`/`--absolute-names`
+with absolute or `..` members).
+`plugins/`, `venv/`, `src/`, `bin/` and `env.sh` under the home are not store paths: a write there
+changes the code that runs as the principal, but the home is an install folder, not the store, and
+that is a scope decision (D-074), not a gap the gate claims to close; a sandbox is the real fix.
+The reverse holds too: a `.exo/config.json` in a project folder matches by name and asks.
 
 ## Policy changes during a session (D-038)
 

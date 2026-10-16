@@ -865,9 +865,10 @@ def _classify_http(argv: list[str], cmd: str) -> Classification:
     return _make("web_post", summary=f"{method} to {host}", **kw)
 
 
-def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
-    """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text)."""
-    sudo = False
+def _strip_prefix_words(words: list) -> tuple[list, bool, str | None, str]:
+    """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text,
+    the folder `env -C` moves into)."""
+    sudo, chdir = False, ""
     while words:
         t = words[0].text
         if not words[0].quoted and _ASSIGN.fullmatch(t):
@@ -883,14 +884,21 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
         while words and words[0].text.startswith("-") and words[0].text != "-":
             f = words[0].text
             words = words[1:]
+            m = base == "env" and re.fullmatch(r"-[a-zA-Z]*?([CSu])(.*)", f)
+            if m:
+                f = "-" + m.group(1) + m.group(2)      # `-iC DIR`, `-iCDIR`: the first value-taking letter ends the cluster
             if base == "env" and (f in ("-S", "--split-string") or f.startswith(("--split-string=", "-S"))):
                 inline = f.split("=", 1)[1] if "=" in f else (f[2:] if f.startswith("-S") and len(f) > 2 else "")
-                return [], sudo, inline or " ".join(w.text for w in words)
+                return [], sudo, inline or " ".join(w.text for w in words), chdir
+            if base == "env" and (f.startswith("--chdir=") or (f.startswith("-C") and len(f) > 2)):
+                chdir = f[8:] if f.startswith("--chdir=") else f[2:]           # `--chdir=DIR`, `-CDIR`
             if f in takes and words:
+                if base == "env" and f in ("-C", "--chdir"):
+                    chdir = words[0].text
                 words = words[1:]
         if base == "timeout" and words and re.fullmatch(r"[\d.]+[smhd]?", words[0].text):
             words = words[1:]
-    return words, sudo, None
+    return words, sudo, None, chdir
 
 
 def _trusted_path(prog: str) -> bool:
@@ -916,7 +924,9 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         words = words[1:]
     if words and not words[0].quoted and words[0].text == "for":
         words = []                                   # a for header lists words, not programs
-    words, sudo, split = _strip_prefix_words(words)
+    words, sudo, split, chdir = _strip_prefix_words(words)
+    if chdir and _in_store_dir(chdir):
+        ctx = {**ctx, "store_cwd": True}             # `env -C <store> cmd` runs this one command inside the store
     parts: list[Classification] = []
     if split is not None:
         parts.append(_opaque("env -S runs a command line", cmd))
@@ -1161,6 +1171,8 @@ def _classify_interpreter(prog: str, argv: list[str], k: _Cmd, cmd: str, depth: 
                     return [_make("shell", summary=f"pip {' '.join(rest[:1])}".strip(), command=cmd) if ok
                             else _opaque(f"pip {rest[0]}", cmd)]
                 return [_make("shell", summary=f"{prog} -m {mod}", command=cmd)]
+            if mod == "exo.config":
+                return [_classify_exo(["exo", "config"] + args[i + 2:], cmd)]
             return [_opaque(f"{prog} -m {mod} runs a module", cmd)]
         if a == "-" or not a.startswith("-"):
             if a != "-":
@@ -1177,8 +1189,9 @@ def _classify_exo(argv: list[str], cmd: str) -> Classification:
     verb = argv[2] if len(argv) > 2 else ""
     if sub == "providers" and verb in ("add", "remove", "test", "default"):
         return _make("credentials", summary=f"exo providers {verb}", command=cmd)  # D-034: key setup is the user's
-    if sub in ("keygen", "init") or (sub == "log" and verb == "append"):
-        c = _make("store_write", summary=f"exo {sub} {verb}".strip(), command=cmd)
+    if sub in ("keygen", "init") or (sub == "log" and verb == "append") or \
+            (sub == "config" and verb in ("set", "unset")) or (sub == "update" and "--pin-trust" in argv[2:]):
+        c = _make("store_write", summary=f"exo {sub} {verb}".strip(), command=cmd)  # writes config.json or update/
         c.signals.append("exo store")
         return c
     if sub in ("find", "get", "ctx", "links", "lint", "graph", "wire", "providers", "--version", "--help", "") or \
@@ -1204,9 +1217,62 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
         if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and \
                 _in_store_dir(words[i + 1].text):
             return words[i + 1].text            # git checkout, reset or commit inside the store
+    argv = [w.text for w in words]
+    for d in _landings(prog, argv, _dir_target(prog, argv)):  # `cp x ~/.exo/`, `tar -C ~/.exo`, `cp -r /tmp/.exo ~/`
+        if _is_store_dir(d):
+            return d                            # the file, or the folder copied, lands on a protected folder
     if ctx.get("store_cwd"):
         return "a path inside the store (after cd)"
     return ""
+
+
+_DIR_OPTS = {"cp": ("-t", "--target-directory"), "install": ("-t", "--target-directory"),
+             "tar": ("-C", "--directory"), "unzip": ("-d",)}
+
+
+def _dir_target(prog: str, argv: list[str]) -> str:
+    """The folder a copying or extracting program writes into, or ''. `cp -t DIR`, `install --target-directory=DIR`,
+    `tar -C DIR` (extracting; creating or listing reads there), `unzip -d DIR`, or a `cp`/`install` destination
+    that is a folder (a trailing slash, one that exists, or a relative `.exo` by name). What lands there is
+    `DIR/<name of each source>`, so the folder decides (see `_landings`). A short option may end a cluster or
+    carry the folder: `-rt DIR`, `-tDIR`, `-xC DIR`."""
+    opts = _DIR_OPTS.get(prog)
+    if not opts:
+        return ""
+    if prog == "tar":
+        old = argv[1] if argv[1:] and not argv[1].startswith("-") else ""      # old style: `tar xCf DIR FILE`
+        if "x" not in old and not any(a in ("--extract", "--get") or re.match(r"-[a-zA-Z]*x", a) for a in argv[1:]):
+            return ""
+        if "C" in old:
+            takers = [ch for ch in old if ch in "CfT"]                      # each takes the next operand, in order
+            return argv[2 + takers.index("C")] if 2 + takers.index("C") < len(argv) else ""
+    for i, a in enumerate(argv[1:], 1):
+        nxt = argv[i + 1] if i + 1 < len(argv) else ""
+        for o in opts:
+            if a == o:
+                return nxt
+            if a.startswith(o + "="):
+                return a.split("=", 1)[1]
+            m = len(o) == 2 and re.fullmatch(rf"-[a-zA-Z]*?{o[1]}(.*)", a)   # the first such letter ends the cluster
+            if m:
+                return m.group(1) or nxt
+    if prog in ("cp", "install"):
+        operands = [a for a in argv[1:] if not a.startswith("-")]
+        dest = operands[-1] if len(operands) > 1 else ""
+        p = _expand_text(dest)
+        if dest.endswith("/") or os.path.isdir(p) or (not p.startswith("/") and re.search(r"(^|/)\.exo$", p)):
+            return dest                  # a relative `.exo` is the home by name; isdir() would ask the gate's own cwd
+    return ""
+
+
+def _landings(prog: str, argv: list[str], dest: str) -> list[str]:
+    """The folders a copy into ``dest`` writes: ``dest`` itself and, for `cp`/`install`, `dest/<name of each
+    source>`: `cp -r /tmp/.exo ~/` merges into the home and overwrites `config.json` without naming either."""
+    if not dest:
+        return []
+    names = [os.path.basename(a.rstrip("/")) for a in argv[1:] if not a.startswith("-") and a != dest] \
+        if prog in ("cp", "install") else []
+    return [dest] + [os.path.join(dest, n) for n in names if n]
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:
@@ -1232,10 +1298,11 @@ def _piped_text(k: _Cmd) -> str | None:
     return None
 
 
-def classify_shell(cmd: str, depth: int = 0) -> Classification:
-    """Classify a shell command line; a compound line takes its most severe part."""
+def classify_shell(cmd: str, depth: int = 0, cwd: str = "") -> Classification:
+    """Classify a shell command line; a compound line takes its most severe part. ``cwd`` is the folder the
+    tool runs it in, when the call names one: inside the store it counts like a leading `cd` there."""
     cmds, subs, func = _parse(cmd or "")
-    ctx: dict = {}
+    ctx: dict = {"store_cwd": True} if cwd and _in_store_dir(cwd) else {}
     parts: list[Classification] = []
     prev: _Cmd | None = None
     for k in cmds:
@@ -1424,9 +1491,9 @@ def _glob_hits_secret(tok: str) -> bool:
 # absolute paths are also checked against EXO_HOME, its principal stores and EXO_PRINCIPAL_STORE.
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
-    r"\.exo/(update(/|$)|config\.json)|"
+    r"\.exo/(update(/|$)|config\.json$)|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
-    r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
+    r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|update/allowed_signers$|"
     r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
     r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
 # `config.json` names the plugins the core loads (the gate among them), the plugin config, the models and the
@@ -1460,7 +1527,7 @@ def is_store_path(path: str, ancestors: bool = False) -> bool:
         return True
     if not p.startswith("/"):
         return False                     # relative: names only; the tool's working folder is not known here
-    p = os.path.normpath(p)
+    p = "/" + os.path.normpath(p).lstrip("/")        # normpath keeps a leading `//`
     for root, names, principals in _store_roots():
         for r in {root, os.path.realpath(root)}:
             if ancestors and (r == p or r.startswith(p.rstrip("/") + "/")):
@@ -1483,8 +1550,19 @@ def _in_store_dir(path: str) -> bool:
     p = _expand_text(path).strip()
     if not p.startswith("/"):
         return bool(re.search(r"(^|/)\.exo(/|$)", p))
-    p = os.path.normpath(p)
+    p = "/" + os.path.normpath(p).lstrip("/")
     return any(p == r or p.startswith(r + "/") for r, _, _ in _store_roots())
+
+
+def _is_store_dir(path: str) -> bool:
+    """A folder whose entries are protected: the home or the principal store itself (`config.json`, `update/`
+    and the rest sit right under it), or a protected folder below it (`update/`, `policies/`)."""
+    p = _expand_text(path).strip()
+    if not p.startswith("/"):
+        p = os.path.normpath(p)          # relative: names only, as in is_store_path; `.exo` is the home by name
+        return bool(re.search(r"(^|/)\.exo$", p)) or is_store_path(p)
+    p = "/" + os.path.normpath(p).lstrip("/")
+    return any(p == os.path.normpath(r) for r, _, _ in _store_roots()) or is_store_path(p)
 
 
 _PATCH_PATHS = re.compile(r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$|^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$",
@@ -1639,7 +1717,8 @@ def classify(action: Any) -> Classification:
     tool, args = _args_of(action)
     if tool in ("terminal", "shell", "bash", "run_command", "exec_command") or (
             tool not in TOOLS and isinstance(args.get("command"), str) and tool.endswith(("terminal", "shell"))):
-        c = classify_shell(str(args.get("command") or args.get("cmd") or ""))
+        cwd = args.get("cwd")
+        c = classify_shell(str(args.get("command") or args.get("cmd") or ""), cwd=cwd if isinstance(cwd, str) else "")
     elif tool == "execute_code":
         c = classify_code(str(args.get("code") or ""))
     elif tool in ("write_file", "patch", "edit_file", "apply_patch"):
