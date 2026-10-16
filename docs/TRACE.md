@@ -33,9 +33,9 @@ cached tokens, only the uncached part at the input rate), or uses the provider's
 (OpenRouter does). A route with no price shows `unknown`, never `$0`. A turn with some unpriced calls shows the
 sum of the priced ones with a `+` (`$0.0210+`). A call that used no tokens costs nothing and is not "unknown".
 Add or override a price in config.json under `models.models`, for example
-`{"models": {"models": {"opencode-go:glm-5.3-flash": {"input": 0.3, "output": 1.2}}}}`; a seat can set the
-same under `[models.models]`. Prices of calls already recorded are as recorded: a price added later applies to
-new calls only.
+`{"models": {"models": {"opencode-go:glm-5.3-flash": {"input": 0.3, "output": 1.2}}}}`; a seat can add or
+override prices the same way under `[models.models]`, model by model, and config.json's other prices stay.
+Prices of calls already recorded are as recorded: a price added later applies to new calls only.
 
 ## Rules
 Each flag has a stable signature, so the same problem counts instead of repeating. Limits are in the `trace`

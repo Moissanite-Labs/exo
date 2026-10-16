@@ -156,7 +156,8 @@ class CoreRuntime:
         if seat and seat.principal and os.environ.get("EXO_PRINCIPAL") not in (None, "", seat.principal):
             raise ValueError("seat principal conflicts with EXO_PRINCIPAL")
         selection = resolve_spend_policy(principal_spend, principal=active_principal)
-        models = {**(models or {}), **(seat.models if seat else {})}
+        over, models = (seat.models if seat else {}), dict(models or {})  # the seat's tables win entry by entry, like [trace]
+        models |= {k: {**models[k], **v} if isinstance(v, dict) and isinstance(models.get(k), dict) else v for k, v in over.items()}
         if principal_spend is not None:
             models["spend"] = principal_spend
         elif seat and "spend" in seat.models and selection.source is None:
