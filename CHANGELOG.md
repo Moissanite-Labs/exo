@@ -144,6 +144,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   a few calls with a large cached prompt, while on Anthropic the budget ignored cached context. The per-child budget
   now counts uncached input, cache writes and output. Cache reads do not count. Context-engine plugins get the
   whole prompt in `prompt_tokens`. Cost and model spend are unchanged.
+- A seat's `[models]` tables (`roles`, `providers`, prices) now merge over config.json's entry by entry instead of
+  replacing the whole table. A seat that set one role used to send `main` and `aux` back to the catalog's cloud
+  defaults and drop config.json's prices. Under the `docs/SEATS.md` example, a local-only config sent aux and
+  decision calls to cloud routes.
 
 ## [0.2.0] (egg) - 2026-10-13
 
