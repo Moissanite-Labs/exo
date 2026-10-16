@@ -56,6 +56,13 @@ cwd = "~/Work/exo-live"       # where this seat's threads start; beats config.js
 turn_wall_s = 90              # also model_call_s, model_call_routes, turn_total_wall_s, model_wait_s, subagent_s, verify_turns, verify_days
 ```
 
+The `[models]` tables (`roles`, `providers`, `models` for prices, `fake`) merge over config.json's `models`
+entry by entry. A role, a provider or a `provider:model` price entry the seat names replaces config.json's entry
+of that name whole. Every other entry stays as config.json set it. So the example above sets only `fast` (which
+`tier` then makes the seat's main model) and keeps config.json's `aux` and `decision` routes, and
+`roles = { decision = [] }` empties that one role. A price field the seat's entry leaves out comes from the
+catalog, not from config.json.
+
 When a thread starts, or a shell call works (its `cwd` argument or a leading `cd`) in a folder that is not inside
 a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.
 
