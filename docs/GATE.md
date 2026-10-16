@@ -7,21 +7,51 @@ each call, records the decision in the signed ledger, and turns an ask into the 
 it, how long "always" lasts, and the sweep for internal names in outbound posts. D-038 made the
 shell classifier an allowlist and put the store itself behind the gate (see the last three sections).
 
-## Shell parameter expansion
+## Shell parameter expansion (D-038)
 
-The shell lexer balances `${...}` through quotes, escapes, nested parameter words,
-command substitutions and backticks. Executable substitutions in defaults,
-alternatives, error words and pattern replacements receive the same classification
-as visible commands. Quoted braces cannot hide a following command. Single-quoted
-literal expansion words stay literal; inside an enclosing double quote, single
-quotes do not suppress command substitution.
+The shell lexer (`exo.gate._Lexer._parameter`) balances `${...}` through quotes, escapes, nested
+parameter words, command substitutions, backticks and, in an unquoted word, the process
+substitutions `<( )` and `>( )`. Executable substitutions in defaults, alternatives, assignments,
+error words, offsets and pattern replacements receive the same classification as visible commands,
+so a category deny on `git push` reaches `echo ${X:-$(git push origin main)}`. Brace matching
+follows bash in its default (non-POSIX) mode, which is how exo runs commands (`bash -c`): inside
+`"${...}"` a single quote pairs with the next one for every operator, so a `}` or `"` between them
+cannot end the word early and hide a following command. `$( )` and backticks inside those single
+quotes are still scanned, because bash expands them in `:-` and `:+` words. A single-quoted
+expansion word outside double quotes stays literal, as does `\$(`. `$((` is arithmetic only when
+bash reads it as arithmetic (the first group's `)` is followed by another); `$((cmd) )` and
+`$((a);(b))` are command substitutions and are classified as such. `$'` directly inside double
+quotes is a literal `$` and a quote, not ANSI-C quoting (`echo "$'" ; rm -rf ./work # '"` is a
+delete). Inside a `${...}` word, `$'..'` ends where bash's parser ends it, with `\'` escaped, so
+`"${x#$'\''}" ; cmd` still reaches `cmd`; under double quotes the `$( )` and backticks inside it are
+scanned too, since bash expands them in `:-` words.
 
-Scanning has a separate 32-level expansion nesting limit. Unclosed expansions,
-substitutions and backticks, or input beyond that limit, add opaque execution and
-ask under the default policy. The classifier does not evaluate variables or choose
-which conditional expansion branch runs; it checks every executable branch it can
-read. Nested command sources are classified once per level, with the existing
-classification depth limit still applying.
+Scanning has a 32-level expansion nesting limit, separate from the classification depth. A word
+nested deeper than that is skipped unread with a flat match of `${ }`, `$( )`, `<( )` and `(( ))`
+that keeps quotes, `$'..'` and escapes and treats a bare `(` in a `${ }` word or a bare `{` in a
+`$( )` as the literal text bash sees. The word adds opaque execution (ask under the default policy)
+and lexing resumes after it, so the commands that follow on the line are still classified and a
+deny on them still holds. Unclosed expansions, substitutions, backticks and top-level quotes add
+opaque execution too. The limit covers `${ }`, `$( )`, `<( )`, `$(( ))` and heredoc bodies alike,
+and the flag reaches the top level from any of them.
+
+Nested command sources are classified once per level up to the classification depth (4). Deeper
+sources are not read in full: each remaining level, up to the scan limit, is lexed on its own and
+its programs are classified without recursion, so the category of an innermost command still
+counts (`echo $(a $(a $(a $(a $(git push --force origin main)))))` is `force_push`) and the cost
+stays linear in the input. The classifier does not evaluate variables or choose which conditional
+branch runs; it checks every executable branch it can read.
+
+Known limits. `${name@P}` (prompt expansion) and the indirection `${!name}` run code held in the
+variable's value, so they ask; the listing forms `${!prefix*}`, `${!prefix@}`, `${!arr[@]}` and
+`${!arr[*]}` do not. Arithmetic on a bare name (`$((x))`, `${s:x}`) also evaluates the value and is
+not flagged: a value assigned from a visible `$( )` on the same line is classified where it is
+assigned, one set earlier or read from a file is not. When bash is absent exo falls back to
+`/bin/sh` (dash), which pairs single quotes inside `"${...}"` for `#` and `%` but not for `:-` and
+`:+`, and has no `$'..'`. The gate reads the line as bash does. A line the two shells split
+differently leaves a quote or brace unclosed under one of the readings and asks when bash's
+reading is the unclosed one (`echo "${x:-'}"; rm -rf ./work; echo '}"'`); a line that both shells
+close, but at different places, is classified as bash runs it.
 
 ## Required executor audit
 

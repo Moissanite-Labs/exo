@@ -245,7 +245,7 @@ class _Lexer:
 
     def run(self, closer: bool = False) -> list:
         s, toks = self.s, []
-        state = {"w": _Word(), "delim": None}
+        state: dict[str, Any] = {"w": _Word(), "delim": None}
         depth = 0
 
         def flush():
@@ -281,7 +281,9 @@ class _Lexer:
                 self.i += 2
             elif ch == "'":
                 j = s.find("'", self.i + 1)
-                j = len(s) if j < 0 else j
+                if j < 0:
+                    j = len(s)
+                    self.opaque = True     # bash rejects an unclosed quote; /bin/sh may pair it differently
                 w.text += s[self.i + 1:j]
                 w.quoted = w.started = True
                 self.i = j + 1
@@ -293,12 +295,7 @@ class _Lexer:
             elif ch == "$":
                 self._dollar(w)
             elif ch in "<>" and nxt == "(" and not w.started:
-                self.i += 2
-                start = self.i
-                self.run(closer=True)
-                self.subs.append(s[start:max(start, self.i - 1)])
-                w.text += "<(..)"
-                w.dynamic = w.started = True
+                self._procsub(w)
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 if w.started and w.text.isdigit() and not w.quoted:
                     state["w"] = _Word()       # an fd number belongs to the operator
@@ -350,8 +347,10 @@ class _Lexer:
             hd.body = "\n".join(lines)
             if not hd.quoted:
                 sub = _Lexer(hd.body)
+                sub.scan_depth = self.scan_depth
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
+                self.opaque |= sub.opaque
 
     def _dquote(self, w: _Word, until_end: bool = False) -> None:
         s = self.s
@@ -372,6 +371,8 @@ class _Lexer:
             else:
                 w.text += ch
                 self.i += 1
+        if not until_end:
+            self.opaque = True             # unclosed double quote
 
     def _backtick(self, w: _Word) -> None:
         s, j, out = self.s, self.i + 1, []
@@ -390,22 +391,59 @@ class _Lexer:
         w.text += "`" + inner + "`"
         w.dynamic = w.started = True
 
+    def _too_deep(self, w: _Word) -> bool:
+        """Past the scan limit: skip the expansion unread, mark it opaque and keep lexing after it."""
+        if self.scan_depth < 32:
+            return False
+        self.opaque = True
+        self.i = _skip_expansion(self.s, self.i)
+        w.dynamic = w.started = True
+        return True
+
+    def _procsub(self, w: _Word) -> None:
+        """<( ) and >( ): the inner line is a command source of this level."""
+        s = self.s
+        if self._too_deep(w):
+            return
+        self.i += 2
+        start, mark = self.i, len(self.subs)
+        self.scan_depth += 1
+        self.run(closer=True)
+        self.scan_depth -= 1
+        del self.subs[mark:]
+        self.subs.append(s[start:max(start, self.i - 1)])
+        w.text += "<(..)"
+        w.dynamic = w.started = True
+
     def _parameter(self, double: bool = False) -> None:
         """Scan an expansion word without treating its punctuation as shell operators."""
         s = self.s
         self.i += 2
+        if re.match(r"!\w+(?![\w*@]|\[[*@]\])|\w+(\[[^\]]*\])?@P\b", s[self.i:]):
+            self.opaque = True  # ${!name} and ${name@P} run code held in the variable's value
         quote = ""
         while self.i < len(s):
             ch = s[self.i]
             if ch == "\\" and quote != "'":
                 self.i += 2
-            elif quote == "'":
-                self.i += 1
+            elif quote in ("'", "$'"):
                 if ch == "'":
                     quote = ""
-            elif ch == "'" and not quote and not double:
+                    self.i += 1
+                elif double and ch == "$":     # bash still expands :- and :+ words here
+                    self._dollar(_Word(), double=True)
+                elif double and ch == "`":
+                    self._backtick(_Word())
+                else:
+                    self.i += 1
+            elif ch == "'" and not quote:      # bash matches braces past '...' even inside "..."
                 quote = "'"
                 self.i += 1
+            elif ch == "$" and s[self.i + 1:self.i + 2] == "'" and not quote:
+                quote = "$'"                   # $'..' ends where bash's parser ends it: \' is escaped
+                self.i += 2
+            elif ch in "<>" and s[self.i + 1:self.i + 2] == "(" and not double and not quote:
+                self._procsub(_Word())
             elif ch == '"':
                 quote = "" if quote else '"'
                 self.i += 1
@@ -424,12 +462,9 @@ class _Lexer:
         s, i = self.s, self.i
         nxt = s[i + 1:i + 2]
         w.started = True
-        if nxt in ("(", "{") and self.scan_depth >= 32:
-            self.opaque = True
-            self.i = len(s)
-            w.dynamic = True
+        if nxt in ("(", "{") and self._too_deep(w):
             return
-        if s.startswith("$((", i):
+        if s.startswith("$((", i) and _arith_closes(s, i + 2):
             depth, j = 0, i + 1
             while j < len(s):
                 depth += {"(": 1, ")": -1}.get(s[j], 0)
@@ -439,8 +474,10 @@ class _Lexer:
             body = s[i:j]
             if "$(" in body[3:] or "`" in body:
                 sub = _Lexer(body[3:-2])
+                sub.scan_depth = self.scan_depth + 1
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
+                self.opaque |= sub.opaque
             w.text += body
             w.dynamic = True
             self.i = j
@@ -489,6 +526,44 @@ class _Lexer:
             else:
                 w.text += "$"
                 self.i = i + 1
+
+
+def _arith_closes(s: str, k: int) -> bool:
+    """Bash reads $(( as arithmetic only when the group opened at k is followed by a second )."""
+    depth = 0
+    while k < len(s):
+        depth += {"(": 1, ")": -1}.get(s[k], 0)
+        k += 1
+        if depth == 0:
+            return s[k:k + 1] == ")"
+    return True
+
+
+def _skip_expansion(s: str, i: int) -> int:
+    """Index after the ${ }, $( ) or <( ) opened at i, matched by a flat scan that keeps quotes and escapes
+    and tells the bracket kinds apart: a bare ( in a ${ } word and a bare { in a $( ) are literal, as in bash."""
+    stack, quote, j, prev = [], "", i + 1, s[i]
+    while j < len(s):
+        ch = s[j]
+        if ch == "\\" and quote != "'":
+            j, prev = j + 2, ""
+            continue
+        if quote:
+            quote = "" if ch == quote[-1] else quote
+        elif ch == "'":
+            quote = "$'" if prev == "$" else "'"   # $'..' keeps its escapes
+        elif ch == '"':
+            quote = ch
+        elif ch == "{" and prev == "$":
+            stack.append("}")
+        elif ch == "(" and (prev in ("$", "<", ">") or (stack and stack[-1] == ")")):
+            stack.append(")")
+        elif stack and ch == stack[-1]:
+            stack.pop()
+            if not stack:
+                return j + 1
+        j, prev = j + 1, ch
+    return len(s)
 
 
 def _literal_heredoc(toks: list) -> str | None:
@@ -1277,6 +1352,20 @@ def _piped_text(k: _Cmd) -> str | None:
     return None
 
 
+def _shallow(src: str, cmd: str, ctx: dict) -> list[Classification]:
+    """Simple commands of a source nested too deep to classify in full: each level the scan limit allows
+    is lexed on its own and its programs are classified without recursion, so a category is still seen."""
+    parts: list[Classification] = []
+    todo = [(src, 0)]
+    while todo:
+        text, level = todo.pop()
+        cmds, subs, _, _ = _parse(text)
+        todo += [(t, level + 1) for t in subs if level < 32]
+        for k in cmds:
+            parts += _classify_simple(k, cmd, _DEPTH, ctx)
+    return parts
+
+
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part."""
     cmds, subs, func, opaque = _parse(cmd or "")
@@ -1288,9 +1377,12 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         parts += _classify_simple(k, cmd, depth, ctx, piped)
         prev = k
     for sub in subs:
-        parts.append(classify_shell(sub, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
+        if depth < _DEPTH:
+            parts.append(classify_shell(sub, depth + 1))
+        else:
+            parts += [_opaque("nested too deep to read", cmd)] + _shallow(sub, cmd, ctx)
     if opaque:
-        parts.append(_opaque("unclosed or excessively nested shell expansion", cmd))
+        parts.append(_opaque("shell expansion the gate cannot read", cmd))
     if func:
         parts.append(_opaque("defines a shell function", cmd))
     c = _combine(parts, cmd)

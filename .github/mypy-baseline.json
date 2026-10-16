@@ -699,32 +699,8 @@
     },
     {
       "path": "src/exo/gate.py",
-      "message": "Argument 1 to \"_backtick\" of \"_Lexer\" has incompatible type \"_Word | None\"; expected \"_Word\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "Argument 1 to \"_dollar\" of \"_Lexer\" has incompatible type \"_Word | None\"; expected \"_Word\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "Argument 1 to \"_dquote\" of \"_Lexer\" has incompatible type \"_Word | None\"; expected \"_Word\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
       "message": "Argument 1 to \"append\" of \"list\" has incompatible type \"tuple[str, tuple[str, str, str], bool]\"; expected \"tuple[str, tuple[str, str, str, str, str], bool]\"",
       "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "Incompatible types in assignment (expression has type \"bool\", target has type \"_Word | None\")",
-      "code": "assignment",
       "count": 1
     },
     {
@@ -738,36 +714,6 @@
       "message": "Item \"None\" of \"Any | list[Any | None] | None\" has no attribute \"__iter__\" (not iterable)",
       "code": "union-attr",
       "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "Item \"None\" of \"_Word | None\" has no attribute \"dynamic\"",
-      "code": "union-attr",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "Item \"None\" of \"_Word | None\" has no attribute \"glob\"",
-      "code": "union-attr",
-      "count": 1
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "Item \"None\" of \"_Word | None\" has no attribute \"quoted\"",
-      "code": "union-attr",
-      "count": 3
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "Item \"None\" of \"_Word | None\" has no attribute \"started\"",
-      "code": "union-attr",
-      "count": 8
-    },
-    {
-      "path": "src/exo/gate.py",
-      "message": "Item \"None\" of \"_Word | None\" has no attribute \"text\"",
-      "code": "union-attr",
-      "count": 5
     },
     {
       "path": "src/exo/gate.py",
