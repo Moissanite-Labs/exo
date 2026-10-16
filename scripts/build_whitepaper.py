@@ -268,7 +268,7 @@ def fig_turn():
         ("s>c", "response {accepted}", ""),
         ("s>c", "message.completed", "user message stored, numbered, sent"),
         ("s>c", "turn.started", ""),
-        ("s", "", "pack + recall, settle summaries, tree view + tail"),
+        ("s", "", "pack + recall, ready summaries + tail, no wait"),
         ("s", "", "router picks a route that is not cooling down"),
         ("s>m", "stream (main role)", ""),
         ("m>s", "text deltas, tool_call edit_file", ""),
@@ -545,7 +545,7 @@ PAGE = """<!doctype html>
       <p class="wp-sub">A personal system for working with models: a signed record, a portable store, one continuous memory, consent bound to exact text, lessons kept only when they prove themselves, and a harness that measures itself.</p>
       <dl class="wp-meta">
         <div><dt>Version</dt><dd>{version}</dd></div>
-        <div><dt>Date</dt><dd>October 2026</dd></div>
+        <div><dt>Date</dt><dd>{month}</dd></div>
         <div><dt>Status</dt><dd>Early, in active build</dd></div>
         <div><dt>Tests</dt><dd>over a thousand passing</dd></div>
       </dl>
@@ -567,7 +567,7 @@ PAGE = """<!doctype html>
     </article>
 
     <footer class="wp-foot">
-      <p>Project Exo whitepaper, version {version}, October 2026. Aska Digital.</p>
+      <p>Project Exo whitepaper, version {version}, {month}. Aska Digital.</p>
       <p><a href="../">&larr; Back to the Project Exo site</a> &nbsp;/&nbsp; <a href="#top-of-page" onclick="window.scrollTo(0,0);return false;">Top</a></p>
     </footer>
   </main>
@@ -577,16 +577,33 @@ PAGE = """<!doctype html>
 """
 
 
+# The header is the first line after the title, "Version 0.3, October 2026. Aska Digital.". It is the one source of
+# the version and the month on the page; a later line that starts with "Version" is prose, never read here.
+HEADER = re.compile(r"^Version (\d+\.\d+), ([^.]+)\.")
+
+
+def header(md):
+    """Return (version, month) from the paper's header line, or stop with a message that says what is wrong."""
+    lines = [ln for ln in md.splitlines() if ln.strip()]
+    first = lines[1] if len(lines) > 1 and lines[0].startswith("# ") else ""
+    m = HEADER.match(first)
+    if not m:
+        sys.exit(f"{SRC}: the line after the title must read like 'Version 0.3, October 2026. Aska Digital.', "
+                 f"found {first!r}")
+    return m.group(1), m.group(2).strip()
+
+
 def main():
     md = SRC.read_text()
+    version, month = header(md)
     start = md.index("## Part I. Overview")
     body, toc = convert(md[start:])
     desc = ("How Project Exo works: a signed, hash-chained ledger, a portable personal store, fresh context every "
             "turn from one continuous memory, a learning loop that keeps a lesson only if it scores better on "
             "held-out cases, approvals bound to exact text, a harness that traces and re-verifies itself, and one "
             "core daemon behind every screen. With an honest status of what is built.")
-    version = re.search(r"^Version (\d+\.\d+)", md, re.M).group(1)  # the paper's header line is the source
-    page = PAGE.replace("{desc}", esc(desc)).replace("{version}", version).replace("{toc}", toc_html(toc))
+    page = PAGE.replace("{desc}", esc(desc)).replace("{version}", version).replace("{month}", esc(month))
+    page = page.replace("{toc}", toc_html(toc))
     page = page.replace("{body}", body)
     page = page.replace('<a href="#top-of-page" onclick="window.scrollTo(0,0);return false;">Top</a>',
                         '<a href="#wp-main">Top</a>')

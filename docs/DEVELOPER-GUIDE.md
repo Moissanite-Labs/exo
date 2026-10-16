@@ -37,11 +37,10 @@ batched per wave: each batch is a new version (`vX.Y`), with its own header, cha
 | Path | What lives there |
 |---|---|
 | `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, approvals, ingress, jobs, plugin loader. Small on purpose. |
-| `src/exo/compose.py` | Builds the engine `exo serve` runs and attaches what lives outside the core: peers, the scheduler, learning. |
+| `src/exo/compose.py` | `create()`, the factory `exo serve` runs: config, seat, executor, plugins. It attaches what lives outside the core: peers, the scheduler, learning. |
 | `src/exo/peers.py`, `src/exo/scheduler.py` | The peer transport (D-026) and scheduled jobs (D-022), outside the core since D-067. |
 | `src/exo/protocol/` | The wire protocol: `schema.py` (commands and events), `client.py`, `export.py`, `generated/`. |
 | `src/exo/server/` | The server that carries the protocol (Unix socket, TCP with a token, or stdio). |
-| `src/exo/compose.py` | `create()`, the factory `exo serve` runs: config, seat, executor, plugins, product integrations. |
 | `src/exo/diagnostics.py` | The read-only views (`/context`, `/compact`, `/trace`, `/findings`, handoff facts) and the built-in `command.run` names, as functions over the engine. |
 | `src/exo/subagents.py` | List, open, steer and stop a running subagent (D-070). |
 | `src/exo/*.py` | The rest of the generic mechanism: store, ledger, crypto, gate, capture, consolidate, eval, brief, onboard, CLI. |
@@ -62,12 +61,13 @@ engine that `exo serve` runs; `exo.core.engine:create` forwards to it. The diagn
 goes in compose, new read-only views go in diagnostics, and neither goes into `CoreEngine`. These modules still read
 some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the split will replace with public queries.
 
-**The core budget.** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines in
-`src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
-protocol files excluded) and fails at 16,000. It stands at about 15,986 today, so there is almost no room. The policy
-(`docs/ENGINE-SPLIT.md` "Budget policy"): do not raise the ceiling to fit a feature, and do not exclude counted
-modules to pass. Put new logic outside the counted core, as compose, diagnostics and `subagents.py` do, or remove
-code. The protocol has its own cap (section 2).
+**The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the
+lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`
+(generated protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
+`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813, and main counts 14,999. A real reduction lowers
+the floor, and the floor never rises. Section 7 has the rules (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude
+counted modules to pass. Put a product feature built on the engine outside the counted core, as compose, diagnostics,
+`subagents.py` and `turn_settle.py` do. The protocol has its own cap (section 2).
 
 **Core, plugins, clients.** The core does the work and holds the state. Plugins add tools, commands, hooks, a memory
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
@@ -456,7 +456,16 @@ Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). Four thin
    `clients/tui/pyproject.toml`, `plugins/*/plugin.yaml`, `plugins/exo-command/exo_command/__init__.py`, `uv.lock`).
 3. In `CHANGELOG.md`, move `[Unreleased]` under a new `[X.Y.Z] (codename) - date` heading.
 4. Run the root suite and the plugin suites. `tests/test_versioning.py` fails if the version files or the changelog drift.
-5. After the merge, tag main with `git tag -a exo-vX.Y.Z -m "one-line summary"` and push the tag.
+5. After the merge, sign the tag on main with `git tag -s exo-vX.Y.Z -m "one-line summary"` and push the tag.
+
+**Signing releases (D-073).** Users who set `update.require_signed` (`docs/INSTALL.md`) accept only commits signed
+by a key in `trust/allowed_signers`, in the format `ssh-keygen -Y verify` reads: `<principal> <key type> <public key>`,
+one per line (add `namespaces="git"` after the principal to limit the key to git). Sign the commits that land on
+main (`git config gpg.format ssh`, `git config user.signingkey ~/.ssh/<key>.pub`, `git config commit.gpgsign true`;
+for merges made on GitHub, use a merge you sign locally, since GitHub's web signature is not an SSH key). The signed
+tag of step 5 is for people who check it by hand. `exo update` checks the commit. To change keys, add the new key in
+a commit signed by an old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the
+list. Never remove the old key from the list in the same commit that the old key must sign.
 
 **The site** (`site-vMAJOR.MINOR`). MAJOR is for a redesign. MINOR goes up per production deploy.
 
@@ -466,8 +475,11 @@ Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). Four thin
 
 **The whitepaper** (`whitepaper-vX.Y`).
 
-1. Edit `docs/WHITEPAPER.md` and update the version in its header.
-2. Run `python3 scripts/build_whitepaper.py` to regenerate `site/whitepaper/index.html`.
+1. Edit `docs/WHITEPAPER.md` and update the version and month in its header line, the line after the title, which
+   reads `Version X.Y, Month YYYY. Aska Digital.`. The page takes both from that line only, and the build stops with
+   a message if the line is missing or reworded.
+2. Run `python3 scripts/build_whitepaper.py` to regenerate `site/whitepaper/index.html`. Never edit the HTML by hand:
+   `tests/docs/test_build_whitepaper.py` fails when the committed page differs from a fresh build.
 3. Add a line to `CHANGELOG.md`.
 4. Tag `whitepaper-vX.Y` only when the paper is published, meaning deployed to production. A merged but unpublished
    draft has no tag.
@@ -487,15 +499,6 @@ Export with `exo taste export-house --version X.Y.Z`, review and tick the pack, 
 
 Unmerged work counts as in progress, even when it was tested locally (`docs/SITE-STATUS.md`). Do not describe it as
 built in any doc.
-
-**Signing releases (D-073).** Users who set `update.require_signed` (`docs/INSTALL.md`) accept only commits signed
-by a key in `trust/allowed_signers`, in the format `ssh-keygen -Y verify` reads: `<principal> <key type> <public key>`,
-one per line (add `namespaces="git"` after the principal to limit the key to git). Sign the commits that land on
-main (`git config gpg.format ssh`, `git config user.signingkey ~/.ssh/<key>.pub`, `git config commit.gpgsign true`;
-for merges made on GitHub, use a merge you sign locally, since GitHub's web signature is not an SSH key). Also sign the
-tag, `git tag -s exo-vX.Y.Z`, for people who check it by hand. To change keys, add the new key in a commit signed by an
-old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the list. Never remove the
-old key from the list in the same commit that the old key must sign.
 
 ## 9. Recipes
 
@@ -602,9 +605,12 @@ a narrower toolset (`BLOCKED_TOOLS` lists what it never gets), and returns one r
 - **The wire.** Check or read a packet with `exo wire check` and `exo wire render` (`docs/COMMANDS.md`). Models only
   ever read the English form.
 - **Control (D-070).** The built-in `command.run` name `subagent` has the verbs `list`, `open`, `send` and `stop`, and
-  lives in `src/exo/subagents.py`. Only the principal or the task's parent session may act. Anyone else gets
-  `forbidden`. A finished child answers `conflict`. A note typed by the principal is stored with author `principal`.
-  The parent session speaks as `delegate` (D-040). The receipt records "steered by principal" or "stopped by parent".
+  lives in `src/exo/subagents.py`. Through this built-in only the principal or the task's parent session may act.
+  Anyone else gets `forbidden`. A finished child answers `conflict`. A note typed by the principal is stored with
+  author `principal`. The parent session speaks as `delegate` (D-040). The receipt records "steered by principal" or
+  "stopped by parent". The built-in is not the only path: a child is a session, so any local caller can still steer
+  it with `turn.send` or stop it with `turn.interrupt` on its session id (D-070 "Limits"). Such a note is stored with
+  that caller's author and leaves no mark on the receipt.
   Tests: `tests/agents/test_delegate.py` and `tests/clients/tui/test_subagents.py`.
 
 ### Set up a provider from a client
@@ -712,8 +718,10 @@ Code lifted from an upstream project (Hermes) is recorded so we can see what cha
 
 ### Schedule a job
 
-A scheduled job is a prompt on a timer (`docs/SCHEDULE.md`, D-022). The scheduler is `src/exo/core/scheduler.py`
-(`Scheduler`, held as `engine.scheduler`), and `exo serve` runs its timer.
+A scheduled job is a prompt on a timer (`docs/SCHEDULE.md`, D-022). The scheduler is `src/exo/scheduler.py`
+(`Scheduler`), outside the core since D-067. `exo.compose` attaches it (`attach_scheduler=Scheduler`) and the engine
+holds it as `engine.scheduler`. An engine built without composition has none, and `schedule.edit` answers
+`unsupported` there. `exo serve` runs its timer.
 
 - **Create and manage** with the protocol command `schedule.edit`: `action` is `list`, `add`, `remove`, `pause`,
   `resume` or `run_now`, with `when` (cron or `every 30m`), `prompt`, `title`, `seat`, `tier` and `deliver`. The web

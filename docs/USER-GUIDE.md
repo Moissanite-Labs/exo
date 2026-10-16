@@ -207,7 +207,9 @@ You can watch and control them:
   changes nothing.
 - The agent's receipt for the task records what you did: "steered by principal" or "stopped by parent".
 
-Only you, or the agent that started the subagent, can steer or stop it. Other sessions and peers cannot (D-070).
+Through these commands, only you, or the agent that started the subagent, can steer or stop it. Other sessions
+and peers get a refusal (D-070). A subagent is still a session, though, so a program on your machine that sends to
+or stops its session directly can reach it. Such a note is recorded as that program's, never as yours.
 
 ### Scheduled jobs
 
@@ -256,8 +258,10 @@ longer holds never stays on screen. If you answer a web card that was already cl
 
 What the gate asks about, and why:
 
-- **Credentials always ask.** Anything that reads or fills a password, token or key asks every time. An "always"
-  answer is never stored for credentials.
+- **Credentials always ask.** Anything the gate sees reading or filling a password, token or key asks every time.
+  An "always" answer is never stored for credentials. The gate judges a read by the path it names, so on main a
+  wildcard or a folder walk of the folder that holds Exo's own connection secret (`run/`) is not yet seen as a
+  credentials read (#169, fix in review).
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another.
@@ -266,10 +270,12 @@ What the gate asks about, and why:
 - **Code the gate cannot see into asks (D-038).** A script file, `python -c`, `node -e`, a heredoc fed to a shell,
   `make`, `npm run` or `npm test`, `npx`, `xargs`, `find -exec`, a variable or `$( )` in the program's place, a shell
   function, `source`, or a program the gate does not know: each asks once, for that exact command. Plain work still
-  runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like.
+  runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like. These are
+  trusted by name, so a test runner still runs your project's files, and some options of trusted programs that run
+  a command are not read yet (`tar --to-command`, `sort --compress-program` and the like; #164 is in review).
 - **Your store is like a key (D-038).** A write to your store's `policies/`, `state/` (your standing grants), the
   ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always" covers it. Reading your
-  policies does not ask.
+  policies does not ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
@@ -278,7 +284,8 @@ What the gate asks about, and why:
 Who may approve: you can always, from the terminal window or the web page. A policy file can let named seats or
 roles approve some kinds of act, and they must sign. A peer never can. A message from a peer that tries to approve
 something is refused and shown to you. The agent cannot answer its own approvals: a command it runs that talks to
-Exo is not you, whatever it claims, and only you can answer "always".
+Exo is not you, whatever it claims, and only you can answer "always". The check has one limit: a program running as you
+that obtains your window's secret and detaches from Exo can pass (`docs/GATE.md` "Who answered").
 
 "Always" answers become standing grants. They expire (7 days for outward acts, 30 days for others) and an outward
 grant covers one exact text. `/grants` lists them. `/grants revoke <id>` removes one.

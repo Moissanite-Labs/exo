@@ -9,11 +9,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
-- Whitepaper v0.3 (draft, tagged `whitepaper-v0.3` when published): the security wave (D-038 to D-040), principal
-  authority (D-052 to D-054), required executor mode (#70) and ledger authority (#80), the composer, keys and layouts
-  (D-037, D-043, D-045, D-046), the house taste wave 1 (D-044), the engine split (#46), versioning (D-056), the web
-  sub-pages (D-061), subagent controls and `/rename` (D-069, D-070), and an "In progress" section. The user guide,
-  developer guide, command reference and docs map are brought up to date with main.
+- Whitepaper v0.3 (draft, tagged `whitepaper-v0.3` when published), covering main up to D-077: the security wave
+  (D-038 to D-040) with its limits stated (allowlisted programs are trusted by name, the principal credential check
+  passes a same-user process that detaches, a wildcard read of a key file is an ordinary read, `config.json` is an
+  ordinary write until D-074), principal authority (D-052 to D-054), required executor mode (#70, #91), ledger
+  authority (#80) and the opt-in witness transport (#88), model-spend ceilings (#87), signed updates (D-073), the
+  composer, keys and layouts (D-037, D-043, D-045, D-046), the house taste wave 1 (D-044), the engine split and the
+  core budget ratchet (#46, D-067, D-077), turns that do not wait for memory upkeep (D-068), versioning (D-056), the
+  web sub-pages (D-061), subagent controls and `/rename` (D-069, D-070), and an "In progress" section that names the
+  open changes and issues (#96, #109, #125, #164, #169). The user guide, developer guide, command reference and docs map are brought up
+  to date with main, and the docs map has one coverage table. `scripts/build_whitepaper.py` takes the version and the
+  month from the paper's header line only, and stops with a message when that line is missing or reworded.
 
 ### Changed
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).
