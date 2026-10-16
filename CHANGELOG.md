@@ -27,6 +27,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Trace (D-025, D-032): a model call stopped with ctrl+c or `/stop` is now recorded, whether the stop came mid
+  stream, before the first token or in the backoff before a retry. It gets a `model.call` event with `stop_reason`
+  `interrupted`, and its time counts in `model_ms`. Before, the wait counted as harness overhead, so stopping a slow
+  model after 30 s filed a false `turn.slow` finding and could reopen a fixed one. The record keeps the routes that
+  timed out or failed before the stop, so stopping the fallback route still flags the route before it. The `/trace`
+  header names the route that served the last call, not "no model call recorded yet", after a stop.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

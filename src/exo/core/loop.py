@@ -295,7 +295,7 @@ class Loop:
                 await maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)
             msg_id = new_id("m")
-            stream = await self._call(session, messages, msg_id, st, result)
+            stream = await self._call(session, messages, msg_id, st, result, _)
             await self._record_call(session, stream, _, st)
             if stream.usage is not None:
                 result.usage = result.usage + stream.usage
@@ -343,7 +343,7 @@ class Loop:
         await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
                                    level="warn"), session)
 
-    async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState) -> None:
+    async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState, stop: str = "") -> None:
         """The model.call event (what was asked, who served, every attempt) and the turn's running totals."""
         role = self.provider.name.split(":", 1)[1] if self.provider.name.startswith("router:") else ""
         st.stats["model_calls"] += 1
@@ -355,7 +355,7 @@ class Loop:
         await self._emit(ev.ModelCall(
             iteration=iteration + 1, role=role, requested=self.model or "", route=served,
             attempts=s.attempts, ttft_ms=s.first_ms, total_ms=s.total_ms, usage=s.usage,
-            stop_reason=(s.done.stop_reason or "") if s.done is not None else "",
+            stop_reason=(s.done.stop_reason or "") if s.done is not None else stop,
             error=trace.scrub(s.error.error, 300) if s.error is not None else "", retries=s.retries), session)
 
     def _assemble(self, s: _Stream, msg_id: str) -> Message:
@@ -375,8 +375,10 @@ class Loop:
     # ---------------------------------------------------------------- provider call
 
     async def _call(self, session: str, messages: list[Message], msg_id: str, st: _SessionState,
-                    result: TurnResult) -> _Stream:
+                    result: TurnResult, iteration: int = 0) -> _Stream:
         """Stream one model call with retry. Retries only while nothing was shown."""
+        if st.interrupt.is_set():  # stopped before the call began: nothing reached the provider, so no record
+            raise _Interrupted()
         opts = dict(self.provider_opts)
         if self.model:
             opts["model"] = self.model
@@ -389,8 +391,12 @@ class Loop:
         while True:
             s = _Stream(t0=t0)
             try:
+                if attempt:  # the backoff is inside the try: a stop during it still records the failed tries
+                    await self._interruptible(asyncio.sleep(self.retry_delay * 2 ** (attempt - 1)), st)
                 await self._interruptible(self._consume(session, messages, specs, opts, msg_id, s), st)
-            except _Interrupted:
+            except _Interrupted:  # the wait up to the stop is model time, not harness time (like f_8e7f52cd)
+                s.total_ms, s.retries, s.attempts = int((time.monotonic() - t0) * 1000), attempt, history + s.attempts
+                await self._record_call(session, s, iteration, st, stop="interrupted")
                 if s.text or s.reasoning:
                     partial = self._assemble(_Stream(text=s.text, reasoning=s.reasoning), msg_id)
                     partial.meta["interrupted"] = True
@@ -410,7 +416,6 @@ class Loop:
             history = s.attempts
             await self._emit(ev.Notice(text=f"retrying model call ({attempt}/{self.max_retries}):"
                                        f" {s.error.error}", level="warn"), session)
-            await self._interruptible(asyncio.sleep(self.retry_delay * 2 ** (attempt - 1)), st)
 
     async def _consume(self, session: str, messages: list[Message], specs: list[ToolSpec],
                        opts: dict[str, Any], msg_id: str, s: _Stream) -> None:
@@ -425,7 +430,8 @@ class Loop:
                 elif pe.kind == "reasoning" and pe.text:
                     s.reasoning.append(pe.text)
                     await self._emit(ev.ReasoningDelta(message_id=msg_id, text=pe.text), session)
-                elif pe.kind == "notice":
+                elif pe.kind == "notice":  # a fallback notice carries the router's tries: a stop on the next route keeps them
+                    s.attempts = pe.attempts or s.attempts
                     await self._emit(ev.Notice(text=pe.text, level="warn"), session)
                 elif pe.kind == "tool_call" and pe.tool_call is not None:
                     s.calls.append(pe.tool_call)

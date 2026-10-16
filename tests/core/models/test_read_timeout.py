@@ -55,3 +55,47 @@ def test_fallback_publishes_notice():
     notes = [e for e in evs if e.kind == "notice"]
     assert [n.text for n in notes] == ["hang:m did not answer in 60 s; trying ok:m"]
     assert evs.index(notes[0]) < [e.kind for e in evs].index("text")
+
+
+def test_stop_on_the_fallback_route_keeps_the_timeout_of_the_route_before(tmp_path):
+    """hang:m times out, ok:m starts streaming, the user stops: the recorded call still shows hang:m's timeout."""
+    from exo.core import trace
+    from exo.core.loop import Loop
+    from exo.core.sessions import EventBus, SessionStore
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "hang.test":
+            raise httpx.ReadTimeout("no bytes", request=request)
+
+        async def body():
+            yield b'data: {"choices":[{"delta":{"content":"hi "}}]}\n\n'
+            await asyncio.Event().wait()  # the fallback streams, then stalls until the stop
+        return httpx.Response(200, content=body(), headers={"content-type": "text/event-stream"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    cfg = {"providers": {"hang": {"base_url": "https://hang.test/v1", "key_env": "HANG_KEY", "read_timeout": 60},
+                         "ok": {"base_url": "https://ok.test/v1", "key_env": "OK_KEY"}},
+           "roles": {"main": ["hang:m", "ok:m"]}}
+    r = Router.from_config(cfg, env={"HANG_KEY": "x", "OK_KEY": "y"}, client=client)
+    store = SessionStore(tmp_path / "s.sqlite")
+    bus = EventBus(store)
+    seen = []
+    bus.subscribe(seen.append)
+    loop = Loop(store, r.provider("main"), bus=bus, retry_delay=0, model="hang:m")
+
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "go"))
+        while not any(e.type == "message.delta" for e in seen):
+            await asyncio.sleep(0.01)
+        assert loop.interrupt(s.id)
+        return s, await asyncio.wait_for(task, 5)
+
+    s, res = asyncio.run(go())
+    assert res.stop_reason == "interrupted"
+    (call,) = [e.body for e in seen if e.type == "model.call"]
+    assert call.stop_reason == "interrupted" and [(a["route"], a["outcome"]) for a in call.attempts] == [("hang:m", "timeout")]
+    assert next(e.body.timing for e in seen if e.type == "turn.completed")["fallbacks"] == 1
+    t = trace.last_turn(store, s.id)
+    assert not t.derived and t.fallbacks == 1  # before, the call had no attempts and the timeout was lost
+    assert "model.timeout:hang:m" in [f.signature for f in trace.detect(t, trace.Thresholds())]
