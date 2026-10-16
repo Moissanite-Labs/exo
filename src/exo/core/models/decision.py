@@ -202,10 +202,11 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any]) -> 
     router.check_spend_policy()
     last: DecisionError | None = None
     tried = 0
+    attempted: set[tuple[str, str]] = set()  # each (credential, model) at most once per call
     for route in router.chain(role):
-        picked = router._pick(route, router.clock())
-        while picked is not None:
+        while (picked := await router._pick_async(route, attempted=attempted)) is not None:
             cred, sole = picked
+            attempted.add((cred.id, route.model))
             tried += 1
             try:
                 if getattr(cred.provider, "is_decision", False):
@@ -227,8 +228,8 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any]) -> 
                 last = e
                 if e.status in (400, 413, 422):  # the question itself is bad; another route will fail too
                     raise
-                router.record_failure(cred.id, route.model, e.status, e.retry_after, sole)
-            picked = router._pick(route, router.clock())
+                if getattr(cred.provider, "is_decision", False):  # chat routes: _attempt keeps the books
+                    router.record_failure(cred.id, route.model, e.status, e.retry_after, sole)
     if last is not None:
         raise DecisionError(f"all routes for {role!r} failed; last error: {last}", last.status,
                             last.retryable, last.retry_after)

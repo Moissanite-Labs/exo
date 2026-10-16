@@ -153,6 +153,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   longer prints a raw `[Errno 98]`: it says Exo's web client is already running there and how to get back in (its
   open page or printed link, Ctrl+C in its terminal, or `--port`), or that another program holds the port.
   `exo stop -h` prints help instead of stopping the core, and `exo stop` with any other word is an error.
+- A decision answer from a chat model that is not the requested JSON, or names an option outside the list, no
+  longer cools the credential. Before, one such answer to the gate made the next main-role call, which often uses
+  the same key, fail with "cooling down" for 60 s. A failed chat decision call now counts one strike, not two
+  (`docs/PROVIDERS.md`).
 
 ## [0.2.0] (egg) - 2026-10-13
 

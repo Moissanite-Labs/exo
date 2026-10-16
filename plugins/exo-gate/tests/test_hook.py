@@ -370,6 +370,21 @@ def test_fallback_route_is_recorded_when_jev_fails(keyed_store):
     assert "decision_model" not in events(store)[-1]["body"]
 
 
+def test_malformed_model_answer_keeps_the_rule_outcome_and_the_main_role_working(keyed_store):
+    from exo.core.models import FakeProvider, Router
+
+    store, key = keyed_store
+    chat = FakeProvider(["I would say ask, to be safe.", "main reply"], name="chat")
+    router = Router(roles={"main": ["chat:m"]}, env={}, instances={"chat": chat}, catalog={"providers": {}})
+    ctx = gated(store, key, router)  # the decision role falls back to the main credential
+    assert call(ctx, "read_file", {"path": "x"}) is None  # no JSON verdict: the rule outcome stands
+    assert len(chat.calls) == 1 and "decision function" in chat.calls[0]["messages"][0].text()
+
+    async def main_turn():
+        return [e async for e in router.stream("main", [], [])][-1]
+    assert router.cooldowns == {} and asyncio.run(main_turn()).kind == "done"
+
+
 def test_credentials_always_ask_once_only_even_in_observe_mode(keyed_store):
     store, key = keyed_store
     for extra in ({}, {"mode": "observe"}):
