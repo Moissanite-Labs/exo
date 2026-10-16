@@ -27,6 +27,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- A decision answer from a chat model that is not the requested JSON, or names an option outside the list, no
+  longer cools the credential. Before, one such answer to the gate made the next main-role call, which often uses
+  the same key, fail with "cooling down" for 60 s. A failed chat decision call now counts one strike, not two
+  (`docs/PROVIDERS.md`).
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
