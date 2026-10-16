@@ -250,6 +250,7 @@ class _Word:
     raw: str = ""              # the source text of the word, quotes kept
     locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
+    exps: list = field(default_factory=list)  # (scan text, source) of each ${..} and $((..)) bash expands here
 
 
 @dataclass
@@ -273,11 +274,13 @@ class _Cmd:
 class _Lexer:
     """Shell words, operators, redirections and heredocs. Never raises; odd input gives odd words."""
 
-    def __init__(self, src: str):
+    def __init__(self, src: str, scan: bool = True):
         self.s = src
         self.i = 0
         self.subs: list[str] = []          # sources of $( ), ` ` and <( ) met at this level
         self.pending: list[_Heredoc] = []
+        self.scan = scan                   # record _Word.exps (off when the lexer only finds where $( ) ends)
+        self.covered = 0                   # the source before here lies in a ${..} already recorded
 
     def run(self, closer: bool = False) -> list:
         s, toks = self.s, []
@@ -442,6 +445,8 @@ class _Lexer:
                 sub = _Lexer(body[3:-2])
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
+            if self.scan and i >= self.covered:
+                w.exps.append((body, body))
             w.text += body
             w.dynamic = True
             self.i = j
@@ -460,6 +465,10 @@ class _Lexer:
         elif nxt == "{":
             j = s.find("}", i)
             j = len(s) - 1 if j < 0 else j
+            if self.scan and i >= self.covered:    # what bash reads: it may run past this first }
+                vis, close = _dollar_brace(s, i, double)
+                w.exps.append((vis, s[i:close + 1]))
+                self.covered = close + 1
             w.text += s[i:j + 1]
             w.dynamic = True
             self.i = j + 1
@@ -491,6 +500,68 @@ class _Lexer:
             else:
                 w.text += "$"
                 self.i = i + 1
+
+
+def _skip(s: str, k: int, closer: str, escapes: bool) -> int:
+    """The index just past the first `closer` from s[k] on, or len(s). With `escapes`, a backslash hides
+    the next character."""
+    while k < len(s) and s[k] != closer:
+        k += 2 if escapes and s[k] == "\\" else 1
+    return min(k + 1, len(s))
+
+
+# The operators after which bash quotes single-quoted text even inside double quotes (a pattern, a case
+# change, `@`, an error message): `"${f%'$x'}"` expands nothing, `"${f:-'$x'}"` expands $x.
+_DQ_QUOTING_OP = re.compile(r"[!#]?(?:[A-Za-z_]\w*|\d+|[-@*#?$!])(?:\[[^\]]*\])?(?:[#%/^,~@?]|:\?)")
+
+
+def _dollar_brace(s: str, i: int, dq: bool = False, closes: dict | None = None) -> tuple[str, int]:
+    """bash's reading of the `${` at s[i]: (its text with what bash does not expand blanked, the index of
+    its closing `}`, len(s) if none). Only a `}` outside quotes and escapes closes it, and only a nested
+    `${` opens another (a bare `{` does not). Blanked: escaped characters, a ` ` or $( ) (it runs in a
+    subshell), and single-quoted or $'..' text, except where bash still expands it: in double quotes (`dq`)
+    after an operator other than _DQ_QUOTING_OP's (`"${a:-'$x'}"`). `closes` collects start: close for
+    each ${ that closes."""
+    def open_(at: int, dq: bool) -> list:      # [text so far, in a "..." inside it, sq expands, dq, start]
+        return [["${"], False, dq and not _DQ_QUOTING_OP.match(s, at + 2), dq, at]
+
+    stack, j = [open_(i, dq)], i + 2                      # one entry per ${ still open, no recursion
+    while j < len(s):
+        out, inq, sq, fdq, _ = stack[-1]
+        ch, k = s[j], j + 1
+        if ch == "\\":
+            k = min(j + 2, len(s))
+            out.append(" " * (k - j))
+        elif s.startswith("$'", j) and not inq:      # where bash expands '..' it expands $'..' too
+            k = _skip(s, j + 2, "'", True)
+            out.append(" " + re.sub(r"\\.", "  ", s[j + 1:k], flags=re.S) if sq else " " * (k - j))
+        elif ch == "'" and not inq:
+            k = _skip(s, j + 1, "'", False)
+            out.append(re.sub(r"\\.", "  ", s[j:k], flags=re.S) if sq else " " * (k - j))
+        elif ch == "`" or (s.startswith("$(", j) and not s.startswith("$((", j)):
+            if ch == "`":
+                k = _skip(s, j + 1, "`", True)
+            else:
+                lx = _Lexer(s, scan=False)
+                lx.i = j + 2
+                lx.run(closer=True)
+                k = lx.i
+            out.append(" " * (k - j))
+        elif s.startswith("${", j):
+            stack.append(open_(j, fdq or inq))
+            k = j + 2
+        elif ch == "}" and not inq:
+            if closes is not None:
+                closes[stack[-1][4]] = j
+            stack.pop()
+            if not stack:
+                return "".join(out) + "}", j
+            stack[-1][0].append("".join(out) + "}")
+        else:
+            stack[-1][1] = inq ^ (ch == '"')
+            out.append(ch)
+        j = k
+    return "".join("".join(f[0]) for f in stack), len(s)
 
 
 def _literal_heredoc(toks: list) -> str | None:
@@ -715,11 +786,137 @@ _GIT_VALUE_OPTS = {"rebase": "CsXx", "push": "o", "archive": "o", "fetch": "jo",
 # lower-case keyword ssh matches (see _ssh_setting).
 _SSH_EXEC_SETTINGS = {k.lower(): k for k in ("ProxyCommand", "LocalCommand", "RemoteCommand", "KnownHostsCommand")}
 _SSH_LIB_SETTINGS = {k.lower(): k for k in ("PKCS11Provider", "SecurityKeyProvider")}
+# Variables set before a program (also through env or sudo), exported or assigned bare on the line.
+# _EXEC_ENV: the value is a command line the program runs, classified as a nested command.
 _EXEC_ENV = frozenset("""
 GIT_SSH_COMMAND GIT_SSH GIT_PAGER GIT_EDITOR GIT_SEQUENCE_EDITOR GIT_EXTERNAL_DIFF GIT_ASKPASS SSH_ASKPASS
-RSYNC_RSH PAGER MANPAGER EDITOR VISUAL LESSOPEN LESSCLOSE
+RSYNC_RSH PAGER MANPAGER EDITOR VISUAL LESSOPEN LESSCLOSE GIT_PROXY_COMMAND BROWSER GH_PAGER GH_EDITOR GH_BROWSER
+PSQL_PAGER PSQL_EDITOR SUDO_ASKPASS SUDO_EDITOR RSYNC_CONNECT_PROG PROMPT_COMMAND
 """.split())
-_EXEC_ENV_OPAQUE = frozenset(["TAR_OPTIONS"])
+# _EXEC_ENV_OPAQUE: the value is not a command the gate can read but decides what code runs: options the
+# program parses, libraries the loader injects, or where programs, modules, startup and config files are
+# found (HOME picks ~/.gitconfig, ~/.ssh/config and ~/.exo), and CDPATH, which moves a relative `cd` where
+# the gate cannot tell whether later writes land in the Exo store. Opaque, named. An empty CDPATH turns
+# it off (`CDPATH= cd src`). Left out: IFS, which does not change how literal words split (expansions are
+# opaque already). LESS counts only with a `+` command in it (`LESS=-R` stays allow).
+_EXEC_ENV_OPAQUE = {
+    **dict.fromkeys("TAR_OPTIONS NODE_OPTIONS PERL5OPT RUBYOPT MANOPT ZIPOPT".split(),
+                    "sets options the gate does not read"),
+    "RIPGREP_CONFIG_PATH": "points rg at a config file the gate does not read",
+    **dict.fromkeys("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
+        DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH OPENSSL_CONF OPENSSL_ENGINES
+        OPENSSL_MODULES""".split(), "changes which libraries are loaded"),
+    **dict.fromkeys("""PATH HOME XDG_CONFIG_HOME BASH_ENV ENV ZDOTDIR GIT_EXEC_PATH GIT_TEMPLATE_DIR
+        GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE PERL5LIB PERLLIB
+        RUBYLIB NODE_PATH PSQLRC""".split(), "changes which programs, modules or startup and config files are used"),
+    "CDPATH": "moves cd, so the gate cannot tell whether writes land in the Exo store",
+}
+# git config from the environment, `git -c` by another name: GIT_CONFIG_KEY_<n> with GIT_CONFIG_VALUE_<n>
+# (GIT_CONFIG_COUNT alone sets nothing), and GIT_CONFIG_PARAMETERS. The pairs take _git_config_kind.
+_GIT_CONFIG_ENV = re.compile(r"GIT_CONFIG_(KEY|VALUE)_(\d+)")
+_EXPORTERS = ("export", "declare", "typeset", "readonly", "local")
+
+
+def _env_hazard(name: str, value: str | None = None) -> str:
+    """Why setting this variable matters to the gate ("" when it does not). `value` None means the line
+    sets it to a value the gate does not see (`read`, `printf -v`, a for loop, a nameref)."""
+    if name in _EXEC_ENV:
+        return "holds a command a program runs"
+    if name in _EXEC_ENV_OPAQUE and not (name == "CDPATH" and value == ""):
+        return _EXEC_ENV_OPAQUE[name]
+    if name == "LESS" and (value is None or "+" in value):
+        return "sets a command less runs at start"
+    if name == "GIT_CONFIG_PARAMETERS" or _GIT_CONFIG_ENV.fullmatch(name):
+        return "sets git config"
+    return ""
+
+
+# A variable the gate assigns without a plain NAME=value word. Parameter expansion assigns with `:=` or
+# `=` (not `:-`/`-`, which only substitute); arithmetic (`$((NAME=n))`) and an array subscript (`a[NAME=n]`,
+# itself arithmetic) assign an integer; a `{NAME}>` redirection drops the fd number into NAME. Each sets the
+# variable as a side effect, whatever the program is, so a listed variable set this way must be read too.
+# Only what bash expands counts: the ${..} and $((..)) the lexer met outside single quotes (_Word.exps), each
+# read to the } bash closes it with and with quoted text blanked (_dollar_brace), and a bracket only as the
+# subscript of a name (`echo [HOME=x]` is a glob, `'${PATH:=.}'` and `${a:-'${PATH:=.}'}` are text).
+_PARAM_SET = re.compile(r"\$\{([A-Za-z_]\w*)(?:\[[^\]]*\])?:?=")
+_ARITH_SET = re.compile(r"\b([A-Za-z_]\w*)\s*[-+*/%&|^]?=(?!=)")
+_SUBSCRIPT = re.compile(r"[A-Za-z_]\w*\[([^\]]*)\]")
+_EXP_SUBSCRIPT = re.compile(r"\$\{[#!]?[A-Za-z_]\w*\[")
+_FD_VAR = re.compile(r"\{([A-Za-z_]\w*)\}")
+
+
+def _balanced(text: str, start: int, opener: str, closer: str) -> str:
+    """The substring from `start` up to the `closer` that matches an opener already counted (depth 1)."""
+    depth, i = 1, start
+    while i < len(text):
+        depth += (text[i] == opener) - (text[i] == closer)
+        if depth == 0:
+            return text[start:i]
+        i += 1
+    return text[start:]
+
+
+def _arith_bodies(text: str) -> list[str]:
+    """The bodies of every `$(( ))` in `text` (arithmetic, where a bare `NAME=n` assigns)."""
+    out, i = [], 0
+    while (j := text.find("$((", i)) >= 0:
+        depth, k = 0, j + 1                               # start on the first paren of `$((`
+        while k < len(text):
+            depth += (text[k] == "(") - (text[k] == ")")
+            k += 1
+            if depth == 0:
+                break
+        out.append(text[j + 3:k - 1])
+        i = k
+    return out
+
+
+def _unquote_value(v: str) -> str:
+    """The value a parameter-expansion assignment gives, quotes removed as bash removes them, so a command
+    value (`${GIT_PAGER:='rm -rf x'}`, `${GIT_SSH_COMMAND:=rm' -rf x'}`) reads as the command it is."""
+    return re.sub(r"'([^']*)'|\"([^\"]*)\"|\\(.)", lambda m: "".join(g or "" for g in m.groups()), v)
+
+
+def _subscript_sets(name: str) -> list[str]:
+    """The variables assigned inside the subscript of a `NAME[...]` word (`a[PATH=10]` sets PATH)."""
+    m = _SUBSCRIPT.match(name)
+    return [a.group(1) for a in _ARITH_SET.finditer(m.group(1))] if m else []
+
+
+def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None]]:
+    """(name, value) for each variable the command assigns without a plain NAME=value word. value is None
+    when the gate does not see it (an fd number, an arithmetic result). Covers parameter-expansion
+    assignment, arithmetic, a subscript in an expansion (`${a[PATH=10]}`, also `${a[PATH=${i}]}`) or in
+    `names` (the words bash reads as a variable name: assignments, exporter and unset arguments), and a
+    `{NAME}>` redirection."""
+    out: list[tuple[str, str | None]] = []
+    for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]:
+        for vis, src in w.exps:                           # only real expansions, quoted text blanked in vis
+            closes: dict[int, int] | None = None          # the value runs to the } that closes its ${
+            for m in _PARAM_SET.finditer(vis):
+                if closes is None:
+                    closes = {}
+                    _dollar_brace(src, 0, closes=closes)
+                end = closes[m.start()] if m.start() in closes else _dollar_brace(src, m.start())[1]
+                out.append((m.group(1), _unquote_value(src[m.end():end])))
+            subs = [_balanced(vis, m.end(), "[", "]") for m in _EXP_SUBSCRIPT.finditer(vis)]
+            for region in _arith_bodies(vis) + subs:
+                out += [(m.group(1), None) for m in _ARITH_SET.finditer(region)]
+    out += [(n, None) for name in names for n in _subscript_sets(name)]
+    if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
+        out += [(fm.group(1), None) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
+    return out
+
+
+def _unreadable_name(w: "_Word") -> bool:
+    """The variable name in this word is one the gate cannot resolve: a glob the shell expands before the
+    builtin sees it (`PAT?=.`, `read HOM[E]`), or a name spliced from an expansion (`export $X=...`)."""
+    if w.glob:
+        return True
+    name = re.split(r"\[|\+?=", w.text, maxsplit=1)[0]
+    return w.dynamic and bool(re.search(r"[$`]", name))
+
+
 # sqlite3/duckdb dot-commands (any unambiguous prefix works, so match prefixes): .shell and .system run a
 # command, .once/.output/.import/.read run one when an argument starts with `|` (after options too:
 # `.import --csv '|cmd' t`), .once/.output/.read/.load otherwise use a file or library the gate does not see
@@ -749,6 +946,9 @@ maintenance count-objects verify-commit verify-tag merge-base name-rev check-ign
 _GIT_EXEC_KEY = re.compile(r"^(alias\..+|core\.(pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy)|"
                            r"sequence\.editor|diff\.external|.+\.(command|cmd|textconv|clean|smudge|process|"
                            r"driver|program|helper)|credential\..*|pager\..+|filter\..+|uploadpack\..+)$", re.I)
+# git config keys that load more config or a template the gate does not read: an included file can set any
+# exec key, and the hooks in a template run (init.templateDir is git clone --template by another name).
+_GIT_LOAD_KEY = re.compile(r"^(include\.path|includeif\..+\.path|init\.templatedir)$", re.I)
 _GH_GROUPS = frozenset("""
 pr issue repo api auth release gist workflow run label secret variable ssh-key gpg-key search browse status
 project cache ruleset org config attestation completion discussion help version --version --help
@@ -802,13 +1002,35 @@ def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection
     return c
 
 
+def _git_config_kind(key: str, value: str) -> str:
+    """What a git config pair makes git do: "exec" for an exec key (an alias, the pager, the editor,
+    core.sshCommand, a hook path, a filter...) or a `!shell` value, "load" for a key that loads another
+    config file or a template, "" otherwise. One check for `git -c`, `git config`, `git clone --config`
+    and the GIT_CONFIG_* variables."""
+    if _GIT_EXEC_KEY.match(key) or value.startswith("!"):
+        return "exec"
+    return "load" if _GIT_LOAD_KEY.match(key) else ""
+
+
+def _git_config_env(spec: str) -> str:
+    """`--config-env=KEY=ENVVAR` as the `-c KEY=VALUE` it is: the value comes from a variable the gate
+    does not see. git splits at the last `=`."""
+    key, _, var = spec.rpartition("=")
+    return f"{key}=${{{var}}}"
+
+
 def _git_subcommand(argv: list[str], config: list[str] | None = None) -> int:
     """Index of the git subcommand after the global options; `-c`/`--config-env` values go to `config`."""
     i = 1
     while i < len(argv) and argv[i].startswith("-"):
+        if argv[i].startswith("--config-env="):
+            if config is not None:
+                config.append(_git_config_env(argv[i].split("=", 1)[1]))
+            i += 1
+            continue
         if argv[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"):
             if argv[i] in ("-c", "--config-env") and i + 1 < len(argv) and config is not None:
-                config.append(argv[i + 1])
+                config.append(argv[i + 1] if argv[i] == "-c" else _git_config_env(argv[i + 1]))
             i += 2
             continue
         i += 1
@@ -820,15 +1042,18 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
     i = _git_subcommand(argv, config)
     for kv in config:
         k, _, v = kv.partition("=")
-        if _GIT_EXEC_KEY.match(k) or v.startswith("!"):
-            return _opaque(f"git -c {k} runs a configured command", cmd)
+        if kind := _git_config_kind(k, v):
+            return _opaque(f"git -c {k} " + ("runs a configured command" if kind == "exec" else
+                                             "loads a config file or template the gate does not read"), cmd)
     sub, rest = (argv[i] if i < len(argv) else ""), argv[i + 1:]
     if sub and sub not in _GIT_SUBS:
         return _opaque(f"git {sub} (an alias or extension the gate cannot see)", cmd)
     if sub == "config":
         names = [a for a in rest if not a.startswith("-")]
-        if names and _GIT_EXEC_KEY.match(names[0]) and (len(names) > 1 or _has(rest, "--add", "--replace-all")):
-            return _opaque(f"git config {names[0]} sets a command git will run", cmd)
+        kind = _git_config_kind(names[0], "") if names else ""
+        if kind and (len(names) > 1 or _has(rest, "--add", "--replace-all")):
+            return _opaque(f"git config {names[0]} " + ("sets a command git will run" if kind == "exec" else
+                                                        "sets a config file or template git will load"), cmd)
     if sub == "push":
         remote = next((a for a in rest if not a.startswith("-")), "")
         if _has(rest, "-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror") or \
@@ -988,11 +1213,12 @@ def _classify_http(argv: list[str], cmd: str) -> Classification:
 
 
 def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
-    """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text)."""
-    sudo = False
+    """Drop assignments and prefix commands (sudo, env, timeout...). Returns (words, sudo, env -S text).
+    env and sudo read NAME=VALUE from their own argv, so after them a quoted one is an assignment too."""
+    sudo = own_argv = False
     while words:
         t = words[0].text
-        if not words[0].quoted and _ASSIGN.fullmatch(t):
+        if (own_argv or not words[0].quoted) and _ASSIGN.fullmatch(t):
             words = words[1:]
             continue
         base = t.rsplit("/", 1)[-1]
@@ -1001,6 +1227,7 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
         if base == "command" and words[1:2] and words[1].text in ("-v", "-V"):
             break
         sudo = sudo or base in ("sudo", "doas")
+        own_argv = base in ("env", "sudo")
         takes, words = _PREFIXES[base], words[1:]
         while words and words[0].text.startswith("-") and words[0].text != "-":
             f = words[0].text
@@ -1036,7 +1263,9 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     words = list(k.words)
     while words and not words[0].quoted and words[0].text in _OPENERS:
         words = words[1:]
+    loop: list[Classification] = []
     if words and not words[0].quoted and words[0].text == "for":
+        loop = _indirect_sets("for", words, cmd)     # the loop variable: `for PATH in ...` sets PATH
         words = []                                   # a for header lists words, not programs
     before = words
     words, sudo, split = _strip_prefix_words(words)
@@ -1050,6 +1279,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped)
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
+        parts += _exec_options(before, words, k, cmd, depth, ctx, piped) + loop
     if sudo:
         parts[0].signals.append("sudo")
         if parts[0].reversibility == "reversible":
@@ -1363,15 +1593,75 @@ def _ssh_setting(text: str) -> tuple[str, str]:
     return key.lower(), rest.lstrip(" \t\r\n=")
 
 
+def _indirect_sets(prog: str, words: list, cmd: str) -> list[Classification]:
+    """Variables a builtin sets to a value the gate does not see: the names `read` (also `-a`) and
+    `printf -v` fill, the target of a nameref (`declare -n r=PATH`), and an exporter argument whose name
+    comes from a variable (`export $X=...`). A variable _env_hazard lists is opaque, named, and so is a
+    name the gate cannot read. A for-loop variable comes here from _classify_simple with prog "for"."""
+    args, targets, parts = words[1:], [], []
+    if prog == "for":
+        targets = args[:1]
+    elif prog == "read":
+        i = 0
+        while i < len(args) and args[i].text.startswith("-") and args[i].text != "-":
+            t, i = args[i].text, i + 1
+            if t == "--":
+                break
+            for j, ch in enumerate(t[1:], 1):
+                if ch in "adinNptu":                 # the options that take a value; -a names an array
+                    val = _Word(text=t[j + 1:], dynamic=args[i - 1].dynamic) if t[j + 1:] else \
+                        (args[i] if i < len(args) else None)
+                    i += 0 if t[j + 1:] else 1
+                    if ch == "a" and val is not None:
+                        targets.append(val)
+                    break
+        targets += args[i:]
+    elif prog == "printf" and args[:1] and args[0].text.startswith("-v"):
+        targets = [_Word(text=args[0].text[2:], dynamic=args[0].dynamic)] if args[0].text != "-v" else args[1:2]
+    elif prog in _EXPORTERS:
+        i, flags = 0, ""
+        while i < len(args) and args[i].text[:1] in "-+" and len(args[i].text) > 1:
+            if args[i].text == "--":
+                i += 1
+                break
+            flags += args[i].text[1:] if args[i].text[0] == "-" else ""
+            i += 1
+        if "f" in flags or "F" in flags:                  # names functions, not variables
+            return []
+        if "p" in flags and prog in ("declare", "typeset", "local"):  # prints; export/readonly -p still assign
+            return []
+        for w in args[i:]:
+            name, (_, sep, ref) = re.split(r"\[|\+?=", w.text, maxsplit=1)[0], w.text.partition("=")
+            if _unreadable_name(w):
+                targets.append(w)
+            elif "n" in flags and prog != "export":     # a nameref: what it points at is what gets set
+                if not sep:
+                    parts.append(_opaque(f"{prog} -n {name} makes a reference the gate cannot follow"[:120], cmd))
+                else:
+                    targets.append(_Word(text=ref, dynamic=w.dynamic))
+    for w in targets:
+        name = re.split(r"\[|\+?=", w.text, maxsplit=1)[0]
+        if _unreadable_name(w):
+            parts.append(_opaque(f"{prog} sets a variable whose name the gate cannot read", cmd))
+        elif why := _env_hazard(name):
+            parts.append(_opaque(f"{name} {why} (set by {prog})", cmd))
+        parts += [_opaque(f"{n} {why} (set in a subscript)", cmd)    # `read 'a[PATH=1]'` sets PATH too
+                  for n in _subscript_sets(w.text) if (why := _env_hazard(n))]
+    return parts
+
+
 def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                   piped: str | None) -> list[Classification]:
     """Commands a trusted program is told to run (#154): an exec option (`tar --to-command`, `rsync -e`,
     `man -P`, `git rebase -x`...), an ssh `-o ProxyCommand`, a sqlite3/psql shell command, or an environment variable
     such as GIT_SSH_COMMAND set before the program. Each is classified as a nested command; a value the
-    gate cannot read (a script file, `.output FILE`) is opaque."""
-    if not words or words[0].dynamic:
+    gate cannot read (a script file, `.output FILE`) is opaque, and so is a variable that loads code or
+    moves where programs and config are found (LD_PRELOAD, PATH...). Git config set on the line (`git -c`,
+    `git --config-env`, `git clone --config`, GIT_CONFIG_*) takes _git_config_kind. `words` is empty for a
+    bare assignment."""
+    if words and words[0].dynamic:
         return []
-    prog, argv = words[0].text.rsplit("/", 1)[-1], [w.text for w in words]
+    prog, argv = (words[0].text.rsplit("/", 1)[-1] if words else ""), [w.text for w in words]
     parts: list[Classification] = []
 
     def nested(text: str, what: str) -> Classification | None:
@@ -1407,21 +1697,60 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         return _option_values(argv, names, start, takes if sub_takes is None else sub_takes, longs,
                               1 if prog == "ssh" else None, exact, wild)
 
-    # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env; a partly quoted one is
-    # left in `words`) and export's arguments, never an argument that merely looks like one (`grep EDITOR=x`)
+    def git_config(pairs: list[str], what: str) -> None:
+        # KEY=VALUE pairs checked as `git -c` is: an exec key or a `!` value is opaque, and the value is read
+        # as the command it is, so a category deny on it fires; a key that loads a config file or a template
+        # is opaque; a key from a variable is opaque.
+        for kv in pairs:
+            key, _, value = kv.partition("=")
+            kind = _git_config_kind(key, value)
+            if re.search(r"[$`]", key):
+                parts.append(_opaque(f"{what} sets a git config key the gate cannot read", cmd))
+            elif kind == "exec":
+                parts.append(_opaque(f"{what} sets {key}, which makes git run a command"[:120], cmd))
+                nested(value.removeprefix("!"), f"{what} {key}")
+            elif kind == "load":
+                parts.append(_opaque(f"{what} sets {key}, which loads a config file or template"[:120], cmd))
+
+    # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env, sudo or timeout; a partly
+    # quoted one is left in `words`), export's arguments, a bare assignment the rest of the line inherits, and
+    # the ones hidden in an expansion, arithmetic or a redirection (`${PATH:=.}`, `$((PATH=10))`, `{PATH}>f`);
+    # never an argument that merely looks like one (`grep EDITOR=x`). Only a real program position runs a value.
     n = len(before) - len(words)
     while n < len(before) and _ASSIGN.fullmatch(before[n].text):
         n += 1
-    env_words = [w.text for w in before[:n] if _ASSIGN.fullmatch(w.text)]
-    exported = [a for a in argv[1:] if _ASSIGN.fullmatch(a)] if prog in ("export", "declare", "typeset") else []
-    for a in env_words + exported:
-        name, _, value = a.partition("=")
+
+    def split_assign(a: str) -> tuple[str, str]:
+        return re.split(r"\+?=|\[", a, maxsplit=1)[0], a.partition("=")[2]
+
+    assigns = [w.text for w in before[:n] if _ASSIGN.fullmatch(w.text)]
+    sets: list[tuple[str, str | None, bool]] = [(*split_assign(a), not words) for a in assigns]
+    if prog in _EXPORTERS:
+        sets += [(*split_assign(a), True) for a in argv[1:] if _ASSIGN.fullmatch(a)]
+    named = assigns + (argv[1:] if prog in (*_EXPORTERS, "unset") else []) + \
+        [b for a, b in zip(argv, argv[1:]) if prog in ("test", "[") and a == "-v"]   # where NAME[..] is arithmetic
+    sets += [(name, value, True) for name, value in _hidden_sets(k, named)]
+    git_env: dict[tuple[str, ...], str] = {}
+    for name, value, runs_nothing in sets:
         if name in _EXEC_ENV:
-            c = nested(value.lstrip("|"), name)
-            if c is not None and a in exported and c.category == "opaque_exec":
+            c = nested((value or "").lstrip("|"), name)
+            if c is not None and runs_nothing and c.category == "opaque_exec":
                 parts.pop()                              # export runs nothing; an unknown value is not a hit
-        elif name in _EXEC_ENV_OPAQUE:
-            parts.append(_opaque(f"{name} sets options the gate does not read", cmd))
+        elif name == "GIT_CONFIG_PARAMETERS":           # git's own format: 'key'='value' 'key2'='value2'
+            try:
+                git_config(shlex.split(value or ""), name)
+            except ValueError:
+                parts.append(_opaque(f"{name} sets git config the gate cannot read", cmd))
+        elif m := _GIT_CONFIG_ENV.fullmatch(name):
+            git_env[m.groups()] = value or ""
+        elif why := _env_hazard(name, value):         # _EXEC_ENV_OPAQUE, and LESS with a `+` command
+            parts.append(_opaque(f"{name} {why}", cmd))
+    parts += _indirect_sets(prog, words, cmd)
+    for (kind, num), value in git_env.items():
+        if kind == "KEY":
+            git_config([f"{value}={git_env.get(('VALUE', num), '')}"], f"GIT_CONFIG_KEY_{num}")
+        elif ("KEY", num) not in git_env:
+            parts.append(_opaque(f"GIT_CONFIG_VALUE_{num} sets git config whose key is not on the line", cmd))
     for v in values(_EXEC_OPTS.get(prog, ())):
         nested(v, f"{prog} option")
     for v in values(_EXEC_FILE_OPTS.get(prog, ())):
@@ -1431,9 +1760,17 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             if v.startswith("exec="):
                 nested(v[5:], "tar --checkpoint-action")
     if prog == "git":
-        i = _git_subcommand(argv)
+        config: list[str] = []
+        i = _git_subcommand(argv, config)
         sub, rest = (argv[i] if i < len(argv) else ""), argv[i + 1:]
-        for v in values(_GIT_EXEC_OPTS.get(sub, ()), start=i + 1, sub_takes=_GIT_VALUE_OPTS.get(sub, "")):
+        sub_takes = _GIT_VALUE_OPTS.get(sub, "")
+        git_config(config, "git -c")
+        if sub == "clone":                               # clone's own config, and a template whose hooks run
+            git_config(values(("--config", "-c"), start=i + 1, sub_takes=sub_takes), "git clone --config")
+            for v in values(("--template",), start=i + 1, sub_takes=sub_takes):
+                if v:
+                    parts.append(_opaque(f"git clone runs the hooks in the template {v}"[:120], cmd))
+        for v in values(_GIT_EXEC_OPTS.get(sub, ()), start=i + 1, sub_takes=sub_takes):
             nested(v, f"git {sub} option")
         if sub == "bisect" and rest[:1] == ["run"] and len(rest) > 1 and depth < _DEPTH:
             parts.append(_opaque("git bisect run runs a command per step", cmd))
