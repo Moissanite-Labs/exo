@@ -272,7 +272,7 @@ seat selection, required executor/plugin inventory and product attachment. The
 existing `exo.core.engine:create` factory path delegates to it, preserving CLI and
 protocol startup. This is the construction step of the ENGINE-SPLIT direction.
 Core engine lifecycle and turn orchestration remain in place. The counted core
-line-budget test and its 15,000-line threshold are unchanged.
+line-budget test is unchanged by this step.
 
 The next construction step separates `exo.core.engine.CoreRuntime` from
 `exo.application.CoreEngine`. The runtime owns `context_tree` and accepts an
@@ -295,5 +295,5 @@ points remain in `exo.compose`, and runtime executor loading remains in
 `exo.core.engine`.
 
 This extends the ENGINE-SPLIT direction while preserving main's composition,
-diagnostics and approval-desk boundaries. It keeps the existing 15,000-line core
-ceiling.
+diagnostics and approval-desk boundaries. It adds nothing outside the core budget policy
+(`docs/ENGINE-SPLIT.md` "Budget policy").

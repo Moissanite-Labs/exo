@@ -79,25 +79,46 @@ count. Avoid one large rewrite while the broker and authority contracts are chan
   - **Still open for #46.** Step 1: the engine, `peer_target`, `diagnostics`, `findings`, `jobs` and `delegate` still
     read `loop._state`, `store._q` or tree `_view`/`_agent_key`. Inward imports left in the engine: `exo.principal`,
     `exo.config`, `exo.provenance`, `exo.diagnostics` and lazy `exo.learn` and `exo.models_cmd` (the `exo.gate`
-    approver checks moved with the desk to `exo.core.approvals`). The budget decision below is still pending.
+    approver checks moved with the desk to `exo.core.approvals`).
+- 2026-10-15, budget policy (D-077): the hard 15,000-line ceiling became a ratchet with headroom (see "Budget
+  policy"). No code changed. Counted core lines: 14,999 before and after, against a floor of 14,813 and a ceiling
+  of 15,813.
 
 ## Budget policy
 
-Decided 2026-10-13 (D-067): the acceptance ceiling is **15,000** counted lines
-(`tests/integration/test_wave1_acceptance.py`), down from 16,000. Step 4 brought the count under the historical
-15,000-line goal (14,812 at D-067), two thirds of it by moving two subsystems out through real seams, and the lower
-ceiling keeps that gain. Do not raise it again to accommodate a wave or exclude existing counted modules to make a
-failing test pass. A new core feature fits under 15,000 or comes with a cut or a seam.
+Decided 2026-10-15 (D-077). It replaces the hard 15,000-line ceiling that D-067 set on 2026-10-13. The principal's
+ruling: "important to be lean and optimized but not at the cost of functionality and robustness and
+product-market fit". A line count should not stand in the way of security, robustness or product work, so the budget
+is a ratchet with headroom. The structural goal in point 5 is the aim, and the count is a signal for it.
 
-The ceiling is not the completion test for #46. Step 4's completion criteria still stand: private-state reads
-(`loop._state`, `store._q`, the tree's `_view` and `_agent_key`) and the inward product imports listed under
-"Progress" remain to be removed.
+1. **Two recorded numbers.** `tests/integration/test_wave1_acceptance.py` holds `CORE_FLOOR = 14813` and
+   `CORE_HEADROOM = 1000`. The only assertion is `total < CORE_FLOOR + CORE_HEADROOM`, so the ceiling today is 15,813
+   counted lines. The floor is the count right after the last real reduction, #124 (D-067). That branch measured
+   14,812 before its last merge from main, and the count at the merge is 14,813.
+2. **The floor ratchets down.** Every real reduction PR (deletions, simplification, real seams per this plan) sets
+   `CORE_FLOOR` to its post-merge count in the same PR. The floor never goes up, so a reduction that ends above the
+   current floor leaves it where it is.
+3. **Headroom is for shipping.** Fixes and features land inside the headroom with no ceremony. The test prints the
+   count, the floor and the headroom left on every run (`pytest -s` or `-rP` shows it), and its failure message shows
+   them too.
+4. **Security and robustness fixes are never blocked by the budget.** If one would cross the ceiling, its PR raises
+   `CORE_HEADROOM` by the minimum needed, with a one-line `DECISIONS.md` note, and the lead schedules a reduction
+   within the week. A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+5. **The structural goal carries the real intent.** Step 4's criteria are the goal: no private-state reads across
+   module boundaries (`loop._state`, `store._q`, the tree's `_view` and `_agent_key`), no product imports into the
+   engine (the inward imports listed under "Progress"), and one responsibility per module. The test also prints the
+   largest counted files and flags any above 1,000 lines. That report is information, not an assertion.
+6. **The `CORE` list is never edited to dodge the count,** as before. Excluding an existing counted module to make a
+   failing test pass is not a reduction.
 
-Before changing the ceiling, decide whether total line count remains useful. If it is retired, replace it
-with enforceable import-direction and collaborator-interface checks, with explicit temporary exceptions
-that shrink as the steps above land. Dropping the test without those checks leaves the original finding open.
+The count is not the completion test for #46. The private-state reads and inward product imports in point 5 remain to
+be removed whatever the count says.
 
-Completion requires public collaborator interfaces, removed inward product imports, behavior-preserving
-protocol tests and an honest budget decision. The unsupported-hook repair in #26 addresses one part of
-the audit; it does not complete this split. The required executor in #31 changes the dispatch contract and
-must be integrated before those interfaces are treated as stable.
+If total line count is ever retired as a signal, replace it with enforceable import-direction and
+collaborator-interface checks, with explicit temporary exceptions that shrink as the steps above land. Dropping the
+test without those checks leaves the original finding open.
+
+Completion requires public collaborator interfaces, removed inward product imports and behavior-preserving protocol
+tests. The unsupported-hook repair in #26 addresses one part of the audit; it does not complete this split. The
+required executor in #31 changes the dispatch contract and must be integrated before those interfaces are treated as
+stable.
