@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 
 import pytest
 
@@ -111,6 +113,90 @@ def test_missing_key_skips_route_and_reports():
     assert ev.kind == "error" and not ev.retryable and "key_env" in ev.error
 
 
+def test_slow_credential_lookup_keeps_event_loop_responsive(monkeypatch):
+    rec = Recorder((200, fixture_bytes("llamacpp_text_stream.sse"), {}))
+    r = Router(roles={"main": ["p:m"]}, catalog={}, env={}, client=rec.client(),
+               providers={"p": {"base_url": "https://example.invalid/v1", "key_env": ["K"]}})
+    loop_thread = threading.get_ident()
+
+    def key(_):
+        assert threading.get_ident() != loop_thread
+        time.sleep(.15)  # stands in for a slow Secret Service subprocess; never reads a real store
+        return "fake-key"
+
+    monkeypatch.setattr(r, "_key", key)
+
+    async def go():
+        beats = 0
+        running = True
+        async def heartbeat():
+            nonlocal beats
+            while running:
+                await asyncio.sleep(.01)
+                beats += 1
+        task = asyncio.create_task(heartbeat())
+        events = [e async for e in r.stream("main", [Message.user("hi")], [])]
+        running = False
+        await task
+        assert events[-1].kind == "done" and beats >= 5
+    asyncio.run(go())
+
+
+def test_success_does_not_resolve_unused_fallback_credentials(monkeypatch):
+    rec = Recorder((200, fixture_bytes("llamacpp_text_stream.sse"), {}))
+    r = Router(roles={"main": ["p:m", "unused:m"]}, catalog={}, env={}, client=rec.client(),
+               providers={p: {"base_url": "https://example.invalid/v1", "key_env": [k]}
+                          for p, k in [("p", "PRIMARY"), ("unused", "FALLBACK")]})
+    lookups = []
+    monkeypatch.setattr(r, "_key", lambda key: lookups.append(key) or "fake-key")
+    assert run(r)[-1].kind == "done"
+    assert lookups == ["PRIMARY"] and "unused" not in r._creds
+
+
+def test_concurrent_credential_resolution_shares_one_lookup(monkeypatch):
+    r = Router(catalog={}, env={}, providers={"p": {"base_url": "https://example.invalid", "key_env": ["K"]}})
+    calls = []
+    def key(_):
+        calls.append(1)
+        time.sleep(.1)
+        return "fake-key"
+    monkeypatch.setattr(r, "_key", key)
+
+    async def go():
+        creds = await asyncio.gather(*(asyncio.to_thread(r.credentials, "p") for _ in range(8)))
+        assert len(calls) == 1 and all(c is creds[0] for c in creds)
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("all_providers", [False, True])
+def test_reload_during_lookup_discards_the_old_generation(monkeypatch, all_providers):
+    r = Router(catalog={}, env={}, providers={"p": {"base_url": "https://example.invalid", "key_env": ["K"]}})
+    started, release = threading.Event(), threading.Event()
+    calls = []
+    def key(_):
+        calls.append(1)
+        if len(calls) == 1:
+            started.set()
+            assert release.wait(2)
+            return "old-key"
+        return "new-key"
+    monkeypatch.setattr(r, "_key", key)
+
+    async def go():
+        first = asyncio.create_task(asyncio.to_thread(r.credentials, "p"))
+        assert await asyncio.to_thread(started.wait, 1)
+        assert r.reload_credentials(None if all_providers else "p") == ["p"]
+        second = await asyncio.to_thread(r.credentials, "p")
+        release.set()
+        old_result = await first
+        assert second is old_result and second[0].key == "new-key"
+        assert r.credentials("p") is second and len(calls) == 2
+    try:
+        asyncio.run(go())
+    finally:
+        release.set()
+
+
 def test_decision_role_falls_back_to_aux_then_main():
     r = make({"main": ["m:big"], "aux": ["a:small"], "decision": []}, m=FakeProvider(), a=FakeProvider())
     assert [x.ref for x in r.chain("decision")] == ["a:small", "m:big"]
@@ -181,7 +267,8 @@ def test_set_role_rejects_flag_text_and_unknown_provider():
 
 
 def _flaky_pair(n_fail, **cfg):
-    primary = FakeProvider([rate_limited()] * n_fail + ["primary back"] * 5, name="p")
+    outage = ProviderEvent(kind="error", error="HTTP 503: unavailable", status=503, retryable=True)
+    primary = FakeProvider([outage] * n_fail + ["primary back"] * 5, name="p")
     backup = FakeProvider(["from backup"] * 20, name="b")
     clock = Clock()
     r = Router(roles={"main": ["p:free", "b:small"]}, catalog={"providers": {}, "models": {}, "roles": {}},
@@ -236,3 +323,162 @@ def test_nonretryable_errors_do_not_count():
     for _ in range(3):
         run(r)
     assert "p:free" not in r.breakers
+
+
+def test_rate_limits_follow_retry_after_without_opening_breaker():
+    clock = Clock()
+    p = FakeProvider([rate_limited(retry_after=30), rate_limited(retry_after=30), "recovered"], name="p")
+    b = FakeProvider(["fallback"] * 3, name="b")
+    r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=b)
+    for _ in range(2):
+        assert run(r)[-1].route == "b:m"
+        assert r.cooldowns["p"].until == clock.t + 30
+        assert "p:m" not in r.breakers
+        clock.t += 31
+    assert run(r)[-1].message.text() == "recovered"
+
+
+def test_rate_limit_during_breaker_trial_uses_only_credential_timer():
+    clock = Clock()
+    p = FakeProvider([rate_limited(retry_after=30), "recovered"], name="p")
+    r = make({"main": ["p:m"]}, clock, p=p)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t - 1)
+    assert run(r)[-1].status == 429 and "p:m" not in r.breakers
+    clock.t += 31
+    assert run(r)[-1].kind == "done"
+
+
+def test_skipped_open_route_is_last_resort_after_normal_fallback_failure():
+    clock = Clock()
+    p = FakeProvider(["primary recovered"], name="p")
+    b = FakeProvider([ProviderEvent(kind="error", error="down", status=503, retryable=True)], name="b")
+    r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=b)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500, last_failed=clock.t - 100)
+    events = run(r)
+    assert events[-1].kind == "done" and events[-1].route == "p:m"
+    assert [a["route"] for a in events[-1].attempts] == ["b:m", "p:m"]
+    assert events[-1].attempts[0]["outcome"] == "fallback"
+    assert any(e.kind == "notice" and "last resort" in e.text for e in events)
+    assert "p:m" not in r.breakers
+
+
+def test_last_resort_selects_oldest_failure_and_attempts_only_one_skipped_route():
+    clock = Clock()
+    down = ProviderEvent(kind="error", error="down", status=503, retryable=True)
+    p, q, b = FakeProvider(["unused"], name="p"), FakeProvider([down], name="q"), FakeProvider([down], name="b")
+    r = make({"main": ["p:m", "q:m", "b:m"]}, clock, p=p, q=q, b=b)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500, last_failed=clock.t - 10)
+    r.breakers["q:m"] = Breaker(level=1, until=clock.t + 500, last_failed=clock.t - 100)
+    events = run(r)
+    assert [a["route"] for a in events[-1].attempts] == ["b:m", "q:m"]
+    assert events[-1].kind == "error" and events[-1].attempts[-1]["outcome"] == "error"
+    assert not p.calls and len(q.calls) == len(b.calls) == 1
+    assert len([e for e in events if e.kind in ("done", "error")]) == 1
+
+
+def test_all_open_uses_oldest_credential_eligible_route():
+    clock = Clock()
+    p, q = FakeProvider(["unused"], name="p"), FakeProvider(["oldest recovered"], name="q")
+    r = make({"main": ["p:m", "q:m"]}, clock, p=p, q=q)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500, last_failed=clock.t - 10)
+    r.breakers["q:m"] = Breaker(level=1, until=clock.t + 500, last_failed=clock.t - 100)
+    assert run(r)[-1].route == "q:m" and not p.calls
+
+
+@pytest.mark.parametrize("status", [401, 402])
+def test_last_resort_does_not_bypass_auth_or_billing_cooldown(status):
+    clock = Clock()
+    p = FakeProvider(["must stay unused"], name="p")
+    b = FakeProvider([ProviderEvent(kind="error", error="down", status=503, retryable=True)], name="b")
+    r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=b)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500)
+    r.record_failure("p", "m", status, None, True)
+    assert run(r)[-1].kind == "error" and not p.calls
+
+
+@pytest.mark.parametrize("status", [400, 413, 422])
+def test_request_invalid_response_stops_before_last_resort(status):
+    clock = Clock()
+    p = FakeProvider(["must stay unused"], name="p")
+    b = FakeProvider([ProviderEvent(kind="error", error="bad request", status=status, retryable=False)], name="b")
+    r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=b)
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500)
+    events = run(r)
+    assert events[-1].status == status and not p.calls
+    assert len([e for e in events if e.kind in ("done", "error")]) == 1
+
+
+def test_last_resort_is_not_used_after_output_has_started():
+    clock = Clock()
+    p = FakeProvider(["unused"], name="p")
+    partial = [ProviderEvent(kind="text", text="partial"),
+               ProviderEvent(kind="error", error="down", status=503, retryable=True)]
+    r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=FakeProvider([partial], name="b"))
+    r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500)
+    assert [e.kind for e in run(r)] == ["text", "error"] and not p.calls
+
+
+def test_failed_credential_is_not_retried_when_its_timer_expires_during_call():
+    class AdvancingClock(Clock):
+        def __call__(self):
+            self.t += 100
+            return self.t
+    p = FakeProvider([rate_limited(), "must not retry"], name="p")
+    b = FakeProvider(["fallback"], name="b")
+    r = make({"main": ["p:m", "p:another-model", "b:m"]}, AdvancingClock(), p=p, b=b)
+    assert run(r)[-1].route == "b:m" and len(p.calls) == 1
+
+
+def test_concurrent_exhausted_calls_share_at_most_one_live_forced_probe():
+    async def go():
+        entered, release = asyncio.Event(), asyncio.Event()
+        class Blocked(FakeProvider):
+            async def stream(self, messages, tools, **opts):
+                entered.set()
+                await release.wait()
+                async for ev in super().stream(messages, tools, **opts):
+                    yield ev
+        clock = Clock()
+        p = Blocked(["recovered"], name="p")
+        down = ProviderEvent(kind="error", error="down", status=503, retryable=True)
+        r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=FakeProvider([down, down], name="b"))
+        r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500)
+        async def call():
+            return [e async for e in r.stream("main", [Message.user("hi")], [])]
+        first = asyncio.create_task(call())
+        await asyncio.wait_for(entered.wait(), 1)
+        clock.t += 61  # the lease is bounded, but a still-live forced probe must remain exclusive
+        second = await asyncio.wait_for(call(), 2)
+        assert second[-1].kind == "error"
+        release.set()
+        assert (await first)[-1].kind == "done"
+        assert len(p.calls) == 1 and not r._forced_probes
+    asyncio.run(go())
+
+
+def test_last_resort_does_not_resurrect_breaker_removed_during_lookup(monkeypatch):
+    async def go():
+        resolving, release = asyncio.Event(), asyncio.Event()
+        clock = Clock()
+        down = ProviderEvent(kind="error", error="down", status=503, retryable=True)
+        p = FakeProvider(["unused"], name="p")
+        r = make({"main": ["p:m", "b:m"]}, clock, p=p, b=FakeProvider([down], name="b"))
+        r.breakers["p:m"] = Breaker(level=1, until=clock.t + 500)
+        pick = r._pick_async
+        async def paused(route, **kwargs):
+            result = await pick(route, **kwargs)
+            if route.provider == "p":
+                resolving.set()
+                await release.wait()
+            return result
+        monkeypatch.setattr(r, "_pick_async", paused)
+        async def call():
+            return [e async for e in r.stream("main", [Message.user("hi")], [])]
+        task = asyncio.create_task(call())
+        await asyncio.wait_for(resolving.wait(), 1)
+        r.route_ok("p:m")
+        release.set()
+        events = await task
+        assert events[-1].kind == "error" and not p.calls
+        assert "p:m" not in r.breakers and not r._forced_probes
+    asyncio.run(go())

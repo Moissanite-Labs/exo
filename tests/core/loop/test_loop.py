@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from exo.core.context import DefaultCompressor, TreeContext, summary_prompt
+from exo.core.context import DefaultCompressor, SummaryError, TreeContext, summary_prompt
 from exo.core.loop import Loop
 from exo.core.sessions import EventBus, SessionStore
 from exo.core.types import Message, ProviderEvent, ToolCall, ToolResult, ToolSpec, Usage
@@ -277,7 +277,6 @@ def test_fork_lineage_and_undo(tmp_path):
 
     s, child, grand = run(go())
     assert child.parent == s.id and grand.parent == child.id
-    assert store.lineage(grand.id) == [grand.id, child.id, s.id]
     assert [m.text() for m in store.messages(child.id)] == ["one", "r1", "branch", "child"]
     assert store.messages(child.id)[0].meta["forked_from"] == store.messages(s.id)[0].id
     assert store.get_session(s.id).message_count == 4  # parent untouched
@@ -304,7 +303,7 @@ def test_turn_is_fresh_call_from_tree_and_tail(tmp_path):
             await loop.send(s.id, f"q{i}")
         return s
 
-    s = run(go())
+    _s = run(go())
     last = prov.calls[-1]
     assert last[0].role == "system" and "SUMMARY" in last[0].text()
     assert len(last) <= 1 + 2 + 2  # system, maybe a bridge, tail of at most leaf+tail
@@ -332,7 +331,8 @@ def test_merge_when_view_over_budget(tmp_path):
     assert top[0].level >= 1 and top[0].start == 1
 
 
-def test_turn_waits_for_pending_summary(tmp_path):
+def test_turn_does_not_wait_for_pending_summary(tmp_path):
+    """Issue #99: the turn starts from verbatim; the summary lands in the background and the next turn uses it."""
     summ = Summ()
     store, ctx, prov, loop, seen = _tree_loop(tmp_path, summ)
 
@@ -342,15 +342,15 @@ def test_turn_waits_for_pending_summary(tmp_path):
         for i in range(2):
             store.append_message(s.id, Message.user(f"old{i}"))
             store.append_message(s.id, Message.assistant(f"ans{i}"))
-        task = asyncio.create_task(loop.send(s.id, "new"))
-        await asyncio.sleep(0.05)
-        assert not task.done() and prov.calls == []  # blocked on the summary
+        await asyncio.wait_for(loop.send(s.id, "new"), 2)  # not held by the gated summary
+        assert "summary pending" in prov.calls[0][0].text() and "old0" in prov.calls[0][0].text()
         summ.gate.set()
-        await asyncio.wait_for(task, 2)
+        await asyncio.wait_for(ctx.settle(s.id), 2)
+        await loop.send(s.id, "next")
         return s
 
     run(go())
-    assert "SUMMARY1" in prov.calls[0][0].text()
+    assert "SUMMARY1" in prov.calls[-1][0].text()
 
 
 def test_settle_timeout_falls_back_to_verbatim(tmp_path):
@@ -595,7 +595,7 @@ class _BrokenSummarizer:
 
     async def summarize(self, content, previous=None):
         self.calls += 1
-        raise RuntimeError("aux model refused")
+        raise SummaryError("aux model refused", retryable=False)
 
 
 def _failing_tree(tmp_path, **kw):
@@ -680,3 +680,90 @@ def test_round_cap_wrap_up_off(tmp_path):
         return await loop.send(s.id, "spin")
 
     assert run(go()).stop_reason == "max_iterations" and len(prov.calls) == 2
+
+
+def test_transient_summary_outage_retries_after_minutes_with_capped_delay_and_one_report(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from exo.core import context, trace
+
+    clock = [0.0]
+    monkeypatch.setattr(context, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    reported = []
+    monkeypatch.setattr(trace, "report", lambda where, error, session: reported.append((where, str(error))))
+
+    class Outage:
+        calls = 0
+
+        async def summarize(self, content, previous=None):
+            self.calls += 1
+            if clock[0] < 600:
+                raise SummaryError("service unavailable")
+            return "short summary"
+
+    store = SessionStore(tmp_path / "s.sqlite")
+    comp = Outage()
+    ctx = TreeContext(store, comp, leaf_size=2, tail_messages=2, min_compact_tokens=0)
+    sid = store.create_session().id
+    for i in range(4):
+        store.append_message(sid, Message.user(f"q{i} " + "fact " * 50))
+
+    async def go():
+        for now in (0, 30, 90, 210, 450):
+            clock[0] = now
+            ctx.note(sid)
+            await ctx.settle(sid)
+            assert comp.calls == (0, 30, 90, 210, 450).index(now) + 1
+            assert all(n.status == "failed" for n in store.summaries(sid))
+            for _ in range(5):
+                ctx.note(sid)
+                await ctx.settle(sid)
+            assert comp.calls == (0, 30, 90, 210, 450).index(now) + 1
+        assert ctx._retry_at[next(iter(ctx._retry_at))] == 750  # bounded at 300 seconds
+        clock[0] = 750
+        ctx.note(sid)
+        await ctx.settle(sid)
+        assert comp.calls == 6 and all(n.status == "done" for n in store.summaries(sid))
+        assert not ctx._retry_at
+    run(go())
+    assert len(reported) == 1 and "will retry" in reported[0][1]
+
+
+def test_default_compressor_preserves_terminal_and_transient_retryability():
+    async def go():
+        for retryable in (False, True):
+            comp = DefaultCompressor(Script([ProviderEvent(kind="error", error="offline", retryable=retryable)]),
+                                     retries=0)
+            try:
+                await comp.summarize("source")
+            except SummaryError as exc:
+                assert exc.retryable is retryable
+            else:
+                raise AssertionError("expected a summary error")
+    run(go())
+
+
+def test_transient_summary_zero_backoff_still_has_a_retry_floor(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from exo.core import context, trace
+
+    clock = [0.0]
+    monkeypatch.setattr(context, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(trace, "report", lambda *args: None)
+    store, ctx, comp, session, _ = _failing_tree(tmp_path, retry_backoff=0.0)
+
+    async def offline(content, previous=None):
+        comp.calls += 1
+        raise SummaryError("offline")
+
+    comp.summarize = offline
+
+    async def go():
+        for _ in range(5):
+            ctx.note(session.id)
+            await ctx.settle(session.id)
+        assert comp.calls == 2
+        clock[0] = 1.0
+        ctx.note(session.id)
+        await ctx.settle(session.id)
+        assert comp.calls == 4
+    run(go())

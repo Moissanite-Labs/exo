@@ -93,7 +93,7 @@ def test_notes_are_not_repeated_and_skip_private_threads():
         await loop.send(b.id, "first")
         await loop.send(b.id, "second")
         return b
-    b = run(go())
+    _b = run(go())
     first, second = prov.calls[-2], prov.calls[-1]
     text = "\n".join(m.text() for m in first)
     assert "public fact" in text and "private matter" not in text

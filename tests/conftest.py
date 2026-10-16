@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from exo import crypto
 from exo.store import PrincipalStore
@@ -12,6 +13,17 @@ def signer():
 @pytest.fixture
 def template_store(tmp_path):
     return PrincipalStore.create(tmp_path / "store")
+
+
+@pytest.fixture
+def trusted_gate(tmp_path):
+    from exo.core.plugins import PluginManager
+    root = tmp_path / 'gate-store'
+    root.mkdir()
+    manager = PluginManager(config={'exo-gate': {'principal_store': str(root),
+        'key_path': str(tmp_path / 'gate.key'), 'decision_model': False}}, executor_required=True)
+    assert manager.load_folder(Path(__file__).resolve().parents[1] / 'plugins/exo-gate').ok
+    return manager
 
 
 @pytest.fixture(autouse=True)

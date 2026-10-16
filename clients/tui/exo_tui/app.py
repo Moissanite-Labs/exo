@@ -33,7 +33,7 @@ from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar
                              EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
 CLIENT_ID = "exo-tui"
-DEFAULT_WINDOW = 200_000
+DEFAULT_WINDOW = 0  # unknown until the core reports this model's capacity
 MAX_FILE = 64 * 1024
 WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
 PAGE = 60  # entries added per "load earlier"
@@ -46,13 +46,14 @@ COMMANDS = {
     "sessions": ("session", "pick one of this agent's threads to switch to"),
     "resume": ("session", "same as /sessions"),
     "fork": ("session", "fork this session"),
+    "rename": ("session", "give this thread a new title: /rename <title>; shows in /sessions"),
     "undo": ("session", "undo the last turn"),
     "clear": ("session", "clear the transcript view (history is kept)"),
     "cwd": ("session", "show this session's working folder"),
     "context": ("session", "show what the next model call carries: each part with its tokens (read-only)"),
     "compact": ("session", "summarize now what is eligible in this agent's memory, then show tokens before and after"),
     "restart": ("session", "reopen this session in a new terminal tab and exit this one"),
-    "stop": ("session", "stop the running turn (what was done is kept)"),
+    "stop": ("session", "stop the running turn (what was done is kept); /stop <task> stops a running subagent"),
     "unsteer": ("session", "pull your last queued steer message back into the composer, if it has not landed yet"),
     "exit": ("session", "quit"),
     "quit": ("session", "same as /exit"),
@@ -61,6 +62,9 @@ COMMANDS = {
     "providers": ("model", "set up model providers: add or replace a key, test it, remove it, pick the default"),
     "usage": ("model", "show context size, cost and the model in use"),
     "panel": ("tools", "reopen the last panel"),
+    "tasks": ("tools", "list the subagents this session handed work to, with their status"),
+    "open": ("tools", "watch a subagent's session: /open <task> (a task id, a prefix of it, or its session id)"),
+    "steer": ("tools", "send a note to a running subagent: /steer <task> <text> (the parent's receipt records it)"),
     "peers": ("tools", "list the other live sessions (Exo and Hermes) you can message"),
     "send": ("tools", "message another session yourself: /send <peer> <text>"),
     "handoff": ("other", "have the agent write a handoff note for the next session: /handoff [path]"),
@@ -114,6 +118,7 @@ class ExoApp(App):
     #left.inverse #cmenu { border-top: none; border-bottom: solid $line; }
     #cmenu { height: auto; max-height: 10; background: $background; border-top: solid $line; padding: 0 2; }
     #status { height: 2; padding: 0 2; border-top: solid $line; background: $surface; }
+    #status.inverse { border-top: none; border-bottom: solid $line; }
     #approval { height: auto; border-left: outer $accent; background: $surface; padding: 0 1; margin: 0 2 1 2; }
     #hero { margin: 0; }
     #approval Input { border: none; background: $panel; height: 1; padding: 0 1; }
@@ -182,7 +187,9 @@ class ExoApp(App):
         self.seat = seat
         self.title_arg = title
         self.model = ""
+        self.clipboard_verified = False
         self.window = DEFAULT_WINDOW
+        self.capacities: dict[str, int] = {}
         self.ctx_tokens = 0
         self.cost: float | None = None  # session USD from priced calls; None = no priced call (D-032: unknown, never 0)
         self.calls_seen = 0  # model calls that used tokens, seen by this client
@@ -216,14 +223,17 @@ class ExoApp(App):
         self.hints = load_catalog()
         self.hint_budget = 1  # one tip per turn
         self.intro_after_providers = False  # a first run is waiting for a provider before it sends /intro
-        self.intro_pending = ""  # "first" or "manual" from sending /intro until its turn starts
+        self.intro_pending = ""  # "first" or "manual", retained until this intro turn completes
+        self.intro_turn = ""
+        self.intro_reply = False
         self.sent: list[Any] = []  # every command body this client sent, for tests and debugging
         self._dirty = False
         self.hist = cm.History.for_seat(home or exo_home(), seat)  # up-arrow and ghost text (D-037)
         self.catalog: list[cm.Item] = cm.build_catalog(LOCAL_COMMANDS)
         self.arg_ctx: dict[str, list[cm.Item]] = {}  # cached argument data by kind; fetched once when first needed
         self.arg_at: dict[str, float] = {}
-        self.files = cm.FileIndex(os.getcwd())
+        self.files = cm.FileIndex(os.getcwd(), executor_required=bool(
+            getattr(getattr(client, "engine", None), "executor_required", True)))
         self.sug = cm.Suggestion()
         self.sel = 0
         self.sug_text = ""
@@ -320,10 +330,10 @@ class ExoApp(App):
 
     def status_text(self) -> str:
         """The status strip as plain text (the strip itself draws instruments from the same numbers)."""
-        pct = min(999, round(100 * self.ctx_tokens / self.window)) if self.window else 0
+        pct = str(min(999, round(100 * self.ctx_tokens / self.window))) + "%" if self.window else "capacity unknown"
         bug = f" · {self.findings} findings" if self.findings else ""
         cache = "" if self.cache_share is None else f" · cache {round(100 * self.cache_share)}%"
-        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}%{cache} · {self.cost_label()}{bug}"
+        return f"{self.seat or 'main'} · {self.model or '-'} · ctx {pct}{cache} · {self.cost_label()}{bug}"
 
     def cost_label(self) -> str:
         """The D-032 rule, formatted by the same `money` /trace uses: "-" before any call, "unknown" when no call is
@@ -416,11 +426,10 @@ class ExoApp(App):
             self.boot_mark("core", "connected")
             try:
                 for m in (await self.client.call(s.ModelsList())).get("models", []):
+                    self.capacities[m.get("route", "")] = int(m.get("context") or 0)
                     if m.get("role") == "main":
                         self.model = self.model or m.get("route", "")
-                        if m.get("context"):
-                            self.window = int(m["context"])
-                            break
+                self.window = self.capacities.get(self.model, 0)
                 self.boot_mark("model", self.model)
                 self.commands = (await self.client.call(s.CommandsList())).get("commands", [])
                 self.catalog = cm.build_catalog(LOCAL_COMMANDS, self.commands)  # the core's list, once per session
@@ -506,13 +515,14 @@ class ExoApp(App):
         b = ev.body
         if isinstance(b, s.TurnStarted):
             self.busy = True
-            if self.intro_pending:
-                self.intro_started()
             self.turn_t0 = time.monotonic()
             self.model = b.model or self.model
+            self.window = self.capacities.get(self.model, 0)
             self.requested, self.served = self.model, ""  # what this turn asked for; ModelCall says what served
             self.close_cur()
         elif isinstance(b, s.TurnCompleted):
+            if self.intro_turn and b.turn_id == self.intro_turn:
+                self.intro_completed(b.stop_reason)
             self.gstate.turns += 1
             self.gstate.long_turn = (b.timing.get("wall_ms", 0) - b.timing.get("tool_ms", 0)
                                      - b.timing.get("approval_ms", 0)) >= LONG_TURN_MS
@@ -540,6 +550,15 @@ class ExoApp(App):
             self.mark_dirty()
         elif isinstance(b, s.MessageCompleted):
             m = b.message
+            if (self.intro_pending and m.role == "user" and m.text() == INTRO_PROMPT
+                    and m.meta.get("author") == "principal"):
+                self.intro_turn = m.meta.get("turn_id") or ""
+                self.intro_reply = False
+            elif self.intro_turn and m.role == "assistant" and m.meta.get("turn_id") == self.intro_turn:
+                route = str(m.meta.get("model") or "")
+                provider, sep, model = route.partition(":")
+                self.intro_reply = bool(m.text().strip() and sep and model and provider and provider != "fake"
+                                        and not m.tool_calls and not m.meta.get("interrupted") and not m.meta.get("error"))
             if m.role == "user" and m.id:
                 self.steer_landed(m.id)
             if m.role == "assistant":
@@ -569,11 +588,15 @@ class ExoApp(App):
             if tb := self.tools.get(b.call_id):
                 tb.output += b.text
                 tb.flush()
+            else:
+                self.update_older_tool(b.call_id, b.text, append=True)
         elif isinstance(b, s.ToolCompleted):
             self.running_tools = max(0, self.running_tools - 1)
             if tb := self.tools.get(b.result.call_id):
                 tb.output = b.result.text() or tb.output
                 tb.finish("error" if b.result.is_error else "done", b.duration_ms / 1000 if b.duration_ms else None)
+            else:
+                self.update_older_tool(b.result.call_id, b.result.text(), status="error" if b.result.is_error else "done")
         elif isinstance(b, s.ApprovalRequested):
             self.approvals.append(b)
             self.show_approval()
@@ -583,6 +606,8 @@ class ExoApp(App):
             if self.card is not None and self.card.req.request_id == b.request_id:
                 self.close_card()
         elif isinstance(b, s.SteerCancelled):
+            if self.intro_pending and b.text == INTRO_PROMPT:
+                self.intro_pending, self.intro_turn, self.intro_reply = "", "", False
             self.drop_pending_steer(b.message_id)
         elif isinstance(b, s.QuestionAsked):
             self.question = b.question_id
@@ -590,7 +615,7 @@ class ExoApp(App):
             self.note(f"question: {b.text}{opts}  (type your answer)")
         elif isinstance(b, s.UsageUpdated):
             u = b.usage
-            self.ctx_tokens = u.input_tokens + u.cache_read_tokens
+            self.ctx_tokens = u.input_tokens + u.cache_read_tokens + u.cache_write_tokens
             if b.session_total and b.session_total.cost_usd is not None:
                 self.cost = b.session_total.cost_usd
             self.model = self.served or b.model or self.model  # a fallback that served stays visible
@@ -600,6 +625,7 @@ class ExoApp(App):
             self.gstate.provider_error = bool(b.error)
             if b.route:
                 self.model = self.served = b.route  # the route that served, not the one asked for
+                self.window = self.capacities.get(b.route, 0)
             if b.requested:
                 self.requested = b.requested
             if b.usage is not None and (b.usage.input_tokens or b.usage.output_tokens or b.usage.cache_read_tokens
@@ -679,13 +705,21 @@ class ExoApp(App):
                     self.last_answer = (m.get("id"), text)
                 for tc in m.get("tool_calls", []):
                     by_id[tc["id"]] = len(out)
-                    out.append(("tool", tc["id"], tc["name"], tc.get("arguments"), "done", ""))
+                    out.append(("tool", tc["id"], tc["name"], tc.get("arguments"), "running", ""))
             elif m["role"] == "tool":
                 for r in m.get("tool_results", []):
                     if (n := by_id.get(r["call_id"])) is not None:
                         out[n] = out[n][:4] + ("error" if r.get("is_error") else "done",
                                                "".join(p.get("text", "") for p in r.get("content", [])))
         return out
+
+    def update_older_tool(self, call_id: str, text: str, *, append: bool = False, status: str = "") -> None:
+        """Live tools beyond the mounted history window still update the stored transcript."""
+        for i, entry in enumerate(self.older):
+            if entry[0] == "tool" and entry[1] == call_id:
+                output = entry[5] + text if append else text or entry[5]
+                self.older[i] = entry[:4] + (status or entry[4], output)
+                return
 
     def widgets_for(self, entries: list[tuple]) -> list[Block | ToolBlock]:
         widgets: list[Block | ToolBlock] = []
@@ -762,12 +796,13 @@ class ExoApp(App):
         name = info.get("title") or str(info.get("id", ""))[-8:]
         return f"thread {name}" + (" (private)" if info.get("kind") == "private" else "")
 
-    async def load_session(self, sid: str) -> None:
-        got = await self.client.call(s.SessionResume(session=sid))
+    async def load_session(self, sid: str, resume: bool = True) -> None:
+        got = await self.client.call(s.SessionResume(session=sid) if resume else s.SessionGet(session=sid))
         self.session = sid
         info = got["session"]
         self.seat = self.seat or info.get("seat")
         self.model = info.get("model") or self.model
+        self.window = self.capacities.get(self.model, 0)
         self.thread_label = self.label_of(info)
         self.clear_transcript()
         self.render_history(got.get("messages", []))
@@ -782,6 +817,7 @@ class ExoApp(App):
         got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat, kind=kind))
         self.session = got["session"]["id"]
         self.model = got["session"].get("model") or self.model
+        self.window = self.capacities.get(self.model, 0)
         self.thread_label = self.label_of(got["session"])
         self.clear_transcript()
         if kind == "private":
@@ -1027,13 +1063,17 @@ class ExoApp(App):
         return parts
 
     async def submit(self, text: str) -> None:
-        if self.question and not text.startswith("/"):
+        parts = text[1:].split(maxsplit=1) if text.startswith("/") else []
+        name, args = (parts[0], parts[1] if len(parts) > 1 else "") if parts else ("", "")
+        known = set(LOCAL_COMMANDS) | {c["name"] for c in self.commands}
+        # Only simple command names are eligible for typo help; /etc/hosts and paths are literal text.
+        command = name in known or (bool(re.fullmatch(r"[a-z][a-z-]*", name)) and cm.closest(name, known))
+        if self.question and not command:
             qid, self.question = self.question, None
             self.add(Block(text, "user"))
             await self.post(s.QuestionAnswer(question_id=qid, answer=text))
             return
-        if text.startswith("/"):
-            name, _, args = text[1:].partition(" ")
+        if command:
             await self.slash(name, args.strip())
             return
         shown, send = text, text
@@ -1091,21 +1131,58 @@ class ExoApp(App):
         self.composer.focus()
         return True
 
+    async def subagent(self, verb: str, args: str) -> None:
+        """/tasks, /open, /steer and /stop <task>: the core's ``subagent`` built-in (#97). The core decides who may act."""
+        if verb != "list" and not args.strip():
+            self.note({"open": "usage: /open <task>", "send": "usage: /steer <task> <text>",
+                       "stop": "usage: /stop <task>"}[verb] + "  (see /tasks)", "warn")
+            return
+        resp = await self.post(s.CommandRun(name="subagent", args=f"{verb} {args}".strip(), session=self.session))
+        out = (resp.result.get("output") or {}) if resp.ok else {}
+        if verb == "list":
+            rows = out.get("tasks", [])
+            self.note("\n".join([f"{len(rows)} subagent task(s)"] + [
+                f"  {r['task_id']}  [{r['status']}{', live' if r['live'] else ''}]  {r['title']}" for r in rows]))
+        elif verb == "open" and resp.ok:
+            if not out.get("session"):
+                self.note(f"task {out['task_id']} has no session yet ({out['status']})", "warn")
+                return
+            await self.load_session(out["child_session"], resume=False)  # read-only look: resume would repair a live loop
+            self.note(f"subagent {out['task_id']} is {out['status']}. " + (
+                "/steer <task> <text> sends it a note, /stop <task> stops it, " if out["steerable"] else "finished; ")
+                + "/sessions goes back to a thread", "hint")
+        elif resp.ok:
+            self.note(("note sent to " if verb == "send" else "stopped ") + out["task_id"] + "; the parent's receipt records it")
+
     async def slash(self, name: str, args: str) -> None:
         if not self.busy:
             self.hint_budget = 1
         known = {n for n in LOCAL_COMMANDS} | {c["name"] for c in self.commands}
-        if self.commands and name not in known:  # D-037: a typo gets a suggestion, not a round trip and an error
+        if name not in known:  # D-037: a typo gets a suggestion, not a round trip and an error
             guess = cm.closest(name, known)
             if guess:
                 self.note(f"unknown command /{name}. did you mean /{guess}? It is in the composer: Enter runs it.", "warn")
                 self.composer.text = f"/{guess}" + (f" {args}" if args else "")
                 self.composer.move_cursor(self.composer.document.end)
                 return
+        if args and name in {"exit", "quit", "unsteer", "restart", "peers", "clear", "cwd",
+                             "usage", "intro", "help", "undo", "compact", "context", "panel"}:
+            self.note(f"usage: /{name}", "warn")
+            return
+        if name == "trace" and args and not args.isdigit():
+            self.note("usage: /trace [count]", "warn")
+            return
+        if name == "findings" and args not in ("", "all", "count", "open", "fixed", "verified", "reopened"):
+            self.note("usage: /findings [state]", "warn")
+            return
         if name in ("exit", "quit"):
             self.exit()
+        elif name == "stop" and args:
+            await self.subagent("stop", args)
         elif name == "stop":
             self.stop_turn()
+        elif name in ("tasks", "open", "steer"):
+            await self.subagent({"tasks": "list"}.get(name, "send" if name == "steer" else name), args)
         elif name == "unsteer":
             await self.unsteer()
         elif name == "restart":
@@ -1146,6 +1223,9 @@ class ExoApp(App):
             else:
                 self.open_providers()
         elif name == "new":
+            if args not in ("", "private"):
+                self.note("usage: /new [private]", "warn")
+                return
             await self.new_session("private" if args.strip() == "private" else "")
             self.hint("new_thread")
         elif name == "intro":
@@ -1166,6 +1246,13 @@ class ExoApp(App):
                 await self.set_default(rest.strip())
             else:
                 await self.set_model(args)
+        elif name == "rename":
+            if not args.strip():
+                self.note("usage: /rename <title>", "warn")
+                return
+            resp = await self.post(s.CommandRun(name="rename", args=args, session=self.session))
+            if resp.ok:
+                self.note(f"renamed to: {resp.result['output']['session']['title']}")
         elif name == "fork":
             resp = await self.post(s.SessionFork(session=self.session, title=args))
             if resp.ok:
@@ -1184,10 +1271,17 @@ class ExoApp(App):
         else:  # /context and /compact are core commands too (command.run); the core that holds the agent lock does the work
             if name == "compact":
                 self.note("compacting...")
-            resp = await self.post(s.CommandRun(name=name, args=args, session=self.session))
+            resp = await self.post(s.CommandRun(name=name, args="json" if name == "context" else args,
+                                                session=self.session))
             if resp.ok:
                 out = resp.result.get("output")
                 if out and name == "context":
+                    if isinstance(out, dict) and out.get("schema_version") == 1:
+                        self.ctx_tokens = out["tokens"]["total"]
+                        self.window = int(out.get("capacity") or 0)
+                        self.capacities[out["model"]] = self.window
+                        self.refresh_status()
+                        out = out["text"]
                     self.close_cur()
                     self.add(Block(out if isinstance(out, str) else str(out), "report", head="context " + th.DOT + " next call"))
                 elif out:
@@ -1196,17 +1290,32 @@ class ExoApp(App):
     # ------------------------------------------------------------ onboarding (D-030)
     async def intro(self, kind: str) -> None:
         """Send the orientation as a normal user turn. It shows as "/intro"; the agent gets the longer prompt."""
+        if self.intro_pending:
+            return
+        if self.provider_check and not await self.first_run_providers():
+            self.intro_after_providers = kind == "first" or not self.onb.onboarded
+            return
         self.add(Block("/intro", "user"))
         self.close_cur()
         self.intro_pending = kind
-        resp = await self.post(s.TurnSend(session=self.session, text=INTRO_PROMPT,
-                                          mode="steer" if self.busy else "send"))
+        self.intro_turn, self.intro_reply = "", False
+        try:
+            resp = await self.post(s.TurnSend(session=self.session, text=INTRO_PROMPT,
+                                              mode="steer" if self.busy else "send"))
+        except Exception:
+            self.intro_pending, self.intro_turn, self.intro_reply = "", "", False
+            self.note("Could not start orientation. /intro retries when the core is available.", "warn")
+            return
         if not resp.ok:
             self.intro_pending = ""  # the turn never started, so a first run stays un-onboarded
 
-    def intro_started(self) -> None:
-        """The intro turn began: only now is the home onboarded. A first run also turns tutorial mode on."""
+    def intro_completed(self, stop_reason: str) -> None:
+        """Only a successful real reply from this exact intro turn completes orientation."""
         kind, self.intro_pending = self.intro_pending, ""
+        success = stop_reason == "end" and self.intro_reply
+        self.intro_turn, self.intro_reply = "", False
+        if not success:
+            return
         self.onb.mark_onboarded()
         if kind == "first":
             self.run_worker(self.set_tutorial(True, quiet=True), exit_on_error=False)
@@ -1266,16 +1375,25 @@ class ExoApp(App):
         self.note(f"tip: {h['text']}{more}", "hint")
 
     def copy_to_clipboard(self, text: str) -> None:
-        """Textual only writes OSC 52, which macOS Terminal ignores; also hand the text to pbcopy."""
-        super().copy_to_clipboard(text)
+        """Try native helpers, retaining OSC52 as an explicitly unverified fallback."""
         import shutil
         import subprocess
-        exe = shutil.which("pbcopy")
-        if exe:
+
+        self.clipboard_verified = False
+        for name, flags in (("pbcopy", []), ("wl-copy", []), ("xclip", ["-selection", "clipboard"]),
+                            ("xsel", ["--clipboard", "--input"])):
+            exe = shutil.which(name)
+            if not exe:
+                continue
             try:
-                subprocess.run([exe], input=text.encode("utf-8"), timeout=3, check=False)
-            except Exception:
+                result = subprocess.run([exe, *flags], input=text.encode("utf-8"), timeout=3, check=False)
+                if result.returncode == 0:
+                    self.clipboard_verified = True
+                    return
+            except (OSError, subprocess.TimeoutExpired):
                 pass
+        super().copy_to_clipboard(text)
+
 
     def last_block(self, kind: str, blocks: list[Block]) -> str:
         """Newest text of a kind: mounted blocks first, then history that is not mounted yet."""
@@ -1300,7 +1418,8 @@ class ExoApp(App):
             self.note(f"nothing to copy: no {label} yet", "warn")
             return
         self.copy_to_clipboard(text)
-        self.note(f"copied {label} ({len(text)} chars) to the clipboard")
+        self.note(f"copied {label} ({len(text)} chars) to the clipboard" if self.clipboard_verified
+                  else f"sent {label} ({len(text)} chars) via OSC52; clipboard receipt cannot be verified")
 
     def help_text(self) -> str:
         lines: list[str] = []
@@ -1313,7 +1432,11 @@ class ExoApp(App):
         lines += ["copy: drag to select, then ctrl+c; or /copy, /copy error, /copy all",
                   "      (Terminal.app has no OSC 52, so exo also uses pbcopy; iTerm2: hold Option to select natively)",
                   "keys: @path adds a file   !cmd runs a shell command   ctrl+p palette",
-                  "      ctrl+o tool output   ctrl+y accept  ctrl+e edit  ctrl+r reject"]
+                  "      ctrl+o tool output   ctrl+y accept  ctrl+e edit  ctrl+r reject",
+                  "      ctrl+c stops a running turn (idle: quit hint; with a selection: copy)",
+                  "      ctrl+f focuses the approval card   ctrl+g opens/closes the big composer",
+                  "      Up in an empty composer pulls a queued steer back to edit; at the first line it recalls history",
+                  "      F6 loads earlier transcript messages"]
         return "\n".join(lines)
 
     async def restart(self) -> None:
@@ -1342,6 +1465,8 @@ class ExoApp(App):
         saved = await self.post(s.ConfigSet(key="models.roles.main", value=routes))
         if saved.ok:
             self.note(f"default model: {ref} (saved to config.json, fallbacks kept)")
+            if self.intro_after_providers:
+                await self.intro_when_ready()
 
     # ------------------------------------------------------------ providers (D-034)
     def open_providers(self, initial: str = "", add: bool = False) -> None:
@@ -1353,6 +1478,7 @@ class ExoApp(App):
         self.composer.focus()
         if isinstance(result, tuple) and result[0] == "default":
             self.run_worker(self.pick_provider_default(result[1]), exit_on_error=False)
+            return
         if self.intro_after_providers:
             self.run_worker(self.intro_when_ready(), exit_on_error=False)
 
@@ -1375,18 +1501,26 @@ class ExoApp(App):
         self.push_screen(Palette(items, f"default model: {provider}"),
                          lambda v: v and self.run_worker(self.set_default(v), exit_on_error=False))
 
-    async def first_run_providers(self) -> bool | None:
-        """No provider ready: one note says where to start, and the providers panel opens. Returns False when
-        none is ready, True when one is, None when the check failed (silent, then treated as ready)."""
+    async def first_run_providers(self, show_setup: bool = True) -> bool:
+        """Check the running core's main route; credentials alone cannot start orientation."""
         try:
-            from exo import providers_setup
-            ready = await asyncio.to_thread(providers_setup.any_ready)
+            result = await self.client.call(s.CommandRun(name="providers"))
+            state = (result.get("output") or {}).get("main") or {}
         except Exception:
-            return None
-        if not ready:
+            self.note("Could not check the main model route. /providers checks setup; /intro retries orientation.", "warn")
+            return False
+        if not state.get("ready"):
             try:
-                self.note("No model provider is set up yet. Type /providers to add a key.")
-                self.open_providers()
+                needs = state.get("needs_model") or []
+                if not needs and not show_setup:
+                    return False
+                if len(needs) == 1:
+                    self.note(f"{needs[0]} is set up; choose a default model before /intro.")
+                    await self.pick_provider_default(needs[0])
+                else:
+                    self.note("No model provider is set up yet. Type /providers to add a key." if not needs
+                              else "Choose a default main model in /providers before /intro.")
+                    self.open_providers()
             except Exception:  # the app closed while the check ran
                 pass
             return False
@@ -1395,10 +1529,9 @@ class ExoApp(App):
     async def intro_when_ready(self) -> None:
         """The panel closed on a first run: send the waiting /intro once a provider works."""
         try:
-            from exo import providers_setup
-            ready = await asyncio.to_thread(providers_setup.any_ready)
+            ready = await self.first_run_providers(show_setup=False)
         except Exception:
-            ready = True
+            ready = False
         if ready:
             self.intro_after_providers = False
             await self.intro("first")
@@ -1445,6 +1578,7 @@ class ExoApp(App):
         resp = await self.post(s.ModelsSet(model=ref, session=self.session))
         if resp.ok:
             self.model = ref
+            self.window = self.capacities.get(ref, 0)
             self.refresh_status()
 
     # ------------------------------------------------------------ approvals
@@ -1457,7 +1591,10 @@ class ExoApp(App):
     def action_answer_card(self) -> None:
         """ctrl+f: put the focus on the approval card from anywhere; the draft in the composer stays as it is."""
         if self.card is not None and not self.modal_open():
-            self.card.focus()
+            if self.card.noting:
+                self.card.query_one("#deny-note").focus()
+            else:
+                self.card.focus()
 
     async def reconcile_approvals(self) -> None:
         """D-045: the core's list is the truth. A card whose request the core no longer holds (a missed
@@ -1483,11 +1620,12 @@ class ExoApp(App):
             self.close_card()
 
     def close_card(self) -> None:
+        restore = self.card is not None and (self.focused is self.card or self.card.has_focus_within)
         if self.card is not None:
             self.card.remove()
             self.card = None
         self.show_approval()
-        if self.card is None:
+        if restore:
             self.query_one(Composer).focus()
 
     def on_approval_card_answered(self, msg: ApprovalCard.Answered) -> None:
@@ -1559,6 +1697,13 @@ class ExoApp(App):
         if self.card is not None:  # the approval card stays right above the activity line (its own code mounts it so)
             left.move_child(self.card, before=self.query_one("#activity"))
         left.set_class(self.inverse, "inverse")
+        main = self.query_one("#main")  # the status strip goes with the input: top in inverse, bottom in classic
+        screen = main.screen  # the strip and #main are both children of the app's own screen
+        if self.inverse:
+            screen.move_child(self.strip, before=main)
+        else:
+            screen.move_child(self.strip, after=main)
+        self.strip.set_class(self.inverse, "inverse")
 
     def apply_layout(self, name: str, save: bool = True) -> None:
         if name not in LAYOUTS:

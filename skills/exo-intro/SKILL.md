@@ -50,19 +50,24 @@ with `[session] cwd` in its seat.toml), `/restart` reopens in a new terminal tab
 ## While the agent works
 - Type while it is running and your message steers it: it lands at the next tool round, and the agent
   changes course. Nothing is lost and you do not need to wait.
-- Press ctrl+c, or type `/stop`, to stop the turn. Esc never stops it: it only closes a menu, clears a tip or leaves a panel.
-- A message typed while a turn runs is a steer. Until it lands you can pull it back: press Up in an empty box or type `/unsteer`.
+- Press ctrl+c, or type `/stop`, to stop a running turn. With selected text ctrl+c copies it; while idle it shows the quit hint. Esc never stops a turn: it only closes a menu, clears a tip or leaves a panel.
+- A message typed while a turn runs is a steer. Until it lands you can pull it back: press Up in an empty box to return it to the composer for editing, or type `/unsteer`.
+- Press ctrl+f to focus a pending approval card so you can answer it without losing the composer draft. Press ctrl+g to open or close the big composer for a longer message.
 - `@path` attaches a file, `!command` runs a shell command through the agent, ctrl+p opens a palette of
   commands, ctrl+o expands tool output.
 - Typing `/` opens a menu of every command with its arguments; Tab completes. `/model `, `/resume ` and `@` list
-  models, threads and files. A mistyped command gets "did you mean". Up arrow recalls earlier lines, right arrow
-  takes the dim suggestion. `/tutorial off` also silences the one-line next-step suggestion.
+  models, threads and files. A mistyped command gets "did you mean". At the first line, Up recalls earlier
+  lines; in an empty composer it first pulls a queued steer back for editing. Right arrow takes the dim
+  suggestion. `/tutorial off` also silences the one-line next-step suggestion.
 - `ctrl+y`, `ctrl+e`, `ctrl+r` accept, edit or reject the last answer, which Exo learns from.
+- F6 loads earlier transcript messages when the older history is not mounted yet.
 
 ## The approval gate
 Tools have a risk: low, medium or high. Reading is low. Running commands, editing and anything that leaves
 the machine can be higher. When a tool needs your say, a panel appears with what it wants to do. Allow, deny,
-or allow always for that kind of action. A pending approval blocks only that tool call. Peers and other
+or allow always for that kind of action. Both clients use `o` once, `a` always and `d` deny; always needs a
+separate Enter or confirm button, including uppercase `A`. Cards never take focus: Tab, click or Ctrl+F moves
+to one, and typing in a message cannot approve it. A pending approval blocks only that tool call. Peers and other
 agents cannot approve for you.
 
 ## Models and fallback routing
@@ -113,7 +118,7 @@ smaller: a folder with a SKILL.md the agent loads when its description matches t
 
 ## Slash command index
 Every command `/help` lists, in one line each, so you can answer "what does /x do":
-- `/new`, `/sessions`, `/resume`, `/fork`, `/undo`, `/clear`, `/cwd`, `/restart`, `/exit`, `/quit`: threads
+- `/new`, `/sessions`, `/resume`, `/fork`, `/rename`, `/undo`, `/clear`, `/cwd`, `/restart`, `/exit`, `/quit`: threads
   and the window, above.
 - `/context`, `/compact`, `/usage`: memory and cost, above.
 - `/copy` puts the last answer on the clipboard; `/copy error` the last error; `/copy all` the transcript.
@@ -123,6 +128,7 @@ Every command `/help` lists, in one line each, so you can answer "what does /x d
 - `/providers` sets up a model key: add or replace it (typed in a hidden field), test it, remove it, pick the default.
 - `/panel` reopens the last panel (an approval or a choice the agent showed you).
 - `/peers`, `/send`: peers, above.
+- `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>`: watch, steer and stop a subagent that is working for you.
 - `/trace`, `/findings`: trace and findings, above.
 - `/handoff [path]` has the agent write a structured handoff note (goal, state, done, next, blockers,
   paths) to `$EXO_HOME/handoffs/<seat>-<date>.md` (or `$EXO_HANDOFF_DIR`, or `handoff_dir` in `config.json`), or to the path you give. It uses the exo-handoff skill and the

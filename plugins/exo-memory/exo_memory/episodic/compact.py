@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .tree import NODE_BYTES, SummaryTree
-from .view import UNBUILT_PLACEHOLDER, View
+from .view import View
 
 logger = logging.getLogger(__name__)
 

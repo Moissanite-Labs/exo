@@ -3,6 +3,7 @@
 import asyncio
 
 from exo.core.engine import CoreEngine
+from exo.scheduler import Scheduler
 from exo.core.plugins import Manifest, PluginManager
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher
@@ -15,9 +16,10 @@ MODELS = {"fake": {"rules": [{"match": "panel", "steps": [{"tool": "ui", "args":
 
 def _eng(tmp_path, register=None):
     pm = PluginManager()
+    pm.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
     if register:
         pm._run_register(Manifest(name="t"), "dir", register)
-    return CoreEngine(tmp_path / "home", MODELS, plugins=pm, cwd=str(tmp_path), env={})
+    return CoreEngine(tmp_path / "home", MODELS, plugins=pm, cwd=str(tmp_path), env={}, attach_scheduler=Scheduler)
 
 
 async def _turn(d, eng, text, sid=None):

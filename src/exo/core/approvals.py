@@ -1,5 +1,7 @@
-"""Signed approval answers from seats (D-033).
+"""Open approval requests (``ApprovalDesk``) and signed approval answers from seats (D-033).
 
+``ApprovalDesk`` holds the engine's open requests: it publishes ``approval.requested``, waits for
+``approval.respond``, checks who may answer (D-033, D-039) and closes each card once (D-045).
 A client that answers ``approval.respond`` as ``seat:<name>`` must sign the answer with that seat's
 Ed25519 key. The signature covers the request id, the decision, the request's binding hash and the
 seat name, so it cannot be replayed on another request, another decision or another text.
@@ -10,12 +12,19 @@ The public key comes from the bus registry (``$EXO_HOME/bus/registry.json`` or
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Callable, Mapping
 
 from exo import crypto
+from exo.gate import approver_allowed, approver_identity
+from exo.principal import current_caller, is_principal, principal_as
+from exo.protocol import schema as s
+from exo.server.engine import CommandFailed
 
 KIND = "exo.approval.v1"
 
@@ -62,3 +71,101 @@ def verify_approval(sig: str, request_id: str, decision: str, binding: str, seat
         return False
     data = approval_payload(request_id, decision, binding, seat)
     return any(crypto.verify(data, sig, pub) for pub in seat_pubkeys(seat, env))
+
+
+@dataclass
+class Pending:
+    """One open request: the future its asker waits on, its session, what was shown, and who answered."""
+    future: asyncio.Future
+    session: str | None
+    request: s.ApprovalRequested
+    decider: str = "unknown"
+
+
+class ApprovalDesk:
+    """The engine's open approval requests. ``publish(body, session)`` sends through the engine's current hub;
+    ``waited(session, ms)`` adds approval wait time to the turn summary. ``always`` holds standing grants."""
+
+    def __init__(self, publish: Callable[[Any, str | None], Any], waited: Callable[[str, int], None]) -> None:
+        self.publish, self.waited = publish, waited
+        self.open: dict[str, Pending] = {}
+        self.always: set[str] = set()
+        self._announced: set[str] = set()  # ids whose ApprovalResolved went out (D-045)
+
+    async def ask(self, session: str | None, summary: str, call: Any = None, risk: str = "medium",
+                  decided_by: list[str] | None = None, options: list[str] | None = None,
+                  opened: list[str] | None = None, approvers: list[str] | None = None, binding: str = "") -> str:
+        """Publish an approval request and wait for ``approval.respond``.
+
+        ``decided_by`` (optional out list) receives the id of the client that answered. ``approvers`` limits who
+        may answer (``principal``, ``seat:<name>``; empty = any local client that is not a peer). ``binding`` is the
+        hash of the exact outbound text; an answer that names a different hash is refused (D-033)."""
+        rid, t0 = s.new_id("a"), time.monotonic()
+        req = s.ApprovalRequested(request_id=rid, summary=summary, risk=risk, call=call, approvers=list(approvers or []),
+                                  binding=binding)
+        if options:
+            req.options = list(options)
+        self.open[rid] = pending = Pending(asyncio.get_running_loop().create_future(), session, req)
+        if opened is not None:
+            opened.append(rid)
+        self.publish(req, session)
+        answered = False
+        try:
+            decision = await pending.future
+            answered = True
+            if decided_by is not None:
+                decided_by.append(pending.decider)
+            return decision
+        finally:
+            if not answered:  # the turn was stopped or the ask cancelled: close the card in every client (D-045)
+                self.announce_resolved(rid, "cancelled", "core", session)
+            if session:  # the turn summary reports this apart from tool time
+                self.waited(session, int((time.monotonic() - t0) * 1000))
+            self._announced.discard(rid)
+            self.open.pop(rid, None)
+
+    def announce_resolved(self, rid: str, decision: str, by: str, session: str | None) -> None:
+        """Tell every client an approval is closed, once per request."""
+        if rid not in self._announced:
+            self._announced.add(rid)
+            self.publish(s.ApprovalResolved(request_id=rid, decision=decision, by=by), session)
+
+    def listing(self, session: str | None = None) -> list[dict[str, Any]]:
+        """What ``approvals.list`` shows: requests still waiting, optionally of one session."""
+        from exo.core.types import to_dict
+        return [{**to_dict(p.request), "session": p.session} for p in self.open.values()
+                if not p.future.done() and not (session and p.session != session)]
+
+    def respond(self, b: s.ApprovalRespond) -> None:
+        """D-039: who answered comes from the connection, never from the body. A principal connection answers as
+        the principal (``client`` is only a display label). Any other connection answers only as a seat, with a
+        D-033 signature, and never with ``allow_always``."""
+        if (b.client or "").lower().startswith(("peer", "ingress")):  # D-026: input from outside is never consent
+            raise CommandFailed("forbidden", "a peer cannot answer an approval")
+        pending = self.open.get(b.request_id)
+        if pending is None or pending.future.done():
+            raise CommandFailed("not_found", f"no open approval {b.request_id}")
+        approvers, binding = pending.request.approvers, pending.request.binding
+        caller = current_caller()
+        if is_principal(caller):
+            ident = by = principal_as(caller.partition(":")[2] or b.client)
+        elif (b.client or "").strip().lower().startswith("seat:"):
+            ident = by = approver_identity(b.client)
+        else:
+            raise CommandFailed("forbidden", "this connection cannot answer approvals: answer in the Exo window or "
+                                             "the web page, or sign as a seat")
+        if not approver_allowed(ident, approvers):  # D-033: who may answer, by category
+            raise CommandFailed("forbidden", f"{approver_identity(ident)} may not answer this approval; "
+                                             f"it needs {' or '.join(approvers)}")
+        if b.binding and binding and b.binding != binding:
+            raise CommandFailed("stale", "the text changed after it was shown; read the new request and answer that")
+        if not is_principal(caller):  # D-033: a seat signs its answer; a seat never gives a standing grant
+            if not verify_approval(b.sig, b.request_id, b.decision, binding, ident[5:]):
+                raise CommandFailed("forbidden", f"{ident} must sign its answer with its seat key "
+                                                 "(request id, decision, binding)")
+            if b.decision == "allow_always":
+                raise CommandFailed("forbidden", "only the principal can give a standing grant; "
+                                                 "a seat approves one exact text with allow")
+        pending.decider = by
+        pending.future.set_result(b.decision)
+        self.announce_resolved(b.request_id, b.decision, by, pending.session)

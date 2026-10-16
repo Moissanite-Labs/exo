@@ -58,7 +58,7 @@ def repo(tmp_path):
 def test_commands_route_lists_what_the_composer_runs():
     code, d = dispatch(Src(), "/api/complete/commands")
     names = [c["name"] for c in d["commands"]]
-    assert code == 200 and names == ["context", "findings", "trace", "new", "layout"]
+    assert code == 200 and names == ["context", "findings", "trace", "new", "rename", "layout"]
     trace = next(c for c in d["commands"] if c["name"] == "trace")
     assert trace["args"] == "[last N turns]" and [x["value"] for x in trace["choices"]] == ["5", "10", "25"]
     assert d["guidance"] is True
@@ -84,6 +84,25 @@ def test_files_route_is_cwd_bounded_and_needs_a_session(repo):
         assert dispatch(Src(str(repo)), "/api/complete/files", {"session": ["s1"], "q": [q]})[1]["files"] == []
     assert dispatch(Src(str(repo)), "/api/complete/files", {"q": [""]})[1]["files"] == []
     assert dispatch(Src(str(repo)), "/api/complete/files", {"session": ["nope"], "q": [""]})[1]["files"] == []
+
+
+def test_explicit_required_source_does_not_reuse_ordinary_file_index(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from exo_command.source import DispatcherSource
+    monkeypatch.delenv('EXO_TOOL_EXECUTOR_REQUIRED', raising=False)
+    (tmp_path / 'safe.txt').write_text('safe')
+    ordinary = Src(str(tmp_path))
+    ordinary.executor_required = False
+    api._INDEXES.clear()
+    query = {'session': ['s1'], 'q': ['']}
+    dispatch(ordinary, '/api/complete/files', query)
+    required = DispatcherSource(SimpleNamespace(engine=SimpleNamespace(executor_required=True)))
+    required.call = ordinary.call
+    def no_git(*args, **kw): raise AssertionError('completion executed host Git')
+    monkeypatch.setattr(api.cm.subprocess, 'run', no_git)
+    code, result = dispatch(required, '/api/complete/files', query)
+    assert code == 200 and [f['value'] for f in result['files']] == ['@safe.txt']
+    assert (str(tmp_path), True) in api._INDEXES
 
 
 def test_files_route_is_read_only(repo):
@@ -226,11 +245,9 @@ console.log(JSON.stringify({out, lines}));''')
 
 
 def test_escape_never_stops_a_turn_in_the_page():
-    """D-043: the only Escape handler closes the completion menu; Stop is a button."""
-    from pathlib import Path
-
+    """D-043: Escape closes/cancels local UI, never interrupts a turn. DOM stopPropagation is harmless."""
     static = Path(__file__).resolve().parents[1] / "exo_command" / "static"
     for js in static.glob("*.js"):
         for line in js.read_text(encoding="utf-8").splitlines():
             if "Escape" in line:
-                assert "interrupt" not in line and "stop" not in line.lower(), (js.name, line)
+                assert not re.search(r"\b(?:interrupt|stopTurn)\s*\(|/interrupt", line), (js.name, line)
