@@ -408,7 +408,7 @@ raise SystemExit(main(["serve", "--stdio"]))
 def _tiered_route(**overrides):
     route = {'contract': 'text-tokens-v1', 'transport': 'anthropic', 'base_url': 'https://api.anthropic.com',
              'model': 'claude-haiku-5-5', 'input_bound': 1_000_000, 'max_output': 128_000,
-             'input': '0.50', 'output': '2.50', 'cache_read': '0.05', 'cache_write': '0.60'}
+             'input': '0.50', 'output': '2.50', 'cache_read': '0.05', 'cache_write': '0.625'}
     route.update(overrides)
     return route
 
@@ -419,6 +419,15 @@ def test_policy_refuses_pin_below_audited_tier(protected):
     for field, low in (('input', '0.10'), ('output', '0.50')):
         bad = dict(cfg, routes={'anthropic:claude-haiku-5-5': _tiered_route(**{field: low})})
         with pytest.raises(ValueError, match='tier'):
+            validate_policy(bad)
+
+
+def test_policy_refuses_cache_pin_below_audited_tier(protected):
+    from exo.model_spend import validate_policy
+    cfg, _ = protected
+    for field, low in (('cache_read', '0.01'), ('cache_write', '0.60'), ('cache_write', '0.125')):
+        bad = dict(cfg, routes={'anthropic:claude-haiku-5-5': _tiered_route(**{field: low})})
+        with pytest.raises(ValueError, match=f'{field} rate below audited tier'):
             validate_policy(bad)
 
 

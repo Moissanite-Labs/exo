@@ -74,9 +74,11 @@ that reasoning is included in output tokens and that
 these four token rates bound **all** charges for this text-only request, including
 long-context premiums, cache writes and any relay markup. When a price tier varies,
 pin the worst-case rate: for routes with an audited tier in `NATIVE_TIERS`
-(currently `claude-haiku-5-5`, which bills $0.50/$2.50 per MTok input/output above
-100K prompt tokens), code refuses a pin below the audited worst-case tier, both at
-policy validation time and at request admission. A low input estimate is not a valid `input_bound`: code refuses a value below the
+(currently `claude-haiku-5-5`, which bills $0.50/$2.50 per MTok input/output,
+$0.05 cache read and $0.625 5-minute cache write above 100K prompt tokens, cache
+tokens included in the count), code refuses a pin below the audited worst-case
+tier in any of the four classes, both at policy validation time and at request
+admission. A low input estimate is not a valid `input_bound`: code refuses a value below the
 checked-in full native context ceiling, including wrappers and tool schemas.
 Unknown contracts must remain absent. There is no automatic catalog-price or
 "probably free" exemption. Endpoint, wire model, transport and price snapshot
@@ -118,7 +120,9 @@ Protocol references checked during implementation:
 [Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create),
 [Anthropic cache token accounting](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
 [OpenAI maximum completion tokens](https://platform.openai.com/docs/api-reference/chat/create).
-No price is obtained from these documents or guessed by the mechanism.
+No price is obtained from these documents or guessed by the mechanism. The audited
+tier floors in `NATIVE_TIERS` are validation floors only, never charge rates: they
+refuse a pin that is too low, and every charge still uses the pinned rates.
 
 The single offline exemption is the exact installed `RuleFake` class. The boundary
 calls its class implementation, including its built-in rule selection, rather than
@@ -262,7 +266,8 @@ already discarded by another JSON parser. `resolve_spend_policy` additionally
 checks the root-controlled path and freezes the selected policy.
 
 The small `exo.core.models.spend.admitted_stream` adapter binds those APIs to exact
-installed provider types, reserves before dispatch and settles before exposing a
+installed provider types, checks the pinned contract against the native inventory
+and tier floors (`admit_native`), reserves before dispatch and settles before exposing a
 completed model result. `spend_refused` attempt outcomes become the protocol error
 code `model_spend_refused`. Retained uncertainty or an existing journal stop uses
 `spend_stopped` and `model_spend_stopped`. Both are nonretryable for that request.

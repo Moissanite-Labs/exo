@@ -27,6 +27,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Model spend (#128): a pinned route rate below the audited long-prompt tier is refused, at policy validation and
+  at request admission, in all four classes (input, output, cache read, cache write). `claude-haiku-5-5` bills
+  $0.50/$2.50 input/output, $0.05 cache read and $0.625 5-minute cache write per MTok above 100K prompt tokens,
+  so a headline pin under-reserved and under-settled long prompts, cache-heavy ones most. The floors are
+  validation floors only; every charge still uses the pinned rates. The native-contract admission checks now
+  live in `exo.model_spend.admit_native`.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

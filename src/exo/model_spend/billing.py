@@ -32,10 +32,13 @@ NATIVE_BOUNDS = MappingProxyType({
     ("anthropic", "https://api.anthropic.com", "claude-haiku-5-5"): (1_000_000, 128_000),
 })
 
-# Audited 2026-10-14. Tiered long-prompt pricing for native routes, keyed like
+# Audited 2026-10-14, re-checked 2026-10-16, native endpoints only.
+# https://platform.claude.com/docs/en/about-claude/pricing ("Model pricing", "Long context pricing")
+# Tiered long-prompt pricing for native routes, keyed like
 # NATIVE_BOUNDS. Value: (prompt-token threshold, worst-case tier rates).
 # Worst-case rates are nano-USD per million tokens, (input, output, cache_read,
 # cache_write); a class set to None has no audited tier and is not checked.
+# These are validation floors only, never charge rates: charge() uses the pin.
 # The pin must cover the worst case because input_bound admits prompts above the
 # threshold, so maximum() and charge() would otherwise under-price them.
 # Routes with a single documented tier have no entry.
@@ -44,9 +47,13 @@ NATIVE_BOUNDS = MappingProxyType({
 # its own) and $0.50/$2.50 above it. Opus 5.5 and Sonnet 5.5 bill their full 1M
 # context window at flat standard rates; gpt-4.1-2025-04-14 has a single tier in
 # the audited snapshot.
+# Above the threshold cache reads bill $0.05 and cache writes $0.625 (5-minute
+# TTL) or $1.00 (1-hour TTL). The cache_write floor is the 5-minute rate because
+# the Anthropic adapter only sends the default ephemeral cache_control; sending a
+# 1-hour TTL would need the floor raised to 1_000_000_000.
 NATIVE_TIERS = MappingProxyType({
     ("anthropic", "https://api.anthropic.com", "claude-haiku-5-5"):
-        (100_000, (500_000_000, 2_500_000_000, None, None)),
+        (100_000, (500_000_000, 2_500_000_000, 50_000_000, 625_000_000)),
 })
 
 
@@ -132,3 +139,20 @@ def check_tier_rates(price: Price) -> None:
     for name, pinned, floor in zip(_TIER_CLASS_NAMES, price.rates, worst):
         if floor is not None and pinned < floor:
             raise ValueError(f"pinned {name} rate below audited tier rate for {price.model}")
+
+
+def admit_native(price: Price) -> None:
+    """Refuse a pin outside the audited native contract; raises SpendDenied.
+
+    The route must have a checked-in native ceiling, reserve its full context,
+    obey its output ceiling and pin no class below the audited worst-case tier.
+    """
+    bounds = NATIVE_BOUNDS.get((price.transport, price.base_url, price.model))
+    if bounds is None:
+        raise SpendDenied("model/endpoint lacks an audited native token ceiling")
+    if price.input_bound < bounds[0] or price.max_output > bounds[1]:
+        raise SpendDenied("policy must reserve the full native context and obey its output ceiling")
+    try:
+        check_tier_rates(price)
+    except ValueError as exc:
+        raise SpendDenied(str(exc)) from exc
