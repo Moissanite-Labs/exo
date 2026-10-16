@@ -4,7 +4,7 @@ This provides an opt-in portable transport around `WitnessJournal`. No witness e
 
 This change restores `exo.ledger_authority.witness` and its state tests from the earlier authority draft, with key-separation checks now comparing decoded public-key bytes. The transport carries that durable-state dependency, adds fresh challenge verification and handles request-level database failures. Core startup enables no endpoint or receipt-delivery worker.
 
-Witness modules remain outside the counted core boundary, whose existing 15,000-line ceiling is unchanged.
+Witness modules remain outside the counted core boundary and do not count against the core line budget (`docs/ENGINE-SPLIT.md` "Budget policy").
 
 A witness certifies a durable checkpoint prefix. It does not see event contents, prove honest consent, prevent an authority from inventing future events, or prove an action occurred. A saved receipt proves only the prefix it names. Only a newly generated challenge and its verified response provide a fresh observation of the independent witness's head. Even that observation can become outdated after the response.
 
