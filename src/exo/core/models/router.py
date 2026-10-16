@@ -119,8 +119,8 @@ def cooldown_until(now: float, status: int | None, strikes: int, reset_at: float
 class Router:
     """Resolves roles to routes and streams with fallback.
 
-    ``roles`` and ``providers`` override the catalog tables. ``instances`` maps a
-    provider name to a ready Provider object (tests, plugins, the fake provider).
+    ``roles`` override the catalog roles; each ``providers`` table merges key by key over the catalog entry of
+    its name. ``instances`` maps a provider name to a ready Provider object (tests, plugins, the fake provider).
     """
 
     def __init__(self, roles: Mapping[str, list[str]] | None = None, providers: Mapping[str, dict] | None = None,
@@ -137,7 +137,12 @@ class Router:
         self.spend = spend if spend is not None else configured(selection.config, required=selection.required)
         self._spend_required, self._spend_source = selection.required, selection.source
         cat = load_catalog() if catalog is None else catalog
-        self.providers: dict[str, dict] = {**cat.get("providers", {}), **(providers or {})}
+        self.providers: dict[str, dict] = dict(cat.get("providers", {}))
+        for name, spec in (providers or {}).items():  # a partial table keeps the catalog transport, key and roles
+            base = self.providers.get(name, {})
+            if isinstance(spec, dict) and "base_url" in spec:  # a table that sets base_url uses only its own key_env
+                base = {k: v for k, v in base.items() if k != "key_env"}
+            self.providers[name] = {**base, **spec} if isinstance(spec, dict) else spec
         self.models: dict[str, dict] = dict(cat.get("models", {}))
         self.roles: dict[str, list[str]] = {**cat.get("roles", {}), **(roles or {})}
         self.instances = dict(instances or {})
@@ -269,7 +274,7 @@ class Router:
             exe = shutil.which(spec.get("command", cls.default_command), path=self.env.get("PATH", ""))
             if exe:
                 creds = [Credential(provider, None, cls(exe, name=provider, env=self.env, **timeout))]
-        elif spec is not None:
+        elif spec is not None and spec.get("base_url"):  # no base_url: no credential, the route is skipped
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)

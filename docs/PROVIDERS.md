@@ -226,10 +226,18 @@ Weights download from Hugging Face on first use: about 0.65 GB (`laya-multilingu
 so Apple silicon uses MPS. Model ids: `laya`, `laya-multilingual`, `laya-typed-decisions`. Base Laya is weak
 zero-shot and over-confident (research/DECISION-MODELS.md); do not gate on its raw numbers. It was not
 installed or downloaded here because torch plus weights is over 2 GB. If port 8000 clashes with vLLM,
-set `LAYA_PORT` and override `base_url` under `[models.providers.laya]`.
+set `LAYA_PORT` and override only `base_url` under `[models.providers.laya]`.
 
 Add or change a provider in config under `[models.providers.NAME]` with `transport`, `base_url`,
-`key_env`.
+`key_env`. A table for a catalog provider merges over the catalog entry key by key: the keys you set win and
+the rest stay. So `base_url` alone keeps Laya's `decision` transport, `local` flag and decision-only `roles`,
+and `read_timeout` alone keeps Anthropic's URL and key. A table that sets `base_url` uses only the `key_env`
+it sets, never the catalog's. With only `base_url = "http://127.0.0.1:1234/v1"` under
+`[models.providers.openai]` (a LAN vLLM or LM Studio behind the `openai` name), the endpoint is keyless and no
+OpenAI key is ever sent to it. To send a key along with your `base_url`, set `key_env` in the same table: the
+catalog's variable or one of your own. A new provider needs a `base_url` (a CLI transport needs none). Without
+one it gets no credential, its routes are skipped and the providers list shows it as `no base_url`, even when
+its key is found.
 
 ## Roles
 

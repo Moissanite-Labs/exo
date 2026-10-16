@@ -138,15 +138,15 @@ when it is not zero.
 ## Providers (D-034)
 
 The Providers tab (`providers.js`) shows where keys are stored, one row per provider with a status chip
-(verified with latency, key found, no key, failed with the error class, local running, cli installed), the
-source of the key (never a value), the model count and a default mark. A provider that needs a key has a
-password field with Save, Test and Remove. After Save the field is cleared at once, also on error; the key is
-read once to build the request body and is never logged, shown again, put in a URL or kept in browser storage.
-A select lists the configured routes, then the available ones, with Save default. The routes need the page
-token: `exo web` prints a link with `#token=...`; the page moves it to `sessionStorage` (this tab only),
-removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider routes also
-need a loopback peer). Without a token the tab only asks you to open that link. When no provider is ready, the Chat view shows one quiet line with a
-link to this tab.
+(verified with latency, key found, no key, no base_url, failed with the error class, local running, cli
+installed), the source of the key (never a value), the model count and a default mark. A provider that needs a
+key has a password field with Save, Test and Remove. After Save the field is cleared at once, also on error;
+the key is read once to build the request body and is never logged, shown again, put in a URL or kept in
+browser storage. A select lists the configured routes, then the available ones, with Save default. The routes
+need the page token: `exo web` prints a link with `#token=...`; the page moves it to `sessionStorage` (this
+tab only), removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider
+routes also need a loopback peer). Without a token the tab only asks you to open that link. When no provider
+is ready, the Chat view shows one quiet line with a link to this tab.
 
 ## Sub-pages (D-061)
 
