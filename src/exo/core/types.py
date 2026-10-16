@@ -203,6 +203,7 @@ def to_dict(obj: Any) -> Any:
 
 
 _HINTS: dict[type, dict[str, Any]] = {}
+_PRIMITIVES: dict[Any, tuple[type, ...]] = {int: (int,), float: (int, float), str: (str,), bool: (bool,)}
 
 
 def _hints(cls: type) -> dict[str, Any]:
@@ -229,13 +230,17 @@ def _decode(tp: Any, value: Any, strict: bool) -> Any:
         return [_decode(arg, v, strict) for v in value]
     if isinstance(tp, type) and dataclasses.is_dataclass(tp):
         return from_dict(tp, value, strict=strict)
+    if strict and tp in _PRIMITIVES and (not isinstance(value, _PRIMITIVES[tp]) or
+                                         (isinstance(value, bool) and tp is not bool)):
+        raise ValueError(f"expected {tp.__name__}, got {type(value).__name__}")
     return value
 
 
 def from_dict(cls: type, data: Any, strict: bool = True) -> Any:
     """Build dataclass ``cls`` from plain data. Nested types are decoded.
 
-    strict=True rejects unknown fields; strict=False drops them (forward compat).
+    strict=True rejects unknown fields and wrong-typed int, float, str and bool fields (a bool is not an int;
+    an int is a float); strict=False drops unknown fields and takes primitives as they come (forward compat).
     Missing fields fall back to defaults; missing required fields raise.
     """
     if not isinstance(data, dict):
