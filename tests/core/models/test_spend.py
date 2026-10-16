@@ -20,9 +20,9 @@ from .conftest import collect
 @pytest.fixture(autouse=True)
 def synthetic_native_contract(monkeypatch):
     # This fake-price model exists only in test code. Production config cannot add native bounds.
-    from exo.core.models import spend
-    monkeypatch.setattr(spend, 'NATIVE_BOUNDS', {
-        **spend.NATIVE_BOUNDS,
+    from exo.model_spend import billing
+    monkeypatch.setattr(billing, 'NATIVE_BOUNDS', {
+        **billing.NATIVE_BOUNDS,
         ('openai', 'https://api.openai.com/v1', 'm'): (1000, 1000),
         ('anthropic', 'https://api.anthropic.com', 'claude-opus-5-5'): (8000, 128000),
     })
@@ -538,7 +538,7 @@ def test_native_context_cannot_be_underreserved_or_expanded(tmp_path, case):
     if case == 'session_header': r.providers['test']['session_header'] = 'custom-header'
     event = call(r)[-1]
     assert event.kind == 'error' and not seen and not rows(cfg)
-    if case == 'input': assert 'full native context' in event.error
+    if case in ('input', 'output'): assert 'full native context and obey its output ceiling' in event.error
 
 
 def test_required_decision_missing_policy_is_a_hard_gate_refusal(monkeypatch):
@@ -580,13 +580,85 @@ def test_long_prompt_settles_below_tier_price_without_refusal():
         check_tier_rates(headline)
 
 
+def tiered_route(**overrides):
+    # Pinned at the audited long-prompt tier of the default aux/fast route (NATIVE_TIERS).
+    route = dict(contract='text-tokens-v1', transport='anthropic', base_url='https://api.anthropic.com',
+                 model='claude-haiku-5-5', input_bound=1_000_000, max_output=128_000,
+                 input='0.50', output='2.50', cache_read='0.05', cache_write='0.625')
+    route.update(overrides)
+    return route
+
+
+def tiered_router(cfg, handler):
+    return Router.from_config({'spend': cfg, 'roles': {'main': ['test:claude-haiku-5-5']},
+        'providers': {'test': {'transport': 'anthropic', 'base_url': 'https://api.anthropic.com'}}},
+        catalog={}, env={}, client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+
+
+def anthropic_sse(fresh, cache_write, output, cache_read=0):
+    usage = {'input_tokens': fresh, 'cache_creation_input_tokens': cache_write,
+             'cache_read_input_tokens': cache_read, 'output_tokens': 1}
+    events = [{'type': 'message_start', 'message': {'id': 'msg_01', 'type': 'message', 'role': 'assistant',
+               'model': 'claude-haiku-5-5', 'content': [], 'stop_reason': None, 'usage': usage}},
+              {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}},
+              {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'hi'}},
+              {'type': 'content_block_stop', 'index': 0},
+              {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None},
+               'usage': {'output_tokens': output}},
+              {'type': 'message_stop'}]
+    return ''.join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
+
+
 def test_tier_compliant_pin_keeps_flat_accounting():
     from exo.model_spend.billing import Price, check_tier_rates
-    pinned = Price.parse({'contract': 'text-tokens-v1', 'transport': 'anthropic',
-                          'base_url': 'https://api.anthropic.com', 'model': 'claude-haiku-5-5',
-                          'input_bound': 1_000_000, 'max_output': 128_000,
-                          'input': '0.50', 'output': '2.50',
-                          'cache_read': '0.05', 'cache_write': '0.60'})
+    pinned = Price.parse(tiered_route())
     check_tier_rates(pinned)
-    assert pinned.maximum(100) == 600_250_000
+    assert pinned.maximum(100) == 625_250_000
     assert pinned.charge((10_000, 100, 0, 0)) == 5_250_000
+
+
+@pytest.mark.parametrize('field, low', [('cache_read', '0.01'), ('cache_write', '0.60')])
+def test_admission_refuses_cache_pin_below_audited_tier(tmp_path, field, low):
+    cfg = policy(tmp_path)
+    cfg['daily_usd'] = cfg['monthly_usd'] = 1
+    cfg['routes'] = {'test:claude-haiku-5-5': tiered_route(**{field: low})}
+    seen = []
+    r = tiered_router(cfg, lambda req: seen.append(req) or httpx.Response(200, content=anthropic_sse(10, 0, 1)))
+    event = call(r)[-1]
+    assert event.kind == 'error' and not event.retryable and field in event.error and 'tier' in event.error
+    assert event.attempts == [{'route': 'test:claude-haiku-5-5', 'outcome': 'spend_refused'}]
+    assert not seen and not rows(cfg) and SpendJournal(cfg).status()['state'] == 'ready'  # no freeze
+
+
+def test_admission_refuses_the_under_settling_cache_pin(tmp_path):
+    # A long prompt on the tiered route: 10K fresh, 890K cache-write and 1K output tokens, pinned at the long-prompt
+    # input/output rates and the cache-read rate, but the headline cache-write rate. It would settle about 4.7x under
+    # the provider bill, which also exceeds a 1K-output reservation; the cache-write floor is what refuses it.
+    from exo.model_spend.billing import Price
+    pin = tiered_route(cache_read='0.05', cache_write='0.125')
+    counts = (10_000, 1_000, 0, 890_000)
+    audited = (500_000_000, 2_500_000_000, 50_000_000, 625_000_000)  # the provider's rates above 100K
+    bill = sum(n * rate for n, rate in zip(counts, audited)) // 1_000_000
+    assert Price.parse(pin).charge(counts) == 118_750_000 < Price.parse(pin).maximum(1_000) == 502_500_000
+    assert bill == 563_750_000
+    cfg = policy(tmp_path)
+    cfg['daily_usd'] = cfg['monthly_usd'] = 1
+    cfg['routes'] = {'test:claude-haiku-5-5': pin}
+    seen = []
+    r = tiered_router(cfg, lambda req: seen.append(req) or httpx.Response(200, content=anthropic_sse(10_000, 890_000, 1_000)))
+    event = call(r)[-1]
+    assert event.kind == 'error' and 'cache_write' in event.error
+    assert event.attempts == [{'route': 'test:claude-haiku-5-5', 'outcome': 'spend_refused'}]
+    assert not seen and not rows(cfg)
+
+
+def test_tier_compliant_pin_covers_cache_heavy_long_prompt(tmp_path):
+    cfg = policy(tmp_path)
+    cfg['daily_usd'] = cfg['monthly_usd'] = 1
+    cfg['routes'] = {'test:claude-haiku-5-5': tiered_route()}
+    r = tiered_router(cfg, lambda req: httpx.Response(200, content=anthropic_sse(10_000, 890_000, 1_000)))
+    event = call(r)[-1]
+    assert event.kind == 'done' and event.usage.cost_usd == 0.56375
+    reserved, actual = rows(cfg)[0]
+    assert actual == 563_750_000  # the audited-tier bill for this prompt
+    assert reserved == 945_000_000 >= actual  # full context at the cache_write floor plus the output ceiling
