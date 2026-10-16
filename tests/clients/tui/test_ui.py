@@ -121,6 +121,34 @@ def test_model_call_drives_served_model_and_cache_share(tmp_path):
     run(tmp_path, sc)
 
 
+
+def test_context_gauge_and_cache_share_count_the_prompt_once(tmp_path):
+    """D-080: an OpenAI-chat call over a 92,012-token prompt with 90,000 of it cached shows 92,012 tokens of
+    context and a 98% cache share (it read 182,012 and 49% when input_tokens still held the cached tokens).
+    Cache writes are part of the prompt but were not served from the cache."""
+    import json
+
+    import httpx
+    from exo.core.models.openai_chat import OpenAIChatProvider
+
+    sse = "".join(f"data: {json.dumps(c)}\n\n" for c in [
+        {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 92_012, "completion_tokens": 300,
+                                  "prompt_tokens_details": {"cached_tokens": 90_000}}}]) + "data: [DONE]\n\n"
+
+    async def sc(app, pilot, client, eng):
+        http = httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, text=sse)))
+        prov = OpenAIChatProvider("https://api.openai.com/v1", "k", client=http)
+        u = [ev async for ev in prov.stream([s.Message.user("hi")], [], model="m")][-1].usage
+        for usage in (u, s.Usage(input_tokens=12, cache_read_tokens=80_000, cache_write_tokens=12_000)):
+            app.ctx_tokens, app.cache_share = 0, None
+            eng.hub.publish(s.ModelCall(requested="fake:x", route="fake:x", usage=usage), app.session)
+            eng.hub.publish(s.UsageUpdated(usage=usage, session_total=usage, model="fake:x"), app.session)
+            await until(lambda: app.ctx_tokens and app.cache_share is not None, pilot)
+            assert app.ctx_tokens == 92_012 and app.cache_share == pytest.approx(usage.cache_read_tokens / 92_012)
+
+    run(tmp_path, sc)
+
 def test_brand_bar_live_dot_and_names(tmp_path):
     async def sc(app, pilot, client, eng):
         assert "E X O" in plain(app.brand.render()) and "exo-razi" not in plain(app.brand.render())

@@ -18,8 +18,8 @@ from exo.core.types import Message, Usage
 
 def _usage_dict(u: Usage | None) -> dict[str, int]:
     u = u or Usage()
-    return {"prompt_tokens": u.input_tokens, "completion_tokens": u.output_tokens,
-            "total_tokens": u.input_tokens + u.output_tokens}
+    prompt = u.input_tokens + u.cache_read_tokens + u.cache_write_tokens  # OpenAI style: cached tokens included
+    return {"prompt_tokens": prompt, "completion_tokens": u.output_tokens, "total_tokens": prompt + u.output_tokens}
 
 
 class ContextAdapter:
