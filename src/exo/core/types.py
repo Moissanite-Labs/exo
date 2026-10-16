@@ -106,7 +106,8 @@ class Message:
 
 @dataclass
 class Usage:
-    """Token and cost accounting for one call (or a running total)."""
+    """Token and cost accounting for one call (or a running total). ``input_tokens`` is the uncached input on every
+    transport; cache reads and writes are counted apart, so the prompt is the sum of the three (D-080)."""
 
     input_tokens: int = 0
     output_tokens: int = 0

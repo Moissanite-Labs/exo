@@ -370,16 +370,15 @@ class Router:
     def route_ok(self, ref: str) -> None:
         self.breakers.pop(ref, None)
 
-    def price(self, route: Route, usage: Usage | None, input_includes_cache: bool = False) -> Usage | None:
+    def price(self, route: Route, usage: Usage | None) -> Usage | None:
         """Fill ``cost_usd`` from the catalog price of the route that served the call (USD per million tokens).
-        None stays None when the route has no price (never 0). ``input_includes_cache``: the provider counts cached
-        tokens inside ``input_tokens`` (OpenAI style), so they are charged at the cache-read rate only."""
+        None stays None when the route has no price (never 0). ``input_tokens`` is the uncached input on every
+        transport (D-080); cache reads and writes are charged at their own rates on top."""
         info = self.models.get(route.ref)
         if usage is None or usage.cost_usd is not None or not info or "input" not in info:
             return usage
         inp = info["input"]
-        fresh = usage.input_tokens - (usage.cache_read_tokens if input_includes_cache else 0)
-        cost = (max(fresh, 0) * inp + usage.output_tokens * info.get("output", 0)
+        cost = (max(usage.input_tokens, 0) * inp + usage.output_tokens * info.get("output", 0)
                 + usage.cache_read_tokens * info.get("cache_read", inp * 0.1)
                 + usage.cache_write_tokens * info.get("cache_write", inp * 1.25)) / 1e6
         return Usage(**{**vars(usage), "cost_usd": round(cost, 8)})
@@ -540,7 +539,7 @@ class Router:
             if ev.kind in ("text", "reasoning", "tool_call"):
                 started = True
             elif ev.kind in ("usage", "done"):
-                ev.usage = self.price(route, ev.usage, getattr(cred.provider, "input_includes_cache", False))
+                ev.usage = self.price(route, ev.usage)
                 ev.route = route.ref  # the route that served this call, after any fallback
                 if ev.kind == "done":
                     note("ok")

@@ -138,6 +138,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A shell command that prints fast no longer floods the event stream. Its output chunks went out as one
   `tool.output` (and one database write) each, and one command could queue thousands before any client read one.
   The chunks queued between two loop turns now go out as one event.
+- Token counts mean the same on every provider (D-080). `input_tokens` is now the uncached input on OpenAI-style
+  routes too, with cached tokens counted as cache reads, as Anthropic reports them. Before, the TUI context gauge
+  read about double on those routes and the cache share about half. Subagents there were stopped for `budget` after
+  a few calls with a large cached prompt, while on Anthropic the budget ignored cached context. The per-child budget
+  now counts uncached input, cache writes and output. Cache reads do not count. Context-engine plugins get the
+  whole prompt in `prompt_tokens`. Cost and model spend are unchanged.
 
 ## [0.2.0] (egg) - 2026-10-13
 

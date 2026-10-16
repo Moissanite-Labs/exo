@@ -15,7 +15,8 @@ additively (new optional fields with defaults). Ask the lead before changing any
   Assistant messages carry `tool_calls`; `tool` messages carry one or more `tool_results`; system prompts
   are `role="system"` messages. Helpers `Message.system/user/assistant/tool(...)`, `.text()`.
 - `Usage`: input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens (all 0),
-  cost_usd?. Supports `+`.
+  cost_usd?. Supports `+`. input_tokens is the uncached input on every transport. Cache reads and writes are
+  counted apart, so the prompt is the sum of the three (D-080).
 - `ToolSpec`: name, description, parameters: JSON Schema dict = empty object, risk `low/medium/high` =
   low, toolset = "core".
 - `ProviderEvent` (tagged by `kind`): kind `text/reasoning/tool_call/usage/done/error`, text = "",

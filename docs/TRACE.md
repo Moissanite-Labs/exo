@@ -28,10 +28,13 @@ you run on.
 ### Cost (D-032)
 Cost is an estimate in USD per call and per turn (subagent turns included). The router prices each call from
 the catalog entry of the route that served it (`input`, `output`, `cache_read`, `cache_write`, USD per million
-tokens; cache reads at the cache-read rate, and for OpenAI-style providers, whose `prompt_tokens` already count
-cached tokens, only the uncached part at the input rate), or uses the provider's own figure when it reports one
-(OpenRouter does). A route with no price shows `unknown`, never `$0`. A turn with some unpriced calls shows the
-sum of the priced ones with a `+` (`$0.0210+`). A call that used no tokens costs nothing and is not "unknown".
+tokens: uncached input at the input rate, cache reads and writes at their own rates, each token once), or uses the
+provider's own figure when it reports one (OpenRouter does). Tokens in are the uncached input on every provider
+(D-080). OpenAI-style `prompt_tokens` already count the cached tokens, so that transport splits them out into
+cache read, the way Anthropic reports them. The prompt a call sent is tokens in plus cache read and write. Calls
+recorded on those routes before D-080 keep the whole prompt in tokens in, and their cost as recorded. A
+route with no price shows `unknown`, never `$0`. A turn with some unpriced calls shows the sum of the priced ones
+with a `+` (`$0.0210+`). A call that used no tokens costs nothing and is not "unknown".
 Add or override a price in config.json under `models.models`, for example
 `{"models": {"models": {"opencode-go:glm-5.3-flash": {"input": 0.3, "output": 1.2}}}}`; a seat can set the
 same under `[models.models]`. Prices of calls already recorded are as recorded: a price added later applies to
