@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from exo.core import trace
 from exo.core.context import DefaultCompressor, SummaryError, TreeContext, summary_prompt
 from exo.core.loop import Loop
 from exo.core.sessions import EventBus, SessionStore
@@ -210,6 +211,98 @@ def test_interrupted_tool_counts_its_time_up_to_the_interrupt(tmp_path):
     timing = next(e.body.timing for e in seen if e.type == "turn.completed")
     assert 250 <= timing["tool_ms"] <= timing["wall_ms"]
     assert timing["interrupted_tool"] == "pytest_run"
+
+
+def _stop_when(loop, seen, ready, after):
+    """Run one turn, stop it ``after`` seconds once an event of type ``ready`` is seen; return (session, result)."""
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "go"))
+        while not any(e.type == ready for e in seen):
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(after)
+        assert loop.interrupt(s.id)
+        return s, await asyncio.wait_for(task, 2)
+
+    return run(go())
+
+
+def test_interrupted_model_call_counts_as_model_time(tmp_path):
+    """A model call cut short by a stop is recorded: the wait is model time, not harness overhead (turn.slow)."""
+    prov = Script([ProviderEvent(kind="text", text="half "), "WAIT"])
+    store, loop, seen = make(tmp_path, prov)
+    s, res = _stop_when(loop, seen, "message.delta", after=0.5)
+    assert res.stop_reason == "interrupted"
+    assert store.messages(s.id)[-1].text() == "half "  # the text the user saw is still kept
+    timing = next(e.body.timing for e in seen if e.type == "turn.completed")
+    assert timing["model_calls"] == 1 and 450 <= timing["model_ms"] <= timing["wall_ms"]
+    calls = [e.body for e in seen if e.type == "model.call"]
+    assert len(calls) == 1
+    call = calls[0]
+    assert call.stop_reason == "interrupted" and call.error == "" and call.attempts == []
+    assert call.ttft_ms is not None and call.total_ms >= 450 and call.iteration == 1
+    types = [e.type for e in seen]
+    assert types.index("model.call") < types.index("turn.completed")
+    t = trace.last_turn(store, s.id)
+    assert len(t.calls) == 1 and t.harness_ms < timing["model_ms"]  # on main all of it was harness time
+    assert "turn.slow" not in [f.signature for f in trace.detect(t, trace.Thresholds(turn_wall_s=0.45))]
+
+
+def test_interrupted_model_call_before_first_token_blames_the_route(tmp_path):
+    """No output yet: the call is still recorded, so a long wait reads as model.wait on the route, not turn.slow."""
+    prov = Script(["WAIT"])
+    store, loop, seen = make(tmp_path, prov, model="fake-model")
+    s, res = _stop_when(loop, seen, "turn.started", after=0.5)
+    assert res.stop_reason == "interrupted"
+    timing = next(e.body.timing for e in seen if e.type == "turn.completed")
+    assert timing["model_calls"] == 1 and timing["fallbacks"] == 0 and timing["model_ms"] >= 450
+    (call,) = [e.body for e in seen if e.type == "model.call"]
+    assert call.stop_reason == "interrupted" and call.ttft_ms is None and call.total_ms >= 450
+    assert call.requested == "fake-model" and call.route == ""
+    flags = [f.signature for f in trace.detect(trace.last_turn(store, s.id),
+                                               trace.Thresholds(turn_wall_s=0.4, model_wait_s=0.3))]
+    assert "model.wait:fake-model" in flags and "turn.slow" not in flags
+
+
+def test_stop_during_retry_backoff_records_the_failed_tries(tmp_path):
+    """A stop during the backoff before a retry still records the call with the tries already made."""
+    tried = [{"route": "p:m", "outcome": "error", "error": "overloaded", "ms": 5}]
+    prov = Script([ProviderEvent(kind="error", error="overloaded", retryable=True, status=529, attempts=tried)])
+    store, loop, seen = make(tmp_path, prov)
+    loop.retry_delay = 5  # the stop must cut this backoff short
+    s, res = _stop_when(loop, seen, "notice", after=0.3)
+    assert res.stop_reason == "interrupted" and len(prov.calls) == 1  # the retry never ran
+    timing = next(e.body.timing for e in seen if e.type == "turn.completed")
+    assert timing["model_calls"] == 1 and timing["fallbacks"] == 1 and timing["model_ms"] >= 250
+    (call,) = [e.body for e in seen if e.type == "model.call"]
+    assert call.stop_reason == "interrupted" and call.retries == 1 and call.attempts == tried
+
+
+def test_stop_before_the_model_call_records_no_call(tmp_path):
+    """Guard for the record above: a stop that lands before the provider is called records no model.call."""
+    class HeldMemory:
+        def __init__(self):
+            self.entered, self.gate = asyncio.Event(), asyncio.Event()
+
+        async def prefetch(self, query, session_id=None):
+            self.entered.set()
+            await self.gate.wait()
+            return ""
+
+    mem = HeldMemory()
+    store, loop, seen = make(tmp_path, Script(reply("never")), memory=mem)
+
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "go"))
+        await asyncio.wait_for(mem.entered.wait(), 2)
+        assert loop.interrupt(s.id)
+        mem.gate.set()
+        return await asyncio.wait_for(task, 2)
+
+    assert run(go()).stop_reason == "interrupted"
+    timing = next(e.body.timing for e in seen if e.type == "turn.completed")
+    assert timing["model_calls"] == 0 and not [e for e in seen if e.type == "model.call"]
 
 
 def test_steer_injects_between_tool_rounds(tmp_path):

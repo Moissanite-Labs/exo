@@ -604,6 +604,34 @@ def test_agent_tools(tmp_path):
     assert "running on: fake:x" in out and "harness " in out and "findings 1: 1 open, 0 fixed (awaiting re-verification)" in out
 
 
+def test_trace_header_after_a_stop_names_the_route_that_served_the_last_call(tmp_path, monkeypatch):
+    """A call cut short by a stop names no route (usage comes at the end of a stream); the header skips it."""
+    eng = engine(tmp_path, [{"match": "go", "steps": ["ok"]}])
+    fake = eng.router.credentials("fake")[0].provider
+
+    async def stall(messages, tools, **opts):
+        yield ProviderEvent(kind="text", text="long answer")
+        await asyncio.Event().wait()
+
+    async def go():
+        sid = (await eng.loop.create_session(title="t")).id
+        await eng.loop.send(sid, "go")
+        monkeypatch.setattr(fake, "stream", stall)
+        task = asyncio.create_task(eng.loop.send(sid, "go on"))
+        while not any(e.type == "message.delta" and e.body.text == "long answer" for e in types(eng, sid)):
+            await asyncio.sleep(0.01)
+        assert eng.loop.interrupt(sid)
+        assert (await asyncio.wait_for(task, 5)).stop_reason == "interrupted"
+        return sid
+
+    sid = run(go())
+    calls = [e.body for e in types(eng, sid) if e.type == "model.call"]
+    assert [(c.route, c.stop_reason) for c in calls] == [("fake:x", "end"), ("", "interrupted")]
+    out = eng.trace_text(sid, 5)
+    assert "last call served by fake:x" in out.splitlines()[0]
+    assert "calls in turn 2" in out
+
+
 def test_trace_tools_are_not_for_subagents_and_seats_keep_them(tmp_path):
     from exo.core.agents import BLOCKED_TOOLS
 

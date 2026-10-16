@@ -167,7 +167,7 @@ class ProviderEvent:
     status: int | None = None
     retry_after: float | None = None  # seconds until the provider says to retry (error only)
     route: str = ""  # done, usage, error: the provider:model that served (or last failed) the call; set by the router
-    attempts: list[dict[str, Any]] = field(default_factory=list)  # done, error: [{route, outcome, error, ms}]
+    attempts: list[dict[str, Any]] = field(default_factory=list)  # done, error, fallback notice: [{route, outcome, error, ms}]
 
 
 @runtime_checkable
