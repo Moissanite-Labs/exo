@@ -49,13 +49,21 @@ ends the turn `interrupted`. The call is one more model call and spend-journal e
 
 Codec: `to_dict(obj)` and `from_dict(cls, data, strict=True)` work for every dataclass here and in the
 protocol. Nested dataclasses, lists, optionals and Literals are decoded and checked. `strict=True`
-rejects unknown fields; `strict=False` drops them. Use these for sessions.sqlite rows too.
+rejects unknown fields and wrong-typed `int`, `float`, `str` and `bool` fields: a bool is not an int, an
+int is a float, and null fits a primitive field only when it is optional. `strict=False` drops unknown fields
+and takes primitive values as stored. The core reads sessions.sqlite messages and events with `strict=False`,
+so a row an older core wrote still loads.
 
 ## Protocol (`exo.protocol.schema`), `PROTOCOL_VERSION = 1`
 
 Envelopes:
 - `Command`: id (auto `c_...`), type, body. Build with `Command.of(body)`. `to_json()`, `from_json()`.
-  Always strict: unknown type is `unknown_command`; unknown or missing body fields are `bad_body`.
+  Always strict. An unknown type is `unknown_command`, and so is a type that is not a string. Unknown,
+  missing or wrong-typed body fields are `bad_body`. A malformed command never ends the connection or the
+  stdio transport: the server answers it with an error `Response` and keeps serving. Over HTTP every
+  `Response` comes back with status 200, an error one too. A fault the server did not classify, in the
+  decoder, the replay or the engine, is `internal`: an `events.subscribe` `since` past SQLite's 64-bit range
+  is one.
 - `Response`: id (the command's), ok = True, result: dict = {}, error: ErrorInfo?. Results are
   untyped JSON for now; reuse `SessionInfo` and core types inside them via `to_dict`.
 - `Event`: id (auto `e_...`), seq, session?, type, ts (ISO 8601 UTC, auto), body. JSON key order is

@@ -286,7 +286,7 @@ class SessionStore:
         """Messages with ``since < seq <= upto``, in order."""
         rows = self._q("SELECT data FROM messages WHERE session=? AND seq>? AND seq<=? AND hidden=0 ORDER BY seq",
                        (sid, since, upto if upto is not None else 2**62))
-        return [from_dict(Message, json.loads(r["data"])) for r in rows]
+        return [from_dict(Message, json.loads(r["data"]), strict=False) for r in rows]
 
     def message_seq(self, sid: str, message_id: str) -> int | None:
         rows = self._q("SELECT seq FROM messages WHERE session=? AND id=?", (sid, message_id))
@@ -377,7 +377,7 @@ class SessionStore:
                        " sessions s ON s.id=m.session WHERE m.agent=? AND m.pos>? AND m.pos<=? ORDER BY m.pos",
                        (agent, since, upto if upto is not None else 2**62))
         return [LogEntry(r["pos"], r["session"], r["kind"] or "", r["created"],
-                         from_dict(Message, json.loads(r["data"])), bool(r["hidden"])) for r in rows]
+                         from_dict(Message, json.loads(r["data"]), strict=False), bool(r["hidden"])) for r in rows]
 
     def last_logged_seq(self, sid: str, upto_pos: int) -> int:
         """The seq of this thread's last log entry with pos <= upto_pos (0 if none)."""

@@ -41,6 +41,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   composer typing it adds to the copied page were inline scripts, which the policy refuses, so regenerated shots
   came out in the inverse layout with an empty composer. They are now a file in the copied static folder, loaded
   by `src`.
+- Protocol strict decoding: a command whose `type` is not a string is `unknown_command`, a wrong-typed `int`,
+  `float`, `str` or `bool` body field (such as `events.subscribe` `since: "5"`) is `bad_body`, and JSON nested too
+  deep is `bad_json`. An `events.subscribe` `since` past SQLite's 64-bit range is `internal`. Before, these raised
+  out of the server: over HTTP the connection closed with no reply, and on stdio one bad line ended
+  `exo serve --stdio`. The server now answers every malformed command and keeps serving. Messages an older core
+  stored load as written.
 
 ### Changed
 - Command deny and reservation regexes also match a literal-word view of the command (#136, D-038

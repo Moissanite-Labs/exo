@@ -8,7 +8,7 @@ The interface started fixed at wave 1 and has grown additively since. Stdlib onl
   Today there are 30 commands and 29 events. New features add fields or a ``command.run`` built-in, not a type.
 - Additive changes only within a protocol version: new optional fields with
   defaults, or new types. Never rename or remove.
-- Commands are strict: unknown type or unknown field is rejected.
+- Commands are strict: an unknown type, an unknown field or a wrong-typed field is rejected.
 - Events decode strictly by default; clients pass ``strict=False`` to accept
   newer servers (unknown fields dropped, unknown types kept as raw dicts).
 """
@@ -609,7 +609,7 @@ class Error:
 def _loads(text: str | bytes) -> dict[str, Any]:
     try:
         data = json.loads(text)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, RecursionError) as exc:  # RecursionError: nesting too deep
         raise ProtocolError("bad_json", str(exc)) from None
     if not isinstance(data, dict):
         raise ProtocolError("bad_envelope", "envelope must be an object")
@@ -617,7 +617,7 @@ def _loads(text: str | bytes) -> dict[str, Any]:
 
 
 def _body(table: dict[str, type], kind: str, type_: Any, raw: Any, strict: bool) -> Any:
-    cls = table.get(type_)
+    cls = table.get(type_) if isinstance(type_, str) else None  # a list or object type is unknown, not a crash
     if cls is None:
         if strict:
             raise ProtocolError(f"unknown_{kind}", repr(type_))
