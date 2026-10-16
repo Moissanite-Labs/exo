@@ -240,7 +240,7 @@ A seat is a TOML file in `$EXO_HOME/seats/<name>.toml`, or `<name>/seat.toml` wi
 |---|---|
 | `[seat]`, `[principal]` | Name, role, soul file, and the principal id the seat serves. |
 | `[models]` | `tier` (fast, standard, deep) and per-role router overrides. |
-| `[tools]` | `toolsets` to allow, and `env_allow`: secret-looking variables that bash and jobs may keep. Default none. |
+| `[tools]` | `toolsets` to allow, and `env_allow`: variables the scrub would drop (secrets, shell startup hooks) that bash and jobs may keep. Default none; `docs/TOOLS.md` "Environment of bash and jobs" has the startup-code caveat. |
 | `[skills]` | `folders` to search first, `load` as an allow list. |
 | `[mcp.<name>]` | An MCP server: `command` or `url`, `env`, `risk`. |
 | `[channels.<name>]` | Channels to run with the server. |

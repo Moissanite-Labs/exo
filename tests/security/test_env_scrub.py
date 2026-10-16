@@ -2,6 +2,8 @@
 for the claude CLI provider."""
 from __future__ import annotations
 
+import shlex
+
 import pytest
 
 from exo import envscrub
@@ -12,15 +14,19 @@ SECRETS = {
     "AWS_SECRET_ACCESS_KEY": "s", "AWS_PROFILE": "p", "DATABASE_URL": "postgres://u:p@h/d", "SENTRY_DSN": "s",
     "GH_TOKEN": "s", "GH_ENTERPRISE_TOKEN": "s", "GITHUB_TOKEN": "s", "EXO_BUS_SEAT": "x", "EXO_KEYS_FILE": "/f",
     "EXOD_TOKEN": "t", "EXO_PRINCIPAL_TOKEN": "t", "EXO_SOCKET": "/s", "SECRET_KEY_BASE": "s",
-    "STRIPE_APIKEY": "s", "BASH_ENV": "/startup", "ENV": "/startup",
+    "STRIPE_APIKEY": "s",
 }
+# Shell startup hooks: bash acts on these before `bash -c` runs the command (#135). Exact names, not secrets.
+HOOKS = {"BASH_ENV": "/startup", "ENV": "/startup", "SHELLOPTS": "xtrace", "BASHOPTS": "xpg_echo",
+         "PS4": "$(true)+ ", "BASH_FUNC_trap%%": '() { builtin trap "$@"; }',
+         "BASH_FUNC_trap()": '() { builtin trap "$@"; }'}
 KEEP = {"PATH": "/bin", "HOME": "/h", "LANG": "C", "EXO_HOME": "/h/.exo", "EXO_SEAT": "a", "KEEP_ME": "1",
         "EDITOR": "vi", "SSH_AUTH_SOCK": "/tmp/agent"}
 
 
 def test_scrub_drops_secret_names_and_keeps_the_rest():
-    out = envscrub.scrub_env({**SECRETS, **KEEP})
-    leaked = sorted(k for k in SECRETS if k in out)
+    out = envscrub.scrub_env({**SECRETS, **HOOKS, **KEEP})
+    leaked = sorted(k for k in {**SECRETS, **HOOKS} if k in out)
     assert leaked == [], leaked
     assert {k: out[k] for k in KEEP} == KEEP
 
@@ -38,7 +44,7 @@ def test_seat_allow_keeps_and_seat_deny_drops():
     assert "GH_TOKEN" not in envscrub.scrub_env(env, allow=["GH_TOKEN"], deny=["GH_*"])
 
 
-@pytest.mark.parametrize("name", sorted(SECRETS))
+@pytest.mark.parametrize("name", sorted({**SECRETS, **HOOKS}))
 def test_every_subprocess_path_uses_the_one_scrub(name, monkeypatch):
     from exo.core.models.claude_cli import child_env
     from exo.core.tools.builtin.codefind import _child_env
@@ -119,9 +125,27 @@ def test_noncredential_urls_and_unknown_opaque_values_are_preserved():
     assert "HTTPS_PROXY" not in envscrub.minimal_env({"HTTPS_PROXY": "http://u:p@127.0.0.1:8080"})
 
 
-@pytest.mark.parametrize("name", ["BASH_ENV", "ENV"])
+def test_shell_startup_hooks_are_exact_names_not_secret_names():
+    for name in HOOKS:
+        assert envscrub.is_exec_hook(name) and not envscrub.is_secret_name(name), name
+    # bash honours only the exact spellings, and `env` in a URL query names a deployment, not a credential
+    src = {"env": "dev", "Env": "dev", "bash_env": "/x", "ps4": "+ ", "BASH_FUNCTIONS": "x",
+           "DASHBOARD_URL": "https://grafana.example.com/d/abc?env=staging",
+           "API_BASE_URL": "https://api.example.com/#env=prod"}
+    assert envscrub.scrub_env(src) == src
+    assert envscrub.scrub_env({"ENV": "dev", "DEPLOY_ENV": "dev"}) == {"DEPLOY_ENV": "dev"}
+
+
+def test_env_value_is_not_redacted_from_cli_diagnostics():
+    from exo.core.models.claude_cli import ClaudeCliProvider
+
+    p = ClaudeCliProvider(env={"PATH": "/bin", "ENV": "dev", "MY_TOKEN": "busy"})
+    assert p._diagnostic("cannot open /dev/tty; device busy") == "cannot open /dev/tty; device [redacted]"
+
+
+@pytest.mark.parametrize("name", sorted(HOOKS))
 def test_shell_startup_hooks_follow_exact_allow_and_deny_precedence(name):
-    src = {name: "/benign/startup"}
+    src = {name: HOOKS[name]}
     assert envscrub.scrub_env(src) == {}
     assert envscrub.scrub_env(src, allow=[name]) == src
     assert envscrub.scrub_env(src, allow=["*"]) == {}
@@ -129,27 +153,15 @@ def test_shell_startup_hooks_follow_exact_allow_and_deny_precedence(name):
     assert envscrub.scrub_env(src, allow=[name], deny=["*"]) == {}
 
 
-@pytest.mark.parametrize("background", [False, True], ids=["foreground", "background"])
-@pytest.mark.parametrize("policy,expected", [("default", "unset:unset"),
-                                              ("allow", "set:set"), ("deny", "unset:unset")])
-def test_shell_startup_file_is_not_sourced_without_explicit_allow(tmp_path, monkeypatch, background, policy, expected):
+def _tool_output(command: str, tmp_path, background: bool, allow: list[str], deny: list[str]) -> str:
+    """Run ``command`` the way the model's bash tool does (foreground ``run_command`` or a background job) with a
+    seat's env_allow/env_deny; asserts exit 0 and returns the merged output."""
     import asyncio
-    import shlex
     import time
 
     from exo.core.engine import CoreEngine
     from exo.core.seats import Seat
     from exo.core.tools.builtin.shell import run_command
-
-    marker = tmp_path / "startup-sourced"
-    startup = tmp_path / "startup.sh"
-    startup.write_text("printf sourced > " + shlex.quote(str(marker)) + "\n")
-    for name in ("BASH_ENV", "ENV"):
-        monkeypatch.setenv(name, str(startup))
-    allow = ["BASH_ENV", "ENV"] if policy != "default" else []
-    deny = ["BASH_*", "ENV"] if policy == "deny" else []
-    command = ('if [ -n "${BASH_ENV+x}" ]; then printf set; else printf unset; fi; printf :; '
-               'if [ -n "${ENV+x}" ]; then printf set; else printf unset; fi')
 
     async def run_background():
         eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}},
@@ -167,11 +179,43 @@ def test_shell_startup_file_is_not_sourced_without_explicit_allow(tmp_path, monk
             await eng.close()
 
     if background:
-        output = asyncio.run(run_background())
-    else:
-        code, output, status = run_command(command, str(tmp_path), timeout=5, env_allow=allow, env_deny=deny)
-        assert (code, status) == (0, "ok")
+        return asyncio.run(run_background())
+    code, output, status = run_command(command, str(tmp_path), timeout=5, env_allow=allow, env_deny=deny)
+    assert (code, status) == (0, "ok")
+    return output
+
+
+@pytest.mark.parametrize("background", [False, True], ids=["foreground", "background"])
+@pytest.mark.parametrize("policy,expected", [("default", "unset:unset"),
+                                              ("allow", "set:set"), ("deny", "unset:unset")])
+def test_shell_startup_file_is_not_sourced_without_explicit_allow(tmp_path, monkeypatch, background, policy, expected):
+    marker = tmp_path / "startup-sourced"
+    startup = tmp_path / "startup.sh"
+    startup.write_text("printf sourced > " + shlex.quote(str(marker)) + "\n")
+    for name in ("BASH_ENV", "ENV"):
+        monkeypatch.setenv(name, str(startup))
+    allow = ["BASH_ENV", "ENV"] if policy != "default" else []
+    deny = ["BASH_*", "ENV"] if policy == "deny" else []
+    command = ('if [ -n "${BASH_ENV+x}" ]; then printf set; else printf unset; fi; printf :; '
+               'if [ -n "${ENV+x}" ]; then printf set; else printf unset; fi')
+
+    output = _tool_output(command, tmp_path, background, allow, deny)
     assert output == expected
     assert marker.exists() is (policy == "allow")
     if policy == "allow":
         assert marker.read_text() == "sourced"
+
+
+@pytest.mark.parametrize("background", [False, True], ids=["foreground", "background"])
+@pytest.mark.parametrize("policy", ["default", "allow"])
+def test_exported_functions_and_shellopts_do_not_reach_the_command(tmp_path, monkeypatch, background, policy):
+    # An exported function named after a builtin runs its payload when the wrapper's own `trap` runs, with no file
+    # on disk and no sign in the (harmless) command text; SHELLOPTS=xtrace would echo every command to stderr.
+    marker = tmp_path / "trap-ran"
+    monkeypatch.setenv("BASH_FUNC_trap%%", "() { touch " + shlex.quote(str(marker)) + '; builtin trap "$@"; }')
+    monkeypatch.setenv("SHELLOPTS", "xtrace")
+    allow = ["BASH_FUNC_trap%%"] if policy == "allow" else []
+
+    output = _tool_output("true", tmp_path, background, allow, [])
+    assert output == ""
+    assert marker.exists() is (policy == "allow")
