@@ -76,13 +76,13 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Scheduled jobs | `docs/SCHEDULE.md` | §5 "Scheduled jobs" (the web Schedule page; no terminal entry point exists) | §9 "Schedule a job" | WP §13.2, §24, §29 (brief) |
 | Handoff | `docs/HANDOFF.md` | §3 (`/handoff`) | n/a | WP §24 |
 | Signed ledger, crypto and the principal store | `docs/CORE.md`, `docs/STORE-V2.md` | §11 | §9 "Write to the signed ledger" | WP §19, §20 |
-| Opt-in independent witness transport | `docs/WITNESS-TRANSPORT.md`, `docs/LEDGER-AUTHORITY.md` | n/a (disabled by default, administrator invocation only) | Setup and recovery in the technical doc | WP §20.2 |
+| #88 Opt-in independent witness transport (`exo-witness`, durable checkpoint journal, pinned mutual TLS) | `docs/WITNESS-TRANSPORT.md`, `docs/LEDGER-AUTHORITY.md` | n/a (disabled by default, administrator invocation only) | Setup and recovery in the technical doc | WP §20.2 (built, opt-in), §30 (running a witness is deployment work) |
 | Retrieval | `docs/STORE-V2.md` §3, `docs/CORE.md` "Python API" | §11 (`exo find`, `exo ctx`) | §9 "Use retrieval" | WP §21 |
 | Eval, ask queue, brief, consolidate | `docs/TOOLS-CLI.md` | §11 "Review what Exo learned" | §9 "Work on the learning loop" (consolidate and proposals) | WP §6, §22 |
 | D-035 Typing `exo` opens Exo: bare command, installer on PATH, `exo update` | `docs/INSTALL.md` "The `exo` command", `docs/COMMANDS.md` Part 2 "Running Exo" | §1 | n/a | n/a |
 | D-036 One shared core: `exo web` finds or starts it | `docs/ui/WEB.md` "Connecting to the core", `docs/USER-GUIDE.md` §2, `docs/COMMANDS.md` | §2 | n/a | n/a |
-| D-038 Gate default ask: shell allowlist, store is credentials, policy edits only tighten | `docs/GATE.md` "Shell commands: an allowlist", "The store is credentials", "Policy changes during a session", `docs/COMMANDS.md` | §6 | n/a | WP §7, §15.4, §26 |
-| D-039 Approval identity from the connection, web token on every route, one secret scrub | `docs/GATE.md` "Who answered: the connection, not the body", `docs/ui/WEB.md` "Opening the page and the page token", `docs/TOOLS.md` "Environment of bash and jobs", `docs/SEATS.md` | §2, §6, §10 | §2 | WP §7, §12.5, §15.1, §15.3, §26 |
+| D-038 Gate default ask: shell allowlist, store is credentials, policy edits only tighten | `docs/GATE.md` "Shell commands: an allowlist", "The store is credentials", "Policy changes during a session", `docs/COMMANDS.md` | §6 | n/a | WP §7, §15.4 (programs trusted by name; exec options and test runners as the known gap, #164 in review), §26 |
+| D-039 Approval identity from the connection, web token on every route, one secret scrub | `docs/GATE.md` "Who answered: the connection, not the body", `docs/ui/WEB.md` "Opening the page and the page token", `docs/TOOLS.md` "Environment of bash and jobs", `docs/SEATS.md` | §2, §6, §10 | §2 | WP §7, §12.5 (with the detach limit), §15.1, §15.3, §26, glossary |
 | D-037 Completion and guidance in the composer | `docs/COMMANDS.md` "Completion and guidance", `docs/UI.md`, `docs/ui/WEB.md` "The composer" | §3 "Typing help" | n/a | WP §8, §24 "Typing help" |
 | D-042 Repo hygiene, privacy and licensing | `docs/DEVELOPER-GUIDE.md` §7 "CI, lint, lockfile and the privacy deny-list", `docs/HANDOFF.md` | n/a | §7 | WP §31 (the security and correctness wave) |
 | D-040 Who wrote it: message authors, pinned keys, anchored ledger head | `docs/MEMORY-MODEL.md` "Who wrote it", `docs/LEARNING.md` "Signals in", `docs/PEERS.md` "Bus seats", `docs/CORE.md` "Pinned keys" and "Head anchor", `docs/COMMANDS.md`, `plugins/exo-bus/README.md`, `plugins/exo-memory/README.md` | §4, §7, §11 | §4 "Who wrote it", §9 "Work on the learning loop" | WP §7, §12.7, §20.1, §26 |
@@ -110,22 +110,36 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Issue #48 long `HOME` no longer stops the core: the peer socket falls back to a short private folder | `docs/PEERS.md` "How it works" | n/a (no user commands changed) | n/a | n/a |
 | #100 Findings verify on eligible quiet turns or days of activity (D-025); trace lists open findings | `docs/TRACE.md` "Findings", `CHANGELOG.md` | n/a (no user commands changed) | n/a | WP §9, §23 |
 | D-069 Session rename is a built-in `command.run`, principal only, announced as `session.updated` | `docs/COMMANDS.md`, `docs/ui/WEB.md`, `DECISIONS.md` D-069 | §2, §3 (`/rename`, double-click on the web) | §2 "Extend through `command.run` built-ins" (worked example) | WP §12.2, §24 "Threads you can find again" |
+| D-067 Engine split step 4 (core cap 15,000, since replaced by D-077): dead code and duplicates deleted, `ApprovalDesk`, peer transport to `exo.peers`, scheduler to `exo.scheduler`, both attached by `exo.compose` | `docs/ENGINE-SPLIT.md` "Progress" and "Budget policy", `docs/CORE.md`, `docs/PEERS.md`, `docs/SCHEDULE.md`, `CHANGELOG.md` | n/a (no user commands changed) | §1 "The engine and what is attached to it", §9 "Schedule a job" | WP §11 "The engine split" and the layout table, §30 |
+| D-068 Turns build from ready summaries and do not wait for memory upkeep; a wait of at most 5 seconds only when the view overflows its budget | `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep", `src/exo/turn_settle.py`, `DECISIONS.md` D-068 | n/a (no user commands changed) | n/a | WP §5, §17.3, §28 step 4, figure 6 |
+| D-073 Signed updates: `update.require_signed` checks the update target against a pinned trust list (#42) | `docs/INSTALL.md` "Signed updates", `DECISIONS.md` D-073, `src/exo/update_verify.py`, `src/exo/config.py` | `docs/INSTALL.md` (`exo update --pin-trust`) | §8 "Cutting a release" | WP §26 "Updates" |
+| D-077 Core budget: a ratchet with headroom (`CORE_FLOOR` lowered by real reductions, `CORE_HEADROOM` 1,000, security and robustness fixes never blocked) | `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `tests/integration/test_wave1_acceptance.py`, `DECISIONS.md` D-077, `CHANGELOG.md` | n/a (no user commands changed) | §1 "The core budget", §7 "The core line budget" | WP §11, §27 |
+| #87 Principal model-spend admission: daily and monthly ceilings, reservation before a call, settlement from usage, opt-in | `docs/MODEL-SPEND.md` | n/a (opt-in; set up from the technical doc) | n/a | WP §13.5 "Spend ceilings" |
 | #46 Engine split, first pass: diagnostics and composition leave the core (`exo.compose:create`, `src/exo/diagnostics.py`) | `docs/ENGINE-SPLIT.md` "Progress", `docs/COMMANDS.md` | n/a (no behaviour change) | §1 "The compose and diagnostics split" | WP §11 "The engine split" |
-| Core line budget and protocol cap (16,000 counted lines; 30 commands, 29 of 30 event slots) | `docs/ENGINE-SPLIT.md` "Budget policy", `src/exo/protocol/schema.py` | n/a | §1 "The core budget", §2 | WP §11, §12.2 |
-| #70 Required tool executor mode: one dispatch path, gate evidence before action, trusted plugin inventory | `docs/EXECUTORS.md` | §6 (executor denial and audit) | §3 (executor interface) | WP §15.6 |
+| Core line budget and protocol cap (a ratchet with headroom, D-077: floor 14,813 plus 1,000; 30 commands, 29 of 30 event slots) | `docs/ENGINE-SPLIT.md` "Budget policy", `src/exo/protocol/schema.py` | n/a | §1 "The core budget", §7 "The core line budget", §2 | WP §11, §12.2, §27 |
+| #70, #91 Required tool executor mode: one dispatch path, gate evidence before action, trusted plugin inventory; #91 binds the request before hooks, isolates hook arguments, turns off plugins from installed packages and rejects a gate that fails to register or sits outside the inventory | `docs/EXECUTORS.md` | §6 (executor denial and audit) | §3 (executor interface) | WP §15.6 |
 | #80 Ledger authority: protected append service, recoverable projections, independent verifier | `docs/LEDGER-AUTHORITY.md` | n/a (no user commands changed) | n/a (OS integration; the contract is in the technical doc) | WP §20.2 |
 | The docs rule and this map | `docs/DOCS-MAP.md`, `tests/docs/test_docs_map.py` | n/a | "The docs rule" | n/a |
+| Whitepaper build: version and month from the paper's header line only, the committed page checked against a fresh build | `scripts/build_whitepaper.py`, `tests/docs/test_build_whitepaper.py` | n/a | §8 "Cutting a release" (the whitepaper steps) | n/a (the paper is its input) |
 | Local-first workflow: local branch, canary test build, PR, staging, live | `docs/VERSIONING.md` §6, `docs/SITE-STATUS.md` | n/a | §8 "The local-first workflow" | WP §31 |
 
 ## Whitepaper gaps
 
-The whitepaper was brought up to date through D-033 in version 0.2, and through D-070 (everything on main as of
-2026-10-13) in version 0.3. It has no D numbers in it, so the whitepaper column above comes from reading its
-sections. Section numbers are those of version 0.3. Sections 1 to 34 keep their version 0.2 numbers, and the new
-parts are subsections (15.6, 20.1, 20.2, 22.7, 30.1) and section 35.
+The whitepaper was brought up to date through D-033 in version 0.2. Version 0.3 covers main up to D-077 (the core
+budget ratchet), including D-067, D-068 and D-073, the witness transport (#88), model-spend admission (#87) and the
+required executor changes of #91. The paper cites decision and pull request numbers only in a few places, so the
+whitepaper column above comes from reading its sections. Section numbers are those of version 0.3. Sections 1 to 34
+keep their version 0.2 numbers, and the new parts are subsections (15.6, 20.1, 20.2, 22.7, 30.1) and section 35.
 
-- **Not covered:** none of the decisions on main that need whitepaper coverage.
-- **Covered as in progress, not on main:** Unix peer authentication (D-060), the permissionless mode, `/rounds`,
+- **Not covered:** none of the decisions on main that need whitepaper coverage. Decisions with nothing for the
+  paper to say (for example the site, brand and test-hygiene decisions D-047, D-049 and D-053) are `n/a` above.
+- **Stated as today's limits, with the open change named:** the shell allowlist trusts programs by name, and exec
+  options of trusted programs are not read (#164, WP §15.4); `config.json` is an ordinary local write (D-074, #125,
+  WP §7, §26); the principal credential check passes a same-user process that detaches (D-060, #109, WP §12.5);
+  a read that reaches a key file through a wildcard or a folder walk is an ordinary read (no change open yet,
+  WP §12.5, §15.4).
+- **Covered as in progress, not on main:** Unix peer authentication (D-060, #109), protecting `config.json`
+  (D-074, #125), reading exec options (#164), the permissionless mode (keeping the operator floor, #96), `/rounds`,
   the choice card, the exosphere, house taste waves 2 and 3, and event activation (WP §30.1).
 - **Covered as designed, not built:** D-011 (store version 2, WP §19), the staged retrieval pipeline (WP §21),
   the unbuilt parts of D-015 (calibration, `decision` ledger entries, exo-decide, WP §14), and the house taste
@@ -138,32 +152,15 @@ The whitepaper pass is separate. It batches these per wave, and each batch is a 
 Technical docs filled so far: `docs/LEARNING.md` (D-012), `docs/SCHEDULE.md` (scheduled jobs), `docs/HANDOFF.md`
 (`/handoff`), `docs/COMMANDS.md` (every slash command and `exo` subcommand) and `docs/TOOLS-CLI.md` (`exo eval`,
 `ask`, `brief`, `consolidate`). `docs/CORE.md` and the protocol comments in `src/exo/protocol/schema.py` now state the
-real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Still open:
+real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Delegation is covered by user guide §5
+"Subagents" and developer guide §9 "Work with subagents". Eval, the ask queue, the brief and consolidate are covered
+for users by user guide §11 "Review what Exo learned". Still open:
 
-1. **Delegation.** Done: user guide §5 "Subagents" and developer guide §9 "Work with subagents".
-2. **Scheduling from the user's side.** The web Schedule page is the entry point (user guide §5 "Scheduled jobs").
+1. **Scheduling from the user's side.** The web Schedule page is the entry point (user guide §5 "Scheduled jobs").
    There is still no terminal command or agent tool for it.
-3. **Bus for users.** The developer guide has a bus recipe (§9). The user guide does not cover bus seats or the relay.
-4. **Eval, ask queue, brief and consolidate for users.** Done: user guide §11 "Review what Exo learned".
-7. **`docs/STORE-V2.md` §3** describes `assemble(query, scope, budget)`; the code is `assemble(store, query, budget,
+2. **Bus for users.** The developer guide has a bus recipe (§9). The user guide does not cover bus seats or the relay.
+3. **`docs/STORE-V2.md` §3** describes `assemble(query, scope, budget)`; the code is `assemble(store, query, budget,
    ranker)`. The developer guide states the real signature.
-5. **Plans that read as descriptions.** `docs/STANDALONE.md` and `docs/WAVE-3.md` are plans, not current
+4. **Plans that read as descriptions.** `docs/STANDALONE.md` and `docs/WAVE-3.md` are plans, not current
    descriptions. `docs/CORE-V2-INTERFACES.md` still says 25 commands and 21 events, which is the wave 2 shape.
-6. **D-027.** Reserved in D-026 and never written. If it is written, add its row here.
-| D-043 Esc never stops a turn; ctrl+c and `/stop` do; approval card keeps out of typing; failover off the event loop | `docs/USER-GUIDE.md` "Approvals", `docs/UI.md`, `docs/COMMANDS.md`, `docs/ui/WEB.md`, `skills/exo-intro/SKILL.md` | n/a | n/a | WP §12 |
-| D-044 Taste baseline: house taste pack (method and identity-free values), layers, sustained-change rule, value step back, ask or silent mode, safety defaults out of taste (wave 1 built: layers and export) | `docs/TASTE-BASELINE.md` ("Build status"), `docs/LEARNING.md` "The house taste", `docs/COMMANDS.md`, `plugins/exo-memory/README.md` | §4 "Taste" (`exo taste`, start blank, `taste_budget`); MISSING for waves 2 and 3 (`/taste`, `/taste mode`, first-run text) | §1 (`src/exo/baseline/`), §9 "Work on the house taste"; MISSING for waves 2 and 3 (weekly record) | MISSING (batched per wave) |
-| D-045 Approval cards never outlive their request (core announces every close, clients reconcile with `approvals.list`); web stream resumes and reopens; queued steer can be pulled back (`unsteer`, `steer.cancelled`) | `docs/USER-GUIDE.md` "Approvals", `docs/UI.md`, `docs/COMMANDS.md`, `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`, `docs/CORE.md`, `skills/exo-intro/SKILL.md` | n/a | n/a | n/a |
-| D-046 Focus follows the user, a big composer pane, an inverse layout (experiment) | `docs/USER-GUIDE.md` "The two clients", `docs/UI.md`, `docs/COMMANDS.md`, `docs/ui/WEB.md`, `docs/media/README.md`, `skills/exo-intro/SKILL.md` | n/a | n/a | n/a |
-| D-052 Principal authority for turn authorship, learning, settings, policy adoption, human peer sends and unsteer | `docs/GATE.md`, `docs/MEMORY-MODEL.md`, `docs/COMMANDS.md` | n/a | n/a | n/a |
-| D-053 Hermetic terminal preferences and corrected approval and undo documentation | `docs/DEVELOPER-GUIDE.md`, `docs/UI.md`, `docs/MEMORY-MODEL.md` | n/a | n/a | n/a |
-| D-054 Mandatory learning checks precede ruling citations, with explicit acceptance separate | `docs/LEARNING.md`, `research/LEARNING-LOOP.md` | n/a | n/a | n/a |
-| D-055 Keep staging current with verified status; core engine, browser polish, then Electron desktop packaging | `docs/SITE-STATUS.md`, `DECISIONS.md` D-055, `site/roadmap/index.html`, `site/app/index.html` | n/a (no user commands changed) | "Deploying the site" | Batched; desktop delivery direction only |
-| D-056 Versioning and naming: SemVer with codenames, site and doc versions, tags, branches, changelog | `docs/VERSIONING.md`, `CHANGELOG.md`, `DECISIONS.md` | n/a | `docs/DEVELOPER-GUIDE.md` "Cutting a release" | n/a |
-| D-070 Inspect, open and steer running subagents from the parent: `subagent` built-in, `/tasks` `/open` `/steer` `/stop <task>`, Tasks card controls | `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `src/exo/subagents.py` | `docs/USER-GUIDE.md` (keys and prefixes) | `docs/DEVELOPER-GUIDE.md` "Extend through `command.run` built-ins" | n/a |
-| D-061 Web sub-pages to the site v2 standard: page heads, designed empty states, status in form, 400px layout | `docs/ui/WEB.md` "Sub-pages (D-061)", `scripts/shots_web_tabs.py` | n/a (no user commands changed) | n/a | n/a |
-| D-067 Engine split step 4 (core cap 15,000): dead code and duplicates deleted, `ApprovalDesk`, peer transport to `exo.peers`, scheduler to `exo.scheduler`, both attached by `exo.compose` | `docs/ENGINE-SPLIT.md` "Progress" and "Budget policy", `docs/CORE.md`, `docs/PEERS.md`, `docs/SCHEDULE.md`, `docs/WHITEPAPER.md`, `CHANGELOG.md` | n/a (no user commands changed) | §1 "The engine and what is attached to it" | n/a |
-| D-077 Core budget: a ratchet with headroom (`CORE_FLOOR` lowered by real reductions, `CORE_HEADROOM` 1,000, security and robustness fixes never blocked) | `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `tests/integration/test_wave1_acceptance.py`, `DECISIONS.md` D-077, `CHANGELOG.md` | n/a (no user commands changed) | `docs/DEVELOPER-GUIDE.md` §7 "The core line budget" | WP §11, §27 |
-| #100 Findings verify on eligible quiet turns or days of activity (D-025); trace lists open findings | `docs/TRACE.md` "Findings", `CHANGELOG.md` | n/a (no user commands changed) | n/a | n/a |
-| D-069 Session rename is a built-in `command.run`, principal only, announced as `session.updated` | `docs/COMMANDS.md`, `docs/ui/WEB.md`, `DECISIONS.md` D-069 | `docs/USER-GUIDE.md` `/rename` | `docs/DEVELOPER-GUIDE.md` built-in commands | n/a |
-| D-073 Signed updates: `update.require_signed` checks the update target against a pinned trust list (#42) | `docs/INSTALL.md` "Signed updates", `DECISIONS.md` D-073, `src/exo/update_verify.py`, `src/exo/config.py` | `docs/INSTALL.md` (`exo update --pin-trust`) | `docs/DEVELOPER-GUIDE.md` "Cutting a release" | n/a |
-| D-068 Turns build from ready summaries and do not wait for memory upkeep; short wait only on budget overflow | `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep", `DECISIONS.md` D-068 | n/a (no user commands changed) | n/a | n/a |
+5. **D-027.** Reserved in D-026 and never written. If it is written, add its row here.
