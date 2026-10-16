@@ -203,19 +203,62 @@ A command is `allow` only when every program in it is known and nothing is hidde
   `.output |` and `.import '|'` dot-commands of `sqlite3` and `duckdb` (as an argument, via
   `-cmd`, or on stdin); `\!`, `\o |`, `\g |` and `\w |` anywhere on a `psql` line, `\!` and
   `system` in `mysql`; and a command set in `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PAGER`,
-  `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`,
-  `RSYNC_RSH`, `PAGER`, `MANPAGER`, `EDITOR`, `VISUAL`, `LESSOPEN` or `LESSCLOSE` before the
-  program (also through `env`; `export NAME=value` counts when the value is a known hazard). The
-  option is recognised as `getopt` reads it: an unambiguous abbreviation of the long name
-  (`--to-com=`), the value attached to the short letter, also inside a cluster (`-xIcmd`), or the
-  next word. A known program in the value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
-  `allow`; a program the gate does not know asks, as it would on its own. A value the gate cannot
-  read is `opaque_exec`: a variable, a script file (`tar --info-script`, `sqlite3 -init`,
+  `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `GIT_PROXY_COMMAND`,
+  `SSH_ASKPASS`, `RSYNC_RSH`, `RSYNC_CONNECT_PROG`, `PAGER`, `MANPAGER`, `EDITOR`, `VISUAL`,
+  `BROWSER`, `GH_PAGER`, `GH_EDITOR`, `GH_BROWSER`, `PSQL_PAGER`, `PSQL_EDITOR`, `SUDO_ASKPASS`,
+  `SUDO_EDITOR`, `PROMPT_COMMAND`, `LESSOPEN` or `LESSCLOSE` before the program (also through
+  `env`, `sudo` or `timeout`). An `export NAME=value` or a bare `NAME=value` counts when the value
+  is a known hazard. The option is recognised as `getopt` reads it: an unambiguous abbreviation of
+  the long name (`--to-com=`), the value attached to the short letter, also inside a cluster
+  (`-xIcmd`), or the next word. A known program in the value (`tar -I zstd`, `rsync -e ssh`,
+  `PAGER=cat`) stays `allow`. A program the gate does not know asks, as it would on its own. A
+  value the gate cannot read is `opaque_exec`: a variable, a script file (`tar --info-script`, `sqlite3 -init`,
   `.read`, `.load`), `.once`/`.output FILE`, `psql ... PROGRAM`, `TAR_OPTIONS`, and a library
   `ssh` loads (`-I`, `-o PKCS11Provider`, `-o SecurityKeyProvider`). `sed` scripts with `e` or
   `s///e` and `awk` programs calling `system()` were already opaque. An argument that merely
   looks like an assignment (`grep EDITOR=vim`) and a data load (`sqlite3 '.import f.csv t'`) are
-  not commands.
+  not commands. A variable that loads code or decides where programs, modules and config files
+  are found is `opaque_exec`, named in the summary: `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`,
+  `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`,
+  `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`, `OPENSSL_CONF`,
+  `OPENSSL_ENGINES`, `OPENSSL_MODULES`, `PATH`, `HOME` (it picks `~/.gitconfig`, `~/.ssh/config`
+  and `~/.exo`), `XDG_CONFIG_HOME`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
+  `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `PYTHONSTARTUP`, `PYTHONPATH`,
+  `PYTHONHOME`, `PYTHONUSERBASE`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`, `RUBYOPT`, `RUBYLIB`,
+  `NODE_OPTIONS`, `NODE_PATH`, `PSQLRC`, the option variables `MANOPT`, `ZIPOPT` and
+  `RIPGREP_CONFIG_PATH` (their command-line forms `man -P`, `zip -TT` and `rg --pre` already
+  count), `LESS` when it holds a `+` command (`LESS=-R` stays `allow`), and a non-empty `CDPATH`,
+  which moves a relative `cd` into the Exo store unseen (`CDPATH= cd src` stays `allow`). The
+  line sets one before the program, through a prefix, exported or bare (`export -p` and
+  `readonly -p` assign too, while `declare -p` only prints), as a parameter-expansion assignment
+  (`${PATH:=.}` or `${PATH=.}`, also in double quotes or a here-string), as the name `read` (also
+  `-a`) or `printf -v` fills, as a `for` variable, through a nameref (`declare -n r=PATH`), or as
+  an integer through arithmetic, an array subscript, or a `{PATH}>` redirection (`$((PATH=10))`,
+  `a[PATH=10]=1`, `${a[PATH=10]}`). A subscript counts where bash reads the word as a variable
+  name: an assignment, `${a[...]}`, and the name an exporter, `unset`, `read`, `printf -v`, a
+  nameref or `test -v` takes. `mapfile` and `getopts` already ask. Parameter expansion that
+  only reads or substitutes (`${PATH}`, `${PATH:-/usr/bin}`, `${PATH#/x}`) assigns nothing and
+  stays `allow`. So does text bash does not expand: single-quoted text, a quoted here-doc, and
+  a bracket outside a subscript, which is a glob (`git commit -m 'read ${PATH:=.}'`,
+  `pytest -q 'test_x[HOME=/tmp]'`, `echo [HOME=x]`). An expansion runs to the `}` bash closes
+  it with, past a nested `${b}` but not into quoted or escaped text, and the single-quoted text
+  inside it counts only where bash expands it: in double quotes after `:-`, `:=` and the like,
+  not after a pattern (`echo ${a:-'${PATH:=.}'}` and `echo "${f%'${PATH:=.}'}"` stay `allow`,
+  `echo "${a:-'${PATH:=.}'}"` asks). A partly quoted value loses its quotes as
+  bash removes them, so `${GIT_SSH_COMMAND:=rm' -rf x'}` reads as `rm -rf x`. A name the gate
+  cannot read (`export $X=...`, `read -r "$v"`, `declare -n r=$X`,
+  a nameref with no target, or a glob the shell expands first such as `export PAT?=.` or
+  `read HOM[E]`) is opaque too.
+  Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
+  --config` or `-c`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`)
+  takes the `git -c` exec-key check, and the value of an exec key is classified as a command too,
+  so a `deny: [delete]` fires on `core.sshCommand='rm -rf ...'`. A key that loads another config
+  file or a template (`include.path`, `includeIf.<condition>.path`, `init.templateDir`) is
+  opaque, also through `git config`: the included file can set any exec key, and the hooks in a
+  template run. A key the gate cannot read, a `--config-env` value (it comes from a variable) for
+  an exec key, and `git clone --template` are opaque. `env` and `sudo` read `NAME=VALUE` from their
+  own argv, so a quoted one after them (`env 'LD_PRELOAD=x' ls`) is an assignment. `IFS` is left
+  out: it does not change how literal words split, and `while IFS= read -r line` is everyday.
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
   `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
@@ -234,6 +277,13 @@ Known limit. A trusted program that runs project code (pytest runs conftest.py, 
 The same goes for options that read more options from a file (`curl --config`, `gcc -wrapper`,
 `-specs`) and for `git grep -O`, whose pager takes the matching files as arguments. The gate does
 not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+
+The gate reads the common ways a line sets a variable. A shell's rarer expansion forms can still
+set one unseen: an unquoted here-doc body fed to a builtin (`${NAME:=v}` or `$((NAME=n))` in
+it), a brace expansion in a name (`export {PATH,FOO}=x`), indirect expansion (`${!ref:=v}`),
+arithmetic in a substring offset (`${x:PATH=1}`), the old `$[...]` arithmetic, an integer
+variable (`declare -i x; x=PATH=5`), `wait -p NAME` and `{NAME}<<<x`. This is one more reason
+the sandbox is the real fix.
 
 ## The store is credentials (D-038)
 
