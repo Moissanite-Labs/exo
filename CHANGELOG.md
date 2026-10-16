@@ -148,6 +148,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   replacing the whole table. A seat that set one role used to send `main` and `aux` back to the catalog's cloud
   defaults and drop config.json's prices. Under the `docs/SEATS.md` example, a local-only config sent aux and
   decision calls to cloud routes.
+- A partial `[models.providers.NAME]` table now merges over the catalog entry instead of replacing it. The
+  documented Laya port override (`base_url` only) no longer turns Laya into a chat provider open to every role,
+  and a one-key table such as `read_timeout = 300` no longer makes streams through that provider fail with
+  `'base_url'`. A provider without a `base_url` gets no credential, so its route is skipped, and the providers
+  list (`exo providers`, `/providers`, the web view) shows it as `no base_url` instead of `key found`. A table
+  that sets `base_url` uses only the `key_env` it sets and is keyless without one, as before: the catalog key
+  (for example `OPENAI_API_KEY`) is never sent to that URL. Set `key_env` in that table to send a key there.
 
 ## [0.2.0] (egg) - 2026-10-13
 

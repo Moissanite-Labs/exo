@@ -71,7 +71,7 @@ read over that prompt. Input is the uncached part on every provider (D-080), so 
 ## The /providers panel
 
 `/providers` opens a modal in the same language: a cold `PROVIDERS` header rule, then one row per provider with a
-status chip (green `verified` with latency, grey `key found`, dim `no key`, orange `failed: <class>`, cold `running`
+status chip (green `verified` with latency, grey `key found`, dim `no key` or `no base_url`, orange `failed: <class>`, cold `running`
 for a local server), where the key comes from (env, keychain, secret-service or file, never a value), the model count
 and an orange default mark. Key chips: `[a]` add or replace a key, `[t]` test, `[r]` remove (asks y or n), `[d]` pick
 the default model, `[esc]` close (leaving a panel is soft; Esc never stops a turn, ctrl+c or `/stop` does). `[a]` opens a small modal with one masked field; the key never goes through the
