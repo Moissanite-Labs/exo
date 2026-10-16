@@ -60,8 +60,8 @@ A contract test suite runs against every new tag before the pin moves.
 | `exo-context` | `ContextEngine` + commands | Compaction that keeps principal signals (rulings, corrections, open decisions) verbatim and writes a handoff file. Commands: `/exo branch`, `/exo handoff`, `/exo resume`. |
 | `exo-gate` | hooks `pre_tool_call`, approval transport | Classifies each action; reversible and private runs, irreversible or public waits for the principal's channel with a link and a default. Applies posting rules from the principal store. |
 | `exo-bus` | platform plugin | Divan Bus as a Hermes platform: signed, hash-chained seat-to-seat messages; SYM-2P packets as an optional body format. |
-| `exo-command` | dashboard plugin + kanban hooks | Command centre: projects (Continuum's clustering), live agents and tasks (subagent viewer), decisions waiting on the principal, the brief, cost per accepted output. |
-| `exo-orchestra` | profiles + skills + hooks | The Protean system as a template: orchestrator and role profiles, the control-plane rules as a charter, the doctrine, the clean-writing gate, delegation receipts. Generic roles; a principal's own agents and names live in L3. |
+| `exo-command` | dashboard plugin | Command centre: projects (Continuum's clustering), live agents and tasks (subagent viewer), decisions waiting on the principal, the brief, cost per accepted output. |
+| `exo-orchestra` | profiles + skills | The Protean system as a template: orchestrator and role profiles, the control-plane rules as a charter, the doctrine, the clean-writing gate, delegation receipts. Generic roles; a principal's own agents and names live in L3. |
 
 ### L3 Principal store (data only)
 Layout = the hafiz layout (`~/hafiz` is A's store v0):

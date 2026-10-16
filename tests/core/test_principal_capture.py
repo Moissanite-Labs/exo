@@ -6,7 +6,8 @@ from __future__ import annotations
 import asyncio
 
 from exo.core.context import (HISTORICAL_TASK_HEADING, AgentContext, is_principal, missing_directives, summary_prompt)
-from exo.core.engine import ContextAdapter, CoreEngine, render_compact, render_context
+from exo.core.engine import ContextAdapter, CoreEngine
+from exo.diagnostics import render_compact, render_context
 from exo.core.loop import Loop
 from exo.core.seats import Seat
 from exo.core.sessions import SessionStore

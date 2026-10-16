@@ -15,21 +15,18 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from exo.core.private import private_file
+from exo.ensure_core import exod_socket, home_dir
 from exo.protocol import schema as s
 
 TOKEN_ENV = "EXOD_TOKEN"
 
 
-def run_dir() -> Path:
-    return Path(os.environ.get("EXO_HOME") or Path.home() / ".exo").expanduser() / "run"
-
-
 def default_socket() -> Path:
-    return run_dir() / "exod.sock"
+    return exod_socket(home_dir())
 
 
 def default_token_file() -> Path:
-    return run_dir() / "exod.token"
+    return default_socket().with_name("exod.token")
 
 
 def register(sp: Any, common: Any) -> None:
@@ -38,7 +35,7 @@ def register(sp: Any, common: Any) -> None:
     p.add_argument("--tcp", metavar="HOST:PORT", help="also listen on TCP (bearer token required)")
     p.add_argument("--token-file", help="token for TCP (default: $EXO_HOME/run/exod.token, created 0600)")
     p.add_argument("--stdio", action="store_true", help="JSON lines on stdin/stdout instead of HTTP")
-    p.add_argument("--engine", default=os.environ.get("EXO_ENGINE", "exo.core.engine:create"),
+    p.add_argument("--engine", default=os.environ.get("EXO_ENGINE", "exo.compose:create"),
                    help="module:factory returning an Engine (default the real core), or echo")
     p.add_argument("--seat", help="seat name: loads $EXO_HOME/seats/<name>.toml (see docs/SEATS.md)")
     p.add_argument("--stop", action="store_true", help="stop the background exod that exo web started, then exit")

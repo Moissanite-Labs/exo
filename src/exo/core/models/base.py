@@ -167,6 +167,10 @@ class HttpTransport:
         """Hook: rewrite a provider's raw HTTP error into something a user can act on."""
         return text
 
+    def explain_request_error(self, status: int, text: str, *, model: str | None) -> str:
+        """Request-local error context. The default preserves existing two-argument provider hooks."""
+        return self.explain_error(status, text)
+
     def upstream_down(self, status: int, text: str) -> bool:
         """Hook: True when an HTTP error (even a 400) means the provider's own upstream is unavailable, so the call
         is retryable on another route and counts toward the route circuit breaker."""
@@ -176,6 +180,12 @@ class HttpTransport:
     async def stream(self, messages: list[Message], tools: list[ToolSpec], **opts: Any) -> AsyncIterator[ProviderEvent]:
         session_id = opts.pop("session_id", None)
         body = self.build_body(messages, tools, **opts)
+        async for event in self.stream_prepared(body, session_id=session_id):
+            yield event
+
+    async def stream_prepared(self, body: dict[str, Any], *, session_id: str | None = None,
+                              require_usage: bool = False) -> AsyncIterator[ProviderEvent]:
+        """Send exactly the prepared body. HTTPX's default transport does not retry."""
         url = self.base_url + self.path
         sent = {"user-agent": USER_AGENT, **self.headers(), **self.extra_headers}
         if self.session_header and session_id:
@@ -187,7 +197,8 @@ class HttpTransport:
                 if resp.status_code >= 400:
                     raw = (await resp.aread()).decode("utf-8", "replace")
                     msg = self.error_text(raw)
-                    yield error_event(f"HTTP {resp.status_code}: {self.explain_error(resp.status_code, msg)}", resp.status_code,
+                    explained = self.explain_request_error(resp.status_code, msg, model=body.get("model") or self.model)
+                    yield error_event(f"HTTP {resp.status_code}: {explained}", resp.status_code,
                                       retryable=True if self.upstream_down(resp.status_code, msg) else None,
                                       retry_after=parse_retry_after(resp.headers.get("retry-after")))
                     return
@@ -216,6 +227,11 @@ class HttpTransport:
         finished = st.meta.pop("_finished", False) or st.stop_reason is not None
         if not finished:  # closed cleanly but cut short: no finish event and no stop reason; never a normal end
             yield error_event("stream ended without a response", None, retryable=True)
+            return
+        usage_complete = st.meta.pop("_usage_complete", False)
+        st.meta.pop("_usage_input", None)
+        if require_usage and not usage_complete:
+            yield error_event("provider did not return complete token usage", None, retryable=False)
             return
         if st.usage != Usage():
             yield ProviderEvent(kind="usage", usage=st.usage)

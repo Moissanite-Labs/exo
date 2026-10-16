@@ -22,7 +22,9 @@ the map links a file that does not exist.
 
 | Path | What lives there |
 |---|---|
-| `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, jobs, peers, scheduler, plugin loader. Small on purpose. |
+| `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, approvals, ingress, jobs, plugin loader. Small on purpose. |
+| `src/exo/compose.py` | Builds the engine `exo serve` runs and attaches what lives outside the core: peers, the scheduler, learning. |
+| `src/exo/peers.py`, `src/exo/scheduler.py` | The peer transport (D-026) and scheduled jobs (D-022), outside the core since D-067. |
 | `src/exo/protocol/` | The wire protocol: `schema.py` (commands and events), `client.py`, `export.py`, `generated/`. |
 | `src/exo/server/` | The server that carries the protocol (Unix socket, TCP with a token, or stdio). |
 | `src/exo/*.py` | The generic mechanism: store, ledger, crypto, gate, capture, consolidate, eval, brief, onboard, CLI. |
@@ -40,6 +42,25 @@ the map links a file that does not exist.
 **Core, plugins, clients.** The core does the work and holds the state. Plugins add tools, commands, hooks, a memory
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
 program's database. Nothing in the core may assume one person's names, accounts or machines (D-004).
+
+**The engine and what is attached to it (D-067, `docs/ENGINE-SPLIT.md`).** `CoreEngine` runs turns and answers
+commands. Its collaborators have small interfaces:
+
+- `engine.approvals` is an `ApprovalDesk` (`src/exo/core/approvals.py`): `ask`, `listing`, `respond` and
+  `announce_resolved`, one `Pending` record per open request. Code that needs a human answer calls
+  `engine.approvals.ask(...)`. A test that fakes an open request puts a `Pending` in `engine.approvals.open`.
+- `engine.peers` is the `PeerService` from `exo.peers`, or `None`. `exo.compose` passes
+  `attach_peers=exo.peers.attach`. A test that needs peers does the same, then calls `await engine.peers.start(sock)`.
+- `engine.scheduler` is the `Scheduler` from `exo.scheduler`, or `None`. `exo.compose` passes
+  `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`.
+- `engine.run_turn(body, meta)` runs one turn with the lifecycle hooks around it. Product code outside the core
+  (the scheduler) uses it, not the loop's private state.
+- A plugin callback that may be sync or async goes through `exo.core.hooks.maybe_await`. One that may not declare
+  every keyword goes through `exo.core.hooks.accepted`. Do not write a new copy of either.
+
+A new subsystem that is a product feature built on the engine (like the scheduler) goes outside `src/exo/core` and
+is attached by `exo.compose`, at the point in `CoreEngine.__init__` where its tools must register, so the tool order
+the model sees stays the same.
 
 ## 2. The protocol
 
@@ -87,9 +108,11 @@ After any change to the schema, regenerate the exports and commit them:
 ### Extend through `command.run` built-ins
 
 `command.run` takes `name`, `args` and `session`. The core answers a few names itself, in
-`CoreEngine._builtin_command` in `src/exo/core/engine.py`: `context`, `compact`, `trace`, `findings`,
-`handoff_facts`, `harness_error` and `unsteer` (pull a queued steer message back; args is its id, empty means the
-newest; publishes `steer.cancelled`, D-045). Anything else goes to a command a plugin registered. To add one:
+`builtin_command` in `src/exo/diagnostics.py`: `context`, `compact`, `trace`, `findings`,
+`handoff_facts`, `harness_error`, `subagent` (list, open, steer and stop a running child; the rules live in
+`src/exo/subagents.py`, outside the counted core, D-070), `unsteer` (pull a queued steer message back; args is its id, empty means the
+newest; publishes `steer.cancelled`, D-045) and `rename` (set the session title; principal only; publishes
+`session.updated`, D-069). Anything else goes to a command a plugin registered. To add one:
 
 1. For a core command, add a branch in `_builtin_command` and an entry in `_commands_list` so it shows in
    `commands.list`. Return a string, dict or list.
@@ -143,8 +166,10 @@ A plugin is a folder with `plugin.yaml`, an `__init__.py` that has `register(ctx
 The manifest needs a `name`. Other keys in use: `version`, `description`, `kind`, `hooks`, `config_schema` (with a
 default for each key), `tags`. Look at `plugins/exo-command/plugin.yaml` for a full one.
 
-Plugins are found in `$EXO_PLUGIN_DIRS`, then `$EXO_HOME/plugins`, then the repo's `plugins/`. A seat can limit the
-list with `[plugins] enabled`. A failed `register` is rolled back, so a half-loaded plugin leaves nothing behind.
+Plugin folders are found in `$EXO_PLUGIN_DIRS`, then `$EXO_HOME/plugins`; installed `exo.plugins` entry points
+also load. To use the repo's plugins during development, set `EXO_PLUGIN_DIRS` to its `plugins/` folder.
+A seat can limit the list with `[plugins] enabled`. A failed `register` is rolled back, so a half-loaded plugin
+leaves nothing behind.
 
 What `ctx` offers (`src/exo/core/plugins.py`):
 
@@ -159,13 +184,23 @@ What `ctx` offers (`src/exo/core/plugins.py`):
 | `register_skill(name, path)` | Adds a skill file. |
 | `get_config(key, default)` | Reads a plugin setting. |
 
-**Hooks.** The names are in `VALID_HOOKS` in `src/exo/core/hooks.py`: `pre_tool_call`, `post_tool_call`,
-`transform_tool_result`, `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`,
-`on_session_end`, `on_session_reset`, `on_turn_start`, `on_turn_end`, `on_compaction`, `pre_approval_request`,
-`post_approval_response`, `pre_command`, `subagent_start`, `subagent_stop`, `on_skill_lifecycle`. Callbacks take
-keyword arguments only. A failing callback is logged and skipped (it fails open), except that a `pre_tool_call`
-block is honoured. To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the
-principal, it returns `{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+**Hooks.** `register_hook` accepts only the six names in `VALID_HOOKS` in `src/exo/core/hooks.py`, which the
+core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call`, `transform_tool_result`,
+`on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. A failing callback is logged and
+skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
+tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
+To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
+`{"action": "approve", ...}` (see `plugins/exo-gate/exo_gate/hook.py`).
+
+`KNOWN_UNFIRED_HOOKS` names hooks present in Hermes contracts or earlier Exo declarations that Exo does not
+fire: `pre_llm_call`, `post_llm_call`, `transform_llm_output`, `on_session_start`, `on_session_end`,
+`on_session_finalize`, `on_session_reset`, `on_compaction`, `pre_approval_request`, `pre_command`,
+`subagent_start`, `subagent_stop`, `on_skill_lifecycle`, `pre_auxiliary_call`, `post_auxiliary_call`,
+`pre_gateway_dispatch`, `kanban_task_completed`, and `kanban_task_blocked`. Default registration raises
+`HookError` instead of accepting a callback that would never run. A custom `HookRegistry(valid=...)` can define
+a separate fire surface for an isolated consumer; it does not add hooks to the Exo core. Hermes contract tests
+continue to check Hermes's own hook metadata.
+
 Required-executor engines propagate failures of `exo-gate` in `pre_tool_call`
 and `post_approval_response`, blocking dispatch. The gate requires saved signed
 decision and approval events; ordinary optional hooks keep the behavior above.
@@ -244,13 +279,34 @@ Plugin suites are separate. They need a bus address that goes nowhere and a seat
 
 Run each plugin folder you changed: `plugins/<name>/tests`.
 
+One test is opt-in because it spends money and needs a logged-in CLI: `tests/core/models/test_claude_cli_real.py`
+(marker `real_claude`) runs one tiny real turn through the claude-cli provider, to catch a Claude CLI release that
+changes the stream-json envelope. It is skipped unless `EXO_TEST_REAL_CLAUDE=1` is set and `claude` is on PATH. Default
+runs and CI never run it.
+
 If you changed the protocol schema, also run `python -m exo.protocol.export --check`.
 
-Rules that tests enforce: the protocol caps, the core line budget, the TUI colour tokens against the site's
+Rules that tests enforce: the protocol caps, the core line budget (a ratchet with headroom, explained below), the
+TUI colour tokens against the site's
 `style.css`, that every `/help` command appears in the intro skill, and the docs map (`tests/docs/test_docs_map.py`).
 Tests use fake models and no network. The conftest fixtures isolate `EXO_HOME`, the bus identity and the peers
 folder, so a test never reads your real setup. The root fixture also clears inherited `NO_COLOR` so terminal
 settings cannot change the expected TUI theme. Tests that need no-colour mode set `NO_COLOR` themselves.
+
+**The core line budget (D-077).** `test_core_line_budget` (`tests/integration/test_wave1_acceptance.py`) counts the
+lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`,
+generated files excluded. It is a ratchet with headroom, not a wall. The test records `CORE_FLOOR` and
+`CORE_HEADROOM` and fails when the count reaches their sum. Run it with `-s` or `-rP` to see the count, the headroom
+left and the largest counted files. The rules are in `docs/ENGINE-SPLIT.md` "Budget policy":
+
+- Fixes and features land inside the headroom with no ceremony.
+- A PR that makes a real reduction (deletions, simplification, a real seam from the engine split) sets `CORE_FLOOR` to
+  its post-merge count in the same PR. The floor never goes up.
+- A security or robustness fix is never blocked. If it would cross the ceiling, raise `CORE_HEADROOM` by the minimum
+  that the failure message names, and add a one-line note to `DECISIONS.md`. A reduction follows within the week.
+- A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+- Never edit the `CORE` list to dodge the count. The goal is structural: no private-state reads across module
+  boundaries, no product imports into the engine, one responsibility per module. The count is a signal for it.
 
 Check your prose before you commit docs:
 
@@ -263,9 +319,30 @@ then each plugin suite on its own (from the plugin folder, because each has its 
 with Python 3.11 and 3.13. It also runs `pytest plugins` once, to prove the plugin tests collect together. Plugin
 test files need unique names (`test_<plugin>_...py`) because the plugin test folders are not packages.
 
-**Lint.** `ruff check` with the pyflakes rules only (`F`, set in `pyproject.toml`). CI runs it with `--exit-zero` for
-now, so findings show but do not fail the build: the tree still has unused imports (F401) that were not mass-fixed
-while several branches edit the same files. Keep new code clean. When the baseline is clean, drop `--exit-zero`.
+**Lint.** `uv run --frozen --all-extras ruff check .` checks the pyflakes rules (`F`, set in `pyproject.toml`).
+Findings fail CI. Keep intentional public re-exports explicit (`from module import name as name`), and preserve
+calls with side effects when removing unused bindings.
+
+**Types.** CI checks `src/exo` and the packaged terminal client `clients/tui/exo_tui` with mypy 2.4.0,
+Python 3.11 and the Linux platform. Both are explicit targets so mypy checks the same source whether the
+editable installation points at this checkout or another one. It follows local imports using `src`,
+`clients/tui` and `plugins/exo-command`. Diagnostics from those imports also count. This is the standard
+mypy check, not strict mode or a check of every unannotated function body. Run the same check locally:
+
+    uv sync --frozen --all-extras --python 3.11
+    uv run --frozen --all-extras python scripts/check_types.py
+
+The reviewed `.github/mypy-baseline.json` records existing errors by relative path, message, code and occurrence
+count. Source line shifts do not matter. Another occurrence of an existing error does. New errors fail the check
+and must be fixed. Resolved errors also fail until their stale entries are removed. After fixing errors, run:
+
+    uv run --frozen --all-extras python scripts/check_types.py --update
+
+Review and commit the smaller baseline. `--update` refuses new errors and never expands it. CI never writes it.
+`--initialize` creates a first baseline only when the file is absent, for a separately reviewed migration of the
+compiler or check scope. The helper refuses missing dependencies, mismatched settings and malformed or fatal
+compiler output. It uses no disk cache. `--root PATH --baseline PATH` can check another checkout without changing
+that checkout. No global or per-module type-error suppressions are applied.
 
 **Lockfile.** `uv.lock` pins every dependency, extras included. CI installs with `uv sync --frozen --all-extras`.
 After you change `dependencies` or an extra in `pyproject.toml`, run `uv lock` and commit the result. Declare every
@@ -328,6 +405,15 @@ Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). To releas
 `[X.Y.Z] (codename) - date` heading, run the suites (`tests/test_versioning.py` fails if they drift), merge, then tag
 main with an annotated `exo-vX.Y.Z`. Site deploys take `--version`; see `scripts/deploy-site.sh`.
 
+**Signing releases (D-073).** Users who set `update.require_signed` (`docs/INSTALL.md`) accept only commits signed
+by a key in `trust/allowed_signers`, in the format `ssh-keygen -Y verify` reads: `<principal> <key type> <public key>`,
+one per line (add `namespaces="git"` after the principal to limit the key to git). Sign the commits that land on
+main (`git config gpg.format ssh`, `git config user.signingkey ~/.ssh/<key>.pub`, `git config commit.gpgsign true`;
+for merges made on GitHub, use a merge you sign locally, since GitHub's web signature is not an SSH key). Also sign the
+tag, `git tag -s exo-vX.Y.Z`, for people who check it by hand. To change keys, add the new key in a commit signed by an
+old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the list. Never remove the
+old key from the list in the same commit that the old key must sign.
+
 ## 9. Recipes
 
 Short, working patterns for four things people ask about. Each one names the file to read next.
@@ -378,17 +464,12 @@ A decision model returns probabilities, not prose (`docs/PROVIDERS.md`). The cal
 `aux`, then `main`.
 
 ```python
-from exo.core.models.decision import ask_choice_result, ask_score, tighten_only, DecisionError
+from exo.core.models.decision import ask_choice_result, tighten_only, DecisionError
 
 res = await ask_choice_result(router, state, "How strictly should this call be gated?",
                               ["allow", "log", "ask", "deny"])
 res.choice, res.probabilities, res.source, res.route, res.confidence
 #   source is "decision" (a probability model) or "generative" (a chat model fallback, probability 1.0 on its pick)
-
-sc = await ask_score(router, state, "How risky is this?", ["harmless", "minor", "serious"])
-sc.score         # a level index counted from 0; it can fall between levels, such as 1.43. Use 2 to 10 levels.
-
-probs = await ask_choice(router, state, "Which fits?", ["a", "b"])   # just {option: probability}
 ```
 
 - `state` is the context the question is about. It can be a string or JSON. `router` comes from the plugin context

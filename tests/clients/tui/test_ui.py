@@ -7,16 +7,15 @@ import re
 from pathlib import Path
 
 import pytest
-from exo.core.engine import CoreEngine
 from exo.core.types import ToolCall
 from exo.protocol import schema as s
 from exo_tui import theme as th
 from exo_tui.app import ExoApp
 from exo_tui.boot import BootScreen
-from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, PromptMark, StatusStrip,
+from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, StatusStrip,
                              ToolBlock, Welcome)
 from rich.console import Console
-from test_tui import FAKE, FakeServerClient, make_engine, run, send, until
+from test_tui import FakeServerClient, make_engine, pending_approval, run, send, until
 
 SITE_CSS = Path(__file__).resolve().parents[3] / "site" / "assets" / "style.css"
 
@@ -246,14 +245,14 @@ def test_tip_line_keeps_the_tip_prefix_in_the_text(tmp_path):
 # ---------------------------------------------------------------- approval
 def test_approval_card_draws_header_and_key_chips(tmp_path):
     async def sc(app, pilot, client, eng):
-        app.reconcile_every = 1e9  # a card published straight to the hub has no request in the core (D-045)
-        eng.hub.publish(s.ApprovalRequested(request_id="r", summary="Post it?", risk="public, irreversible",
-                                            call=ToolCall("c", "slack_post", {"text": "hi"})), app.session)
+        pending_approval(eng, app.session, s.ApprovalRequested(request_id="r", summary="Post it?", risk="public, irreversible",
+                                                              call=ToolCall("c", "slack_post", {"text": "hi"})))
         await until(lambda: app.card is not None, pilot)
         await pilot.pause(0.1)
         out = plain(app.card.body(), 70)
         assert out.startswith("APPROVAL · PUBLIC, IRREVERSIBLE") and "Post it?" in out
         assert "[o] once  [a] always  [d] deny" in out
+        await pilot.press("ctrl+f")
         await pilot.press("d")
         await pilot.pause(0.1)
         assert "why deny?" in plain(app.card.body(), 70) and "[o]" not in plain(app.card.body(), 70)
@@ -329,10 +328,9 @@ def test_reduced_motion_app_has_still_widgets(tmp_path, monkeypatch):
 # ---------------------------------------------------------------- snapshots
 def test_screenshots_of_key_states_render(tmp_path):
     async def sc(app, pilot, client, eng):
-        app.reconcile_every = 1e9  # a card published straight to the hub has no request in the core (D-045)
         shots = []
         shots.append(app.export_screenshot())
-        eng.hub.publish(s.ApprovalRequested(request_id="r", summary="Post it?", risk="public"), app.session)
+        pending_approval(eng, app.session, s.ApprovalRequested(request_id="r", summary="Post it?", risk="public"))
         await until(lambda: app.card is not None, pilot)
         await pilot.pause(0.6)
         shots.append(app.export_screenshot())
@@ -383,7 +381,7 @@ def test_hero_hidden_on_a_short_terminal(tmp_path):
 
     async def main():
         app = ExoApp(FakeServerClient(eng), seat="tester")
-        async with app.run_test(size=(100, 24)) as pilot:
+        async with app.run_test(size=(100, 24)) as _pilot:
             await asyncio.wait_for(app.ready.wait(), 5)
             assert not app.query("#hero") and app.query("#welcome")
 
@@ -405,8 +403,7 @@ def test_tool_columns_align_with_and_without_the_hint():
 
 def test_approval_leaves_a_blank_row_above_the_wire(tmp_path):
     async def sc(app, pilot, client, eng):
-        app.reconcile_every = 1e9  # a card published straight to the hub has no request in the core (D-045)
-        eng.hub.publish(s.ApprovalRequested(request_id="r", summary="x", risk="low"), app.session)
+        pending_approval(eng, app.session, s.ApprovalRequested(request_id="r", summary="x", risk="low"))
         await until(lambda: app.card is not None, pilot)
         await pilot.pause(0.2)
         assert app.card.region.bottom < app.query_one("#activity").region.y  # a gap, not touching

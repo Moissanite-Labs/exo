@@ -373,7 +373,7 @@ def frag(e):
     op = int(e[0])
     args = e[1:]
     if op == 20:
-        unit = UNITS.get(args[0], str(args[0]))
+        _unit = UNITS.get(args[0], str(args[0]))
         r = args[1]
         if isinstance(r, list):
             if r[0] == r[1]:
