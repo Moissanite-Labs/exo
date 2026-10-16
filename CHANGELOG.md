@@ -8,7 +8,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Security
 - A `deny` or `reserved` entry in `gates.yaml` now matches any simple command on a compound line, nested ones
   included (D-075). Before, only the most severe part was checked, so `git push origin main && rm -rf build` asked
-  about the delete and ran the denied push on approval.
+  about the delete and ran the denied push on approval. Each part carries the tool of its call (`tool:execute_code`
+  no longer denies `python -c` run from bash), the `ssh` hop and the `internal` exposure of an `ssh` line reach
+  every part, a flat mapping entry with a `reason` or `name` is no longer ignored, and a standing grant in exo-gate
+  no longer covers a reserved part of the line. Where the gate cannot read a command (`coproc`, nesting past the
+  depth cap, `eval $(...)`, a command on stdin, `watch`/`tmux`-style wrappers) the line still asks as opaque rather
+  than denying; `docs/GATE.md` lists these paths, and `${...}` bodies are #143 / #144.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
