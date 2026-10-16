@@ -10,14 +10,17 @@ A variable is dropped when any of these holds:
 - it contains TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL, APIKEY, API_KEY, PRIVATE_KEY, ACCESS_KEY or _KEY_;
 - it starts with AWS_, GH_, EXO_BUS_, EXOD_ or EXO_PRINCIPAL, or is GITHUB_TOKEN or ends in DATABASE_URL;
 - it is an EXO_ variable that names a socket (contains SOCK): the core's socket and credential stay out of tools;
-- it is a shell startup hook (``BASH_ENV`` or ``ENV``), which can run code before the command;
+- it is a shell startup hook bash imports before ``bash -c`` runs the command: ``BASH_ENV``, ``ENV``, an exported
+  function (``BASH_FUNC_<name>%%``, or ``BASH_FUNC_<name>()`` from bash before 4.4), ``SHELLOPTS``, ``BASHOPTS``
+  or ``PS4``, matched by exact name only;
 - it is a known credential/configuration name (including database passwords, package/docker auth and kube config);
 - its value has a recognized token/private-key format, or its URL/URI/proxy value carries userinfo or a credential query;
 - it matches the seat's ``[tools] env_deny`` (exact names or shell patterns like ``COMPANY_*``).
 
 A seat's ``[tools] env_allow`` (exact names) keeps a variable the rules above would drop. The denylist wins over
 the allowlist. This is a heuristic: an unrecognized secret under an innocent name still passes, so keys belong in the key store,
-not the environment.
+not the environment. Loader and interpreter hooks (``LD_PRELOAD``, ``PYTHONPATH``, ``NODE_OPTIONS``,
+``GIT_SSH_COMMAND`` and the like) pass: they have ordinary development uses, and docs/TOOLS.md says so.
 """
 from __future__ import annotations
 
@@ -34,7 +37,11 @@ WORDS = ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "APIKEY", "API_K
          "_KEY_")
 PREFIXES = ("AWS_", "GH_", "EXO_BUS_", "EXOD_", "EXO_PRINCIPAL")
 NAMES = frozenset({"GITHUB_TOKEN", "STRIPE_SK", "NPM_CONFIG__AUTH", "DOCKER_AUTH_CONFIG", "KUBECONFIG",
-                   "PGPASSFILE", "PGSERVICEFILE", "PGSSLKEY", "SLACK_WEBHOOK_URL", "BASH_ENV", "ENV"})
+                   "PGPASSFILE", "PGSERVICEFILE", "PGSSLKEY", "SLACK_WEBHOOK_URL"})
+# Shell startup hooks: exact case, never through ``is_secret_name`` (it case-folds and has other callers, and ``ENV=dev``
+# or a ``?env=`` URL query is no secret). Exported functions arrive as ``BASH_FUNC_<name>%%`` (``BASH_FUNC_<name>()``
+# before bash 4.4) and shadow commands.
+EXEC_HOOKS = frozenset({"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PS4"})
 VALUE_SECRET = re.compile(r"^(?:sk-|gh[pousr]_|xox[baprs]-|whsec_)[A-Za-z0-9_-]{16,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----")
 URL_SECRETS = frozenset({"token", "access_token", "api_key", "apikey", "password", "passwd", "secret",
                         "auth", "authorization", "key", "signature", "sig"})
@@ -72,6 +79,11 @@ def is_secret_name(name: str) -> bool:
             or any(w in u for w in WORDS) or u.startswith(PREFIXES) or (u.startswith("EXO") and "SOCK" in u))
 
 
+def is_exec_hook(name: str) -> bool:
+    """A variable bash acts on at startup, before the command (exact name; see ``EXEC_HOOKS``)."""
+    return name in EXEC_HOOKS or (name.startswith("BASH_FUNC_") and name.endswith(("%%", "()")))
+
+
 def is_secret_value(name: str, value: str) -> bool:
     """Recognized token formats and credential-bearing URL/URI fields; not arbitrary secret detection."""
     if VALUE_SECRET.search(value.strip()):
@@ -97,7 +109,7 @@ def scrub_env(src: Mapping[str, str] | None = None, allow: Iterable[str] = (),
     def drop(k: str, v: str) -> bool:
         if any(fnmatch.fnmatchcase(k, d) for d in denied):
             return True
-        return k not in allowed and (is_secret_name(k) or is_secret_value(k, v))
+        return k not in allowed and (is_exec_hook(k) or is_secret_name(k) or is_secret_value(k, v))
 
     return {k: v for k, v in src.items() if not drop(k, v)}
 

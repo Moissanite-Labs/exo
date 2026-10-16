@@ -804,6 +804,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   identity, the core socket and credential variables, and a new seat `[tools] env_deny` (names or patterns).
   `env_allow` keeps a name; `env_deny` wins. The claude-cli child gets `minimal_env` (PATH, HOME, locale, terminal,
   CLAUDE_CONFIG_DIR, proxies, CA bundles) plus its switches.
+  *Amendment 2026-10-16 (issue #135):* the scrub also drops the shell startup hooks bash acts on before `bash -c`
+  reaches the command: `BASH_ENV`, `ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS`, `BASHOPTS` and
+  `PS4` (`envscrub.EXEC_HOOKS`). They are a separate exact-case set, not secret names: `is_secret_name` case-folds
+  and also classifies URL query keys and CLI diagnostics, so `ENV=dev` or `?env=staging` must not count as a
+  credential. The same `env_allow` (exact) and `env_deny` precedence applies. Limits: loader and interpreter hooks
+  (`LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS`, `PERL5OPT`, `RUBYOPT`, `GIT_CONFIG_PARAMETERS`, `GIT_SSH_COMMAND`,
+  `GIT_EXTERNAL_DIFF`) pass, since they have everyday development uses; `bash -p` was rejected because it would
+  silently defeat an exact `env_allow` for a trusted startup file. Documented in `docs/TOOLS.md`.
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys

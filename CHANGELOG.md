@@ -6,8 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
-- Tool subprocesses drop `BASH_ENV` and `ENV` by default so inherited shell startup files cannot run before the
-  command (#135). Exact `env_allow` overrides remain available; `env_deny` wins.
+- Tool subprocesses (bash, background jobs, `code_find`) drop the shell startup hooks bash acts on before the
+  command: `BASH_ENV`, `ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS`, `BASHOPTS` and `PS4` (#135,
+  D-039 amendment). They match by exact name and are not secret names, so `ENV=dev`, a `?env=` URL query and
+  claude-cli diagnostics are unaffected. Exact `env_allow` entries restore them; `env_deny` wins. Loader and
+  interpreter hooks (`LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS`, ...) are documented as not scrubbed.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
