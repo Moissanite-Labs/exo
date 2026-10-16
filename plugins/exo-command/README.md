@@ -173,6 +173,13 @@ not price (a local model, an unknown rate) shows its tokens and `unpriced`. The 
 named by the newest `turn.started`. Cost per accepted output needs verdict events from the ledger and is
 left for when `exo.eval` publishes them.
 
+A subagent's spend counts once. When a delegated child finishes, the core adds its total to the parent's
+`session_total` and publishes `usage.updated` on the parent. From then on the table keeps the child's row,
+marked `in parent` (`rolled_up` in the data), and the total, the seat and model bars and the session counts
+leave it out. That spend then shows under the parent's seat and model. A child that is still running, the
+session of a scheduled job and a fork are summed as their own sessions, because the core rolls none of them
+into a parent.
+
 ## Tests
 
 ```sh
