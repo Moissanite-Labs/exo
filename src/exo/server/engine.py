@@ -79,7 +79,15 @@ class MemoryLog:
 
 
 class Closed(Exception):
-    """The hub shut down."""
+    """The stream ended: the hub shut down (``Hub.closed``), or the subscriber fell ``MAX_LAG`` events behind and
+    resumes with since."""
+
+
+# A subscriber this many unread events behind has stalled: its stream ends after the last event it read and it
+# resumes with since, so a stopped reader cannot grow the core's memory. A reader that keeps up holds what one loop
+# turn publishes: a delta per provider chunk (core/loop.py) and one tool.output per running tool (core/engine.py
+# run_tool joins a tool thread's chunks), so a handful.
+MAX_LAG = 4096
 
 
 class Subscription:
@@ -138,13 +146,20 @@ class Hub:
         self.log: EventLog = log if log is not None else MemoryLog()
         self.seq = self.log.last_seq()
         self._subs: set[asyncio.Queue[Event | None]] = set()
+        self.closed = False  # set by close(); a stream that ends while False was ended for lag: resume with since
 
     def publish(self, body: Any, session: str | None = None) -> Event:
         ev = Event.of(body, self.seq + 1, session)
         self.log.append(ev)
         self.seq = ev.seq
-        for q in self._subs:
-            q.put_nowait(ev)
+        for q in list(self._subs):
+            if q.qsize() < MAX_LAG:
+                q.put_nowait(ev)
+            else:  # stalled: drop what it has not read and end its stream; it resumes with since, so no gap
+                self._subs.discard(q)
+                while not q.empty():
+                    q.get_nowait()
+                q.put_nowait(None)
         return ev
 
     def since(self, seq: int, session: str | None = None) -> list[Event]:
@@ -154,6 +169,7 @@ class Hub:
         return Subscription(self, since, session)
 
     def close(self) -> None:
+        self.closed = True
         for q in self._subs:
             q.put_nowait(None)
         self._subs.clear()

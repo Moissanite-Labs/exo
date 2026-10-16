@@ -58,7 +58,8 @@ Web routes: `GET /`, `GET /api/snapshot?sections=a,b&fresh=true`, `GET /api/sect
 The server binds to loopback, and a POST from another origin is refused.
 
 On start the client reads the last 5000 events so recent approvals, usage and task moves are not missed.
-A client that drops resumes from the last `seq`.
+When its stream ends (a core restart, or a stream the core ended for falling behind, D-079), it replays from the
+last event it applied, so it misses nothing.
 
 ## The web UI
 

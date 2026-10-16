@@ -3,7 +3,8 @@
 ``CommandCentre`` holds a ``State`` and keeps it current from a ``Source``:
 
 * ``bootstrap()`` asks the core for the picture (``hello``, ``session.list``, ``tasks.list``) and
-  replays recent events so approvals and usage are not missed.
+  replays recent events so approvals and usage are not missed; after a reconnect, every event since the last one
+  applied.
 * ``follow()`` then folds the live event stream; ``sync()`` does one poll through
   ``events.subscribe`` for callers with no stream (tests, a one-shot digest).
 
@@ -52,7 +53,11 @@ class CommandCentre:
     async def bootstrap(self) -> None:
         src = self._need_source()
         hello = await src.call(s.Hello(client="exo-command"))
-        since = max(0, int(hello.get("seq") or 0) - REPLAY_WINDOW)
+        seq = int(hello.get("seq") or 0)
+        # A reconnect resumes where this page stopped, so every event published while the stream was down applies
+        # (the core ends a stream that falls behind, D-079). A first start, or a newer core whose log is behind this
+        # page, replays only the newest window.
+        since = self.state.seq if 0 < self.state.seq <= seq else max(0, seq - REPLAY_WINDOW)
         replay = await src.call(s.EventsSubscribe(since=since))
         self.state.apply_all(replay.get("events") or [])
         for ev in replay.get("events") or []:
