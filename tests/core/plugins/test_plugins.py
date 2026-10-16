@@ -167,6 +167,27 @@ def test_context_slot_exclusive_and_shape():
     assert s.context is None
 
 
+
+def test_context_engine_sees_the_whole_prompt_after_a_turn():
+    """D-080: a context engine decides when to compress from OpenAI-style prompt_tokens, which count the cached
+    tokens. Usage keeps cache reads and writes out of input_tokens, so the adapter adds them back."""
+    from types import SimpleNamespace
+
+    from exo.core.types import Usage
+    from exo.plugin_context import ContextAdapter
+
+    class Seen(Eng):
+        def on_turn_complete(self, messages, usage=None, **kw):
+            self.turn_usage = usage
+
+    e = Seen("ctx")
+    e.update_model("m", 100_000)  # compress above 75,000 prompt tokens
+    adapter = ContextAdapter(SimpleNamespace(transcript=lambda session, last: []), e)
+    adapter.on_turn_complete("s", Usage(input_tokens=12, cache_read_tokens=80_000, cache_write_tokens=12_000,
+                                        output_tokens=5))
+    assert e.last_prompt_tokens == 92_012 and e.should_compress()
+    assert e.turn_usage == {"prompt_tokens": 92_012, "completion_tokens": 5, "total_tokens": 92_017}
+
 def test_memory_provider_defaults_and_thread():
     class M(MemoryProvider):
         name = "m"

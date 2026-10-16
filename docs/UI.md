@@ -65,6 +65,8 @@ the middle dot as separator come straight from the site.
 Where the numbers come from, all from events the core already sends: `model.call` (`requested`, `route`,
 `usage.cache_read_tokens`), `usage.updated` (context tokens, session cost), `memory.summarized`,
 `peer.message`, `taste.updated`, `tool.completed` (`duration_ms`), and the findings count the client polls.
+Context tokens are the last call's whole prompt, input plus cache read and cache write. The cache share is cache
+read over that prompt. Input is the uncached part on every provider (D-080), so the sum counts each token once.
 
 ## The /providers panel
 

@@ -324,9 +324,8 @@ def test_cost_flows_from_catalog_price_through_router_and_trace(tmp_path):
     r = Router.from_config({"models": {"p:m": {"input": 2.0, "output": 10.0, "cache_read": 0.2}}}, env={})
     u = r.price(Route("p", "m"), Usage(input_tokens=1000, output_tokens=100, cache_read_tokens=5000))
     assert u.cost_usd == pytest.approx((1000 * 2.0 + 100 * 10.0 + 5000 * 0.2) / 1e6)  # cache read priced as such
-    # OpenAI-style counts include the cached tokens in input_tokens: they are not charged twice
-    o = r.price(Route("p", "m"), Usage(input_tokens=6000, output_tokens=100, cache_read_tokens=5000), True)
-    assert o.cost_usd == pytest.approx(u.cost_usd)
+    # input_tokens is the uncached input on every transport (D-080): the OpenAI transport splits the cached
+    # tokens out of prompt_tokens, so the router never subtracts them (tests/core/models/test_router.py)
     assert r.price(Route("p", "nope"), Usage(input_tokens=5)).cost_usd is None  # no price: None, never 0
 
 

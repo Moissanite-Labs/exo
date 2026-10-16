@@ -548,3 +548,47 @@ def test_required_decision_missing_policy_is_a_hard_gate_refusal(monkeypatch):
     monkeypatch.setenv('EXO_MODEL_SPEND_REQUIRED', '1')
     with pytest.raises(SpendDenied): asyncio.run(ask_choice_result(r, 's', 'q', ['a', 'b']))
     assert not fake.calls
+
+
+def test_cached_calls_settle_the_same_spend_on_both_transports(tmp_path):
+    """D-080: the OpenAI transport hands the boundary uncached input in input_tokens, as Anthropic does. Settled
+    spend is unchanged: uncached, cache-read and cache-write tokens are each charged once at their own rate. A cached
+    count above the prompt count is incomplete usage: the call fails and the reservation is retained."""
+    cfg = policy(tmp_path)
+    cfg['daily_usd'] = cfg['monthly_usd'] = 1
+    cfg['routes']['test:m']['cache_read'] = '.1'
+    cfg['routes']['anth:claude-opus-5-5'] = dict(contract='text-tokens-v1', base_url='https://api.anthropic.com',
+        model='claude-opus-5-5', transport='anthropic', input_bound=8000, max_output=1000, input=1, output=10,
+        cache_read='.1', cache_write='1.25')
+    ant = ''.join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in [
+        {'type': 'message_start', 'message': {'usage': {'input_tokens': 12, 'cache_read_input_tokens': 900,
+                                                        'cache_creation_input_tokens': 200, 'output_tokens': 1}}},
+        {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': 'ok'}},
+        {'type': 'content_block_stop', 'index': 0},
+        {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}, 'usage': {'output_tokens': 30}},
+        {'type': 'message_stop'}])
+    cached = [80, 150]
+    def handle(req):
+        if req.url.host == 'api.anthropic.com':
+            return httpx.Response(200, text=ant)
+        data = {'choices': [{'delta': {'content': 'hi'}, 'finish_reason': 'stop'}],
+                'usage': {'prompt_tokens': 100, 'completion_tokens': 10,
+                          'prompt_tokens_details': {'cached_tokens': cached.pop(0)}}}
+        return httpx.Response(200, text='data: ' + json.dumps(data) + '\n\ndata: [DONE]\n\n')
+    r = Router.from_config({'spend': cfg, 'roles': {'main': ['test:m'], 'aux': ['anth:claude-opus-5-5']},
+        'providers': {'test': {'transport': 'openai', 'base_url': 'https://api.openai.com/v1'},
+                      'anth': {'transport': 'anthropic', 'base_url': 'https://api.anthropic.com'}}},
+        catalog={}, env={}, client=httpx.AsyncClient(transport=httpx.MockTransport(handle)))
+    o = call(r)[-1]
+    assert o.kind == 'done', o.error
+    assert (o.usage.input_tokens, o.usage.cache_read_tokens, o.usage.cache_write_tokens) == (20, 80, 0)
+    assert o.usage.cost_usd == pytest.approx((20 * 1 + 10 * 10 + 80 * .1) / 1e6)  # 128,000 nano-USD, as on main
+    a = collect(r.stream('aux', [Message.user('hi')], []))[-1]
+    assert a.kind == 'done', a.error
+    assert (a.usage.input_tokens, a.usage.cache_read_tokens, a.usage.cache_write_tokens) == (12, 900, 200)
+    assert a.usage.cost_usd == pytest.approx((12 * 1 + 30 * 10 + 900 * .1 + 200 * 1.25) / 1e6)  # 652,000 nano-USD
+    assert [actual for _, actual in rows(cfg)] == [128_000, 652_000]
+    bad = call(r)[-1]  # cached 150 of a 100-token prompt
+    assert bad.kind == 'error' and 'reservation retained' in bad.error
+    assert rows(cfg)[-1][1] is None
+    with pytest.raises(SpendDenied): SpendJournal(cfg).check()

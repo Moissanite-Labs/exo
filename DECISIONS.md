@@ -1334,3 +1334,43 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** the budget test, `tests/docs`, `tests/test_privacy.py`, `tests/test_versioning.py`, `ruff check`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
+
+## D-080 (2026-10-16) One meaning for `Usage.input_tokens`, and what the per-child token budget counts
+- **Status:** Accepted 2026-10-16. It replaces the `input_includes_cache` flag that D-032 #6 added for pricing.
+- **Why:** the two transports filled `Usage.input_tokens` differently. Anthropic reports only the uncached input,
+  with cache reads and writes apart. The OpenAI transport copied `prompt_tokens`, which already holds the cached
+  tokens. Only pricing knew. Every other reader assumed one meaning and got the other half the time:
+  - The delegate budget (200,000 tokens per child) counted `input + output`. On Anthropic, where caching is on by
+    default, it ignored the cached context and barely acted. On OpenAI-style routes it counted the whole cached
+    prompt on every call, and a child with a 92k prompt was stopped after 3 calls.
+  - The TUI context gauge read about double on OpenAI routes (182,012 for a 92,012-token prompt), and the cache
+    share read 49% where 98% was real.
+  - Context-engine plugins got `prompt_tokens` = `input_tokens`, so on Anthropic they saw only the uncached tail
+    and usage-driven compression never fired.
+- **Decision:**
+  - `input_tokens` is the uncached input on every transport. Cache reads and writes are counted apart, so the
+    prompt a call sent is the sum of the three. The OpenAI transport reports `prompt_tokens - cached_tokens` as
+    input and the cached count as cache reads. A cached count it cannot split (above the prompt, negative, not
+    an integer) makes the usage incomplete, so the spend boundary refuses it and keeps the reservation. Without a
+    spend policy the whole prompt stays uncached input. The router prices `input_tokens` directly. Cost and
+    settled spend are unchanged on both transports.
+  - The per-child budget counts what the child newly processes: uncached input plus cache writes plus output.
+    Cache reads do not count. The receipt's tokens in are the same count.
+  - Readers that need the prompt size add the three counters: the TUI and web context gauges, the cache share
+    (cache reads over the whole prompt), and the `prompt_tokens` handed to context engines.
+- **Rejected:**
+  - Keeping the flag and teaching every reader about it: each new reader would have to know, and four did not.
+  - Counting all context processed (`input + cache read + cache write + output`) for the budget: every round
+    re-reads the cached context, so a child re-reading 25k tokens a round would stop after about 8 rounds, where
+    today it effectively never stops on the default provider.
+  - Counting only uncached input plus output: cache writes are new tokens at a higher price, and leaving them
+    out keeps the budget blind on Anthropic.
+- **Revisit if:** a transport reports cache counters in yet another shape, or children hit `budget` on routes that
+  report no cache counts at all (local servers with their own prompt cache), where every call's full prompt counts.
+- **Follow-up:** `spend.py` and `billing.Price.actual` still take an `includes_cache` argument, now always false.
+  Remove it once PR #129 (tiered spend rates, same files) lands. The turn usage handed to `on_turn_complete` is the
+  sum of the turn's calls, not the last call's prompt.
+- **Validation:** `tests/core/models` (transport split, router price, spend settlement), `tests/agents`,
+  `tests/clients/tui`, `tests/core/plugins`, `tests/trace`, the core budget test, `ruff check`, the mypy baseline.
+- **Docs:** `docs/TRACE.md` "Cost", `docs/MODEL-SPEND.md`, `docs/CORE-V2-INTERFACES.md`, `docs/AGENT-WIRE.md`
+  "Limits", `docs/UI.md`, `CHANGELOG.md`.

@@ -27,6 +27,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Token counts mean the same on every provider (D-080). `input_tokens` is now the uncached input on OpenAI-style
+  routes too, with cached tokens counted as cache reads, as Anthropic reports them. Before, the TUI context gauge
+  read about double on those routes and the cache share about half. Subagents there were stopped for `budget` after
+  a few calls with a large cached prompt, while on Anthropic the budget ignored cached context. The per-child budget
+  now counts uncached input, cache writes and output. Cache reads do not count. Context-engine plugins get the
+  whole prompt in `prompt_tokens`. Cost and model spend are unchanged.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
