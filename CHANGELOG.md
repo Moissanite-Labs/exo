@@ -14,7 +14,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - `edit_file` after whitespace drift: when only the whitespace-normalized strategy matched (one stray double
   space in the file), the span could start inside the indentation before the match and the reindented replacement
   shifted every following line by one column, leaving code that no longer parsed. The span now starts at the
-  match, and a match that begins after a line's indentation keeps the file's depth on every replaced line.
+  match. When `old_string` is dedented to column 0 (its continuation lines sit shallower than the file's) and
+  matches after a line's indentation, the replacement is re-anchored on that indentation. An `old_string` copied
+  verbatim from the file, a one-line `old_string`, and escape- or Unicode-normalized matches are replaced in place
+  as before, keeping the line's indent and the file's typography; `replace_all` on adjacent lines and an empty
+  `new_string` no longer touch text outside the match (#127).
 
 ### Changed
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).

@@ -8,8 +8,9 @@ the intended region::
     new_content, count, strategy, error = fuzzy_find_and_replace(
         content, old_string, new_string, replace_all=False)
 
-Exo trims: metrics hooks dropped, docstrings shortened. One fix: the whitespace-normalized span
-mapping no longer starts a match inside the blank run before it.
+Exo trims: metrics hooks dropped, docstrings shortened. Two fixes: the whitespace-normalized span
+mapping no longer starts a match inside the blank run before it, and a dedented pattern matched after a
+line's indentation is re-anchored on that indentation before the reindent (see _apply_replacements).
 """
 
 from __future__ import annotations
@@ -404,23 +405,40 @@ def _preserve_unicode_in_replacement(region: str, new_string: str, plan: tuple[s
     return "".join(parts)
 
 
+def _dedented_form(region: str, old_string: str) -> bool:
+    """True when old_string's first indented continuation line sits shallower than the file's: the block
+    was dedented to column 0, so its lines need the file's indent back. A verbatim copy (continuation
+    lines already at the file's depth) and a one-line old_string are not."""
+    for old_line, file_line in zip(old_string.split("\n")[1:], region.split("\n")[1:]):
+        if old_line.strip():
+            old_indent, file_indent = _leading_ws(old_line), _leading_ws(file_line)
+            return old_indent != file_indent and file_indent.startswith(old_indent)
+    return False
+
+
 def _apply_replacements(content: str, matches: list[Span], new_string: str,
                         old_string: str | None = None,
                         unicode_plan: tuple[str, list] | None = None) -> str:
     result = content
-    for start, end in sorted(matches, key=lambda x: x[0], reverse=True):
+    ordered = sorted(matches)
+    for i in reversed(range(len(ordered))):
+        start, end = ordered[i]
         adjusted = new_string
         if old_string is not None:
-            line_start = content.rfind("\n", 0, start) + 1
-            if line_start < start and not content[line_start:start].strip(" \t"):
-                # The match begins after the line's indentation (a whitespace-normalized or Unicode match of
-                # a pattern with no leading blanks). Take that indentation into the region, so the reindent
-                # below sees the file's base indent and the replacement's lines keep their depth.
-                start = line_start
             region = content[start:end]
             if unicode_plan is not None:
                 adjusted = _preserve_unicode_in_replacement(region, adjusted, unicode_plan)
-            adjusted = _reindent_replacement(region, old_string, adjusted)
+            line_start = content.rfind("\n", 0, start) + 1
+            if i:
+                line_start = max(line_start, ordered[i - 1][1])  # never back into the previous match
+            at_eol = end == len(content) or content[end] in "\r\n" or content[end - 1] == "\n"
+            if (line_start < start and not content[line_start:start].strip(" \t")
+                    and _dedented_form(region, old_string) and (adjusted or at_eol)):
+                # A dedented pattern matched after the line's indentation. Take that indentation into the
+                # region, so the reindent below sees the file's base indent and the replacement's lines
+                # keep their depth. A deletion that stops mid-line keeps the indent.
+                start = line_start
+            adjusted = _reindent_replacement(content[start:end], old_string, adjusted)
         result = result[:start] + adjusted + result[end:]
     return result
 
