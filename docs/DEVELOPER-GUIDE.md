@@ -286,12 +286,27 @@ runs and CI never run it.
 
 If you changed the protocol schema, also run `python -m exo.protocol.export --check`.
 
-Rules that tests enforce: the protocol caps, the core line budget (under 15,000 counted lines,
-`docs/ENGINE-SPLIT.md` "Budget policy"), the TUI colour tokens against the site's
+Rules that tests enforce: the protocol caps, the core line budget (a ratchet with headroom, explained below), the
+TUI colour tokens against the site's
 `style.css`, that every `/help` command appears in the intro skill, and the docs map (`tests/docs/test_docs_map.py`).
 Tests use fake models and no network. The conftest fixtures isolate `EXO_HOME`, the bus identity and the peers
 folder, so a test never reads your real setup. The root fixture also clears inherited `NO_COLOR` so terminal
 settings cannot change the expected TUI theme. Tests that need no-colour mode set `NO_COLOR` themselves.
+
+**The core line budget (D-077).** `test_core_line_budget` (`tests/integration/test_wave1_acceptance.py`) counts the
+lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`,
+generated files excluded. It is a ratchet with headroom, not a wall. The test records `CORE_FLOOR` and
+`CORE_HEADROOM` and fails when the count reaches their sum. Run it with `-s` or `-rP` to see the count, the headroom
+left and the largest counted files. The rules are in `docs/ENGINE-SPLIT.md` "Budget policy":
+
+- Fixes and features land inside the headroom with no ceremony.
+- A PR that makes a real reduction (deletions, simplification, a real seam from the engine split) sets `CORE_FLOOR` to
+  its post-merge count in the same PR. The floor never goes up.
+- A security or robustness fix is never blocked. If it would cross the ceiling, raise `CORE_HEADROOM` by the minimum
+  that the failure message names, and add a one-line note to `DECISIONS.md`. A reduction follows within the week.
+- A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+- Never edit the `CORE` list to dodge the count. The goal is structural: no private-state reads across module
+  boundaries, no product imports into the engine, one responsibility per module. The count is a signal for it.
 
 Check your prose before you commit docs:
 
