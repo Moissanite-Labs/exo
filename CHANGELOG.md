@@ -169,6 +169,30 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `~/.exo/{policies,x}/default.yaml` were allowed local writes, so one tool call could rewrite the gate's policy
   or grants without a card. They are `store_write` now and ask the principal. Quoted and escaped braces stay
   literal, as in bash. The store checks have their own brace budget, so no secret-store outcome changes.
+- Environment variables that load code or move where programs and config are found (`LD_PRELOAD`, `PATH`,
+  `PYTHONPATH`, `NODE_OPTIONS`, `BASH_ENV`, `HOME` and the rest of the audited list in `docs/GATE.md`) are
+  `opaque_exec` and ask, named in the summary, when set before a program, through `env`, `sudo` or `timeout`,
+  exported or bare (`export -p` and `readonly -p` assign too), as a parameter-expansion assignment
+  (`${PATH:=.}`, `${PATH=.}`), through `read`, `printf -v`, a `for` loop or a nameref, or as an integer through
+  arithmetic, an array subscript or a `{PATH}>` redirection (`$((PATH=10))`, `a[PATH=10]=1`). So does an
+  exporter, `read` or `printf -v` name the gate cannot read, whether spliced from a variable (`export $X=...`)
+  or a glob the shell expands first (`export PAT?=.`, `read HOM[E]`). So do `MANOPT`, `ZIPOPT`,
+  `RIPGREP_CONFIG_PATH`, `LESS` with a
+  `+` command, and a non-empty `CDPATH`, which moved a `cd` into the Exo store unseen. More command-valued
+  variables are read as commands (`GIT_PROXY_COMMAND`, `GH_PAGER`, `PSQL_PAGER`, `SUDO_ASKPASS`...). Git config
+  from the environment (`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`), `git
+  --config-env` in both forms and `git clone --config`/`-c` take the `git -c` exec-key check, and the value of
+  an exec key is classified as a command, `git -c` included, so a `deny: [delete]` fires on it. A key that loads
+  another config file or a template (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as does `git
+  clone --template`. A quoted `NAME=VALUE` after `env` or `sudo` is the assignment those programs read it as.
+  `IFS=`, `CDPATH=`, `LESS=-R`, `PAGER=cat` and other harmless assignments are unchanged, and so is text bash
+  does not expand: single-quoted text (also inside an unquoted `${a:-'...'}`), a quoted here-doc and a bracket
+  outside a subscript, so `git commit -m 'read ${PATH:=.}'`, `pytest -q 'test_x[HOME=/tmp]'` and `echo [HOME=x]`
+  stay `allow`. A
+  partly quoted value loses its quotes as bash removes them (`${GIT_SSH_COMMAND:=rm' -rf x'}` is `rm -rf x`).
+  The rarer expansion forms that can still set a variable unseen are listed in `docs/GATE.md`. This is the inline
+  form, distinct from #135, which drops `BASH_ENV` inherited from the parent environment (builds on #154,
+  D-038).
 
 ## [0.2.0] (egg) - 2026-10-13
 
