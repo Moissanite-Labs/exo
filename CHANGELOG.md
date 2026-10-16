@@ -26,6 +26,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
+- A core that `exo web` (or any client) starts is no longer that client's child (refs #145, D-036): a short helper
+  starts a new session, forks the core and exits, so init (or the nearest subreaper) adopts the core. Process
+  ancestry changed; the principal and tool checks did not. The helper and the core run with `python -P`, so a
+  `pathlib.py` in the current folder no longer runs; an `EXO_ENGINE` module must now be installed or on `PYTHONPATH`,
+  not just in the folder the client started from; startup output from `sitecustomize` no longer breaks the start; and a core that dies while
+  starting is reported at once, with its real exit code when known and never a made-up one.
 
 ## [0.2.0] (egg) - 2026-10-13
 

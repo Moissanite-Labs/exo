@@ -93,20 +93,22 @@ def writer_holder(home: Path, agent: str) -> str | None:
 def _daemonize(home: Path) -> None:
     """Fork only in a fresh helper interpreter, never in a threaded client.
 
-    setsid alone leaves the core a client descendant on macOS. Reparent it
-    before exec so principal authority can still distinguish clients from tools.
+    The helper's exit hands the core to init (or the nearest subreaper), so the core is never a child of the client
+    that started it. This is hardening, not the cause of #145: ``principal.stamp`` walks the *peer's* ancestors for
+    the core, and a client that started the core is its ancestor, never its descendant.
     """
     os.setsid()
     pid = os.fork()
     if pid:
-        os.write(1, f"{pid}\n".encode())
+        os.write(1, f"\n{pid}\n".encode())  # the last line: startup output (sitecustomize, .pth) may come first
         os._exit(0)
     # Close the PID channel immediately, including on an exec failure.
     out = os.open(private_file(log_path(home)), os.O_WRONLY | os.O_APPEND)
     os.dup2(out, 1)
     os.dup2(out, 2)
     os.close(out)
-    os.execvpe(sys.executable, [sys.executable, "-m", "exo.cli", "serve"],
+    # -P: the client's cwd is not put first on sys.path (a pathlib.py there would run as the core).
+    os.execvpe(sys.executable, [sys.executable, "-P", "-m", "exo.cli", "serve"],
                dict(os.environ, EXO_HOME=str(home)))
 
 
@@ -115,22 +117,51 @@ _DAEMONIZE_SRC = ("import pathlib, sys; from exo.ensure_core import _daemonize;"
 
 
 class _DetachedCore:
-    """The helper's successful exit does not mean the detached core exited."""
+    """The detached core: not our child, unless this process reaps orphans (PID 1 or a subreaper).
+
+    ``poll`` is ``Popen.poll``: the exit code once known, else None. ``gone`` is set when the core exited (or is a zombie)
+    and is not this process's child, so its exit code cannot be known here.
+    """
 
     def __init__(self, pid: int):
         self.pid = pid
+        self.returncode: int | None = None
+        self.gone = False
 
     def poll(self) -> int | None:
+        if self.returncode is not None or self.gone:
+            return self.returncode
         try:
-            os.kill(self.pid, 0)
-        except ProcessLookupError:
-            return 1
+            pid, status = os.waitpid(self.pid, os.WNOHANG)
+        except ChildProcessError:
+            pass
+        else:
+            if pid:
+                self.returncode = os.waitstatus_to_exitcode(status)
+                self.gone = True
+            return self.returncode
+        try:
+            self.gone = Path(f"/proc/{self.pid}/stat").read_text().rsplit(")", 1)[1].split()[0] == "Z"
+        except (OSError, IndexError):
+            pass
+        if not self.gone:
+            try:
+                os.kill(self.pid, 0)
+            except (ProcessLookupError, PermissionError):  # EPERM: the pid now belongs to someone else
+                self.gone = True
         return None
+
+
+def _exit_text(proc: subprocess.Popen | _DetachedCore) -> str:
+    code = proc.poll()
+    if code is None and getattr(proc, "gone", False):
+        return "exited; it is not this process's child, so the exit code is not known"
+    return f"exit {code}"
 
 
 def _spawn(home: Path, timeout: float = START_TIMEOUT) -> _DetachedCore:
     with open(private_file(log_path(home)), "ab") as out:
-        proc = subprocess.Popen([sys.executable, "-c", _DAEMONIZE_SRC, str(home)],
+        proc = subprocess.Popen([sys.executable, "-P", "-c", _DAEMONIZE_SRC, str(home)],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=out,
                                 env=dict(os.environ, EXO_HOME=str(home)))
         try:
@@ -143,7 +174,7 @@ def _spawn(home: Path, timeout: float = START_TIMEOUT) -> _DetachedCore:
             if proc.stdout is not None:
                 proc.stdout.close()
             raise CoreUnavailable(f"Exo core startup helper timed out. See {log_path(home)}") from None
-    pid = result.strip()
+    pid = (result.strip().splitlines() or [b""])[-1].strip()
     if proc.returncode or not pid.isdigit() or int(pid) <= 1:
         raise CoreUnavailable(f"Exo core startup helper failed (exit {proc.returncode}). "
                               f"See {log_path(home)}:\n{_tail(log_path(home))}")
@@ -204,12 +235,12 @@ def ensure_core(home: Path | None = None, agent: str | None = None, timeout: flo
         while time.monotonic() < deadline:
             if (found := find_core(home, agent)) is not None:
                 return found
-            if proc is not None and proc.poll() is not None:
+            if proc is not None and (proc.poll() is not None or getattr(proc, "gone", False)):
                 break
             time.sleep(0.1)
     if proc is not None:
         tail = _tail(log_path(home))
-        raise CoreUnavailable(f"Exo core did not start (exit {proc.poll()}). See {log_path(home)}"
+        raise CoreUnavailable(f"Exo core did not start ({_exit_text(proc)}). See {log_path(home)}"
                               + (f":\n{tail}" if tail else ""))
     raise CoreUnavailable(
         f"Agent {agent} is held by process {holder}, which is not sharing it. Close that Exo window "
@@ -233,7 +264,7 @@ def stop_core(home: Path | None = None, timeout: float = 10.0) -> str:
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         try:
-            os.waitpid(pid, os.WNOHANG)  # reaps it when it is our own child (tests); else ChildProcessError
+            os.waitpid(pid, os.WNOHANG)  # reaps it when this process adopted it (PID 1 or a subreaper)
         except ChildProcessError:
             pass
         try:

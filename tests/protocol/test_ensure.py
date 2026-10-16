@@ -18,10 +18,29 @@ from exo.core.agentlog import claim_writer, release_writer, socket_path
 from exo import ensure_core as ensure
 
 
+def kill_started_core(home: Path) -> None:
+    """A core a test started is not the test's child: kill it by its recorded pid if that pid is still this core."""
+    try:
+        pid = int(ensure.pid_path(home).read_text())
+        if f"EXO_HOME={home}".encode() in Path(f"/proc/{pid}/environ").read_bytes().split(b"\0"):
+            os.kill(pid, signal.SIGKILL)
+    except (OSError, ValueError):
+        pass
+
+
+def stop_started_core(home: Path) -> None:
+    """stop_core, after giving a core whose start was not reported time to write run/exod.pid (it does once serving)."""
+    deadline = time.monotonic() + 10
+    while not ensure.pid_path(home).exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    ensure.stop_core(home)
+
+
 @pytest.fixture
 def home():
     d = Path(tempfile.mkdtemp(prefix="exo-e-", dir="/tmp"))
     yield d
+    kill_started_core(d)
     shutil.rmtree(d, ignore_errors=True)
 
 
@@ -239,9 +258,11 @@ for _ in range(100):
     if Path(sock).exists() and key.exists():
         break
     time.sleep(.05)
+raw = key.read_text().strip()
+token = json.loads(raw)['token'] if raw.startswith('{') else raw  # a D-060 launch record, or the bare token
 with httpx.Client(transport=httpx.HTTPTransport(uds=sock), base_url='http://exod') as c:
     response = c.post('/command', content=s.Command.of(s.ModelsSet(model='fake:x')).to_json(),
-                      headers={'X-Exo-Principal': key.read_text().strip(), 'X-Exo-Client': 'web'}).json()
+                      headers={'X-Exo-Principal': token, 'X-Exo-Client': 'web'}).json()
 Path(result).write_text(json.dumps(response))
 """
     factory = home / "startup_engine.py"
@@ -266,5 +287,94 @@ Path(result).write_text(json.dumps(response))
             time.sleep(.05)
         tool_response = json.loads(result_file.read_text())
         assert not tool_response["ok"] and tool_response["error"]["code"] == "forbidden"
+        # Control: the same child, started outside the core's tree, is accepted, so the refusal above is the
+        # ancestry check and not a bad token.
+        control_file = home / "control-result.json"
+        subprocess.run([sys.executable, "-c", child, str(sock), str(control_file)], check=True, timeout=30)
+        control_response = json.loads(control_file.read_text())
+        assert control_response["ok"], control_response
     finally:
         ensure.stop_core(home)
+
+
+REAPER = r"""
+import ctypes, json, os, sys, time
+from pathlib import Path
+assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0  # PR_SET_CHILD_SUBREAPER
+from exo import ensure_core as ensure
+started, error = time.monotonic(), None
+try:
+    ensure.ensure_core(Path(sys.argv[1]), timeout=10)
+except ensure.CoreUnavailable as exc:
+    error = str(exc)
+elapsed = time.monotonic() - started
+zombies = []
+for stat in Path('/proc').glob('[0-9]*/stat'):
+    try:
+        state, ppid = stat.read_text().rsplit(')', 1)[1].split()[:2]
+    except (OSError, ValueError):
+        continue
+    if state == 'Z' and int(ppid) == os.getpid():
+        zombies.append(int(stat.parent.name))
+print(json.dumps({'error': error, 'elapsed': elapsed, 'zombies': zombies}))
+"""
+
+
+def dying_engine(home: Path, monkeypatch) -> None:
+    (home / "dying_engine.py").write_text("import os\nos._exit(3)\n")
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(home), os.environ.get("PYTHONPATH", "")]))
+    monkeypatch.setenv("EXO_ENGINE", "dying_engine:create")
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="PR_SET_CHILD_SUBREAPER is Linux only")
+def test_core_dying_under_a_subreaper_is_reported_promptly_with_its_exit_code(home, monkeypatch):
+    """A client that reaps orphans (PID 1 in a container, a subreaper) adopts the core: waitpid, not kill(0)."""
+    dying_engine(home, monkeypatch)
+    out = subprocess.run([sys.executable, "-c", REAPER, str(home)], capture_output=True, text=True, timeout=60,
+                         env=dict(os.environ, EXO_HOME=str(home)))
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got["error"] and "did not start (exit 3)" in got["error"], got
+    assert got["elapsed"] < 5, got
+    assert got["zombies"] == [], got
+
+
+def test_core_dying_at_startup_is_reported_promptly_without_a_made_up_code(home, monkeypatch):
+    dying_engine(home, monkeypatch)
+    started = time.monotonic()
+    with pytest.raises(ensure.CoreUnavailable) as e:
+        ensure.ensure_core(home, timeout=10)
+    assert time.monotonic() - started < 5
+    # Another process reaped the core, so its code is not ours to know (exit 3 if this process is a reaper).
+    assert "exit code is not known" in str(e.value) or "(exit 3)" in str(e.value), str(e.value)
+
+
+def test_startup_output_before_the_pid_does_not_break_the_handshake(home, monkeypatch):
+    site = home / "site"
+    site.mkdir()
+    (site / "sitecustomize.py").write_text("import sys\nsys.stdout.write('hello from sitecustomize')\n"
+                                           "sys.stdout.flush()\n")
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([str(site), os.environ.get("PYTHONPATH", "")]))
+    monkeypatch.setenv("EXO_ENGINE", "echo")
+    try:
+        sock = ensure.ensure_core(home, timeout=30)
+        assert ensure.probe(sock) == "alive"
+        pid = int(ensure.pid_path(home).read_text())
+        assert pid > 1 and pid != os.getpid()
+    finally:
+        stop_started_core(home)
+
+
+def test_client_cwd_is_not_on_the_core_import_path(home, monkeypatch):
+    """A pathlib.py in the directory `exo web` runs from must not run in the helper or the core."""
+    cwd, marker = home / "cwd", home / "planted-ran"
+    cwd.mkdir()
+    (cwd / "pathlib.py").write_text(f"open({str(marker)!r}, 'w').close()\n")
+    monkeypatch.chdir(cwd)
+    monkeypatch.setenv("EXO_ENGINE", "echo")
+    try:
+        sock = ensure.ensure_core(home, timeout=30)
+        assert ensure.probe(sock) == "alive"
+    finally:
+        stop_started_core(home)
+    assert not marker.exists()
