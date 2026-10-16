@@ -495,6 +495,8 @@ class Gate:
             d2 = gate.decide(c, changed, ctx)
             if _RANK[d2.outcome] > _RANK[d.outcome]:
                 d = d2
+            # A part reserved under either policy keeps its ask from a standing grant (D-075).
+            d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
             d.reason += " (policy files changed this session; the stricter of old and new applies until /gate accept)"
         if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
             d.reason += f" (registry risk is high and {tool} is not a known tool)"
@@ -601,6 +603,10 @@ class Gate:
 
     def _grant_for(self, c: gate.Classification, d: gate.Decision, binding: str, outward: bool) -> Optional[dict]:
         if c.category in gate.NO_GRANT or (d.violations and not binding):
+            return None
+        # D-075: a grant covers the act it was given for. A reserved entry that matched another part of
+        # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.
+        if any(hit != (c.category, c.target) for hit in d.reserved):
             return None
         try:
             return self.grants.match(c.category, c.target or c.tool, binding, outward)

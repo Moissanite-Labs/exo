@@ -190,17 +190,32 @@ A command is `allow` only when every program in it is known and nothing is hidde
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
-  delete is the more severe part and would otherwise set the card. The ledger view of a
-  classification (`as_dict`) leaves the parts out.
+  delete is the more severe part and would otherwise set the card. Only those two lists see the
+  parts: rules, category overrides, the opaque bump, third-party escalation, posting checks and
+  the floors see the dominant part. A part carries the tool of the call it came in on
+  (`tool:execute_code` matches the `execute_code` tool, not `python -c` run from bash), the `ssh`
+  hop is a part with the host as its target, and the inner commands of an `ssh` line are
+  `internal`. The ledger view of a classification (`as_dict`) leaves the parts out.
+  `Decision.reserved` names the parts a reserved entry matched, and the exo-gate hook does not
+  let a standing grant for the line's category cover one of them.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
-  (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
+  (`subprocess.run(['gh','pr','comment',...])` is a `github_post`). A command inside such code
+  becomes a part only when it classifies as a non-benign category; a `web_read` or
+  `local_write` literal is dropped, and code can reach a target with no literal at all.
 - The principal can lower `opaque_exec` only by naming it: `categories: {opaque_exec: act}` or a
   rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
 
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
 `npm install` runs package scripts) can run code the agent wrote earlier with a local write.
 The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+
+Residual `deny` → `ask` paths (D-075). Where the gate cannot read a command it files the line
+as `opaque_exec`, which asks, so a `deny` entry on the hidden action does not fire. Today:
+`coproc` (addressed by #140); nesting past the depth cap (#137, #141); `eval $(...)`; a command
+arriving on stdin (`echo ... | xargs -I{} sh -c '{}'`); the wrappers `watch`, `parallel`, `tmux`,
+`screen` and `setsid`. `${...}` bodies are worse: the lexer does not read them, so the line can
+be `allow` until #143 / #144 land.
 
 ## The store is credentials (D-038)
 

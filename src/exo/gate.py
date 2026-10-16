@@ -137,6 +137,9 @@ class Decision:
     violations: list[str] = field(default_factory=list)
     exposure: str = ""                # effective exposure after scopes
     third_party: bool = False
+    # (category, target) of each part a reserved entry matched (D-075). A standing grant for the line's
+    # own category must not cover a reserved part outside it.
+    reserved: list[tuple[str, str]] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -1063,10 +1066,15 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                                   "-O", "-Q", "-S", "-w", "-e") else 1
         host = rest[i] if i < len(rest) else ""
         inner = " ".join(rest[i + 1:])
-        c = (classify_shell(inner, inner_depth) if inner and depth < _DEPTH
-             else _make("shell", summary=f"ssh {host}", command=cmd))
-        if EXPOSURE.index(c.exposure) < 1:
-            c.exposure = "internal"
+        if inner and depth < _DEPTH:
+            c = classify_shell(inner, inner_depth)
+            # The hop is a part too, so a `target:<host>` entry matches when the inner command has its own target.
+            c.parts.append(_make("shell", summary=f"ssh {host}", target=host, command=cmd, signals=["remote host"]))
+        else:
+            c = _make("shell", summary=f"ssh {host}", command=cmd)
+        for p in _each_part(c):               # every part runs on the remote host (D-075)
+            if EXPOSURE.index(p.exposure) < 1:
+                p.exposure = "internal"
         c.target = c.target or host
         c.signals.append("remote host")
         return [c]
@@ -1300,8 +1308,7 @@ def classify_code(code: str) -> Classification:
         c = classify_shell(s, depth=_DEPTH - 1)
         if c.category not in _BENIGN:
             parts.append(c)
-    c = _combine(parts, code)
-    c.tool = "execute_code"
+    c = _combine(parts, code)      # `classify` stamps the tool; a nested result keeps the shell's (D-075)
     c.command = code
     c.signals = list(dict.fromkeys(c.signals + ["indirection"]))
     return c
@@ -1840,8 +1847,10 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
     or a mapping like a rule's match. Plain prose that matches none of these is ignored."""
     for e in entries:
         if isinstance(e, Mapping):
-            if e and _rule_matches(e.get("match", e), c):
-                return str(e.get("reason") or e)
+            # A flat entry may carry reason or name like a rule does; they are not match keys.
+            match = e["match"] if "match" in e else {k: v for k, v in e.items() if k not in ("decision", "reason", "name")}
+            if e and _rule_matches(match, c):
+                return str(e.get("reason") or e.get("name") or e)
             continue
         s = str(e).strip()
         if s == c.category:
@@ -1856,10 +1865,12 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
     return ""
 
 
-def _scoped(c: Classification, scopes: Mapping) -> Classification:
-    """``c`` with the principal's scopes applied, and the same for every simple command it was built from."""
+def _scoped(c: Classification, scopes: Mapping, tool: str = "") -> Classification:
+    """``c`` with the principal's scopes applied, and the same for every simple command it was built from.
+    A part carries the tool of the call it came in on, so a `tool:` entry matches it too."""
     exposure, third = apply_scopes(c, scopes)
-    return replace(c, exposure=exposure, third_party=third, parts=[_scoped(p, scopes) for p in c.parts])
+    tool = c.tool or tool
+    return replace(c, exposure=exposure, third_party=third, tool=tool, parts=[_scoped(p, scopes, tool) for p in c.parts])
 
 
 def _each_part(c: Classification) -> Iterator[Classification]:
@@ -1869,13 +1880,12 @@ def _each_part(c: Classification) -> Iterator[Classification]:
         yield from _each_part(p)
 
 
-def _any_part_matches(entries: Iterable, c: Classification) -> str:
-    """A reserved or deny entry that matches the combined classification or any one of its parts (D-075):
-    a compound line is denied when any simple command on it is."""
-    for p in _each_part(c):
-        if (hit := _list_matches(entries, p)):
-            return hit
-    return ""
+def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classification, str]]:
+    """Each part of the classification (the combined result first, then every simple command it was built
+    from) with the reserved or deny entry that matches it (D-075): a compound line is denied when any simple
+    command on it is."""
+    entries = list(entries)
+    return [(p, hit) for p in _each_part(c) if (hit := _list_matches(entries, p))]
 
 
 def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
@@ -1961,9 +1971,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     if (eff.category == "opaque_exec" or "indirection" in eff.signals) and not opaque_named:
         bump("ask", "runs code the gate cannot fully see (" + (c.summary or "indirection") + ")", "opaque")
-    hit = _any_part_matches(gates.get("reserved") or [], eff)
-    if hit:
-        bump("ask", f"reserved for the principal ({hit})", "reserved")
+    reserved = _part_hits(gates.get("reserved") or [], eff)
+    if reserved:
+        bump("ask", f"reserved for the principal ({reserved[0][1]})", "reserved")
     esc = gates.get("escalate") or {}
     if esc.get("cost_over_budget", True):
         per_action = float(budget.get("per_action_max") or 0)
@@ -2000,11 +2010,11 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     if eff.category == "store_write":
         bump("ask", "writes to the Exo store; only the principal approves, every time", "floor")
 
-    hit = _any_part_matches(gates.get("deny") or [], eff)
-    if hit:
-        outcome, reason, rule = "deny", f"denied by policy ({hit})", "deny"
+    if (denied := _part_hits(gates.get("deny") or [], eff)):
+        outcome, reason, rule = "deny", f"denied by policy ({denied[0][1]})", "deny"
     return Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
-                    exposure=eff.exposure, third_party=eff.third_party)
+                    exposure=eff.exposure, third_party=eff.third_party,
+                    reserved=[(p.category, p.target) for p, _ in reserved])
 
 
 def summarize(c: Classification, d: Decision, default: str = "skip") -> str:

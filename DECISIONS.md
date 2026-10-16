@@ -1313,11 +1313,25 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Decision:** a classification keeps the simple commands it was built from (`parts`, nested through `bash -c`,
   `python -c`, `eval`, `xargs` and the rest). `decide` applies the principal's scopes to each and checks `reserved`
   and `deny` entries against the combined result and every part; a hit on any part denies (or reserves) the line.
-  The most severe part still sets the card, the category and everything else. The ledger view (`as_dict`) leaves
-  the parts out, so approval bindings and trace rows are unchanged.
+  Parts are checked for `deny` and `reserved` only: rules, category overrides, the opaque bump, third-party
+  escalation, posting checks and the floors still see the dominant part, which sets the card, the category and
+  everything else. A part carries the tool of the call it came in on (`tool:execute_code` names the tool, not
+  `python -c` run from bash), the `ssh` hop is a part of its own with the host as its target, and the inner commands
+  of an `ssh` line are `internal` like the line. A flat mapping entry may carry `reason` or `name` like a rule.
+  `Decision.reserved` lists the parts a reserved entry matched, under the pinned policy and a pending one alike,
+  and the exo-gate hook refuses a standing grant for the line's category when one of them lies outside the
+  grant. The ledger view (`as_dict`) leaves the parts out,
+  so approval bindings and trace rows are unchanged.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).
+- **Limits:** commands inside `python -c` or `execute_code` count only when they classify as a non-benign category
+  (a `web_read` or `local_write` literal is dropped), and code can reach a target with no literal at all. Residual
+  deny → ask paths, where the gate cannot read the command and files the line as `opaque_exec`, so a `deny` on the
+  hidden action becomes an `ask`: `coproc` (addressed by #140); nesting past the depth cap (#137, #141);
+  `eval $(...)`; a command arriving on stdin (`echo ... | xargs -I{} sh -c '{}'`); the wrappers `watch`,
+  `parallel`, `tmux`, `screen` and `setsid`. `${...}` bodies are worse: the lexer does not read them, so the line
+  can be `allow` until #143 / #144 land.
 - **Revisit if:** a principal wants a denied action to be allowed when it is part of a longer line. None asked;
   the entry format says "no agent may take" the action.
 
