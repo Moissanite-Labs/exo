@@ -27,6 +27,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Security
+- An `ssh` or `mosh` chain with more hops than the gate reads (four) is `opaque_exec` and asks, keeping the
+  `remote host` exposure and the first host as target; it used to pass as plain `shell` (#153, D-038).
+- Options of trusted programs that run a command are followed as nested commands: `tar --to-command`, `-I`,
+  `--use-compress-program`, `--rsh-command`, `--rmt-command`, `--checkpoint-action=exec=`; `split --filter`;
+  `sort --compress-program`; `man -P`/`--pager`; `rsync -e`/`--rsh`/`--rsync-path`; `scp -S`; `ssh -o
+  ProxyCommand`/`LocalCommand`/`RemoteCommand`/`KnownHostsCommand`; `git rebase -x`, `git bisect run`,
+  `git submodule foreach`, `--upload-pack`, `--receive-pack`; `rg --pre`; `zip -TT`; `less +!`; the
+  `sqlite3`/`duckdb` `.shell`, `.system` and `|` dot-commands; `psql \!`, `\o |`, `\g |`, `\w |` anywhere on a
+  line and `mysql system`; and `GIT_SSH_COMMAND`, `RSYNC_RSH`, `PAGER` and the other command-valued variables
+  set before the program. Abbreviated long options (`--to-com=`) and values attached inside a short-option
+  cluster (`-xIcmd`) are read as `getopt` reads them. Values the gate cannot read ask (#154, D-038).
+- Environment dumps (`printenv X`, a bare `env`, `set`, `export -p`, `declare -x`) are `credentials` behind
+  `uv run`, `poetry run`, `pdm run`, `pipenv run`, `hatch run`, `coproc`, `sudo`, `nice`, `timeout`, `env` and
+  the other prefixes, and inside `if`/`for`/`while` bodies, as they are on their own (#155, D-038).
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
