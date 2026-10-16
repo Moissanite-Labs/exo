@@ -187,6 +187,41 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- Nesting is read four levels deep. Past that the text is `opaque_exec` and asks. An `ssh` or
+  `mosh` chain with more hops than that is not read either: the hops that were read keep the
+  `remote host` exposure and the first host as target (so a `target:` deny on it still
+  matches), and the rest asks as `opaque_exec` (#153). A chain the gate can read to the end is
+  classified by what runs at the end.
+- Options of trusted programs whose value is a command are followed as a nested command, like
+  `find -exec` (#154): `tar --to-command`, `-I`, `--use-compress-program`, `--rsh-command`,
+  `--rmt-command`, `--checkpoint-action=exec=`; `split --filter`; `sort --compress-program`;
+  `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp -S`; `ssh`/`scp -o
+  ProxyCommand`, `LocalCommand`, `RemoteCommand` (with the `remote host` exposure) and
+  `KnownHostsCommand`; `git rebase -x`/`--exec`, `git bisect run`, `git submodule foreach`,
+  `--upload-pack` (`clone`, `fetch`, `pull`, `ls-remote`), `git push --receive-pack`/`--exec`,
+  `git archive --exec`; `rg --pre`; `zip -TT`; `less +!cmd`; the `.shell`, `.system`, `.once |`,
+  `.output |` and `.import '|'` dot-commands of `sqlite3` and `duckdb` (as an argument, via
+  `-cmd`, or on stdin); `\!`, `\o |`, `\g |` and `\w |` anywhere on a `psql` line, `\!` and
+  `system` in `mysql`; and a command set in `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PAGER`,
+  `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`,
+  `RSYNC_RSH`, `PAGER`, `MANPAGER`, `EDITOR`, `VISUAL`, `LESSOPEN` or `LESSCLOSE` before the
+  program (also through `env`; `export NAME=value` counts when the value is a known hazard). The
+  option is recognised as `getopt` reads it: an unambiguous abbreviation of the long name
+  (`--to-com=`), the value attached to the short letter, also inside a cluster (`-xIcmd`), or the
+  next word. A known program in the value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
+  `allow`; a program the gate does not know asks, as it would on its own. A value the gate cannot
+  read is `opaque_exec`: a variable, a script file (`tar --info-script`, `sqlite3 -init`,
+  `.read`, `.load`), `.once`/`.output FILE`, `psql ... PROGRAM`, `TAR_OPTIONS`, and a library
+  `ssh` loads (`-I`, `-o PKCS11Provider`, `-o SecurityKeyProvider`). `sed` scripts with `e` or
+  `s///e` and `awk` programs calling `system()` were already opaque. An argument that merely
+  looks like an assignment (`grep EDITOR=vim`) and a data load (`sqlite3 '.import f.csv t'`) are
+  not commands.
+- Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
+  `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
+  `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
+  or `hatch run`, or inside an `if`, `for` or `while` body, classify as `credentials` just as the
+  bare command does. A runner followed by ordinary work (`uv run pytest -q`) is unchanged.
+  `uvx`, `pipx run` and `npx` stay `opaque_exec`.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
@@ -194,8 +229,11 @@ A command is `allow` only when every program in it is known and nothing is hidde
   rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
 
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
-`npm install` runs package scripts) can run code the agent wrote earlier with a local write.
-The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+`npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
+`~/.ssh/config` with a `ProxyCommand`) can run code the agent wrote earlier with a local write.
+The same goes for options that read more options from a file (`curl --config`, `gcc -wrapper`,
+`-specs`) and for `git grep -O`, whose pager takes the matching files as arguments. The gate does
+not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
 
 ## The store is credentials (D-038)
 
