@@ -283,13 +283,14 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
 
     async def pump(since: int, session: str | None) -> None:
         cursor.update(seq=since, session=session)
-        sub = dispatcher.hub.subscribe(since, session)
-        try:
-            async for ev in sub:
-                write(ev.to_json())
-                cursor["seq"] = ev.seq
-        finally:
-            sub.close()
+        while not dispatcher.hub.closed:  # a stream ended for lag (D-079) resumes after the last event written
+            sub = dispatcher.hub.subscribe(cursor["seq"], session)
+            try:
+                async for ev in sub:
+                    write(ev.to_json())
+                    cursor["seq"] = ev.seq
+            finally:
+                sub.close()
 
     try:
         while (line := await lines()) is not None:

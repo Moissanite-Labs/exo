@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import inspect
 import os
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
@@ -433,6 +434,16 @@ class CoreRuntime:
         sid = lctx.get("session")
         info = self.store.get_session(sid) if sid else None
         loop = asyncio.get_running_loop()
+        # Chunks a tool thread queues between two loop turns go out as one tool.output: one publish (and one
+        # sessions.sqlite write) per turn instead of thousands, so a reader that keeps up never nears MAX_LAG (D-079).
+        pending: list[str] = []
+        lock = threading.Lock()
+
+        def flush() -> None:
+            with lock:
+                text = "".join(pending)
+                pending.clear()
+            self.hub.publish(s.ToolOutput(call_id=call.id, text=text), sid)
 
         def emit(text: str) -> None:  # tool threads call this; publish on the event loop
             try:
@@ -440,7 +451,11 @@ class CoreRuntime:
                 text = redact_secrets(text)
             except Exception:
                 pass
-            loop.call_soon_threadsafe(self.hub.publish, s.ToolOutput(call_id=call.id, text=text), sid)
+            with lock:
+                pending.append(text)
+                if len(pending) > 1:  # a flush is already queued and takes this chunk too
+                    return
+            loop.call_soon_threadsafe(flush)
 
         self.jobs.loop = loop
         if call.name == "bash" and sid:
