@@ -10,6 +10,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
 
+### Fixed
+- Protocol strict decoding: a command whose `type` is not a string is `unknown_command`, a wrong-typed `int`,
+  `float`, `str` or `bool` body field (such as `events.subscribe` `since: "5"`) is `bad_body`, and JSON nested too
+  deep is `bad_json`. An `events.subscribe` `since` past SQLite's 64-bit range is `internal`. Before, these raised
+  out of the server: over HTTP the connection closed with no reply, and on stdio one bad line ended
+  `exo serve --stdio`. The server now answers every malformed command and keeps serving. Messages an older core
+  stored load as written.
+
 ### Changed
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,
