@@ -110,3 +110,60 @@ def test_fuzzy_whitespace_spans_cover_the_pattern():
             assert norm(content[a:b]) == norm(drifted), (content, drifted, (a, b))
             checked += 1
     assert checked > 500
+
+
+def test_fuzzy_verbatim_form_keeps_absolute_indent():
+    # old_string copied from read_file starting at the first token: its continuation lines already carry
+    # the file's indent, so the replacement goes in as written (tabs, spaces, and a one-line old).
+    content = "func f() {\n\tif a {\n\t\treturn  1\n\t}\n}"
+    new, n, strategy, err = fuzzy_find_and_replace(content, "if a {\n\t\treturn 1\n\t}", "if a {\n\t\treturn 2\n\t}")
+    assert err is None and strategy == "whitespace_normalized" and new == content.replace("return  1", "return 2")
+    content = "def f():\n    if a:\n        return  1\n"
+    new, _n, _s, err = fuzzy_find_and_replace(content, "if a:\n        return 1", "if a:\n        return 2")
+    assert err is None and new == "def f():\n    if a:\n        return 2\n"
+    new, _n, _s, err = fuzzy_find_and_replace("\tx  := g()", "x := g()", "x := g()\n\tlog(x)")
+    assert err is None and new == "\tx := g()\n\tlog(x)"
+
+
+def test_fuzzy_indented_unicode_and_escape_matches_stay_in_place():
+    # Unicode- and escape-normalized matches after a line's indent keep the file's typography and are never
+    # re-anchored: their continuation lines land exactly where new_string puts them.
+    new, _n, strategy, err = fuzzy_find_and_replace("    \u201chello\u201d\n", '"hello"', '"hello world"')
+    assert err is None and strategy == "unicode_normalized" and new == "    \u201chello world\u201d\n"
+    new, _n, _s, err = fuzzy_find_and_replace("    print(\"It\u2019s fine\")", "print(\"It's fine\")", "print(\"It's great\")")
+    assert err is None and new == "    print(\"It\u2019s great\")"
+    content = "  - It\u2019s \u201cdone\u201d \u2014 ship\u00a0it\n"
+    new, _n, _s, err = fuzzy_find_and_replace(content, '- It\'s "done" -- ship it', '- It\'s "done" -- ship it now')
+    assert err is None and new == "  - It\u2019s \u201cdone\u201d \u2014 ship\u00a0it now\n"
+    content = "def h():\n    msg = \u201chi\u201d\n    return msg"
+    new, _n, strategy, err = fuzzy_find_and_replace(content, 'msg = "hi"\n    return msg', 'msg = "bye"\n    return msg')
+    assert err is None and strategy == "unicode_normalized" and new == content.replace("hi", "bye")
+    for indent in ("    ", "\t"):
+        content = f"def g():\n{indent}if x:\n{indent}{indent}return 1\n"
+        old, new_string = f"if x:\\n{indent}{indent}return 1", f"if x:\n{indent}{indent}return 2"
+        new, _n, strategy, err = fuzzy_find_and_replace(content, old, new_string)
+        assert err is None and strategy == "escape_normalized" and new == content.replace("return 1", "return 2")
+
+
+def test_fuzzy_empty_new_string_keeps_line_indent():
+    # Deleting the head of an indented line leaves the indent; deleting a whole dedented block takes it along.
+    assert fuzzy_find_and_replace("\ta  := 1; b := 2", "a := 1; ", "")[0] == "\tb := 2"
+    assert fuzzy_find_and_replace("    a  = 1; b = 2", "a = 1; ", "")[0] == "    b = 2"
+    assert fuzzy_find_and_replace("    s = \u201cx\u201d; t = 2", 's = "x"; ', "")[0] == "    t = 2"
+    assert fuzzy_find_and_replace("    foo  x", "foo x", "")[0] == "    "
+    content = "    if a:\n        return  1\n    x = 2\n"
+    assert fuzzy_find_and_replace(content, "if a:\n    return 1", "")[0] == "\n    x = 2\n"
+
+
+def test_fuzzy_replace_all_on_adjacent_indented_lines():
+    # A match that swallows the next line's indent must not be widened back into the previous match.
+    content = "    print(\u201chi\u201d)\n    print(\u201chi\u201d)\n    done()\n"
+    new, n, _s, err = fuzzy_find_and_replace(content, 'print("hi")\n    ', "", replace_all=True)
+    assert err is None and n == 2 and new == "    done()\n"
+    new, n, _s, err = fuzzy_find_and_replace("    a = 1\n    a = 1\n    b = 2\n", "a = 1\\n    ", "", replace_all=True)
+    assert err is None and n == 2 and new == "    b = 2\n"
+    new, n, _s, err = fuzzy_find_and_replace("x  =\n    x  =\n    y = 1\n    z = 2\n", "x =\n ", "", replace_all=True)
+    assert err is None and n == 2 and new == "y = 1\n    z = 2\n"
+    content = "def f():\n    if a:\n        return  1\n    if a:\n        return  1\n"
+    new, n, _s, err = fuzzy_find_and_replace(content, "if a:\n    return 1", "if a:\n    return 2", replace_all=True)
+    assert err is None and n == 2 and new == content.replace("return  1", "return 2")
