@@ -27,6 +27,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- A steer sent while a turn was finishing (its completion hooks still held the session) is no longer lost: it waits
+  for the lock and runs as the next turn, keeping its author. A peer, bus or job message in that window starts a turn
+  where the seat wakes instead of being queued behind a turn that was over. The web chat keeps a `steer queued`
+  chip until the message lands or is cancelled, and drops one the core no longer holds (#147, #151).
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

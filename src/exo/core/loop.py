@@ -72,8 +72,7 @@ class _SessionState:
         self.lock = asyncio.Lock()
         self.interrupt = asyncio.Event()
         self.steer: list[Message] = []
-        self.running = False
-        self.accepting_steers = False
+        self.running = self.accepting_steers = False
         self.total = Usage()
         self.stats: dict[str, int] = {}  # this turn's timing summary, filled as it runs (D-025)
 
@@ -138,8 +137,8 @@ class Loop:
         return st.running
 
     def steer(self, session: str, msg: Message) -> bool:
-        """Put a message into the running turn at its next tool round. False when no turn is running
-        (the caller queues it instead): unlike ``send(mode="steer")`` this never starts a turn."""
+        """Put a message into the running turn at its next tool round. False when no round can take it (no turn runs,
+        or the running one is finishing): the caller queues it. Unlike ``send(mode="steer")`` this never starts a turn."""
         st = self.state(session)
         if not st.accepting_steers:
             return False
@@ -162,8 +161,8 @@ class Loop:
 
     async def send(self, session: str, text: str = "", parts: list[ContentPart] | None = None,
                    mode: str = "send", meta: dict[str, Any] | None = None) -> TurnResult | None:
-        """Run a turn. ``steer`` while a turn runs injects the message between tool
-        rounds and returns None (the message is the newest of ``state(session).steer``); ``queue`` and ``send`` wait for the running turn."""
+        """Run a turn. ``steer`` while a turn still takes steers injects the message between tool rounds and returns None
+        (the newest of ``state(session).steer``); otherwise, as ``queue`` and ``send`` do, it waits for the running turn."""
         if self.store.get_session(session) is None:
             raise KeyError(session)
         self.store.assert_open(session)
@@ -181,14 +180,12 @@ class Loop:
             st.steer.append(msg)
             return None
         async with st.lock:
-            st.running = True
-            st.accepting_steers = True
+            st.running = st.accepting_steers = True
             st.interrupt.clear()
             try:
                 return await self._turn(session, msg, st)
             finally:
-                st.accepting_steers = False
-                st.running = False
+                st.running = st.accepting_steers = False
                 st.interrupt.clear()
 
     # ---------------------------------------------------------------- turn
@@ -237,13 +234,10 @@ class Loop:
             result.stop_reason, result.error = "error", str(exc) or type(exc).__name__
             await self._emit(ev.Error(code="turn_failed", message=result.error), session)
             await self._emit(trace.error_body("turn loop", exc), session)
-        # No more rounds can consume a steer. Later arrivals must wait for a new turn,
-        # including while completion hooks await with the session lock still held.
-        st.accepting_steers = False
-        if st.steer:  # a message that arrived after the last tool round is context for the next turn, not lost
-            for m in st.steer:
-                await self._add(session, m, turn_id)
-            st.steer.clear()
+        st.accepting_steers = False  # no round can take a steer now: a later one waits for a new turn (#147)
+        for m in st.steer:  # a message that arrived after the last tool round is context for the next turn, not lost
+            await self._add(session, m, turn_id)
+        st.steer.clear()
         wall, approval = int((time.monotonic() - t0) * 1000), self.approval_ms.get(session, 0) - waited
         timing = {"wall_ms": wall, "model_ms": st.stats["model_ms"], "approval_ms": approval,
                   "tool_ms": max(0, st.stats["tool_ms"] - approval), "model_calls": st.stats["model_calls"],

@@ -73,7 +73,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 - **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
   `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
-  (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it.
+  (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it,
+  not when the turn ends: a steer that arrives while a turn is finishing starts the next turn (#147). Reopening the
+  thread drops a chip the core no longer queues (`GET /api/chat/sessions/<id>` lists the queued ids as `steers`).
 - **Thread list.** Double-click a thread to rename it (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
   the core `rename` built-in, principal only (D-069).
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never

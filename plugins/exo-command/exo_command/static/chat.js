@@ -420,7 +420,7 @@ export function mount(root) {
   }
 
   async function open(id) {
-    const generation = ++snapshotGeneration;
+    const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
     current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
@@ -428,6 +428,7 @@ export function mount(root) {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
       if (current !== id || generation !== snapshotGeneration) return;
       items = fromMessages(d.messages || []);
+      dropSteers(id, had, d.steers);
       loadedSeq = d.seq || 0;
       const live = sessions.find((s) => s.id === id);
       busy = !!(live && live.status === "live");
@@ -441,7 +442,7 @@ export function mount(root) {
   }
 
   async function recover() {
-    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq();
+    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq(), had = Object.keys(steers);
     loading = true;
     try {
       const freshSessions = (await api("GET", "/api/chat/sessions")).sessions || [];
@@ -450,6 +451,7 @@ export function mount(root) {
       sessions = freshSessions;
       if (d) {
         items = mergeTranscript(fromMessages(d.messages || []), items);
+        dropSteers(id, had, d.steers);
         loadedSeq = Math.min(cutoff, d.seq || 0);
         busy = sessions.some((s) => s.id === id && s.status === "live");
         model = d.session.model || model;
@@ -555,12 +557,19 @@ export function mount(root) {
       h("button", { class: "xc-btn xc-x", title: "Pull this back into the box (Up in an empty box does the same)", "aria-label": "Cancel queued steer",
         onclick: () => unsteer(x) }, "\u00D7"))));
   }
+  // A chip the core no longer queues (a restart lost the message, D-045) goes when the thread is read again. Only a
+  // chip drawn before the read was asked for can be judged by it; a core without the list leaves them all.
+  function dropSteers(sid, had, queued) {
+    if (!Array.isArray(queued)) return;
+    for (const k of had) if (steers[k] && steers[k].session === sid && !queued.includes(k)) delete steers[k];
+    drawSteers();
+  }
   async function unsteer(x) {
     try {
       const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(x.session) + "/unsteer", { message_id: x.id });
       delete steers[x.id]; drawSteers();
       if ((d.cancelled || []).length) { input.value = input.value.trim() ? x.text + "\n" + input.value : x.text; input.focus(); input.dispatchEvent(new Event("input")); }
-      else flash("that message already landed");
+      else flash("no longer queued");
     } catch (e) { fail(e); }
   }
 

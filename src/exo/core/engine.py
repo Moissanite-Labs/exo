@@ -527,8 +527,8 @@ class CoreRuntime:
         return {"approvals": self.approvals.listing(b.session)}
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
-        info = self._info(b.session)
-        return {"session": to_dict(info), "messages": to_dict(self.store.messages(b.session))}
+        info, queued = self._info(b.session), [m.id for m in self.loop.state(b.session).steer]  # chips a client still draws
+        return {"session": to_dict(info), "messages": to_dict(self.store.messages(b.session)), "steers": queued}
 
     async def _session_resume(self, b: s.SessionResume) -> dict[str, Any]:
         self._info(b.session)
