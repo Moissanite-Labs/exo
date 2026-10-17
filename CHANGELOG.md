@@ -27,6 +27,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Signed updates (#42, D-073): an OpenPGP or X.509 signature on the update target was checked by gpg against the
+  local keyring and never against the pinned trust list, so a key you had only imported passed. Only SSH signatures
+  from the pin count now. A `config.json` that exists but cannot be read no longer turns `update.require_signed`
+  off: `exo update` refuses until it is fixed, and `--dry-run` says whether the check is on. `exo update
+  --pin-trust REV` no longer adopts any commit's list: once a pin exists, the commit that set the list must verify
+  against it (`docs/INSTALL.md`).
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
