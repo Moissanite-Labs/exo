@@ -27,6 +27,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Turn state (D-070, D-052): a scheduled run and a subagent now share the engine's per-session state, so a turn
+  running there is a running turn everywhere. `session.list` shows it `live`. A job or peer notice is steered in,
+  and a `turn.send` steer lands in that turn. Before, the engine saw these sessions as idle: a notice was stored
+  between a tool call and its result or started a second turn at the same time, and the model got a false
+  "not run" result for a command that did run. The principal typing into a running subagent's session steers it,
+  whatever the mode. Anyone else gets `forbidden`. An unaddressed peer message never picks a subagent's session.
+- Opening a thread whose turn is still running (`/resume`, `/sessions`, `exo tui --session` or `--resume`,
+  `exo chat --resume`) no longer writes "not run: session was interrupted" for the tool call in flight, so the
+  model never sees two results for one call. `session.resume` still closes a round a crash left open.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

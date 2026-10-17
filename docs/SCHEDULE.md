@@ -34,6 +34,11 @@ Jobs live in `$EXO_HOME/schedule.sqlite`. `exo serve` runs the timer. A one-shot
 - `turn.interrupt` for the run's child session (Ctrl+C or `/stop` in that thread) stops its model call, tool or
   approval wait through the ordinary turn loop. Other threads and background shell jobs keep running.
   Completion, failure and cancellation remove the live scheduled loop; cancellation also reaps pending work.
+- The run's loop shares the engine's per-session state: one lock, one steer queue and one running flag per
+  session, whichever loop runs it. So the run is a live turn to everything else. `session.list` shows it `live`.
+  A `turn.send` steer lands at its next tool round, and a plain send waits for the run to end. A job or peer
+  notice is steered in. It is never stored between a tool call and its result, and never starts a second turn.
+  Opening the thread (`session.resume`) leaves the run's open tool call alone.
 - The timer loop survives a failing check or next-run database listing: the error is recorded as a
   `harness.error` (`scheduler tick`) and the loop waits a few seconds and goes on. If the loop ever ends by
   itself, that is recorded too (`scheduler loop`) and a

@@ -6,6 +6,7 @@ import asyncio
 import functools
 import hashlib
 import sqlite3
+import time
 from datetime import datetime
 
 import pytest
@@ -457,3 +458,97 @@ async def test_next_run_listing_error_is_reported_and_scheduler_survives(tmp_pat
         assert not any(b.where == "scheduler loop" for b in bodies(eng, s.HarnessError))
     finally:
         await sch.stop()
+
+
+# ---------------------------------------------------------------- the run's session state is the engine's
+
+async def live_run(tmp_path, **kw):
+    """A scheduled run held inside its first tool call until ``gate`` is set: (engine, run session, gate)."""
+    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={},
+                     attach_scheduler=Scheduler, **kw)
+    eng.loop.provider = FakeProvider([tool_turn("scheduled_hold"), "scheduled done", "next turn"], repeat=True)
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def hold(args, ctx):
+        entered.set()
+        await gate.wait()
+        return "held result"
+
+    eng.registry.register(ToolSpec(name="scheduled_hold", description="held fake tool", risk="low", toolset="test"), hold)
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: {"action": "allow"})
+    eng.scheduler.launch(eng.scheduler.add("every 1h", "report"))
+    await asyncio.wait_for(entered.wait(), 2)
+    return eng, next(t.child_session for t in bodies(eng, s.TaskUpdated) if t.status == "running"), gate
+
+
+async def settle(eng):
+    await asyncio.wait_for(eng.scheduler.wait(), 2)
+    while eng._tasks:
+        await asyncio.wait_for(asyncio.gather(*list(eng._tasks)), 2)
+
+
+def turns(eng, sid):
+    return [type(e.body).__name__ for e in eng.hub.since(0, sid) if isinstance(e.body, (s.TurnStarted, s.TurnCompleted))]
+
+
+def one_result_per_call(eng, sid):
+    """Each tool call has exactly one result, in the message right after it, and none is a made-up 'not run'."""
+    msgs = eng.store.messages(sid)
+    for i, m in enumerate(msgs):
+        if m.tool_calls:
+            assert [r.call_id for r in msgs[i + 1].tool_results] == [c.id for c in m.tool_calls]
+    results = [r for m in msgs for r in m.tool_results]
+    assert len(results) == sum(len(m.tool_calls) for m in msgs)
+    assert not any("not run" in r.text() for r in results)
+    return msgs
+
+
+@aio
+async def test_running_scheduled_session_is_live_and_a_steer_lands_in_its_turn(tmp_path):
+    """The run's own Loop shares the engine's session state: session.list shows it live, the peer and job targets
+    see it running, a turn.send steer lands in the run's turn, and session.resume leaves its open call alone."""
+    eng, sid, gate = await live_run(tmp_path)
+    listed = (await eng._session_list(s.SessionList()))["sessions"]
+    assert [r["status"] for r in listed if r["id"] == sid] == ["live"]
+    assert eng._peer_target.state(sid) == eng.jobs.target.state(sid) == "running"
+    got = await eng._session_resume(s.SessionResume(session=sid))  # a second window opens the run's thread
+    assert not [m for m in got["messages"] if m["role"] == "tool"]
+    out = await eng._turn_send(s.TurnSend(session=sid, text="also check the logs", mode="steer"))
+    assert out["steered"] and out["message_id"]
+    gate.set()
+    await settle(eng)
+    assert turns(eng, sid) == ["TurnStarted", "TurnCompleted"]  # one turn: the steer did not start another
+    msgs = one_result_per_call(eng, sid)
+    steer = next(m for m in msgs if m.text() == "also check the logs")
+    assert msgs[msgs.index(steer) - 1].role == "tool" and steer.meta["turn_id"] == msgs[0].meta["turn_id"]
+
+
+@aio
+async def test_turn_send_to_a_running_scheduled_session_waits_for_the_run(tmp_path):
+    """A plain send queues behind the run on the one per-session lock: never a second turn at the same time."""
+    eng, sid, gate = await live_run(tmp_path)
+    assert await eng._turn_send(s.TurnSend(session=sid, text="and then this")) == {"accepted": True}
+    await asyncio.sleep(0.05)
+    assert turns(eng, sid) == ["TurnStarted"]
+    gate.set()
+    await settle(eng)
+    assert turns(eng, sid) == ["TurnStarted", "TurnCompleted"] * 2
+    msgs = one_result_per_call(eng, sid)
+    assert [m.text() for m in msgs if m.role == "assistant" and m.text()] == ["scheduled done", "next turn"]
+
+
+@pytest.mark.parametrize("wake", [True, False])
+@aio
+async def test_job_notice_for_a_running_scheduled_run_is_steered_in(tmp_path, wake):
+    """A background job the run started ends mid-run: its notice is steered in after the tool result. It is not
+    stored between a call and its result (wake off), and it does not start a second turn (wake on)."""
+    eng, sid, gate = await live_run(tmp_path, jobs={"wake": wake})
+    t = time.time()
+    receipt = await eng.jobs.path.submit(eng.jobs._notice("j_test", "done", 0, "echo hi", t, t, sid))
+    assert receipt.mode == "steered"
+    gate.set()
+    await settle(eng)
+    assert turns(eng, sid) == ["TurnStarted", "TurnCompleted"]
+    msgs = one_result_per_call(eng, sid)
+    notice = next(i for i, m in enumerate(msgs) if m.meta.get("job"))
+    assert msgs[notice - 1].role == "tool"

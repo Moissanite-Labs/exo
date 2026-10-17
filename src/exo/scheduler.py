@@ -196,6 +196,9 @@ class Scheduler:
                         system_prompt="\n\n".join(p for p in (e.loop.system_prompt, PROMPT) if p), model=model,
                         max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
             loop.approval_ms, loop.on_turn_end = e.loop.approval_ms, e.observe_turn
+            # The engine's session table: one lock, steer queue and running flag per session, whichever loop runs
+            # it, so turn.send, session.list, resume and job or peer notices see this run as the live turn it is.
+            loop._state = e.loop._state
 
             def refresh_prompt() -> str:
                 soul = e.loop.before_turn() if e.loop.before_turn is not None else ""

@@ -44,7 +44,7 @@ class EngineTarget(Target):
         for info in store.list_sessions(40):
             st = loop._state.get(info.id)
             running = bool(st and st.running)
-            if store.get_meta(info.id).get("locked"):
+            if info.kind == "subagent" or store.get_meta(info.id).get("locked"):  # never a subagent (D-070)
                 continue
             try:
                 fresh = wire.parse_ts(info.updated).timestamp() >= cutoff
