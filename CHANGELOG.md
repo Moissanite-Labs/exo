@@ -133,6 +133,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- Bus relay: the web view at `/`, which takes no auth, no longer shows plaintext bodies (DMs included) that the API
+  gives only to signed seats. It lists seq, sender, recipients, kind, time and thread. `EXO_BUS_WEB_BODIES=1` shows
+  bodies again, for a relay only seats can reach.
+- Bus relay: an envelope that the log would store in another form than the one signed (`v` as `true` or `1.0`, a
+  number as `thread`, a text field that is not a string) is refused with 422. Before, it was accepted and
+  `/v1/verify` failed at that row for good. Wrong types that crashed the handler with 500 get the same 422.
 
 ## [0.2.0] (egg) - 2026-10-13
 

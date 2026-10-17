@@ -530,7 +530,9 @@ cli.verify()                                  # re-check every id, signature and
 ```
 
 Message `kind` is one of `msg`, `ack`, `claim`, `notice`, `directive`, `report`, `file`. `enc_to="<seat>"` seals the
-body so only that seat reads it. `post_sym2p(to, line)` sends a structured agent-wire packet (`docs/AGENT-WIRE.md`).
+body so only that seat reads it. Every seat can read a body that is not sealed. The relay's web view (`/`, no auth)
+shows no bodies unless the relay runs with `EXO_BUS_WEB_BODIES=1`. `post_sym2p(to, line)` sends a structured
+agent-wire packet (`docs/AGENT-WIRE.md`).
 
 From an agent, the `exo-bus` plugin gives four tools: `bus_post`, `bus_inbox`, `bus_thread`, `bus_verify`. They stay
 hidden until `EXO_BUS_URL` and `EXO_BUS_SEAT` are set. The plugin's channel turns a message from another seat into
