@@ -27,6 +27,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Terminal thread switching (D-045, D-032): opening a thread (`/resume`, `/sessions`, `/fork`, `/open`,
+  `--session`, `--resume`) shows the approval it still waits on, from `approvals.list`, and `LIVE` when a turn runs
+  there, so ctrl+c stops it. `session.get` and `session.resume` now carry `status`, as `session.list` does. Before,
+  such a request had no card and the turn waited for good. Leaving a thread drops its turn state, card, queued
+  steer and numbers: the new thread no longer shows `LIVE`, `running tool` or steer mode once the old turn ends,
+  and `COST` no longer shows the other thread's dollars. A thread opened again keeps its `COST` and the `+` for an
+  unpriced call. An answer the core refuses brings its card back. A
+  finished subagent whose calls had no price adds the `+` to `COST`, and its roll-up no longer moves `MEM`.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

@@ -53,6 +53,8 @@ Envelopes:
   `bad_body`.
 - Shared shapes: `SessionInfo` (id, title = "", seat?, model?, cwd?, parent?, created = "", updated = "",
   message_count = 0); `ErrorInfo` (code, message, retryable = False).
+  `SessionInfo.status` is `live` while a turn runs and `idle` otherwise, in the results of `session.list`,
+  `session.get` and `session.resume`.
 - Registries: `COMMANDS` and `EVENTS` map type name to body class; each class has `.TYPE`. The
   `@command` / `@event` decorators refuse duplicates and enforce the cap of 30 each.
 
