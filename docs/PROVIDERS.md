@@ -93,6 +93,10 @@ The fixture contract is:
 - Usage is read from the final result when reported; absent counts stay unknown. The inert MCP bridge lists
   tools but refuses to run them. Blank input is ignored, malformed JSON gets a JSON-RPC parse error, and valid
   following requests continue to work.
+- A user frame whose last text starts with a command name (`/help`) gets a local reply and a `result` with
+  `num_turns: 0`, and no model call, as the real CLI does. Exo never sends a user text that starts with `/`.
+- The fixture reads each file that an `@path` in any user frame names, as the real CLI does, and records what it
+  read. Exo never sends a user `@` that the CLI would read.
 
 The CLI-specific replay and boundary assumptions still need an opt-in, isolated real-CLI contract check against
 a mocked local endpoint before any release can be called wire-verified. Default tests never use real OAuth,
@@ -102,6 +106,31 @@ Every stream exit cancels and awaits the stderr reader. It retains a bounded, sc
 than waiting for a descendant to close stderr. The adapter stops its process group even after the leader exits,
 and finishes cleanup before returning a terminal response to the router. A cancel (Esc) while the stream is read
 stops it, even when it lands just as a line arrives (#163).
+
+**Working folder.** The CLI runs in a private folder of its own, `claude-cli-cwd-<uid>` in the temp dir (mode
+0700). It is the same folder on every call because the CLI writes its cwd into the prompt, and a changing folder
+would break prompt caching. The CLI's environment note therefore names that folder, not the thread's, and the CLI
+has no switch to drop the note when a system prompt is given. So Exo's system text names the thread's real
+working folder on every route: tools run there, and it overrides any working folder an environment note names.
+The line is fixed for the thread, so the cache holds. Running the CLI in the thread's folder was not chosen: the
+provider call does not carry the thread, and the CLI then adds its own notes about that folder, written for
+Claude Code.
+
+**Slash commands.** The CLI reads a user text that starts with `/` as its own command, even with
+`--disable-slash-commands`. On version 2.1.302 a built-in name such as `/help` gets a local "isn't available in
+this environment" reply with no model call, which Exo reads as an incomplete response and falls back. Any other
+word gets a CLI note added, and a replayed history frame is rewritten. Paths such as `/etc/hosts` pass. So the
+adapter puts a zero-width space (U+200B) in front of every user text block that starts with `/`, and the model
+reads the user's words as typed. Assistant text and tool results are never read as commands and stay unchanged.
+
+**File mentions.** The CLI also reads `@path` in user text as a file to attach, even with `--tools ""`. On
+version 2.1.302, wherever the `@` starts the text, follows whitespace (U+FEFF counts) or follows a CJK full stop,
+comma, `？` or `！`, the CLI reads the file and sends it to the model, in the latest turn and in replayed history.
+The quoted form `@"path"` works too. So `@~/.ssh/id_rsa` sent the key, past the gate, which asks before any
+credential read. The text need not be the user's: peer and bus messages, notes from other threads and delegate
+briefs reach the CLI as user text. So the adapter puts the same zero-width space in front of each such `@` in a
+user text block. The model still reads the `@`. A decorator at the start of a pasted code line gets the space
+too. An address such as `a@example.com` stays as it is. Exo's own `@path` already adds the file as its own part.
 
 ## Use a Muse Code subscription (`muse-cli`)
 
