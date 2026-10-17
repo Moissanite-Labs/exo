@@ -307,8 +307,7 @@ class Delegator:
         prompt = CHILD_PROMPT + (ORCHESTRATOR_NOTE if "delegate" in names else "")
         if "code_find" in names:
             prompt += CODE_FIND_NOTE
-        if b.cwd:
-            prompt += f"\n\nWorking directory: {b.cwd}"
+        # no cwd line here: the loop names the child session's cwd (b.cwd) in the system text
         child = Loop(e.store, provider, bus=_Bus(self), context=TreeContext(e.store, DefaultCompressor(
                      e.router.provider("aux"))), tool_specs=lambda: e.registry.specs(names=sorted(names)),
                      run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,

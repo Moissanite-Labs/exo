@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -50,6 +51,11 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MCP_SERVER = Path(__file__).with_name("claude_cli_mcp.py")
 CLEANUP_TIMEOUT = 2.0
 STDERR_BYTES = 4096
+# The CLI reads user text as its own input, even with --disable-slash-commands and --tools "": a block that starts
+# with "/" runs as its command (a built-in gets a local "isn't available" reply, no model call), and an "@path" at
+# the start, after JS \s (U+FEFF too) or after CJK punctuation attaches that file, keys too, with no gate ask.
+TEXT_GUARD = "\u200b"  # a zero-width space in front keeps both plain text
+CLI_SYNTAX = re.compile(r"^(?=/)|(?<![^\s\ufeff\u3002\u3001\uff1f\uff01])(?=@)")
 
 
 def child_env(env: Mapping[str, str] | None = None, *, drop: tuple[str, ...] = DROP_ENV,
@@ -96,7 +102,8 @@ def build_frames(messages: list[Message], names: set[str]) -> tuple[str, list[di
             blocks += [{"type": "tool_use", "id": sanitize_tool_id(tc.id), "name": PREFIX + tc.name if tc.name in names else tc.name,
                         "input": tc.arguments} for tc in m.tool_calls]
         else:
-            role, blocks = "user", _blocks(m)
+            role, blocks = "user", [{**b, "text": CLI_SYNTAX.sub(TEXT_GUARD, b["text"])} if b["type"] == "text" else b
+                                    for b in _blocks(m)]
         if not blocks:  # an empty frame (a tool message with no results, a blank turn) carries nothing
             continue
         if frames and frames[-1]["type"] == role:
