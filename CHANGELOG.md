@@ -129,6 +129,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   approval with no thread (a held peer message that no live session could take) shows in every thread, as in the
   terminal client, and allow now delivers it into a new thread instead of closing it as denied. A panel you dismiss
   stays closed after the next panel event, a tab switch or a reconnect.
+- The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
+  the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
+  the card shows every argument of the call.
+- `exo web` folded the core's replayed events into its state a second time after the core's stream dropped: message,
+  tool call and task counts doubled, and a session stayed `waiting` after its approval was answered. Each event now
+  counts once, and a core whose log is behind the page (a new `EXO_HOME`) starts the page over.
+- A web chat reader that fell 1000 events behind lost one event for good. Its stream now ends with nothing lost, and
+  the reconnect replays every event it had not received.
 
 ## [0.2.0] (egg) - 2026-10-13
 
