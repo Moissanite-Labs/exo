@@ -26,8 +26,8 @@ Everything stays in `sessions.sqlite`.
   Private threads are logged, but never enter the tree, other threads' views or search. Nothing from them
   reaches the principal store either (see "Private threads" below).
 - **Undo** hides the entries (`messages.hidden`) instead of deleting them, so the log stays append-only
-  and verifiable. Hidden entries leave the thread view and search. Summaries whose ranges reach the hidden
-  entries are invalidated and rebuilt from the remaining entries.
+  and verifiable. Hidden entries leave the thread view and search. Summaries whose ranges hold a hidden
+  entry, and the merges above them, are rebuilt from the remaining entries. The thread's context notes stay.
 - **Tree.** One summary tree per agent over log positions, stored in `summaries` under the key
   `agent:<id>`. Leaves cover `leaf_size` positions, parents merge pairs, as in D-013. Leaf text labels each
   entry with its thread. The compaction floor from the canary fix carries over: a span under
@@ -75,7 +75,10 @@ Each model call is built fresh, in this order:
    byte-identical for every thread of the agent until a real summary lands.
 2. **This thread's verbatim tail**: every message of the thread after the tree frontier, and at least its
    last `tail_messages`, widened back so it never starts with an orphan tool result. Context notes stored
-   in the thread are part of it.
+   in the thread are part of it. A fork's copies count at their original's log position, so a fork opens with
+   its parent's tail, not the parent's whole transcript, and `/compact` shrinks a fork's tail too. A copy
+   counts only while the tree can hold its original: the copies of a private thread's entries, and of entries
+   the parent undid after the fork, stay in the fork's tail.
 3. **Context notes.** Before a model call, entries other threads committed since this thread last looked
    (and after the frontier) are written into this thread as one compact note: `In thread "tui 2", 4 min
    ago: user: ... / you: ...`. The note is stored (thread-local, not in the log), so the next call sees
@@ -155,9 +158,15 @@ content is the same once the summaries finish. Tests: `tests/core/test_turn_sett
 
 ## Undo and failed summaries (D-041)
 
-- **Undo.** Undo hides the entries of the undone turns. It also deletes every tree node whose range reaches the
-  first hidden position, in the agent tree (`agent:<name>`, ranges are log positions) as well as in a
-  per-thread tree (ranges are message numbers). A summary that was already running when undo ran is not saved
+- **Undo.** Undo hides the entries of the undone turns. It also deletes each tree node whose range holds one of
+  them, and the merges above it, in the agent tree (`agent:<name>`, ranges are log positions) as well as in a
+  per-thread tree (ranges are message numbers). Other nodes stay, so the other threads' summarized entries stay
+  in the view. One gap is left: if the last summary in the view held an undone entry, the view ends before
+  that span until a summary at or after it lands again, and other threads miss the span's other entries until
+  then. Context notes stored in the thread stay. They hold other threads' news, which the thread has already
+  marked as seen, so dropping them would lose that news. Undo does not reach copies made before it: a note
+  another thread stored keeps the undone text (that thread's model has seen it, and the note is replayed byte
+  for byte), and so does a fork. A summary of a deleted node that was already running when undo ran is not saved
   afterwards. The next turn rebuilds the summary from the entries that are left.
 - **Failures.** A node whose summary fails is retried with backoff (30 s, then 60 s, ...; `retry_backoff`), at most
   `max_attempts` (3) times in all; the count is stored on the node (`summaries.attempts`). During backoff the span
