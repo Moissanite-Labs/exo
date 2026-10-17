@@ -54,7 +54,15 @@ exo interview --principal sam                  # more questions later, on an exi
 ```
 
 `exo init` copies `templates/principal-store`, creates the ledger (0600), and makes the id the
-active principal in `$EXO_HOME/config.json` when none is set.
+active principal in `$EXO_HOME/config.json` when none is set. exo-memory and learning both fall back to
+that key, so they use the same store.
+
+Until a store exists (an install with `--no-interview`, or without a terminal), memory and learning are
+off. That is a setup state, not an error: when a thread starts, one quiet notice names `exo init <id>`,
+the boot line says `memory off, no principal store`, and no finding is filed. A first run does not make a
+store under an id nobody chose. The id is the principal's to pick, and `exo init` sets the active principal
+only when none is set, so a default store would keep their memory under a name they never chose, apart from
+the store they make later (D-004). Memory and learning pick the store up at the next start.
 
 ### How questions are chosen (principle 13)
 
