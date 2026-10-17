@@ -194,14 +194,46 @@ A command is `allow` only when every program in it is known and nothing is hidde
   `printf -v 'a[$(gh pr comment 3 --body hi)]' %s x` is a `github_post`. Its output is evaluated
   as well, so any expansion or quoting in the subscript (`$(cat f)`, `$i`, `${x}`, `$(( ))`, `"k"`)
   also adds the `indirection` signal and asks: a value such as `b[$(cmd)]` runs cmd. It is a
-  signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
-  without expansion (`a[0]`; for a bare name such as `a[i]` see the known limit below) and the
-  other arguments (printf's format, read's prompt) change nothing.
+  signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A command
+  there also carries `reread` (below), so a policy that names `opaque_exec` does not lower its
+  ask (#188). A subscript without expansion (`a[0]`; for a bare name such as `a[i]` see the
+  known limit below) and the other arguments (printf's format, read's prompt) change nothing.
+- `declare`, `typeset`, `local`, `readonly` and `export` also evaluate the value of a
+  `NAME=VALUE` operand again, so it is read too (#188). With `-a` or `-A` (or for a variable that
+  is already an array) bash parses a compound value `(..)` again as words even when it is
+  quoted, so `declare -a 'b=($(cmd))'` and `export -a 'b=(<(cmd))'` run cmd. The gate reads a
+  compound value with or without `-a`, which is only stricter: each `$( )`, backticks, `<( )` or
+  `>( )` in it is classified like a `$( )`, and each `[key]=` is read like a subscript above.
+  With `-i` (declare, typeset, local) the value, or each element, is arithmetic, and with `-n`
+  it is a name whose subscript bash evaluates when the nameref is used; both are read like a
+  subscript. So `declare -i x='a[$(gh pr comment 3 --body hi)]'` is a `github_post`.
+- Any expansion in such a `-i` or `-n` value (`local -i n=$1`, `local -n ref=$1`,
+  `declare -n r='a[$i]'`) asks, as does a compound value the line itself expanded
+  (`declare -a "b=($x)"`: bash parses x's value as code) and every command in a quoted compound
+  value, which runs only because bash reads the value again. That is the `indirection` signal,
+  and the command ranks after the line's own parts, as it would unquoted, so a redirection's
+  `local_write` still decides a tie and a deny on it still wins. When the command outranks the
+  line's own category, a deny on that category becomes ask, never allow or log
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` asks under `deny: [local_write]`); D-075 (deny on any
+  part, open PR #126) restores the deny for the `deny:` list form only; #191 tracks the
+  `categories` form. Such a command also carries the `reread` signal, and naming `opaque_exec`
+  (below) does not lower its ask, so the line asks under `{local_write: deny, opaque_exec: allow}`
+  too. A deny on the command's own
+  category still denies. A command in such a value or subscript nested deeper than the gate
+  reads is an `opaque_exec` part (ask), as on the line itself, and carries `reread` too. A
+  plain expansion in a compound value the line did not expand (`declare -a 'b=("$@")'`), a
+  scalar value without `-i` or `-n`, `+i`, the `-n` of `export` and `readonly` (it removes the
+  attribute) and a subscripted name given to `readonly` or `export` (bash rejects it as not a
+  valid identifier) change nothing. An unquoted compound value
+  (`declare -a b=($(ls))`) is read by the line's own parse, as before, and a quoted operand after
+  it on the same line (`declare -a b=() 'c=($(cmd))'`) is read too.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
 - The principal can lower `opaque_exec` only by naming it: `categories: {opaque_exec: act}` or a
   rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
+  That does not lower the ask of a command a declaration runs as it reads a value again
+  (`reread`, above).
 
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
 `npm install` runs package scripts) can run code the agent wrote earlier with a local write.
@@ -213,9 +245,11 @@ arithmetic context as arithmetic too (`a[i]`, `$(( x ))`, `declare -i`), so a va
 builtins above asks; one in an assignment word (`a[$i]=v`) or an arithmetic expression
 (`$(( a[$i] ))`) does not. The gate cannot tell an associative array from an indexed one, so a
 subscript of an associative array asks too, although bash does not evaluate it as arithmetic.
-A quoted value that declare, typeset or local reads as an array or arithmetic value
-(`declare -a 'b=($(cmd))'`, `declare -i x='a[$(cmd)]'`, `declare -n`) runs cmd too and is not
-read yet (#188).
+Only a value written in the `declare` operand itself is read (#188): a later plain assignment
+to a `-i` or `-n` variable (`declare -i n; n='a[$(cmd)]'`), an element of an unquoted compound
+value given with `-i` (`declare -ai b=($x)`) and a compound value or name that comes whole
+from a variable (`declare -a b=$x`, `declare "$n=$v"`) are evaluated by bash too and are not
+read.
 
 ## The store is credentials (D-038)
 
