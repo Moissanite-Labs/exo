@@ -72,7 +72,7 @@ def parse_cron(line: str) -> tuple[set[int], set[int], set[int], set[int], set[i
 
 
 def next_run(when: str, after: float) -> float:
-    """The first fire time strictly after ``after`` (epoch seconds, local time)."""
+    """The first fire time strictly after ``after`` (epoch seconds; cron fields are local time), across DST too."""
     when = when.strip()
     if m := EVERY.match(when):
         n = int(m[1])
@@ -88,8 +88,10 @@ def next_run(when: str, after: float) -> float:
             for h in sorted(hr):
                 for m_ in sorted(mi):
                     c = t.replace(hour=h, minute=m_)
-                    if c >= t:
-                        return c.timestamp()
+                    if c >= t:  # naive: when clocks go back, the hour's first pass (fold 0) can be before `after`
+                        for fold in (0, 1):
+                            if (ts := c.replace(fold=fold).timestamp()) > after:
+                                return ts
         t = t.replace(hour=0, minute=0) + timedelta(days=1)
     raise ValueError("this cron line never fires")
 
