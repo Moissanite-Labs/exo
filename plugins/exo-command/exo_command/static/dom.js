@@ -41,6 +41,16 @@ export function stream(path) {
   return new EventSource(path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token()));
 }
 
+// Trade the one-time launch code `exo web` opened the browser on for the page token (#166). The only request without
+// the token; any failure gives no token, with the server's reason when it sent one.
+export async function redeem(code) {
+  try {
+    const r = await fetch("/api/launch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+    const data = await r.json();
+    return r.ok && typeof data.token === "string" ? { token: data.token } : { error: String(data.error || "") };
+  } catch (e) { return { error: "" }; }
+}
+
 export async function api(method, path, body) {
   const opt = { method, headers: { "X-Exo-Token": token() } };
   if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }

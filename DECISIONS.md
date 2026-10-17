@@ -815,6 +815,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   heuristic.
 - **Not changed:** the TUI approval card's focus behaviour (another branch is editing the TUI); noted for later.
   The echo engine (a test double) still accepts any answer.
+- **Later (2026-10-17, #166):** the launcher's argv was a real leak, not a brief one: `webbrowser.open` hands the
+  `#token=` link to `xdg-open` and the browser, whose command lines any user of the host can read in `/proc` unless
+  it is mounted with `hidepid`, and the token answers approvals as `principal:web`. So the one-time bootstrap code
+  rejected above is now how the browser opens: `exo web` opens `#code=<one-time code>` (fresh per launch, in memory,
+  one use, 120 seconds), and the page trades it for the token at `POST /api/launch`, the only `/api/` route without
+  the token, with every other check of `providers.guard`. A used code that comes back means two parties held it: the
+  token is replaced, the old token's streams end, and the terminal gets a warning and the new link. The printed
+  `#token=` link is unchanged (stdout is the user's own); with a non-loopback `--host` no browser is opened. Limit,
+  stated plainly: the hop from the browser to the web server is not checked by uid. Any process on the host that has
+  the token, or wins the race for an unused code inside its 120 seconds, is the page. The race shows up as a
+  replaced token and a terminal warning. `docs/ui/WEB.md` "Opening the page and the page token".
 
 ## D-040 (2026-10-12) Who wrote it: authors on every message, pinned keys, an anchored ledger head
 - **Why:** the 12 October audit (priorities 4 and 6). (a) `exo_note` let the agent write `kind="ruling"`, and

@@ -18,8 +18,8 @@ status and store keys the same way.
   `add` never takes the key as an argument (it would land in shell history and in `ps`) and needs a terminal.
 - **TUI:** `/providers` opens a panel with the same list. `a` adds or replaces a key in a masked field, `t`
   tests, `r` removes, `d` sets the default model. The key never enters the transcript, history or session log.
-- **Web client:** `exo web` opens the page with a one-time token in the address. The Providers tab has the same
-  list, a masked key field, Test, Remove and a default model picker.
+- **Web client:** `exo web` opens the page with a one-time launch code that the page trades for the per-launch
+  token. The Providers tab has the same list, a masked key field, Test, Remove and a default model picker.
 
 Where a new key goes: the macOS Keychain (service `exo`) on a Mac; on Linux the Secret Service through
 `secret-tool` when it is installed, else `~/.config/exo/keys.env` (written mode 0600, atomically). Choose another
@@ -60,8 +60,9 @@ of these, or it answers 403:
    is `same-origin` or `none`;
 4. the header `X-Exo-Token` holds the per-launch token. `exo web` makes a new one each start, keeps it in memory,
    and prints it in the URL fragment (`#token=...`), which browsers never send to a server. The page moves it to
-   `sessionStorage` (gone when the tab closes) and strips it from the address bar. A custom header also forces a
-   CORS preflight, which the server never answers, so a cross-site page cannot send it.
+   `sessionStorage` (gone when the tab closes) and strips it from the address bar. The browser `exo web` opens gets
+   a one-time launch code instead, traded for the token over loopback (#166, `docs/ui/WEB.md`). A custom header
+   also forces a CORS preflight, which the server never answers, so a cross-site page cannot send it.
 
 The key travels once, in a POST body over loopback. The server does not log requests, never echoes the key and
 never returns a stored value; the page clears the field and keeps the key in no storage. What this does not stop:
