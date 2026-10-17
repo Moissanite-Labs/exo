@@ -22,7 +22,8 @@ Only your own words are signals (D-040). The loop reads a ruling, verdict, answe
 you (`exo.provenance.principal_names`: `principal`, your store's id, and the principal ids in the key registry). A
 ruling the agent wrote with `exo_note`, a correction it reported with `exo_should_have_been`, or text that came from a
 peer, a bus seat or a job notice is never read as yours, whatever it says. Consolidation counts these as
-`not_principal` and skips them.
+`not_principal` and skips them. History you import with `exo ingest` is authored as you, so it counts like a live
+turn. A Hermes row that may be an agent's brief is authored `hermes:unverified-user` and never does.
 
 ## The fast loop
 

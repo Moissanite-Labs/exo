@@ -501,7 +501,7 @@ def build_replays(ledger, cutoff: str | None = None) -> list[dict]:
         sess = ev.get("session") or ""
         text = next((b[k] for k in ("text", "content", "description", "summary") if isinstance(b.get(k), str)
                      and b[k].strip()), "")
-        if ev["kind"] == "utterance" and b.get("role", "user") == "user":
+        if ev["kind"] == "utterance" and b.get("role", "user") in ("user", "principal"):  # principal: exo ingest
             last_user[sess] = text
             continue
         base = {"ts": ev["ts"], "source": ev["id"], "session": sess, "kind": "replay",
