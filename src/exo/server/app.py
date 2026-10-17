@@ -125,15 +125,19 @@ class HttpServer:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if path.exists():
             path.unlink()
+        self._unix_path = path
+        if self.principal:  # before the socket accepts: no client may read a missing or a crashed core's record
+            self._principal_token = pr.issue(path, self.dispatcher.hub.instance)
         old = os.umask(0o177)
         try:
             self._server = await asyncio.start_unix_server(self._accept_client, path=str(path))
+        except BaseException:
+            if self._principal_token:
+                pr.revoke(path, self._principal_token)
+            raise
         finally:
             os.umask(old)
         os.chmod(path, 0o600)
-        self._unix_path = path
-        if self.principal:
-            self._principal_token = pr.issue(path, self.dispatcher.hub.instance)
 
     async def start_tcp(self, host: str, port: int) -> int:
         if not self.token:
@@ -266,8 +270,11 @@ class HttpServer:
                     return
                 if ev is None:
                     writer.write(b": ping\n\n")
-                else:
-                    writer.write(f"id: {ev.seq}\nevent: {ev.type}\ndata: {ev.to_json()}\n\n".encode())
+                else:  # raw UTF-8 keeps a frame near the body that made it (D-060); escapes stay valid JSON
+                    data = json.dumps(ev.to_dict(), separators=(",", ":"), ensure_ascii=False)
+                    for ch in "\x85\u2028\u2029":  # line breaks to str.splitlines, so to httpx's line reader
+                        data = data.replace(ch, f"\\u{ord(ch):04x}")
+                    writer.write(f"id: {ev.seq}\nevent: {ev.type}\ndata: {data}\n\n".encode("utf-8", "backslashreplace"))
                 await writer.drain()
         finally:
             sub.close()

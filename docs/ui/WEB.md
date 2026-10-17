@@ -34,7 +34,9 @@ the page shell (`/`, `/static/`) loads without the token. Responses carry `Refer
 The web process answers approvals as the principal: on each connection it checks with the kernel that the socket
 is served by the core named in its launch record (`run/<socket>.principal.key`), then sends that record's
 credential on that connection (D-060, `docs/GATE.md` "Unix peer authentication"). It re-joins a core that restarted
-with a new record, and refuses a socket that some other process serves. The optional
+with a new record, and refuses a socket that some other process serves. A refusal shows on the page with its reason
+(for a core from before D-060: "launch record is not a v1 record") and a restart hint: run `exo stop` (or close the
+Exo window that runs the core), then reopen the page. The optional
 ASGI app (`asgi.py`) is gone: it re-exposed the routes with no checks.
 
 The stream resumes through the core’s durable event log when its cursor has fallen outside the web event ring.

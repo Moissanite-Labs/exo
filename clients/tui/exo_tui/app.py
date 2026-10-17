@@ -18,7 +18,7 @@ from textual.widgets import Input, OptionList, Static, TextArea
 from rich.theme import Theme as RichTheme
 
 from exo.config import exo_home
-from exo.core.types import ContentPart
+from exo.core.types import ContentPart, from_dict
 from exo.core.trace import money
 from exo import complete as cm
 from exo.protocol import schema as s
@@ -33,6 +33,7 @@ from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar
                              EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
 CLIENT_ID = "exo-tui"
+LOST = "connection_lost"  # post's code for a command whose reply never came (D-060: it is not resent)
 DEFAULT_WINDOW = 0  # unknown until the core reports this model's capacity
 MAX_FILE = 64 * 1024
 WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
@@ -833,8 +834,16 @@ class ExoApp(App):
 
     # ------------------------------------------------------------ sending
     async def post(self, body: Any) -> s.Response:
+        import httpx
+
         self.sent.append(body)
-        resp = await self.client.send(body)
+        try:
+            resp = await self.client.send(body)
+        except (httpx.TransportError, OSError) as exc:  # the request may have reached the core: say so, never resend
+            self.note("connection lost; this may not have been delivered. Check before you send it again.", "error")
+            if isinstance(body, s.ApprovalRespond):
+                self.run_worker(self.restore_approvals(), exit_on_error=False)
+            return s.Response(id="", ok=False, error=s.ErrorInfo(code=LOST, message=str(exc)))
         if not resp.ok:
             self.note(f"error: {resp.error.code}: {resp.error.message}", "error")
         return resp
@@ -1071,7 +1080,10 @@ class ExoApp(App):
         if self.question and not command:
             qid, self.question = self.question, None
             self.add(Block(text, "user"))
-            await self.post(s.QuestionAnswer(question_id=qid, answer=text))
+            resp = await self.post(s.QuestionAnswer(question_id=qid, answer=text))
+            if resp.error is not None and resp.error.code == LOST:
+                self.question = qid  # still open as far as this window knows
+                self.keep_text(text)
             return
         if command:
             await self.slash(name, args.strip())
@@ -1087,10 +1099,17 @@ class ExoApp(App):
         self.close_cur()
         resp = await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
                                           mode="steer" if steering else "send"))
+        if resp.error is not None and resp.error.code == LOST:
+            self.keep_text(text)
         if steering and resp.ok and resp.result.get("message_id"):  # queued, not delivered: it can be pulled back
             self.pending_steers.append((resp.result["message_id"], block))
             block.pending = True
             block.flush()
+
+    def keep_text(self, text: str) -> None:
+        """A message whose delivery is unknown goes back in an empty composer, to send again or drop."""
+        if not self.composer.text:
+            self.put(text)
 
     def steer_landed(self, message_id: str) -> None:
         """The steer reached the conversation (message.completed): it is no longer pending."""
@@ -1118,6 +1137,8 @@ class ExoApp(App):
             return False
         mid, block = self.pending_steers[-1]
         resp = await self.post(s.CommandRun(name="unsteer", args=mid, session=self.session))
+        if resp.error is not None and resp.error.code == LOST:
+            return False  # unknown whether it was pulled back: it stays shown as pending
         gone = (resp.result.get("output") or {}).get("cancelled", []) if resp.ok else []
         if not gone:  # it landed while we asked
             self.steer_landed(mid)
@@ -1300,9 +1321,11 @@ class ExoApp(App):
         self.intro_pending = kind
         self.intro_turn, self.intro_reply = "", False
         try:
-            resp = await self.post(s.TurnSend(session=self.session, text=INTRO_PROMPT,
-                                              mode="steer" if self.busy else "send"))
+            resp: s.Response | None = await self.post(s.TurnSend(session=self.session, text=INTRO_PROMPT,
+                                                                 mode="steer" if self.busy else "send"))
         except Exception:
+            resp = None
+        if resp is None or (resp.error is not None and resp.error.code == LOST):
             self.intro_pending, self.intro_turn, self.intro_reply = "", "", False
             self.note("Could not start orientation. /intro retries when the core is available.", "warn")
             return
@@ -1618,6 +1641,24 @@ class ExoApp(App):
         self.approvals = [a for a in self.approvals if a.request_id not in gone]
         if self.card is not None and self.card.req.request_id in gone:
             self.close_card()
+
+    async def restore_approvals(self) -> None:
+        """After an answer whose reply was lost: the core's list is the truth, so a request it still holds gets its
+        card back."""
+        try:
+            resp = await self.client.send(s.ApprovalsList(session=self.session))
+        except Exception:
+            return
+        if not resp.ok:
+            return
+        shown = {a.request_id for a in self.approvals} | ({self.card.req.request_id} if self.card else set())
+        for a in resp.result.get("approvals", []):
+            if a.get("request_id") not in shown:
+                self.approvals.append(from_dict(s.ApprovalRequested, a, strict=False))
+        if self.card is None:  # the answered card may still be on its way out, and the new one reuses its id
+            for old in self.query(ApprovalCard):
+                await old.remove()
+        self.show_approval()
 
     def close_card(self) -> None:
         restore = self.card is not None and (self.focused is self.card or self.card.has_focus_within)

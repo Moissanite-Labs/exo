@@ -197,11 +197,12 @@ def test_core_refuses_a_peer_whose_kernel_credentials_do_not_match(sock_dir, mon
             await _stop(srv, task)
     assert asyncio.run(main()) == ("principal:tui", "local")
     monkeypatch.undo()
-    now, tok = time.time(), "t" * 43
-    assert pr.stamp(tok, tok, pr.Peer(os.getpid(), os.geteuid(), now), "tui") == "principal:tui"
-    assert pr.stamp(tok, tok, pr.Peer(os.getpid(), os.geteuid() + 1, now), "tui") == "local"
+    now, tok, me = time.time(), "t" * 43, pr.proc_info(os.getpid()).ident
+    assert pr.stamp(tok, tok, pr.Peer(os.getpid(), os.geteuid(), now, me), "tui") == "principal:tui"
+    assert pr.stamp(tok, tok, pr.Peer(os.getpid(), os.geteuid() + 1, now, me), "tui") == "local"
     assert pr.stamp(tok, tok, pr.Peer(None, os.geteuid(), now), "tui") == "local"
-    assert pr.stamp(tok, tok, pr.Peer(os.getpid(), os.geteuid(), now - 3600), "tui") == "local"  # pid reused
+    assert pr.stamp(tok, tok, pr.Peer(os.getpid(), os.geteuid(), now - 3600, me), "tui") == "local"  # pid reused
+    assert pr.stamp(tok, tok, pr.Peer(os.getpid(), os.geteuid(), now), "tui") == "local"  # no identity at accept
 
 
 DETACH = r'''
@@ -241,7 +242,9 @@ asyncio.run(main())
 
 def test_tool_tree_descendant_is_refused_even_after_detaching(tmp_path, sock_dir):
     """A child of the core holding the credential is local through the real client, and stays local when the
-    process that connected exits so the kernel's peer pid no longer has a readable parent chain."""
+    process that connected exits and leaves the connection to an orphan: the kernel's peer pid then names a dead
+    process, and the dead-peer check (not the parent walk) refuses it. The walker's own fail-closed case is
+    ``test_unreadable_ancestor_is_the_tool_tree``."""
     sock = sock_dir / "exod.sock"
     script, out = tmp_path / "detach.py", tmp_path / "detach.json"
     script.write_text(DETACH)
