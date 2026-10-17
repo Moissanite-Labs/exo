@@ -1022,12 +1022,6 @@
       "count": 1
     },
     {
-      "path": "src/exo/server/app.py",
-      "message": "Value of type \"tuple[str, int] | None\" is not indexable",
-      "code": "index",
-      "count": 1
-    },
-    {
       "path": "src/exo/server/engine.py",
       "message": "Argument 1 to \"wait_for\" has incompatible type \"Coroutine[Any, Any, Event | None]\"; expected \"Future[Event] | Generator[Any, None, Event] | Awaitable[Event]\"",
       "code": "arg-type",

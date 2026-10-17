@@ -13,9 +13,12 @@ compatible with Divan Bus v0.1, so seats and relays already running keep working
   `team:<name>` or `group` lands in that shared chat. The core checks the envelope against the seat's pinned key
   (never the relay's), marks it as written by `bus:<seat>`, and applies the peer policy: held for the principal
   unless a rule lets the seat through (D-040, `docs/PEERS.md` "Bus seats"). The final reply goes back as a signed
-  envelope in the same thread only for a turn that an auto-delivered message started. Register it with the core's
-  `register_channel`; the factory takes a protocol link (a `exo.protocol.client.Client`, or
-  `InProcessLink(engine)` for an embedded core).
+  envelope in the same thread only for a turn that an auto-delivered message opened. A message steered or queued
+  into another turn posts nothing, and neither does a turn the principal typed into. A body sealed to this seat
+  that cannot be opened arrives as `<encrypted body could not be opened>`, so it never stops the inbox. Register
+  it with the core's `register_channel`. The factory takes a link: exod passes its in-process `ChannelLink`
+  (caller `channel`, the only caller the core takes a bus message from), and `InProcessLink(engine)` does the same
+  for an embedded core.
 - **Relay key:** the relay signs a post with its own key only for a seat whose key it does not hold (an MCP post),
   and marks it `{"relay": {"composed_for": seat}}` in `attach`. Readers never take the relay key as the seat's:
   `Client.signer_of` returns the seat's key or nothing.

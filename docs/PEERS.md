@@ -42,7 +42,10 @@ enabled = true
 
 The exo-bus channel brings messages from other seats on the Exo Bus. It does not start turns itself. For each
 inbox envelope it calls the `peers` command with action `bus`, and the core takes it from there
-(`src/exo/bus/ingress.py`):
+(`src/exo/bus/ingress.py`). Only a channel exod runs can do this: exod gives its channels an in-process link
+stamped with the caller `channel`, which no socket, stdio or TCP connection ever gets (`docs/GATE.md` "Who
+answered"). Any other caller, a tool subprocess on the socket or the principal's own client, is refused as
+`forbidden`, so it cannot pin a seat's key or speak as a seat.
 
 1. **Check the signature against the seat's pinned key.** The first message from a seat pins the key the bus
    registry lists for it (in `$EXO_HOME/keys/registry.json`). Every later message must verify against that pinned
@@ -55,9 +58,13 @@ inbox envelope it calls the `peers` command with action `bus`, and the core take
 3. **Deliver it as the seat, not as you.** It lands in the bus session for that chat, framed as `[bus message from
    <seat> ...]`, with author `bus:<seat>`. Memory capture and learning never read it as your words.
 4. **Reply only when the policy said auto.** The channel posts the turn's final answer back to the bus only for a
-   turn that a message the policy delivered on its own started. A held message you released, a denied one, and your
-   own typing in a bus session post nothing. The agent can still answer with the `bus_post` tool, which the gate
-   checks like any post.
+   turn that a message the policy delivered on its own opened: the turn's first message is that envelope. A held
+   message you released, a denied one, and your own typing in a bus session post nothing. Neither does a message
+   steered or queued into a turn that was already running (yours included), nor an auto turn that you or a job
+   typed into. The agent can still answer with the `bus_post` tool, which the gate checks like any post.
+
+A body sealed to this seat that cannot be opened (malformed, or sealed to a key this seat no longer holds) arrives
+as `<encrypted body could not be opened>`. It is checked and held like any message, and the inbox moves past it.
 
 ## What a peer cannot do
 
