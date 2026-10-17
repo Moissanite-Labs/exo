@@ -77,12 +77,17 @@ export function mount(root) {
   function flash(msg) { notice = msg || ""; drawStatus(); }
   function fail(e) { flash(e && e.message ? e.message : String(e)); }
 
+  // A context note (meta.note: other threads' news) is for the model, not a message the user typed (D-028), so the
+  // transcript leaves it out, as the terminal client does.
+  function isNote(m) { return !!(m && m.meta && m.meta.note); }
+
   function fromMessages(msgs) {
     for (const m of msgs) if (m.role === "user" && m.id) { landed.add(m.id); delete steers[m.id]; }
     drawSteers();
     const out = [];
     const byCall = {};
     for (const m of msgs) {
+      if (isNote(m)) continue;
       if (m.role === "user" || m.role === "assistant") {
         const text = partsText(m.content);
         if (text || m.role === "user") out.push({ kind: m.role, id: m.id || "m" + out.length, text, complete: true });
@@ -188,6 +193,7 @@ export function mount(root) {
   }
 
   function completed(m) {
+    if (isNote(m)) return;
     if (m.role === "user") { if (!find(m.id)) push({ kind: "user", id: m.id, text: partsText(m.content) }); return; }
     if (m.role === "assistant") {
       const text = partsText(m.content);

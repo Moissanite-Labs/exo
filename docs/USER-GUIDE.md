@@ -275,6 +275,7 @@ Details and the cost rules: `docs/TRACE.md`.
 | The error says a local model "is not running" | Start the server it names (for Ollama, `ollama serve`), then test it in `/providers` (`t`). A passing test lets the next message through at once. |
 | The error says "next route reopens in" some seconds | The provider failed and Exo rests it for a while. Wait, or test it in `/providers` (`t`): a passing test retries it at once. |
 | A second `exo serve` refuses to start | One process writes an agent's log. Another `exo serve` or `exo tui` for that seat already holds it. Use that one, or stop it. |
+| A second `exo web` says Exo's web client is already running | One already serves that port. Keep using its page, or open the full link it printed, or stop it with Ctrl+C in its terminal. `exo web --port 7343` starts a second one on the same core. |
 | Cost shows `unknown` | The route has no price. Add one under `models.models` in `config.json` (`docs/TRACE.md`). |
 | `code_find` is missing | It needs Node.js 22 or newer. `exo models` says why on its `code_find:` line (`docs/TOOLS.md`). |
 | Memory or learning is off | Both need a principal store. Without one the boot line says `memory off, no principal store`. Run `exo init <id>` (any short id, such as your first name), then start Exo again. If `exo web` started the core, run `exo stop` first (`docs/LEARNING.md`). |
