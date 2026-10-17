@@ -263,6 +263,8 @@ installed provider types, reserves before dispatch and settles before exposing a
 completed model result. `spend_refused` attempt outcomes become the protocol error
 code `model_spend_refused`. Retained uncertainty or an existing journal stop uses
 `spend_stopped` and `model_spend_stopped`. Both are nonretryable for that request.
+A turn that reaches the tool-round cap makes one more admitted call, its wrap-up, so it reserves and settles one
+more journal entry; a refusal there is reported with the same codes.
 
 Application factory composition now lives in `exo.compose.create`: config and
 seat selection, required executor/plugin inventory and product attachment. The

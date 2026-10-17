@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
+
+import pytest
 
 from exo.core.context import DefaultCompressor, SummaryError, TreeContext, summary_prompt
 from exo.core.loop import Loop
@@ -644,13 +648,14 @@ def test_summary_gives_up_after_the_cap_and_reports_once(tmp_path):
     assert [m.text() for m in run(ctx.build(s.id, ""))][-1] == "q5"  # still in the context, verbatim
 
 
-def test_round_cap_wraps_up_without_tools(tmp_path):
+def test_round_cap_wraps_up_with_tool_use_off(tmp_path):
     spin = [ToolCall(id="c", name="echo", arguments={})]
-    seen_tools = []
+    seen_tools, seen_choice = [], []
 
     class Spy(Script):
         async def stream(self, messages, tools, **opts):
             seen_tools.append(list(tools))
+            seen_choice.append(opts.get("tool_choice"))
             async for pe in super().stream(messages, tools, **opts):
                 yield pe
 
@@ -664,7 +669,8 @@ def test_round_cap_wraps_up_without_tools(tmp_path):
     s, res = run(go())
     assert res.stop_reason == "max_iterations"  # callers still see the cap
     assert res.message.text() == "did 3 rounds; next: finish X" and res.message.meta.get("wrap_up")
-    assert len(prov.calls) == 4 and seen_tools[-1] == [] and all(seen_tools[:3])
+    assert len(prov.calls) == 4 and seen_tools == [[SPEC]] * 4  # the same tools stay declared...
+    assert seen_choice == [None, None, None, "none"]  # ...and only the wrap-up turns tool use off
     assert "tool rounds" in prov.calls[-1][-1].text()  # transient prompt reached the model...
     assert not any("tool rounds" in m.text() for m in store.messages(s.id) if m.role == "user")  # ...not the store
 
@@ -680,6 +686,184 @@ def test_round_cap_wrap_up_off(tmp_path):
         return await loop.send(s.id, "spin")
 
     assert run(go()).stop_reason == "max_iterations" and len(prov.calls) == 2
+
+
+def _spin(n):
+    return [reply("", [ToolCall(id=f"c{i}", name="echo", arguments={})]) for i in range(n)]
+
+
+def _capped(tmp_path, wrap, **kw):
+    """Two tool rounds hit the cap; ``wrap`` is the wrap-up call's script step."""
+    prov = Script(*_spin(2), wrap)
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], max_iterations=2, **{"run_tool": echo_tool, **kw})
+
+    async def go():
+        s = await loop.create_session()
+        return s, await loop.send(s.id, "spin")
+
+    s, res = run(go())
+    return store, seen, s, res
+
+
+def _bodies(seen, cls):
+    return [e.body for e in seen if isinstance(e.body, cls)]
+
+
+def test_round_cap_wrap_up_drops_a_stray_tool_call_and_keeps_the_route_meta(tmp_path):
+    ran = []
+
+    async def tool(call, ctx):
+        ran.append(call.id)
+        return ToolResult.of_text(call.id, "ok")
+
+    wrap = reply("did A; next: B", [ToolCall(id="late", name="echo", arguments={})])
+    wrap[-1].message.meta["model"] = "fake:wrap"  # what the router stamps on the reply
+    store, seen, s, res = _capped(tmp_path, wrap, run_tool=tool)
+    last = store.messages(s.id)[-1]
+    assert res.stop_reason == "max_iterations" and ran == ["c0", "c1"]  # the stray call never ran
+    assert last.role == "assistant" and last.text() == "did A; next: B" and last.tool_calls == []  # none dangles
+    assert last.meta["wrap_up"] is True and last.meta["model"] == "fake:wrap"
+
+
+def test_round_cap_wrap_up_with_only_a_tool_call_stores_nothing(tmp_path):
+    ran = []
+
+    async def tool(call, ctx):
+        ran.append(call.id)
+        return ToolResult.of_text(call.id, "ok")
+
+    store, seen, s, res = _capped(tmp_path, reply("", [ToolCall(id="late", name="echo", arguments={})]), run_tool=tool)
+    assert res.stop_reason == "max_iterations" and ran == ["c0", "c1"]  # the stray call never ran
+    assert store.messages(s.id)[-1].role == "tool"  # no empty wrap-up message is stored
+    assert not res.message.meta.get("wrap_up")
+
+
+def test_round_cap_wrap_up_error_keeps_the_partial_and_reports_it(tmp_path):
+    from exo.protocol import schema as ev
+
+    wrap = [ProviderEvent(kind="text", text="I finished A; still open: "),
+            ProviderEvent(kind="error", error="upstream reset", retryable=True)]
+    store, seen, s, res = _capped(tmp_path, wrap)
+    last = store.messages(s.id)[-1]
+    assert res.stop_reason == "max_iterations" and res.error == "upstream reset"
+    assert last.text() == "I finished A; still open: " and res.message.id == last.id  # what the user saw is kept
+    assert last.meta["interrupted"] is True and last.meta["error"] == "upstream reset"
+    assert [b.code for b in _bodies(seen, ev.Error)] == ["provider_error"]
+
+
+def test_round_cap_wrap_up_spend_refusal_is_reported_with_its_code(tmp_path):
+    from exo.protocol import schema as ev
+
+    refused = ProviderEvent(kind="error", error="Model request refused: daily cap", retryable=False,
+                            attempts=[{"route": "anthropic:m", "outcome": "spend_refused"}])
+    store, seen, s, res = _capped(tmp_path, [refused])
+    assert res.stop_reason == "max_iterations" and res.error == "Model request refused: daily cap"
+    assert [b.code for b in _bodies(seen, ev.Error)] == ["model_spend_refused"]
+    assert store.messages(s.id)[-1].role == "tool"  # nothing was said, nothing stored
+
+
+def test_round_cap_wrap_up_exception_keeps_the_cap_and_is_recorded(tmp_path):
+    from exo.protocol import schema as ev
+
+    prov = Script(*_spin(2))
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], run_tool=echo_tool, max_iterations=2)
+    build, builds = loop.context.build, []
+
+    async def flaky(session, system):  # the third build is the wrap-up's
+        builds.append(session)
+        if len(builds) == 3:
+            raise RuntimeError("tree broke")
+        return await build(session, system)
+
+    loop.context.build = flaky
+
+    async def go():
+        s = await loop.create_session()
+        return await loop.send(s.id, "spin")
+
+    res = run(go())
+    assert res.stop_reason == "max_iterations" and res.error is None and len(prov.calls) == 2
+    assert not _bodies(seen, ev.Error)  # no turn_failed
+    assert [(b.where, b.message) for b in _bodies(seen, ev.HarnessError)] == [("wrap-up", "tree broke")]
+
+
+def test_round_cap_wrap_up_interrupt_ends_the_turn_interrupted(tmp_path):
+    prov = Script(*_spin(2), [ProviderEvent(kind="text", text="so far "), "WAIT"])
+    store, loop, seen = make(tmp_path, prov, tool_specs=[SPEC], run_tool=echo_tool, max_iterations=2)
+
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "spin"))
+        while not any(e.type == "message.delta" for e in seen):
+            await asyncio.sleep(0.01)
+        assert loop.interrupt(s.id)
+        return s, await asyncio.wait_for(task, 2)
+
+    s, res = run(go())
+    last = store.messages(s.id)[-1]
+    assert res.stop_reason == "interrupted"  # an interrupt wins over the cap, like in any other call
+    assert last.text() == "so far " and last.meta["interrupted"] is True
+
+
+def _sse(*events):
+    return "".join("data: " + json.dumps(e) + "\n\n" for e in events).encode()
+
+
+ANTHROPIC_WRAP = _sse(
+    {"type": "message_start", "message": {"usage": {"input_tokens": 10, "output_tokens": 1}}},
+    {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Summing up."}},
+    {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "SIG"}},
+    {"type": "content_block_stop", "index": 0},
+    {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+    {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Read it; next: summarize."}},
+    {"type": "content_block_stop", "index": 1},
+    {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 9}},
+    {"type": "message_stop"})
+OPENAI_WRAP = _sse(
+    {"choices": [{"index": 0, "delta": {"content": "Read it; next: summarize."}, "finish_reason": None}]},
+    {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+    {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 9}}) + b"data: [DONE]\n\n"
+
+
+@pytest.mark.parametrize("kind", ["anthropic", "openai"])
+def test_round_cap_wrap_up_request_keeps_the_tools_and_sets_tool_choice_none(tmp_path, kind):
+    import httpx
+
+    from exo.core.models.anthropic import AnthropicProvider
+    from exo.core.models.openai_chat import OpenAIChatProvider
+
+    fixtures = Path(__file__).parents[1] / "models" / "fixtures"
+    bodies = []
+
+    def handle(request):
+        bodies.append(json.loads(request.content))
+        tools_round = (fixtures / f"{kind}_tool_stream.sse").read_bytes()
+        wrap = ANTHROPIC_WRAP if kind == "anthropic" else OPENAI_WRAP
+        return httpx.Response(200, content=tools_round if len(bodies) <= 2 else wrap,
+                              headers={"content-type": "text/event-stream"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    if kind == "anthropic":
+        prov, names, none = AnthropicProvider(api_key="k", client=client), ["read_file"], {"type": "none"}
+    else:
+        prov, names, none = OpenAIChatProvider("https://example.invalid/v1", "k", client=client), ["weather", "time"], "none"
+    specs = [ToolSpec(name=n, description=n) for n in names]
+    store, loop, seen = make(tmp_path, prov, tool_specs=specs, run_tool=echo_tool, max_iterations=2,
+                             model="claude-opus-5-5" if kind == "anthropic" else "m")
+
+    async def go():
+        s = await loop.create_session()
+        return s, await loop.send(s.id, "read the readme")
+
+    s, res = run(go())
+    assert len(bodies) == 3 and bodies[2]["tools"] == bodies[1]["tools"] == bodies[0]["tools"]  # no tool_set edit
+    assert [b.get("tool_choice") for b in bodies] == [None, None, none]
+    assert "tool rounds" in json.dumps(bodies[2]["messages"][-1])
+    last = store.messages(s.id)[-1]
+    assert res.stop_reason == "max_iterations" and last.meta["wrap_up"] is True
+    assert last.text() == "Read it; next: summarize." and last.tool_calls == []
+    assert not any(p.signature for p in last.content)  # thinking signed against the unstored prompt is not kept
 
 
 def test_transient_summary_outage_retries_after_minutes_with_capped_delay_and_one_report(tmp_path, monkeypatch):

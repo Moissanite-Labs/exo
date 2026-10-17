@@ -23,6 +23,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (14,813, the count after the last real reduction) and `CORE_HEADROOM` (1,000) and asserts the count stays under
   their sum, 15,813. A real reduction lowers the floor and it never rises. Security and robustness fixes are never
   blocked by the budget. The test prints the count, the headroom left and the largest counted files.
+- Tool-round cap (#92, #93): a turn that reaches 24 tool rounds now ends with a short report (done, still open,
+  next step) from one more model call with tool use off, instead of a dangling tool round. The tools stay declared
+  and `tool_choice` is `none`, so the provider sees no tool-set edit. `stop_reason` stays `max_iterations`; a failed
+  report is a coded `error` and keeps any shown text. Each capped turn costs one more model call and one more
+  spend-journal entry. Scheduled runs append the report to their status, and a capped subagent's receipt summary
+  is the report when the wrap-up produced one (otherwise it is the last message's text, as before). `Loop(wrap_up=False)` turns it off.
 - Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
