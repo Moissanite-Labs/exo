@@ -27,6 +27,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Security
+- Gate: a heredoc or here-string after a compound command's closing `}`, `)`, `done`, `fi` or `esac`, and text piped
+  into a compound, now reach the commands inside it (#161). `{ bash; } <<'EOF'` with `git push origin main` in the
+  body was `opaque_exec` (ask) and slipped past `deny: [vcs_push]`; it is now `vcs_push`, as `bash <<'EOF'` is.
+  Commands that do not run their input (`{ cat; } <<EOF`) keep their class, and a command whose stdin is already
+  set (its own heredoc, here-string or `<`, a pipe inside: `{ curl ... | bash; } <<< 'ls'`, or an earlier
+  `exec < file` however spelled, or an eval, source, `.`, variable program or function that may run one) is not
+  fed and stays `opaque_exec`, as is the whole compound when its closer has its own `<`.
+  Under `deny: [opaque_exec]` or `categories: {opaque_exec: deny}` these compound lines now ask where they were
+  denied, as `bash <<EOF` already does, until D-075 (#126) / #191. It carries the #178 floor change (naming
+  `opaque_exec` at `ask` or `deny` keeps the indirection floor), so they ask rather than falling to the push's own
+  `log` (`docs/GATE.md` "Shell commands: an allowlist").
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

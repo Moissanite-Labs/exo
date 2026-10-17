@@ -772,6 +772,28 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+  *Amendment 2026-10-17 (issue #161):* the lexer attached a heredoc to the command whose line held the `<<`, which
+  for `{ bash; } <<EOF`, `( bash ) <<EOF` and `while ...; do bash; done <<EOF` is the closing token, so the shell
+  inside ran a body the gate never read (ask, where `bash <<EOF` with the same body is denied by a category deny).
+  Now a heredoc or here-string after a closing `}`, `)`, `done`, `fi` or `esac`, and readable text piped into a
+  compound, is fed to the commands inside it, nested ones included, except a command whose stdin is already set:
+  its own heredoc, here-string or `<` redirection, a pipe from a command inside, an earlier `exec < file` inside
+  (however spelled or prefixed, or possibly run by eval, source, `.`, a variable program or a function on the line),
+  or a nested compound's own closer redirection or pipe (inner closers win, as in bash). Nothing is fed when the
+  closer has its own `<`, and a closer heredoc wins over a pipe in. Feeding such a command would read decoy text as
+  what the shell runs (`{ curl ... | bash; } <<< 'rm -rf build'` would leave `opaque_exec` for `delete`). Chosen
+  over feeding only the last command: any inner command may read stdin. Only shells, interpreters and gh act on
+  it, so `{ cat; } <<EOF` stays `read`, but the fed text can change the line's category and the summary shown at
+  ask. Each text is classified once per line and a shared stdin is listed once, and the parser finds command
+  position and a closer's opener without rescanning, so the cost stays linear (a group of shells fed a body that
+  is itself a group of fed shells was read width to the power of depth times, n here-strings fed to n shells cost
+  n squared, and so did n openers in a row). A line read this way leaves `opaque_exec` for its inner category,
+  so it carries the issue #178 floor (only naming `opaque_exec` at `log` or `allow` turns the indirection floor
+  off): under `deny: [opaque_exec]` or `categories: {opaque_exec: deny}` these lines now ask where they were
+  denied, as `bash <<EOF` already does, until D-075 (#126) / #191; under `categories: {opaque_exec: deny}` the
+  floor keeps them at ask rather than falling to the push's own `log`. `coproc W { ...; } <<EOF` and
+  `function NAME { ...; } <<EOF` are fed the same way once #181 reads their bodies; the body of `time { ...; }` is
+  not read at all, so it still asks as `opaque_exec`.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

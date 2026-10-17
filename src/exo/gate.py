@@ -204,6 +204,7 @@ _WRITE_REDIRS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
 _REDIR_OPS = ("&>>", "&>", "<<<", "<<-", "<<", "<>", ">>", ">|", ">&", "<&", ">", "<")
 _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
 _ASSIGN = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=.*", re.S)
+_FUNC_NAMES = re.compile(r"\bfunction\s+([^\s(){};&|<>]+)|([^\s(){};&|<>'\"]+)\s*\(\s*\)")
 
 
 @dataclass
@@ -461,16 +462,37 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
     """(simple commands, substitution sources, defines a function)."""
     lx = _Lexer(src or "")
     toks = lx.run()
+    fnames = {a or b for a, b in _FUNC_NAMES.findall(src or "")}   # a call to one may run `exec < f` (#161)
     cmds: list[_Cmd] = []
     cur = _Cmd()
     func = False
     i = 0
+    opened: list = []       # compounds still open: (opener, index of their first command, command piped in)
+    tops: dict = {}         # opener -> its indexes in opened, so a closer finds its opener without a scan
+    shut = None             # the open compound the current command closes
+    lead = True             # every word of cur so far is a reserved word
+    taken: dict = {}        # first command -> (end, an exec inside set the shell's stdin) of a compound whose
+                            # stdin is set (inner closers win); also _piped_text's memo
 
     def end(piped: bool = False) -> None:
-        nonlocal cur
+        nonlocal cur, shut, lead
+        if shut is not None:
+            _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
             cmds.append(cur)
-        cur = _Cmd(piped_in=piped)
+        cur, shut, lead = _Cmd(piped_in=piped), None, True
+
+    def push(entry: tuple) -> None:
+        tops.setdefault(entry[0], []).append(len(opened))
+        opened.append(entry)
+
+    def close(j: int) -> None:
+        nonlocal shut
+        shut = opened[j]
+        del opened[j:]
+        for stack in tops.values():
+            while stack and stack[-1] >= j:
+                stack.pop()
 
     while i < len(toks):
         kind, v = toks[i]
@@ -480,7 +502,12 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
                 i += 2
                 end()
                 continue
+            into = cmds[-1] if v == "(" and cur.piped_in and cmds else None
             end(piped=v in ("|", "|&"))
+            if v == "(":
+                push(("(", len(cmds), into))
+            elif v == ")" and opened and opened[-1][0] == "(":
+                close(len(opened) - 1)
         elif kind == "redir":
             if i + 1 < len(toks) and toks[i + 1][0] == "w":
                 if v == "<<<":
@@ -492,6 +519,14 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
         elif kind == "hd":
             cur.heredocs.append(v)
         else:
+            if not v.quoted and _command_word(cur.words, lead):
+                if v.text in _COMPOUND_OPENERS:
+                    push((v.text, len(cmds), cmds[-1] if cur.piped_in and cmds else None))
+                elif v.text in _COMPOUND_CLOSERS:
+                    j = max((tops[o][-1] for o in _COMPOUND_CLOSERS[v.text] if tops.get(o)), default=-1)
+                    if j >= 0:
+                        close(j)
+            lead = lead and not v.quoted and v.text in _OPENERS
             cur.words.append(v)
         i += 1
     end()
@@ -905,7 +940,87 @@ def _stdin_texts(k: _Cmd, piped: str | None) -> list[str]:
     out = [h.body for h in k.heredocs] + [w.text for w in k.herestrings]
     if piped is not None:
         out.append(piped)
-    return out
+    return list(dict.fromkeys(out))
+
+
+# A compound command's closing word, and the openers it closes.
+_COMPOUND_CLOSERS = {"}": ("{",), "done": ("while", "until", "for", "select"), "fi": ("if",), "esac": ("case",)}
+_COMPOUND_OPENERS = frozenset(o for names in _COMPOUND_CLOSERS.values() for o in names)
+_READ_REDIRS = ("<", "<&", "<>")
+
+
+def _command_word(words: list, lead: bool) -> bool:
+    """Whether the next word is in command position: only reserved words (lead, which the parser keeps so this
+    is O(1)), `coproc [NAME]` or `function NAME` before it."""
+    return lead or (len(words) <= 2 and not words[0].quoted and words[0].text in ("coproc", "function"))
+
+
+def _own_stdin(k: _Cmd) -> bool:
+    """Whether the command's own heredoc, here-string or `<` redirection sets its stdin. The lexer drops fd
+    numbers, so `2<file` counts too: that command is not fed, as on main."""
+    return bool(k.heredocs or k.herestrings) or any(op in _READ_REDIRS for op, _ in k.redirs)
+
+
+def _sets_shell_stdin(k: _Cmd, fnames: set) -> bool:
+    """Whether the compound's stdin stops being fed after this command. `exec < file` makes the file the
+    stdin of every later command in that shell, and bash reaches it however exec is spelled or prefixed
+    (`"exec"`, `\\exec`, `command exec`, `X=1 exec`, `time exec`) and unseen through eval, source, `.`, a
+    program name from a variable or a function defined on the line. So any of those stops the feed, and
+    the later commands keep main's reading."""
+    w = next((w for w in k.words if not (w.text in _OPENERS or w.text in ("command", "time", "-p")
+                                         or _ASSIGN.fullmatch(w.text))), None)
+    if w is None:
+        return False
+    return (w.dynamic or w.text in ("eval", "source", ".") or w.text in fnames
+            or (w.text == "exec" and _own_stdin(k)))
+
+
+def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None, taken: dict,
+                   fnames: set) -> None:
+    """A compound command's stdin reaches the commands inside it: a heredoc or here-string after its
+    closing `}`, `)`, `done`, `fi` or `esac`, and text piped into it. As in bash, a command whose stdin is
+    already set keeps it: its own redirection, a pipe from a command inside, or a nested compound's closer
+    or pipe (inner closers are fed first). After an `exec < file` inside, nothing more is fed. The closer's
+    own redirection wins over a pipe in, and its `<` over its heredoc too (the lexer keeps no order between
+    them), so then nothing is fed. Every other inner command gets all of it, an over-approximation: only
+    shells, interpreters and gh read it."""
+    if src is None and not _own_stdin(closer):
+        return
+    redirected = any(op in _READ_REDIRS for op, _ in closer.redirs)
+    heredocs, texts = list(closer.heredocs), list(closer.herestrings)
+    piped = _piped_text(src, taken) if src is not None and not _own_stdin(closer) else None
+    if piped is not None:
+        texts.append(_Word(piped))
+    i, sets = start, False
+    while i < len(cmds) and not sets:
+        if i in taken:                  # a nested compound with its own stdin, skipped whole (linear)
+            i, sets = taken[i]
+            continue
+        k = cmds[i]
+        sets = _sets_shell_stdin(k, fnames)
+        if not (redirected or sets or _own_stdin(k) or (i > start and k.piped_in)):
+            k.heredocs, k.herestrings = heredocs, texts      # shared, so _once can skip a repeat whole
+        i += 1
+    if len(cmds) > start:
+        taken[start] = (len(cmds), sets)
+
+
+def _once(ctx: dict, fn, k: _Cmd, piped: str | None, *args) -> list[Classification]:
+    """fn(text, *args) for each stdin text of k that this command line has not yet given fn. A compound's
+    stdin reaches every command inside it (as the same lists), and _combine keeps the most severe part with
+    every part's signals, so a repeat adds nothing. Without this a body of fed shells, itself fed to many
+    shells, is read width ** depth times, and many here-strings fed to many shells cost their product."""
+    seen = ctx.setdefault("stdin", set())
+    whole = (fn, id(k.heredocs), id(k.herestrings), piped, *args)
+    if whole in seen:
+        return []
+    seen.add(whole)
+    parts = []
+    for text in _stdin_texts(k, piped):
+        if (fn, text, *args) not in seen:
+            seen.add((fn, text, *args))
+            parts.append(fn(text, *args))
+    return parts
 
 
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
@@ -999,9 +1114,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             if not a.startswith(("-", "+")):
                 parts[0].summary = f"{prog} runs the script {a}"[:120]
                 return parts
-        for text in _stdin_texts(k, piped):
-            if depth < _DEPTH:
-                parts.append(classify_shell(text, inner_depth))
+        if depth < _DEPTH:
+            parts += _once(ctx, classify_shell, k, piped, inner_depth)
         return parts
     if prog in _INTERPRETERS:
         return _classify_interpreter(prog, argv, k, cmd, depth, ctx, piped)
@@ -1049,7 +1163,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog == "exo":
         return [_classify_exo(argv, cmd)]
     if prog == "gh":
-        return [_classify_gh(argv, cmd, [h.body for h in k.heredocs])]
+        return [_classify_gh(argv, cmd, [h.body for h in k.heredocs[:1]])]
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
         return [_classify_http(argv, cmd)]
     if prog in ("ssh", "mosh"):
@@ -1168,7 +1282,7 @@ def _classify_interpreter(prog: str, argv: list[str], k: _Cmd, cmd: str, depth: 
             break
         i += 2 if a in _INTERP_VALUE_FLAGS.get(prog, ()) else 1
     parts = [_opaque(f"{prog} reads code from its input", cmd)]
-    parts += [classify_code(t) for t in _stdin_texts(k, piped)]
+    parts += _once(ctx, classify_code, k, piped)
     return parts
 
 
@@ -1219,14 +1333,19 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
     return c
 
 
-def _piped_text(k: _Cmd) -> str | None:
-    """What a simple command writes to a pipe, when the gate can read it: `cat <<EOF`, `echo`, `printf`."""
+def _piped_text(k: _Cmd, memo: dict | None = None) -> str | None:
+    """What a simple command writes to a pipe, when the gate can read it: `cat <<EOF`, `echo`, `printf`.
+    memo joins a compound's stdin, which many `cat`s inside it share, once per line."""
     words = [w for w in k.words]
     if not words or any(w.dynamic for w in words):
         return None
     prog = words[0].text
     if prog == "cat" and len(words) == 1 and (k.heredocs or k.herestrings):
-        return "\n".join([h.body for h in k.heredocs] + [w.text for w in k.herestrings])
+        memo = {} if memo is None else memo
+        key = (id(k.heredocs), id(k.herestrings))
+        if key not in memo:
+            memo[key] = "\n".join([h.body for h in k.heredocs] + [w.text for w in k.herestrings])
+        return memo[key]
     if prog in ("echo", "printf"):
         return " ".join(w.text for w in words[1:] if not (prog == "echo" and w.text in ("-n", "-e", "-E")))
     return None
@@ -1239,7 +1358,7 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     parts: list[Classification] = []
     prev: _Cmd | None = None
     for k in cmds:
-        piped = _piped_text(prev) if (k.piped_in and prev is not None) else None
+        piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
         parts += _classify_simple(k, cmd, depth, ctx, piped)
         prev = k
     for sub in subs:
@@ -1257,9 +1376,9 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         c.signals = signals + ["secret store"]
     c.command = cmd
     # Outbound text: if several gh segments post text, keep the most severe one's text.
-    bodies = [h.body for k in cmds for h in k.heredocs]
-    if not c.text and c.category in OUTBOUND and bodies and c.category != "web_post":
-        c.text = bodies[0]
+    body = next((h.body for k in cmds for h in k.heredocs), None)
+    if not c.text and c.category in OUTBOUND and body is not None and c.category != "web_post":
+        c.text = body
     return c
 
 
@@ -1911,14 +2030,17 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     outcome = gates["matrix"][eff.reversibility][eff.exposure]
     reason, rule = f"{eff.reversibility} and {eff.exposure}", "matrix"
-    # D-038: the principal may lower opaque code only by naming it (a category line or a rule on opaque_exec).
-    opaque_named = "opaque_exec" in gates.get("categories", {})
+    # D-038: the principal may lower opaque code only by naming it below ask (a category line or a rule on
+    # opaque_exec). Naming it at ask or deny keeps the indirection floor (#178).
+    below_ask = ("allow", "log")
+    opaque_named = gates.get("categories", {}).get("opaque_exec") in below_ask
     if eff.category in gates.get("categories", {}):
         outcome, reason, rule = gates["categories"][eff.category], f"category {eff.category}", "category"
     for r in gates.get("rules") or []:
         if _rule_matches(r["match"], eff):
             outcome, reason, rule = r["decision"], r["reason"], "rule"
-            opaque_named = opaque_named or "opaque_exec" in [str(x) for x in _as_list(r["match"].get("category", []))]
+            opaque_named = opaque_named or (r["decision"] in below_ask and "opaque_exec" in
+                                            [str(x) for x in _as_list(r["match"].get("category", []))])
             break
 
     def bump(level: str, why: str, step: str):

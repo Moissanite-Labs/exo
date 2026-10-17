@@ -190,12 +190,43 @@ A command is `allow` only when every program in it is known and nothing is hidde
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
-- The principal can lower `opaque_exec` only by naming it: `categories: {opaque_exec: act}` or a
-  rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
+- The principal can lower `opaque_exec` only by naming it below ask: `categories: {opaque_exec: act}`
+  or a rule whose match has `category: opaque_exec` and whose decision is `act` or `report` (for
+  example with a `command` regex for `make`). Naming it at `ask` or `deny` keeps the indirection
+  floor: a command the gate reads inside a wrapper still asks at least, whatever its own category
+  says (#178).
 
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
 `npm install` runs package scripts) can run code the agent wrote earlier with a local write.
 The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+
+Compound commands (#161). The stdin of a compound command reaches the commands inside it, nested
+compounds included: a heredoc or here-string after its closing `}`, `)`, `done`, `fi` or `esac`,
+and text the gate can read piped into it (`echo ... | ( bash )`, `... | while read l; do bash; done`).
+So `{ bash; } <<EOF`, `( bash ) <<EOF` and `while ...; do bash; done <<EOF` classify the body as
+`bash <<EOF` does, and `{ python3; } <<EOF` reads it as code. `coproc W { bash; } <<EOF` and
+`function f { bash; } <<EOF` are read the same way once #181 lands (before it, their bodies are not
+read and they ask as `opaque_exec`). As in bash, a command whose stdin is already set keeps it and
+is not fed: one with its own heredoc, here-string or `<` redirection (`{ cat <<EOF; bash; }` feeds
+cat only), one piped into from a command inside (`{ curl ... | bash; } <<< 'ls'` stays
+`opaque_exec`), and the commands of a nested compound with its own closer redirection or pipe.
+Nothing more is fed after a command that may make a file the shell's stdin for good: `exec` with its
+own stdin however it is spelled or prefixed (`"exec"`, `\exec`, `command exec`, `X=1 exec`), and
+`eval`, `source`, `.`, a program name from a variable or a function defined on the line, which can
+run such an exec unseen. When the closer has its own `<`, nothing is fed (the gate keeps no order
+between a closer's redirections, so it does not guess which one bash applies last: `{ bash; } <<EOF
+< f`), and a closer heredoc or here-string wins over a pipe in. Every other inner command gets all
+of it. That over-approximates, and the fed text can change the line's category and the summary shown
+when it asks: only shells, interpreters and gh act on it, so `{ cat; } <<EOF` stays `read`, while `{
+bash; } <<EOF` with `rm -rf build` in the body is `delete`. Each text is read once per line, however
+many commands it reaches. Such a line was `opaque_exec` before; it now takes the inner category, and
+the floor above keeps it at ask at least under a policy that names `opaque_exec` at `ask` or `deny`.
+So under `deny: [opaque_exec]` or `categories: {opaque_exec: deny}` these lines now ask where they
+were denied, as `bash <<EOF` already does, until D-075 (#126) / #191. Known limits: the body of
+`time { ...; }` is not read at all (`{` is an unknown program there), so a heredoc after it changes
+nothing; it asks as `opaque_exec`. As on main, text piped into a command is read even when the
+command's own `<` wins (`echo ... | bash < f`), and so is the pipe into the first command of `echo
+... | { bash; } < f`.
 
 ## The store is credentials (D-038)
 
