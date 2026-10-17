@@ -511,6 +511,8 @@ _PREFIXES = {"sudo": {"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T"
              "caffeinate": {"-t", "-w"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
              "stdbuf": {"-i", "-o", "-e"}}
 _OPENERS = {"if", "then", "elif", "else", "do", "while", "until", "{", "}", "!", "fi", "done", "esac"}
+# openers that may follow a `coproc` or `function` NAME (`( list )` is split by the lexer and never a word)
+_COMPOUND = frozenset({"{", "while", "until", "if", "for", "case", "select", "[["})
 _SYSTEM_BIN = {"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/sbin", "/usr/sbin",
                "/usr/local/sbin", "/opt/local/bin"}
 _ENV_BIN = re.compile(r"(^|/)(\.?venv|env|\.tox/[^/]+|\.nox/[^/]+)/bin/[^/]+$|(^|/)node_modules/\.bin/[^/]+$")
@@ -978,13 +980,23 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
 
     if prog in _OPAQUE_PROGRAMS:
         parts = [_opaque(f"{prog}: {_OPAQUE_PROGRAMS[prog]}", cmd)]
-        if prog == "coproc":
-            # A name is optional only before a compound command. Keep the
-            # original words so quotes, expansion flags and stdin survive.
+        if prog in ("coproc", "function"):
+            # bash: `coproc [NAME] compound_command`, `function NAME compound_command`. The name is
+            # skipped before a compound opener; before a simple command (`coproc w echo hi`) the first
+            # word is the program. Keep the original words so quotes, expansion flags and stdin survive.
             body = words[1:]
-            if len(body) > 1 and body[1].text == "{" and not body[1].quoted:
+            if len(body) > 1 and not body[1].quoted and body[1].text in _COMPOUND:
                 body = body[1:]
+            elif prog == "function":
+                body = []                        # `function f() { ...; }`: the body is parsed as its own command
             parts += inner_words(body)
+            # An environment dump is credentials; classify_shell looks for one only in top-level commands.
+            i = 0
+            while i < len(body) and not body[i].quoted and body[i].text in _OPENERS:
+                i += 1
+            if _env_dump(_strip_prefixes_keep_env([w.text for w in body[i:]])[0]):
+                parts.append(_make("credentials", summary="shell touching environment dump", command=cmd,
+                                   signals=["secret store"]))
         if prog == "trap" and len(argv) > 1 and depth < _DEPTH:
             parts.append(classify_shell(argv[1], inner_depth))
         return parts
@@ -1254,6 +1266,8 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     if func:
         parts.append(_opaque("defines a shell function", cmd))
     c = _combine(parts, cmd)
+    if c.category == "credentials":  # a secret beside an irreversible command keeps that command's weight
+        c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
     segs = [[w.text for w in k.words] for k in cmds if k.words]
     hit = _shell_credential_hit(cmd, segs)
     if hit and c.category != "credentials":

@@ -187,10 +187,17 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
-- `coproc` inspects the inner command's original words, preserving quotes and heredocs,
-  while retaining `indirection`. An optional name is skipped only before an unquoted `{`.
-  Visible deletion can therefore match `deny: [delete]`; matching every category in a compound
-  command still depends on the separate classification-parts change in PR #126.
+- `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
+  form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
+  before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
+  skipped; before a simple command (`coproc w echo hi`) the first word is the program.
+  `function NAME { ...; }` is read the same way. An environment dump inside (`coproc env`,
+  `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Until D-075 lands, a coproc is denied
+  only when its inner command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
+  category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`) still
+  asks. A heredoc after the closing `}` of a block (`coproc W { bash; } <<EOF`) attaches to the
+  `}` and is not fed to the inner command, which asks as `opaque_exec`; the same limit applies
+  to `{ ...; } <<EOF` on its own.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
