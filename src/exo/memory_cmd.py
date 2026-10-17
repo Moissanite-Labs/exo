@@ -2,7 +2,8 @@
 
     exo memory [verify] [--agent NAME] [--json]   each agent log: positions with no gap, hash chain intact;
                                                   each principal ledger: chain, signatures against pinned keys,
-                                                  head anchors and append-only triggers
+                                                  head anchors and append-only triggers (a ledger deleted
+                                                  while its anchor remains fails)
     exo memory threads [--agent NAME] [--json]    the agent's threads, newest first
 """
 from __future__ import annotations
@@ -42,13 +43,15 @@ def verify_ledgers(a) -> dict[str, dict]:
                                    "error": "no principal store configured for authority verification"}}
         return {s.root.name: verify_configured(s.ledger_path) for s in stores}
     from .keyring import KeyRegistry
-    from .ledger import Ledger
+    from .ledger import Ledger, missing_ledger_problem
     out: dict[str, dict] = {}
-    stores = [s for s in _stores(a) if s.ledger_path.is_file()]
-    if not stores:
-        return out
-    reg = KeyRegistry.load()
-    for s in stores:
+    reg = None
+    for s in _stores(a):
+        if not s.ledger_path.is_file():  # no ledger is fine, unless an anchor says it held events (D-040)
+            if why := missing_ledger_problem(s.ledger_path):
+                out[s.root.name] = {"ok": False, "checked": 0, "error": why}
+            continue
+        reg = reg or KeyRegistry.load()
         with Ledger(s.ledger_path) as led:
             out[s.root.name] = led.verify(trusted=reg)
     return out
