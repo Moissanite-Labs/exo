@@ -789,6 +789,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   in `<socket stem>.principal.key` beside the socket (0600, in the 0700 run folder), new per launch, deleted on
   stop, never in an environment variable. Clients that are the principal (`exo`, joined windows, `exo chat`, the
   web) read it per request, so they re-join a restarted core.
+  *Amendment 2026-10-17 (bus ingress):* a third caller, `channel`, for the channels exod runs. `serve()` hands them
+  `ChannelLink`, which runs their commands in process and stamps `channel`. No transport ever stamps it. `peers`
+  action `bus` (D-040) pins a seat's key on first sight, and it now takes only this caller, so a tool subprocess on
+  the socket cannot pin an unseen seat to its own key and speak as that seat. Rejected: requiring the principal.
+  The channel was a local socket client, so every first message from a new seat would be refused and trust on
+  first use would end. Also rejected: a leader-signed pin, which needs a leader key the principal pinned, and no
+  home has one by default. A same-user process that writes `keys/registry.json` directly stays out of scope (D-040
+  "Not covered").
 - **Decision, approvals:** a principal connection answers as the principal (`client` is a label: `by` is
   `principal:tui`). A local connection answers only as `seat:<name>` with the D-033 signature, and never with
   `allow_always`. `approver_identity` returns `unknown` for an empty or unrecognised name, and `unknown` may not

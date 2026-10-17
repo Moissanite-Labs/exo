@@ -5,6 +5,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Fixed
+- Bus channel: a bus message steered into a turn you typed in a bus session no longer posts your answer to the
+  sending seat, and neither does your next turn after one. The channel replies only for the turn that an
+  auto-delivered message itself opened (D-040).
+- Bus channel: one sealed envelope that cannot be opened (malformed, or sealed to an old key) no longer stops a
+  seat's inbox for good. It reads as `<encrypted body could not be opened>` and the cursor moves past it.
+- Bus ingress: only a channel exod runs (the new caller `channel`, D-039) can hand the core a bus message. Before,
+  any local caller, a tool subprocess on the socket included, could pin an unseen seat's key to its own and send
+  messages as that seat.
+
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
