@@ -60,7 +60,10 @@ the middle dot as separator come straight from the site.
    30), one still frame under reduced motion or `NO_COLOR`, gone with the first message. Idle cost measured with
    `scripts/idle_cpu.py`: about 1.3% of one core (0.5% without it). A plain startup prints no `new thread` line; `/new` does.
    Before that, a boot sequence (under a second, any key skips it) that marks `core`, `agent`, `memory`, `model` as
-   each real step finishes, then an empty-start card with the keys.
+   each real step finishes, then an empty-start card with the keys. The `memory` line and the card read the core's
+   `memory_status` built-in: `ready`, `off, no principal store` (no store yet: a dim dash, not a green check, and a
+   notice naming `exo init <id>`), `did not start` (also a dash), or `log only` (no memory plugin: the agent log and
+   summary tree still run). An older core that cannot say leaves the plain label.
 
 Where the numbers come from, all from events the core already sends: `model.call` (`requested`, `route`,
 `usage.cache_read_tokens`), `usage.updated` (context tokens, session cost), `memory.summarized`,

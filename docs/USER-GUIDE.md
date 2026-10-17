@@ -145,6 +145,9 @@ Different seats are different agents. They share your store and talk through pee
 - A private thread (`/new private`) is logged but never shared.
 - Only what you type counts as you. Messages from peers, bus seats, job notices and the agent's own notes are kept,
   but never saved as your rulings or corrections, and never teach the agent your taste.
+- What Exo keeps about you lives in your principal store. An install that skipped the interview has none yet. The
+  log and summaries still work, but the boot line says `memory off, no principal store` and one dim note names the
+  fix: `exo init <id>`. Memory and learning use the new store from the next start.
 
 Details: `docs/MEMORY-MODEL.md`.
 
@@ -271,7 +274,7 @@ Details and the cost rules: `docs/TRACE.md`.
 | A second `exo serve` refuses to start | One process writes an agent's log. Another `exo serve` or `exo tui` for that seat already holds it. Use that one, or stop it. |
 | Cost shows `unknown` | The route has no price. Add one under `models.models` in `config.json` (`docs/TRACE.md`). |
 | `code_find` is missing | It needs Node.js 22 or newer. `exo models` says why on its `code_find:` line (`docs/TOOLS.md`). |
-| Learning does nothing | It needs a principal store. Without one it is off and says so once (`docs/LEARNING.md`). |
+| Memory or learning is off | Both need a principal store. Without one the boot line says `memory off, no principal store`. Run `exo init <id>` (any short id, such as your first name), then start Exo again. If `exo web` started the core, run `exo stop` first (`docs/LEARNING.md`). |
 | A peer message never arrived | It may be held. Look for an approval card. Held messages expire after 30 minutes (`docs/PEERS.md`). |
 | Memory looks wrong | Run `/context`, then `exo memory verify` to check the log's hash chain (`docs/MEMORY-MODEL.md`). |
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
@@ -292,7 +295,7 @@ Pick the store with `--principal ID` or `--root DIR`, or set `EXO_PRINCIPAL` onc
 
 | Command | What you get |
 |---|---|
-| `exo init <id>` | A new, empty store with its ledger. It becomes your active principal if you have none. Add `--interview` to answer the onboarding questions straight away. |
+| `exo init <id>` | A new, empty store with its ledger. It becomes your active principal if you have none, and memory and learning use it from the next start. Add `--interview` to answer the onboarding questions straight away. |
 | `exo interview` | The onboarding questions for an existing store. It asks a few, saves each answer as a low-confidence "you said" note, and queues more for later. `--plan` shows the questions first. `--answers FILE` fills them from a file. Press Enter to skip, `q` to stop. Do not type passwords. |
 | `exo import-store <path>` | Copies a store you already have into a new principal. The source is never touched. Private files and keys are left out unless you add `--include-private`. |
 

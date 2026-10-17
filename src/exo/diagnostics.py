@@ -1,4 +1,4 @@
-"""Diagnostic views over a running CoreEngine: /context, /compact, /trace, /findings, /handoff facts.
+"""Diagnostic views over a running CoreEngine: /context, /compact, /trace, /findings, /handoff facts, memory status.
 
 Moved out of ``exo.core.engine`` (docs/ENGINE-SPLIT.md, issue #46). Each function reads the engine's
 public state and its stores; none changes how a turn runs. ``builtin_command`` answers the built-in
@@ -173,6 +173,18 @@ async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = ""
             facts[key] = []
     return facts
 
+def memory_status(eng: CoreEngine) -> dict[str, str]:
+    """The memory slot's state: ``on``; ``off`` until a setup step (``NotConfigured``, a quiet notice);
+    ``failed`` (an error at start); ``none`` with no memory plugin (the agent log and summary tree still run)."""
+    mem = eng.plugins.slots.memory
+    if mem is None:
+        return {"state": "none", "provider": "", "text": "no memory plugin: the agent log and summary tree only"}
+    if eng.memory_off:
+        return {"state": "off", "provider": mem.name, "text": eng.memory_off}
+    if eng.memory_init_error:
+        return {"state": "failed", "provider": mem.name, "text": eng.memory_init_error}
+    return {"state": "on", "provider": mem.name, "text": ""}
+
 async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
     if b.name == "context":
         if b.args.strip() not in ("", "json"):
@@ -220,6 +232,8 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         table = await asyncio.to_thread(providers_setup.rows, eng.router, eng.home,
                                        prober=providers_setup.probe)
         return {"providers": table, "main": await eng._main_status(table)}
+    if b.name == "memory_status":  # what the memory plugin is doing, so a client's boot line tells the truth
+        return memory_status(eng)
     if b.name == "handoff_facts":  # D-032: the facts /handoff gives the agent; the client sends the turn
         return await eng.handoff_facts(b.session, b.args)
     if b.name == "harness_error":  # a client (the TUI) reporting an exception it caught
