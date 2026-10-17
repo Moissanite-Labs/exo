@@ -188,10 +188,11 @@ def read_text(p: Path) -> str:
 
 
 def write_atomic(p: Path, text: str) -> None:
-    """Write UTF-8 text via a temp file and rename, keeping line endings as given."""
+    """Write UTF-8 text via a fresh temp file and rename, keeping line endings as given."""
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f".{p.name}.exo-tmp")
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
+    tmp.unlink(missing_ok=True)  # a leftover, or a planted link: never write through it; O_EXCL fails on a race
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666), "w", encoding="utf-8", newline="") as f:
         f.write(text)
     if p.exists():
         os.chmod(tmp, p.stat().st_mode & 0o7777)
@@ -228,7 +229,9 @@ def apply_patch(text: str, resolve: Callable[[str], Path]) -> tuple[bool, str]:
     for op in ops:
         src = resolve(op.file_path)
         cur = read(src)
-        if op.operation is OperationType.ADD:
+        if op.operation is not OperationType.DELETE and src.is_symlink():  # the rename would replace the link
+            errors.append(f"{op.file_path}: is a symlink to {os.path.realpath(src)}; patch that path instead")
+        elif op.operation is OperationType.ADD:
             if cur is not None or src.is_dir():
                 errors.append(f"{op.file_path}: file already exists; use Update File, not Add File")
             else:
@@ -240,7 +243,7 @@ def apply_patch(text: str, resolve: Callable[[str], Path]) -> tuple[bool, str]:
             put(src, op.file_path, None)
         elif op.operation is OperationType.MOVE:
             dst = resolve(op.new_path or "")
-            if read(dst) is not None or dst.is_dir():
+            if read(dst) is not None or dst.is_dir() or dst.is_symlink():
                 errors.append(f"{op.new_path}: destination already exists; move would overwrite")
             else:
                 put(dst, op.new_path or "", cur)
