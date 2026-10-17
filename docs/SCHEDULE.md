@@ -13,11 +13,14 @@ The protocol command is `schedule.edit`. Its `action` is `list`, `add`, `remove`
 | `when` | A 5-field cron line such as `0 9 * * *`. The fields are minute, hour, day of month, month, day of week. `*`, lists, ranges and steps work. or `every <n>m`, `every <n>h`, `every <n>d`. |
 | `prompt` | What the run should do. |
 | `title` | A label. |
-| `seat` | The seat the run belongs to. Empty means the active one. |
+| `seat` | The seat whose core runs the job. Other seats' cores skip it and refuse `run_now`. It must be the adding core's seat or name a seat file. Empty means any one seat: the first timer to claim the slot runs it. |
 | `tier` | `fast` (default), `standard` or `deep`. The cheapest tier that can do the job is the right one (D-017). |
 | `deliver` | `notice` (default) or a channel id. |
 
 Jobs live in `$EXO_HOME/schedule.sqlite`. `exo serve` runs the timer. A one-shot engine, such as a test, does not.
+Seats that share one `$EXO_HOME` share this table (docs/SEATS.md). A timer claims a due slot by moving its
+`next_run`, and only if no other timer moved it first and the job is not paused, so each slot runs once. The timer
+sleeps at most a minute, so a job that another seat's core adds or resumes starts within a minute of its time.
 
 ## Rules of the run
 
