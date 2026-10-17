@@ -1911,14 +1911,17 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     outcome = gates["matrix"][eff.reversibility][eff.exposure]
     reason, rule = f"{eff.reversibility} and {eff.exposure}", "matrix"
-    # D-038: the principal may lower opaque code only by naming it (a category line or a rule on opaque_exec).
-    opaque_named = "opaque_exec" in gates.get("categories", {})
+    # D-038: the principal may lower opaque code only by naming it below ask (a category line or a rule on
+    # opaque_exec). Naming it at ask or deny keeps the indirection floor (#178).
+    below_ask = ("allow", "log")
+    opaque_named = gates.get("categories", {}).get("opaque_exec") in below_ask
     if eff.category in gates.get("categories", {}):
         outcome, reason, rule = gates["categories"][eff.category], f"category {eff.category}", "category"
     for r in gates.get("rules") or []:
         if _rule_matches(r["match"], eff):
             outcome, reason, rule = r["decision"], r["reason"], "rule"
-            opaque_named = opaque_named or "opaque_exec" in [str(x) for x in _as_list(r["match"].get("category", []))]
+            opaque_named = opaque_named or (r["decision"] in below_ask and "opaque_exec" in
+                                            [str(x) for x in _as_list(r["match"].get("category", []))])
             break
 
     def bump(level: str, why: str, step: str):
