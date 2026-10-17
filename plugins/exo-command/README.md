@@ -36,8 +36,9 @@ calls `exo_command.__main__.main()`; arguments after `web` go to it. `python -m 
 with `PYTHONPATH=plugins/exo-command`.
 
 Options: `--socket PATH` (default `$EXO_HOME/run/exod.sock`), `--url URL --token-file FILE` for a core
-on TCP, `--host`, `--port`. It uses the standard library only. `exo web` will call
-XX
+on TCP, `--host`, `--port`. It uses the standard library only. A second `exo web` on a port in use says whether
+Exo's web client already runs there (its open page and printed link still work, Ctrl+C in its terminal stops it)
+or another program holds it, and suggests `--port`.
 
 The slash command `/exo-command` prints a short text digest of the same panels (it connects to the
 running core).
@@ -68,7 +69,8 @@ and nothing loaded from another site. It follows the system light or dark settin
 
 - **Chat:** sessions on the left, a monospace transcript with streamed text, tool lines, approval cards and
   a composer in the middle, and the side panel area on the right. Each answer has accept, edit (with a
-  text box) and reject, which send `feedback.send`. Enter sends; while a turn runs it steers.
+  text box) and reject, which send `feedback.send`. Enter sends, and while a turn runs it steers. A context note
+  from other threads (`meta.note`, D-028) is for the model and is not drawn, as in the terminal client.
 - **Panels:** `ui.panel` events open panels beside the chat. Kinds: markdown, diff, table, tasks,
   approval, taste, choice, file, chart. A panel whose data is missing or odd shows its `text`. The page
   sends `ui.respond` for opened, dismissed and acted (a choice or a taste verdict).

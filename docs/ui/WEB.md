@@ -31,6 +31,14 @@ header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, so a DN
 even the page. An Origin, when sent, must be that same host, and Sec-Fetch-Site must be same-origin or none. Only
 the page shell (`/`, `/static/`) loads without the token. Responses carry `Referrer-Policy: no-referrer`.
 
+A second `exo web` on a port that is already in use exits with a message, not a raw bind error. It loads the page
+shell `/` (no token needed) to tell the two cases apart. If Exo's web client answers, it says so and how to get back
+in: an open page keeps working, the full link the first launch printed still works, Ctrl+C in that terminal stops it,
+or `--port` starts a second one on the same core. It cannot show the first link, because the token lives in that
+process only. A token in a file under `$EXO_HOME/run` was rejected: the agent's own file tools can read that folder
+(#169), and a page with the token answers approvals. If another program holds the port, the message says so and
+suggests `--port`.
+
 The web process answers approvals as the principal: it reads the core's principal credential
 (`run/<socket>.principal.key`) on each request, so it re-joins a core that restarted with a new one. The optional
 ASGI app (`asgi.py`) is gone: it re-exposed the routes with no checks.
@@ -60,7 +68,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 - **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed;
   click to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded ·
   1781 → 153 tok` and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic
-  (a `notice` that starts with `tip`).
+  (a `notice` that starts with `tip`). A context note (a stored user message with `meta.note`: what other threads
+  did, D-028) is for the model, so the transcript leaves it out on load and live, as the terminal client does.
+  Its size shows on the `threads` row of the memory column.
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
   `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
   automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,

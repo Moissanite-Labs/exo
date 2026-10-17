@@ -269,6 +269,7 @@ Details and the cost rules: `docs/TRACE.md`.
 |---|---|
 | No model answers | Run `exo providers`. It shows which providers have keys and whether a test call worked; `exo providers test <name>` says why one fails. Add a key with `exo providers add <name>` or `/providers`. |
 | A second `exo serve` refuses to start | One process writes an agent's log. Another `exo serve` or `exo tui` for that seat already holds it. Use that one, or stop it. |
+| A second `exo web` says Exo's web client is already running | One already serves that port. Keep using its page, or open the full link it printed, or stop it with Ctrl+C in its terminal. `exo web --port 7343` starts a second one on the same core. |
 | Cost shows `unknown` | The route has no price. Add one under `models.models` in `config.json` (`docs/TRACE.md`). |
 | `code_find` is missing | It needs Node.js 22 or newer. `exo models` says why on its `code_find:` line (`docs/TOOLS.md`). |
 | Learning does nothing | It needs a principal store. Without one it is off and says so once (`docs/LEARNING.md`). |
