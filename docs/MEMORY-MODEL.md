@@ -126,11 +126,13 @@ content is the same once the summaries finish. Tests: `tests/core/test_turn_sett
   first hidden position, in the agent tree (`agent:<name>`, ranges are log positions) as well as in a
   per-thread tree (ranges are message numbers). A summary that was already running when undo ran is not saved
   afterwards. The next turn rebuilds the summary from the entries that are left.
-- **Failures.** A node whose summary fails is retried with backoff (30 s, then 60 s, ...; `retry_backoff`), at most
-  `max_attempts` (3) times in all; the count is stored on the node (`summaries.attempts`). During backoff the span
-  stays verbatim and the turn does not wait for it. After the last try the node is marked `skipped`: the span stays
-  verbatim for good, and one `harness.error` event (`where` = `summary`) records it, so it shows in `exo trace` and
-  findings once, not every turn.
+- **Failures.** A node whose summary fails is retried with backoff (30 s, then 60 s, ... up to five minutes, set by
+  `retry_backoff`). During backoff the span stays verbatim and the turn does not wait for it. A temporary failure
+  keeps its turn on later upkeep: an outage, or an error that says when its route reopens (`retry_after`), such as
+  a refused key or a local server that is down. Any other failure is tried at most `max_attempts` (3) times in all.
+  The count is stored on the node (`summaries.attempts`). After the last try the node is marked `skipped`: the span
+  stays verbatim for good, and one `harness.error` event (`where` = `summary`) records it, so it shows in `exo trace`
+  and findings once, not every turn.
 
 ## Who wrote it: every message has an author (D-040)
 

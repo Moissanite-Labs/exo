@@ -27,6 +27,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- A rejected key no longer reads as an outage. When the last route fails with HTTP 401, 402 or 403, the error names
+  the provider and the key to fix (`anthropic rejected the key (HTTP 401: ...): fix ANTHROPIC_API_KEY or add a key
+  in /providers`) and the turn is not retried three times. Later turns in the key's cooldown keep that cause instead
+  of "all routes failed or are cooling down". A local server that refuses the connection is reported as `ollama is
+  not running at 127.0.0.1:11434: start it, then test it in /providers`, not a raw `ConnectError`. A background
+  summary that hits either error still tries again once the route reopens. The terminal
+  client's first run no longer says "add a key" when the default is a keyless local server or CLI, and the
+  failed-call tip says `/providers` checks keys, servers and logins. A passing provider test in `/providers` or the
+  web Providers tab now tells the core to reload that provider, so the chat works at once instead of after the
+  cooldown (`docs/PROVIDERS.md`).
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

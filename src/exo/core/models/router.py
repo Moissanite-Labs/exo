@@ -23,6 +23,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Mapping
+from urllib.parse import urlsplit
 
 from exo.core.models.anthropic import AnthropicProvider
 from exo.core.models.base import error_event
@@ -49,6 +50,7 @@ BREAKER_FAILURES = 2  # consecutive retryable failures of one route before it is
 BREAKER_COOLDOWN_S = 600.0  # first skip; doubles on each failed trial
 BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
+REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key or login: waiting will not fix it
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
 CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
@@ -562,10 +564,35 @@ class Router:
             return error_event(f"no credentials for role {role!r}: set the provider key_env variables, "
                                "or use /providers to add a provider and choose its model",
                                None, retryable=False)
+        if refused := self._refused(role, tried, last, now):  # no retry now, say what to fix; retry_after: it reopens
+            return error_event(refused[1], refused[0], retryable=False, retry_after=wait)
         why = f"; last error: {last.error}" if last is not None else ""
         hint = f"; next route reopens in {wait:.0f}s" if wait else ""
         return error_event(f"all routes for {role!r} failed or are cooling down{why}{hint}",
                            last.status if last is not None else 429, retryable=True, retry_after=wait)
+
+    def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
+                 now: float) -> tuple[int | None, str] | None:
+        """Status and message when waiting cannot help: the provider refused the key or login (401, 402, 403; on a
+        later call too, while that credential is the chain's first to reopen), or a local server is not running."""
+        if last is None:  # nothing ran: the chain's credential that reopens first holds the cause
+            names = {r.provider for r in self.chain(role)}
+            cooling = sorted(((cd.until, k.partition("|")[0].partition("#")[0], cd.status)
+                              for k, cd in self.cooldowns.items() if cd.until > now), key=lambda c: c[0])
+            _, name, status = next((c for c in cooling if c[1] in names), (0, "", None))
+            err = f"HTTP {status}"
+        else:
+            name, status, err = tried[-1].partition(":")[0], last.status, last.error or ""
+        spec = self.providers.get(name) or {}
+        if status in REFUSED_STATUS:
+            envs = spec.get("key_env") or []
+            envs = [envs] if isinstance(envs, str) else envs
+            return status, (f"{name} rejected the key ({err}): fix {' or '.join(envs)} or add a key in /providers"
+                            if envs else f"{name} refused the login ({err}): log in again, then test it in /providers")
+        if last is not None and spec.get("local") and err.startswith("ConnectError"):
+            return None, (f"{name} is not running at {urlsplit(spec.get('base_url', '')).netloc}: "
+                          "start it, then test it in /providers")
+        return None
 
     def provider(self, role: str = "main") -> RoleProvider:
         return RoleProvider(self, role)
