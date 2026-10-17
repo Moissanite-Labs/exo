@@ -128,6 +128,8 @@ async def handle(centre, method: str, path: str, body: Dict[str, Any],
                 out["core_reloaded"] = await _reload(centre, name)
                 return 200, {"ok": True, **out}
             out = await asyncio.to_thread(ps.test_provider, name, router=router)
+            if out.get("ok"):  # the core retries it now: its cooldown and route breaker clear
+                out["core_reloaded"] = await _reload(centre, name)
             return 200, out
         if method not in ("GET", "POST"):
             return 405, {"error": "method not allowed"}
