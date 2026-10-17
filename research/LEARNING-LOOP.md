@@ -506,7 +506,8 @@ Promotion rule 5 (skills) and any auto-promotion of a high-impact taste rule mus
 - **No guarded-domain regression** at all (public posts, spend, irreversible acts).
 - **Pinned cases.** A small set of must-pass items the principal marked as critical. Always run.
 
-A failed gate leaves the proposal open and returns the failing items. Citing a principal ruling
+A case built from the lesson's own evidence is not held out from it and does not count. A failed gate leaves
+the proposal open and returns the failing items. Citing a principal ruling
 does not waive the gate for a derived skill or high-impact lesson. The principal can explicitly accept
 the proposal through the separate acceptance path. Original rulings remain in the ledger and context.
 
