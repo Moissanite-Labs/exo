@@ -665,6 +665,8 @@ body { margin: 0; background: #08090a; }
 .xc-root .xc-cmd .xc-card h3 { font: 600 15px/1.35 var(--xc-sans); letter-spacing: -.01em; }
 .xc-cmd .xc-card-top { align-items: center; }
 .xc-cmd .xc-foot { font: 11.5px var(--xc-mono); }
+/* No max-height: the page redraws the card on every event, and a new scroll box starts at its top. The page scroll keeps its place. */
+.xc-cmd .xc-args { margin: 0; font: 12px/1.45 var(--xc-mono); }
 .xc-cmd .xc-grid { gap: 10px; }
 .xc-cmd .xc-lane-head { padding: 10px 12px; font: 500 11px var(--xc-mono); letter-spacing: .14em; }
 .xc-cmd .xc-lanes { gap: 10px; }

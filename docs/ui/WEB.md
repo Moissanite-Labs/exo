@@ -80,6 +80,12 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
   the whole page history, so streamed text doubled. A stale page token shows "page link expired" in the corner.
+  A chat reader that falls 1000 events behind has its stream ended with nothing lost: the events still queued for it
+  are dropped unwritten, and the reconnect replays them from the ring or the core's log. Before, the oldest queued
+  event was thrown away and never replayed. `exo web` folds each core event into its state once, by `seq`, so its
+  re-bootstrap after the core's stream drops counts no message, tool call, task update or approval twice. A core
+  whose log is behind the page (a new `EXO_HOME`) starts the page over: the old picture goes, and every open stream
+  reconnects and gets the reset.
 - **Boot.** Four lines go green as real calls answer: core, agent, memory (message count on record), model
   route. A line the server cannot answer stays dim as `unavailable`. Skipped under reduced motion, with
   `?boot=0`, and after the first time in a tab.
@@ -172,6 +178,11 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   The form sits beside the list, with labelled fields; under 1100px it follows the list.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
+  An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with
+  the call and the page scrolls to its end: the page redraws on every core event, and a scroll box of its own would
+  jump back to its top each time.
+  Allow always is a standing grant, so as on the Chat card it waits for a separate Confirm always click. Cancel,
+  another section, Refresh or the request closing elsewhere drops the confirm. Allow and deny answer at once.
   At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
   Empty sections say what will appear and how.
 - **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count

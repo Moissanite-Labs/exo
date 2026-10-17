@@ -27,6 +27,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
+  the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
+  the card shows every argument of the call.
+- `exo web` folded the core's replayed events into its state a second time after the core's stream dropped: message,
+  tool call and task counts doubled, and a session stayed `waiting` after its approval was answered. Each event now
+  counts once, and a core whose log is behind the page (a new `EXO_HOME`) starts the page over.
+- A web chat reader that fell 1000 events behind lost one event for good. Its stream now ends with nothing lost, and
+  the reconnect replays every event it had not received.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
