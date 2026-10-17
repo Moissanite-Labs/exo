@@ -1210,35 +1210,56 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   asks the kernel for the peer (`SO_PEERCRED` on Linux; `LOCAL_PEERCRED` and `LOCAL_PEERPID` on macOS), reads the
   launch record through one descriptor (no symlink, one link, owner-only, bounded, v1), and requires this user,
   the record's pid and the record's process start identity. Only then does that record's token go on that same
-  connection, and only on `POST /command`. Any failure is a `ConnectError` with the reason and zero bytes written.
+  connection, and only on `POST /command`. Any failure is a `ConnectError` (`PrincipalRefused`) with the reason and
+  zero bytes written; the web page passes the reason through with a restart hint.
 - **Decision, core:** the launch record (`<socket stem>.principal.key`, same path and mode) is JSON binding token,
-  pid, uid, process start identity and launch instance in one atomic write. The core takes the kernel peer at
-  accept. `principal` needs the token, this uid, a peer process that started before the accept (pid reuse fails),
-  and a parent chain that reads cleanly to pid 1 without the core; an unreadable chain is the tool tree.
-  `descends_from` fails closed accordingly; there is one walker. Other platforms: no principal over the socket.
+  pid, uid, process start identity and launch instance in one atomic write, before the socket accepts. The core
+  takes the kernel peer and that pid's start identity at accept. `principal` needs the token, this uid, a peer
+  pid that still names that process and started before the accept (a pid reused after the accept fails), and a parent chain that reads
+  cleanly to pid 1 without the core; an unreadable chain is the tool tree. `descends_from` fails closed
+  accordingly; there is one walker. A credential taken as local is logged once per process with the reason, and
+  that connection's refusals name it. Other platforms: no principal over the socket.
 - **Unchanged (D-039, D-052):** the principal comes from the connection; in-process clients are the principal by
   construction; stdio and TCP are local; only a principal caller acts as the principal. No command or event added.
 - **Snapshot and liveness (handoff items 2 and 3, the parts that ride on this):** `hello` reports `instance` and
   `heartbeat`; the event stream's opening comment carries both; `approvals.list` adds `cursor: {instance, seq}`
   from the same await-free copy. A failed `approval.requested` publication no longer leaves a pending row. A
   filtered subscription's heartbeat timeout is absolute, so other sessions' traffic cannot starve it. The Python
-  client ends a stream with no complete frame (event or heartbeat) for 45 s and bounds a frame at 16 MiB. A joined
-  terminal window no longer resends a turn, approval answer or other change after a lost reply; it resends only
-  reads and commands whose connection never opened.
+  client ends a stream with no complete frame (event or heartbeat) for 45 s and skips a frame over 16 Mi characters, resuming
+  after its seq (resuming at it replayed it forever). The core writes frames as raw UTF-8, so a frame stays near
+  the request that made it (`ensure_ascii` had made raw emoji three times larger). A joined terminal window no
+  longer resends a turn, approval answer or other change after a lost reply; it resends only reads and commands
+  whose connection never opened. It says the change may not have been delivered, keeps the typed text and
+  re-reads `approvals.list` to put back a card the core still holds.
 - **Scope against the handoff:** no ruling conflicted. D-039's file name and gate credential class are kept, so the
   launch record replaces the token file's contents rather than adding a file. The OS surface lives in another
   repository and migrates there. Clients expose the stream `instance` but the terminal and web views do not yet
   take a fresh snapshot when it changes. Required response bindings, phone factors and transcript cursors stay out
   (handoff items 3 and 4; item 4 needs a ruling on D-033's "principal always").
-- **Limits:** same-user code outside the core's tree remains trusted and can read the record. A tool child that
-  detaches before connecting is still not caught (issue #31); the fix is the tool sandbox. A core from before this
-  change has a plain-token file, which new clients refuse (restart the core).
+- **Limits:** same-user code outside the core's tree remains trusted and can read the record. A tool child whose
+  parent exits before it sends its request is still not caught (issue #31); the fix is the tool sandbox. The
+  dead-peer check, not the parent walk, makes the orphan of a tool child that connected and exited local, and
+  only reliably on Linux: macOS `LOCAL_PEERPID` names the last process to use the socket. A core from before this
+  change has a plain-token file, which new clients refuse (restart the core). An old client against a new core
+  sends the whole record as its token and is local with no message (restart `exo`, `exo web`, `exo chat`). Under
+  `hidepid`, `ProtectProc` or `ProcSubset=pid` an unreadable ancestor (`sshd`, `login`, `su`, `sudo`) makes every
+  client below it local, on purpose: stopping at the first unreadable ancestor would let `tool -> sudo -u $USER
+  exo` pass. The core logs it and the refusal says so. A client in another PID namespace than the core is refused
+  (the kernel names pid 0), and a core that cannot read its own process entry warns and serves no principal. A pid
+  reused between connect and accept is not detected (that window is the accept latency; Linux `SO_PEERPIDFD` would
+  pin the process).
 - **Validation:** `tests/security/test_unix_peer_auth.py`: a replaced socket gets zero bytes; stale, symlinked,
   shared, old-format and missing records refuse before any byte; an unsupported platform fails closed both ways; a
   mismatched kernel uid is local; a tool child through the real client, and the orphan of one that exited, are
   local; the TUI and web clients act as the principal and stream; reconnect after restart takes the new record;
   the snapshot cursor, the publication failure, heartbeat starvation, the frame deadline and no-resend. The D-039
-  and D-052 attack scripts now steal the record's real token.
+  and D-052 attack scripts now steal the record's real token. `tests/security/test_unix_peer_auth_edges.py`: a
+  raw UTF-8 `turn.send` near `MAX_BODY` against a real core does not stall `Client.events` or a joined window's
+  `SharedClient.events` (an emoji message is delivered, a NEL one is skipped); a frame too large is skipped by
+  seq; line separators and lone surrogates round-trip; a uid above 2^31; pid 0; a pid that names another process
+  by stamp time; the parent walk with a clean, unreadable and descendant chain; the demotion reason in the log and
+  the refusal; a core without its own start identity; the record in place before the socket accepts; the refusal
+  type. `tests/clients/tui/test_lost_reply.py` and the web's `test_refused_principal_names_the_reason_and_the_restart`.
 - **Docs:** `docs/GATE.md` "Unix peer authentication", `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-061 (2026-10-13) Web sub-pages to the site v2 standard

@@ -22,8 +22,10 @@ Unix peer authentication (D-060) runs in both directions, on the kernel's view o
   record names (pid and process start identity, so a stale record or a reused pid fails) does it put the token
   from that record on that same connection. Any doubt refuses principal mode; nothing falls back.
 - The core stamps ``principal`` only when the token matches and the kernel's peer is this user, still the process
-  that made the connection (it started before the core accepted it), and its whole parent chain resolves to pid 1
-  without passing through the core. A chain that cannot be read is treated as the core's own tool tree.
+  that made the connection (the start identity read at accept, and it started before the core accepted it), and its
+  whole parent chain resolves to pid 1 without passing through the core. A chain that cannot be read is treated as
+  the core's own tool tree. A credential taken as local is said once in the core's log, and the connection's
+  refusals name the reason (``demoted``).
 
 Same-user code that runs outside the core's tree is trusted by this design: it can read the record. D-039's limit
 (an OS sandbox for tools) still applies.
@@ -79,8 +81,20 @@ def require_principal(operation: str) -> str:
     who = current_caller()
     if not is_principal(who):
         from exo.server.engine import CommandFailed
-        raise CommandFailed("forbidden", f"only the principal can {operation}; use the Exo window or web page")
+        raise CommandFailed("forbidden", f"only the principal can {operation}; use the Exo window or web page"
+                            + demoted())
     return who
+
+
+DEMOTED: contextvars.ContextVar[str] = contextvars.ContextVar("exo_demoted", default="")
+
+
+def demoted() -> str:
+    """For a refusal message: why the live command's principal credential was taken as local, or ""."""
+    c, why = CALLER.get(), DEMOTED.get()
+    if not why or c is None or not c.live or is_principal(c.who):
+        return ""
+    return f" (this connection carried the principal credential but is local: {why})"
 
 
 def principal_as(label: str = "") -> str:
@@ -100,9 +114,10 @@ class PeerRefused(Exception):
 class Peer:
     """The kernel's answer for one accepted connection, taken before any byte is read from it."""
 
-    pid: int | None
+    pid: int | None  # 0: the kernel named no pid (the peer is in another PID namespace)
     uid: int | None
     at: float  # wall clock at accept; the process that connected existed before this
+    ident: str | None = None  # its start identity at accept; the pid must still name this process when stamped
 
 
 @dataclass(frozen=True)
@@ -112,7 +127,9 @@ class Proc:
     ident: str  # exact start identity, for "the same process as the launch record"
 
 
-CLOCK_SLACK = 1.0  # Linux derives start times from a whole-second boot time; a clock step can move it a little
+# A wall-clock step between a process start and the accept. Linux's whole-second btime makes computed starts up to
+# 1 s early, which widens this window rather than needing it; ``Peer.ident`` is what pins the process.
+CLOCK_SLACK = 1.0
 _SOL_LOCAL, _LOCAL_PEERCRED, _LOCAL_PEERPID = 0, 0x001, 0x002  # <sys/un.h>
 _XUCRED_SIZE = 76  # struct xucred: u_int cr_version; uid_t cr_uid; short cr_ngroups; gid_t cr_groups[16]
 
@@ -121,15 +138,18 @@ def peer_cred(sock: object) -> tuple[int, int] | None:
     """``(pid, uid)`` of the other end of a connected Unix socket, from the kernel; None where the OS will not say.
 
     Linux: ``SO_PEERCRED`` (struct ucred). macOS: ``LOCAL_PEERCRED`` (struct xucred, the uid ``getpeereid`` reports)
-    and ``LOCAL_PEERPID``. Any other platform answers None, and every caller then refuses principal standing."""
+    and ``LOCAL_PEERPID``. Any other platform answers None, and every caller then refuses principal standing. Linux
+    names pid 0 for a peer in another PID namespace (and for a TCP socket); that is returned as 0, which no check
+    accepts."""
     try:
         if sys.platform == "darwin":
             version, uid = struct.unpack_from("2I", sock.getsockopt(_SOL_LOCAL, _LOCAL_PEERCRED, _XUCRED_SIZE))
             pid = int(sock.getsockopt(_SOL_LOCAL, _LOCAL_PEERPID))
             return (pid, uid) if version == 0 and pid > 0 else None
         if sys.platform.startswith("linux") and hasattr(_socket, "SO_PEERCRED"):
-            pid, uid, _gid = struct.unpack("3i", sock.getsockopt(_socket.SOL_SOCKET, _socket.SO_PEERCRED, 12))
-            return (pid, uid) if pid > 0 else None
+            # struct ucred: pid_t pid; uid_t uid; gid_t gid (uid and gid are unsigned: 2**31 and above are real)
+            pid, uid, _gid = struct.unpack("iII", sock.getsockopt(_socket.SOL_SOCKET, _socket.SO_PEERCRED, 12))
+            return (pid, uid) if pid >= 0 else None
     except (OSError, AttributeError, TypeError, ValueError, struct.error):
         return None
     return None
@@ -138,13 +158,14 @@ def peer_cred(sock: object) -> tuple[int, int] | None:
 def peer_pid(sock: object) -> int | None:
     """Pid of the process at the other end of a Unix socket, or None where the OS will not say."""
     cred = peer_cred(sock)
-    return cred[0] if cred else None
+    return cred[0] if cred and cred[0] > 0 else None
 
 
 def accepted(sock: object) -> Peer:
-    """Bind the kernel's peer identity to a connection as it is accepted."""
+    """Bind the kernel's peer identity to a connection as it is accepted, with the start identity of that pid."""
     cred = peer_cred(sock)
-    return Peer(cred[0] if cred else None, cred[1] if cred else None, time.time())
+    info = proc_info(cred[0]) if cred else None
+    return Peer(cred[0] if cred else None, cred[1] if cred else None, time.time(), info.ident if info else None)
 
 
 _LIBPROC = None
@@ -225,19 +246,38 @@ def descends_from(pid: int, ancestor: int) -> bool:
     return chain is None or ancestor in chain
 
 
+_SAID: set[str] = set()
+
+
+def _demote(peer: Peer, why: str) -> str:
+    """Local, with the reason kept for this connection's refusals and said once per pid in the core's log."""
+    DEMOTED.set(why)
+    if (key := f"{peer.pid}:{why}") not in _SAID and len(_SAID) < 256:
+        _SAID.add(key)
+        print(f"exod: the principal credential from pid {peer.pid} is taken as local: {why}", file=sys.stderr)
+    return LOCAL
+
+
 def stamp(sent: str | None, token: str | None, peer: Peer | object, label: str = "") -> str:
     """The caller of one HTTP request on the Unix socket (one request per connection, so per connection)."""
     if not matches(sent, token):
         return LOCAL
     if not isinstance(peer, Peer):
         peer = accepted(peer)
-    if peer.pid is None or peer.uid != os.geteuid():  # no kernel answer, or another user: no principal standing
-        return LOCAL
+    if peer.pid is None:  # no kernel answer: no principal standing
+        return _demote(peer, "the kernel did not name the peer process")
+    if peer.pid == 0:
+        return _demote(peer, "the peer is in another PID namespace, so the kernel names no pid")
+    if peer.uid != os.geteuid():
+        return _demote(peer, f"the peer is uid {peer.uid}, not this user")
     info = proc_info(peer.pid)
-    if info is None or info.start > peer.at + CLOCK_SLACK:  # gone, or its pid now names a later process
-        return LOCAL
+    if info is None or peer.ident is None or not hmac.compare_digest(info.ident, peer.ident) \
+            or info.start > peer.at + CLOCK_SLACK:  # gone, or its pid now names another process
+        return _demote(peer, "the process that connected is gone or its pid was reused")
     if descends_from(peer.pid, os.getpid()):  # a tool subprocess of this core holds no consent
-        return LOCAL
+        return _demote(peer, "it runs under this core (a tool process)" if lineage(peer.pid) is not None else
+                       "an ancestor of it cannot be read (/proc hidden by hidepid or ProtectProc?), so it is "
+                       "treated as a tool process")
     return principal_as(label)
 
 
@@ -258,6 +298,9 @@ def issue(sock: str | os.PathLike, instance: str = "") -> str:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     token = secrets.token_urlsafe(32)
     me = proc_info(os.getpid())
+    if me is None:
+        print(f"exod: cannot read this process's own start identity (/proc hidden?); principal clients of {sock} "
+              "will be refused", file=sys.stderr)
     record = {"v": 1, "token": token, "pid": os.getpid(), "uid": os.geteuid(),
               "start": me.ident if me else "", "instance": instance}
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
@@ -269,10 +312,9 @@ def issue(sock: str | os.PathLike, instance: str = "") -> str:
     return token
 
 
-def read_record(sock: str | os.PathLike) -> dict:
-    """The launch record, read through one descriptor: no symlink, a regular single-link file owned by this
-    user with no group or other access, bounded in size, well formed. Raises PeerRefused."""
-    path = token_path(sock)
+def _load(path: Path) -> object:
+    """The record file's JSON, read through one descriptor: no symlink, a regular single-link file owned by this
+    user with no group or other access, bounded in size. Raises PeerRefused."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError as exc:
@@ -289,9 +331,17 @@ def read_record(sock: str | os.PathLike) -> dict:
     if len(raw) > RECORD_MAX:
         raise PeerRefused("launch record too large")
     try:
-        rec = json.loads(raw)
+        return json.loads(raw)
     except ValueError:
         raise PeerRefused("launch record is not a v1 record (a core from before peer authentication?)") from None
+
+
+def read_record(sock: str | os.PathLike) -> dict:
+    """The launch record (``_load``), well formed. Raises PeerRefused."""
+    rec = _load(token_path(sock))
+    if isinstance(rec, dict) and rec.get("v") == 1 and rec.get("start") == "":
+        raise PeerRefused("the core could not read its own process start identity (/proc hidden by hidepid, "
+                          "ProtectProc or ProcSubset?), so principal mode is unavailable with it")
     if not (isinstance(rec, dict) and rec.get("v") == 1 and isinstance(rec.get("token"), str) and rec["token"]
             and isinstance(rec.get("pid"), int) and isinstance(rec.get("start"), str) and rec["start"]
             and isinstance(rec.get("instance", ""), str)):
@@ -308,8 +358,13 @@ def read(sock: str | os.PathLike) -> str | None:
 
 
 def revoke(sock: str | os.PathLike, token: str) -> None:
-    """Remove the record if it is still ours (a newer core may have replaced it)."""
-    if read(sock) == token:
+    """Remove the record if it is still ours (a newer core may have replaced it). Only the token is compared, so a
+    record this core wrote without its start identity goes too."""
+    try:
+        rec = _load(token_path(sock))
+    except PeerRefused:
+        return
+    if isinstance(rec, dict) and isinstance(rec.get("token"), str) and matches(rec["token"], token):
         token_path(sock).unlink(missing_ok=True)
 
 
@@ -326,11 +381,15 @@ def verify_daemon(conn: object, sock: str | os.PathLike) -> dict:
         raise PeerRefused(f"the kernel will not name the peer of a Unix socket on {sys.platform}; principal mode "
                           "needs SO_PEERCRED (Linux) or LOCAL_PEERCRED and LOCAL_PEERPID (macOS)")
     pid, uid = cred
+    if pid == 0:
+        raise PeerRefused(f"{sock} is served from another PID namespace, so the kernel names no pid for it; run "
+                          "the client in the core's PID namespace")
     if uid != os.geteuid():
         raise PeerRefused(f"{sock} is served by uid {uid}, not this user")
     rec = read_record(sock)
     if rec["pid"] != pid:
-        raise PeerRefused(f"{sock} is served by pid {pid}, not the core in the launch record")
+        raise PeerRefused(f"{sock} is served by pid {pid}, not the core in the launch record (pid {rec['pid']}): "
+                          "a stale record, another process on the socket, or a core in another PID namespace")
     info = proc_info(pid)
     if info is None or not hmac.compare_digest(info.ident, rec["start"]):
         raise PeerRefused("the launch record is stale (its process start identity does not match)")

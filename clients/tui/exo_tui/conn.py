@@ -140,7 +140,8 @@ class SharedClient:
     async def send(self, body: Any) -> s.Response:
         """After a lost connection, rejoin. Resend only what cannot have acted twice: a command that never left
         (connect failed, so no byte was written) or a read. A turn, an approval answer or any other change whose
-        reply was lost is raised, not repeated: the caller reconciles with a fresh snapshot (D-060)."""
+        reply was lost is raised, not repeated (D-060): the window says it may not have been delivered, keeps the
+        typed text, and re-reads ``approvals.list`` to put back a card the core still holds (``ExoApp.post``)."""
         import httpx
 
         try:
@@ -164,6 +165,7 @@ class SharedClient:
                      reconnect: bool = False, backoff: float = 0.5) -> AsyncIterator[s.Event]:
         import httpx
 
+        from exo.peerauth import FrameTooLarge
         from exo.protocol.client import ClientError
 
         self.last_seq = since
@@ -172,6 +174,10 @@ class SharedClient:
                 async for ev in self.inner.events(since=self.last_seq, session=session):
                     self.last_seq = ev.seq
                     yield ev
+                # the inner client moves past an event too large to read; resume after it, not at it
+                self.last_seq = max(self.last_seq, getattr(self.inner, "last_seq", 0))
+            except FrameTooLarge:  # no seq to resume past: replaying it would never end
+                raise
             except (httpx.TransportError, httpx.StreamError, OSError):
                 pass
             except ClientError:  # the new core answered with a refusal for now: back off and ask again

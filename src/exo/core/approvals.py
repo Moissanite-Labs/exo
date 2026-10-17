@@ -22,7 +22,7 @@ from typing import Any, Callable, Mapping
 
 from exo import crypto
 from exo.gate import approver_allowed, approver_identity
-from exo.principal import current_caller, is_principal, principal_as
+from exo.principal import current_caller, demoted, is_principal, principal_as
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
 
@@ -155,7 +155,7 @@ class ApprovalDesk:
             ident = by = approver_identity(b.client)
         else:
             raise CommandFailed("forbidden", "this connection cannot answer approvals: answer in the Exo window or "
-                                             "the web page, or sign as a seat")
+                                             "the web page, or sign as a seat" + demoted())
         if not approver_allowed(ident, approvers):  # D-033: who may answer, by category
             raise CommandFailed("forbidden", f"{approver_identity(ident)} may not answer this approval; "
                                              f"it needs {' or '.join(approvers)}")

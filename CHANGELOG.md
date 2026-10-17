@@ -27,6 +27,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Security
+- Unix peer authentication (#109, D-060): principal clients ask the kernel who serves the socket before the
+  credential moves, and the core asks who connected before it stamps the principal. The credential file
+  (`run/<socket>.principal.key`) is now a JSON launch record, so restart the core and every running `exo`, `exo web`
+  and `exo chat` after updating: a new client refuses an old core (the page says to run `exo stop`), and an old
+  client against a new core is quietly local. Protocol additions: `hello` reports `instance` and `heartbeat`, the
+  event stream opens with a comment naming both, `approvals.list` returns a `cursor`, and the Python client ends a
+  stream with no event or heartbeat for 45 s. Event frames are raw UTF-8, and a frame too large to read is skipped
+  instead of stalling the stream. A joined terminal window never resends a turn or approval answer whose reply was
+  lost; it says so and keeps the text. Under `hidepid` or `ProtectProc` clients are local, with the reason logged and
+  named in refusals.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

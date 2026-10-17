@@ -7,7 +7,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from exo.peerauth import PrincipalTransport, sse_frames, stream_info
+from exo.peerauth import FrameTooLarge, PrincipalTransport, sse_frames, stream_info
 from exo.protocol import schema as s
 
 
@@ -70,13 +70,18 @@ class Client:
     async def events(self, since: int = 0, session: str | None = None,
                      reconnect: bool = False, backoff: float = 0.5) -> AsyncIterator[s.Event]:
         """Stream events with seq > since. With ``reconnect`` the stream resumes
-        from the last seen seq after a drop, so nothing is missed or repeated."""
+        from the last seen seq after a drop, so nothing is missed or repeated. An event too large to read is
+        skipped (``last_seq`` moves past it)."""
         self.last_seq = since
         while True:
             try:
                 async for ev in self._stream(self.last_seq, session):
                     self.last_seq = ev.seq
                     yield ev
+            except FrameTooLarge as exc:  # resuming at the same seq would replay the same frame forever: skip it
+                if exc.seq is None:
+                    raise
+                self.last_seq = max(self.last_seq, exc.seq)
             except (httpx.TransportError, httpx.StreamError):
                 pass
             except ClientError:  # a refusal or a 5xx while the core restarts: keep trying, never end the feed (D-045)
