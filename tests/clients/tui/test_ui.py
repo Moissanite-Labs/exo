@@ -291,6 +291,51 @@ def test_boot_sequence_runs_marks_real_steps_and_ends(tmp_path):
     boot_run(tmp_path, sc)
 
 
+def test_boot_line_and_empty_start_tell_the_memory_plugins_real_state(tmp_path):
+    """The memory check reads the core's memory_status, never an assumed "ready": with no principal store the
+    plugin is off, and both the boot line and the empty-start card say so."""
+    async def boot(state):
+        eng = make_engine(tmp_path / state)
+        if state != "none":
+            eng.plugins.slots.memory = type("Mem", (), {"name": "exo-memory"})()
+        eng.memory_off = "memory is off: no principal store yet" if state == "off" else ""
+        eng.memory_init_error = "ledger is locked" if state == "failed" else ""
+        app = ExoApp(FakeServerClient(eng), seat="tester", boot_anim=True)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await until(lambda: app.ready.is_set(), pilot)
+            return (app.boot_screen.done["memory"], "memory" in app.boot_screen.short,
+                    plain(app.query_one(Welcome).shown, 100).split("\n")[1])
+
+    for state, word in (("off", "off, no principal store"), ("failed", "did not start"), ("none", "log only"),
+                        ("on", "ready")):
+        line, short, card = asyncio.run(boot(state))
+        assert line == word and short == (state in ("off", "failed")), state  # no green check when it is not on
+        assert f"memory {word}" in card and (state == "on" or "memory ready" not in card), card
+
+
+def test_boot_line_says_nothing_about_memory_when_the_core_cannot_tell(tmp_path):
+    """An older core has no memory_status: the line keeps its plain label and the card claims nothing."""
+    eng = make_engine(tmp_path)
+    client = FakeServerClient(eng)
+    real = client.send
+
+    async def send(body):
+        if isinstance(body, s.CommandRun) and body.name == "memory_status":
+            return s.Response(id="x", ok=False, error=s.ErrorInfo(code="not_found", message="no command /memory_status"))
+        return await real(body)
+
+    client.send = send
+
+    async def main():
+        app = ExoApp(client, seat="tester", boot_anim=True)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await until(lambda: app.ready.is_set(), pilot)
+            assert app.boot_screen.done["memory"] == ""
+            assert "memory" not in plain(app.query_one(Welcome).shown, 100).split("\n")[1]
+
+    asyncio.run(main())
+
+
 def test_boot_is_skippable_with_any_key(tmp_path):
     async def sc(app, pilot):
         await pilot.press("x")

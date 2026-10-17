@@ -27,6 +27,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
+  is off: no principal store is set" no longer prints right after an install created a store.
+- With no principal store yet (an install that skipped the interview), memory is a quiet off state. One dim notice
+  names `exo init <id>`, the memory tools are not offered, and nothing prints over the terminal. Before, it was a
+  harness error, a warning and a `bug` finding that grew with every launch.
+- A setup state is not a harness error. The memory provider's `initialize` raises `NotConfigured` (`exo.core.slots`)
+  when it has no store, and the engine turns that into one info notice, with no `harness.error` event or finding.
+  That is the only supported place to raise it. Elsewhere `trace.report` files no event or finding for it, but the
+  other failure handling still runs: the hook runner logs its warning with the traceback, a `pre_tool_call` hook that
+  raises it blocks the call as a failing approval hook does, and a tool that raises it is still a tool error (D-025,
+  `docs/TRACE.md`).
+- The terminal client's boot line and empty-start card show the memory plugin's real state (`ready`,
+  `off, no principal store`, `did not start`, `log only`) from the new `memory_status` built-in. Before, they always
+  said "memory ready".
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

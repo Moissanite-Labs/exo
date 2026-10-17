@@ -114,9 +114,10 @@ All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._com
 | `handoff_facts` | The facts the agent needs to write a handoff: thread, git state of the folder, open findings and tasks, recent summaries, last turns. Reads only. | optional path | dict (`handoff_facts`) |
 | `subagent` | Inspect, steer and stop a subagent a session handed work to (D-070). The verb is the first word of the arguments; the task is a task id, a unique prefix of it, or the child's session id. Only the principal or the task's parent session may steer or stop; any other caller gets `forbidden`. A finished child answers `conflict`. No protocol command or event was added. | `list` (this session's tasks), `open <task>`, `send <task> <text>`, `stop <task>` | dict: `list` gives `{"tasks": [{task_id, parent, child_session, status, title, live}]}`; `open` gives the task row, `steerable`, the child's session and the tail of its messages; `send` gives `{steered, author}`; `stop` gives `{stopped}` |
 | `harness_error` | A client reports an exception it caught, so the core files a finding. Not for people. | JSON with `where`, `message`, `error_type`, `traceback`. Plain text also works. | nothing |
+| `memory_status` | The memory slot's state, for a client's boot line: `on`, `off` until a setup step (no principal store, and `text` is the notice naming `exo init <id>`), `failed` (an error at start) or `none` (no memory plugin). | none | dict `{state, provider, text}` |
 
-Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `handoff_facts`, `harness_error` and `subagent` are
-for clients to call (`/tasks`, `/open`, `/steer` and `/stop <task>` in the TUI, the Tasks page on the web).
+Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `handoff_facts`, `harness_error`, `memory_status` and
+`subagent` are for clients to call (`/tasks`, `/open`, `/steer` and `/stop <task>` in the TUI, the Tasks page on the web).
 
 ### Plugin commands
 

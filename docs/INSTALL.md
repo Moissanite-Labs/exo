@@ -78,7 +78,7 @@ signatures are not consulted: the tip commit must be signed.
 | 5 | Copies the Exo plugins (every `plugins/*/plugin.yaml`, or `--plugins`) into `$EXO_HOME/plugins/`, where the standalone core discovers them, without tests. With `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME`, it also copies them into `<HERMES_HOME>/plugins/`. Each copy carries a `.exo-managed` marker. A plugin folder without the marker is never overwritten. |
 | 6 | Only with `--with-hermes`. Writes `<HERMES_HOME>/config.yaml` only if it does not exist: `plugins.enabled`, `memory.provider: exo-memory`, `context.engine: exo-context`. An existing file is left alone and the lines to add are printed. |
 | 7 | Writes `$EXO_HOME/env.sh` and `$EXO_HOME/config.json`. With `--with-hermes` it also writes `$EXO_HOME/bin/exo-hermes` (runs the pinned Hermes with Exo's `HERMES_HOME`). |
-| 8 | Offers `exo init <id> --interview`. With `--principal ID` it runs without asking; add `--answers FILE` for a scripted interview. |
+| 8 | Offers `exo init <id> --interview`. With `--principal ID` it runs without asking. Add `--answers FILE` for a scripted interview. With `--no-interview`, or without a terminal, it is skipped: memory stays off, with one quiet notice, until you run `exo init <id>`. |
 
 ## Where things go
 
