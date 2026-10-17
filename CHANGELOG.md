@@ -145,6 +145,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   off: `exo update` refuses until it is fixed, and `--dry-run` says whether the check is on. `exo update
   --pin-trust REV` no longer adopts any commit's list: once a pin exists, the commit that set the list must verify
   against it (`docs/INSTALL.md`).
+- The signed ledger's head anchor (D-040) is now written after the append's COMMIT, so a writer killed in between
+  leaves it one event behind, never ahead. Before, a kill at that moment made the ledger report "events were
+  removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match,
+  which used to hide a real truncation. `exo log anchor --force` repairs a store an older version left stuck.
+- `exo import-store` of a store Exo made no longer fails partway and leaves a half-copied store. The ledger's
+  `.head` anchor is skipped with the ledger, and a stale anchor a deleted store left for the destination is dropped.
+- `exo memory verify` fails a store whose `ledger.sqlite` was deleted while a head anchor remains. It used to print
+  "nothing to verify" and exit 0.
 
 ## [0.2.0] (egg) - 2026-10-13
 

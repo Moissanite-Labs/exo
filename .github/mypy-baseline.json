@@ -933,12 +933,6 @@
     },
     {
       "path": "src/exo/ledger.py",
-      "message": "Argument 2 to \"Head\" has incompatible type \"list[str] | Mapping[Any, Any] | str | None\"; expected \"str | None\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/ledger.py",
       "message": "Argument 2 to \"chain_hash\" has incompatible type \"list[str] | Mapping[Any, Any] | str | None\"; expected \"str\"",
       "code": "arg-type",
       "count": 1
