@@ -109,7 +109,7 @@ async def context_text(eng: CoreEngine, session: str | None) -> str:
 async def context_report(eng: CoreEngine, session: str | None) -> dict[str, Any]:
     tree = agent_ctx(eng, session)
     assert session is not None  # agent_ctx has validated the thread
-    r = tree.report(session, await eng.loop.base_system())
+    r = tree.report(session, await eng.loop.base_system(session))
     info = eng._info(session)
     model = info.model or eng.loop.model or ""
     capacity = eng.router.models.get(model, {}).get("context")
@@ -125,7 +125,7 @@ async def compact_text(eng: CoreEngine, session: str | None) -> str:
     st = eng.loop._state.get(session)
     if st is not None and st.running:
         raise CommandFailed("busy", "a turn is running in this thread; try again when it ends")
-    res = await tree.compact(session, await eng.loop.base_system())
+    res = await tree.compact(session, await eng.loop.base_system(session))
     return render_compact(res)
 
 async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = "") -> dict[str, Any]:
