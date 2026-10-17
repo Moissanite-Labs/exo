@@ -161,6 +161,130 @@ def test_selected_plugins_install_to_standalone_and_explicit_hermes_home(box, mo
     assert {p.name for p in (target / "plugins").iterdir()} == {"exo-command", "exo-gate"}
 
 
+# --- the skill pack ------------------------------------------------------------------
+
+def test_skill_pack_is_installed_where_the_core_and_orchestra_find_it(box, monkeypatch, caplog):
+    """/intro loads exo-intro, and exo-orchestra reads MANIFEST.json, both from $EXO_HOME/skills."""
+    before = snapshot(box)
+    r = run(box, "--dry-run")
+    exo = (box / "exo").resolve()
+    assert r.returncode == 0 and f"skill pack    {exo}/skills" in r.stdout and f"{exo}/skills/exo-intro" in r.stdout
+    assert snapshot(box) == before
+    r = run(box, "--no-pip", "--no-interview")
+    assert r.returncode == 0, r.stderr + r.stdout
+    skills = box / "exo" / "skills"
+    assert (skills / "MANIFEST.json").read_bytes() == (REPO / "skills" / "MANIFEST.json").read_bytes()
+    assert (skills / ".exo-managed").is_file() and (skills / "exo-intro" / ".exo-managed").is_file()
+    assert (skills / "sym-protocol" / "tests" / "run-tests.py").is_file()  # a skill's own tests are part of it
+    assert "skill pack: 17 skills" in r.stdout
+    from exo.core.skills import SkillIndex
+    assert "# Exo orientation" in SkillIndex.discover([skills]).load("exo-intro")
+    monkeypatch.setenv("EXO_HOME", str(box / "exo"))
+    monkeypatch.delenv("EXO_PLUGIN_DIRS", raising=False)
+    monkeypatch.delenv("EXO_SKILLS_DIR", raising=False)
+    pm = PluginManager()
+    pm.load_all(entry_points=False)
+    assert "exo-orchestra:exo-intro" in pm.skills
+    assert "no skill manifest" not in caplog.text
+
+
+def checkout_copy(tmp_path: Path) -> Path:
+    """A checkout whose skills/ a test can change: the real source and plugins, a copy of the pack."""
+    src = tmp_path / "checkout"
+    src.mkdir()
+    shutil.copy(REPO / "pyproject.toml", src / "pyproject.toml")
+    (src / "src").symlink_to(REPO / "src")
+    (src / "plugins").symlink_to(REPO / "plugins")
+    shutil.copytree(REPO / "skills", src / "skills", ignore=shutil.ignore_patterns("__pycache__"))
+    return src
+
+
+def test_rerun_refreshes_the_pack_and_keeps_your_skills(box):
+    """A re-run (and `exo update`, which re-runs the installer) brings the pack up to date, folder by folder."""
+    src = checkout_copy(box)
+    args = ("--no-pip", "--no-interview", "--exo-source", str(src))
+    assert run(box, *args).returncode == 0
+    skills = box / "exo" / "skills"
+    (skills / "mine").mkdir()
+    (skills / "mine" / "SKILL.md").write_text("---\nname: mine\ndescription: my own\n---\nbody\n")
+    with open(src / "skills" / "exo-intro" / "SKILL.md", "a") as f:
+        f.write("\n## New fact\n")
+    shutil.rmtree(src / "skills" / "jevgrep")
+    manifest = (src / "skills" / "MANIFEST.json").read_text().replace('"version": 1', '"version": 2')
+    (src / "skills" / "MANIFEST.json").write_text(manifest)
+    r = run(box, *args)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert (skills / "exo-intro" / "SKILL.md").read_text().endswith("## New fact\n")
+    assert not (skills / "jevgrep").exists()                # a pack skill that was removed upstream goes
+    assert (skills / "mine" / "SKILL.md").read_text().endswith("body\n")  # yours stays
+    assert (skills / "MANIFEST.json").read_text() == manifest
+    first = snapshot(skills)
+    assert run(box, *args).returncode == 0
+    assert snapshot(skills) == first                        # nothing changed upstream: nothing rewritten
+
+
+def test_skill_pack_leaves_folders_it_did_not_install(box):
+    skills = box / "exo" / "skills"
+    (skills / "exo-intro").mkdir(parents=True)
+    (skills / "exo-intro" / "SKILL.md").write_text("---\nname: exo-intro\ndescription: mine\n---\nmy intro\n")
+    (skills / "MANIFEST.json").write_text('{"skills": []}')
+    r = run(box, "--no-pip", "--no-interview")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "exo-intro was not installed by Exo; left alone" in r.stderr
+    assert "MANIFEST.json was not written by Exo; left alone" in r.stderr
+    assert (skills / "exo-intro" / "SKILL.md").read_text().endswith("my intro\n")
+    assert not (skills / "exo-intro" / ".exo-managed").exists()
+    assert (skills / "MANIFEST.json").read_text() == '{"skills": []}'
+    assert (skills / "clean-writing" / ".exo-managed").is_file()  # the rest of the pack still installs
+
+
+def test_a_hand_copied_pack_is_adopted(box):
+    """The earlier workaround, `cp -r skills $EXO_HOME/skills`, becomes a managed pack without warnings."""
+    skills = box / "exo" / "skills"
+    shutil.copytree(REPO / "skills", skills, ignore=shutil.ignore_patterns("__pycache__"))
+    r = run(box, "--no-pip", "--no-interview")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "left alone" not in r.stderr
+    assert (skills / ".exo-managed").is_file() and (skills / "exo-intro" / ".exo-managed").is_file()
+
+
+def test_a_skills_folder_linked_to_the_checkout_is_left_alone(box):
+    """`ln -s <checkout>/skills $EXO_HOME/skills` keeps the pack live. Adopting it would rm -rf the checkout's skills."""
+    src = checkout_copy(box)
+    before = snapshot(src / "skills")
+    (box / "exo").mkdir()
+    (box / "exo" / "skills").symlink_to(src / "skills")
+    for _ in range(2):  # the second run is `exo update`
+        r = run(box, "--no-pip", "--no-interview", "--exo-source", str(src))
+        assert r.returncode == 0, r.stderr + r.stdout
+        assert "so the pack is live there; left alone" in r.stdout and "rm -rf" not in r.stdout
+        assert snapshot(src / "skills") == before  # nothing deleted, rewritten or marked in the checkout
+    (box / "exo" / "skills").unlink()
+    (box / "exo" / "skills").symlink_to(box / "home")  # a link to somewhere else of yours
+    r = run(box, "--no-pip", "--no-interview", "--exo-source", str(src))
+    assert r.returncode == 0 and "is a link Exo did not make; left alone" in r.stderr
+    assert not (box / "home" / "exo-intro").exists()
+
+
+def test_skills_and_manifest_linked_into_the_checkout_are_left_alone(box):
+    """A link that resolves to its own source is never adopted or replaced; the rest of the pack still installs."""
+    src = checkout_copy(box)
+    before = snapshot(src / "skills")
+    skills = box / "exo" / "skills"
+    skills.mkdir(parents=True)
+    (skills / "exo-intro").symlink_to(src / "skills" / "exo-intro")
+    (skills / "MANIFEST.json").symlink_to(src / "skills" / "MANIFEST.json")
+    (skills / "clean-writing").symlink_to(box / "home")  # a link elsewhere stands in for the pack's skill
+    r = run(box, "--no-pip", "--no-interview", "--exo-source", str(src))
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "skill exo-intro:" in r.stdout and "links to the pack's; left alone" in r.stdout
+    assert "clean-writing was not installed by Exo; left alone" in r.stderr
+    assert "MANIFEST.json was not written by Exo" not in r.stderr  # it is the pack's own, live
+    assert all(p.is_symlink() for p in (skills / "exo-intro", skills / "MANIFEST.json", skills / "clean-writing"))
+    assert snapshot(src / "skills") == before and not list((box / "home").glob(".exo-managed"))
+    assert (skills / "council" / ".exo-managed").is_file()
+
+
 # --- the `exo` command on PATH -----------------------------------------------------
 
 def run_sh(tmp_path, *args, shell="/bin/zsh"):

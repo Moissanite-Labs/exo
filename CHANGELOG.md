@@ -124,6 +124,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- First run (user-readiness audit, blocker 1): the installer now copies the skill pack (`skills/` with
+  `MANIFEST.json`) into `$EXO_HOME/skills`, so `/intro` loads its `exo-intro` skill and exo-orchestra stops warning
+  "no skill manifest" at launch. Each pack skill is a marked folder that a re-run or `exo update` refreshes, and
+  skills you add there are kept. A skills folder or skill that links into the checkout is left alone. When the skill
+  is still missing, the terminal client shows a short orientation instead of sending a model turn that could only
+  improvise. A first intro that started but failed or got no reply is no longer sent again at every launch: the
+  composer offers `/intro` instead, and the one that completes still turns tutorial mode on.
 
 ## [0.2.0] (egg) - 2026-10-13
 
