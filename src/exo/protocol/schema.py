@@ -10,7 +10,8 @@ The interface started fixed at wave 1 and has grown additively since. Stdlib onl
   defaults, or new types. Never rename or remove.
 - Commands are strict: unknown type or unknown field is rejected.
 - Events decode strictly by default; clients pass ``strict=False`` to accept
-  newer servers (unknown fields dropped, unknown types kept as raw dicts).
+  newer servers (unknown fields dropped, unknown types kept as raw dicts, unknown Literal values kept as
+  sent). ``Client.events`` skips and logs an event it still cannot decode, and the feed goes on.
 """
 
 from __future__ import annotations

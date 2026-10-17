@@ -10,6 +10,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
 
+### Fixed
+- Terminal event feed: a boot that failed after `hello` left the window without its feed, so `/new` and a message
+  worked but no reply or approval card ever showed. The feed now starts whatever the boot does, and a `--session`
+  id the core does not know opens a new thread and says so. One event the window cannot read no longer ends the
+  feed either. Under `strict=False` a Literal value the client does not know (such as a newer core's `ui.panel`
+  kind) is kept, `Client.events` skips and logs an event that still fails to decode, and a feed that dies says so.
+
 ### Changed
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,

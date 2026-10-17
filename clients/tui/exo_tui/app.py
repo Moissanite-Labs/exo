@@ -420,6 +420,7 @@ class ExoApp(App):
 
     # ------------------------------------------------------------ boot and events
     async def boot(self) -> None:
+        hello: dict[str, Any] | None = None
         try:
             hello = await self.client.call(s.Hello(client=CLIENT_ID, capabilities=["markdown", "diff"],
                                                    screen_cols=self.size.width or None))
@@ -450,7 +451,7 @@ class ExoApp(App):
                 rows = [r for r in rows if r.get("kind") != "subagent"]  # resume a thread, not a child's log
                 self.session = rows[0]["id"] if rows else None
             if self.session:
-                await self.load_session(self.session)
+                await self.resume_or_new(self.session)
             else:
                 await self.new_session(announce=False)
             self.boot_mark("agent", self.seat or "main")
@@ -466,20 +467,27 @@ class ExoApp(App):
                 await self.intro("first")
         except Exception as exc:
             self.note(f"cannot start: {type(exc).__name__}: {exc}", "error")
+            if hello is not None and not any(w.name == "pump" for w in self.workers):
+                # whatever failed after hello, the window can still /new and send: replies and approvals must show
+                self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
         self.boot_end()
         self.refresh_status()
         self.ready.set()
 
     async def pump(self, since: int) -> None:
-        async for ev in self.client.events(since=since, reconnect=True):
-            if ev.session not in (None, self.session):
-                continue
-            try:
-                self.handle(ev)
-            except Exception as exc:  # a bad event must not stop the feed, and the harness is told (D-025)
-                self.note(f"event {ev.type}: {type(exc).__name__}: {exc}", "error")
-                if ev.type != "harness.error":  # never report the report of an error
-                    self.report_error(f"tui event {ev.type}", exc)
+        try:
+            async for ev in self.client.events(since=since, reconnect=True):
+                if ev.session not in (None, self.session):
+                    continue
+                try:
+                    self.handle(ev)
+                except Exception as exc:  # a bad event must not stop the feed, and the harness is told (D-025)
+                    self.note(f"event {ev.type}: {type(exc).__name__}: {exc}", "error")
+                    if ev.type != "harness.error":  # never report the report of an error
+                        self.report_error(f"tui event {ev.type}", exc)
+        except Exception as exc:  # the feed itself died: say so, never go quiet (D-025)
+            self.note(f"event feed stopped: {type(exc).__name__}: {exc}. /restart reopens this thread.", "error")
+            self.report_error("tui event feed", exc)
 
     def report_error(self, where: str, exc: Exception) -> None:
         """Send a caught exception to the core as a harness.error event."""
@@ -811,6 +819,16 @@ class ExoApp(App):
         what = "private thread" if info.get("kind") == "private" else "thread"
         self.note(f"resumed {what} {title + ' ' if title else ''}({sid}, {n} messages)", "note")
         self.refresh_status()
+
+    async def resume_or_new(self, sid: str) -> None:
+        """Resume thread ``sid``; an id the core does not know (a typo, a deleted thread) opens a new thread."""
+        try:
+            await self.load_session(sid)
+        except Exception as exc:
+            if getattr(exc, "code", None) != "not_found":
+                raise
+            await self.new_session(announce=True)
+            self.note(f"no thread {sid}; started a new one", "warn")  # after new_session, which clears the transcript
 
     async def new_session(self, kind: str = "", announce: bool = True) -> None:
         """A new thread of the same agent: a fresh focus with the same memory (D-028)."""

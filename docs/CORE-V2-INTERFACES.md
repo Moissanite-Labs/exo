@@ -38,6 +38,9 @@ Codec: `to_dict(obj)` and `from_dict(cls, data, strict=True)` work for every dat
 protocol. Nested dataclasses, lists, optionals and Literals are decoded and checked. `strict=True`
 rejects unknown fields; `strict=False` drops them. Use these for sessions.sqlite rows too.
 
+Under `strict=False` a Literal value the codec does not know is kept as sent, because a newer peer may add one.
+`strict=True` rejects it.
+
 ## Protocol (`exo.protocol.schema`), `PROTOCOL_VERSION = 1`
 
 Envelopes:
@@ -47,7 +50,8 @@ Envelopes:
   untyped JSON for now; reuse `SessionInfo` and core types inside them via `to_dict`.
 - `Event`: id (auto `e_...`), seq, session?, type, ts (ISO 8601 UTC, auto), body. JSON key order is
   `id, seq, session, type, ts, body`. Build with `Event.of(body, seq, session)`. `from_json(s, strict=True)`;
-  clients pass `strict=False` to accept newer servers (unknown fields dropped, unknown types kept as dict).
+  clients pass `strict=False` to accept newer servers (unknown fields dropped, unknown types kept as dict,
+  unknown Literal values kept). `Client.events` skips and logs an event it still cannot decode, and the feed goes on.
   Note: STANDALONE.md 5.2 drafted the payload key as `data`; it is `body`.
 - `ProtocolError(code, message)`: codes `bad_json`, `bad_envelope`, `unknown_command`, `unknown_event`,
   `bad_body`.

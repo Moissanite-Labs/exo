@@ -213,7 +213,7 @@ def _hints(cls: type) -> dict[str, Any]:
 def _decode(tp: Any, value: Any, strict: bool) -> Any:
     origin = typing.get_origin(tp)
     if origin is Literal:
-        if value not in typing.get_args(tp):
+        if strict and value not in typing.get_args(tp):  # loose decoding keeps a newer peer's value (forward compat)
             raise ValueError(f"{value!r} not one of {typing.get_args(tp)}")
         return value
     if origin in (typing.Union, types.UnionType):
