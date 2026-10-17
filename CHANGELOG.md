@@ -157,6 +157,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   longer cools the credential. Before, one such answer to the gate made the next main-role call, which often uses
   the same key, fail with "cooling down" for 60 s. A failed chat decision call now counts one strike, not two
   (`docs/PROVIDERS.md`).
+- The gate's decision call no longer uses the main model (D-081). With only the claude CLI login, every tool call
+  the rules allowed started a hidden main-model call (2 to 10 s), and one failed call cooled the login, so the
+  next turn failed with "all routes for 'main' failed or are cooling down". The call now uses the decision and aux
+  routes only, keeps the rule outcome when there are none, and a failure cools only the model that failed
+  (`docs/GATE.md`, `docs/PROVIDERS.md`).
+- Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`) classify as reads in the gate, so a new
+  user's first screen is no longer an approval card for loading the intro skill (`docs/GATE.md`).
 
 ## [0.2.0] (egg) - 2026-10-13
 

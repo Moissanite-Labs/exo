@@ -375,8 +375,9 @@ def test_malformed_model_answer_keeps_the_rule_outcome_and_the_main_role_working
 
     store, key = keyed_store
     chat = FakeProvider(["I would say ask, to be safe.", "main reply"], name="chat")
-    router = Router(roles={"main": ["chat:m"]}, env={}, instances={"chat": chat}, catalog={"providers": {}})
-    ctx = gated(store, key, router)  # the decision role falls back to the main credential
+    router = Router(roles={"aux": ["chat:small"], "main": ["chat:m"]}, env={}, instances={"chat": chat},
+                    catalog={"providers": {}})
+    ctx = gated(store, key, router)  # the decision role falls back to aux on the main credential (never main, D-081)
     assert call(ctx, "read_file", {"path": "x"}) is None  # no JSON verdict: the rule outcome stands
     assert len(chat.calls) == 1 and "decision function" in chat.calls[0]["messages"][0].text()
 
