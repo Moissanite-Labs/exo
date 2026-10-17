@@ -27,6 +27,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- The terminal client no longer freezes on the boot screen when first run opens the model picker (the claude CLI
+  on PATH and a configured main route that is down). The boot screen's dismiss closed the picker in its place, and
+  only ctrl+c got out. It now closes before the first-run check opens anything, so a first run with no provider also
+  opens the providers panel, as the docs say (`docs/UI.md`).
+- `exo --resume` and `exo resume` continue the newest thread with messages. Each launch opens a thread, so a
+  launch you only looked at, or an unused `/new`, made resume open an empty thread (`docs/USER-GUIDE.md`).
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

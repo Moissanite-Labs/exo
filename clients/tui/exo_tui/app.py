@@ -304,6 +304,13 @@ class ExoApp(App):
             for step, _ in BOOT_STEPS:
                 self.boot_screen.mark(step, "-")
 
+    async def boot_over(self) -> None:
+        """End the boot sequence and wait until it is off the stack. Its dismiss pops the top screen, so a screen
+        pushed while it runs (the first-run model picker or providers panel) would close in its place."""
+        self.boot_end()
+        if self.boot_screen is not None:
+            await self.boot_screen.closed.wait()
+
     # ------------------------------------------------------------ helpers
     @property
     def transcript(self) -> VerticalScroll:
@@ -446,8 +453,9 @@ class ExoApp(App):
             self.gstate.first_run = not self.onb.onboarded
             self.update_guidance()
             if self.resume and not self.session:
-                rows = (await self.client.call(s.SessionList(limit=20, seat=self.seat)))["sessions"]
-                rows = [r for r in rows if r.get("kind") != "subagent"]  # resume a thread, not a child's log
+                rows = (await self.client.call(s.SessionList(limit=50, seat=self.seat)))["sessions"]
+                # a thread, not a child's log, with something in it: every launch opens one, used or not
+                rows = [r for r in rows if r.get("kind") != "subagent" and r.get("message_count")]
                 self.session = rows[0]["id"] if rows else None
             if self.session:
                 await self.load_session(self.session)
@@ -456,6 +464,7 @@ class ExoApp(App):
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", "ready")
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
+            await self.boot_over()  # the provider check below may push a screen
             want_intro = self.auto_intro and not self.resume and not self.onb.onboarded
             # A first run with no working provider goes to /providers first; the intro waits for a key,
             # because the orientation is an agent turn and would only fail without one.
