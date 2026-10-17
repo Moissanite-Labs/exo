@@ -145,6 +145,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   notice. With `wake` unset or on, that notice started a model turn while the engine was closing, a paid call
   at every such shutdown. The job now ends with one `killed` record and one `job.updated`. Once shutdown has
   begun no job notice starts a turn. A notice still in delivery is queued for the next one.
+- Scheduled jobs when clocks go back: a cron job added, resumed or overdue in the repeated hour's second pass got
+  a next run in the hour's first pass, up to an hour in the past, so the timer ran it again each time a run ended
+  until that hour was over. The next run is now always later than now (`docs/SCHEDULE.md`, "Clock changes").
 
 ## [0.2.0] (egg) - 2026-10-13
 

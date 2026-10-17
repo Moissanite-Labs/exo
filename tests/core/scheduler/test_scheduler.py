@@ -89,6 +89,77 @@ def test_next_run_every():
         next_run("every m", 0)
 
 
+# ---------------------------------------------------------------- daylight saving: cron fields are local time
+
+# zone -> (the day clocks go back, the day they go forward, the hour that day skips); 01:00-01:59 repeats in both
+DST = {"America/New_York": ((2026, 11, 1), (2026, 3, 8), 2), "Europe/London": ((2026, 10, 25), (2026, 3, 29), 1)}
+
+
+@pytest.fixture(params=sorted(DST))
+def dst(request):
+    """Run in a zone with daylight saving, then put the old zone back (only TZ: the autouse env stays)."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is POSIX only")
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("TZ", request.param)
+            time.tzset()
+            fall = DST[request.param][0]
+            if ts(*fall, 1, 30) == datetime(*fall, 1, 30, fold=1).timestamp():
+                pytest.skip(f"no time zone data for {request.param}")  # not a silent pass
+            yield DST[request.param]
+    finally:
+        time.tzset()
+
+
+def test_next_run_is_strictly_after_across_dst(dst):
+    """In the repeated hour's second pass next_run gave the first pass's time, up to an hour in the past."""
+    wrong = []
+    for day in dst[:2]:
+        after, end = ts(*day, 0, 0), ts(*day, 4, 0)
+        while after < end:
+            for line in ("*/15 * * * *", "30 1 * * *", "50 * * * *", "0 2 * * *", "30 2 * * *", "* * * * *"):
+                if not after < next_run(line, after) <= after + 2 * 86400:
+                    wrong.append((line, datetime.fromtimestamp(after)))
+            after += 37
+    assert not wrong, f"{len(wrong)} wrong, first {wrong[:3]}"
+
+
+def test_next_run_exact_times_across_dst(dst):
+    (y, mo, d), spring, gap = dst
+    second = datetime(y, mo, d, 1, 20, fold=1).timestamp()  # 01:20 in the repeated hour's second pass
+    assert next_run("*/15 * * * *", second) == datetime(y, mo, d, 1, 30, fold=1).timestamp() == second + 600
+    assert next_run("30 1 * * *", second) == second + 600
+    assert next_run("50 * * * *", second) == second + 1800
+    assert next_run("* * * * *", second) == second + 60
+    assert next_run("*/15 * * * *", ts(y, mo, d, 1, 20)) == ts(y, mo, d, 1, 30)  # the first pass as before
+    # a fixed-time job that ran in the first pass does not run again in the second
+    assert next_run("30 1 * * *", ts(y, mo, d, 1, 31)) == ts(y, mo, d + 1, 1, 30)
+    # a */n job that ran late in the first pass skips the second (docs/SCHEDULE.md)
+    assert next_run("*/15 * * * *", ts(y, mo, d, 1, 50)) == ts(y, mo, d, 2, 0) == ts(y, mo, d, 1, 50) + 70 * 60
+    # clocks going forward: a slot in the skipped hour runs an hour later
+    before = ts(*spring, gap - 1, 50)
+    assert next_run(f"30 {gap} * * *", before) == ts(*spring, gap + 1, 30) == before + 40 * 60
+    assert next_run("*/15 * * * *", before) == ts(*spring, gap + 1, 0) == before + 600
+
+
+@aio
+async def test_job_in_the_repeated_hour_runs_once(tmp_path, dst):
+    """Added, resumed or overdue in the second pass, a job got a past next_run and ran back to back for an hour."""
+    eng, clk = mk(tmp_path), Clock(datetime(*dst[0], 1, 20, fold=1).timestamp())
+    sch = Scheduler(eng, clk)
+    job = sch.add("*/15 * * * *", "x")
+    assert job["next_run"] == clk.t + 600
+    sch.pause(job["id"])
+    assert sch.pause(job["id"], False)["next_run"] == clk.t + 600
+    sch.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (clk.t - 5, job["id"]))  # overdue, as after a wake
+    sch.db.commit()
+    assert await sch.tick() == [job["id"]]
+    await sch.wait()
+    assert sch.get(job["id"])["next_run"] == clk.t + 600
+    assert await sch.tick() == []  # not relaunched as soon as the run ended
+
+
 def test_add_list_remove_and_due(tmp_path):
     eng, clk = mk(tmp_path), Clock(ts(2026, 10, 11, 8, 0))
     sch = Scheduler(eng, clk)

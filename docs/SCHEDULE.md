@@ -51,3 +51,11 @@ sleeps at most a minute, so a job that another seat's core adds or resumes start
   warning notice. When there is no complete wrap-up reply (it failed, had no text, or `wrap_up` is off), nothing
   is appended; the last tool round's text is never shown as the report.
 - Runs missed while the engine was down happen once at start, not once per missed slot.
+
+## Clock changes
+
+Cron fields are local time, and a job's next run is always later than now. When clocks go back, an hour comes
+twice. A job that ran in the first pass of that hour does not run again in the second: `30 1 * * *` runs once,
+and `*/15 * * * *` goes from 01:45 to 02:00. A job added, resumed or overdue during the second pass counts from
+that pass's time: added at 01:20 there, `*/15 * * * *` runs at 01:30, 10 minutes later. When clocks go forward, a slot in the skipped hour runs an hour later: where 02:00 jumps
+to 03:00, `30 2 * * *` runs at 03:30 that day. `every` jobs count real time and do not move.
