@@ -27,6 +27,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Security
+- `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
+  requests from the web server only, no inline script, style attribute or eval, no framing, plus
+  `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
+  computed widths now go through the CSSOM instead of `style` attributes; nothing looks different.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

@@ -29,7 +29,8 @@ Every `/api/` route needs the token: the page sends it as `X-Exo-Token` on every
 `?token=` on the two event streams (`stream()` in `dom.js`; a browser EventSource cannot send headers). The Host
 header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, so a DNS rebinding name gets nothing, not
 even the page. An Origin, when sent, must be that same host, and Sec-Fetch-Site must be same-origin or none. Only
-the page shell (`/`, `/static/`) loads without the token. Responses carry `Referrer-Policy: no-referrer`.
+the page shell (`/`, `/static/`) loads without the token. Responses carry `Referrer-Policy: no-referrer`,
+`X-Content-Type-Options: nosniff` and the Content-Security-Policy below.
 
 The web process answers approvals as the principal: it reads the core's principal credential
 (`run/<socket>.principal.key`) on each request, so it re-joins a core that restarted with a new one. The optional
@@ -40,6 +41,30 @@ After replay the page refreshes durable messages, session activity, open panels 
 drafts and unfinished streamed output survive that refresh. `/context` uses typed token counts (`command.run`,
 `args="json"`), while the default core command still returns the human-readable report. `/new private` creates a
 private session; malformed known commands show usage. Literal paths such as `/etc/hosts is broken` remain messages.
+
+## Content-Security-Policy (#162)
+
+The page builds every node with `h()` and text nodes, never `innerHTML`, so model text cannot become markup. That
+alone was the XSS defence, and Markdown panels (and completed replies) run model text through `markdown.js`. So
+every response the web server writes, the page, static files, JSON, both event streams and every error, carries one
+policy, `CSP` in `server.py`:
+
+```
+default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self';
+object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+```
+
+with `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` (`SECURITY_HEADERS`). Script and styles
+load only from this server (in practice `/static/`); requests (fetch and the two EventSource streams) go only to
+this server; there are no WebSockets, fonts or `data:` images; no other site may frame the page; forms never post
+natively (each is handled in script). Inline scripts, inline event handlers, `javascript:` links, `eval` and string
+timers, `<style>` blocks and `style` attributes are all refused, so markup that a renderer slip ever let into the
+page would not run or restyle it. The policy has no `'unsafe-inline'`, `'unsafe-eval'`, hash or nonce, and must not
+get one: a page that needs an inline script or style moves it into a file under `static/`. The few computed sizes
+(gauges, bars, the task board's column count) are set through the CSSOM: `h()` turns a `style` key into
+`el.style.cssText`, which the policy allows. `plugins/exo-command/tests/test_csp_web.py` pins the header on every
+kind of response, loads the page in headless Chrome with no violation, and shows that injected markup runs without
+the policy and does not run with it.
 
 ## Screens
 
