@@ -33,6 +33,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   quotes, so `printf -v 'a[$(gh pr comment ...)]' %s x` was allowed; it is now a `github_post`. Bash also evaluates
   the command's output or a variable's value there, so any expansion or quoting in such a subscript asks
   (`unset "arr[$i]"` and `printf -v 'a[$(date)]' %s x` were allowed and now ask).
+- The gate reads the values `declare`, `typeset`, `local`, `readonly` and `export` evaluate again (#188, D-038).
+  With `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted (the gate reads it with or
+  without them), a `-i` value is arithmetic and a `-n` value is a name whose subscript runs when used, so
+  `declare -a 'b=($(gh pr comment ...))'`, `export -a 'b=(<(gh ...))'`, `declare -i x='a[$(gh ...)]'` and
+  `declare -n r='a[$(gh ...)]'` were allowed and are now a `github_post`. A command there, and an expansion bash
+  evaluates again, also asks (`declare -a 'b=($(date))'`, `local -i n=$1`, `local -n ref=$1`,
+  `declare -a 'a=([$i]=1)'` and `declare -a "b=($x)"` were allowed and now ask). When such a command outranks the
+  line's own category, a deny on that category becomes ask (`declare -a 'b=($(sudo ls))' > /tmp/f` under
+  `deny: [local_write]`), never allow or log, also when the policy names `opaque_exec`. A command nested deeper
+  than the gate reads asks.
 
 ## [0.2.0] (egg) - 2026-10-13
 

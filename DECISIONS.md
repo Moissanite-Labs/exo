@@ -779,6 +779,26 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   command's output (or a variable's value) as arithmetic too, any expansion or quoting there also asks through the
   `indirection` signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
   without expansion and plain names keep their class; a bare name such as `a[i]` is a known limit (GATE.md).
+  *Amendment 2026-10-17 (issue #188):* `declare`, `typeset`, `local`, `readonly` and `export` evaluate the value of
+  a `NAME=VALUE` operand again: with `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted
+  (the gate reads it with or without them, which is only stricter), and for the first three a `-i` value is
+  arithmetic and a `-n` value is a name whose subscript bash evaluates when used. So `declare -a 'b=($(gh ...))'`,
+  `export -a 'b=(<(gh ...))'` and `declare -i x='a[$(gh ...)]'` were `read` (allow). Those values are now read with
+  the subscript scan: each `$( )`, backticks or `<( )` in them is classified like a `$( )` and added after the
+  line's own parts, as the line parse adds an unquoted one (so it does not take a tie from a redirection), a
+  `[key]=` is read as a subscript, and a quoted operand after an unquoted compound one is read too. A command the
+  line runs only because bash reads a value again also asks through `indirection`, as does an expansion in a `-i` or
+  `-n` value, in a `-i` element, or in a compound value the line itself expanded. So when such a command outranks
+  the line's own category, a deny on that category becomes ask, never allow or log
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `deny: [local_write]`); D-075 (open PR #126) restores the deny for
+  the `deny:` list form only (#191 tracks the `categories` form). That command also carries the `reread` signal,
+  and naming `opaque_exec` does not lower its ask, which stands in for the line's own deny:
+  `{local_write: deny, opaque_exec: allow}` asks too. Past the
+  depth limit such a command, or one in a subscript, is an `opaque_exec` part, as on the line itself, with `reread`.
+  A plain expansion in a compound element without `-i` (`'b=("$@")'`) is expanded once and asks nothing, and the
+  unquoted compound form keeps the line parse's reading. readonly and export never evaluate a name's subscript, so
+  their names are not read. A later plain assignment to a `-i` or `-n` variable and values that come whole from a
+  variable stay a known limit (GATE.md).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
