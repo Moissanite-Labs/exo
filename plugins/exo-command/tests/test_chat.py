@@ -119,6 +119,9 @@ def test_session_model_route_is_scoped_and_preserves_core_refusals():
     assert call(c, "GET", "/api/chat/sessions/s1/model")[0] == 405
     src.fail["models.set"] = "forbidden"
     assert call(c, "POST", "/api/chat/sessions/s1/model", {"model": "fake:y"})[0] == 403
+    for code in ("bad_model", "bad_request"):   # the caller's mistake, as /api/providers/default says; 502 means the core is away
+        src.fail["models.set"] = code
+        assert call(c, "POST", "/api/chat/sessions/s1/model", {"model": "nosuch:m"}) == (400, {"error": "nope", "code": code})
     src.fail["session.get"] = "not_found"
     before = sum(isinstance(cmd, s.ModelsSet) for cmd in src.calls)
     assert call(c, "POST", "/api/chat/sessions/missing/model", {"model": "fake:y"})[0] == 404

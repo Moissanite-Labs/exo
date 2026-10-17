@@ -736,6 +736,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Under reduced motion there is no timer: it only updates on events.
 - **Typo help:** an unknown `/comand` is not sent. The note says "did you mean /compact?" and the corrected line waits
   in the composer. With nothing close, the line goes to the core as before. The web does the same for its commands.
+  Web, #146: the names are the page's own commands, the core's `commands.list` and the terminal client's own (the
+  shared `complete.ARG_HINTS` table), and "near" is the TUI's rule (a port of `complete.closest`, for lower-case names
+  only). A `/name` from those the page does not run (`/grants`, `/help`), or a near typo of one, stays in the box with
+  a note rather than becoming a message; a line close to no name (`/tmp is full`, `/data is corrupted`, `/Users is
+  big`) is a message. Until the page has the names it holds every `/name` line, and asks again after a failed load.
 - **Rejected:** a model call to suggest commands (cost, latency, and the rules are enough); a second ranking in each
   client (they would drift); storing history in the browser (the web client keeps none across page loads, on purpose).
 - **Not done:** file completion for bare paths (`./x`, `~/x`) outside `@`; `/findings <id>` (the core takes only

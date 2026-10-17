@@ -100,16 +100,28 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 - Typing `/context`, `/findings` or `/trace` in the composer runs that report and shows it in the transcript.
   The plugin exposes this as `POST /api/chat/sessions/<id>/command` (names limited to those three, sent as the
   existing `command.run`): a plugin route, not a protocol change.
+- `/model <ref>` sets the shared main route through `POST /api/chat/sessions/<id>/model` (`session.get`, then the
+  core's principal-only `models.set` for that thread). `/default <ref>` and `/model default <ref>` save the default
+  through `POST /api/providers/default`, which answers a loopback page only (D-034): on a page opened at another
+  address the note says so, and `/model` still works. Without a reference either one opens a picker under the box,
+  filled from `GET /api/chat/models` (`models.list`); a later `/model` or `/default` replaces a list still loading,
+  Esc or Cancel closes it, and choosing returns focus to the box. While a change is in flight the box sends nothing.
+  A failed change keeps the line in the box. A `bad_model` or `bad_request` core error is a 400, not a 502, on every
+  route of `api.py`'s table (chat, tasks, schedule, feedback), so a bad model reference is the caller's mistake (#146).
 
 ## The composer (D-037)
 
-Typing `/` opens a dropdown under the composer with the commands the page runs (`/context`, `/findings`, `/trace`,
-`/new`), each with its argument shape and a line of description. Same ranking, Tab, Enter, arrows and Esc (close the menu only) as the
+Typing `/` opens a dropdown under the composer with the commands the page runs (`/context`, `/model`, `/default`,
+`/findings`, `/trace`, `/new`, `/rename`, `/layout`), each with its argument shape and a line of description. Same ranking, Tab, Enter, arrows and Esc (close the menu only) as the
 terminal client. Esc never stops a turn on this page either; the Stop button does. Approval hotkeys are ignored while a field has focus. After a command it offers the argument words (`/trace ` offers 5, 10, 25). `@` lists files from the
 open thread's working folder through `GET /api/complete/files?session=&q=`: read-only, names only, inside the folder,
 secret stores left out with `gate.is_sensitive_path`, and guarded like the key routes (loopback peer, Host, page
 token). Ghost text from this page's history (right arrow takes it), up and down walk it; nothing is stored in the
-browser. A mistyped `/command` is not sent: the box shows the fix. One dim guidance line above the box (a failed call,
+browser. A mistyped `/command` is not sent: the box shows the fix. A command the page does not run stays in the box
+with a note, as does a near typo of one: a name of the core's `commands.list` (`/grants`), or one of the terminal
+client's own from `complete.ARG_HINTS` (`/help`, `/quit`). `GET /api/complete/commands` lists them as `core` and
+`client`. Until that list has loaded every `/name` line waits in the box; a failed load is asked again with a backoff
+and on the next send. A `/word` close to no command by the TUI's rule (`/tmp is full`, `/data is corrupted`, `/Users is big`) is sent as a message. One dim guidance line above the box (a failed call,
 a finished job, open findings, a slow turn, a long thread), one new line per 25 seconds at most, off when the core
 config key `guidance.enabled` is `false` (`GET /api/complete/commands` says so), no timer under reduced motion.
 The logic is `static/complete.js` (pure, tested in node against the Python engine); the drawing is `static/composer.js`.
