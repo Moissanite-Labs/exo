@@ -187,6 +187,16 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- Bash evaluates an array subscript in a variable name as arithmetic, and that runs a `$( )` or
+  backticks in it, even inside single quotes. So the name arguments of `printf -v`, `read` (and
+  `read -a`), `declare`, `typeset`, `local`, `unset`, `test -v` and `[ -v`, and `wait -p` are read
+  for a subscript (#179). Each command in it is classified like a `$( )`, so
+  `printf -v 'a[$(gh pr comment 3 --body hi)]' %s x` is a `github_post`. Its output is evaluated
+  as well, so any expansion or quoting in the subscript (`$(cat f)`, `$i`, `${x}`, `$(( ))`, `"k"`)
+  also adds the `indirection` signal and asks: a value such as `b[$(cmd)]` runs cmd. It is a
+  signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
+  without expansion (`a[0]`; for a bare name such as `a[i]` see the known limit below) and the
+  other arguments (printf's format, read's prompt) change nothing.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
@@ -196,6 +206,16 @@ A command is `allow` only when every program in it is known and nothing is hidde
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
 `npm install` runs package scripts) can run code the agent wrote earlier with a local write.
 The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+
+Known limit. The gate does not model a variable's value. Bash evaluates a bare name in an
+arithmetic context as arithmetic too (`a[i]`, `$(( x ))`, `declare -i`), so a value such as
+`b[$(cmd)]` set earlier runs cmd there. Only an expansion written in the name argument of the
+builtins above asks; one in an assignment word (`a[$i]=v`) or an arithmetic expression
+(`$(( a[$i] ))`) does not. The gate cannot tell an associative array from an indexed one, so a
+subscript of an associative array asks too, although bash does not evaluate it as arithmetic.
+A quoted value that declare, typeset or local reads as an array or arithmetic value
+(`declare -a 'b=($(cmd))'`, `declare -i x='a[$(cmd)]'`, `declare -n`) runs cmd too and is not
+read yet (#188).
 
 ## The store is credentials (D-038)
 
