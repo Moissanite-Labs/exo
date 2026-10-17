@@ -82,6 +82,9 @@ def handle_feedback(engine: Any, body: Any) -> dict:
     if verdict not in VERDICTS:
         return {"recorded": False, "reason": f"unknown verdict {verdict!r}"}
     session = getattr(body, "session", None)
+    if lr.private(session):  # D-028: nothing from a private thread (or its child) reaches the ledger, verdicts too
+        return {"recorded": False, "reason": "this is a private thread, or runs under one: feedback on it is not "
+                                             "remembered"}
     text = (getattr(body, "text", "") or "").strip()
     answer, context, mid = _answer_and_context(lr, session, getattr(body, "message_id", None))
     with rt.lock:
@@ -108,12 +111,25 @@ def handle_feedback(engine: Any, body: Any) -> dict:
     return {"recorded": True, "event": ev["id"], "verdict": verdict, "pair": pair, "review": started}
 
 
+def _panel_session(engine: Any, panel_id: str) -> str | None:
+    """The session that opened panel `panel_id`, from the `ui.panel` events in sessions.sqlite; None if unknown."""
+    store = getattr(engine, "store", None)
+    if not panel_id or store is None:
+        return None
+    rows = store._q("SELECT session FROM events WHERE type='ui.panel' AND json_extract(body, '$.panel_id')=? LIMIT 1",
+                    (panel_id,))
+    return rows[0]["session"] if rows else None
+
+
 def handle_ui_respond(engine: Any, body: Any) -> dict:
     """`ui.respond`: log what the user did with a panel (opened, dismissed, acted, ignored) as a `note` event."""
     lr = get_learner(engine)
     rt = lr.runtime
     if rt is None:
         return {"recorded": False, "reason": lr.notices[0] if lr.notices else "learning is off"}
+    if lr.private(_panel_session(engine, getattr(body, "panel_id", ""))):  # D-028: its value can hold a comment
+        return {"recorded": False, "reason": "this panel is from a private thread: what you did with it is not "
+                                             "remembered"}
     value = dict(getattr(body, "value", None) or {})
     if len(json.dumps(value, default=str)) > 4000:
         value = {"truncated": True}

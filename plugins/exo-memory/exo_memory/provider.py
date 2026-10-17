@@ -43,6 +43,7 @@ NOTE_KINDS = ("note", "question", "action", "artifact")
 # D-040: kinds in the principal's voice. The agent's exo_note cannot write them: a note claiming one is kept as an
 # agent note (kind note, type agent_note), which consolidation and learning never read as the principal.
 PRINCIPAL_KINDS = ("ruling", "answer")
+WRITE_TOOLS = ("exo_note", "exo_should_have_been")  # D-028: refused in a private thread (agent_context="private")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 TOOLS_LINE = ("Memory tools: exo_recall(query, budget) for beliefs and past sessions; exo_get(id) reads a whole "
               "belief node when recall shows only its summary; exo_note(text, kind) to log; "
@@ -718,6 +719,9 @@ class ExoMemoryProvider(MemoryProvider):
         return tools
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs) -> str:
+        if tool_name in WRITE_TOOLS and kwargs.get("agent_context") == "private":  # D-028: it is not remembered
+            return json.dumps({"error": f"{tool_name} writes memory, and this is a private thread: nothing from it "
+                                        "is remembered, so nothing was written. Recall still works here."})
         st = self._state(kwargs.get("exo_home"))
         if st is None:
             # The tools may be served by a bridge that never ran initialize(): start the

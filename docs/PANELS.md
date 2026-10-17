@@ -32,4 +32,5 @@ For `acted`, `value` is:
 | taste | `{rule_id, verdict: "accept" or "reject"}` |
 | other | free form, for example `{line, comment}` on a diff |
 
-Every response is a learning signal: a dismissed or ignored panel teaches when not to open one.
+Every response is a learning signal: a dismissed or ignored panel teaches when not to open one. A response to a
+panel that a private thread opened is not recorded (D-028): `ui.respond` returns `recorded: false`.

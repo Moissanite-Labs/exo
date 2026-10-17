@@ -23,7 +23,8 @@ Everything stays in `sessions.sqlite`.
   `meta` (`import`, `peer`, or live).
 - **Not in the log** (`pos` is empty): subagent threads (they keep their own transcript, opened by name
   with `memory_zoom`), fork copies (the original is already in the log) and context notes (below).
-  Private threads are logged, but never enter the tree, other threads' views or search.
+  Private threads are logged, but never enter the tree, other threads' views or search. Nothing from them
+  reaches the principal store either (see "Private threads" below).
 - **Undo** hides the entries (`messages.hidden`) instead of deleting them, so the log stays append-only
   and verifiable. Hidden entries leave the thread view and search. Summaries whose ranges reach the hidden
   entries are invalidated and rebuilt from the remaining entries.
@@ -31,6 +32,38 @@ Everything stays in `sessions.sqlite`.
   `agent:<id>`. Leaves cover `leaf_size` positions, parents merge pairs, as in D-013. Leaf text labels each
   entry with its thread. The compaction floor from the canary fix carries over: a span under
   `min_compact_tokens` stays verbatim, and a summary that is not smaller than its source is dropped.
+
+## Private threads
+
+A private thread (`/new private`, `session.create` with `kind: private`) is not remembered. It is logged in
+`sessions.sqlite` like any thread, and it can read memory: the provider block and recall (`prefetch`) still run.
+Nothing written from it reaches the principal store, the tree, the learning loop or another thread's memory
+and context. The same holds for every session under it: its delegate children, and their children, carry briefs
+built from it and their results (the core checks `SessionStore.private`, which walks up the parents):
+
+- **Memory hooks.** The loop does not call `on_turn_start`, `sync_turn` or `checkpoint` in or under a private thread, so
+  no utterance, ruling or correction from it goes to the signed ledger. The core enforces this, so it holds for
+  any memory provider.
+- **Memory tools.** A memory tool called in or under a private thread gets `agent_context="private"`. exo-memory then
+  refuses `exo_note` and `exo_should_have_been` and says why. `exo_recall` and `exo_get` still answer.
+- **The tree.** Private entries never enter it. Its plugin hooks (`on_pre_compress`, the pre-compress
+  `checkpoint`, `capture_principal`, `on_compacted`) name the latest thread that is not private, even while a
+  private thread is talking. `/compact` offers each principal message with the agent reply just before it in the
+  log, and reads the log the same way: a private reply is skipped, so a correction keeps the reply it judges.
+- **The context plugin.** It never sees a private thread: no `on_session_start`, `select_context` or
+  `on_turn_complete` for it. exo-context therefore writes no pin and no handoff from one.
+- **The learning loop.** It captures no correction from a private thread and starts no review for it.
+  `feedback.send` on its answers returns `recorded: false` with the reason, and so does a verdict on a delegate
+  child's answer (a client opens one with `/tasks` and `/open`). A reject or should_have_been on either files no
+  finding, since every thread can list findings (`exo_trace`, `/findings`). `ui.respond` on a panel a private
+  thread opened is not noted in the ledger: its value can carry a comment. The event log tells which thread
+  opened the panel.
+- **Context notes.** Other threads' notes leave it out.
+- **Subagents.** A delegate child of a private thread, and any child of that child, opens with
+  `memory_zoom(subagent=)` only from that private thread. Another thread's lookup skips it, by role or by id.
+- **Harness findings.** These are not memory, so they still run: the anomaly rules check its turns, and
+  `exo_harness_report` files from it. Every thread lists open findings by title. An anomaly title names no
+  text from the thread. Its detail can (a tool's error, a subagent goal), and so can a failed tool's signature.
 
 ## Context assembly per turn
 
@@ -210,7 +243,8 @@ The engine hands the memory provider an `agent_log` view (search, zoom, date, le
 exo-memory stops writing its own episodic log, so there is one log. Its recall searches the agent log,
 and its summary view is not repeated, since the tree is already in the system message. `exo_zoom` and
 `exo_date` read the agent log. Without it (another host), exo-memory keeps its own episodic layer as
-before. Belief recall and the signed ledger are unchanged.
+before. Belief recall and the signed ledger are unchanged, except that a private thread writes nothing to the
+ledger (see "Private threads").
 
 ## What changes for clients
 
