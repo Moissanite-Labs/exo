@@ -1000,6 +1000,7 @@ class AgentContext(TreeContext):
         tail = self._thread_tail(session, frontier)
         if recall:
             block = Message.user("# Recalled memory (for this turn)\n" + recall)
+            block.meta["author"] = "system"  # D-040: recalled memory is data, never the principal's words
             at = next((i for i, m in enumerate(tail) if turn_id and m.meta.get("turn_id") == turn_id
                        and m.role == "user" and not m.meta.get("note")), None)
             if at is None:
