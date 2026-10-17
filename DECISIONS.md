@@ -772,6 +772,22 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+  *Amendment 2026-10-17 (issue #160):* wrappers that run a command were unknown or opaque programs, so the command
+  was never classified and a deny on its category asked (`setsid git push origin main`, `flock /tmp/l git push`,
+  `watch git push`, `script -qc '...'`, `tmux new-session -d '...'`, `screen -dm ...`, `parallel git push :::
+  origin`). The gate now reads them as it reads `xargs` (`gate._WRAPPERS`, `_classify_wrapper`): options and fixed
+  operands are skipped as getopt reads them, and the argv or the command string (`flock -c`, `script -c`, `watch`
+  through `sh -c`, a tmux shell-command, a parallel template) is classified as a nested command beside an opaque
+  part, so the line asks as before and a deny on what runs applies. `chroot`, `nsenter`, `unshare` and
+  `systemd-run` follow the `sudo` precedent: a signal named after the wrapper, reversible counts as costly. Forms
+  the gate cannot read (a variable, `tmux send-keys`, `screen -X stuff`, `parallel` without a template) stay
+  `opaque_exec`. A deny on `opaque_exec` itself no longer reaches a wrapped command that outranks it, as with
+  `bash -c` and `xargs`, so the line asks there (it was denied) until D-075. To keep that an ask and not the inner
+  category's `log`, this change carries #178's floor rule: only naming `opaque_exec` at `log` or `allow` turns the
+  indirection floor off. A `parallel` template is read per argument only on the line itself (16 distinct
+  arguments, four times that command's own length, each text sized before it is built); a nested one is read
+  alone, so a template that is a parallel line cannot multiply the work. `function NAME {` from the same issue is
+  read by #181.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
