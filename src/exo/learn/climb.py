@@ -5,6 +5,9 @@ add a held lesson, or drop an auto-promoted one. A candidate replaces the incumb
 the margin, not worse on held-out, and passes the gate. The night is capped: at most `climb.candidates` candidates
 (default 10) and `climb.judge_samples` judge samples per item (default 3). The judge is the `eval` role, which
 defaults to the main route (D-018). The responder under test answers on the `main` route.
+
+Eval items come only from the principal's own events (D-040), and a lesson's own evidence is never its proof. Gated
+lessons (rule 5) and lessons with a critic objection are not climb candidates: `apply_policy` decides them.
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from exo import eval as E
+from exo import provenance
 from exo.consolidate import ConsolidateError, Proposal, load_state, proposal_accept, skill_text_after, _status
 
 from .learner import Learner
@@ -75,13 +79,30 @@ def responder_for(lr: Learner) -> Callable[[dict], E.Responder]:
     return build
 
 
-def make_grader(lr: Learner) -> E.Grader:
-    rubric = ""
+def _rubric(lr: Learner) -> str:
     rp = lr.runtime.root / "eval" / "rubric.md"
-    if rp.is_file():
-        rubric = rp.read_text(encoding="utf-8")
-    return E.judge_grader(lambda prompt: lr.complete_sync("eval", prompt), rubric,
+    return rp.read_text(encoding="utf-8") if rp.is_file() else ""
+
+
+def make_grader(lr: Learner) -> E.Grader:
+    return E.judge_grader(lambda prompt: lr.complete_sync("eval", prompt), _rubric(lr),
                           samples=int(lr.settings["climb"]["judge_samples"]))
+
+
+def climb_fingerprint(lr: Learner) -> dict:
+    """What changes scores besides the configuration and the items: the responder's and the judge's routes, the
+    rubric and the judge samples. The climb rescores its cached incumbent when this changes."""
+    router = getattr(lr.engine, "router", None)
+    routes = {r: [x.ref for x in router.chain(r)] for r in ("main", "eval")} if router is not None else {}
+    return {"routes": routes, "rubric": _rubric(lr), "judge_samples": int(lr.settings["climb"]["judge_samples"])}
+
+
+def eval_items(lr: Learner) -> list[dict]:
+    """The store's eval items; session replays come only from the principal's own events (D-040)."""
+    rt = lr.runtime
+    if rt is None:
+        return []
+    return E.load_items(rt.root, rt.ledger, principals=provenance.principal_names(rt.store))
 
 
 def gate_policy(lr: Learner) -> dict:
@@ -92,12 +113,14 @@ def gate_policy(lr: Learner) -> dict:
 
 def gate_proposal(lr: Learner, p: Proposal) -> dict:
     """Run the 6.5 gates for one lesson: held-out and pinned items, incumbent against incumbent plus the lesson.
-    With no held-out items nothing can be proved, so it fails and says why."""
+    Items built from the lesson's own evidence do not count. With no held-out items nothing can be proved, so it
+    fails and says why."""
     rt = lr.runtime
-    items = E.load_items(rt.root, rt.ledger)
+    items = eval_items(lr)
     parts = E.split(items)
     pinned = [i for i in items if i.get("pinned") and i not in parts["held"]]
-    held = parts["held"] + pinned
+    own = {e["id"] for e in p.evidence}
+    held = [i for i in parts["held"] + pinned if not E.derived_from(i, own)]
     if not held:
         return {"pass": False, "reason": "no held-out cases to prove it", "failures": []}
     build = responder_for(lr)
@@ -114,8 +137,11 @@ def gate_proposal(lr: Learner, p: Proposal) -> dict:
 # --- the night ----------------------------------------------------------------
 
 def candidates_for(lr: Learner, limit: int) -> list[dict]:
-    """Add candidates from held-back lessons (medium weight and up), then drop candidates from auto-promoted ones."""
+    """Add candidates from held-back lessons (medium weight and up), then drop candidates from auto-promoted ones.
+    Only ordinary lessons are added: not guarded, not gated (rule 5 keeps its critic, weight, session and held-out
+    checks in `apply_policy`) and with no critic objection. An add candidate never scores on its own evidence."""
     rt = lr.runtime
+    pol = lr.settings["promote"]
     st = load_state(rt.ledger)
     cfg = current_config(lr)
     promoted = {}
@@ -129,8 +155,10 @@ def candidates_for(lr: Learner, limit: int) -> list[dict]:
             break
         if _status(st, pid) != "proposed" or p.ptype not in ("taste", "fact") or p.guarded or p.confidence == "low":
             continue
+        if p.critic_note or p.ptype in pol["eval_gate_for"] or p.domain in pol["high_impact_domains"]:
+            continue
         out.append({"id": f"add:{pid}", "config": with_lesson(cfg, p), "domains": [p.domain, "general"],
-                    "note": p.claim, "kind": "add", "proposal": pid})
+                    "note": p.claim, "kind": "add", "proposal": pid, "exclude": [e["id"] for e in p.evidence]})
     for pid, auto in promoted.items():
         if len(out) >= limit:
             break
@@ -145,20 +173,22 @@ def candidates_for(lr: Learner, limit: int) -> list[dict]:
 def _sync_climb(lr: Learner, budget: E.Budget) -> dict:
     rt = lr.runtime
     cfg = current_config(lr)
+    st = load_state(rt.ledger)
     cands = candidates_for(lr, budget.candidates)
     accepted_kinds: dict[str, dict] = {c["id"]: c for c in cands}
     report = E.climb(rt.store, budget, incumbent={"id": config_id(cfg), "config": cfg}, candidates=cands,
-                     responder_for=responder_for(lr), grader=make_grader(lr), ledger=rt.ledger,
-                     policy=gate_policy(lr))
+                     responder_for=responder_for(lr), grader=make_grader(lr), items=eval_items(lr),
+                     ledger=rt.ledger, policy=gate_policy(lr), fingerprint=climb_fingerprint(lr))
     report["applied"] = []
     for cid in report["accepted"]:
         c = accepted_kinds[cid]
         try:
             if c["kind"] == "add":
-                proposal_accept(rt.store, rt.ledger, c["proposal"], author=rt.agent)
+                p = st.proposals[c["proposal"]]
+                r = proposal_accept(rt.store, rt.ledger, c["proposal"], author=rt.agent)
                 rt.ledger.append("note", {"type": "learn_promotion", "proposal_id": c["proposal"], "rule": 5,
-                                          "auto": True, "claim": c["note"], "ptype": "taste", "domain": "",
-                                          "via": "climb"})
+                                          "auto": True, "claim": c["note"], "ptype": p.ptype, "domain": p.domain,
+                                          "node": p.node_id, "via": "climb"}, refs=[r["event"]])
                 status = "kept"
             else:
                 revert(lr, c["proposal"], "eval: the candidate without this lesson scored better", follow_up=False)
@@ -182,8 +212,7 @@ def check_regression(lr: Learner, budget: E.Budget) -> list[dict]:
               if (ev["body"] or {}).get("type") == "learn_promotion"]
     if not recent:
         return []
-    items = E.load_items(rt.root, rt.ledger)
-    parts = E.split(items)
+    parts = E.split(eval_items(lr))
     pool = parts["dev"] + parts["held"]
     if not pool:
         return []

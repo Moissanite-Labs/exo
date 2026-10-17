@@ -1,8 +1,11 @@
 import asyncio
+import json
+
+import pytest
 
 from exo import eval as E
 from exo.consolidate import proposals_list
-from exo.learn import nightly
+from exo.learn import learned_since, nightly
 from exo.learn.climb import check_regression, current_config
 from exo.learn.promote import apply_policy
 
@@ -120,3 +123,81 @@ def test_nightly_off_without_a_store(make_engine):
     eng = make_engine(store=False)
     out = asyncio.run(nightly(eng))
     assert out["status"] == "off" and "learning is off" in out["reason"]
+
+
+@pytest.mark.parametrize("setting,ptype,extra", [
+    ({"high_impact_domains": ["mind"]}, "taste", {"critic_note": "one-off: they asked once in one session"}),
+    ({"high_impact_domains": ["mind"]}, "taste", {}),
+    ({"eval_gate_for": ["skill", "fact"]}, "fact", {}),
+    ({}, "taste", {"critic_note": "one-off: they asked once in one session"}),
+], ids=["gated-critic", "gated-one-session", "gated-type", "ungated-critic"])
+def test_nightly_climb_leaves_gated_and_objected_lessons_to_the_policy(learner, setting, ptype, extra):
+    """Rule 5 and D-054: a gated lesson keeps its critic, weight, session and held-out checks; the climb is no way
+    around them. No auto path promotes over a critic objection."""
+    rt = learner.runtime
+    learner.settings["promote"].update(setting)
+    write_qa(rt.root)
+    learner._complete = scripted_model()
+    res = propose(rt, ptype, evidence=[correction(rt, "plain status lines please", "s1")["id"]], **extra)
+    out = run(learner)
+    assert [d["action"] for d in out["promotions"]] in (["wait"], ["hint"])
+    assert out["climb"]["accepted"] == [] and not any(c["id"] == f"add:{res['id']}" for c in out["climb"]["candidates"])
+    assert status(learner, res["id"]) == "proposed"
+
+
+def test_nightly_climb_fails_a_lesson_with_no_held_out_case_in_its_domain(learner):
+    rt = learner.runtime
+    rows = [{"id": f"q{k}", "question": f"Write status line {k}", "gold": f"Status ok {k}",
+             "domain": "work" if E._hash_pct(f"q{k}") < 20 else "mind"} for k in range(24)]
+    (rt.root / "training").mkdir(parents=True, exist_ok=True)
+    (rt.root / "training" / "eval-qa.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    learner._complete = scripted_model()
+    res = propose(rt, evidence=[correction(rt, "plain status lines please", "s1")["id"]])
+    out = run(learner)
+    (c,) = [c for c in out["climb"]["candidates"] if c["id"] == f"add:{res['id']}"]
+    assert c["dev"]["better"] and (c["status"], c["reason"]) == ("gate_failed", "no held-out cases")
+    assert status(learner, res["id"]) == "proposed"
+
+
+def test_nightly_climb_records_what_it_kept(learner):
+    rt = learner.runtime
+    write_qa(rt.root)
+    learner._complete = scripted_model()
+    res = propose(rt, "fact", evidence=[correction(rt, "plain status lines please", "s1")["id"]])
+    out = run(learner)
+    assert out["climb"]["accepted"] == [f"add:{res['id']}"]
+    (note,) = [e for e in rt.ledger.iter(kind="note") if e["body"]["type"] == "learn_promotion"]
+    assert (note["body"]["ptype"], note["body"]["domain"], note["body"]["via"]) == ("fact", "mind", "climb")
+    assert rt.ledger.get(note["refs"][0])["kind"] == "belief_accepted"
+    assert any(line.startswith("Learned (fact, auto-promoted)") for line in learned_since(learner.engine))
+
+
+def test_nightly_climb_ignores_replays_the_principal_did_not_write(learner):
+    """D-040: a peer's question with the agent's exo_should_have_been verdict on the reply is not an eval case."""
+    rt = learner.runtime
+    learner._complete = scripted_model()
+    for k in range(6):
+        rt.ledger.append("utterance", {"text": f"Write status line {k}", "role": "user"}, "peer:other", session=f"p{k}")
+        a = rt.ledger.append("utterance", {"text": f"Status fine {k}", "role": "assistant"}, "agent", session=f"p{k}")
+        rt.ledger.append("verdict", {"verdict": "should_have_been", "target": a["id"], "wanted": f"Status ok {k}"},
+                         "agent", session=f"p{k}")
+    res = propose(rt, evidence=[correction(rt, "plain status lines please", "s1")["id"]])
+    out = run(learner)
+    assert out["climb"]["sizes"] == {"train": 0, "dev": 0, "held": 0}
+    assert out["climb"]["accepted"] == [] and status(learner, res["id"]) == "proposed"
+
+
+def test_nightly_rescores_the_incumbent_after_a_model_switch(learner):
+    """The cached incumbent scores belong to the models that made them: a lesson that changes nothing is not kept
+    because the main route got better overnight."""
+    rt = learner.runtime
+    write_qa(rt.root)
+    learner._complete = scripted_model(good_marker="never-matches")
+    res = propose(rt, evidence=[correction(rt, "plain status lines please", "s1")["id"]])
+    first = run(learner)
+    assert first["climb"]["accepted"] == [] and first["climb"]["start_composite"] == 0.0
+    learner.engine.router.roles["main"] = ["fake:newer"]
+    learner._complete = scripted_model(good_marker="never-matches", base_good=True)
+    out = run(learner)
+    assert out["climb"]["start_composite"] == 1.0 and out["climb"]["accepted"] == []
+    assert status(learner, res["id"]) == "proposed"

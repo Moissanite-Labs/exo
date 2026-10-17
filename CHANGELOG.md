@@ -27,6 +27,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- The nightly climb follows rule 5 and D-054. It no longer adds a gated lesson (a type in `eval_gate_for` or a
+  domain in `high_impact_domains`) or one with a critic objection: rule 5 alone promotes those, with its critic,
+  weight, session and held-out checks. A climb candidate with no held-out case in its domains fails the gate
+  instead of passing on zero cases. A climb promotion records the lesson's real type and domain for the brief.
+- Eval cases respect authorship (D-040): a replay comes only from the principal's own verdict, answer or ruling,
+  asked by the principal's own message. The agent's `exo_should_have_been` reports and peer messages no longer
+  become gold answers for the climb, the rule 5 gate or the regression check.
+- A lesson's own evidence is no longer its proof: the rule 5 gate and the climb ignore the replay or preference pair
+  built from the verdict the lesson cites. A skill whose only held-out case was its own evidence now fails the gate.
+- The climb's cached incumbent scores are scored again when the eval cases' contents, the checks, the rubric, the
+  judge samples or the main or eval route models change. Before, only the config and the case ids were checked,
+  so a lesson that changed nothing could be kept against stale scores.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
