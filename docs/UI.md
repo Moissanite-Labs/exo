@@ -80,6 +80,14 @@ when the window starts with `--session` or `--resume`, and after the core refuse
 roll-up is a `usage.updated` with no `model.call` before it. It adds to `COST`, adds the `+` when the child's calls
 had no price, and leaves `MEM`, `CACHE` and `MODEL` alone.
 
+The event feed starts once `hello` answers, whatever the rest of the boot does. When a later step fails, the window
+says `cannot start: ...` and still streams, so `/new` and a message work and their replies and approval cards show.
+A `--session ID` the core does not know (a typo, a deleted thread) opens a new thread with the note
+`no thread ID; started a new one`. One event the window cannot read does not end the feed. A value it does not
+know, such as a newer core's panel kind, is kept, and the panel shows its text fallback. An event that still fails
+to decode is skipped and logged under `exo.protocol.client`. If the feed itself dies, the window says
+`event feed stopped: ...` and tells the harness (D-025). `/restart` reopens the thread.
+
 ## The /providers panel
 
 `/providers` opens a modal in the same language: a cold `PROVIDERS` header rule, then one row per provider with a
