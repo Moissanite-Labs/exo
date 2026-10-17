@@ -27,6 +27,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- First run (user-readiness audit, blocker 1): the installer now copies the skill pack (`skills/` with
+  `MANIFEST.json`) into `$EXO_HOME/skills`, so `/intro` loads its `exo-intro` skill and exo-orchestra stops warning
+  "no skill manifest" at launch. Each pack skill is a marked folder that a re-run or `exo update` refreshes, and
+  skills you add there are kept. A skills folder or skill that links into the checkout is left alone. When the skill
+  is still missing, the terminal client shows a short orientation instead of sending a model turn that could only
+  improvise. A first intro that started but failed or got no reply is no longer sent again at every launch: the
+  composer offers `/intro` instead, and the one that completes still turns tutorial mode on.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

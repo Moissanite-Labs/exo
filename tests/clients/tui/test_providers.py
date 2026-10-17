@@ -7,7 +7,7 @@ import json
 
 import httpx
 import pytest
-from test_tui import FakeServerClient, make_engine, send, until
+from test_tui import FakeServerClient, install_intro_skill, make_engine, send, until
 
 from exo import providers_setup as ps
 from exo.core.models.router import load_catalog
@@ -65,6 +65,7 @@ def fakes(monkeypatch):
 
 
 def run(tmp_path, scenario, main_state=None, models=None, prepare=None, **kw):
+    install_intro_skill(tmp_path)  # the first-run intro turn needs it, as an installed home has it
     eng = make_engine(tmp_path)
     if prepare:
         prepare(eng)

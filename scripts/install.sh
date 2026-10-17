@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # install.sh: install Exo for any user on macOS or Linux.
 #
-#   one venv + exo (with the terminal client) + the `exo` command on PATH + the Exo plugins + an `exo models` check
+#   one venv + exo (with the terminal client) + `exo` on PATH + the Exo plugins and skill pack + an `exo models` check
 #   Hermes is NOT installed by default. Exo runs on its own core. `--with-hermes` adds the
 #   pinned Hermes Agent and its patch queue (kept until the wave 4 cutover).
 #
@@ -174,6 +174,7 @@ cat <<EOF
   venv          $VENV  ($([ "$PIP" -eq 1 ] && echo "$([ "$WITH_HERMES" -eq 1 ] && echo 'Hermes + ')exo" || echo skipped))
   command       $BIN_DIR/exo  (link to $VENV/bin/exo)
   core plugins  $EXO_HOME/plugins
+  skill pack    $EXO_HOME/skills
   Hermes home   $TARGET_HOME$([ "$HERMES_HOME_EXPLICIT" -eq 1 ] && echo '  (explicit)' || echo '  (optional, Exo-owned)')
 EOF
 
@@ -278,32 +279,82 @@ if { [ "$WITH_HERMES" -eq 1 ] || [ "$HERMES_HOME_EXPLICIT" -eq 1 ] || [ -n "${EX
   PDIRS+=("$TARGET_HOME/plugins")
 fi
 MARK=".exo-managed"
+foreign() { [ -e "$1" ] && [ ! -f "$1/$MARK" ]; }  # something is at $1 and Exo did not install it
+# copy_managed SRC DST LABEL [keep-tests]: copy a folder Exo ships to DST without caches (and without tests/ unless
+# keep-tests), then mark DST as Exo's. Says LABEL is up to date when nothing changed. Check foreign() first.
+copy_managed() {
+  local src="$1" dst="$2" label="$3" skip=tests
+  [ "${4:-}" = keep-tests ] && skip=.pytest_cache
+  if [ -f "$dst/$MARK" ] && diff -rq -x "$MARK" -x "$skip" -x __pycache__ -x .pytest_cache "$src" "$dst" >/dev/null 2>&1; then
+    [ -z "$label" ] || say "$label is up to date"
+    return 0
+  fi
+  [ -e "$dst" ] && run rm -rf "$dst"
+  run mkdir -p "$dst"
+  if [ "$DRY" -eq 1 ]; then
+    echo "+ copy $src -> $dst (without $([ "$skip" = tests ] && echo 'tests, ')caches)"
+  else
+    (cd "$src" && find . \( -name "$skip" -o -name __pycache__ -o -name .pytest_cache \) -prune -o -type f -print) |
+      while IFS= read -r f; do
+        mkdir -p "$dst/$(dirname "$f")"
+        cp -p "$src/$f" "$dst/$f"
+      done
+  fi
+  if [ "$DRY" -eq 1 ]; then echo "+ write $dst/$MARK"; else echo "installed by exo scripts/install.sh from $src" > "$dst/$MARK"; fi
+}
 for PDIR in "${PDIRS[@]}"; do
   [ -d "$PDIR" ] || run mkdir -p "$PDIR"
   for name in "${SELECTED[@]}"; do
-    src="$EXO_SRC/plugins/$name" dst="$PDIR/$name"
-    if [ -e "$dst" ] && [ ! -f "$dst/$MARK" ]; then
-      die "refusing: $dst exists and was not installed by Exo. Move it away or choose another install home."
-    fi
-    if [ -f "$dst/$MARK" ] && diff -rq -x "$MARK" -x tests -x __pycache__ -x .pytest_cache "$src" "$dst" >/dev/null 2>&1; then
-      say "plugin $name is up to date"
-      continue
-    fi
-    [ -e "$dst" ] && run rm -rf "$dst"
-    run mkdir -p "$dst"
-    # copy without tests and caches
-    if [ "$DRY" -eq 1 ]; then
-      echo "+ copy $src -> $dst (without tests, caches)"
-    else
-      (cd "$src" && find . \( -name tests -o -name __pycache__ -o -name .pytest_cache \) -prune -o -type f -print) |
-        while IFS= read -r f; do
-          mkdir -p "$dst/$(dirname "$f")"
-          cp -p "$src/$f" "$dst/$f"
-        done
-    fi
-    if [ "$DRY" -eq 1 ]; then echo "+ write $dst/$MARK"; else echo "installed by exo scripts/install.sh from $src" > "$dst/$MARK"; fi
+    foreign "$PDIR/$name" &&
+      die "refusing: $PDIR/$name exists and was not installed by Exo. Move it away or choose another install home."
+    copy_managed "$EXO_SRC/plugins/$name" "$PDIR/$name" "plugin $name"
   done
 done
+
+# The skill pack (skills/ with MANIFEST.json) goes to $EXO_HOME/skills, where the core's skill index and exo-orchestra
+# find it; /intro needs its exo-intro skill. Each pack skill is its own marked folder, as plugins are, so a skill you
+# add there is never touched, and a folder of yours with a pack skill's name is left alone and wins (an unmarked
+# exact copy of the pack's, say from a hand copy of skills/, is adopted). A marked skill the pack no longer has is
+# removed. The root marker says MANIFEST.json is Exo's too. A link (the skills folder, a skill or the manifest) is
+# never adopted, replaced or removed: it is yours, one into the checkout keeps the pack live there, and rm -rf
+# through it would delete what it points at.
+SKDIR="$EXO_HOME/skills"
+SKMAN="$EXO_SRC/skills/MANIFEST.json"
+if [ -f "$SKMAN" ] && [ "$SKDIR" -ef "$EXO_SRC/skills" ]; then
+  say "skill pack: $SKDIR resolves to $EXO_SRC/skills, so the pack is live there; left alone"
+elif [ -f "$SKMAN" ] && [ -L "$SKDIR" ]; then
+  warn "$SKDIR is a link Exo did not make; left alone, so the skill pack is not installed"
+elif [ -f "$SKMAN" ]; then
+  [ -d "$SKDIR" ] || run mkdir -p "$SKDIR"
+  count=0
+  for d in "$EXO_SRC"/skills/*/; do
+    name="$(basename "$d")"
+    dst="$SKDIR/$name"
+    if [ "${d%/}" -ef "$dst" ]; then
+      say "skill $name: $dst links to the pack's; left alone"
+      continue
+    elif [ -L "$dst" ] || { foreign "$dst" && ! diff -rq -x __pycache__ -x .pytest_cache "${d%/}" "$dst" >/dev/null 2>&1; }; then
+      warn "$dst was not installed by Exo; left alone (it stands in for the pack's $name skill)"
+      continue
+    fi
+    copy_managed "${d%/}" "$dst" "" keep-tests
+    count=$((count + 1))
+  done
+  for d in "$SKDIR"/*/; do
+    if [ ! -L "${d%/}" ] && [ -f "$d$MARK" ] && [ ! -d "$EXO_SRC/skills/$(basename "$d")" ]; then run rm -rf "${d%/}"; fi
+  done
+  man="$SKDIR/MANIFEST.json"
+  if [ -L "$man" ] || { [ -e "$man" ] && [ ! -f "$SKDIR/$MARK" ] && ! cmp -s "$SKMAN" "$man"; }; then
+    cmp -s "$SKMAN" "$man" || warn "$man was not written by Exo; left alone"
+  elif [ ! -f "$SKDIR/$MARK" ] || ! cmp -s "$SKMAN" "$man"; then
+    run cp -p "$SKMAN" "$man"
+    if [ "$DRY" -eq 1 ]; then echo "+ write $SKDIR/$MARK"; else
+      echo "installed by exo scripts/install.sh from $EXO_SRC/skills: MANIFEST.json and each folder holding $MARK." \
+        "Other skills here are yours." > "$SKDIR/$MARK"
+    fi
+  fi
+  say "skill pack: $count skills in $SKDIR"
+fi
 
 # Hermes plugins are opt-in. A config.yaml Exo creates enables them; an existing one is not edited.
 # Only written with --with-hermes: the default install has nothing that reads it.
