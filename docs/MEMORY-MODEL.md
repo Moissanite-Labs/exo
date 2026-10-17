@@ -190,6 +190,21 @@ content is the same once the summaries finish. Tests: `tests/core/test_turn_sett
   verbatim for good, and one `harness.error` event (`where` = `summary`) records it, so it shows in `exo trace` and
   findings once, not every turn.
 
+Undo also tells the context plugin. The core calls `on_session_switch(session, rewound=True, messages=,
+summaries=)` with every message left in the thread and the ids of the summary nodes still stored for its tree
+(`{tree key: [ids]}`). exo-context then drops each pin that no remaining principal message holds. It also drops
+each summary node it kept from `on_compacted` that the undo deleted, since the core may have restored the undone
+ruling in that node word for word. The undone turns leave the window it writes handoffs from when that window is
+the thread's, even if the engine is bound to another thread by then. Then it writes again, replacing that day's
+file, each automatic handoff that may quote them: one that lost a summary node, the thread's own when a pin went,
+and one written from the thread's window. On an agent tree a summary node goes to the thread that was newest, so
+that handoff may be another thread's. A file whose window has been replaced since is written from its summaries and
+pins alone. The pinned block links a handoff only if it is current. A handoff the principal wrote under its own
+topic with `/exo handoff` or `/exo branch` before the undo stays on disk as written, but is no longer linked. So does
+an automatic handoff written before the host last started, since exo-context keeps its summary nodes and its list of
+handoffs in memory. exo-context never puts an undone ruling back in the system message or in a handoff it writes
+after the undo. A ruling that was only summarized stays pinned.
+
 ## Who wrote it: every message has an author (D-040)
 
 Before D-040 the core decided "is this the principal?" by looking for tags that say it is not (a peer tag, a job
@@ -220,6 +235,12 @@ What uses it:
   messages, `principal: true|false`. exo-memory captures rulings and corrections only from principal messages and
   logs a peer's or job's turn under that author, not the principal's id.
 - The learning loop's chat capture (`record_chat_signals`) and `/handoff` pins read the same flags.
+- The context plugin's `select_context` gets `author` and `principal` on each message, with `principal` read from
+  the author alone. exo-context pins a ruling or correction, and quotes it in a handoff as the principal's words,
+  only from a principal message. A fork's copy of the principal's message keeps its author, so the child thread
+  pins it too (`is_principal` skips the copy, so capture does not take it twice). The recalled-memory block before
+  each turn is authored `system`. A pinned block inside peer, bus, job, tool or agent text is not carried into a
+  handoff.
 - Peer, bus and job text enters the context inside its own tag (`[peer message from ...]`, `[bus message from
   ...]`, `[job notice ...]`), with a closing line that says it is not the user.
 
