@@ -187,6 +187,9 @@ removes it from the address bar and sends it as `X-Exo-Token` on every call (D-0
 need a loopback peer). Without a token the tab only asks you to open that link. When no provider is ready, the Chat view shows one quiet line with a
 link to this tab.
 
+A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
+provider that was cooling down after a failure then takes the next message at once.
+
 ## Sub-pages (D-061)
 
 Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.css`, `site/roadmap/roadmap.css`).

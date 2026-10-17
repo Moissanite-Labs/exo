@@ -28,7 +28,7 @@ from exo_tui import theme as th
 from exo_tui.hero import Hero, hero_rows
 from exo_tui.boot import STEPS as BOOT_STEPS
 from exo_tui.boot import BootScreen
-from exo_tui.providers import ProvidersScreen, refuse_key_in_composer
+from exo_tui.providers import ProvidersScreen, refuse_key_in_composer, setup_advice
 from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, ComposeHeader, CompletionMenu,
                              EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
@@ -1527,7 +1527,7 @@ class ExoApp(App):
                     self.note(f"{needs[0]} is set up; choose a default model before /intro.")
                     await self.pick_provider_default(needs[0])
                 else:
-                    self.note("No model provider is set up yet. Type /providers to add a key." if not needs
+                    self.note(setup_advice((result.get("output") or {}).get("providers") or []) if not needs
                               else "Choose a default main model in /providers before /intro.")
                     self.open_providers()
             except Exception:  # the app closed while the check ran

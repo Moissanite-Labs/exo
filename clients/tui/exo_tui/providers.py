@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from urllib.parse import urlsplit
 
 from rich.console import Group
 from rich.text import Text
@@ -40,6 +41,19 @@ def refuse_key_in_composer(text: str) -> bool:
 def error_text(exc: BaseException) -> str:
     """What may be shown for a failure: a SetupError message, else only the exception class name."""
     return str(exc) if isinstance(exc, ps.SetupError) else type(exc).__name__
+
+
+def setup_advice(table: list[dict[str, Any]]) -> str:
+    """The first-run note when nothing can serve main. A key helps only a keyed default: a keyless local server
+    must be started, a CLI installed or logged in."""
+    r = next((r for r in table if r.get("default") and not r.get("ready")), {})
+    if r.get("needs") == "server":
+        where = urlsplit(r.get("base_url") or "").netloc or "its address"
+        return f"{r['provider']} is not running at {where}: start it, then test it in /providers."
+    if r.get("needs") == "cli":
+        fix = "log in" if r.get("status") == "not logged in" else "install it and log in"
+        return f"{r['provider']} is {r.get('status') or 'not ready'}: {fix}, then test it in /providers."
+    return "No model provider is set up yet. Type /providers to add a key."
 
 
 def status_chip(r: dict[str, Any]) -> Text:
@@ -301,6 +315,7 @@ class ProvidersScreen(ModalScreen):
                 ms = out.get("latency_ms")
                 n = out.get("models")
                 self.say(f"{name} ok" + (f" {DOT} {ms}ms" if ms else "") + (f" {DOT} {n} models" if n else ""))
+                await self.tell_core(name)  # the core retries it now: its cooldown and route breaker clear
             else:
                 self.say(f"{name} failed: {out.get('error_class') or 'error'} {DOT} {out.get('detail') or ''}")
             await self.reload()

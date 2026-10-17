@@ -242,7 +242,7 @@ Override any role in `[models.roles]` in your config.
 A route that keeps failing is skipped instead of costing every turn a failed try. After `failures` consecutive
 retryable failures (429, 5xx, timeouts, or an upstream-unavailable 400) the route is skipped for `cooldown_s`.
 Then one trial call is allowed: success clears the route, failure skips it again for twice as long, up to
-`max_cooldown_s`. State is in memory, per process, and `exo providers` key changes reset it. If every route
+`max_cooldown_s`. State is in memory, per process. Key changes and a passing test reset it. If every route
 of a role is skipped, they are all tried anyway. The trip is logged once: the attempt that opened the breaker
 carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Config, in `[models.breaker]`:
 
@@ -258,6 +258,26 @@ carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Conf
 | decision | Jev (`jev:jev-latest`), then local Laya (`laya:laya`) | aux, then main |
 | eval | empty, which means the `main` route | main |
 | fast, standard, deep | Haiku, Sonnet, Opus | standard, then main |
+
+### When every route fails
+
+The error says why. When waiting cannot fix the cause, it also says what will, and the turn is not retried:
+
+- The last route tried refused its key (HTTP 401, 402 or 403): `anthropic rejected the key (HTTP 401: invalid
+  x-api-key): fix ANTHROPIC_API_KEY or add a key in /providers`. A provider with no key, such as `claude-cli`,
+  asks you to log in again instead. The key stays benched for its cooldown (5 minutes after a 401). Calls in that
+  time repeat the cause, not a wait, unless another route of the role reopens sooner.
+- A local provider's server refused the connection: `ollama is not running at 127.0.0.1:11434: start it, then
+  test it in /providers`.
+
+Other failures (429, 5xx, timeouts, a remote network error) stay retryable and say when the next route reopens.
+The two errors above still carry `retry_after`, the time the route reopens. A background summary that failed on
+one tries again then instead of giving up on the span (`docs/MEMORY-MODEL.md`).
+A passing test in `/providers` (`t`) or in the web Providers tab tells the running core to reload that provider.
+Its cooldown and breaker clear, so the next message reaches it at once. An environment variable still wins over a
+saved key: change it in the shell that starts Exo, then restart Exo. If no provider can serve the main role, the
+terminal client's first run says what the default needs. A keyed provider needs a key. A local server must be
+started, and a CLI must be installed and logged in.
 
 ## See what is set
 

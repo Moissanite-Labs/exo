@@ -77,8 +77,10 @@ for a local server), where the key comes from (env, keychain, secret-service or 
 and an orange default mark. Key chips: `[a]` add or replace a key, `[t]` test, `[r]` remove (asks y or n), `[d]` pick
 the default model, `[esc]` close (leaving a panel is soft; Esc never stops a turn, ctrl+c or `/stop` does). `[a]` opens a small modal with one masked field; the key never goes through the
 composer, the transcript or any log, and a key typed after `/providers add <name>` in the composer is refused and
-not echoed. After a change the client tells a running core to read keys again. At start, if no provider is ready,
-one note says to type `/providers`.
+not echoed. After a key change, or a test that passes, the client tells a running core to read keys again. That
+also clears the provider's cooldown and route breaker, so the next message reaches it. At start, if no provider is
+ready, one note says what the default needs: a key, a running local server (with its address), or a CLI that is
+installed and logged in.
 
 ## Focus, the big composer and the inverse layout (D-046)
 
