@@ -131,6 +131,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   which hung the core (cancel could not stop it) or read `/dev/zero` until memory ran out, and `read_file` and
   `edit_file` refuse files over 50 MB. `code_find` passes the question to jg after `--`, so a question such as
   `- --include-sensitive` can no longer turn off jg's sensitive-file filter (docs/TOOLS.md).
+- Streamed `bash` output no longer leaks a known key split between two reads. The output went out per 64 KiB read
+  and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
+  halves. A read now holds back an ending that could start a key until the next read. The stream and the result also
+  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
 
 ## [0.2.0] (egg) - 2026-10-13
 
