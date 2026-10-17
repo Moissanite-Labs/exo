@@ -104,9 +104,14 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   a focused button shortcut, or clicking Always) requires a separate Enter or Confirm always button; Escape,
   another key, Cancel, or leaving the card cancels confirmation. Deny opens an optional note. The page reconciles
   its cards with the server's list on every thread open and stream reconnect, and the server asks the core first,
-  so a card the core no longer holds is dropped (D-045). Taste, diff and the
-  other panels are cold. A peer message has the sender in the header, a grey rule and the line "from another
-  session, not from you": it never looks like the user. Panels and new transcript items reveal on arrival.
+  so a card the core no longer holds is dropped (D-045). A card with no thread (a held peer message that no live
+  session could take) shows in every thread, as in the terminal client. Taste, diff and the other panels are cold.
+  A dismissed panel stays closed. The core sends no `ui.panel` close for a dismissal, so the page drops the panel
+  from its own list as well, and the next panel event, a tab switch or a reconnect does not bring it back. A peer
+  message has the sender in the header, a grey rule and the line "from another session, not from you": it never
+  looks like the user. That holds after a reload or a thread switch too. A stored peer, bus or job message
+  (`meta.peer`, `meta.bus`, `meta.job`) is the same card with its real author (`Bus · <seat>`, `Job · <id>`), and a
+  live `peer.message` and its stored message make one card. Panels and new transcript items reveal on arrival.
 - **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
   `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
