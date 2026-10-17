@@ -26,6 +26,7 @@ from exo.core.hooks import maybe_await
 from exo.core.loop import Loop
 from exo.core.private import private_file
 from exo.core.models.router import TIERS
+from exo.core.seats import list_seats
 from exo.core.sessions import new_id
 from exo.protocol import schema as s
 
@@ -107,6 +108,7 @@ class Scheduler:
         self._wake = asyncio.Event()
         self._main: asyncio.Future[None] | None = None
         self.error_pause = 5.0  # seconds to wait after a failed tick, so a persistent fault does not spin
+        self.poll = 60.0  # longest sleep: a job another seat's core adds or resumes in this home starts in time
 
     # ------------------------------------------------------------ jobs
 
@@ -125,6 +127,8 @@ class Scheduler:
             raise ValueError("a job needs a prompt")
         if tier not in TIERS:
             raise ValueError(f"tier must be one of {', '.join(TIERS)}")
+        if seat and not self.mine({"seat": seat}) and seat not in {x["name"] for x in list_seats(self.engine.home)}:
+            raise ValueError(f"no seat {seat!r}: a job bound to it would never run")
         nxt = next_run(when, self.clock())  # also validates the line
         jid = new_id("j")
         self.db.execute("INSERT INTO jobs (id,title,\"when\",prompt,seat,tier,deliver,paused,next_run) VALUES (?,?,?,?,?,?,?,0,?)",
@@ -149,9 +153,14 @@ class Scheduler:
 
     # ------------------------------------------------------------ running
 
+    def mine(self, job: dict[str, Any]) -> bool:
+        """Seats of one home share the jobs table: a job bound to a seat runs only in that seat's core."""
+        return not job["seat"] or job["seat"] == getattr(self.engine, "agent", None)
+
     def due(self, now: float | None = None) -> Jobs:
         now = self.clock() if now is None else now
-        return [j for j in self.list() if not j["paused"] and j["next_run"] is not None and j["next_run"] <= now]
+        return [j for j in self.list() if self.mine(j) and not j["paused"] and j["next_run"] is not None
+                and j["next_run"] <= now]
 
     async def tick(self) -> Strs:
         """Start every due job (once each, however many slots were missed); returns the job ids started."""
@@ -159,8 +168,12 @@ class Scheduler:
         for job in self.due():
             if job["id"] in self.running:
                 continue
-            self.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (next_run(job["when"], self.clock()), job["id"]))
+            # Claim the slot: another seat's timer may have moved next_run (or someone paused it) since due() read it.
+            cur = self.db.execute("UPDATE jobs SET next_run=? WHERE id=? AND next_run=? AND paused=0",
+                                  (next_run(job["when"], self.clock()), job["id"], job["next_run"]))
             self.db.commit()
+            if cur.rowcount != 1:
+                continue
             self.launch(job)
             started.append(job["id"])
         return started
@@ -282,7 +295,8 @@ class Scheduler:
         while True:
             try:
                 await self.tick()
-                nxt = [j["next_run"] for j in self.list() if not j["paused"] and j["next_run"] is not None]
+                nxt = [j["next_run"] for j in self.list()
+                       if self.mine(j) and not j["paused"] and j["next_run"] is not None]  # not another seat's
                 delay = max(0.0, min(nxt) - self.clock()) if nxt else 3600.0
             except asyncio.CancelledError:
                 raise
@@ -292,7 +306,7 @@ class Scheduler:
                 continue
             self._wake.clear()
             try:
-                await asyncio.wait_for(self._wake.wait(), min(delay, 3600.0) + 0.05)
+                await asyncio.wait_for(self._wake.wait(), min(delay, self.poll) + 0.05)
             except asyncio.TimeoutError:
                 pass
 
@@ -318,6 +332,8 @@ async def handle_schedule_edit(sch: Scheduler, body: Any) -> dict[str, Any]:
             return {"job": sch.pause(b.get("job_id"), act == "pause")}
         if act == "run_now":
             job = sch.get(b.get("job_id"))
+            if not sch.mine(job):
+                return {"job": job, "error": f"this job belongs to seat {job['seat']!r}; run it from that seat"}
             task_id = sch.launch(job)
             return {"job": job, "task_id": task_id} if task_id else {"job": job, "error": "already running"}
     except ValueError as exc:

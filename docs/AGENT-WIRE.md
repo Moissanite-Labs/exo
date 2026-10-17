@@ -244,7 +244,8 @@ waits for it to stop cleanly; a child's own `delegate` call is cancelled the sam
 stops. `turn.interrupt` on a child session stops just that child, and the parent gets a cancelled receipt.
 
 **Outcomes.** done; failed with a reason code (`timeout`, `turns`, `budget`, `error`); cancelled (`cancelled`
-by the parent, `interrupted` by a client). After a restart, tasks left queued or running are marked failed.
+by the parent, `interrupted` by a client). After a restart, the agent's own tasks left queued or running are
+marked failed once its core holds the writer lock (`run/agent-<id>.lock`).
 
 **Protocol.** `tasks.list` now works (rows with English `detail`, the brief and receipt lines, signature).
 `exo chat` prints `[task running]` and `[task done]` lines.

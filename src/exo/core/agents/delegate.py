@@ -144,10 +144,15 @@ class Delegator:
         self.over: set[str] = set()           # children stopped for their token budget
         self.marks: dict[str, list[str]] = {}  # child -> "steered by ..." notes for its receipt (exo.subagents, #97)
         self.sems: dict[int, asyncio.Semaphore] = {}
-        db = engine.store
-        db._q(TABLE)
-        db._q("UPDATE tasks SET status='failed', updated=? WHERE status IN ('queued','running') "
-              "AND (child IS NULL OR child NOT LIKE 'bus:%')", (s.now_ts(),))
+        engine.store._q(TABLE)
+
+    def fail_stale(self) -> None:
+        """Fail this agent's tasks a dead process left queued or running. ``claim_writer`` calls it, so another
+        seat's core, or a second core of this seat that fails the lock, never touches live tasks."""
+        a = getattr(self.engine, "agent", "default")
+        self.engine.store._q("UPDATE tasks SET status='failed', updated=? WHERE status IN ('queued','running') AND "
+                             "(child IS NULL OR child NOT LIKE 'bus:%') AND (parent IN (SELECT id FROM sessions WHERE "
+                             "agent=?) OR child IN (SELECT id FROM sessions WHERE agent=?))", (s.now_ts(), a, a))
 
     def install(self) -> None:
         self.engine.registry.register(SPEC, self.tool, replace=True)

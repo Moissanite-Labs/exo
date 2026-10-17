@@ -27,6 +27,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Two seats in one `$EXO_HOME` now run side by side. Each core numbered events from its own counter, so the core
+  that fell behind failed every publish with a UNIQUE constraint error until it restarted. The database now numbers
+  each event past the table's highest. Starting any core, even one that then failed the writer lock, also marked
+  every agent's running delegate tasks failed. Now only an agent's writer fails its own leftovers.
+- Scheduled jobs on a home with several seats: both seats' timers ran the same due job, and a job's `seat` was
+  never read, so a job for one seat could run as another. A timer now claims the slot before it runs it, a
+  seat-bound job runs only in its seat, `run_now` from another seat is refused, and `add` refuses a seat no core
+  could run.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

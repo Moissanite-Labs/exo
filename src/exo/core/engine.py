@@ -319,6 +319,7 @@ class CoreRuntime:
         """Become the one writer of this agent's log and tree (raises agentlog.WriterBusy if another process is)."""
         if self._writer is None:
             self._writer = agentlog.claim_writer(self.home, self.agent)
+            self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
         agentlog.release_writer(self._writer)

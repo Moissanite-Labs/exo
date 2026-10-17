@@ -87,3 +87,21 @@ values shaped like API keys. Changes apply on the next start.
 A plugin calls `register_channel(name, factory)`. For each channel a seat (or `channels` in config.json)
 enables, `exo serve` calls `factory(link, **config)` with a real protocol `Client` on the server socket, runs
 `start()` after the server listens, and `stop()` on shutdown.
+
+## Several seats in one home
+
+Seats whose files sit in one `$EXO_HOME` run side by side. With no `exo serve` on the home's `run/exod.sock`,
+`exo tui --seat scout` and `exo tui --seat forge` are two cores, one per seat. So are two `exo serve --seat NAME`,
+each with its own `--socket`. A TUI window joins a server on `run/exod.sock` whatever its `--seat`, so it then talks
+to that server's seat. Each core holds its own writer lock (`run/agent-<seat>.lock`, see docs/MEMORY-MODEL.md), and
+all of them use the home's `sessions.sqlite` and `schedule.sqlite`.
+
+- **Events.** Each core numbers its own events, and the database raises a number past the table's highest inside
+  the write transaction, so two cores never reuse one. One core's stream still rises, with gaps where the other
+  seat wrote. Replay goes by number, not by seat: a client that subscribes with no session filter also gets the
+  other seat's events.
+- **Delegate tasks.** A core fails the queued or running tasks a dead process left behind only for its own agent,
+  and only once it holds the writer lock. Another seat's core, or a second core of the same seat that fails the
+  lock, leaves live tasks alone.
+- **Scheduled jobs.** A job with a `seat` runs only in that seat's core, and each due slot runs once
+  (docs/SCHEDULE.md).
