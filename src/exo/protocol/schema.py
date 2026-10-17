@@ -89,7 +89,7 @@ class SessionInfo:
     created: str = ""
     updated: str = ""
     message_count: int = 0
-    status: str = ""  # set by session.list: "live" while a turn runs, else "idle"
+    status: str = ""  # set by session.list, session.get and session.resume: "live" while a turn runs, else "idle"
     agent: str | None = None  # the agent (seat) whose one memory this thread belongs to (D-028)
     kind: str = ""  # thread, private, scheduled or subagent; empty for a session outside any agent
 
