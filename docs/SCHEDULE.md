@@ -39,3 +39,11 @@ Jobs live in `$EXO_HOME/schedule.sqlite`. `exo serve` runs the timer. A one-shot
   itself, that is recorded too (`scheduler loop`) and a
   warning notice is shown.
 - Runs missed while the engine was down happen once at start, not once per missed slot.
+
+## Clock changes
+
+Cron fields are local time, and a job's next run is always later than now. When clocks go back, an hour comes
+twice. A job that ran in the first pass of that hour does not run again in the second: `30 1 * * *` runs once,
+and `*/15 * * * *` goes from 01:45 to 02:00. A job added, resumed or overdue during the second pass counts from
+that pass's time: added at 01:20 there, `*/15 * * * *` runs at 01:30, 10 minutes later. When clocks go forward, a slot in the skipped hour runs an hour later: where 02:00 jumps
+to 03:00, `30 2 * * *` runs at 03:30 that day. `every` jobs count real time and do not move.

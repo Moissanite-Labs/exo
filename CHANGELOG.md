@@ -27,6 +27,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Scheduled jobs when clocks go back: a cron job added, resumed or overdue in the repeated hour's second pass got
+  a next run in the hour's first pass, up to an hour in the past, so the timer ran it again each time a run ended
+  until that hour was over. The next run is now always later than now (`docs/SCHEDULE.md`, "Clock changes").
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
