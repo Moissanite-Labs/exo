@@ -231,8 +231,16 @@ def cmd_update(argv: list[str], run: Runner = _run, *, read: Runner | None = Non
               'Re-run scripts/install.sh from a checkout.', file=sys.stderr)
         return 1
     if '--dry-run' in argv or '-n' in argv:
+        from . import update_verify
+        try:
+            signed = update_verify.required()
+        except ValueError as e:
+            print(f'exo update: {e}', file=sys.stderr)
+            return 1
         print(f'exo update ({p["mode"]} install, now {display_version()})')
         print('preflight: clean checkout, installer, target pip or uv pip; no probes in dry run')
+        print('signed check: ' + ('on: fetch, verify the upstream tip against the pin, merge --ff-only that '
+                                  'commit instead of the pull' if signed else 'off (update.require_signed)'))
         for step in p['steps']:
             print('+ ' + ' '.join(step))
         print('dry run: nothing changed (pip step uses uv pip if pip is missing)')

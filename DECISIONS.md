@@ -1355,6 +1355,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   every later key change visible. Opt-in because the project does not sign releases yet.
 - **Limits:** trust on first use of the pin; SSH signatures only; commit signatures, not tags; `uv tool` installs
   cannot be verified. A key compromise needs the pin edited by hand.
+- **Amended 2026-10-17:** three gaps closed. git chooses the verify backend from the signature's armor, not from
+  `gpg.format`, so an OpenPGP or X.509 signature went to the local gpg keyring and never read the pin. The check now
+  switches both backends off and requires an SSH signature header. A `config.json` that exists but cannot be read,
+  or a `require_signed` that is not a boolean, refuses the update instead of reading as off. Once a pin exists,
+  `--pin-trust REV` takes a different list only if the commit that last changed it in REV's first-parent history
+  verifies against the current pin. The commit that set the list is checked, not REV, because the documented
+  rotation pins `@{u}` when later commits are signed only by the new key. No override flag: the hand edit above is
+  the override. A list a pinned key signed earlier can still be pinned again (no rollback protection).
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
 
 ## D-077 (2026-10-15) Core budget: a ratchet with headroom, functionality and robustness first
