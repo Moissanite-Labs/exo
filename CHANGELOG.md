@@ -27,6 +27,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Security
+- The gate reads the array subscript in the variable names of `printf -v`, `read`, `declare`, `typeset`, `local`,
+  `unset`, `test -v`/`[ -v` and `wait -p` (#179, D-038). Bash runs a `$( )` or backticks there even inside single
+  quotes, so `printf -v 'a[$(gh pr comment ...)]' %s x` was allowed; it is now a `github_post`. Bash also evaluates
+  the command's output or a variable's value there, so any expansion or quoting in such a subscript asks
+  (`unset "arr[$i]"` and `printf -v 'a[$(date)]' %s x` were allowed and now ask).
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

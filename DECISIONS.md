@@ -772,6 +772,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+  *Amendment 2026-10-17 (issue #179):* bash runs a `$( )` or backticks inside the array subscript of a variable
+  name, even when the name is single-quoted, so `printf -v 'a[$(gh pr comment ...)]' %s x` was `read` (allow). The
+  name arguments of `printf -v`, `read`, `declare`, `typeset`, `local`, `unset`, `test -v`/`[ -v` and `wait -p`
+  are now read for a subscript: each command in it is classified like a `$( )`, and since bash evaluates the
+  command's output (or a variable's value) as arithmetic too, any expansion or quoting there also asks through the
+  `indirection` signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
+  without expansion and plain names keep their class; a bare name such as `a[i]` is a known limit (GATE.md).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

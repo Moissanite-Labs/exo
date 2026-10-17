@@ -908,6 +908,67 @@ def _stdin_texts(k: _Cmd, piped: str | None) -> list[str]:
     return out
 
 
+# Builtins that take a variable name and evaluate an array subscript in it as arithmetic, which runs any
+# $( ) or ` ` there (#179): program -> (options whose value is a name, options with another value, operands are names).
+_NAME_BUILTINS = {"printf": ("v", "", False), "read": ("a", "dinNptu", True), "declare": ("", "", True),
+                  "typeset": ("", "", True), "local": ("", "", True), "unset": ("", "", True),
+                  "wait": ("p", "", False), "test": ("v", "", False), "[": ("v", "", False)}
+
+
+def _subscript_parts(prog: str, args: list[str], cmd: str, depth: int, done: list[str]) -> list[Classification]:
+    """The commands inside the array subscripts of a name-taking builtin's name arguments, whatever their quoting
+    (`done`: bodies the line's own parse already classified). Any expansion there also asks: bash evaluates its
+    value (a variable's, or a $( )'s output) as arithmetic too, and a value such as `b[$(cmd)]` runs cmd."""
+    named, valued, operands = _NAME_BUILTINS[prog]
+    names, i, opts = [], 0, True
+    while i < len(args):
+        a, i = args[i], i + 1
+        if prog in ("test", "["):
+            if a == "-v" and i < len(args):
+                names.append(args[i])
+            continue
+        if opts and a == "--":
+            opts = False
+        elif opts and len(a) > 1 and a[0] in "-+":
+            for n, letter in enumerate(a[1:], 2):
+                if letter in named + valued:
+                    val = a[n:] or (args[i] if i < len(args) else "")
+                    i += 0 if a[n:] else 1
+                    names += [val] if letter in named else []
+                    break
+        elif operands:
+            names.append(a)
+            opts = False
+        else:
+            break
+    parts: list[Classification] = []
+    for name in names:
+        m = re.match(r"[^=\[]*\[", name)
+        if not m:
+            continue
+        lx, level, other, q = _Lexer(name), 1, False, ""
+        lx.i = m.end()
+        while lx.i < len(name) and level:     # to the ] that ends it as bash finds it: a quote or \ hides a ]
+            ch = name[lx.i]
+            if ch == "`" or name.startswith(("$(", "${"), lx.i):   # read in any quoting, as bash does
+                (lx._dollar if ch == "$" else lx._backtick)(_Word())
+                other = True
+                continue
+            if ch == "\\" and q != "'" and name[lx.i + 1:lx.i + 2] not in ("$", "`"):
+                lx.i += 1
+            elif ch in "'\"" and q in ("", ch):
+                q = "" if q else ch
+            elif not q:
+                level += {"[": 1, "]": -1}.get(ch, 0)
+            other = other or ch in "\\'\"$"   # quoting or a variable: bash reads it, the gate does not
+            lx.i += 1
+        parts += [classify_shell(sub, depth + 1) for sub in lx.subs if depth < _DEPTH and sub not in done]
+        if other:   # a signal, not an opaque part, so a deny on another part of the line still wins
+            why = f"{prog} evaluates an array subscript the gate cannot read ({name[:40]})"
+            parts.append(_make("read", summary=why[:120], command=cmd, signals=["indirection"]))
+    return parts
+
+
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
     """One simple command into its parts: the program's own category, the redirections, anything run
     inside it, and a store write when it touches the store."""
@@ -924,6 +985,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(classify_shell(split, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
+        if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
+            parts += _subscript_parts(words[0].text, [w.text for w in words[1:]], cmd, depth, ctx.get("subs", []))
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
     if sudo:
@@ -1235,7 +1298,7 @@ def _piped_text(k: _Cmd) -> str | None:
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part."""
     cmds, subs, func = _parse(cmd or "")
-    ctx: dict = {}
+    ctx: dict = {"subs": subs}
     parts: list[Classification] = []
     prev: _Cmd | None = None
     for k in cmds:
