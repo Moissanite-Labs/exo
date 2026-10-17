@@ -11,6 +11,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
 
 ### Changed
+- Web `/model` and `/default` (#146): the composer opens a model picker or sets the route without starting a model
+  turn, and a failed change keeps the line in the box. `/model` goes through the core's principal-only `models.set`
+  (`POST /api/chat/sessions/<id>/model`); `/default` saves through the loopback-only provider routes. A command the
+  page does not run, from the core's list (`/grants`) or the terminal client's own (`/help`, `/quit`), or a near typo
+  of one, stays in the box with a note; until the page has the command names, every `/name` line waits, and a failed
+  load is asked again. `/tmp is full` and other lines close to no command by the TUI's rule are still sent as messages
+  (D-037). A `bad_model` or `bad_request` core error now answers 400, not 502, on every route of the web plugin's
+  `api.py` table (chat, tasks, schedule, feedback), not only `/model`.
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,
   `/findings`, handoff facts) moved to `exo.diagnostics`, and the engine factory moved to `exo.compose:create`, the

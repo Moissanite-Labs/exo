@@ -42,7 +42,9 @@ export function emit(e){seq=e.seq;listener(e);} export function recover(){stateL
     (tmp_path / "panels.mjs").write_text('export const renderPanel=()=>null;')
     (tmp_path / "hero.mjs").write_text('export const createHero=()=>({start(){},stop(){}});')
     (tmp_path / "composer.mjs").write_text('''import {h} from "./dom.mjs";
-export const attachComposer=()=>({guideEl:h("div"),menuEl:h("div"),note(){},sent(){},stop(){},typo(t){return t.startsWith("/contex ")?{guess:"context",line:"/context"}:null;}});
+export const attachComposer=()=>({guideEl:h("div"),menuEl:h("div"),note(){},sent(){},stop(){},ready:()=>globalThis.namesLoaded!==false,
+  elsewhere:n=>n==="grants"?"core":["help","quit","usage"].includes(n)?"client":"",
+  typo(t){return t.startsWith("/contex ")?{guess:"context",line:"/context",here:true}:t.startsWith("/grant ")?{guess:"grants",line:"/grants list",here:false}:null;}});
 ''')
     (tmp_path / "layout.mjs").write_text('''export const getLayout=()=>"classic", setLayout=()=>{}, ordered=x=>x, homeScroll=()=>0, nearHome=()=>true, columnOrder=()=>["banner","stage","approvals","status","steer","guide","composer","menu"], LAYOUTS=["classic","inverse"];''')
     (tmp_path / "test.mjs").write_text(r'''
@@ -52,12 +54,15 @@ globalThis.document={getElementById:()=>null,addEventListener(){},removeEventLis
 globalThis.sessionStorage={getItem:k=>k==="xc-token"?"tok":null,removeItem(){}}; globalThis.requestAnimationFrame=f=>f();
 let messages=[{id:"u1",role:"user",content:[{text:"hello"}]},{id:"a1",role:"assistant",content:[{text:"original answer"}]}], status="idle", hold=null, snapshotSeq=100;
 const requests=[];
-let refuseModel=false, holdModel=null;
+let refuseModel=false, holdModel=null, refuseDefault=null, refuseList=false, holdList=null, failHeldList=false;
 const report={schema_version:1,model:"fake:x",capacity:8192,text:"A report with no parseable token labels",tokens:{system:1,tree:2,notes:3,tail:4194,total:4200},tree:{summaries:1,nodes:2},nodes:{done:2,pending:0},log_entries:4,frontier:2};
 globalThis.mockApi=async (method,path,body)=>{
   requests.push({method,path,body});
   if(path.endsWith("/model") && refuseModel)throw Error("principal required");
   if(path.endsWith("/model") && holdModel)await holdModel;
+  if(path==="/api/providers/default" && refuseDefault)throw Object.assign(Error(refuseDefault[1]),{status:refuseDefault[0]});
+  if(path==="/api/chat/models" && refuseList)throw Error("models list failed");
+  if(path==="/api/chat/models" && holdList){const wait=holdList;holdList=null;await wait;if(failHeldList)throw Error("late list failed");}
   if(path==="/api/chat/sessions" && method==="GET"){if(hold) await hold; return {sessions:[{id:"s1",model:"fake:x",status}]};}
   if(path==="/api/chat/sessions" && method==="POST")return {session:{id:"s1"}};
   if(path.endsWith("/command"))return {output:body.name==="context"?report:{open:0}};
@@ -86,12 +91,15 @@ bus.emit({seq:103,session:"s1",type:"message.delta",body:{message_id:"a1",text:"
 assert.ok(!log.textContent.includes("duplicated"));
 status="idle"; report.capacity=null;bus.recover();await settle();
 assert.match(strip.textContent,/idle/);assert.match(strip.textContent,/capacity unknown/);
-for(const line of ["/etc/hosts is broken", "/context/file is broken", "/layout/file is broken", "/new/file is broken"]){
+// D-037: a /word that names no command, and is near none, is message text (#150 review: paths and /me are not held).
+for(const line of ["/etc/hosts is broken", "/context/file is broken", "/layout/file is broken", "/new/file is broken",
+                   "/tmp is full, what can I delete?", "/home is on another disk", "/var keeps growing", "/me waves", "/v2 is out",
+                   "/frobnicate keep draft", "/xyzzy plugh"]){
   input.value=line;await send.attrs.onclick();await settle();
   assert.equal(requests.findLast(x=>x.path.endsWith("/send")).body.text,line);
 }
 let count=requests.filter(x=>x.path.endsWith("/send")).length;
-for(const line of ["/frobnicate", "/unknown-command", "/MODEL fake:y"]){
+for(const line of ["/grants", "/grant list", "/MODEL fake:y"]){
   input.value=line;await send.attrs.onclick();await settle();
   assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);
 }
@@ -107,8 +115,69 @@ assert.deepEqual(requests.findLast(x=>x.path==="/api/providers/default").body,{r
 input.value="/default";await send.attrs.onclick();await settle();
 assert.equal(nodes.findLast(x=>x.attrs["aria-label"]==="Default model").tagName,"SELECT");
 const before=requests.length;input.value="/model -bad";await send.attrs.onclick();assert.equal(requests.length,before);
-input.value="/frobnicate keep draft";await send.attrs.onclick();assert.equal(input.value,"/frobnicate keep draft");
+input.value="/grants revoke g1";await send.attrs.onclick();assert.equal(input.value,"/grants revoke g1");
+assert.match(strip.textContent,/\/grants runs in exo tui/);
+input.value="/grant list";await send.attrs.onclick();assert.equal(input.value,"/grant list");assert.match(strip.textContent,/did you mean \/grants/);
+// The terminal client's own commands are held too, with the draft, rather than starting a turn (#146).
+for(const line of ["/help", "/quit", "/usage today"]){
+  input.value=line;await send.attrs.onclick();await settle();
+  assert.equal(input.value,line);assert.match(strip.textContent,/runs in the terminal client/);
+}
+// Until the command names load, any /name line waits in the box; plain text still goes.
+globalThis.namesLoaded=false;
+input.value="/tmp is full";await send.attrs.onclick();await settle();
+assert.equal(input.value,"/tmp is full");assert.match(strip.textContent,/commands are still loading/);
+globalThis.namesLoaded=true;
 assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,count);
+// A failed /default, a failing models list and the loopback-only provider routes (D-034) all keep the draft.
+refuseDefault=[400,"unknown model nosuch:m"];input.value="/default nosuch:m";await send.attrs.onclick();await settle();
+assert.equal(input.value,"/default nosuch:m");assert.match(strip.textContent,/unknown model/);
+globalThis.location={hostname:"192.168.1.20"};refuseDefault=[403,"provider routes answer loopback clients only"];
+input.value="/model default fake:y";await send.attrs.onclick();await settle();
+assert.equal(input.value,"/model default fake:y");assert.match(strip.textContent,/only a page opened at 127.0.0.1 or localhost/);
+globalThis.location={hostname:"127.0.0.1"};
+input.value="/default fake:y";await send.attrs.onclick();await settle();
+assert.equal(input.value,"/default fake:y");assert.match(strip.textContent,/loopback clients only/);refuseDefault=null;
+refuseList=true;input.value="/model";await send.attrs.onclick();await settle();
+assert.equal(input.value,"/model");assert.match(strip.textContent,/models list failed/);refuseList=false;
+// A late /model list never replaces the /default picker opened after it.
+let releaseList;holdList=new Promise(r=>releaseList=r);
+input.value="/model";const slowList=send.attrs.onclick();await settle();
+input.value="/default";await send.attrs.onclick();await settle();
+releaseList();await slowList;await settle();
+assert.equal(picker.hidden,false);assert.match(picker.textContent,/Set default/);assert.doesNotMatch(picker.textContent,/Use model/);
+// Nor does a late failing one flash its error over it.
+holdList=new Promise(r=>releaseList=r);failHeldList=true;
+input.value="/model";const failingList=send.attrs.onclick();await settle();
+input.value="/default";await send.attrs.onclick();await settle();
+releaseList();await failingList;await settle();failHeldList=false;
+assert.equal(picker.hidden,false);assert.match(picker.textContent,/Set default/);assert.doesNotMatch(strip.textContent,/late list failed/);
+// Reopening the thread drops a list still loading: the late answer opens no picker.
+holdList=new Promise(r=>releaseList=r);
+input.value="/model";const reopened=send.attrs.onclick();await settle();
+await nodes.findLast(x=>x.attrs.class==="xc-sess on").attrs.onclick();await settle();
+releaseList();await reopened;await settle();assert.equal(picker.hidden,true);
+// Esc closes the picker and gives the box its focus back; so does choosing a model.
+let focused=0;input.focus=()=>{focused++;};
+picker.listeners.keydown({key:"Escape",preventDefault(){}});assert.equal(picker.hidden,true);assert.equal(focused,1);
+input.value="/model";await send.attrs.onclick();await settle();assert.equal(picker.hidden,false);
+await nodes.findLast(x=>x.textContent==="Use model").attrs.onclick();await settle();
+assert.equal(picker.hidden,true);assert.equal(focused,2);
+// While a model change is in flight, Enter sends nothing: no second models.set, no message.
+let releaseBusy;holdModel=new Promise(r=>releaseBusy=r);
+const models=requests.filter(x=>x.path.endsWith("/model")).length, sends=requests.filter(x=>x.path.endsWith("/send")).length;
+input.value="/model fake:y";const busyModel=send.attrs.onclick();await settle();
+await send.attrs.onclick();input.value="hello while switching";await send.attrs.onclick();await settle();
+assert.equal(requests.filter(x=>x.path.endsWith("/model")).length,models+1);
+assert.equal(requests.filter(x=>x.path.endsWith("/send")).length,sends);assert.match(strip.textContent,/changing the model/);
+assert.equal(input.value,"hello while switching");releaseBusy();await busyModel;holdModel=null;
+// The picker's button waits for a change already in flight too.
+input.value="/model";await send.attrs.onclick();await settle();assert.equal(picker.hidden,false);
+holdModel=new Promise(r=>releaseBusy=r);
+input.value="/model fake:x";const typedModel=send.attrs.onclick();await settle();
+await nodes.findLast(x=>x.textContent==="Use model").attrs.onclick();await settle();
+assert.equal(requests.filter(x=>x.path.endsWith("/model")).length,models+2);
+releaseBusy();await typedModel;holdModel=null;
 refuseModel=true;input.value="/model fake:y";await send.attrs.onclick();
 assert.equal(input.value,"/model fake:y");assert.match(strip.textContent,/principal required/);refuseModel=false;
 let releaseModel;holdModel=new Promise(r=>releaseModel=r);

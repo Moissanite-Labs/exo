@@ -19,12 +19,16 @@ TOKEN = "test-page-token-0123456789"
 
 
 class Src:
-    def __init__(self, cwd="", guidance=None):
-        self.cwd, self.guidance, self.calls = cwd, guidance, []
+    def __init__(self, cwd="", guidance=None, commands=None):
+        self.cwd, self.guidance, self.commands, self.calls = cwd, guidance, commands, []
 
     async def call(self, body):
         self.calls.append(body)
         t = type(body).TYPE
+        if t == "commands.list" and self.commands is not None:
+            if isinstance(self.commands, Exception):
+                raise self.commands
+            return {"commands": self.commands}
         if t == "session.get":
             return {"session": {"id": body.session, "cwd": self.cwd if body.session == "s1" else ""}, "messages": []}
         if t == "config.get":
@@ -62,6 +66,16 @@ def test_commands_route_lists_what_the_composer_runs():
     trace = next(c for c in d["commands"] if c["name"] == "trace")
     assert trace["args"] == "[last N turns]" and [x["value"] for x in trace["choices"]] == ["5", "10", "25"]
     assert d["guidance"] is True
+
+
+def test_commands_route_names_the_core_commands_the_composer_holds():
+    rows = [{"name": "context", "description": "d", "args": ""}, {"name": "grants", "description": "d", "args": ""}, {"description": "no name"}]
+    assert dispatch(Src(commands=rows), "/api/complete/commands")[1]["core"] == ["context", "grants"]
+    code, d = dispatch(Src(commands=RuntimeError("older core")), "/api/complete/commands")
+    assert code == 200 and d["core"] is None and len(d["commands"]) == 8   # null: the page asks again
+    # The terminal client's own names (the table every client shares), less what the page runs: held, not sent.
+    assert {"help", "quit", "exit", "usage", "stop", "clear", "sessions", "resume", "undo", "steer"} <= set(d["client"])
+    assert not {r["name"] for r in d["commands"]} & set(d["client"])
 
 
 def test_guidance_config_key_turns_the_line_off():
@@ -224,6 +238,27 @@ console.log(JSON.stringify({
     assert got["noat"] == "" and got["mail"] == ""
     assert got["ghHist"] == {"text": "he test", "ok": True} and got["ghCmd"] == {"text": "ce", "ok": True}
     assert got["ghHint"] == {"text": "[last N turns]", "ok": False}
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_js_typo_guess_is_the_tuis(tmp_path):
+    """#146: the page holds a /word for the same guesses the TUI's cm.closest makes, so `/data is corrupted` is sent."""
+    import random
+    from exo import complete as cm
+    pool = ["context", "model", "default", "findings", "trace", "new", "rename", "layout", "compact", "grants", "gate",
+            "peers", "peer-release", "peer-deny", "exo", "exo-command", "orchestra", "help", "quit", "undo"]
+    rnd = random.Random(146)
+    words = ["data", "note", "repo", "users", "tmp", "home", "me", "grant", "contex", "tarce", "modle", "comand", "peer",
+             "tex", "ord", "orch", "peerdeny", "lay"] + ["".join(rnd.choice("acdeghilmnoprstx-") for _ in range(rnd.randint(1, 9))) for _ in range(400)]
+    for _ in range(400):   # near typos: a name with a letter or two dropped, changed or swapped
+        w = list(rnd.choice(pool))
+        for _ in range(rnd.randint(1, 2)):
+            i = rnd.randrange(len(w))
+            w[i:i + 2] = rnd.choice([[], [rnd.choice("aeinorst")], w[i:i + 2][::-1]])
+        words.append("".join(w))
+    got = node(tmp_path, f"console.log(JSON.stringify({json.dumps(words)}.map(w => c.closest(w, {json.dumps(pool)}))));")
+    assert got == [cm.closest(w, pool) for w in words]
+    assert [cm.closest(w, pool) for w in ("data", "note", "repo", "grant")] == [None, None, None, "grants"]
 
 
 @pytest.mark.skipif(not NODE, reason="node is not installed")

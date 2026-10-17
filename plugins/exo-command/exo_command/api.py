@@ -12,10 +12,14 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
   POST /api/chat/sessions/<id>/rename      command.run rename     {title}; principal only (D-069)
   POST /api/chat/sessions/<id>/command     command.run           {name, args}; read-only names only
+  POST /api/chat/sessions/<id>/model       session.get, then models.set {model}; the shared main route, principal only
+  GET  /api/chat/models                    models.list           the /model picker's choices
   GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
   POST /api/feedback                       feedback.send         {session, verdict, message_id, text}
   POST /api/ui/respond                     ui.respond            {panel_id, action, value}
-  GET  /api/complete/commands             the slash commands this page runs, with argument shapes and choices
+  GET  /api/complete/commands             the slash commands this page runs, with argument shapes and choices, the
+                                           core's commands.list names and the terminal client's own (client); of
+                                           those, the names the page does not run (/grants, /help) are held, not sent
   GET  /api/complete/files?q=&session=     files under the session's folder for @ (D-037); the server guards it
   GET  /api/tasks                          tasks.list
   GET  /api/tasks/<task>                   command.run subagent open   the child's task row and session tail (#97)
@@ -81,6 +85,7 @@ def error_reply(exc: Exception) -> Reply:
         return 400, {"error": str(exc)}
     if isinstance(exc, SourceError):
         status = (404 if exc.code == "not_found" else 403 if exc.code == "forbidden" else 409 if exc.code == "conflict"
+                  else 400 if exc.code in ("bad_model", "bad_request")
                   else 501 if exc.code in ("unsupported", "unknown_command") else 502)
         return status, {"error": exc.message, "code": exc.code}
     return 502, {"error": core_message(exc)}
@@ -270,7 +275,9 @@ _INDEXES: Dict[tuple, cm.FileIndex] = {}
 
 
 async def _complete_commands(c, p, q, body):
-    """Static: the commands the web composer runs itself. Also says whether the guidance line is on."""
+    """Static: the commands the web composer runs itself. Also says whether the guidance line is on, which names the
+    core's commands.list has, and the other names of the table every client shares (``client``: /help, /quit, ...),
+    so typo help covers them and the composer holds those it does not run instead of sending them (D-037)."""
     rows = []
     for name, desc in WEB_COMMANDS.items():
         slot = cm.plan(name, [])
@@ -282,7 +289,14 @@ async def _complete_commands(c, p, q, body):
         guidance = got.get("value") is not False
     except Exception:
         pass   # an older core: leave the line on
-    return {"commands": rows, "guidance": guidance}
+    core = None   # null when commands.list fails (a core restarting, or an older core): the page asks again
+    try:
+        listed = await c.source.call(s.CommandsList())
+        core = [str(r["name"]) for r in listed.get("commands") or [] if isinstance(r, dict) and r.get("name")]
+    except Exception:
+        pass
+    client = [n for n in cm.ARG_HINTS if n not in WEB_COMMANDS]
+    return {"commands": rows, "guidance": guidance, "core": core, "client": client}
 
 
 async def _complete_files(c, p, q, body):

@@ -6,7 +6,8 @@ import { suggest, completeText, ghost, closest, Guide } from "./complete.js";
 const MENU_ROWS = 8;
 
 export function attachComposer({ input, composer, getSession, reducedMotion }) {
-  let cmds = [], sug = { mode: "", items: [], start: 0, hint: "" }, sel = 0, closedFor = null, files = [], fileQ = null, fileTimer = 0;
+  let cmds = [], core = [], client = [], loaded = false, stopped = false, loadingCmds = null, retries = 0, retryTimer = 0;
+  let sug = { mode: "", items: [], start: 0, hint: "" }, sel = 0, closedFor = null, files = [], fileQ = null, fileTimer = 0;
   let browse = -1, draft = "", ghostInfo = { text: "", ok: false }, tip = null;
   const history = [];
   const guide = new Guide();
@@ -18,7 +19,20 @@ export function attachComposer({ input, composer, getSession, reducedMotion }) {
   input.parentNode.insertBefore(ghostEl, input);
   input.addEventListener("scroll", () => { ghostEl.scrollTop = input.scrollTop; });
 
-  api("GET", "/api/complete/commands").then((d) => { cmds = d.commands || []; guide.enabled = d.guidance !== false; pickTip(); refresh(); }).catch(() => {});
+  // The names typo help and the hold rule need. A failed load is asked again (backing off, and on the next send), so
+  // one bad answer never leaves the page without them; until it loads, the page holds every /name line (#146).
+  function loadCommands() {
+    if (loaded || stopped || loadingCmds) return;
+    clearTimeout(retryTimer);
+    loadingCmds = api("GET", "/api/complete/commands").then((d) => {
+      // No core names yet (a core restarting): ask again a few times before settling for this page's own names.
+      if (d.core == null && retries < 6) throw new Error("the core's command names are not available yet");
+      cmds = d.commands || []; core = d.core || []; client = d.client || []; loaded = true;
+      guide.enabled = d.guidance !== false; pickTip(); refresh();
+    }).catch(() => { retryTimer = setTimeout(loadCommands, Math.min(30000, 1000 * 2 ** retries++)); })
+      .finally(() => { loadingCmds = null; });
+  }
+  loadCommands();
 
   function wantFiles() { return !!getSession(); }
   function atEnd() { return input.selectionStart === input.value.length && input.selectionEnd === input.value.length; }
@@ -136,14 +150,25 @@ export function attachComposer({ input, composer, getSession, reducedMotion }) {
       if (/job_output/.test(text)) state.jobDone = "";
       refresh();
     },
+    // Whether the command names have loaded; when they have not, this asks again.
+    ready() { loadCommands(); return loaded; },
     // A mistyped /command: the suggestion, or null when it is not a typo (so the line is a normal message).
+    // Like the TUI, the names are this page's commands, the core's commands.list and the terminal client's own, and
+    // only a simple lower-case name gets typo help (/Users and /v2 are text); here is false when the page does not run it.
     typo(text) {
-      const m = /^\/([A-Za-z][\w-]*)(\s|$)/.exec(text);
-      if (!m || !cmds.length || cmds.some((c) => c.name === m[1].toLowerCase())) return null;
-      const g = closest(m[1], cmds.map((c) => c.name));
-      return g ? { guess: g, line: "/" + g + text.slice(m[0].length - m[2].length) } : null;
+      const m = /^\/([A-Za-z][\w-]*)(\s|$)/.exec(text), name = m && m[1].toLowerCase();
+      if (!m || !loaded || cmds.some((c) => c.name === name) || core.includes(name) || client.includes(name)) return null;
+      if (!/^[a-z][a-z-]*$/.test(m[1])) return null;
+      const g = closest(name, [...cmds.map((c) => c.name), ...core, ...client]);
+      return g ? { guess: g, line: "/" + g + text.slice(m[0].length - m[2].length), here: cmds.some((c) => c.name === g) } : null;
     },
     known(name) { return cmds.some((c) => c.name === name); },
-    stop() { clearInterval(timer); },
+    // Where a command this page does not run lives: "core" (commands.list, so exo chat runs it too) or "client" (the
+    // terminal client's own, such as /help or /quit); "" when the page runs it or nobody does. Held, never sent (#146).
+    elsewhere(name) {
+      if (cmds.some((c) => c.name === name)) return "";
+      return core.includes(name) ? "core" : client.includes(name) ? "client" : "";
+    },
+    stop() { stopped = true; clearInterval(timer); clearTimeout(retryTimer); },
   };
 }
