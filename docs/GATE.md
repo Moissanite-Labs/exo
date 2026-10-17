@@ -187,11 +187,41 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
+  `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
+  `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and
+  `watch -x` run the argv after their options and fixed operands (the lock file of `flock`,
+  the new root of `chroot`, the mask of `taskset`, the priority of `chrt`). Options are read as
+  `getopt` reads them: a value attached, inside a cluster (`-nw5`) or in the next word,
+  `--opt=value`, `--`. The command-string forms are read like `bash -c`: `flock FILE -c CMD`,
+  `script -c CMD` (`--command`), `watch CMD...` (the words joined, run through `sh -c`), the
+  shell-command of `tmux new-session`, `new-window`, `split-window`, `respawn-pane`,
+  `respawn-window` and `run-shell` and of `tmux -c`, the argv of `screen [-dm] [-S name]` and
+  `screen -X screen`, and the template of `parallel CMD ::: args` with each argument appended or
+  put where `{}` stands (on the line itself, up to 16 distinct arguments and four times that
+  command's own length, each text sized before it is built; a nested `parallel` template is read
+  alone, so the work stays linear in the line).
+  The wrapper itself stays an `opaque_exec` part with `indirection`, so
+  the line asks as before and a deny on the inner category applies. `chroot`, `nsenter`,
+  `unshare` and `systemd-run` run the command with other privileges, namespaces or as a
+  system unit: like `sudo`, the line carries a signal named after the wrapper and a reversible
+  part counts as costly. What the gate cannot read stays `opaque_exec`: a program from a
+  variable, `tmux send-keys`, a `screen -X` command other than `screen`, `parallel` with no
+  template (commands from its input or `:::`), a wrapper with no command (an interactive shell,
+  `flock 9`), and options the tables do not know. As with `bash -c`, a wrapped command that
+  outranks `opaque_exec` (`setsid git push`) takes the line's category, so a deny on
+  `opaque_exec` itself no longer reaches it: under `deny: [opaque_exec]`, `categories:
+  {opaque_exec: deny}` or a rule on `opaque_exec` with decision `deny` the line asks (the
+  `indirection` floor below), where it was denied before. D-075 makes such a deny apply to
+  every part.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
-- The principal can lower `opaque_exec` only by naming it: `categories: {opaque_exec: act}` or a
-  rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
+- The principal can lower `opaque_exec` only by naming it below ask: `categories: {opaque_exec: act}`
+  or a rule whose match has `category: opaque_exec` and whose decision is `act` or `report` (for
+  example with a `command` regex for `make`). Naming it at `ask` or `deny` keeps the indirection
+  floor: a command the gate reads inside a wrapper still asks at least, whatever its own category
+  says (#178).
 
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
 `npm install` runs package scripts) can run code the agent wrote earlier with a local write.

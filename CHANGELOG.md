@@ -5,6 +5,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Security
+- The gate reads the command behind wrappers that run one (#160, D-038): `setsid`, `flock`, `chroot`, `unshare`,
+  `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`, `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`,
+  `xvfb-run`, `systemd-run` and `watch`, after their options and fixed operands, and the command strings of
+  `flock -c`, `script -c`, `watch`, `tmux new-session`/`new-window`/`split-window`/`respawn-pane`/`respawn-window`/
+  `run-shell`, `tmux -c`, `screen -dm` and `parallel CMD ::: args`. `setsid git push origin main` was `opaque_exec`,
+  so a deny on `vcs_push` only asked; it is now `vcs_push` and denied. The wrapper keeps the `indirection` floor, so
+  a line that asked still asks; `chroot`, `nsenter`, `unshare` and `systemd-run` add a signal like `sudo`. A command the
+  gate cannot read (`setsid $CMD`, `tmux send-keys`, `parallel` reading its input) stays `opaque_exec`. A deny
+  on `opaque_exec` itself (`deny:`, a category line or a rule) now asks for such a line instead of denying it;
+  naming `opaque_exec` at `ask` or `deny` no longer turns off the indirection floor (#178), so none of these
+  lines logs.
+
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
