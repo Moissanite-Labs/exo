@@ -65,6 +65,8 @@ from .trace_cmd import register as register_trace, cmd_trace, cmd_findings
 from .memory_cmd import register as register_memory, cmd_memory
 from .baseline.cli import register as register_taste, cmd_taste
 
+STOP_HELP = 'stop the background core that exo web / exo serve started'
+
 
 def key_path(name: str) -> Path:
     return exo_home() / 'keys' / f'{name}.key'
@@ -329,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     register_taste(sp, common)
     p = sp.add_parser('web', add_help=False, help='serve the command centre web client (exo-command)')
     p.add_argument('rest', nargs=argparse.REMAINDER, help='passed to exo-command: --socket, --url, --port ...')
-    sp.add_parser('stop', add_help=False, help='stop the background core that exo web / exo serve started')
+    sp.add_parser('stop', add_help=False, help=STOP_HELP)
     sp.add_parser('resume', add_help=False, help='reopen the last session in the terminal client (exo --resume)')
     p = sp.add_parser('tui', add_help=False, help='the terminal client (Textual); runs the core in-process if no exod')
     p.add_argument('rest', nargs=argparse.REMAINDER, help='passed to exo_tui: --resume, --session, --seat ...')
@@ -384,7 +386,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_tui(args)
     if args[0] == 'tui':
         return cmd_tui(args[1:])
-    if args[0] == 'stop':
+    if args[0] == 'stop':  # -h prints help and an unknown word is an error: neither stops the core
+        argparse.ArgumentParser(prog='exo stop', description=STOP_HELP).parse_args(args[1:])
         from .ensure_core import stop_core
         print(stop_core())
         return 0

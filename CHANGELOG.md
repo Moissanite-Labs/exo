@@ -148,6 +148,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   failed-call tip says `/providers` checks keys, servers and logins. A passing provider test in `/providers` or the
   web Providers tab now tells the core to reload that provider, so the chat works at once instead of after the
   cooldown (`docs/PROVIDERS.md`).
+- The web client no longer shows a context note from other threads (`meta.note`, D-028) as a message the user
+  typed. It skips the note on load and live, as the terminal client does. A second `exo web` on a busy port no
+  longer prints a raw `[Errno 98]`: it says Exo's web client is already running there and how to get back in (its
+  open page or printed link, Ctrl+C in its terminal, or `--port`), or that another program holds the port.
+  `exo stop -h` prints help instead of stopping the core, and `exo stop` with any other word is an error.
 
 ## [0.2.0] (egg) - 2026-10-13
 
