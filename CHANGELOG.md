@@ -27,6 +27,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Streamed `bash` output no longer leaks a known key split between two reads. The output went out per 64 KiB read
+  and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
+  halves. A read now holds back an ending that could start a key until the next read. The stream and the result also
+  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

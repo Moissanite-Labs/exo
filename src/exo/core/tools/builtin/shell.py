@@ -11,6 +11,7 @@ PID-reuse fingerprint guard, snapshots and the Windows path.
 
 from __future__ import annotations
 
+import codecs
 import contextlib
 import os
 import shutil
@@ -53,13 +54,32 @@ class _Capped:
 
 
 def _drain(proc: subprocess.Popen, out: _Capped, emit: Callable[[str], None] | None) -> None:
+    """Read the output as one UTF-8 stream, so a character split across reads stays whole. ``emit`` gets it with
+    known key values cut out across reads too: a tail that could start a key waits for the next read or the end."""
+    from exo.core.models.keys import known_secret_values, redact_secrets
     assert proc.stdout is not None
-    for chunk in iter(lambda: proc.stdout.read1(65536), b""):  # type: ignore[union-attr]
-        text = chunk.decode("utf-8", errors="replace")
+    vals: list[str] = []
+    with contextlib.suppress(Exception):  # redaction never stops the drain: an unread pipe would stall the command
+        vals = known_secret_values() if emit else []
+    dec, held, eof = codecs.getincrementaldecoder("utf-8")("replace"), "", False
+    while not eof:
+        chunk = proc.stdout.read1(65536)  # type: ignore[union-attr]
+        eof = not chunk
+        text = dec.decode(chunk, final=eof)
         out.add(text)
         if emit:
-            with contextlib.suppress(Exception):
-                emit(text)
+            buf = redact_secrets(held + text, vals)
+            cut = len(buf) if eof else len(buf) - _key_start(buf, vals)
+            held, text = buf[cut:], buf[:cut]
+            if text:
+                with contextlib.suppress(Exception):
+                    emit(text)
+
+
+def _key_start(text: str, vals: list[str]) -> int:
+    """Length of the longest tail of ``text`` that is the start of a value in ``vals``."""
+    return max((len(text) - i for v in vals for i in range(max(len(text) - len(v) + 1, 0), len(text))
+                if v.startswith(text[i:])), default=0)
 
 
 def _wait_for_group_exit(proc: subprocess.Popen, pgid: int, timeout: float) -> bool:
