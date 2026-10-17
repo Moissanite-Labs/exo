@@ -589,3 +589,126 @@ async def test_job_notice_for_a_running_scheduled_run_is_steered_in(tmp_path, wa
     msgs = one_result_per_call(eng, sid)
     notice = next(i for i, m in enumerate(msgs) if m.meta.get("job"))
     assert msgs[notice - 1].role == "tool"
+
+
+# Two seats in one EXO_HOME share schedule.sqlite: each slot runs once, a seat-bound job only in its seat.
+
+def seat_mk(tmp_path, name, clk):
+    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={},
+                     seat=Seat(name=name), attach_scheduler=lambda e: Scheduler(e, clk))
+    eng.loop.provider = FakeProvider([f"report from {name}"], repeat=True)
+    return eng
+
+
+def queued_runs(tmp_path):
+    from exo.core.sessions import SessionStore
+    evs = SessionStore(tmp_path / "home" / "sessions.sqlite").events_since(0)
+    return [e.body for e in evs if isinstance(e.body, s.TaskUpdated) and e.body.status == "queued"]
+
+
+@aio
+async def test_two_timers_on_one_home_claim_a_slot_once(tmp_path, monkeypatch):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout, forge = seat_mk(tmp_path, "scout", clk), seat_mk(tmp_path, "forge", clk)
+    jid = scout.scheduler.add("every 1h", "make the report")["id"]  # no seat: any one seat runs it
+    clk.t += 3600
+    due_a, due_b = scout.scheduler.due(), forge.scheduler.due()
+    assert [j["id"] for j in due_a] == [jid] == [j["id"] for j in due_b]  # both timers woke for the same slot
+    monkeypatch.setattr(scout.scheduler, "due", lambda: due_a)
+    monkeypatch.setattr(forge.scheduler, "due", lambda: due_b)
+    assert await scout.scheduler.tick() + await forge.scheduler.tick() == [jid]
+    await scout.scheduler.wait()
+    await forge.scheduler.wait()
+    assert len(queued_runs(tmp_path)) == 1
+    assert scout.scheduler.get(jid)["next_run"] == clk.t + 3600
+
+
+@aio
+async def test_seat_bound_job_runs_only_in_its_seat(tmp_path):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout, forge = seat_mk(tmp_path, "scout", clk), seat_mk(tmp_path, "forge", clk)
+    (tmp_path / "home" / "seats").mkdir(exist_ok=True)
+    (tmp_path / "home" / "seats" / "scout.toml").write_text('[seat]\nname = "scout"\n')
+    jid = forge.scheduler.add("every 1h", "make the report", seat="scout")["id"]  # added from forge, for scout
+    clk.t += 3600
+    assert forge.scheduler.due() == [] and await forge.scheduler.tick() == []
+    r = await forge.scheduler.edit({"action": "run_now", "job_id": jid})
+    assert "scout" in r["error"] and "task_id" not in r
+    assert await scout.scheduler.tick() == [jid]
+    await scout.scheduler.wait()
+    assert len(queued_runs(tmp_path)) == 1
+    child = [e.body for e in scout.hub.since(0) if isinstance(e.body, s.TaskUpdated) and e.body.child_session]
+    assert scout.store.get_session(child[0].child_session).agent == "scout"
+
+
+@aio
+async def test_other_seats_due_job_does_not_spin_the_timer(tmp_path):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout, forge = seat_mk(tmp_path, "scout", clk), seat_mk(tmp_path, "forge", clk)
+    scout.scheduler.add("every 1h", "make the report", seat="scout")
+    clk.t += 3600  # scout's core is down: its job stays past due
+    sch, calls = forge.scheduler, []
+    real = sch.tick
+
+    async def counted():
+        calls.append(1)
+        return await real()
+
+    sch.tick = counted
+    sch.start()
+    try:
+        await asyncio.sleep(0.3)
+    finally:
+        await sch.stop()
+    assert 1 <= len(calls) <= 2  # it sleeps; it does not wake every 50 ms for a job it may not run
+    assert queued_runs(tmp_path) == []
+
+
+@aio
+async def test_a_job_another_seats_core_adds_starts_without_a_wake(tmp_path):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout, forge = seat_mk(tmp_path, "scout", clk), seat_mk(tmp_path, "forge", clk)
+    (tmp_path / "home" / "seats").mkdir(exist_ok=True)
+    (tmp_path / "home" / "seats" / "scout.toml").write_text('[seat]\nname = "scout"\n')
+    sch = scout.scheduler
+    sch.poll = 0.05  # 60 s in a real core; the other process's add cannot set this one's wake event
+    sch.start()
+    try:
+        await asyncio.sleep(0.1)  # scout's timer is asleep with no jobs
+        jid = forge.scheduler.add("every 1h", "make the report", seat="scout")["id"]
+        forge.scheduler.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (clk.t - 1, jid))
+        forge.scheduler.db.commit()
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if sch.get(jid)["last_status"]:
+                break
+    finally:
+        await sch.stop()
+    assert sch.get(jid)["last_status"] == "done"
+
+
+@aio
+async def test_job_paused_between_due_and_claim_does_not_launch(tmp_path, monkeypatch):
+    eng, clk = mk(tmp_path), Clock(ts(2026, 10, 11, 8, 0))
+    sch = eng.scheduler = Scheduler(eng, clk)
+    jid = sch.add("every 1h", "x")["id"]
+    clk.t += 3600
+    due = sch.due()
+    sch.pause(jid)
+    monkeypatch.setattr(sch, "due", lambda: due)
+    assert await sch.tick() == []
+    assert sch.running == {} and queued_runs(tmp_path) == []
+
+
+@aio
+async def test_add_rejects_a_seat_no_core_could_run(tmp_path):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout = seat_mk(tmp_path, "scout", clk)
+    with pytest.raises(ValueError, match="nosuch"):
+        scout.scheduler.add("every 1h", "x", seat="nosuch")
+    r = await scout.scheduler.edit({"action": "add", "when": "every 1h", "prompt": "x", "seat": "nosuch"})
+    assert "nosuch" in r["error"] and scout.scheduler.list() == []
+    assert scout.scheduler.add("every 1h", "x", seat="scout")["seat"] == "scout"  # its own seat
+    (tmp_path / "home" / "seats").mkdir(exist_ok=True)
+    (tmp_path / "home" / "seats" / "forge.toml").write_text('[seat]\nname = "forge"\n')
+    assert scout.scheduler.add("every 1h", "x", seat="forge")["seat"] == "forge"  # a seat file names it

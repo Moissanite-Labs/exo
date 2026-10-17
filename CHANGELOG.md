@@ -133,6 +133,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Opening a thread whose turn is still running (`/resume`, `/sessions`, `exo tui --session` or `--resume`,
   `exo chat --resume`) no longer writes "not run: session was interrupted" for the tool call in flight, so the
   model never sees two results for one call. `session.resume` still closes a round a crash left open.
+- Two seats in one `$EXO_HOME` now run side by side. Each core numbered events from its own counter, so the core
+  that fell behind failed every publish with a UNIQUE constraint error until it restarted. The database now numbers
+  each event past the table's highest. Starting any core, even one that then failed the writer lock, also marked
+  every agent's running delegate tasks failed. Now only an agent's writer fails its own leftovers.
+- Scheduled jobs on a home with several seats: both seats' timers ran the same due job, and a job's `seat` was
+  never read, so a job for one seat could run as another. A timer now claims the slot before it runs it, a
+  seat-bound job runs only in its seat, `run_now` from another seat is refused, and `add` refuses a seat no core
+  could run.
 
 ## [0.2.0] (egg) - 2026-10-13
 
