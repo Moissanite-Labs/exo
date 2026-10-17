@@ -124,6 +124,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- History brought in with `exo ingest` now feeds the rule of three in `exo consolidate`. Ingest writes your own
+  messages with role `principal`, and consolidation read only role `user`, so an import never drafted a belief. Rows
+  read before this fix are not in the cluster cache: delete `<store>/proposals/state.json` and the next run rebuilds
+  it from them.
+- Rebuilding that cache (`proposals/state.json` missing or stale) counts only your own utterances (D-040). Before, a
+  rebuild also counted Hermes briefs of doubtful authorship (`hermes:unverified-user`) and peer, bus and job turns,
+  so one matching sentence from you could complete a rule-of-three proposal, which promotion rule 4 could then apply
+  with no review. Summaries from an import (`secondary`) do not count either.
 
 ## [0.2.0] (egg) - 2026-10-13
 

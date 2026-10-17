@@ -15,7 +15,8 @@ with `exo_note`, or one a peer's text produced, is skipped and counted in `not_p
   confidence and an implication beyond the instance. It also carries a preference pair
   (context, rejected, chosen, evidence), appended to `training/preference-pairs.jsonl` on accept.
 - **Rule of three:** an instruction the principal gives in 3+ utterances with no encoded belief
-  gets a proposal to encode it.
+  gets a proposal to encode it. Live turns carry role `user` and rows from `exo ingest` role `principal`;
+  both count. Summaries (`secondary`) are not anyone's own words and do not.
 - **Taste:** a new event that agrees with a known belief reinforces it (a `note` of type
   `belief_reinforced`); weight decays by half-life unless reinforced (`exo.taste`).
 - **Conflict:** an event that opposes a known belief goes through the store's conflict rule.
@@ -26,7 +27,7 @@ with `exo_note`, or one a peer's text produced, is skipped and counted in `not_p
 Outputs: `belief_proposed` events, and draft files in `<store>/proposals/`: `<pid>.md` (the node
 as it would be written), `<pid>.diff` (when it edits an existing node), `<pid>.json` (the full
 proposal). Decided drafts move to `proposals/archive/`. `proposals/state.json` is a rebuildable
-cache of instruction clusters for the rule of three.
+cache of instruction clusters for the rule of three. A rebuild reads only principal-authored utterances (D-040).
 
 Watermark: each run that reads events ends with a `note` of type `consolidate_run` whose `upto`
 is the last sequence number read. Proposal ids are hashes of their evidence, so a lost watermark
@@ -328,9 +329,10 @@ def observe_event(ev: Mapping, ledger: Ledger) -> Observation | None:
 
 
 def instructions_in(ev: Mapping) -> list[Observation]:
-    """Instruction-like sentences in a principal utterance (for the rule of three)."""
+    """Instruction-like sentences in a principal utterance (for the rule of three). Role `user` is a live turn,
+    `principal` an `exo ingest` row. The caller checks the author (D-040)."""
     b = ev.get("body") or {}
-    if b.get("role", "user") != "user":
+    if b.get("role", "user") not in ("user", "principal") or b.get("secondary"):
         return []
     text = _event_text(ev)
     if is_trivial(text):
@@ -1018,6 +1020,8 @@ class _Run:
         for ev in self.ledger.iter(kind="utterance"):
             if ev["seq"] > self.state.watermark:
                 break
+            if ev["author"] not in self.principals:
+                continue  # D-040, as in run(): only the principal's own words fill a cluster
             for o in instructions_in(ev):
                 self._add_to_cluster(clusters, o)
         return clusters
