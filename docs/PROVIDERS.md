@@ -42,9 +42,10 @@ Errors come back as a class: `no_key`, `auth`, `billing`, `not_found`, `rate_lim
 If no provider can serve the main role, `exo tui` and `exo web` say so and point here.
 
 The default core uses real catalog routes; it never substitutes an offline reply for missing credentials.
-Anthropic and OpenRouter use their catalog routes, and an available Claude CLI can use its catalog alias.
-For a provider without a known main model, such as OpenAI, first run opens the model chooser after the key
-is added. Choose the model you want before `/intro` runs. Explicit roles and local model settings are kept.
+Anthropic and OpenRouter use their catalog routes, and an available Claude CLI can use its catalog alias
+(see "Use your Claude Code login"). For a provider without a known main model, such as OpenAI, first run opens
+the model chooser after the key is added. Choose the model you want before `/intro` runs. Explicit roles and
+local model settings are kept.
 Orientation is remembered only after its own turn finishes with a successful, nonempty real assistant reply;
 a provider error, cancellation or deliberately configured fake reply leaves it unfinished for retry.
 
@@ -73,6 +74,32 @@ output, the token is in that log until the next start.
 No tool gives the model these functions. The gate classes `exo providers add|remove|test|default`, `secret-tool`,
 any shell or code that names `/api/providers` or `providers_setup`, and every Keychain read as `credentials`,
 which always asks you and never gets a standing grant (D-033). Keys are write-only: no code path returns one.
+
+## Use your Claude Code login (`claude-cli`)
+
+If Claude Code is installed and logged in, Exo can run on that login with no API key. Each model call starts the
+`claude` command. Exo holds no key for it. `ANTHROPIC_API_KEY` and the other API credentials are removed from the
+child's environment, so the call uses the subscription, never an API account.
+
+It is automatic. When the core starts, `claude` is on your PATH, no route of the main role has what it needs (by
+default, no Anthropic or OpenRouter key), and neither `models.roles.main` in `config.json` nor the seat sets the
+main model, the core puts `claude-cli:sonnet` first for `main`. Sonnet is the first model in the catalog entry
+(`sonnet`, `opus`, `haiku`). The status line shows `claude-cli:sonnet`.
+
+- **Cost reads `unknown`.** A subscription has no per-call price in the catalog, and Exo never shows a guessed
+  `$0`. To see an estimate anyway, add a price under `models.models` (`docs/TRACE.md`, "Cost").
+- **The lists show the configured routes.** The automatic choice is not saved, so `exo models` and
+  `exo config roles` still show Anthropic first for `main`, and `exo providers` marks Anthropic as the default.
+- **To choose it yourself,** or another model, run `exo providers default claude-cli:opus` (or `/default` in the
+  terminal client). The choice is saved to `config.json`, the lists show it, and the automatic choice is off.
+- **An Anthropic or OpenRouter key added later takes over the next time the core starts.** Until then the
+  running core stays on Claude Code.
+- **Exo keeps its own tools and gate.** The CLI runs with its own tools, MCP servers, skills and settings
+  switched off. The model sees Exo's tools, and Exo runs each tool call itself, through the gate, before it calls
+  the CLI again.
+- **The login is not checked ahead of time.** `exo providers test claude-cli` only checks that the command is on
+  PATH. Run `claude` once and log in before you start Exo. On a logged-out CLI the first turn fails with the
+  CLI's error.
 
 ## Claude CLI compatibility and cleanup (`claude-cli`)
 
