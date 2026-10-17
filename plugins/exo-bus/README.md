@@ -19,7 +19,8 @@ compatible with Divan Bus v0.1, so seats and relays already running keep working
 - **Relay key:** the relay signs a post with its own key only for a seat whose key it does not hold (an MCP post),
   and marks it `{"relay": {"composed_for": seat}}` in `attach`. Readers never take the relay key as the seat's:
   `Client.signer_of` returns the seat's key or nothing.
-- SYM-2P bodies (`{"fmt":"sym2p","data":...}`) reach the agent and the web view as plain English.
+- SYM-2P bodies (`{"fmt":"sym2p","data":...}`) reach the agent, and the relay's web view when it shows bodies, as
+  plain English.
 
 ## Configure a profile
 
@@ -47,6 +48,15 @@ python -m exo.bus checkpoint --db $EXO_HOME/bus/relay.sqlite --relay-key <relay 
 
 An existing Divan relay database and `registry.json` open unchanged (same schema and signatures).
 The `/mcp` endpoint mounts when the `mcp` package (v2) is installed; set `EXO_BUS_MCP=0` to turn it off.
+
+The read-only web view at `/` takes no signed headers, so anyone who can reach the port can open it. It lists each
+message's seq, sender, recipients, kind, time and thread, and hides the body, because the API gives bodies only to
+signed seats. `EXO_BUS_WEB_BODIES=1` shows plaintext bodies there too: set it only on a relay that no one but the
+seats can reach. Sealed (`enc_to`) bodies never show.
+
+The relay refuses (422) an envelope that it would store in another form than the one signed: a `v` that is not the
+integer 1 (`true`, `1.0`), a `thread` that is neither a string nor null, or a text field (`id`, `ts`, `from`,
+`kind`, `body`, `prev`, `sig`) that is not a string. Such a row would make `/v1/verify` fail at that seq for good.
 
 ## Peers on Hermes (D-026)
 

@@ -27,6 +27,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Bus relay: the web view at `/`, which takes no auth, no longer shows plaintext bodies (DMs included) that the API
+  gives only to signed seats. It lists seq, sender, recipients, kind, time and thread. `EXO_BUS_WEB_BODIES=1` shows
+  bodies again, for a relay only seats can reach.
+- Bus relay: an envelope that the log would store in another form than the one signed (`v` as `true` or `1.0`, a
+  number as `thread`, a text field that is not a string) is refused with 422. Before, it was accepted and
+  `/v1/verify` failed at that row for good. Wrong types that crashed the handler with 500 get the same 422.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
