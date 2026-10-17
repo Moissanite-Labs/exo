@@ -1339,12 +1339,20 @@ _SENSITIVE_PATH = re.compile(
     r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
     r"proc/[^/]+/environ)(/|$)")
 
+# D-039: a run folder holds the principal credential and the TCP token beside each socket, so the folder itself
+# is a secret store; what is below it keeps its own class (job output in run/jobs/ stays readable). A relative
+# path counts only when it spells `.exo/run`: a bare `run` is not resolved against a working folder. The
+# secrets are glob samples (agent-main stands for any agent); their names already match _SENSITIVE_PATH.
+_RUN_DIR = re.compile(r"(^|/)\.exo/(principals/[^/]+/)?run$")
+_RUN_SECRETS = ("exod.principal.key", "agent-main.principal.key", "exod.token")
+
 # Concrete examples a shell glob is tested against ("could this glob match a secret store?").
 _SENSITIVE_SAMPLES = ("keys.env", ".exo/keys", ".config/exo/keys.env", ".divan/seat.key", "auth.json",
                       "google_token.json", ".unii/acct/token", "client_secret_1.json", ".hermes/p/.env",
                       ".netrc", ".env", ".npmrc", ".pypirc", ".ssh/id_rsa", ".ssh/id_ed25519", ".aws/credentials",
                       ".gnupg/pubring.kbx", "credentials.json", "server.pem",
-                      ".config/gh/hosts.yml", ".git-credentials", ".docker/config.json", ".kube/config")
+                      ".config/gh/hosts.yml", ".git-credentials", ".docker/config.json", ".kube/config",
+                      *(".exo/run/" + x for x in _RUN_SECRETS))
 
 
 def _home() -> str:
@@ -1377,15 +1385,30 @@ def _dynamic_secret_paths() -> list[str]:
     return paths
 
 
+def _is_run_dir(path: str) -> bool:
+    """The run folder itself (D-039), in any spelling: `$EXO_HOME/run`, `.exo/run` or a principal's `run`."""
+    path = os.path.normpath(path.replace("\\", "/"))
+    if _RUN_DIR.search(path):
+        return True
+    if not path.startswith("/"):
+        return False
+    try:
+        homes = {os.path.normpath(_exo_home()), os.path.realpath(_exo_home())}
+        cands = {path, os.path.realpath(path)}
+    except (OSError, ValueError):
+        return False
+    return any(re.fullmatch(re.escape(h) + r"(/principals/[^/]+)?/run", c) for c in cands for h in homes)
+
+
 def is_sensitive_path(path: str) -> bool:
     """True when ``path`` names one of the secret stores (ssh, cloud and netrc credentials, Exo's key
-    stores, signing keys, token and client-secret files, .env files). Never reads the file."""
+    stores and run folders, signing keys, token and client-secret files, .env files). Never reads the file."""
     path = _expand_text(str(path or "")).strip()
     if not path:
         return False
     if path.endswith(".pub"):
         return False  # public keys are meant to be shared
-    if _SENSITIVE_PATH.search(path.replace("\\", "/")):
+    if _SENSITIVE_PATH.search(path.replace("\\", "/")) or _is_run_dir(path):
         return True
     try:
         cands = {os.path.abspath(path), os.path.realpath(path)}
@@ -1404,12 +1427,15 @@ def _glob_hits_secret(tok: str) -> bool:
     tok = _expand_text(tok)
     if not re.search(r"[*?\[]", tok):
         return False
+    tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     home = _home()
+    d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
+    runs = {os.path.join(_exo_home(), "run")} | ({d_abs} if d_abs and _is_run_dir(d_abs) else set())
     samples = [os.path.join(home, x) for x in _SENSITIVE_SAMPLES] + [os.path.join(_exo_home(), "keys", "seat.key"),
                                                                        _dynamic_secret_paths()[1]]
-    d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
+    samples += [os.path.join(r, x) for r in runs for x in _RUN_SECRETS]
     in_store_dir = bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
     if len(stem) < 3 and not in_store_dir:
         return False
