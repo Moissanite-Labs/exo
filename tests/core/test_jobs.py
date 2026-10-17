@@ -257,6 +257,51 @@ async def test_jobs_end_with_exod(tmp_path):
     assert row["state"] == "killed" and "shut down" in row["detail"]
 
 
+@pytest.mark.parametrize("wake", [None, False, True])
+@aio
+async def test_shutdown_records_a_killed_job_once_with_no_notice_or_turn(tmp_path, wake):
+    eng = engine(tmp_path, jobs={"wake": wake})
+    sid = (await eng.loop.create_session(agent="tester")).id
+    job = eng.jobs.start("sleep 60", str(tmp_path), sid)
+    side = eng.jobs.live[job["id"]].side
+    await asyncio.sleep(0.1)
+    n = len(eng.hub.since(0))
+    eng.hub.close()  # exod's order (server/app.py serve): the event stream closes first, so no client looks attached
+    await eng.close()
+    await until(lambda: not alive(job["pid"]))
+    await asyncio.sleep(0.3)  # the watcher sees the process end after the kill: that must add nothing
+    ends = [(e.state, e.detail) for e in events(eng) if e.job_id == job["id"] and e.state != "running"]
+    assert ends == [("killed", "stopped when exod shut down")]
+    assert eng.jobs.get(job["id"])["detail"] == "stopped when exod shut down"
+    assert not [m for m in eng.store.messages(sid) if m.meta.get("job")]
+    assert not [e for e in eng.hub.since(0)[n:] if e.type == "turn.started"]
+    assert not os.path.exists(side) and not eng.jobs.live
+
+
+@aio
+async def test_a_notice_in_flight_at_shutdown_is_kept_and_starts_no_turn(tmp_path):
+    eng = engine(tmp_path, jobs={"wake": True})
+    sid = (await eng.loop.create_session(agent="tester")).id
+    held, plain = asyncio.Event(), eng.jobs.target.state
+
+    async def slow_state(session):  # holds the notice of a job that ended just before shutdown in delivery
+        await held.wait()
+        return plain(session)
+    eng.jobs.target.state = slow_state
+    job = eng.jobs.start("echo built", str(tmp_path), sid)
+    await until(lambda: state(eng, job["id"]) == "done")
+    closing = asyncio.ensure_future(eng.close())
+    await asyncio.sleep(0.2)
+    assert not closing.done()  # close waits for the notice rather than leave it to outlive the engine
+    held.set()
+    await closing
+    msgs = [m for m in eng.store.messages(sid) if m.meta.get("job")]
+    assert len(msgs) == 1 and "built" in msgs[0].text()
+    assert [e.detail for e in events(eng) if e.state == "done"] == ["notice queued"]
+    assert not [e for e in eng.hub.since(0) if e.type == "turn.started"]
+    assert eng.jobs.target.can_wake(sid) is False  # wake = true, but exod is shutting down
+
+
 # ---------------------------------------------------------------- limits
 
 

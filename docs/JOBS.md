@@ -64,7 +64,10 @@ Subagents cannot start jobs (their sessions end with their report) and do not ge
 ## Life of a job
 
 - A turn ending or being stopped (ctrl+c or `/stop`) does not touch it. Only `job_kill`, the wall limit, or exod ending does.
-- Jobs end with exod: closing the engine sends every running job's process group TERM, then KILL.
+- Jobs end with exod: closing the engine sends every running job's process group TERM, then KILL. Each one is
+  recorded `killed` ("stopped when exod shut down") with one `job.updated`, and the thread gets no notice. Once
+  shutdown has begun no job notice starts a turn, whatever `wake` says: a notice still in delivery is queued, and
+  the engine waits for it before it closes.
 - If exod dies without closing, the next start (by the process that holds the agent lock) marks what the table says
   was running as `lost`, tells the owning thread (queued, never waking it) and says the process may still be
   alive, with its pid. It is not touched: a pid can be reused.

@@ -27,6 +27,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Background jobs (D-032): shutting down exod with a job running no longer sends the thread a "was killed"
+  notice. With `wake` unset or on, that notice started a model turn while the engine was closing, a paid call
+  at every such shutdown. The job now ends with one `killed` record and one `job.updated`. Once shutdown has
+  begun no job notice starts a turn. A notice still in delivery is queued for the next one.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
