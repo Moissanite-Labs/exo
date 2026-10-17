@@ -489,10 +489,12 @@ class Router:
 
     async def _attempt(self, route: Route, cred: Credential, sole: bool, messages: list[Message],
                        tools: list[ToolSpec], opts: dict[str, Any], failed: list[ProviderEvent],
-                       attempts: list[dict[str, Any]] | None = None) -> AsyncIterator[ProviderEvent]:
+                       attempts: list[dict[str, Any]] | None = None,
+                       model_only: bool = False) -> AsyncIterator[ProviderEvent]:
         """One call on one credential. A failure that may fall back is swallowed and
         appended to ``failed``; anything else (including a terminal error) is yielded.
-        Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``)."""
+        Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``).
+        ``model_only``: a failure cools this model on the credential, not the credential (a side call)."""
         try:
             self.check_spend_policy()
         except RuntimeError as exc:
@@ -521,7 +523,7 @@ class Router:
                 fallback = (ev.status not in NO_FALLBACK_STATUS or ev.retryable) if ev.status is not None else ev.retryable
                 if fallback:
                     self.record_failure(cred.id, route.model, ev.status, retry_after, sole,
-                                        model_only=ev.status in NO_FALLBACK_STATUS)  # an upstream 400 is this model's
+                                        model_only=model_only or ev.status in NO_FALLBACK_STATUS)  # a 400: this model's
                     if ev.status == 429:
                         # A responding rate limiter is reachable. Retry-After belongs to the credential cooldown,
                         # not the outage breaker (including a trial lease left over from an earlier outage).

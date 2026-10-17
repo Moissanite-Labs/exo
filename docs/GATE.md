@@ -6,6 +6,7 @@ each call, records the decision in the signed ledger, and turns an ask into the 
 `approval.requested`. This page covers what D-033 added: what an approval covers, who may give
 it, how long "always" lasts, and the sweep for internal names in outbound posts. D-038 made the
 shell classifier an allowlist and put the store itself behind the gate (see the last three sections).
+D-081 keeps the decision model's second opinion off the main model (see "The decision model's second opinion").
 
 ## Required executor audit
 
@@ -163,6 +164,32 @@ principal's own channels are not swept.
 line is built in. A principal who wants a disclosure line sets it in `posting.md`, for example
 `footer: "> Automated posting by agentic team with human oversight."`, and can limit it to public
 targets with `footer_exposures: [public]`.
+
+## The decision model's second opinion (D-015, D-081)
+
+After the rules, for any call they do not deny, the plugin asks the router's `decision` role how strictly to
+gate it (allow, log, ask or deny) and keeps the stricter of that answer and the rule outcome. A model never
+loosens an outcome. Turn it off with the plugin setting `decision_model: false` or `EXO_GATE_DECISION_MODEL=0`.
+
+- Routes: Jev (with a TypeSafe key), then local Laya, then the `aux` routes. Never a `main` route, even one also
+  listed under `aux`. A tool call never waits for a main-model turn.
+- With no decision or aux route, the rule outcome stands and no model is asked. This is the usual case with the
+  claude CLI login and no API key: a tool call then starts no claude process and adds no time. (The local Laya
+  route is still tried. With no Laya server running, the refused connection costs milliseconds.)
+- A failure or a 20 s timeout keeps the rule outcome. A failed call cools only the model that failed, never the
+  credential, so a login or key that also serves the main role keeps working. Before, one failed gate call on the
+  claude CLI route made the next turn fail with "all routes for 'main' failed or are cooling down".
+- `exo decide` and the baseline export's judge keep the full `decision` chain, with `main` last
+  (`docs/PROVIDERS.md`).
+- The ledger row of each decision names the verdict and the route that answered (`decision_model`). The call is
+  not a `model.call` event yet, so `/trace` and the turn's cost do not show it.
+
+Exo's own read-only tools are `read`: `read_file`, `grep`, `glob`, `skill` (loads a skill's instructions),
+`memory_zoom`, `exo_trace` and `ui` (a panel beside the chat). An internal gate error does not stop them (unless a
+required executor is set), and a secret-store path in their arguments still makes the call `credentials`. Before,
+`skill` was an unknown tool, so a new user's first screen could be an approval card for loading the intro skill.
+
+Tests: `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/test_decision_spare.py`.
 
 ## Shell commands: an allowlist (D-038)
 

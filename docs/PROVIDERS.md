@@ -210,6 +210,8 @@ a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:
 Jev: set `TYPESAFE_API_KEY` (`exo providers add jev`, env, macOS Keychain service `exo`, Linux Secret Service, or keys.env). It is the first default route of the
 `decision` role (`["jev:jev-latest", "laya:laya"]`, owner ruling: base Laya was poor in a live check, Jev
 answered sensibly). Without a key Jev is skipped and the role falls through to Laya, then aux, then main.
+The gate's check on each tool call stops before main (D-081): it never asks a main route, and a failure there
+cools only the model that failed, so a login or key that also serves main keeps working (`docs/GATE.md`).
 Shapes were checked live on 2026-10-11 (7 calls). Score levels count from 0; a score can fall between
 levels (1.43). Errors: 401 and 422 are not retryable; 429, 529, 5xx and network errors are.
 
@@ -254,7 +256,7 @@ carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Conf
 |---|---|---|
 | main | Anthropic Opus 5.5, then OpenRouter | none |
 | aux | Haiku 5.5 | main |
-| decision | Jev (`jev:jev-latest`), then local Laya (`laya:laya`) | aux, then main |
+| decision | Jev (`jev:jev-latest`), then local Laya (`laya:laya`) | aux, then main (the gate: aux only, D-081) |
 | eval | empty, which means the `main` route | main |
 | fast, standard, deep | Haiku, Sonnet, Opus | standard, then main |
 

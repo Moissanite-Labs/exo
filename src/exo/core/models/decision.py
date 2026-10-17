@@ -14,8 +14,9 @@ Wire format, from https://docs.typesafe.ai/api.md and checked live:
 Public API for the gate and the learning loop (all async, routed through the router's ``decision``
 role with fallback to aux then main):
 
-    ask_choice_result(router, state, question, options, role="decision") -> ChoiceResult
-        the typed result with ``probabilities``, ``source``, ``route``, ``confidence``.
+    ask_choice_result(router, state, question, options, role="decision", spare=None) -> ChoiceResult
+        the typed result with ``probabilities``, ``source``, ``route``, ``confidence``. ``spare="main"`` (the
+        gate, D-081) skips the main role's routes and cools only a failed model, never a whole credential.
 
 When the route is a generative chat model the same API asks for a JSON answer and reports the chosen
 option as probability 1.0 with ``source="generative"``. Per D-015 a decision model may only make a gate
@@ -197,12 +198,14 @@ def _error_text(resp: httpx.Response) -> str:
 
 # --- routed API --------------------------------------------------------------------------------
 
-async def _run(router: Any, role: str, state: Any, question: dict[str, Any]) -> tuple[ChoiceAnswer, str, str]:
-    """Try each route of ``role`` in order. Returns (answer, source, route ref)."""
+async def _run(router: Any, role: str, state: Any, question: dict[str, Any],
+               spare: str | None = None) -> tuple[ChoiceAnswer, str, str]:
+    """Try each route of ``role`` in order, minus the ``spare`` role's routes. Returns (answer, source, route ref)."""
     router.check_spend_policy()
     last: DecisionError | None = None
     tried = 0
-    for route in router.chain(role):
+    spared = router.chain(spare) if spare else []
+    for route in [r for r in router.chain(role) if r not in spared]:
         picked = router._pick(route, router.clock())
         while picked is not None:
             cred, sole = picked
@@ -218,7 +221,7 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any]) -> 
                         raise DecisionError("reply lacks a choice answer", None, True)
                     router.record_success(cred.id, route.model)
                     return ans, "decision", route.ref
-                ans = await _generative(router, route, cred, sole, state, question)
+                ans = await _generative(router, route, cred, sole, state, question, bool(spare))
                 return ans, "generative", route.ref
             except DecisionError as e:
                 if getattr(router, "spend", None) is not None:
@@ -227,7 +230,7 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any]) -> 
                 last = e
                 if e.status in (400, 413, 422):  # the question itself is bad; another route will fail too
                     raise
-                router.record_failure(cred.id, route.model, e.status, e.retry_after, sole)
+                router.record_failure(cred.id, route.model, e.status, e.retry_after, sole, model_only=bool(spare))
             picked = router._pick(route, router.clock())
     if last is not None:
         raise DecisionError(f"all routes for {role!r} failed; last error: {last}", last.status,
@@ -237,12 +240,13 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any]) -> 
 
 
 async def _generative(router: Any, route: Any, cred: Any, sole: bool, state: Any,
-                      question: dict[str, Any]) -> ChoiceAnswer:
+                      question: dict[str, Any], model_only: bool = False) -> ChoiceAnswer:
     """Ask a chat model for a JSON answer and map it onto the decision shapes (probability 1.0)."""
     messages = [Message.system(_SYSTEM_PROMPT), Message.user(_user_prompt(state, question))]
     text: list[str] = []
     failed: list[ProviderEvent] = []
-    async for ev in router._attempt(route, cred, sole, messages, [], {"max_tokens": 200, "temperature": 0}, failed):
+    async for ev in router._attempt(route, cred, sole, messages, [], {"max_tokens": 200, "temperature": 0}, failed,
+                                    model_only=model_only):
         if ev.kind == "text":
             text.append(ev.text)
         elif ev.kind == "error":
@@ -288,6 +292,6 @@ def _parse_generative(text: str, question: dict[str, Any]) -> ChoiceAnswer:
 
 
 async def ask_choice_result(router: Any, state: Any, question: Any, options: Sequence[str] | Mapping[str, Any], *,
-                            role: str = "decision") -> ChoiceResult:
-    ans, source, route = await _run(router, role, state, choice_question(question, options))
+                            role: str = "decision", spare: str | None = None) -> ChoiceResult:
+    ans, source, route = await _run(router, role, state, choice_question(question, options), spare)
     return ChoiceResult(ans.choice, ans.probabilities, source, route, ans.confidence)
