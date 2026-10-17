@@ -4,10 +4,12 @@ The engine wraps; it does not summarise. It does two jobs.
 
 On the Exo core loop (``select_context`` on every turn):
 1. classifies the principal's messages with ``exo.capture`` and pins each ruling and correction
-   it sees, per session, on disk;
+   it sees, per session, on disk (a message whose author is not the principal is skipped, D-040);
 2. when a pinned item is no longer verbatim in the prompt (the core's summary tree folded it away),
    adds a ``<exo-pinned>`` block with it, word for word, to the system message;
-3. writes a handoff file whenever the core reports a new summary node (``on_compacted``).
+3. writes a handoff file whenever the core reports a new summary node (``on_compacted``);
+4. after an undo (``on_session_switch(rewound=True)``) drops the pins of the undone turns and the summary nodes
+   the core deleted with them, and rewrites each handoff that may quote them, another thread's included (D-041).
 The session id comes with every core hook (``session_id=``), so nothing is tracked by hand.
 
 On a flat message list (``compress``, used by hosts and tools):
@@ -30,6 +32,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from exo import handoff as hf
+from exo import provenance
 from exo.store import exo_home
 
 from exo.core.slots import ContextEngine
@@ -128,11 +131,13 @@ class ExoContextEngine(ContextEngine):
         d['_x_session_id'] = ''
         d['_x_topic'] = ''
         d['_x_messages'] = []
+        d['_x_window_sid'] = ''  # the session _x_messages came from (on_compacted may bind another)
         d['_x_resume_block'] = ''
         d['_x_last_handoff'] = None
         d['_x_last_pinned'] = ''
         d['_x_pins'] = {}
         d['_x_nodes'] = {}
+        d['_x_handoffs'] = {}  # session -> (path, session of the window it was written from, topic): automatic only
 
     # --- attribute routing ---------------------------------------------------------
 
@@ -186,7 +191,10 @@ class ExoContextEngine(ContextEngine):
 
     @property
     def topic(self) -> str:
-        return self._x_topic or (f'session-{self._x_session_id[:12]}' if self._x_session_id else 'session')
+        return self._topic_for(self._x_session_id)
+
+    def _topic_for(self, sid: str) -> str:
+        return self._x_topic or (f'session-{sid[:12]}' if sid else 'session')
 
     @topic.setter
     def topic(self, value: str) -> None:
@@ -260,6 +268,7 @@ class ExoContextEngine(ContextEngine):
 
     def on_session_reset(self) -> None:
         self._x_messages = []
+        self._x_window_sid = ''
         self._x_resume_block = ''
         if self.inner is not None and hasattr(self.inner, 'on_session_reset'):
             self.inner.on_session_reset()
@@ -271,6 +280,7 @@ class ExoContextEngine(ContextEngine):
         self._bind(kwargs.get('session_id'))
         if messages:  # the core passes the real recent transcript
             self._x_messages = list(messages)
+            self._x_window_sid = self._x_session_id
         _set_live(self)
         if self.inner is not None and hasattr(self.inner, 'on_turn_complete'):
             self.inner.on_turn_complete(messages, usage, **kwargs)
@@ -279,6 +289,63 @@ class ExoContextEngine(ContextEngine):
         if session_id:
             self._x_session_id = str(session_id)
             _set_live(self)
+
+    def on_session_switch(self, new_session_id: str, *, rewound: bool = False,
+                          messages: list[dict[str, Any]] | None = None,
+                          summaries: dict[str, list[str]] | None = None, **kwargs: Any) -> None:
+        """A switch binds the engine to the new session. After an undo the Exo core sends ``rewound=True``, every
+        message still visible in that thread and ``summaries`` ({tree key: ids of the summary nodes still stored}).
+        Each pin no visible principal message holds goes, and so does each cached summary node the undo deleted (its
+        text may quote the undone ruling), so an undone ruling is never put back as the principal's words (D-041).
+        A pin whose message was only summarized stays. The undone turns leave the window kept for handoffs when it is
+        this thread's, whichever thread the engine is bound to, and each automatic handoff that may quote them is
+        written again."""
+        if self.inner is not None and hasattr(self.inner, 'on_session_switch'):
+            self.inner.on_session_switch(new_session_id, rewound=rewound, **kwargs)
+        if not rewound or messages is None:
+            self._bind(new_session_id)
+            return
+        sid = str(new_session_id or '')
+        held = [hf.Signal('', hf.message_text(m)).key() for m in provenance.principal_view(messages)
+                if m.get('role') == 'user']
+        try:  # a pin is the classified sentence, whitespace folded: classify what is left the same way
+            found = {f'{s.kind}:{s.key()}' for group in sg.classified(messages) for s in group}
+        except Exception as e:
+            logger.warning('exo-context: signal extraction failed: %s', e)
+            found = set()
+        pins = self._load_pins(sid)
+        kept = {k: [t for t in items if f'{k}:{hf.Signal(k, t).key()}' in found
+                    or any(hf.Signal(k, t).key() in u for u in held)] for k, items in pins.items()}
+        changed = kept != pins
+        if changed:
+            self._x_pins[sid] = kept
+            self._save_pins(kept, sid)
+        alive = {str(k): set(v) for k, v in (summaries or {}).items()}
+        lost = set()
+        for owner, cached in self._x_nodes.items():  # any session's cache: an agent tree's nodes go to its latest thread
+            gone = [n for n, (_, _, tree) in cached.items() if tree in alive and n not in alive[tree]]
+            for n in gone:
+                del cached[n]
+            if gone:
+                lost.add(owner)
+        if sid == self._x_window_sid:  # the window last seen is this thread's: the undone turns leave it
+            have = {hf.message_text(m) for m in messages if isinstance(m, dict)}
+            window = [m for m in self._x_messages if isinstance(m, dict) and hf.PIN_OPEN not in hf.message_text(m)
+                      and (m.get('role') == 'system' or hf.message_text(m) in have)]
+            block = self._block_for(kept)
+            self._x_messages = window + ([{'role': 'system', 'content': block}] if block else [])
+            self._x_last_pinned = ''
+        # Rewrite each automatic handoff that may quote the undone turns: one that lost a summary node (on an agent
+        # tree, the thread the node was reported to), this thread's own when its pins changed, and one written from
+        # this thread's window. A window that has since been replaced cannot be cleaned, so it is left out.
+        before = self._x_last_handoff
+        for x, (_, src, topic) in list(self._x_handoffs.items()):
+            if x in lost or src == sid or (x == sid and changed):
+                self._write_handoff(x, topic, windowless=src != self._x_window_sid)
+        # The pinned block links the last handoff: keep that link only to a file that is current, never to one
+        # written before the undo by /exo handoff or from a window the undo changed.
+        current = {p for p, _, _ in self._x_handoffs.values()}
+        self._x_last_handoff = before if before in current else (self._x_handoffs.get(sid) or (None,))[0]
 
     def select_context(self, request_messages: list[dict[str, Any]], **kwargs: Any):
         self._bind(kwargs.get('session_id'))
@@ -290,6 +357,7 @@ class ExoContextEngine(ContextEngine):
         hidden = self._hidden(msgs, pins)
         full = self._block_for(pins)
         self._x_messages = list(msgs) + ([{'role': 'system', 'content': full}] if full else [])
+        self._x_window_sid = self._x_session_id
         parts = [self._block_for(hidden, self._x_last_handoff) if hidden else '', self._x_resume_block]
         extra = '\n\n'.join(p for p in parts if p)
         if not extra:
@@ -306,16 +374,16 @@ class ExoContextEngine(ContextEngine):
 
     # --- pins: rulings and corrections seen this session, kept verbatim ---------------
 
-    def _pin_file(self) -> Path:
-        sid = re.sub(r'[^A-Za-z0-9_.-]+', '_', self._x_session_id or 'default')
+    def _pin_file(self, sid: str | None = None) -> Path:
+        sid = re.sub(r'[^A-Za-z0-9_.-]+', '_', (self._x_session_id if sid is None else sid) or 'default')
         return exo_home() / 'context-pins' / f'{sid}.json'
 
-    def _load_pins(self) -> dict[str, list[str]]:
-        sid = self._x_session_id
+    def _load_pins(self, sid: str | None = None) -> dict[str, list[str]]:
+        sid = self._x_session_id if sid is None else sid
         pins = self._x_pins.get(sid)
         if pins is None:
             try:
-                data = json.loads(self._pin_file().read_text('utf-8'))
+                data = json.loads(self._pin_file(sid).read_text('utf-8'))
                 pins = {k: [str(t) for t in data.get(k, [])] for k in ('ruling', 'correction')}
             except (OSError, ValueError, AttributeError):
                 pins = {'ruling': [], 'correction': []}
@@ -339,13 +407,16 @@ class ExoContextEngine(ContextEngine):
                     have.add(s.key())
                     changed = True
         if changed:
-            try:
-                path = self._pin_file()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(pins), encoding='utf-8')
-            except OSError as e:
-                logger.warning('exo-context: could not save pins: %s', e)
+            self._save_pins(pins)
         return pins
+
+    def _save_pins(self, pins: dict[str, list[str]], sid: str | None = None) -> None:
+        try:
+            path = self._pin_file(sid)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(pins), encoding='utf-8')
+        except OSError as e:
+            logger.warning('exo-context: could not save pins: %s', e)
 
     @staticmethod
     def _hidden(msgs: list[dict[str, Any]], pins: dict[str, list[str]]) -> dict[str, list[str]]:
@@ -364,21 +435,32 @@ class ExoContextEngine(ContextEngine):
         if not self._x_write_handoffs:
             return
         sid = self._x_session_id
-        nodes = self._x_nodes.setdefault(sid, {})
-        nodes[getattr(node, 'id', len(nodes))] = (getattr(node, 'start', 0), str(getattr(node, 'text', '') or ''))
-        summary = '\n\n'.join(t for _, t in sorted(nodes.values(), key=lambda x: x[0]) if t)[-6000:]
+        nodes = self._x_nodes.setdefault(sid, {})  # id -> (start, text, tree key), so undo can drop deleted nodes
+        nodes[getattr(node, 'id', len(nodes))] = (getattr(node, 'start', 0), str(getattr(node, 'text', '') or ''),
+                                                  str(getattr(node, 'session', '') or sid))
+        self._write_handoff(sid)
+
+    def _write_handoff(self, sid: str, topic: str | None = None, windowless: bool = False) -> None:
+        """This session's automatic handoff: the summary nodes seen, the window's signals (none when `windowless`) and
+        the pins. An undo passes the topic the file was written under, so the rewrite replaces it."""
+        nodes = self._x_nodes.get(sid, {})
+        summary = '\n\n'.join(t for _, t, _ in sorted(nodes.values(), key=lambda x: x[0]) if t)[-6000:]
+        window = [] if windowless else self._x_messages
+        topic = topic or self._topic_for(sid)
         try:
-            signals = sg.extract(self._x_messages)
-            pins = self._load_pins()
+            signals = sg.extract(window)
+            pins = self._load_pins(sid)
             signals = dataclasses.replace(
                 signals,
                 rulings=sg.merge(signals.rulings, [hf.Signal('ruling', t) for t in pins['ruling']]),
                 corrections=sg.merge(signals.corrections, [hf.Signal('correction', t) for t in pins['correction']]))
-            path = hf.write_handoff(self.topic, self._x_messages, self._x_store, self.handoff_dir,
+            path = hf.write_handoff(topic, window, self._x_store, self.handoff_dir,
                                     session=sid or None, principal=self._x_principal, summary=summary,
                                     signals=signals)
             self._x_last_handoff = path
+            self._x_handoffs[sid] = (path, '' if windowless else self._x_window_sid, topic)
         except Exception as e:
+            self._x_handoffs.pop(sid, None)  # the file on disk may be stale: an undo must not link it
             logger.warning('exo-context: handoff write failed: %s', e)
 
     # --- compaction --------------------------------------------------------------

@@ -27,6 +27,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- exo-context no longer pins peer, bus or job text as the principal's words (D-040). `select_context` now gets each
+  message's author, and handoff extraction skips every user message that is not the principal's. A peer message or
+  a job notice that said "From now on ..." was put back into the system message as a principal ruling once it left
+  the tail, and written to handoffs. The recalled-memory block is now authored `system`. A pinned block inside
+  peer, bus, job, tool or agent text is no longer carried into a handoff.
+- `/undo` now reaches exo-context (D-041): the pins of the undone turns are dropped, so an undone ruling no longer
+  comes back on the next turn as the principal's verbatim words. The summaries the undo deleted leave exo-context's
+  handoffs too, and each handoff that may quote them is written again at once, including another thread's on an
+  agent tree. The pinned block no longer links a handoff written before the undo. A ruling that was only summarized
+  stays pinned.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

@@ -546,6 +546,8 @@ class CoreRuntime:
     async def _session_undo(self, b: s.SessionUndo) -> dict[str, Any]:
         self._info(b.session)
         removed = self.store.undo(b.session, b.turns)
+        if removed and (rewound := getattr(self.loop.context, "rewound", None)):
+            rewound(b.session)  # the context plugin drops what it kept from the undone turns (D-041)
         info = self.store.update_session(b.session)
         self.hub.publish(s.SessionUpdated(session=info), b.session)
         return {"session": to_dict(info), "removed": removed}

@@ -101,7 +101,9 @@ class ContextAdapter:
         pick = getattr(self.plugin, "select_context", None)
         if pick is None:
             return msgs
-        flat = [{"role": m.role, "content": m.text()} for m in msgs]
+        # D-040: author and principal flag by author, so exo-context pins only what the principal wrote. A fork's
+        # copy of the principal's message is still theirs (is_principal, the capture test, skips it as a copy).
+        flat = [provenance.flat(m) for m in msgs]
         try:
             out = await maybe_await(call_plugin(pick, flat, conversation_messages=flat, budget_tokens=0,
                                            session_id=session))
@@ -111,6 +113,21 @@ class ContextAdapter:
         if not out:
             return msgs
         return apply_selection(msgs, flat, out)
+
+    def rewound(self, session: str) -> None:
+        """After undo: ``on_session_switch(session, rewound=True, messages=, summaries=)`` with every message still
+        visible in the thread and ``{tree key: ids of its summary nodes still stored}`` for the tree the thread's
+        view reads, so the context plugin drops what it kept from the undone turns: their pins, and each summary
+        node (``on_compacted``) the undo deleted (D-041)."""
+        if self.plugin is None or getattr(self, "_private", lambda _s: False)(session):  # D-028: never a private thread
+            return
+        flat = [provenance.flat(m) for m in self.tree.transcript(session, 1 << 30)]  # the whole thread, not a window
+        stored = getattr(getattr(self.tree, "store", None), "summaries", None)
+        agent_key = getattr(self.tree, "_agent_key", None)  # an agent thread reads its agent's tree
+        key = (agent_key(session) if agent_key else None) or session  # node.session of the nodes on_compacted got
+        summaries = {key: [n.id for n in stored(key)]} if stored else None
+        safe_plugin_call(self.plugin, "on_session_switch", session, rewound=True, messages=flat, summaries=summaries,
+                         session_id=session)
 
     def on_turn_complete(self, session: str, usage: Usage) -> None:
         if self.plugin is not None:
