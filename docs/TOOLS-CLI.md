@@ -65,7 +65,11 @@ from the store with no model, so it is a floor to beat. `--responder module:func
 
 **Output.** `<store>/reports/eval-YYYY-MM-DD.json` and `.html`, and a one-line JSON summary on stdout. With
 `--no-write`, it prints the whole JSON report and writes nothing. `src/exo/eval.py` also holds the scoreboard
-(`reports/scoreboard.jsonl`) and the pieces the nightly learning loop uses to compare candidates.
+(`reports/scoreboard.jsonl`) and the pieces the nightly learning loop uses to compare candidates (`docs/LEARNING.md`,
+"The slow loop"). `build_replays` and `load_items` turn only the principal's own verdicts, answers and rulings into
+cases (D-040). Pass `principals` to name who that is. `climb` caches the incumbent's scores against its config, the
+cases' full contents, the checks and a caller's `fingerprint` (the models and rubric). A candidate's `exclude` names
+the ledger events its lesson came from. Cases built from them never count for or against it.
 
 ## `exo brief`: the morning brief
 

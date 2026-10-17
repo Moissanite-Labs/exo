@@ -23,7 +23,8 @@ you (`exo.provenance.principal_names`: `principal`, your store's id, and the pri
 ruling the agent wrote with `exo_note`, a correction it reported with `exo_should_have_been`, or text that came from a
 peer, a bus seat or a job notice is never read as yours, whatever it says. Consolidation counts these as
 `not_principal` and skips them. History you import with `exo ingest` is authored as you, so it counts like a live
-turn. A Hermes row that may be an agent's brief is authored `hermes:unverified-user` and never does.
+turn. A Hermes row that may be an agent's brief is authored `hermes:unverified-user` and never does. The eval cases
+built from the ledger follow the same rule: see "The slow loop".
 
 ## The fast loop
 
@@ -43,7 +44,9 @@ numbers stay fixed for ledger records:
 - Rule 5: skill patches always need the held-out eval gate. Types in `eval_gate_for` and domains in
   `high_impact_domains` need it too. A ruling citation cannot bypass this check or a critic objection.
   Non-skill gated proposals also need high weight and `min_sessions` (2) sessions. The fast loop waits.
-  The slow loop evaluates. With no held-out cases the gate fails and the proposal remains open.
+  The slow loop evaluates. With no held-out cases the gate fails and the proposal remains open. A case built
+  from the lesson's own evidence (the replay of a cited verdict, or a preference pair that cites it) does not
+  count as held out.
 - Rule 1: an ordinary unguarded, ungated proposal citing your ruling or answer promotes immediately.
   The event's author is checked, so an agent-written ruling never triggers this rule (D-040).
 - Rule 4: ordinary taste or fact with high weight, at least `min_sessions` sessions, and no critic objection
@@ -63,6 +66,20 @@ A promotion can be reverted (`exo.learn.revert`), and the revert is a ledger row
 lesson, or drop an auto-promoted one. It replaces the incumbent only if it scores better on the dev cases by a margin,
 is not worse on held-out cases, and passes the gate. The night is capped by `climb.candidates` (10) and
 `climb.judge_samples` (3). The judge is the `eval` role, which defaults to the main route (D-018).
+
+The climb adds only ordinary lessons: not guarded, not gated by rule 5, and with no critic objection. Only rule 5
+promotes a gated lesson on its own. It runs earlier the same night and keeps its critic, weight, session and
+held-out checks. A candidate with no held-out case in its domains fails the gate. A lesson's own evidence never
+counts for or against it, on dev or on held-out cases.
+
+The cases are your eval Q&A, your preference pairs, and replays built from the ledger. A replay comes only from
+your own verdict, answer or ruling, and its question is your own message before it (D-040). An agent's
+`exo_should_have_been` report, or a peer's message, is never a gold answer or a question.
+
+The incumbent's scores are cached in `<store>/eval/incumbent.json`. They are scored again when the incumbent's rules
+or skills change, or when anything else that moves a score changes: an eval case (its text, not only its id), the
+checks in `eval/rules.jsonl`, the rubric in `eval/rubric.md`, the judge samples, or the models on the main and
+eval routes.
 
 Nothing calls `nightly` on a timer yet. D-023 lists the trigger as open.
 
