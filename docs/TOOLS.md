@@ -51,6 +51,15 @@ earlier stage failed with a code other than 141 (SIGPIPE) and the last stage suc
 line in the job's end notice. Only the command's last pipeline is checked, and a command that sets its own EXIT trap
 turns the note off. The trace rule `shell.masked_exit` (docs/TRACE.md) flags it.
 
+## Streamed output
+
+While a foreground `bash` command runs, its output also goes out in pieces as `tool.output` events: clients show
+them live and sessions.sqlite keeps them. The output is read as one UTF-8 stream, so a character split between two
+reads stays whole in the stream and in the result. Only a sequence cut off by the end of the output becomes U+FFFD.
+Known key values are cut out of the stream as `[redacted]`, even when a key is split between two reads. The end of
+a read that could be the start of a key waits for the next read or for the end of the command. Other output is not
+held back. The result is redacted as a whole when the call returns.
+
 ## Execution brokers (D-020)
 
 An installed broker can mediate every registered tool after pre-hooks and
