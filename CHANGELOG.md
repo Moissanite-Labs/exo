@@ -141,6 +141,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   never read, so a job for one seat could run as another. A timer now claims the slot before it runs it, a
   seat-bound job runs only in its seat, `run_now` from another seat is refused, and `add` refuses a seat no core
   could run.
+- Background jobs (D-032): shutting down exod with a job running no longer sends the thread a "was killed"
+  notice. With `wake` unset or on, that notice started a model turn while the engine was closing, a paid call
+  at every such shutdown. The job now ends with one `killed` record and one `job.updated`. Once shutdown has
+  begun no job notice starts a turn. A notice still in delivery is queued for the next one.
 
 ## [0.2.0] (egg) - 2026-10-13
 
