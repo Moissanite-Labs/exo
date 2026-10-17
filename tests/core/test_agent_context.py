@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 
 from exo.core.context import NOTE_HEAD, AgentContext
 from exo.core.loop import Loop
@@ -319,3 +320,143 @@ def test_compact_with_nothing_to_do_is_quiet():
     a = _talk(loop, n=1)
     res = run(ctx.compact(a.id, "SYS"))
     assert res["folded"] == [] and res["skipped"] == 0 and res["failed"] == []
+
+
+def test_undo_keeps_other_threads_news():
+    """Undo takes back the turn, not the note stored during it: the note holds another thread's news, which this
+    thread has marked as seen, so it would not be told again. The undone text reaches no other thread later."""
+    store, ctx, prov, loop, _ = setup()
+
+    async def go():
+        a = await loop.create_session(agent="razi", title="A")
+        b = await loop.create_session(agent="razi", title="B")
+        await loop.send(a.id, "hi")
+        await loop.send(b.id, "my locker code is 4417")
+        await loop.send(a.id, "typo question")  # its note carries B's news
+        assert any("4417" in m.text() for m in prov.calls[-1])
+        assert store.undo(a.id) == 2  # the question and its reply
+        await loop.send(a.id, "what is my locker code?")
+        a_call = prov.calls[-1]
+        await loop.send(b.id, "anything new?")
+        return a_call, prov.calls[-1]
+    a_call, b_call = run(go())
+    a_text, b_text = ("\n".join(m.text() for m in call) for call in (a_call, b_call))
+    assert "4417" in a_text and "typo question" not in a_text
+    assert "what is my locker code?" in b_text and "typo question" not in b_text
+
+
+class GatedSumm(Summ):
+    """Keeps the CFACT words of what it summarizes; waits on ``gate`` while one is set."""
+
+    def __init__(self):
+        super().__init__()
+        self.gate: asyncio.Event | None = None
+
+    async def summarize(self, content, previous=None, **kw):
+        if self.gate is not None:
+            await self.gate.wait()
+        self.prompts.append(content)
+        return "S[" + " ".join(sorted(set(re.findall(r"CFACT\d", f"{previous} {content}")))) + "]"
+
+
+def test_undo_keeps_agent_summaries_that_hold_no_undone_entry():
+    """Undo in A drops the agent-tree nodes holding A's undone turn and the merges above them, nothing else. While
+    their rebuild waits on the summarizer, thread C's summarized news stays in B's view."""
+    store, summ = SessionStore(), GatedSumm()
+    ctx = AgentContext(store, summ, leaf_size=2, tail_messages=2, min_compact_tokens=0, view_budget=1)
+    prov = Echo()
+    loop = Loop(store, prov, context=ctx, system_prompt="SYS", retry_delay=0)
+
+    async def go():
+        a = await loop.create_session(agent="razi", title="A")
+        c = await loop.create_session(agent="razi", title="C")
+        b = await loop.create_session(agent="razi", title="B")
+        await loop.send(a.id, "a first question")  # log positions 1-2
+        for i in range(5):
+            await loop.send(c.id, f"CFACT{i} deployed")
+        for _ in range(4):  # leaves, then merges (the view is over its tiny budget)
+            await ctx.settle("agent:razi", 5, None)
+            ctx.note("agent:razi")
+        await ctx.settle("agent:razi", 5, None)
+        ctx.view_budget = 10**6  # from here on no turn waits for the summarizer
+        await loop.send(b.id, "hello from B")
+        before = {(n.level, n.index) for n in store.summaries("agent:razi")}
+        summ.gate = asyncio.Event()  # the rebuild does not land before B's next call
+        assert store.undo(a.id) == 2
+        after = {(n.level, n.index) for n in store.summaries("agent:razi")}
+        await loop.send(b.id, "what did thread C deploy?")
+        call = prov.calls[-1]
+        summ.gate.set()
+        await ctx.settle("agent:razi", 5, None)
+        return before, after, call
+    before, after, call = run(go())
+    assert {(0, 0), (1, 0), (1, 1)} <= before
+    assert before - after == {n for n in before if n[1] == 0}  # leaf 0 (positions 1-2) and the merges above it
+    text = "\n".join(m.text() for m in call)
+    assert [f"CFACT{i}" in text for i in range(5)] == [True] * 5
+
+
+def test_fork_tail_starts_where_the_parent_tail_starts():
+    """A fork's copies count at their original's log position: the fork opens with its parent's tail, not the
+    parent's whole transcript (the tree already holds the rest). So does a fork of that fork."""
+    store, ctx, prov, loop, summ = setup()
+
+    async def go():
+        a = await loop.create_session(agent="razi")
+        for i in range(40):
+            await loop.send(a.id, f"turn {i}")
+        await ctx.settle("agent:razi", 5, None)
+        ctx.note("agent:razi")
+        await ctx.settle("agent:razi", 5, None)
+        parent = await ctx.build(a.id, "SYS")
+        child = await loop.fork(a.id)
+        fork = await ctx.build(child.id, "SYS")
+        await loop.send(child.id, "in the fork")
+        grand = await loop.fork(child.id)
+        return parent, fork, await ctx.build(grand.id, "SYS")
+    parent, fork, grand = run(go())
+    copies = [m.text() for m in fork if m.meta.get("local") == "fork"]
+    assert copies == [m.text() for m in parent[1:]]
+    copies = [m.text() for m in grand if m.meta.get("local") == "fork" and not m.meta.get("note")]
+    assert copies == [m.text() for m in parent[1:]] + ["in the fork", "ok 40"]
+
+
+def test_compact_shrinks_a_forks_tail():
+    """/compact sets the thread's compaction point from its last log entry the new summaries cover; on a fork that
+    counts the copies at their original's position, so the fork's tail shrinks too."""
+    store, ctx, prov, loop, summ = setup(leaf_size=2, tail_messages=4)
+    a = _talk(loop)
+    child = run(loop.fork(a.id))
+    res = run(ctx.compact(child.id, "SYS"))
+    assert res["complete"] and res["folded"]
+    assert res["after"]["tail"]["messages"] < res["before"]["tail"]["messages"]
+
+
+def test_a_fork_keeps_the_copies_the_tree_cannot_hold():
+    """A copy counts at its original's log position only while the tree can hold that original: a private thread's
+    entries never enter it, nor does an entry the parent undid after the fork. The fork's tail keeps those copies."""
+    store, ctx, prov, loop, _ = setup()
+
+    async def go():
+        a = await loop.create_session(agent="razi", title="public")
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        await loop.send(p.id, "my locker code is 4417")
+        for i in range(4):
+            await loop.send(a.id, f"early turn {i}")
+        await loop.send(a.id, "my pin is 5521")
+        child_a = await loop.fork(a.id)
+        assert store.undo(a.id) == 2
+        for i in range(12):
+            await loop.send(a.id, f"public work {i}")
+            await loop.send(p.id, f"private chat {i}")
+            await ctx.settle("agent:razi", 5, None)
+        for i in range(6):  # the pin copy is no longer among the fork's last tail_messages
+            await loop.send(child_a.id, f"fork turn {i}")
+        a_call = prov.calls[-1]
+        child_p = await loop.fork(p.id)
+        await loop.send(child_p.id, "what is my locker code?")
+        return a_call, prov.calls[-1]
+    a_call, p_call = run(go())
+    a_text, p_text = ("\n".join(m.text() for m in call) for call in (a_call, p_call))
+    assert "4417" in p_text and "private chat 0" in p_text
+    assert "5521" in a_text and "early turn 0" not in a_text  # the tree holds the copies before it

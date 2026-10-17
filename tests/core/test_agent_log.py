@@ -156,3 +156,52 @@ def test_undo_drops_agent_tree_summaries_that_cover_the_undone_entries():
     assert st.undo(a.id) == 2
     assert [n.id for n in st.summaries("agent:razi")] == ["s_old"]
     assert not st.has_summary("s_new")
+
+
+def test_undo_keeps_agent_tree_summaries_that_hold_no_undone_entry():
+    """D-041: undo drops the nodes whose range holds an entry it hides, and the merges above them. A node over
+    other threads' entries stays, and so does a node rebuilt over entries an earlier undo already hid."""
+    from exo.core.context import SummaryNode
+
+    st = SessionStore()
+    a, b = st.create_session(agent="razi"), st.create_session(agent="razi")
+
+    def say(sid, *texts):
+        for t in texts:
+            st.append_message(sid, Message.user(t) if t[0] in "qb" else Message.assistant(t))
+
+    def node(name, level, index, start, end):
+        st.save_summary(SummaryNode(id=f"s_{name}", session="agent:razi", level=level, index=index, start=start,
+                                    end=end, text=name, status="done"))
+
+    say(a.id, "q0", "a0")                          # pos 1-2
+    say(b.id, *(f"b{i}" for i in range(6)))        # pos 3-8
+    say(a.id, "q1", "a1")                          # pos 9-10
+    say(b.id, "b6", "b7")                          # pos 11-12
+    for args in (("0", 0, 0, 1, 4), ("1", 0, 1, 5, 8), ("2", 0, 2, 9, 12), ("top", 1, 0, 1, 8)):
+        node(*args)
+    assert st.undo(a.id) == 2                      # hides 9-10: only the node holding them goes
+    assert sorted(n.id for n in st.summaries("agent:razi")) == ["s_0", "s_1", "s_top"]
+    node("2b", 0, 2, 9, 12)                        # rebuilt from what is left of 9-12
+    assert st.undo(a.id) == 2                      # hides 1-2: leaf 0 and the merge above it go
+    assert sorted(n.id for n in st.summaries("agent:razi")) == ["s_1", "s_2b"]
+
+
+def test_undo_keeps_context_notes_and_drops_other_local_rows():
+    """A context note stored during the undone turn holds other threads' news, not the turn: it stays in the thread
+    and its search, and the count leaves it out. Other rows outside the log (fork copies) still go."""
+    st = SessionStore()
+    a = st.create_session(agent="razi")
+    st.append_message(a.id, Message.user("keep"))
+    st.append_message(a.id, Message.assistant("ok"))
+    st.append_message(a.id, Message.user("typo"))
+    note = Message.user("news from another thread: zanzibar")
+    note.meta.update({"note": "threads", "local": True})
+    st.append_message(a.id, note)
+    st.append_message(a.id, Message.assistant("answer"))
+    assert st.undo(a.id) == 2
+    assert [m.text() for m in st.messages(a.id)] == ["keep", "ok", "news from another thread: zanzibar"]
+    assert st.search("zanzibar", session=a.id) and st.search("typo", session=a.id) == []
+    child = st.fork(a.id)
+    assert st.undo(child.id) == 2                  # the copies of "keep" and "ok"; the copied note stays
+    assert [m.text() for m in st.messages(child.id)] == ["news from another thread: zanzibar"]

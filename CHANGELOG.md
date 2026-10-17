@@ -27,6 +27,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Undo in one thread no longer loses other threads' news: the context note stored during the undone turn stays,
+  and undo deletes only the summaries that hold an undone entry and the merges above them, not every later one.
+- A forked thread no longer resends its parent's whole transcript on every model call: the fork's copies count at
+  their original's log position, so the fork opens with its parent's tail, and `/compact` shrinks a fork's tail too.
+  Copies the tree cannot hold (a private thread's, or an entry the parent undid after the fork) stay in the tail.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

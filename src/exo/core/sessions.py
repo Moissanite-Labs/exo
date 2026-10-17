@@ -293,20 +293,22 @@ class SessionStore:
         return rows[0]["seq"] if rows else None
 
     def truncate(self, sid: str, after_seq: int) -> int:
-        """Remove messages with seq > after_seq and summaries touching them. Agent log entries are hidden,
-        not deleted, so the log stays append-only."""
+        """Remove messages with seq > after_seq and summaries holding them. Agent log entries are hidden,
+        not deleted, so the log stays append-only. Context notes stay: they hold other threads' news."""
 
         def drop(db: sqlite3.Connection) -> int:
-            ids = [r[0] for r in db.execute("SELECT id FROM messages WHERE session=? AND seq>? AND hidden=0",
+            keep = " AND json_extract(data, '$.meta.note') IS NULL"
+            ids = [r[0] for r in db.execute("SELECT id FROM messages WHERE session=? AND seq>? AND hidden=0" + keep,
                                              (sid, after_seq))]
-            logged = db.execute("SELECT agent, MIN(pos) AS first FROM messages WHERE session=? AND seq>?"
-                                " AND hidden=0 AND pos IS NOT NULL", (sid, after_seq)).fetchone()
-            if logged and logged["agent"]:  # an agent tree is keyed agent:<name> and spans log positions
-                db.execute("DELETE FROM summaries WHERE session=? AND end_seq>=?",
-                           (f"agent:{logged['agent']}", logged["first"]))
+            logged = db.execute("SELECT agent FROM messages WHERE session=? AND seq>? AND hidden=0 AND pos IS NOT NULL",
+                                (sid, after_seq)).fetchone()
+            if logged:  # agent tree nodes (ranges are log positions) holding an undone entry, and the merges above them
+                db.execute("DELETE FROM summaries WHERE session=? AND EXISTS (SELECT 1 FROM messages m WHERE m.session=?"
+                           " AND m.seq>? AND m.hidden=0 AND m.pos BETWEEN summaries.start_seq AND summaries.end_seq)",
+                           (f"agent:{logged['agent']}", sid, after_seq))
             db.executemany("DELETE FROM messages_fts WHERE msg_id=?", [(i,) for i in ids])
             db.execute("UPDATE messages SET hidden=1 WHERE session=? AND seq>? AND pos IS NOT NULL", (sid, after_seq))
-            db.execute("DELETE FROM messages WHERE session=? AND seq>? AND pos IS NULL", (sid, after_seq))
+            db.execute("DELETE FROM messages WHERE session=? AND seq>? AND pos IS NULL" + keep, (sid, after_seq))
             db.execute("DELETE FROM summaries WHERE session=? AND end_seq>?", (sid, after_seq))
             return len(ids)
 
@@ -380,9 +382,12 @@ class SessionStore:
                          from_dict(Message, json.loads(r["data"])), bool(r["hidden"])) for r in rows]
 
     def last_logged_seq(self, sid: str, upto_pos: int) -> int:
-        """The seq of this thread's last log entry with pos <= upto_pos (0 if none)."""
-        (seq,) = self._q("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=? AND pos IS NOT NULL AND pos<=?",
-                         (sid, upto_pos))[0]
+        """The seq of this thread's last log entry with pos <= upto_pos (0 if none). A fork copy counts at its
+        original's pos (kept in its meta) while the tree can hold that original (visible, not private)."""
+        (seq,) = self._q("SELECT COALESCE(MAX(c.seq), 0) FROM messages c WHERE c.session=? AND COALESCE(c.pos, (SELECT"
+                         " o.pos FROM messages o JOIN sessions s ON s.id=o.session WHERE json_extract(c.data, '$.meta.local')"
+                         "='fork' AND o.agent=(SELECT agent FROM sessions WHERE id=c.session) AND o.pos=json_extract(c.data,"
+                         " '$.meta.pos') AND o.hidden=0 AND s.kind!='private'))<=?", (sid, upto_pos))[0]
         return seq
 
     def agents(self) -> list[str]:
