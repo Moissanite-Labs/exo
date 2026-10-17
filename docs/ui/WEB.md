@@ -57,10 +57,19 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
   `/context` reports), cache share of that call, session cost. While busy a
   packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
-- **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed;
-  click to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded ·
-  1781 → 153 tok` and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic
-  (a `notice` that starts with `tip`).
+- **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed; click
+  to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded · 1781 → 153 tok`
+  and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic (a `notice` that starts with
+  `tip`). A reply streams as plain text; once complete it is rendered as Markdown: headings, lists (ordered lists
+  keep their source numbers, across blank lines and the fences or sub-items that belong to an item; a table, quote
+  or fence indented under an item renders inside it), fenced code, `>` quotes, and GFM pipe tables that scroll
+  sideways inside the message. Line breaks inside a paragraph are kept, as the streamed text showed them. Everything
+  is built as DOM nodes, so model text never becomes markup: only `http(s)` links become anchors, images and raw
+  HTML stay text. A reply builds at most 10,000 table cells, and a table has at most 64 columns and no more cells
+  padded onto short rows than its source has characters; past that, a table is shown as its source text, so many
+  replies in one thread cost what their bytes cost. Quotes nest at most 8 deep and lists 9, and a deeper `>` stays
+  text. In the classic layout a reply that grows when it renders (a table is taller than its pipe text) keeps the
+  view at the bottom if it was there.
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
   `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
   automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,

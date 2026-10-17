@@ -191,7 +191,11 @@ export function mount(root) {
     if (m.role === "assistant") {
       const text = partsText(m.content);
       const it = find(m.id);
-      if (it) { it.text = text || it.text; it.streaming = false; it.complete = true; redraw(it); }
+      if (it) {
+        const keep = nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);   // judged before the redraw: a rendered table is taller than its streamed text
+        it.text = text || it.text; it.streaming = false; it.complete = true; redraw(it);
+        if (keep) { home(); requestAnimationFrame(home); }
+      }
       else if (text) push({ kind: "assistant", id: m.id, text, complete: true });
       for (const c of m.tool_calls || []) if (!find(c.id)) push({ kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "running" });
     } else if (m.role === "tool") {
@@ -288,7 +292,7 @@ export function mount(root) {
     if (it.kind === "user") {
       el = h("div", { class: "xc-msg xc-user" + fresh }, h("span", { class: "xc-prompt" }, "\u203A"), h("span", { class: "xc-text" }, it.text));
     } else if (it.kind === "assistant") {
-      it.textEl = h("div", { class: "xc-text" }, it.streaming ? it.text : renderMarkdown(it.text));
+      it.textEl = h("div", { class: "xc-text" }, it.streaming ? it.text : markdown(it.text));
       el = h("div", { class: "xc-msg xc-asst" + (it.streaming ? " xc-streaming" : "") + fresh }, it.textEl, it.streaming ? null : feedbackBar(it));
     } else if (it.kind === "sys") {
       el = h("div", { class: "xc-msg xc-sysline" + (it.tone === "tip" ? " xc-tip" : "") + fresh },
@@ -611,4 +615,9 @@ export function mount(root) {
   sessionStorage.removeItem("xc-open");
   refreshSessions().then(() => { if (!current && (asked || sessions.length)) open(asked || sessions[0].id); });
   return off;
+}
+
+// A completed reply as Markdown, or its plain text if the renderer fails: one reply must never blank the thread.
+function markdown(text) {
+  try { return renderMarkdown(text); } catch (e) { return text; }
 }
