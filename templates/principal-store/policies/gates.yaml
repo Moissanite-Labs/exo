@@ -66,7 +66,9 @@ escalate:
 # or a mapping of match keys. Fill from their rulings.
 reserved: []
 
-# Actions no agent may take at all (block). Same entry format as reserved.
+# Actions refused outright instead of asked (deny). Same entry format as reserved. A category
+# entry matches the category the line ends up with, while a command:<regex> sees the whole line;
+# see docs/GATE.md "Known limits" for compound and nested lines and forms not read yet.
 deny: []
 
 # What happens when the principal does not answer an ask. The host blocks on timeout, so

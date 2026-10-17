@@ -172,7 +172,8 @@ Any indirection walked past it. It now works the other way round. A small lexer
 and splits the line into simple commands. Each simple command has one program position (after
 assignments, reserved words such as `if` and `do`, and prefixes such as `sudo`, `env`, `timeout`).
 
-A command is `allow` only when every program in it is known and nothing is hidden:
+A command is `allow` only when every program in it is known and nothing the gate reads is hidden
+(the known forms it does not read yet are listed under "Known limits" below):
 
 - Known programs: `READ_PROGRAMS` (cat, ls, rg, head...), `SHELL_PROGRAMS` (mkdir, cp, pytest,
   ruff...), the tools with their own rules (git, gh, curl, vercel, stripe, ssh, exo...), and
@@ -185,30 +186,75 @@ A command is `allow` only when every program in it is known and nothing is hidde
   git aliases and command-running git config; gh aliases and extensions; an unknown program.
 - Where the gate can see inside (a `bash -c` string, a heredoc or pipe fed to a shell, the code
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
-  `uv run`) it classifies the inner text too, within a bounded inspection depth. The result is
-  the most severe part, and it keeps the `indirection` signal, so `decide` asks even when the
-  inner part alone would only log.
+  `uv run`) it classifies the inner text too, within a bounded inspection depth (four levels,
+  see "Known limits"). The result is the most severe part, and it keeps the `indirection`
+  signal, so `decide` asks even when the inner part alone would only log.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
 - The principal can lower `opaque_exec` only by naming it: `categories: {opaque_exec: act}` or a
   rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
 
-Known limits. Shell inspection is bounded by `_DEPTH = 4`. For example, `gh pr comment 3 --body hi` wrapped in up to four nested
-`bash -c` strings is still classified as `github_post`. At five wrappers, the inner
-post is no longer inspected: the result is `opaque_exec` with the `indirection` signal,
-and default policy asks for approval. Its summary can say `bash runs shell commands`
-without identifying the depth limit or the hidden post.
+Known limits. Each one is true of main today; where a fix is open, its PR is named.
 
-Category denies apply to the forms the gate inspects. With `github_post: deny`, the
-four-wrapper example is denied, while the five-wrapper example asks as `opaque_exec`.
-Approving opaque code can therefore execute an operation that would be denied if visible.
-Review the entire command before approving it. An opaque approval does not prove that all
-nested operations satisfy category policy.
-
-A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
-`npm install` runs package scripts) can run code the agent wrote earlier with a local write.
-The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+- **Inspection depth (#137).** Nesting is read four levels deep (`_DEPTH = 4` in `exo.gate`).
+  The bound holds for a `bash -c`, `sh -c` or `eval` chain called from the bash tool:
+  `gh pr comment 3 --body hi` inside up to four such wrappers is still `github_post`; inside
+  five, the innermost text is not read and the line is `opaque_exec` with the `indirection`
+  signal, so the default policy asks. The card names the outermost wrapper (`bash runs shell
+  commands`, `eval runs text as a command`), not the cap or the hidden command, so it is the
+  same card as `bash -c 'foo'`: a compound classification keeps the first of equally severe
+  parts, and the `nested too deep to read` part that `xargs`, `find -exec`, `uv run` and `$( )`
+  add at the cap reaches the card only when the outer part is benign (`uv run`, `echo $( )`).
+  A command found inside a code string (`python -c`, `node -e`, `execute_code`, a heredoc fed
+  to an interpreter) gets one more level wherever the code sits, because the code reader starts
+  again at the last level: one `bash -c` inside `os.system(...)` is read; a second usually is
+  not (it depends on how the literals are quoted) and the line asks, as `opaque_exec` or, through
+  `execute_code`, as `code`. A chain that mixes wrappers and code strings can therefore be read
+  deeper than four levels. Nested `$( )` is flattened by the lexer and not capped. Past the cap
+  the line asks unless the principal has set a policy for `opaque_exec` (a `command:` deny entry
+  or a deny rule that matches the text still denies it), with one exception: an
+  `ssh` or `mosh` command reached at the cap is allowed (see "Hidden text that is allowed
+  outright" below).
+- **A category deny fires on the category the line ends up with.** `classify_shell` keeps the
+  most severe part of a compound line, and `categories:` applies to that category only. With
+  `github_post: deny`, the four-wrapper example is denied and the five-wrapper example asks as
+  `opaque_exec`. On a compound line a more severe part can take over and the line asks:
+  `gh pr comment 3 --body hi && rm -rf build` is fully inspected, but it is `delete`, the card
+  reads `rm build`, and approving it sends the denied post. A category name in the `deny:` list
+  behaves the same today (a `command:` regex entry is matched against the whole line). D-075
+  (#126, in review) makes a `deny:` or `reserved:` entry match every part of the line within the
+  inspection depth; `categories:` keeps matching the dominant part. So approving an opaque card
+  or a compound line can run an action that would be denied on its own. Read the whole command
+  before approving it: an approval does not vouch for what the gate did not classify.
+- **Hidden text that is allowed outright.** Some unread execution does not even ask today. An
+  entry for the hidden action's category (`github_post`, `delete`...) does not reach it, in
+  `categories:`, `deny:` or `reserved:`. An entry that matches the command text does (a `command:`
+  regex, or a rule with a `command` match), but quoting can evade that regex today (#136; fix in
+  review in #142). An `ssh` or `mosh` command reached at the depth cap, after four levels of `ssh`
+  hops, runner prefixes such as `uv run` or `poetry run`, or `$( )`, in any mix (for example
+  `echo $(ssh h0 ssh h1 ssh h2 ssh h3 ...)`), falls back to plain `shell` and is allowed under the
+  default policy, the template and a category deny (#153; fix in review in #164); a `target:`
+  entry that matches its host still catches it. `${...}` bodies are skipped by the lexer, so
+  `echo ${X:-$(gh pr comment 3 --body hi)}` is `read` and allowed (#143; fix in review in #158).
+  Options of trusted programs whose value is a command are not parsed, so `tar --to-command`,
+  `--checkpoint-action=exec=`, `split --filter`, `sort --compress-program`, `man -P`, `rsync -e`
+  and the `sqlite3` `.shell` dot-command, among others, are allowed too (#154; fix in review in
+  #164). A `$( )` inside a quoted array subscript given to a builtin that takes a variable name
+  (`printf -v`, `read`, `declare`/`typeset`/`local`, `unset`, `test -v` and `[ -v`, `wait -p`) is
+  run by bash, but the gate reads the quoted word as plain text, so
+  `printf -v 'a[$(gh pr comment 3 --body hi)]' %s x` is `read` and allowed (#179).
+- **Other deny-to-ask paths.** Where the gate cannot read the command it files the line as
+  `opaque_exec`, which asks, and the card names the wrapper rather than the action: `eval $(...)`
+  and `eval "$(...)"`; a command arriving on stdin, `echo '...' | xargs -I{} sh -c '{}'` (while
+  `echo 3 | xargs -I{} sh -c 'gh pr comment {} --body hi'` is read and denied); the wrappers
+  `watch`, `parallel`, `tmux`, `screen` and `setsid` (#160, with the `function NAME {` form);
+  `coproc` (#131; fix in review in #140); a heredoc after a compound command's closing token,
+  `{ bash; } <<EOF` (#161).
+- **Project code.** A trusted program that runs project code (pytest runs conftest.py, git runs
+  hooks, `npm install` runs package scripts) can run code the agent wrote earlier with a local
+  write. The gate does not claim to stop that; it stops the one-step forms. A sandbox is the
+  real fix.
 
 ## The store is credentials (D-038)
 

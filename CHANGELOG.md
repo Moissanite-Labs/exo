@@ -26,6 +26,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
+- Gate docs (#137, #141, D-038 amendment): `docs/GATE.md` "Known limits" records the four-level shell inspection
+  depth and what the card says at the cap, that a category deny fires on the category a compound line ends up
+  with (approving the card can run the denied part), the known forms still allowed outright on main (with the
+  issue and the PR in review where there is one), and the other deny-to-ask paths. The template's `deny:` comment
+  uses the deny vocabulary and says which entries see the whole line, and the user guide says that a few forms
+  run without asking and to read the whole command before allowing it. No behaviour change; the test pins the
+  boundary and the compound-line case.
 
 ## [0.2.0] (egg) - 2026-10-13
 
