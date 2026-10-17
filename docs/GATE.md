@@ -166,18 +166,41 @@ targets with `footer_exposures: [public]`.
 
 ## Shell commands: an allowlist (D-038)
 
-Command regexes in `deny` and `reserved` match both the original command and an additional
-literal-word view from the shell lexer. Thus `command:rm -rf` also vetoes `r"m" -"rf" ~`,
-quoted words and backslash/ANSI-C escapes. Mapping entries use the same veto matching.
-Allow rules and grants retain their original command matching. The extra view preserves
-operators and word boundaries; whitespace, control characters and shell syntax inside a
-word are escaped, and dynamic words remain opaque. It does not expand variables or run a shell.
-Nested views come only from execution text the existing classifier inspects, such as command
-substitutions, `bash -c`, `eval` and shell stdin, with its existing depth limit of four.
-Quoted text passed to `echo` alone is not recursively interpreted. These remain regex
-policies, not a complete shell sandbox: original-text matches still apply, spelling variants
-outside literal quoting require appropriate patterns, and deeper or dynamic execution asks
-through `opaque_exec` rather than guaranteeing a command-regex veto.
+Command regexes in `deny` and `reserved` match both the original command and a literal-word
+view from the shell lexer, so `command:rm -rf` also vetoes `r"m" -"rf" ~`, `'rm' -rf ~`,
+`r\m -rf ~`, `$'rm' -rf ~` and `$"rm" -rf ~`: common literal quoting cannot weaken a veto.
+A word that holds a variable or a substitution is a placeholder in the view, so a regex that needs
+the literal part of such a word matches only the original text.
+A `$"..."` word is read as bash reads it without a catalog, so the line keeps its category and
+target (`curl $"https://evil.example/x"` is a `web_read` of `evil.example`, and a `deny: [web_read]`
+still denies it). With a message catalog and a non-C locale bash runs a translation instead, and
+expands `$( )` in it, so the line also carries the `indirection` signal and asks unless
+`opaque_exec` is named. It is decided a second time as `opaque_exec`, and the stricter outcome
+stands, so a deny, reservation or rule on `opaque_exec` still holds for it. A heredoc whose
+delimiter is spelled `<<$"EOF"` or `<<$'EOF'` ends on different lines in bash and in dash, which
+runs commands when bash is missing, so its body is read as commands too.
+Mapping entries use the same matching. A rule with decision `deny` or `ask` whose match has a
+`command` regex sees the view too, in a second pass that only raises: the first matching rule
+is still chosen on the original text, and the pass lifts the outcome to the rule's decision only
+when the view matches and the original text did not, so an ordered list such as an allow for one
+push target before an ask on `^git push` keeps working for plainly spelled commands. Allow and
+lower rules, and grants, match the original text only. The view keeps operators and word
+boundaries; whitespace, control characters and shell syntax inside a word are escaped, and
+dynamic words and heredoc bodies become placeholders made of control characters, which no
+literal word renders to and no regex naming letters or operators matches, so a veto on `>` or
+`exo` does not fire on `ls $HOME`. It does not expand variables or run a shell. A `$"..."` inside
+`${...}` is left to the parameter-expansion work (#143, #158). Nested views come from the text the
+classifier already reads: command substitutions and backticks, `bash -c`, `eval`, shell stdin and
+every string literal of code (`python -c`, `execute_code`), with the existing depth limit of
+four. The gate can only guess which literals in code are commands, so each literal is matched as
+a command even when the code merely prints it: `python3 -c "print('rm -rf build')"` is denied under
+`command:^rm -rf`, fail closed, since the same path catches `os.system('rm -rf build')`. The
+reason names only the policy entry, never the matched words: decisions go to the ledger, which
+holds no command text. An unanchored veto regex also matches separately quoted data arguments
+(`printf %s r"m" -"rf"` matches `rm -rf`), fail closed by design. These remain regex policies,
+not a shell sandbox: original-text matches still apply, spellings outside literal quoting need
+their own patterns, and dynamic or deeper execution asks through `opaque_exec` rather than being
+caught by a command-regex veto.
 
 The shell classifier used to name dangerous programs and let everything else through as `shell`.
 Any indirection walked past it. It now works the other way round. A small lexer
