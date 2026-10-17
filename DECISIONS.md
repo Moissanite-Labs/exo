@@ -772,6 +772,24 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+  *Amendment 2026-10-16 (issue #136):* a `command:` regex in `deny` and `reserved` matched the command text
+  only, so `'git' push`, `g\it push`, `git pu''sh` and `$'rm' -rf` walked past a veto the lexer had already
+  decoded. Those regexes now also match a literal-word view (`_policy_command_view`: the lexer's decoded words,
+  operators kept, shell syntax inside a word escaped, dynamic words and heredoc bodies as placeholders made of
+  control characters, which no literal word renders to), merged through the classifier's existing recursion
+  into `$( )`, backticks, `bash -c`, `eval`, shell stdin and every string literal of code. A non-empty
+  `$"..."` word is read as bash reads it without a catalog, so the line keeps its category, target and the
+  vetoes keyed on them, and adds the `indirection` and `locale translation` signals, so it asks unless
+  opaque_exec is named: with a message catalog and a non-C locale bash runs the translation, and expands
+  `$( )` in it. The line is also decided as opaque_exec and the stricter outcome stands, so a veto on
+  opaque_exec holds for it too. `$"..."` inside `${...}` is left to the parameter-expansion work (#143,
+  #158). A heredoc delimiter spelled `$"EOF"` or `$'EOF'` ends the body on different lines in bash and in
+  dash (the shell tool's fallback when bash is missing), so that body is read as commands too. A `deny` or
+  `ask` rule keyed on `command:` sees the view in a second pass that only raises; the first-match rule is still
+  chosen on the original text. Allow and lower rules and grants match the original text only: the view adds
+  vetoes and never authorizes. Accepted cost, fail closed: a literal that code only prints, and separately
+  quoted data arguments under an unanchored regex, are matched too. The reason names only the policy entry,
+  never the matched words: the hook writes decisions to the signed ledger, which holds no command text.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
