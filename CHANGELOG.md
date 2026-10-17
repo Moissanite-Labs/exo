@@ -144,6 +144,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - The climb's cached incumbent scores are scored again when the eval cases' contents, the checks, the rubric, the
   judge samples or the main or eval route models change. Before, only the config and the case ids were checked,
   so a lesson that changed nothing could be kept against stale scores.
+- `exo taste export-house` no longer ships the principal's own name, organisation or email domain. Onboarding
+  writes them into the body of `person/identity` and the `PRINCIPAL.md` heading, and the deny list read neither. Now
+  the heading name (also when half filled in) and every email domain fail the export, and the words of the
+  onboarding name and role answers hold an item for review, read from the ledger too when the node withholds an
+  answer with a phone number. A generic word in an answer ("team") only holds, a value item too, and never fails
+  the built-in house soul. While the heading is still the template's, the name answer gives the name written as
+  one word (`quillvarden`, held) and the initial plus surname (`qvarden`). These terms also match when joined to
+  another word by `-` or `_` or to digits, as in a handle or a repo name. The initial plus surname fails only as a
+  handle (`@alee`, `alee42`), and an email domain matches only as written, so `me.com` does not fail "Show me
+  commands".
+- The judge score parser no longer misreads plain judge replies. "0.9 - nothing wrong with it" and "On a scale of
+  0 to 1, 0.8" scored 0, and "Not correct." scored 1. A named scale is now only a label, "nothing wrong" does not
+  count as wrong, and "not correct" does. A number that opens the reply is the score.
 
 ## [0.2.0] (egg) - 2026-10-13
 

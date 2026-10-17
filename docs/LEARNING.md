@@ -81,6 +81,11 @@ or skills change, or when anything else that moves a score changes: an eval case
 checks in `eval/rules.jsonl`, the rubric in `eval/rubric.md`, the judge samples, or the models on the main and
 eval routes.
 
+The judge's reply is read as a score from 0 to 1 (`exo.eval.parse_score`). A named scale ("0 to 1", "(0-10)") is
+only a label. A number that opens the reply is the score, as the prompt asks. Otherwise a reply that calls the
+answer wrong, incorrect or not correct is 0 ("nothing wrong" does not), a bare "correct" is 1, and the first
+number counts. A full score in a reply that also calls the answer wrong is 0, and a reply with no number is 0.
+
 Nothing calls `nightly` on a timer yet. D-023 lists the trigger as open.
 
 ## The house taste (D-044)

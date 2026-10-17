@@ -119,21 +119,40 @@ class LLMGrader:
         return parse_score(out)
 
 
-def parse_score(text: str) -> float:
-    t = text.strip()
-    if re.search(r"\bincorrect\b|\bwrong\b", t, re.I):
-        return 0.0
-    if re.search(r"\bcorrect\b", t, re.I) and not re.search(r"\d", t):
-        return 1.0
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:/\s*(\d+))?", t)
-    if not m:
-        return 0.0
+_SCALE = re.compile(r"\b0(?:\.0+)?\s*(?:-|\u2013|\u2014|to|and)\s*(?:1|10|100)(?:\.0+)?\b", re.I)
+_NUM = r"(\d+(?:\.\d+)?)\s*(?:/\s*(\d+(?:\.\d+)?))?"
+_WRONG = re.compile(r"\b(?:incorrect|wrong)\b|\bnot\s+(?:correct|right)\b|n['\u2019]t\s+(?:correct|right)\b", re.I)
+_NOT_WRONG = re.compile(r"\b(?:nothing|not|never|no)\s+(?:(?:is|was)\s+)?(?:wrong|incorrect)\b|"
+                        r"n['\u2019]t\s+(?:wrong|incorrect)\b", re.I)
+
+
+def _scaled(m: re.Match) -> float:
     x = float(m.group(1))
     if m.group(2):
         x /= float(m.group(2)) or 1.0
     elif x > 1.0:
         x /= 10.0 if x <= 10 else 100.0
     return max(0.0, min(1.0, x))
+
+
+def parse_score(text: str) -> float:
+    """A judge reply as a score from 0 to 1. A named scale ("0 to 1", "(0-10)") is only a label. A number that opens
+    the reply is the score, as the prompt asks. Otherwise a reply that calls the answer wrong, incorrect or not
+    correct is 0 ("nothing wrong" does not), a bare "correct" is 1, and the first number counts. A full score in a
+    reply that also calls the answer wrong is 0. x/y is divided out, and a bare number above 1 reads as out of 10
+    (above 10, out of 100). No number is 0."""
+    t = _SCALE.sub(" ", text.strip())
+    wrong = bool(_WRONG.search(_NOT_WRONG.sub(" ", t)))
+    lead = re.match(r"[\W_]*" + _NUM, t)
+    if lead:
+        x = _scaled(lead)
+        return 0.0 if wrong and x >= 1.0 else x
+    if wrong:
+        return 0.0
+    if re.search(r"\bcorrect\b", t, re.I) and not re.search(r"\d", t):
+        return 1.0
+    m = re.search(_NUM, t)
+    return _scaled(m) if m else 0.0
 
 
 # --- eval Q&A -----------------------------------------------------------------------------------
