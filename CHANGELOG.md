@@ -143,6 +143,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   the turn failed and the route cooled down. An `@path` in a message, including a peer or bus message, no longer
   makes the claude CLI read that file and send it to the model past the gate, `~/.ssh` keys included. Found in the
   readiness audit and its review. #146 tracks the web composer side.
+- Docs for a first user. The README now opens with what Exo is today: a coding agent for the terminal and the
+  browser that runs on your Claude Code login or an API key. The Quick start, `docs/INSTALL.md` and the site's
+  install step say the repository is a private preview with access on request. They no longer say a first run
+  with no model key opens the providers panel: the terminal client prints a note that tells you to type
+  `/providers`.
+- The automatic Claude Code route is documented (`docs/PROVIDERS.md` "Use your Claude Code login", user guide
+  §1): it uses `claude-cli:sonnet`, cost reads `unknown`, and `exo models` does not list it. The user guide no
+  longer offers Muse as the keyless main model, because Muse serves only the `aux` role.
+- The README and the site's web app page send you to the full link `exo web` prints, with `#token=`, not the
+  bare address. `docs/INSTALL.md` names the README's real `## Quick start` section. The README and the intro
+  skill say `exo`, not the `exo-tui` command the installer does not provide. The user guide's screenshot paths
+  exist, and it gains a glossary (principal, store, ledger, seat, thread, gate, grant, finding, wave, D-number)
+  that the README links before those words appear. `tests/docs/test_first_user_docs.py` keeps these true.
 
 ## [0.2.0] (egg) - 2026-10-13
 

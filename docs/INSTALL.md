@@ -1,6 +1,7 @@
 # Installing Exo
 
-The README has the short version (`## Install`). This page has the full detail.
+The README has the short version (`## Quick start`). This page has the full detail. The repository is a private
+preview during the early build. Access is on request from [Aska Digital](https://digital.askaconsult.com).
 
 One script installs Exo for any user on macOS or Linux (D-004). It never touches an existing
 `~/.hermes` unless you name it.
@@ -28,7 +29,7 @@ export PATH="$HOME/.local/bin:$PATH"   # zsh: ~/.zshrc, bash: ~/.bashrc, fish: f
 
 `--modify-path` appends that line to the rc file once (a second run sees it and adds nothing). A file already at
 `~/.local/bin/exo` that is not this installer's link is left alone, with a warning. The installer never reads or
-writes model keys; the first `exo` run with no working provider opens the providers panel (`/providers`).
+writes model keys. The first `exo` run with no working provider says so and tells you to type `/providers`.
 
 `exo update` checks the checkout for tracked changes, untracked files and ignored source files before pulling with
 `--ff-only`. Commit, stash (including untracked files), or remove local changes before updating. It
