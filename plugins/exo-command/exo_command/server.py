@@ -14,6 +14,7 @@ Routes:
                               or the Last-Event-ID header); the chat page streams text from here
   ...                         chat, feedback, ui.respond, tasks and schedule routes: see ``api.py``
   POST /api/approvals/<id>    body ``{"decision": "allow|deny|allow_always", "note": ""}``
+  POST /api/launch            body ``{"code": "..."}``: trade a one-time launch code for the page token (#166)
   *    /api/providers...       provider setup (D-034): see ``providers.py``; loopback peer, loopback Host,
                               same Origin and the per-launch token, or refused
 
@@ -23,7 +24,13 @@ page. Every ``/api/`` route and both event streams also need the per-launch page
 or ``?token=`` on the two event streams (a browser EventSource cannot set headers). An Origin, when sent, must be
 this same host, and Sec-Fetch-Site must be same-origin or none. Only the page shell (``/`` and ``/static/``) is
 served without the token: it is code, not data. `exo web` prints the page address with the token in the URL
-fragment (never sent to a server) and opens it in the browser; the page moves it to sessionStorage.
+fragment (never sent to a server); the page moves it to sessionStorage.
+
+Launch code (#166). The browser is opened on ``#code=<one-time code>``, never on the token: the launcher's argv is
+readable by other users of the host in /proc. ``/api/launch`` is the one ``/api/`` route without the token; it
+passes every other check of ``providers.guard``. A code answers the token once, for at most ``LAUNCH_TTL`` seconds.
+A code that comes back after it was used means two parties held it: the token is replaced, the streams opened with
+the old one end, and the terminal gets a warning and the new link.
 """
 from __future__ import annotations
 
@@ -32,6 +39,7 @@ import hmac
 import json
 import mimetypes
 import secrets
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlsplit
@@ -48,6 +56,8 @@ REASONS = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 40
            501: "Not Implemented", 502: "Bad Gateway"}
 DECISIONS = ("allow", "deny", "allow_always")
 STREAMS = ("/api/events", "/api/stream")
+LAUNCH = "/api/launch"
+LAUNCH_TTL = 120.0
 
 
 class WebServer:
@@ -61,6 +71,10 @@ class WebServer:
         self._conns: set = set()
         self._feeds: list = []
         self._hosts: set = set()
+        self._codes: Dict[str, float] = {}   # unused launch codes -> monotonic deadline
+        self._spent: set = set()             # redeemed launch codes: one coming back means it leaked
+        self._streams: set = set()           # event stream connections, ended when the token is replaced
+        self._shown: Optional[Tuple[str, int]] = None
 
     # ------------------------------------------------------------ lifecycle
 
@@ -71,6 +85,7 @@ class WebServer:
         if host and host not in ("0.0.0.0", "::", ""):
             names.add("[{}]".format(host) if ":" in host and not host.startswith("[") else host)
         self._hosts = {"{}:{}".format(n, bound).lower() for n in names}
+        self._shown = (host, bound)
         return bound
 
     def _refuse(self, headers: Dict[str, str], path: str, q: Dict[str, Any]) -> Optional[Tuple[int, Dict[str, Any]]]:
@@ -86,6 +101,8 @@ class WebServer:
         site = headers.get("sec-fetch-site")
         if site is not None and site not in ("same-origin", "none"):
             return 403, {"error": "cross-site request refused"}
+        if path == LAUNCH:   # no token yet: _launch runs providers.guard_peer instead
+            return None
         sent = headers.get(prov.TOKEN_HEADER, "")
         if not sent and path in STREAMS:
             sent = (q.get("token") or [""])[0]
@@ -107,10 +124,14 @@ class WebServer:
                       "or run: exo providers add <provider>", flush=True)
         except Exception:
             pass
-        if self.open_browser:
+        if self.open_browser and not _loopback_shown(host):
+            # /api/launch answers loopback only, and the token link must not go back into the launcher's argv
+            print("exo-command: not opening a browser: the one-time browser link works on a loopback address "
+                  "only. Open the link above.", flush=True)
+        elif self.open_browser:
             try:
                 import webbrowser
-                webbrowser.open(url)
+                webbrowser.open(self.launch_url(host, bound))
             except Exception:
                 pass
         feed = asyncio.create_task(self._feed())
@@ -139,10 +160,44 @@ class WebServer:
 
     def page_url(self, host: str, port: int) -> str:
         """The page address with the token in the fragment, so it never reaches a server or a log line."""
-        shown = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
-        if ":" in shown and not shown.startswith("["):
-            shown = "[{}]".format(shown)
-        return "http://{}:{}/#token={}".format(shown, port, self.token)
+        return "{}/#token={}".format(_origin(host, port), self.token)
+
+    def launch_url(self, host: str, port: int) -> str:
+        """The address the browser is opened on: a fresh one-time code, not the token (#166)."""
+        now = time.monotonic()
+        self._codes = {c: t for c, t in self._codes.items() if t > now}
+        code = secrets.token_urlsafe(32)
+        self._codes[code] = now + LAUNCH_TTL
+        return "{}/#code={}".format(_origin(host, port), code)
+
+    def redeem(self, code: Any) -> Tuple[int, Dict[str, Any]]:
+        """The page token for an unused, unexpired launch code, once. A used code coming back replaces the token."""
+        if not isinstance(code, str) or not code:
+            return 403, {"error": "no launch code"}
+        sent = code.encode()
+        for c in list(self._spent):
+            if hmac.compare_digest(sent, c.encode()):
+                self._spent.discard(c)   # one replacement per leaked code: its holder never saw the new token
+                self.rotate()
+                return 403, {"error": "launch code already used: the page token was replaced"}
+        for c, deadline in list(self._codes.items()):
+            if hmac.compare_digest(sent, c.encode()):
+                del self._codes[c]
+                if time.monotonic() >= deadline:
+                    return 403, {"error": "launch code expired"}
+                self._spent.add(c)
+                return 200, {"token": self.token}
+        return 403, {"error": "unknown launch code"}
+
+    def rotate(self) -> None:
+        """Replace the page token. Every open page must re-open; streams opened with the old token end now."""
+        self.token = secrets.token_urlsafe(32)
+        for t in list(self._streams):
+            t.cancel()
+        if self._shown is not None:
+            print("exo-command: warning: a browser launch link was used twice, so someone else may have had it. "
+                  "The page token was replaced; open the new link:", flush=True)
+            print("exo-command: {}".format(self.page_url(*self._shown)), flush=True)
 
     async def close(self) -> None:
         if self._server is not None:
@@ -165,6 +220,7 @@ class WebServer:
             pass
         finally:
             self._conns.discard(task)
+            self._streams.discard(task)
             try:
                 writer.close()
             except Exception:
@@ -186,6 +242,8 @@ class WebServer:
         if refused is not None:
             return await self._json(writer, *refused)
         c = self.centre
+        if path in STREAMS:
+            self._streams.add(asyncio.current_task())
         if path == "/" and method == "GET":
             return await self._file(writer, STATIC / "index.html")
         if path.startswith("/static/") and method == "GET":
@@ -219,6 +277,10 @@ class WebServer:
             raws = [(q.get("since") or ["0"])[0], headers.get("last-event-id") or "0"]
             since = max([int(r) for r in raws if r.isdigit()] or [0])
             return await self._events(writer, since, (q.get("session") or [None])[0])
+        if path == LAUNCH:
+            if method != "POST":
+                return await self._json(writer, 405, {"error": "POST only"})
+            return await self._launch(reader, writer, headers)
         if path == "/api/providers" or path.startswith("/api/providers/"):
             return await self._providers(reader, writer, headers, method, path)
         if path == "/api/complete/files":   # file names: same guard as the key routes (loopback, Host, token)
@@ -253,6 +315,20 @@ class WebServer:
             body = got
         status, data = await prov.handle(self.centre, method, path, body, self.router_factory)
         body.clear()
+        return await self._json(writer, status, data)
+
+    async def _launch(self, reader, writer, headers: Dict[str, str]) -> None:
+        """Redeem a launch code (#166). Fails closed: any error answers 403 and no token."""
+        peer = writer.get_extra_info("peername")
+        refused = prov.guard_peer(headers, peer[0] if isinstance(peer, (tuple, list)) and peer else None)
+        if refused is not None:
+            return await self._json(writer, *refused)
+        try:
+            n = int(headers.get("content-length", "0"))
+            body = json.loads(await reader.readexactly(n)) if 0 < n <= 1024 else None
+            status, data = self.redeem(body.get("code") if isinstance(body, dict) else None)
+        except Exception:
+            status, data = 403, {"error": "launch code refused"}
         return await self._json(writer, status, data)
 
     async def _body(self, reader, writer, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
@@ -363,6 +439,18 @@ class WebServer:
                 await writer.drain()
         finally:
             self.centre.unsubscribe(q)
+
+
+def _origin(host: str, port: int) -> str:
+    shown = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    if ":" in shown and not shown.startswith("["):
+        shown = "[{}]".format(shown)
+    return "http://{}:{}".format(shown, port)
+
+
+def _loopback_shown(host: str) -> bool:
+    """Whether the address `exo web` shows for this bind passes the loopback Host check of /api/launch."""
+    return prov._host_name(urlsplit(_origin(host, 0)).netloc) in prov.LOOPBACK_NAMES
 
 
 def _frame(ev: Dict[str, Any]) -> bytes:

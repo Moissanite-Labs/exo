@@ -19,11 +19,29 @@ With `--socket` or `--url` nothing is started; the page says the core is not rea
 ## Opening the page and the page token (D-039)
 
 `exo web` makes a random page token for each launch and keeps it in memory only. It prints the page address with
-the token in the URL fragment, `http://127.0.0.1:7342/#token=...`, and, when run in a terminal, opens that address
-in the browser. A fragment is never sent to a server or written to a server log. The page moves the token to
-`sessionStorage` (this tab only) and takes it out of the address bar. A new launch makes a new token, so open the
-latest complete link after a restart; the bare URL shows instructions rather than a usable client. Tokens are
-not persisted across launches. Opening a new token fragment in the same tab reconnects it with that token; `--no-open` prints the link without opening it.
+the token in the URL fragment, `http://127.0.0.1:7342/#token=...`. A fragment is never sent to a server or written
+to a server log. The page moves the token to `sessionStorage` (this tab only) and takes it out of the address bar.
+A new launch makes a new token, so open the latest complete link after a restart; the bare URL shows instructions
+rather than a usable client. Tokens are not persisted across launches. Opening a new token fragment in the same tab
+reconnects it with that token; `--no-open` prints the link without opening it.
+
+When run in a terminal, `exo web` also opens the browser, but not on the token link: the URL handed to the browser
+launcher sits in its argument list, which other users of the host can read in `/proc` (#166). The browser gets
+`http://127.0.0.1:7342/#code=...` instead: a one-time launch code, made fresh for each browser launch, held in
+memory, good for one use and for at most 120 seconds. The page takes the code out of the address bar first (so a
+reload cannot send it twice), then posts it to `/api/launch`, which answers the token once and burns the code. That
+route is the only `/api/` route without the token; it makes every other check of the provider routes (loopback
+peer, Host, Origin, Sec-Fetch-Site), compares in constant time, and answers `Cache-Control: no-store`. A refused
+code (used, expired, unknown or malformed) gets 403 and no token, and the page says: this browser link was already
+used or has expired; open the link `exo web` printed in the terminal. Any other refusal (Host, Origin, peer) shows
+the server's reason. The launch route answers loopback only, so with
+`--host` on a non-loopback address `exo web` opens no browser and says so; open the printed link instead.
+
+A used code that comes back means two parties held it. `exo web` then replaces the page token: every open page
+must re-open, the event streams opened with the old token end, and the old token gets 403 everywhere. The terminal
+prints a warning and the new `#token=` link. The leaked code causes this once; an expired or unknown code is
+refused without a new token. A browser can keep the launch URL in its own argument list for its whole life, so the
+warning can also come from a replay long after the launch; the replay gets no token either way. The printed link and `--no-open` are unchanged.
 
 Every `/api/` route needs the token: the page sends it as `X-Exo-Token` on every fetch (`api()` in `dom.js`) and as
 `?token=` on the two event streams (`stream()` in `dom.js`; a browser EventSource cannot send headers). The Host

@@ -27,6 +27,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Security
+- `exo web` no longer puts the page token in the browser launcher's argv, which other users of the host can read in
+  `/proc` (#166, D-039). The browser opens a one-time launch code (`#code=`, one use, 120 seconds) that the page
+  trades for the token over loopback; a code used twice replaces the token and warns in the terminal. The printed
+  `#token=` link is unchanged. With a non-loopback `--host` no browser is opened; use the printed link.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
