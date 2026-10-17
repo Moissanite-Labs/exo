@@ -27,6 +27,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- History brought in with `exo ingest` now feeds the rule of three in `exo consolidate`. Ingest writes your own
+  messages with role `principal`, and consolidation read only role `user`, so an import never drafted a belief. Rows
+  read before this fix are not in the cluster cache: delete `<store>/proposals/state.json` and the next run rebuilds
+  it from them.
+- Rebuilding that cache (`proposals/state.json` missing or stale) counts only your own utterances (D-040). Before, a
+  rebuild also counted Hermes briefs of doubtful authorship (`hermes:unverified-user`) and peer, bus and job turns,
+  so one matching sentence from you could complete a rule-of-three proposal, which promotion rule 4 could then apply
+  with no review. Summaries from an import (`secondary`) do not count either.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

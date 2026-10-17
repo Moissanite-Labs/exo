@@ -91,6 +91,16 @@ def test_build_replays_from_verdicts_answers_and_rulings(led):
     assert E.build_replays(led, cutoff="2000-01-01T00:00:00Z") == []
 
 
+def test_build_replays_reads_ingested_principal_rows(led):
+    # `exo ingest` writes the principal's own messages with role "principal"; they give a ruling its context.
+    led.append("utterance", {"text": "Going forward keep it short", "role": "principal"}, "principal",
+               session="chatgpt:c1")
+    led.append("utterance", {"text": "Sure, short it is.", "role": "assistant"}, "chatgpt", session="chatgpt:c1")
+    led.append("ruling", {"text": "Keep it short."}, "principal", session="chatgpt:c1")
+    (r,) = E.build_replays(led)
+    assert r["verdict"] == "ruling" and r["question"] == "Going forward keep it short"
+
+
 def test_split_has_a_fixed_held_out_sample():
     pool = items(50)
     a = E.split(pool)
