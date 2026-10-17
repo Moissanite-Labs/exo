@@ -35,8 +35,9 @@ More: `docs/ONBOARDING.md`.
 
 Both clients speak the same protocol to the same core. Use either, or both at once.
 
-**Terminal (`exo tui`).** Type a message and press Enter. Options: `--resume` continues the newest thread,
-`--session ID` continues one, `--seat NAME` picks the seat, `--title TEXT` names a new thread. Keys:
+**Terminal (`exo tui`).** Type a message and press Enter. Options: `--resume` continues the newest thread
+with messages (each launch opens a thread, so it skips the empty ones), `--session ID` continues one, `--seat NAME`
+picks the seat, `--title TEXT` names a new thread. Keys:
 
 | Key or prefix | Does |
 |---|---|

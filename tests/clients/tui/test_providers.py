@@ -13,6 +13,7 @@ from exo import providers_setup as ps
 from exo.core.models.router import load_catalog
 from exo.protocol import schema as s
 from exo_tui.app import COMMANDS, ExoApp
+from exo_tui.boot import BootScreen
 from exo_tui.providers import KeyScreen, ProvidersScreen, refuse_key_in_composer
 from exo_tui.widgets import Composer, Palette
 
@@ -351,6 +352,43 @@ def test_first_run_with_provider_goes_straight_to_the_intro(tmp_path, monkeypatc
         assert not isinstance(app.screen, ProvidersScreen)
 
     run(tmp_path, sc, provider_check=True, auto_intro=True)
+
+
+def booted(app):
+    return not any(isinstance(scr, BootScreen) for scr in app.screen_stack)
+
+
+def test_first_run_model_picker_waits_for_the_boot_sequence(tmp_path, monkeypatch):
+    """The claude CLI is installed and the configured main route is down: first run asks for a default model. The
+    boot screen's dismiss pops the top screen, so a picker pushed under it was closed in its place and the boot screen
+    stayed for good; only ctrl+c got out."""
+    seen = []
+
+    async def sd(self, ref):
+        seen.append(ref)
+
+    monkeypatch.setattr(ExoApp, "set_default", sd)
+    models = {"models": [{"route": "ollama:llama3.2", "role": "main"}], "available": [{"route": "claude-cli:sonnet"}]}
+
+    async def sc(app, pilot, client, eng):
+        await until(lambda: booted(app) and isinstance(app.screen, Palette), pilot)
+        assert [i[1] for i in app.screen.items] == ["claude-cli:sonnet"]
+        await pilot.press("enter")
+        await until(lambda: seen, pilot)
+        assert seen == ["claude-cli:sonnet"] and not app.modal_open()
+
+    run(tmp_path, sc, main_state=lambda eng: {"ready": False, "needs_model": ["claude-cli"]}, models=models,
+        provider_check=True, boot_anim=True)
+
+
+def test_first_run_without_provider_opens_panel_after_the_boot_sequence(tmp_path, monkeypatch):
+    monkeypatch.setattr(ps, "rows", lambda *a, **k: demo_rows())
+    monkeypatch.setattr(ps, "any_ready", lambda *a, **k: False)
+
+    async def sc(app, pilot, client, eng):
+        await until(lambda: booted(app) and isinstance(app.screen, ProvidersScreen), pilot)
+
+    run(tmp_path, sc, provider_check=True, boot_anim=True)
 
 
 def test_new_openai_provider_requires_model_choice_before_real_intro(tmp_path, fakes, monkeypatch):
