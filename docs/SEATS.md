@@ -85,5 +85,7 @@ values shaped like API keys. Changes apply on the next start.
 ## Channels
 
 A plugin calls `register_channel(name, factory)`. For each channel a seat (or `channels` in config.json)
-enables, `exo serve` calls `factory(link, **config)` with a real protocol `Client` on the server socket, runs
-`start()` after the server listens, and `stop()` on shutdown.
+enables, `exo serve` calls `factory(link, **config)`, runs `start()` after the server listens, and `stop()` on
+shutdown. The link is exod's in-process `ChannelLink`: it runs commands as the caller `channel` (`docs/GATE.md`
+"Who answered"), the only caller the core takes a bus message from. A channel run through a protocol `Client` on
+the socket cannot hand in bus messages.
