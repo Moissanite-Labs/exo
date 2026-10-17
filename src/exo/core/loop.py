@@ -303,23 +303,8 @@ class Loop:
             messages = await self.context.build(session, system, **extra)
             msg_id = new_id("m")
             stream = await self._call(session, messages, msg_id, st, result)
-            await self._record_call(session, stream, _, st)
-            if stream.usage is not None:
-                result.usage = result.usage + stream.usage
-                st.total = st.total + stream.usage
-                await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total, model=stream.route or self.model or ""), session)
-            if stream.error is not None:
-                result.stop_reason, result.error = "error", stream.error.error or "provider error"
-                if stream.text or stream.reasoning:  # the user saw this text: keep it, marked, like an interrupt
-                    partial = self._assemble(_Stream(text=stream.text, reasoning=stream.reasoning), msg_id)
-                    partial.meta["interrupted"] = True
-                    partial.meta["error"] = trace.scrub(result.error, 300)
-                    result.message = await self._add(session, partial, turn_id)
-                outcomes = {a.get("outcome") for a in stream.error.attempts}
-                code = ("model_spend_stopped" if "spend_stopped" in outcomes else
-                        "model_spend_refused" if "spend_refused" in outcomes else "provider_error")
-                await self._emit(ev.Error(code=code, message=result.error,
-                                          retryable=stream.error.retryable), session)
+            if await self._settle(session, turn_id, stream, msg_id, _, st, result):
+                result.stop_reason = "error"
                 return
             reply = self._assemble(stream, msg_id)
             result.message = await self._add(session, reply, turn_id)
@@ -354,23 +339,52 @@ class Loop:
 
     async def _wrap_up(self, session: str, turn_id: str, system: str, extra: dict[str, Any],
                        st: _SessionState, result: TurnResult) -> None:
-        """One last call with no tools, so a capped turn ends with an answer, not a dangling tool round.
+        """One last call with tool use off, so a capped turn ends with a report, not a dangling tool round.
 
-        The prompt is transient (never stored); stop_reason stays "max_iterations" so callers still see the cap."""
-        messages = await self.context.build(session, system, **extra)
-        messages.append(Message.user(WRAP_UP_PROMPT.format(n=self.max_iterations)))
-        msg_id = new_id("m")
-        stream = await self._call(session, messages, msg_id, st, result, tools=False)
-        await self._record_call(session, stream, self.max_iterations, st)
+        The same tools stay declared and ``tool_choice="none"`` turns them off: removing them is an edit to the
+        prompt a provider may reject (Anthropic's thinking check) and costs its prompt cache. The prompt is
+        transient (never stored). stop_reason stays "max_iterations", also when the call fails (result.error
+        and the Error event say why); an interrupt still ends the turn "interrupted", like any other call."""
+        try:
+            messages = await self.context.build(session, system, **extra)
+            messages.append(Message.user(WRAP_UP_PROMPT.format(n=self.max_iterations)))
+            msg_id = new_id("m")
+            stream = await self._call(session, messages, msg_id, st, result, tool_choice="none")
+            settled = await self._settle(session, turn_id, stream, msg_id, self.max_iterations, st, result)
+            if settled or not (stream.text or stream.reasoning):
+                return
+            # Stray tool calls are dropped: the cap is spent, nothing runs. So is the signed thinking: it was
+            # minted against a prompt that is never stored, so replaying it would fail the provider's check.
+            reply = self._assemble(_Stream(text=stream.text, reasoning=stream.reasoning), msg_id)
+            reply.meta.update(stream.done.message.meta if stream.done.message is not None else {}, wrap_up=True)
+            result.message = await self._add(session, reply, turn_id)
+        except _Interrupted:
+            raise
+        except Exception as exc:  # a failed report never turns a capped turn into a failed one
+            await self._emit(trace.error_body("wrap-up", exc), session)
+
+    async def _settle(self, session: str, turn_id: str, stream: _Stream, msg_id: str, iteration: int,
+                      st: _SessionState, result: TurnResult) -> bool:
+        """Record the call and its usage. On a provider error keep the text the user saw, emit the Error coded
+        by attempt outcome and set result.error; True then (the caller sets stop_reason)."""
+        await self._record_call(session, stream, iteration, st)
         if stream.usage is not None:
             result.usage = result.usage + stream.usage
             st.total = st.total + stream.usage
             await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total, model=stream.route or self.model or ""), session)
-        if stream.error is not None or not (stream.text or stream.reasoning):
-            return
-        reply = self._assemble(_Stream(text=stream.text, reasoning=stream.reasoning), msg_id)
-        reply.meta["wrap_up"] = True
-        result.message = await self._add(session, reply, turn_id)
+        if stream.error is None:
+            return False
+        result.error = stream.error.error or "provider error"
+        if stream.text or stream.reasoning:  # the user saw this text: keep it, marked, like an interrupt
+            partial = self._assemble(_Stream(text=stream.text, reasoning=stream.reasoning), msg_id)
+            partial.meta["interrupted"] = True
+            partial.meta["error"] = trace.scrub(result.error, 300)
+            result.message = await self._add(session, partial, turn_id)
+        outcomes = {a.get("outcome") for a in stream.error.attempts}
+        code = ("model_spend_stopped" if "spend_stopped" in outcomes else
+                "model_spend_refused" if "spend_refused" in outcomes else "provider_error")
+        await self._emit(ev.Error(code=code, message=result.error, retryable=stream.error.retryable), session)
+        return True
 
     async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState) -> None:
         """The model.call event (what was asked, who served, every attempt) and the turn's running totals."""
@@ -404,7 +418,7 @@ class Loop:
     # ---------------------------------------------------------------- provider call
 
     async def _call(self, session: str, messages: list[Message], msg_id: str, st: _SessionState,
-                    result: TurnResult, *, tools: bool = True) -> _Stream:
+                    result: TurnResult, *, tool_choice: str = "") -> _Stream:
         """Stream one model call with retry. Retries only while nothing was shown."""
         opts = dict(self.provider_opts)
         if self.model:
@@ -413,7 +427,9 @@ class Loop:
         # conversation to them (D-028), so they share the provider's prompt cache
         key = getattr(self.context, "cache_key", None)
         opts["session_id"] = (key(session) if callable(key) else None) or session
-        specs = self._specs() if tools else []
+        if tool_choice:  # "none": the tools stay declared, the model may not call them
+            opts["tool_choice"] = tool_choice
+        specs = self._specs()
         attempt, history, t0 = 0, [], time.monotonic()
         while True:
             s = _Stream(t0=t0)
