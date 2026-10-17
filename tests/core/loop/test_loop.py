@@ -265,6 +265,42 @@ def test_resume_after_restart_and_repair(tmp_path):
     assert store2.search("hello")[0]["session"] == sid
 
 
+def test_resume_leaves_a_running_turns_tool_round_alone(tmp_path):
+    """A second window opening a thread (session.resume) while its turn runs a tool: the open round belongs to that
+    turn, so no 'not run' result is written and the model sees exactly one result per call. With no turn running,
+    resume still closes a round a crash left open."""
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def held(call, ctx):
+        entered.set()
+        await gate.wait()
+        return ToolResult.of_text(call.id, "the real result")
+
+    prov = Script(reply("", [ToolCall(id="call_1", name="echo")]), reply("final answer"))
+    store, loop, _ = make(tmp_path, prov, tool_specs=[SPEC], run_tool=held)
+
+    async def go():
+        s = await loop.create_session()
+        task = asyncio.create_task(loop.send(s.id, "run the long thing"))
+        await asyncio.wait_for(entered.wait(), 2)
+        assert loop.state(s.id).running
+        await loop.resume(s.id)
+        assert store.messages(s.id)[-1].role == "assistant"  # the live call is still open, nothing was added
+        gate.set()
+        res = await asyncio.wait_for(task, 2)
+        store.append_message(s.id, Message.assistant("", [ToolCall(id="z", name="echo")]))  # now a crash leftover
+        await loop.resume(s.id)
+        return s.id, res
+
+    sid, res = run(go())
+    assert res.message.text() == "final answer"
+    tools = [m for m in store.messages(sid) if m.role == "tool"]
+    assert [[(r.call_id, r.text()) for r in m.tool_results] for m in tools] == [
+        [("call_1", "the real result")], [("z", "not run: session was interrupted")]]
+    seen = [[r.call_id for r in m.tool_results] for m in prov.calls[1] if m.role == "tool"]
+    assert seen == [["call_1"]]
+
+
 def test_fork_lineage_and_undo(tmp_path):
     prov = Script(reply("r1"), reply("r2"), reply("child"))
     store, loop, _ = make(tmp_path, prov)

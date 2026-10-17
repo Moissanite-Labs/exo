@@ -556,6 +556,9 @@ class CoreRuntime:
             self.store.assert_open(b.session)
         except SessionLocked as exc:  # a finished child session takes no new turns
             raise CommandFailed("session_locked", str(exc)) from None
+        if b.session in self.agents.loops:  # typing into a running subagent steers it, never a new turn (D-070, D-052)
+            require_principal("steer a subagent")
+            b.mode = "steer"
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
@@ -673,13 +676,13 @@ class CoreRuntime:
     # ------------------------------------------------------------ self-observation (D-025)
 
     def _on_harness_error(self, body: s.HarnessError, session: str | None) -> None:
-        """Sink for ``trace.report``: publish the error. Outside a running turn (no turn-end check is coming)
-        it also becomes a finding right away."""
+        """Sink for ``trace.report``: publish the error. Outside a running turn, or in a subagent's (its loop has no
+        turn-end check, and a parent's reads only direct children), it also becomes a finding right away."""
         if session and self.store.get_session(session) is None:
             return  # another engine's session
         self.hub.publish(body, session)
         st = self.loop._state.get(session) if session else None
-        if self._trace_on and (st is None or not st.running):
+        if self._trace_on and (st is None or not st.running or session in self.agents.loops):
             self.findings.file(f"harness.error:{body.where}:{body.error_type}", f"Harness error in {body.where}",
                                severity="bug", detail=f"{body.error_type}: {body.message}", session=session)
 
