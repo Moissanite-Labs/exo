@@ -160,6 +160,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   bars and the session counts. A delegated child at $0.05 under a $0.10 parent showed $0.20 instead of $0.15. The
   child's row now reads `in parent` and is left out of the sums. A running child, a scheduled job and a fork are
   still summed, since nothing rolls them up.
+- `exo chat` can give a standing grant: typing `allow_always`, as the approval prompt offers it, then Enter to
+  confirm sends `allow_always`. Before, the client read only the first letter, so it sent `allow`. A reply
+  that only starts with a or y (`abort`, `yeah no`) no longer approves, and `Allow` no longer denies: a reply
+  is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else denies.
 
 ## [0.2.0] (egg) - 2026-10-13
 
