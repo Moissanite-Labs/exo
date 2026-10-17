@@ -497,13 +497,13 @@ def _activate(pid: str, root: Path | None = None, force: bool = False) -> bool:
 # --- import-store ---------------------------------------------------------------------
 
 ALWAYS_SKIP = {'.git', '__pycache__', '.DS_Store', '_drafts', '.pytest_cache'}
-PRIVATE_PATHS = {'corpus/private', 'ledger.sqlite', 'ledger.sqlite-wal', 'ledger.sqlite-shm'}
+PRIVATE_PATHS = {'corpus/private', 'ledger.sqlite', 'ledger.sqlite-wal', 'ledger.sqlite-shm', 'ledger.sqlite.head'}
 
 
 def import_store(src: str | os.PathLike, dest: str | os.PathLike, include_private: bool = False) -> dict:
     """Copy a hafiz-format store into `dest`. Never moves or edits the source. Skips `.git`,
     caches, drafts, key files, symlinks, and (unless `include_private`) `corpus/private` and the
-    ledger. Fills in template parts the source lacks (policies, agents, ...)."""
+    ledger with its head anchor. Fills in template parts the source lacks (policies, agents, ...)."""
     src = Path(src).expanduser().resolve()
     dest = Path(dest).expanduser()
     if not (src / 'INDEX.md').is_file() or not (src / 'nodes').is_dir():
@@ -562,6 +562,7 @@ def import_store(src: str | os.PathLike, dest: str | os.PathLike, include_privat
     store = PrincipalStore(dest)
     led_new = not store.ledger_path.exists()
     with _writable_ledger(store.ledger_path, INTERVIEWER) as led:
+        led.clear_anchors(beside=False)  # dest was empty: a keys/heads anchor for it is a deleted store's (D-040)
         led.append('ingest', {'adapter': 'import-store', 'source': str(src), 'files': stats['files'],
                               'bytes': stats['bytes'], 'include_private': include_private,
                               'skipped': stats['skipped'], 'symlinks_skipped': stats['symlinks'],

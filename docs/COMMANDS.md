@@ -163,7 +163,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 |---|---|---|---|
 | `exo init <id>` | Creates a principal store and an empty signed ledger (mode 0600), and makes it the active principal if none is set. Prints the lint summary. | `--from-template [PATH]` start from a template folder (default: the bundled empty store). `--interview` run the onboarding interview. Also takes the interview flags below. `--root DIR` where to create it. | `cmd_init` in `src/exo/onboard.py` |
 | `exo interview` | Asks the next onboarding questions for a store (store). | `--answers FILE` read answers from a YAML file. `--max-questions N` (default 12, 0 is all). `--generator MOD:ATTR` a model hook that drafts more questions. `--plan` print the questions in order and exit. `--seed-queue N` hand the next N unasked questions to the ask queue (default 8). | `cmd_interview` in `src/exo/onboard.py` |
-| `exo import-store <path>` | Copies an existing store into a new principal. Never edits the source. Skips `.git`, caches, key files, symlinks, and `corpus/private` and the ledger unless asked. | `--id ID`, `--root DIR`, `--include-private`, `--activate` | `cmd_import_store`, `import_store` in `src/exo/onboard.py` |
+| `exo import-store <path>` | Copies an existing store into a new principal. Never edits the source. Skips `.git`, caches, key files, symlinks, and `corpus/private` and the ledger with its `.head` anchor unless asked. Drops a stale anchor a deleted store left for the destination (D-040). | `--id ID`, `--root DIR`, `--include-private`, `--activate` | `cmd_import_store`, `import_store` in `src/exo/onboard.py` |
 | `exo find <words...>` | Ranked nodes for some words (store). | `-n N` (default 8) | `cmd_find` in `src/exo/cli.py` |
 | `exo get <id>` | Prints one node (store). | `--body-only` | `cmd_get` |
 | `exo ctx <words...>` | The best nodes packed under a token budget (store). | `--budget N` (default 1500) | `cmd_ctx` |
@@ -173,7 +173,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 | `exo index` | Refreshes the node table in `INDEX.md` (store). | none | `cmd_index` |
 | `exo log append <kind>` | Appends a signed event to the ledger (store). `<kind>` is one of the ledger kinds in `docs/CORE.md`. | `--author NAME` (required). `--key PATH` (default `$EXO_HOME/keys/<author>.key`). `--text T` or `--body JSON`, else stdin. `--session S`. `--ref ID` (repeatable). | `cmd_log` |
 | `exo log verify` | Checks every id, link, chain hash and signature, each key against the key registry, the head anchors and the append-only triggers (D-040). Prints JSON. Exit code 1 if broken (store). | none | `cmd_log` |
-| `exo log anchor` | Writes the current head to the ledger's anchor files (a store made before D-040; the next append does it too). | none | `cmd_log` |
+| `exo log anchor` | Writes the current head to the ledger's anchor files, for a store made before D-040. The next append does it too. Refuses to replace an anchor that does not match the ledger, since events may have been removed. Exit code 1 then. | `--force` replaces it and prints what it replaced: for a store an older Exo left with its anchor ahead after a crash, not for a truncation (`docs/CORE.md` "Head anchor") | `cmd_log` |
 | `exo log tail` | Prints the last events (store). | `-n N` (default 10), `--kind K` | `cmd_log` |
 | `exo keygen <name>` | Creates an Ed25519 key, mode 0600. Refuses to overwrite. A key made in `$EXO_HOME/keys` is pinned in the key registry. | `--out PATH` (default `$EXO_HOME/keys/<name>.key`) | `cmd_keygen` |
 | `exo keys [list]` | The key registry (D-040): pinned signing keys, bus seats, principal ids. | `--json` | `cmd_keys` |
@@ -238,7 +238,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 | `exo findings add <title>` | Files a finding by hand. | `--severity bug\|papercut` (default `papercut`), `--signature S`, `--detail TEXT` | same |
 | `exo findings fix <id>` | Marks a finding fixed. Later turns re-measure it. | `--in SHA` (required) | same |
 | `exo findings export` | A digest for the developer session. | `--md` | same |
-| `exo memory [verify]` | Checks the hash chain of each agent's one log, and each principal store's ledger against the pinned keys, its head anchors and its triggers (D-040). Exit code 1 if broken. | `--agent NAME` (default: all), `--principal ID` or `--root DIR` (default: every store in the home), `--json` | `cmd_memory` in `src/exo/memory_cmd.py` |
+| `exo memory [verify]` | Checks the hash chain of each agent's one log, and each principal store's ledger against the pinned keys, its head anchors and its triggers (D-040). A store whose ledger file is gone while an anchor says it held events fails too. Exit code 1 if broken. | `--agent NAME` (default: all), `--principal ID` or `--root DIR` (default: every store in the home), `--json` | `cmd_memory` in `src/exo/memory_cmd.py` |
 | `exo memory threads` | Lists each agent's threads. | `--agent NAME`, `--json` | same |
 
 ### Tracking upstream and reading wire packets

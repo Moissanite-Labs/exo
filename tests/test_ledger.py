@@ -131,3 +131,41 @@ def test_concurrent_appends_keep_chain(tmp_path, signer):
     led = Ledger(path)
     assert len(led) == 80
     assert led.verify()["ok"]
+    assert [a["seq"] for _, a in led.anchors()] == [80, 80]  # anchors only move forward, even when writers race
+
+
+@pytest.mark.parametrize("point,next_seq", [("commit", 2), ("anchor", 3)])
+def test_a_writer_killed_mid_append_never_leaves_the_anchor_ahead(tmp_path, point, next_seq):
+    """SIGKILL, OOM or power loss: the head anchor may lag the ledger by the newest event, never lead it. An
+    anchor ahead reads as "events were removed" and refuses every later append."""
+    import subprocess
+    import sys
+    path, key = tmp_path / "l.sqlite", tmp_path / "w.key"
+    crypto.save_key(crypto.keygen(), key)
+    with Ledger(path, crypto.Signer.from_file("w", key)) as led:
+        led.append("note", {"i": 1})
+    script = """
+import os, sys
+from exo import crypto
+from exo.ledger import Ledger
+led = Ledger(sys.argv[1], crypto.Signer.from_file("w", sys.argv[2]))
+if sys.argv[3] == "anchor":  # dies after COMMIT, before the anchors are written
+    led._write_anchors = lambda *a: os._exit(79)
+else:  # dies at COMMIT, so SQLite rolls the row back
+    real = led.db
+    class Db:
+        def __getattr__(self, name):
+            return getattr(real, name)
+        def execute(self, sql, *a):
+            if sql == "COMMIT":
+                os._exit(79)
+            return real.execute(sql, *a)
+    led.db = Db()
+led.append("note", {"i": 2})
+"""
+    res = subprocess.run([sys.executable, "-c", script, str(path), str(key), point], capture_output=True, text=True)
+    assert res.returncode == 79, res.stderr
+    with Ledger(path, crypto.Signer.from_file("w", key)) as led:
+        assert led.verify()["ok"]
+        assert led.append("note", {"i": 3})["seq"] == next_seq
+        assert led.verify()["anchored"] and [a["seq"] for _, a in led.anchors()] == [next_seq, next_seq]
