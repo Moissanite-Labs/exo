@@ -6,14 +6,31 @@ Relative paths resolve against ``ToolContext.cwd``.
 
 from __future__ import annotations
 
+import os
+import stat
+from pathlib import Path
 from typing import Any
 
 from exo.core.tools.builtin.fuzzy import format_no_match_hint, fuzzy_find_and_replace
-from exo.core.tools.builtin.patch import apply_patch, read_text, write_atomic
+from exo.core.tools.builtin.patch import apply_patch, write_atomic
 from exo.core.tools.registry import Registry, ToolContext, ToolError
 
 DEFAULT_LIMIT = 2000
 MAX_LINE_CHARS = 2000
+MAX_READ_BYTES = 50_000_000
+
+
+def read_regular(p: Path, cap: int) -> bytes:
+    """Bytes of a regular file (links followed). A FIFO or device is refused before it is opened."""
+    if not p.is_file():
+        raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
+    with open(os.open(p, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)), "rb") as f:  # a FIFO swapped in: no block
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
+        if st.st_size > cap:
+            raise ToolError(f"{p} is {st.st_size:,} bytes, over the {cap:,}-byte limit; use grep, or sed -n in bash")
+        return f.read(cap)
 
 
 def _read_existing(ctx: ToolContext, path: str) -> str:
@@ -22,11 +39,11 @@ def _read_existing(ctx: ToolContext, path: str) -> str:
         raise ToolError(f"File not found: {path}")
     if p.is_dir():
         raise ToolError(f"{path} is a directory; use glob to list it")
-    raw = p.read_bytes()
+    raw = read_regular(p, MAX_READ_BYTES)
     if b"\x00" in raw[:8192]:
         raise ToolError(f"{path} looks like a binary file")
     try:
-        return read_text(p)
+        return raw.decode("utf-8")
     except UnicodeDecodeError:
         raise ToolError(f"{path} is not valid UTF-8 text") from None
 
@@ -52,8 +69,16 @@ def read_file(args: dict[str, Any], ctx: ToolContext) -> str:
     return "\n".join(out)
 
 
+def _target(ctx: ToolContext, path: str) -> Path:
+    """The path a write replaces; a symlink is refused, since the rename would replace the link, not its target."""
+    p = ctx.resolve(path)
+    if p.is_symlink():
+        raise ToolError(f"{path} is a symlink to {os.path.realpath(p)}; edit that path instead so the link is kept")
+    return p
+
+
 def write_file(args: dict[str, Any], ctx: ToolContext) -> str:
-    p = ctx.resolve(args["path"])
+    p = _target(ctx, args["path"])
     if p.is_dir():
         raise ToolError(f"{args['path']} is a directory")
     existed = p.exists()
@@ -64,12 +89,13 @@ def write_file(args: dict[str, Any], ctx: ToolContext) -> str:
 
 def edit_file(args: dict[str, Any], ctx: ToolContext) -> str:
     path, old, new = args["path"], args["old_string"], args["new_string"]
+    p = _target(ctx, path)
     content = _read_existing(ctx, path)
     updated, count, strategy, err = fuzzy_find_and_replace(
         content, old, new, replace_all=bool(args.get("replace_all", False)))
     if err:
         raise ToolError(err + format_no_match_hint(err, old, content))
-    write_atomic(ctx.resolve(path), updated)
+    write_atomic(p, updated)
     how = "" if strategy == "exact" else f" (matched via {strategy})"
     return f"Edited {path}: {count} replacement{'s' if count != 1 else ''}{how}"
 

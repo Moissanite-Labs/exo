@@ -124,6 +124,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- File tools: a write no longer follows a link planted at its temp name (`.<name>.exo-tmp`), which sent the
+  bytes, and the file's mode, to wherever the link pointed while the gate had classified only the named path. A
+  write to a symlinked file is refused with the link's target named, instead of replacing the link with a regular
+  file and leaving the target unedited. `read_file`, `edit_file` and `grep` refuse or skip FIFOs and devices,
+  which hung the core (cancel could not stop it) or read `/dev/zero` until memory ran out, and `read_file` and
+  `edit_file` refuse files over 50 MB. `code_find` passes the question to jg after `--`, so a question such as
+  `- --include-sensitive` can no longer turn off jg's sensitive-file filter (docs/TOOLS.md).
 
 ## [0.2.0] (egg) - 2026-10-13
 

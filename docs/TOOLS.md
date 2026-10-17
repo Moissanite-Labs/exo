@@ -68,6 +68,19 @@ Image results have a separate 4 MiB aggregate cap on UTF-8 `data` and `url` fiel
 omitted whole with a visible marker, even when the text budget is exhausted. Base64 is never truncated. This
 caps inline/URL payload, not remote asset download sizes; metadata and serialization overhead are separate.
 
+## File safety
+
+- **Writes** (`write_file`, `edit_file`, `apply_patch`) go through a fresh temp file beside the target
+  (`.<name>.exo-tmp`, created exclusively) and a rename, so a link already sitting at the temp name is never
+  followed. A write to a symlinked file is refused, and the error names the link's target: write that path instead,
+  and the link stays. Before, the rename replaced the link with a regular file and left the target unchanged.
+  `apply_patch` checks this before it writes anything, and its Delete File removes only the link, as `rm` does.
+  A hard-linked file becomes its own copy, as with any atomic rename. A symlinked parent folder is still followed.
+- **Reads** (`read_file`, `edit_file`, `grep`) open regular files only. A FIFO, socket or device, or a link to one,
+  is refused before it is opened (`grep` skips it), so a FIFO cannot block the core and `/dev/zero` cannot fill
+  its memory. `read_file` and `edit_file` refuse files over 50 MB (`MAX_READ_BYTES`). Use `grep`, or `sed -n` in
+  `bash`, for those. `grep` skips files over 2 MB.
+
 ## code_find (D-029)
 
 `code_find(question, path=".", page=1, timeout=120)` runs [jevgrep](https://github.com/dzhng/jevgrep) (`jg`, MIT)
@@ -90,7 +103,8 @@ ranked file list and verbatim excerpts. Use it for unfamiliar code and "where or
   is scrubbed from any error text. Nothing is logged.
 - **Limits:** 120 s default timeout (max 600; the process group is killed), output paged at 20,000 characters
   (`page=2` serves the rest from memory), jg itself capped at 256 KB. Read-only, so risk low, but it sends
-  eligible source files to the backend; jg skips ignored and known sensitive files.
+  eligible source files to the backend; jg skips ignored and known sensitive files. The question goes to jg after
+  `--`, so it can never act as a jg flag such as `--include-sensitive`.
 - **Trace:** a normal tool call in `exo trace` (`tool.completed` with `duration_ms`); backend and duration are the
   first line of the result.
 - Skill: `skills/jevgrep` (adapted from dzhng/jevgrep's skill, MIT).
