@@ -210,13 +210,17 @@ async def _wait_turn(client: Any, done: asyncio.Event, approvals: asyncio.Queue,
         if asker not in finished:
             asker.cancel()
             continue
-        req = asker.result()
-        answer = await read_line(f"{'/'.join(req.options)}> ")
-        if answer is None:
-            return False
-        decision = {"a": "allow", "y": "allow", "d": "deny", "n": "deny"}.get(answer.strip()[:1], answer.strip())
-        if decision not in ("allow", "deny", "allow_always"):
-            decision = "deny"
+        req, decision = asker.result(), ""
+        while not decision:  # a cancelled allow_always asks again
+            if (answer := await read_line(f"{'/'.join(req.options)}> ")) is None:
+                return False
+            a = answer.strip().lower()
+            a = "allow" if a in ("a", "y", "yes") else a  # shorthands; otherwise an option as shown, or deny
+            decision = a if a in req.options else "deny"
+            if decision == "allow_always":  # a standing grant takes a second deliberate act, as in the TUI
+                if (confirm := await read_line("allow always? enter confirms, anything else cancels> ")) is None:
+                    return False
+                decision = "" if confirm.strip() else decision
         await client.send(s.ApprovalRespond(request_id=req.request_id, decision=decision))
     return True
 
