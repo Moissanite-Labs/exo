@@ -139,6 +139,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Bus relay: an envelope that the log would store in another form than the one signed (`v` as `true` or `1.0`, a
   number as `thread`, a text field that is not a string) is refused with 422. Before, it was accepted and
   `/v1/verify` failed at that row for good. Wrong types that crashed the handler with 500 get the same 422.
+- Signed updates (#42, D-073): an OpenPGP or X.509 signature on the update target was checked by gpg against the
+  local keyring and never against the pinned trust list, so a key you had only imported passed. Only SSH signatures
+  from the pin count now. A `config.json` that exists but cannot be read no longer turns `update.require_signed`
+  off: `exo update` refuses until it is fixed, and `--dry-run` says whether the check is on. `exo update
+  --pin-trust REV` no longer adopts any commit's list: once a pin exists, the commit that set the list must verify
+  against it (`docs/INSTALL.md`).
 
 ## [0.2.0] (egg) - 2026-10-13
 

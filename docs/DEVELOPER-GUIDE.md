@@ -411,7 +411,9 @@ one per line (add `namespaces="git"` after the principal to limit the key to git
 main (`git config gpg.format ssh`, `git config user.signingkey ~/.ssh/<key>.pub`, `git config commit.gpgsign true`;
 for merges made on GitHub, use a merge you sign locally, since GitHub's web signature is not an SSH key). Also sign the
 tag, `git tag -s exo-vX.Y.Z`, for people who check it by hand. To change keys, add the new key in a commit signed by an
-old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the list. Never remove the
+old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the list. `--pin-trust`
+refuses a new list unless the commit that set it on main (the merge, if it came in through one) carries a good
+signature from a key the user already pinned. Never remove the
 old key from the list in the same commit that the old key must sign.
 
 ## 9. Recipes
