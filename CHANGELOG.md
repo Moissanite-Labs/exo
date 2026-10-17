@@ -124,6 +124,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- The web Chat view draws a peer, bus or job message as a card with its real author, never as a line the user
+  typed: on reload and thread switch too, and the live `peer.message` and its stored message are one card. An
+  approval with no thread (a held peer message that no live session could take) shows in every thread, as in the
+  terminal client, and allow now delivers it into a new thread instead of closing it as denied. A panel you dismiss
+  stays closed after the next panel event, a tab switch or a reconnect.
 
 ## [0.2.0] (egg) - 2026-10-13
 
