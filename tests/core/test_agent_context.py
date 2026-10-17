@@ -100,6 +100,31 @@ def test_notes_are_not_repeated_and_skip_private_threads():
     assert sum(NOTE_HEAD in m.text() for m in second) == 1  # the same stored note, not a new one
 
 
+def test_the_tree_and_its_hooks_never_carry_a_private_thread():
+    """D-028: private entries never enter the agent tree, and its plugin hooks (pre-compress, capture, compacted)
+    name the latest thread that is not private, even while a private thread is the one talking."""
+    store, ctx, prov, loop, summ = setup(leaf_size=2, tail_messages=2)
+    hooked = []
+    ctx.on_pre_compress = lambda session, msgs: hooked.append(("pre", session, " ".join(m.text() for m in msgs)))
+    ctx.on_capture = lambda session, msgs: hooked.append(("capture", session, " ".join(m.text() for m in msgs)))
+    ctx.on_compacted = lambda session, node: hooked.append(("compacted", session, node.text))
+
+    async def go():
+        a = await loop.create_session(agent="razi", title="alpha")
+        p = await loop.create_session(agent="razi", kind="private")
+        await loop.send(a.id, "a0")
+        await loop.send(a.id, "a1")
+        await loop.send(p.id, "zebracorn plan")  # leaves over a's entries are summarized during these turns
+        await loop.send(p.id, "more zebracorn")
+        await loop.send(a.id, "a2")              # and the leaf over the private span is read here
+        await ctx.settle(AgentContext.key("razi"), 5, None)
+        return a, p
+    a, p = run(go())
+    assert {h[0] for h in hooked} == {"pre", "capture", "compacted"}
+    assert {h[1] for h in hooked} == {a.id}
+    assert not any("zebracorn" in h[2] for h in hooked) and not any("zebracorn" in t for t in summ.prompts)
+
+
 def test_system_message_is_shared_by_threads_and_holds_the_agent_tree():
     store, ctx, prov, loop, summ = setup(leaf_size=2, tail_messages=2)
 

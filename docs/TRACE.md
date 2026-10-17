@@ -64,7 +64,9 @@ A row in the `findings` table of sessions.sqlite: id, signature, source (anomaly
 count, status, fixed_in. One row per signature; a recurrence bumps the count.
 - Anomalies are filed at turn end, with no model call.
 - The agent files with `exo_harness_report(title, detail, severity)`; the same title dedups.
-- `feedback.send` with reject or should_have_been files a principal finding (the learning step still runs).
+- `feedback.send` with reject or should_have_been files a principal finding (the learning step still runs). It files
+  none for a private thread or a session under it, such as its delegate child (D-028): findings are listed in every
+  thread, and the note would carry its text.
 
 Lifecycle: `open`, then `fixed` (`exo findings fix ID --in SHA`), then `verified` after 20 quiet eligible turns
 (`verify_turns`) or 3 quiet days of activity (`verify_days`) on a harness at or after SHA. The same signature

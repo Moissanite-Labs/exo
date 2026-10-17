@@ -210,6 +210,12 @@ class SessionStore:
         rows = self._q("SELECT agent, kind FROM sessions WHERE id=?", (sid,))
         return (rows[0]["agent"], rows[0]["kind"] or "") if rows else (None, "")
 
+    def private(self, sid: str | None) -> bool:
+        """A private thread, or a session under one at any depth (its delegate child): not remembered (D-028)."""
+        return bool(sid) and bool(self._q(
+            "WITH RECURSIVE up(parent, kind) AS (SELECT parent, kind FROM sessions WHERE id=? UNION SELECT s.parent,"
+            " s.kind FROM sessions s JOIN up ON s.id=up.parent) SELECT 1 FROM up WHERE kind='private'", (sid,)))
+
     def update_session(self, sid: str, **fields: Any) -> SessionInfo:
         allowed = {"title", "seat", "model", "cwd"}
         bad = set(fields) - allowed

@@ -361,12 +361,18 @@ class CoreRuntime:
                 spec = ToolSpec(name=schema["name"], description=schema.get("description", ""),
                                 parameters=schema.get("parameters") or {"type": "object", "properties": {}},
                                 toolset="memory" if slot is pm.slots.memory else "context")
-                kw = {"exo_home": str(self.home), "agent_log": self.log_view} if slot is pm.slots.memory else {}
-                handler = (lambda o, n, kw: lambda args, ctx: o.handle_tool_call(n, args, session_id=ctx.session, **kw))(
-                    slot, spec.name, kw)
+                handler = (lambda o, n, mem: lambda args, ctx: o.handle_tool_call(
+                    n, args, session_id=ctx.session, **(self._memory_kw(ctx.session) if mem else {})))(
+                    slot, spec.name, slot is pm.slots.memory)
                 self.registry.register(spec, handler, replace=True)
         self.registry.add_hook("pre_tool_call", self._pre_hook)
         self.registry.add_hook("post_tool_call", self._post_hook)
+
+    def _memory_kw(self, session: str | None) -> dict[str, Any]:
+        """A memory tool call's keywords; ``agent_context="private"`` in or under a private thread: write nothing
+        (D-028)."""
+        kw = {"exo_home": str(self.home), "agent_log": self.log_view}
+        return {**kw, "agent_context": "private"} if self.store.private(session) else kw
 
     @staticmethod
     def _plugin_handler(fn: Any) -> Any:
@@ -610,7 +616,8 @@ class CoreRuntime:
         require_principal("send feedback")
         from exo import learn  # outside the core; learning off just records nothing
         out = learn.handle_feedback(self, b)
-        if b.verdict in ("reject", "should_have_been"):  # the principal's own finding (D-025)
+        # The principal's own finding (D-025). Findings are global: none for a private thread or its child (D-028)
+        if b.verdict in ("reject", "should_have_been") and not self.store.private(b.session):
             note = (b.text or "").strip()
             self.findings.file(f"principal:{b.verdict}:{b.session}:{b.message_id or 'last'}",
                                f"Answer {'rejected' if b.verdict == 'reject' else 'should have been different'}"
