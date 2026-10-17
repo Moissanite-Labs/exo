@@ -10,7 +10,10 @@ import asyncio
 import pytest
 
 from exo import provenance, subagents
+from exo.core import trace
+from exo.core.ingress import Ingress
 from exo.core.models.fake import tool_turn
+from exo.core.types import ToolSpec
 from exo.protocol import schema as s
 from exo.server.app import Dispatcher
 from exo.server.engine import CommandFailed
@@ -160,5 +163,126 @@ def test_list_and_open_inspect_a_running_child(tmp_path):
         gate.set()
         await turn
         assert (await run_cmd(d, f"open {task_id(eng)}")).result["output"]["steerable"] is False
+
+    asyncio.run(go())
+
+
+# ---------------------------------------------------------------- the child's session state is the engine's
+
+def turns(eng, sid):
+    return [type(e.body).__name__ for e in eng.hub.since(0, sid) if isinstance(e.body, (s.TurnStarted, s.TurnCompleted))]
+
+
+def turn_send(d, child, text, mode):
+    return d.run(s.Command.of(s.TurnSend(session=child, text=text, mode=mode)))
+
+
+def test_typing_into_a_running_child_steers_it(tmp_path):
+    """D-070: the principal typing into a child's session steers it through turn.send, whatever the client's mode.
+    The child shows live and runs one turn; its own Loop no longer looks idle, so no second turn starts."""
+    async def go():
+        eng, gate = make(tmp_path)
+        parent, child, turn = await start(eng)
+        assert eng.loop.state(child).running
+        listed = (await eng._session_list(s.SessionList()))["sessions"]
+        assert [r["status"] for r in listed if r["id"] == child] == ["live"]
+        d = Dispatcher(eng, caller="principal:tui")
+        for mode in ("send", "queue", "steer"):
+            r = await turn_send(d, child, f"CHILD-A note by {mode}", mode)
+            assert r.ok and r.result["steered"] and r.result["message_id"], r.error
+        gate.set()
+        await turn
+        assert turns(eng, child) == ["TurnStarted", "TurnCompleted"]
+        for mode in ("send", "queue", "steer"):
+            assert (f"CHILD-A note by {mode}", "principal") in users(eng, child)
+        assert eng.agents.list()[0]["status"] == "done"
+
+    asyncio.run(go())
+
+
+def test_only_the_principal_can_type_into_a_running_child(tmp_path):
+    """D-052 on the turn.send path too: a local caller gets forbidden and nothing lands in the child."""
+    async def go():
+        eng, gate = make(tmp_path)
+        parent, child, turn = await start(eng)
+        before = users(eng, child)
+        local = Dispatcher(eng, caller="local")
+        for mode in ("send", "queue", "steer"):
+            r = await turn_send(local, child, "CHILD-A from a script", mode)
+            assert not r.ok and r.error.code == "forbidden"
+        assert eng.loop.state(child).steer == []
+        gate.set()
+        await turn
+        assert users(eng, child) == before and turns(eng, child) == ["TurnStarted", "TurnCompleted"]
+
+    asyncio.run(go())
+
+
+def test_resuming_a_running_child_leaves_its_tool_call_alone(tmp_path):
+    """session.resume on a child whose tool is still running writes no 'not run' result for that call."""
+    async def go():
+        entered, release = asyncio.Event(), asyncio.Event()
+        rules = [("PARENT", [tool_turn("delegate", {"goal": "CHILD-A work", "role": "builder"}), "parent done"]),
+                 ("CHILD-A", [tool_turn("child_hold"), "child done"])]
+        eng = engine(tmp_path, rules)[0]
+
+        async def hold(args, ctx):
+            entered.set()
+            await release.wait()
+            return "held result"
+
+        eng.registry.register(ToolSpec(name="child_hold", description="held fake tool", risk="low", toolset="test"), hold)
+        parent, child, turn = await start(eng)
+        await asyncio.wait_for(entered.wait(), 2)
+        got = await eng._session_resume(s.SessionResume(session=child))
+        assert not [m for m in got["messages"] if m["role"] == "tool"]
+        release.set()
+        await turn
+        assert [(r.call_id, r.text()) for m in eng.store.messages(child) for r in m.tool_results] == [
+            ("call_1", "held result")]
+
+    asyncio.run(go())
+
+
+def test_an_unaddressed_peer_message_never_lands_in_a_running_child(tmp_path):
+    """A running child now reads as running; it is still never a peer's pick (only its principal or parent steers it)."""
+    async def go():
+        eng, gate = make(tmp_path)
+        parent, child, turn = await start(eng)
+        target = eng._peer_target
+        assert target.state(child) == "running"
+        assert child not in {r["id"] for r in target.live_sessions()}
+        assert target.pick_session(Ingress("peer", "x", "trusted", "hi")) == parent
+        gate.set()
+        await turn
+
+    asyncio.run(go())
+
+
+def test_a_harness_error_in_a_running_grandchild_is_still_filed(tmp_path):
+    """A grandchild reads as running in the engine's table, yet no turn-end check reads its errors (child loops have
+    none, and the parent's reads only direct children): its harness error becomes a finding at once."""
+    async def go():
+        entered, release = asyncio.Event(), asyncio.Event()
+        rules = [("GRAND", [tool_turn("grand_hold"), "grand done"]),
+                 ("PARENT", [tool_turn("delegate", {"goal": "CHILD-A work", "role": "builder"}), "parent done"]),
+                 ("CHILD-A", [tool_turn("delegate", {"goal": "GRAND work", "role": "builder"}), "child done"])]
+        eng = engine(tmp_path, rules, max_depth=2)[0]
+
+        async def hold(args, ctx):
+            entered.set()
+            await release.wait()
+            return "held result"
+
+        eng.registry.register(ToolSpec(name="grand_hold", description="held fake tool", risk="low", toolset="test"), hold)
+        info = await eng.loop.create_session(title="parent")
+        turn = asyncio.ensure_future(eng.loop.send(info.id, "PARENT go"))
+        await asyncio.wait_for(entered.wait(), 5)
+        (grand,) = [sid for sid in eng.agents.loops if any("GRAND" in m.text() for m in eng.store.messages(sid))]
+        assert eng.loop.state(grand).running
+        trace.report("grand plugin", RuntimeError("boom in a grandchild"), session=grand)
+        release.set()
+        await turn
+        assert [f["session"] for f in eng.findings.list() if "grand plugin" in f["signature"]] == [grand]
 
     asyncio.run(go())

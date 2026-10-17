@@ -77,9 +77,12 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `session.list` SessionList: limit = 50, seat?
 - `session.get` SessionGet: session
 - `session.fork` SessionFork: session, at_message?, title = ""
-- `session.resume` SessionResume: session
+- `session.resume` SessionResume: session. It closes a tool round a crash left open. While a turn is running in
+  the session it only reads, so a second window never writes into a live tool call
 - `session.undo` SessionUndo: session, turns = 1
-- `turn.send` TurnSend: session, text = "", parts: list[ContentPart] = [], mode `send/queue/steer` = send
+- `turn.send` TurnSend: session, text = "", parts: list[ContentPart] = [], mode `send/queue/steer` = send. A
+  scheduled run's or a subagent's turn counts as running (their loops share the engine's per-session state).
+  Into a running subagent's session every mode steers, and only the principal may send (D-070, D-052)
 - `turn.interrupt` TurnInterrupt: session
 - `approval.respond` ApprovalRespond: request_id, decision `allow/deny/allow_always`, note = "", client = "", binding = "", sig = ""
   (D-033: a `binding` that differs from the request's is refused as `stale`; a client outside the request's

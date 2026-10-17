@@ -128,11 +128,12 @@ class Loop:
         return info
 
     async def resume(self, session: str) -> ev.SessionInfo:
-        """Reattach after a restart: repair a half-finished tool round, restart summaries."""
+        """Reattach after a restart: repair a half-finished tool round (not a running turn's own), restart summaries."""
         info = self.store.get_session(session)
         if info is None:
             raise KeyError(session)
-        await self._repair(session)
+        if not self.state(session).running:
+            await self._repair(session)
         if hasattr(self.context, "note"):
             await maybe_await(self.context.note(session))
         return self.store.get_session(session)  # type: ignore[return-value]

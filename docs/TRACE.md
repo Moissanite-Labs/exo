@@ -63,6 +63,8 @@ A row in the `findings` table of sessions.sqlite: id, signature, source (anomaly
 (blocker, bug, papercut, idea), title, detail, session, turn, model, harness version, first and last seen,
 count, status, fixed_in. One row per signature; a recurrence bumps the count.
 - Anomalies are filed at turn end, with no model call.
+- A `harness.error` in a main or scheduled turn is filed when that turn ends. One outside a turn, or in a
+  subagent's turn, is filed at once.
 - The agent files with `exo_harness_report(title, detail, severity)`; the same title dedups.
 - `feedback.send` with reject or should_have_been files a principal finding (the learning step still runs).
 
