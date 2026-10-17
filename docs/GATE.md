@@ -103,6 +103,35 @@ both reads the file without the gate seeing it and detaches from the core's proc
 still pass. The full fix is an OS sandbox for tools; until then the gate and the process-tree
 check are the guard.
 
+## Secret-store paths
+
+A path names a secret store (`credentials`, always asks) when it matches the store list in `exo.gate`
+(`~/.ssh`, `~/.aws`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `.env`, `*.key`,
+token files, Exo's `keys/`...), or when it is a glob that could match one of the sample store paths. This holds
+for shell words, redirection targets, `bash -c` and `$( )` text, string literals in code, and the path arguments
+of file tools. Brace sets are expanded as bash does before matching (issue #184). In a shell word the gate
+expands the source text, quotes kept, and then removes the quotes from each word, so only unquoted braces
+expand: `'{a,b}'`, `"{a,b}"` and `\{a,b\}` stay literal, while in `''{},.env}` the `{` follows a quote, is not
+at the start of the word, and opens a group. A `$"..."` is also read as the plain `"..."` bash gives it without
+a message catalog, so `cat $""{.env,x}` asks. A path argument of a file tool has no quoting and is expanded as
+written. The scan follows bash's: a group ends at the first top-level `}` after a comma or `..`, so `{},hosts}`
+is one group; a `{x..y[..n]}` sequence expands to its members; nested groups expand too; `${...}`, `$(...)`
+and groups with neither a comma nor a sequence stay literal. The word as written and every word it expands to
+are checked, and a hit on any counts, so `cat ~/.config/gh/{hosts,x}.yml`, `cat ~/.docker/{*,}` and
+`cat ~/{},.netrc}` ask.
+
+The work is bounded. A word that would expand to more than 1,024 words (or past a million characters in all),
+nests groups more than 32 deep, or has a sequence bound longer than 18 digits counts as a store path (asks)
+rather than being matched in part. One tool call expands at most 4,096 words in all, across its words,
+redirections, nested commands and code literals (a glob word counts four times, and a long word once more per
+64 characters); past that, each further word with a brace set counts as a store path too. The trade-off: this
+fails closed, so an ordinary line past a limit, such as `echo {1..2000}` or `for i in {1..2000}`, is
+`credentials` and asks every time with no grant. A string literal in code is read as a shell command, so
+compact JSON with 11 or more objects in one literal (`'[{"a":1,"b":2},...]'`) goes past the cap the same way.
+Known limit: the folder a `cd` enters is tracked for stores matched by name (`cd ~/.aws && cat credentials`
+asks), not for stores matched only by sample paths (`cd ~/.config/gh && cat hosts.yml`; #192).
+Tests: `tests/security/test_gate_brace_sets.py`.
+
 ## Muse CLI credentials
 
 `muse login`, `muse auth` and `muse logout` are `credentials` acts, like `vercel login`: they always ask and never

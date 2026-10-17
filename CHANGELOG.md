@@ -27,6 +27,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Security
+- Gate (#184, D-038): brace sets are expanded as bash does before a path is matched against the secret stores.
+  `cat ~/.config/gh/{hosts,x}.yml`, `cat ~/.docker/{*,}`, `cat ~/{},.netrc}`, `cat ''{},.env}`,
+  `cat $""{.env,x}` and `cat .{d..f}{m..o}{u..w}` were allowed reads; they are `credentials` now and ask. A shell
+  word is expanded from its source text, so quoted and escaped braces stay literal and keep their class; the
+  word as written is still checked, and `$"..."` is also read as plain `"..."`. A word that expands past 1,024
+  words, 32 levels of nesting or a sequence bound over 18 digits, and any brace word after one tool call has
+  expanded 4,096 words in all (globs count more), asks as a secret-store path; so does `echo {1..2000}`, and so
+  does a string literal in code holding compact JSON with 11 or more objects, since code literals are read as
+  shell commands.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
