@@ -4,7 +4,12 @@
 
 # Exo
 
-**One agent that remembers, watches itself, and asks before it acts.**
+**Exo is a coding agent for the terminal and the browser that keeps one memory across sessions, ties each
+approval to post, send or pay to the exact text you saw, shows the cost of every turn, and runs on your Claude
+Code login or an API key.**
+
+It reads and edits files and runs commands in the folder you start it in. The
+[glossary](docs/USER-GUIDE.md#words-exo-uses) explains the few words Exo uses in its own way.
 
 Exo is a standalone agent system for working well with language models. You talk to one agent. It keeps one
 continuous memory across every window, channel and scheduled run, so a new thread is not a blank mind. It
@@ -29,7 +34,7 @@ Exo is early and in active build. Waves 1 to 3 are built and in daily use on one
 | **Background jobs** | A long build or test run does not hold the turn. It is a job the agent owns, and the agent gets a notice when it ends. [`docs/JOBS.md`](docs/JOBS.md) |
 | **Peers** | Sessions message each other through one ingress path with a trust policy. A peer message is input, never consent. [`docs/PEERS.md`](docs/PEERS.md) |
 | **Cost per turn** | Timing and estimated cost for every turn and call. A call Exo cannot price reads `unknown`, never zero. |
-| **Two clients** | A terminal client (`exo-tui`) and a web client (`exo web`), both drawn from one protocol and one design language. [`docs/UI.md`](docs/UI.md), [`docs/ui/WEB.md`](docs/ui/WEB.md) |
+| **Two clients** | A terminal client (`exo`, the same as `exo tui`) and a web client (`exo web`), both drawn from one protocol and one design language. [`docs/UI.md`](docs/UI.md), [`docs/ui/WEB.md`](docs/ui/WEB.md) |
 | **Fits one person, works for anyone** | The core is generic. Everything about a person lives in their own store, built by an onboarding interview. A fresh install with an empty store runs end to end. |
 
 Also built: a signed ledger and personal store, a learning loop with explicit promotion rules and a gated
@@ -67,7 +72,9 @@ More on each client: [exo.askaconsult.com/cli](https://exo.askaconsult.com/cli/)
 
 ## Quick start
 
-Needs `git` and Python 3.11 or newer, on macOS or Linux (tested on Arch with Python 3.14).
+The repository is a private preview during the early build. Access is on request from
+[Aska Digital](https://digital.askaconsult.com). Exo needs `git` and Python 3.11 or newer, on macOS or Linux
+(tested on Arch with Python 3.14).
 
     git clone https://github.com/aska-digital/exo && cd exo
     scripts/install.sh --dry-run      # print the plan, change nothing
@@ -75,16 +82,22 @@ Needs `git` and Python 3.11 or newer, on macOS or Linux (tested on Arch with Pyt
     exo                               # the terminal client, in the current directory
 
 If `~/.local/bin` is not on your PATH, the installer prints the line to add to your shell rc file (or run it
-with `--modify-path` and it adds the line). First run with no model key opens the providers panel. Upgrade
-with `exo update`. `exo --version` shows the version and, for a checkout install, the git sha. Flags pass
-through to the client: `exo --resume` (or `exo resume`), `exo --seat NAME`, `exo --no-intro`. Other commands keep working:
+with `--modify-path` and it adds the line). With no model key, Exo uses your Claude Code login when the `claude`
+command is on your PATH: the model is `claude-cli:sonnet`, and cost reads `unknown` because a subscription has
+no per-call price ([`docs/PROVIDERS.md`](docs/PROVIDERS.md#use-your-claude-code-login-claude-cli)). Otherwise,
+the first run with no model key says so and tells you to type `/providers`. Upgrade with `exo update`.
+`exo --version` shows the version and, for a checkout install, the git sha. Flags pass through to the client:
+`exo --resume` (or `exo resume`), `exo --seat NAME`, `exo --no-intro`. Other commands keep working:
 `exo models`, `exo providers`, `exo -h` lists all.
 
-For the web client, run `exo web` (it starts the shared core if none runs; `exo stop` ends it), then open
-`http://127.0.0.1:7342`. Options, what each install step does, safety rules and re-runs are in
-[`docs/INSTALL.md`](docs/INSTALL.md). To add a model key, see [`docs/PROVIDERS.md`](docs/PROVIDERS.md).
-Provider keys are read from the environment first, then the macOS Keychain or Linux Secret Service (when
-`secret-tool` is available), then a mode-0600 `keys.env` file. `EXO_KEYS_FILE` can point to another file.
+For the web client, run `exo web`. It opens the page in your browser. If it does not, open the full link it
+prints, `http://127.0.0.1:7342/#token=...`: the part after `#token=` is a key for this launch, and the bare
+address shows only a note. `exo web` starts the shared core if none runs, and `exo stop` ends it.
+
+Options, what each install step does, safety rules and re-runs are in [`docs/INSTALL.md`](docs/INSTALL.md). To
+add a model key, see [`docs/PROVIDERS.md`](docs/PROVIDERS.md). Provider keys are read from the environment
+first, then the macOS Keychain or Linux Secret Service (when `secret-tool` is available), then a mode-0600
+`keys.env` file. `EXO_KEYS_FILE` can point to another file.
 
 The first time `exo` runs on an `EXO_HOME`, the agent gives a short orientation (`/intro`) and turns on
 tutorial mode: small tips the first time something comes up. `/tutorial off` turns them off, and
