@@ -754,6 +754,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   stricter; the `indirection` signal makes `decide` ask even if the inner part only logs. An "always" on opaque code
   covers that exact command only. The principal can lower `opaque_exec` only by naming it in a category line or rule.
   The old program and prefix cases are gone; one classifier serves the core and the `exo-gate` plugin.
+  *Amendment 2026-10-17 (issue #178):* naming `opaque_exec` at any level turned the indirection floor off, so
+  `categories: {opaque_exec: deny}` let `bash -c 'git push origin main'` fall back to the push's own `log`. Only a
+  name that lowers it (a category line, or the first matching rule on `opaque_exec`, at `log` or `allow`) turns the
+  floor off now. Naming it at `ask` or `deny` keeps the floor, so a command read inside a wrapper asks at least.
 - **Decision, store:** `policies/`, `state/`, `ledger.sqlite*`, `keys/`, seat files and the sockets under `$EXO_HOME`
   or the principal store are on a protected list. Any write is `store_write`: a floor like credentials, no standing
   grant, principal-only (`approvals.yaml` cannot add seats), enforced in observe mode. Reads stay `read`; `keys/`
