@@ -24,6 +24,10 @@ turn is logged under that author. `exo_note` cannot write `ruling` or `answer` (
 `agent_note`), and `exo_should_have_been` is signed as the agent with `for: <principal>`. On first use the provider
 adds its configured principal id to the key registry, so consolidation reads that id as the principal.
 
+Private threads (D-028): the Exo core calls no write hook in or under a private thread (its delegate children
+included), and passes `agent_context="private"` to a tool called there. Then `exo_note` and
+`exo_should_have_been` write nothing and return an error that says why. `exo_recall` and `exo_get` still answer.
+
 A correction becomes a `verdict` event that points at the agent output it judges. If that output is not
 in the ledger yet, it is logged first.
 

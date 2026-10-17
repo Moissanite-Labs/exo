@@ -124,6 +124,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- Private threads are not remembered again (D-028). Their turns no longer reach exo-memory's signed ledger: the
+  loop skips `on_turn_start`, `sync_turn` and `checkpoint` for them. `exo_note` and `exo_should_have_been` refuse
+  in them. The learning loop and `feedback.send` ignore them: a reject or should_have_been on one files no finding.
+  The context plugin never sees them, so no exo-context handoff or pin carries them. The tree's hooks never name
+  them, and `/compact` no longer offers a private reply as the output a correction in another thread judges.
+  `memory_zoom(subagent=)` opens a private thread's delegate children only from that thread. All of this holds
+  for those children too, at any depth: feedback on a child's answer records nothing and files no finding. A
+  response to a panel a private thread opened is no longer noted in the ledger.
 
 ## [0.2.0] (egg) - 2026-10-13
 

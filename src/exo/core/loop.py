@@ -12,9 +12,9 @@ keeps the loop independent of the registry, router and slot modules.
 Memory call sites (all optional, sync or async): ``system_prompt_block()``,
 ``prefetch(query, session_id=)``, ``on_turn_start(turn_number, message, session_id=, author=)``,
 ``sync_turn(user_content, assistant_content, session_id=, turn_author={"author": ...})``,
-``checkpoint(session_id=, messages=, reason=)``. ``author`` is the turn message's author (exo.provenance, D-040);
-each message dict carries ``author`` and, for user messages, ``principal``. Keywords a provider does not
-declare are dropped.
+``checkpoint(session_id=, messages=, reason=)``; the last three never in or under a private thread (D-028).
+``author`` is the turn message's author (exo.provenance, D-040); each message dict carries ``author`` and,
+for user messages, ``principal``. Keywords a provider does not declare are dropped.
 Context call sites: ``note(session_id)``, ``await build(session_id, system)``,
 optional ``on_turn_complete(session_id, usage)`` and an ``on_event`` attribute.
 """
@@ -225,7 +225,9 @@ class Loop:
         await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or "", soul=soul), session)
         turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user" and not _.meta.get("note"))
         author = provenance.author_of(user)
-        await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
+        remembered = not self.store.private(session)  # D-028: no memory write sees a private thread or its child
+        if remembered:
+            await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
         result = TurnResult(turn_id=turn_id, stop_reason="end")
         try:
             await self._rounds(session, turn_id, user, st, result)
@@ -254,8 +256,9 @@ class Loop:
         await self._emit(ev.TurnCompleted(turn_id=turn_id, stop_reason=result.stop_reason,
                                           usage=result.usage, timing=timing), session)
         reply = result.message.text() if result.message else ""
-        await self._memory("sync_turn", user.text(), reply, session_id=session, turn_author={"author": author})
-        if self.memory is not None and hasattr(self.memory, "checkpoint"):
+        if remembered:
+            await self._memory("sync_turn", user.text(), reply, session_id=session, turn_author={"author": author})
+        if remembered and self.memory is not None and hasattr(self.memory, "checkpoint"):
             recent = [provenance.flat(m) for m in self.store.messages(session)[-40:]]  # D-040: author per message
             await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
         if hasattr(self.context, "on_turn_complete"):

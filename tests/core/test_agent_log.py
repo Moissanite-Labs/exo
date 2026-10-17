@@ -84,6 +84,23 @@ def test_private_and_subagent_threads():
     assert st.search("secret")  # still searchable locally, by session
 
 
+def test_private_covers_a_private_threads_children_at_any_depth():
+    """D-028: store.private is true for a private thread, its fork and its delegate children at any depth (they
+    hold briefs built from it), and false for any other session, an unknown id or none. A parent loop ends."""
+    st = SessionStore()
+    p = st.create_session(agent="razi", kind="private")
+    kid = st.create_session(agent="razi", kind="subagent", parent=p.id)
+    grandkid = st.create_session(agent="razi", kind="subagent", parent=kid.id)
+    st.append_message(p.id, Message.user("secret plan"))
+    fork = st.fork(p.id)
+    t = st.create_session(agent="razi")
+    tkid = st.create_session(agent="razi", kind="subagent", parent=t.id)
+    plain = st.create_session()
+    st._q("UPDATE sessions SET parent=? WHERE id=?", (tkid.id, t.id))  # a cycle must not hang the walk
+    assert [st.private(x.id) for x in (p, kid, grandkid, fork)] == [True] * 4
+    assert [st.private(x) for x in (t.id, tkid.id, plain.id, "s_missing", "", None)] == [False] * 6
+
+
 def test_agent_search_gives_positions():
     st = SessionStore()
     a = st.create_session(agent="razi")

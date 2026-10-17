@@ -36,6 +36,11 @@ class ContextAdapter:
         tree.on_capture = self._capture if hasattr(memory, "capture_principal") else None
         tree.on_compacted = self._compacted
 
+    def _private(self, session: str) -> bool:
+        """D-028: a private thread is never shown to the context plugin, so no handoff or pin it writes carries it."""
+        private = getattr(getattr(self.tree, "store", None), "private", None)
+        return private is not None and private(session)
+
     def transcript(self, session: str, last: int | None = None) -> list[dict[str, Any]]:
         """Recent messages as OpenAI-style dicts, for plugin hooks."""
         msgs = self.tree.transcript(session, last or self.RECENT)
@@ -87,7 +92,7 @@ class ContextAdapter:
 
     def note(self, session: str) -> None:
         self.tree.note(session)
-        if self.plugin is not None and session not in self._started:
+        if self.plugin is not None and session not in self._started and not self._private(session):
             self._started.add(session)
             safe_plugin_call(self.plugin, "on_session_start", session, platform="exo")
 
@@ -99,7 +104,7 @@ class ContextAdapter:
             msgs = await self.tree.build(session, (system + "\n\n" if system else "") + "# Recalled memory\n" + recall
                                          if recall else system)
         pick = getattr(self.plugin, "select_context", None)
-        if pick is None:
+        if pick is None or self._private(session):
             return msgs
         flat = [{"role": m.role, "content": m.text()} for m in msgs]
         try:
@@ -113,7 +118,7 @@ class ContextAdapter:
         return apply_selection(msgs, flat, out)
 
     def on_turn_complete(self, session: str, usage: Usage) -> None:
-        if self.plugin is not None:
+        if self.plugin is not None and not self._private(session):
             safe_plugin_call(self.plugin, "update_from_response", _usage_dict(usage))
             safe_plugin_call(self.plugin, "on_turn_complete", self.transcript(session), usage=_usage_dict(usage),
                   session_id=session)

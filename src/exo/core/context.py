@@ -521,7 +521,7 @@ class TreeContext:
         return key
 
     def _hook_session(self, key: str) -> str:
-        """The session id plugin hooks get for a tree (an agent tree: its most recently active thread)."""
+        """The session id plugin hooks get for a tree (an agent tree: its latest active thread, never a private one)."""
         return key
 
     def _verbatim(self, node: SummaryNode, limit: int | None = None) -> str:
@@ -771,8 +771,8 @@ class AgentContext(TreeContext):
     def _hook_session(self, key: str) -> str:
         if not key.startswith("agent:"):
             return key
-        rows = self.store._q("SELECT session FROM messages WHERE agent=? AND pos IS NOT NULL ORDER BY pos DESC"
-                             " LIMIT 1", (key[6:],))
+        rows = self.store._q("SELECT m.session FROM messages m JOIN sessions s ON s.id=m.session WHERE m.agent=? AND"
+                             " m.pos IS NOT NULL AND s.kind!='private' ORDER BY m.pos DESC LIMIT 1", (key[6:],))
         return rows[0]["session"] if rows else key
 
     def note(self, session: str, force: bool = False) -> None:
@@ -799,10 +799,12 @@ class AgentContext(TreeContext):
     def _with_context(self, key: str, principal: list[Message]) -> list[Message]:
         """Each principal message after the agent message just before it (a correction judges that output)."""
         out: list[Message] = []
-        for m in principal:
-            pos = int(m.meta["log_pos"])
-            if pos > 1:
-                prev = [e for e in self.store.log(key[6:], pos - 2, pos - 1) if not e.hidden and e.message.role == "assistant"]
+        for m in principal:  # "just before" as the tree reads the log: a private entry is not there (D-028)
+            rows = self.store._q("SELECT m.pos FROM messages m JOIN sessions s ON s.id=m.session WHERE m.agent=? AND"
+                                 " m.pos<? AND s.kind!='private' ORDER BY m.pos DESC LIMIT 1", (key[6:], m.meta["log_pos"]))
+            if rows:
+                p = rows[0]["pos"]
+                prev = [e for e in self.store.log(key[6:], p - 1, p) if not e.hidden and e.message.role == "assistant"]
                 if prev and prev[0].message.text().strip():
                     out.append(prev[0].message)
             out.append(m)
