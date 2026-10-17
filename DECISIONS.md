@@ -809,9 +809,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
   today).
 - **Limits:** a tool process is the same OS user. Code that reads the credential file without the gate seeing it
-  (the gate classes a plain read as `credentials`, always ask; indirection is the gate branch's work) and also
-  detaches from the core's process tree could still pass. The real fix is an OS sandbox for tool subprocesses.
-  The page link sits in browser history and, briefly, in the browser launcher's argv. The env scrub is a
+  (the gate classes a read of the file, of its run folder or of a wildcard there as `credentials`, always ask,
+  #169; indirection is the gate branch's work) and also detaches from the core's process tree could still pass.
+  The real fix is an OS sandbox for tool subprocesses. The page link sits in browser history and, briefly, in the
+  browser launcher's argv. The env scrub is a
   heuristic.
 - **Not changed:** the TUI approval card's focus behaviour (another branch is editing the TUI); noted for later.
   The echo engine (a test double) still accepts any answer.

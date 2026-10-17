@@ -27,6 +27,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Security
+- The run folder is a secret store, like `~/.ssh` (#169, D-039). The folder itself (`$EXO_HOME/run`, `.exo/run`,
+  `$EXO_HOME/principals/<name>/run`, in any spelling such as `run/`, `run/.` or `run/jobs/..`), its credential
+  files (`exod.principal.key`, `<socket stem>.principal.key`, `exod.token`) and a wildcard there that could match
+  one (`run/*`, `run/exod.principal.k*`, `run/exod.tok*`) are `credentials` and ask, also nested in
+  `bash -c`, `$( )`, interpreter code and `execute_code`. Before, only a call that named the key file asked: `cat
+  $EXO_HOME/run/*`, `grep -r . $EXO_HOME/run` and the built-in `grep` or `glob` on the folder were allowed reads.
+  Deletes and moves of the run folder or its credential files (`rm -rf ~/.exo/run`, `rm ~/.exo/run/*`,
+  `mv ~/.exo/run/* /tmp/`) are now `credentials` like `keys/` (previously `store_write`), so a seat delegated
+  `credentials` approvals in `approvals.yaml` may approve them, and a `deny: [store_write]` entry no longer matches
+  them (`deny: [credentials]` does). Job output in `run/jobs/` keeps its class, and a
+  bare `run` (`uv run`, `gh run list`, `ls run`) is not the folder. Every secret-store wildcard is now matched with
+  `.` and `..` resolved (`cat ./.env*` asks like `cat .env*`), and a bare `cat exod*` or `ls agent-*` asks in any
+  folder, as `cat id_rs*` already did (`rm exod*` is `credentials`, was `delete`); so does a bare `ls run*`. A
+  brace set (`run/{*,}`) is not expanded, as for every store matched by sample (#184). Limits are in
+  `docs/GATE.md`.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
