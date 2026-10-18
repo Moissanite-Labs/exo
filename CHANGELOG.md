@@ -98,10 +98,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   findings by default and counts the rest.
 - A core that `exo web` (or any client) starts is no longer that client's child (refs #145, D-036): a short helper
   starts a new session, forks the core and exits, so init (or the nearest subreaper) adopts the core. Process
-  ancestry changed; the principal and tool checks did not. The helper and the core run with `python -P`, so a
-  `pathlib.py` in the current folder no longer runs; an `EXO_ENGINE` module must now be installed or on `PYTHONPATH`,
-  not just in the folder the client started from; startup output from `sitecustomize` no longer breaks the start; and a core that dies while
-  starting is reported at once, with its real exit code when known and never a made-up one.
+  ancestry changed; the principal and tool checks did not. `exo stop` from another terminal now stops a core whose
+  `exo web` is still running (before, the core stayed that client's zombie and `exo stop` waited it out). The helper
+  and the core run with `python -P`, so a `pathlib.py` in the current folder no longer runs; an `EXO_ENGINE` module
+  must now be installed or on `PYTHONPATH`, not just in the folder the client started from. A core that dies while
+  starting is still reported at once, but the message gives its exit code only when the client is PID 1 or a
+  subreaper (the log tail still gives the reason). Such a client adopts the cores it starts and reaps one that exits
+  later at its next start, so restarts leave no zombies.
 
 ### Fixed
 - Esc on a `claude-cli` turn is no longer lost when it lands just as the CLI prints a line (#163). On Python 3.11
