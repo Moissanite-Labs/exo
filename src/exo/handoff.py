@@ -450,10 +450,12 @@ def render_pinned_block(signals: Signals, handoff_path: str | os.PathLike | None
 # --- extraction ------------------------------------------------------------------
 
 def _may_carry(m: dict) -> bool:
-    """D-040: a pinned block is carried from a summary, the system message, the principal or an older host's untagged
-    message. One inside peer, bus, job, tool or agent text is data, not the principal's words."""
+    """D-040: a pinned block is carried only from a message that opens with it (exo-context's own block) or with a
+    compaction marker (a host's summary), from the system, the principal or an older host's untagged message. A block
+    in peer, bus, job, tool or agent text is data, and so is one quoted further down a message: the Exo core's system
+    message quotes each span too small to summarize word for word, a peer's turn included."""
     return m.get('role') not in ('other', 'tool') and (m.get('author') or provenance.SYSTEM) in (
-        provenance.SYSTEM, provenance.PRINCIPAL)
+        provenance.SYSTEM, provenance.PRINCIPAL) and message_text(m).lstrip().startswith((PIN_OPEN, *SUMMARY_MARKERS))
 
 
 def extract_signals(messages: list[dict]) -> Signals:

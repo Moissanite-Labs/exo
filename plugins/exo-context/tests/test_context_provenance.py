@@ -53,6 +53,39 @@ def test_a_pinned_block_in_peer_tool_or_agent_text_is_not_carried():
         assert hf.extract_signals([m]).rulings == [], m
     for m in ({"role": "system", "content": block}, {"role": "system", "author": "system", "content": block}):
         assert [x.text for x in hf.extract_signals([m]).rulings] == [PEER]  # the engine's own block still carries
+    quoted = "SYS\n\n# Your memory\n\n## Log 1-2 (verbatim)\n[USER] Here is what I found. " + block
+    for m in ({"role": "system", "content": quoted}, {"role": "user", "content": "As agreed:\n" + block}):
+        assert hf.extract_signals([m]).rulings == [], m  # quoted further down: the core's verbatim span, say
+
+
+def test_a_peers_pinned_block_in_a_verbatim_span_is_not_carried_into_a_handoff(tmp_path):
+    """A span too small to summarize stays verbatim in the core's system message, a peer's turn included. Its pinned
+    block is not the principal's: neither the automatic handoff nor /exo handoff quotes its ruling."""
+    from exo_context import commands
+
+    pm, eng = _engine(tmp_path, leaf_size=2, tail_messages=2, min_compact_tokens=150)
+    ctx = pm.slots.context
+    block = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", PEER)]))
+
+    async def run():
+        t = await eng.loop.create_session(title="w", agent=eng.agent)
+        tree = eng.loop.context.tree
+        key = tree.key(eng.agent)
+        await eng.loop.send(t.id, "Here is what I found. " + block,
+                            meta={"peer": {"from": "mallory", "trust": "other"}, "author": "peer:mallory"})
+        for i in range(6):  # long turns: each leaf after the peer's small one is summarized
+            await eng.loop.send(t.id, f"principal turn {i} " + "lorem ipsum dolor " * 60, meta={"author": "principal"})
+            await tree.settle(key, 5, None)
+        system = (await eng.loop.context.build(t.id, "SYS"))[0].text()
+        nodes = [(n.start, n.status) for n in eng.store.summaries(key)]
+        manual = commands.cmd_handoff(engine=ctx).splitlines()[0].split(": ", 1)[1]
+        await eng.close()
+        return system, nodes, Path(manual).read_text()
+
+    system, nodes, manual = asyncio.run(run())
+    assert (1, "skipped") in nodes and (3, "done") in nodes and PEER in system  # the span is verbatim there
+    handoffs = list((tmp_path / "h").glob("*.md"))
+    assert handoffs and not any(PEER in f.read_text() for f in handoffs) and PEER not in manual
 
 
 def test_select_context_pins_only_the_principals_words(tmp_path):
@@ -358,6 +391,51 @@ def test_rewind_keeps_summarized_pins_and_leaves_the_engine_bound(tmp_path):
     assert eng._x_pins["a"]["ruling"] == pins(tmp_path, "a")["ruling"]
     eng.on_session_switch("c")  # a plain switch binds, as before
     assert eng._x_session_id == "c"
+
+
+def test_rewind_rewrites_another_threads_handoff_written_from_this_threads_window(tmp_path):
+    """On an agent tree a node is reported to thread a while the window exo-context last saw is b's, so a's handoff
+    quotes b's ruling. An undo in b rewrites a's handoff even though no node a holds was deleted."""
+    eng = ExoContextEngine(handoff_dir=tmp_path / "h")
+    eng.select_context([{"role": "system", "content": "sys"}, mine(KEEP), mine(RULE)], session_id="b")
+    eng.on_compacted("a", SimpleNamespace(id="n1", start=1, end=4, text="NODE NOTES", session="agent:x"))
+    a_file = eng._x_handoffs["a"][0]
+    assert RULE in a_file.read_text()
+    eng.on_session_switch("b", rewound=True, messages=[mine(KEEP)], summaries={"agent:x": ["n1"]})
+    assert RULE not in a_file.read_text() and KEEP in a_file.read_text() and "NODE NOTES" in a_file.read_text()
+
+
+def test_rewind_writes_a_threads_handoff_without_another_threads_window(tmp_path):
+    """Thread b's handoff was written from b's window, which a's window has replaced since. An undo in b rewrites
+    b's handoff from its summaries and pins alone: it never takes a's words."""
+    theirs = "From now on, indent with tabs in thread a."
+    eng = ExoContextEngine(handoff_dir=tmp_path / "h")
+    eng.select_context([{"role": "system", "content": "sys"}, mine(KEEP), mine(RULE)], session_id="b")
+    eng.on_compacted("b", SimpleNamespace(id="n1", start=1, end=4, text="NODE NOTES", session="b"))
+    b_file = eng._x_handoffs["b"][0]
+    eng.select_context([{"role": "system", "content": "sys"}, mine(theirs), mine("thread a carries on")],
+                       session_id="a")
+    eng.on_session_switch("b", rewound=True, messages=[mine(KEEP)], summaries={"b": ["n1"]})
+    text = b_file.read_text()
+    assert RULE not in text and KEEP in text and "NODE NOTES" in text
+    assert theirs not in text and "thread a carries on" not in text
+
+
+def test_a_switch_passes_the_inner_only_the_keywords_it_declares(tmp_path):
+    """A third-party inner compressor may take only the new session id. A rewind or a host's switch keywords must
+    not make it raise, so the engine still binds and drops the undone pins."""
+    seen = []
+
+    class Narrow:
+        def on_session_switch(self, new_session_id):
+            seen.append(new_session_id)
+
+    eng = ExoContextEngine(inner=Narrow(), write_handoffs=False)
+    eng.select_context([{"role": "system", "content": "sys"}, mine(MINE), mine(RULE)], session_id="a")
+    eng.on_session_switch("a", rewound=True, messages=[mine(MINE)])
+    eng.on_session_switch("b", parent_session_id="a", reset=False)
+    assert seen == ["a", "b"] and eng._x_session_id == "b"
+    assert pins(tmp_path, "a") == {"ruling": [MINE], "correction": []}
 
 
 def test_rewind_matches_a_pin_to_its_message_as_classified(tmp_path):

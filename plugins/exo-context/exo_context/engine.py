@@ -299,9 +299,10 @@ class ExoContextEngine(ContextEngine):
         text may quote the undone ruling), so an undone ruling is never put back as the principal's words (D-041).
         A pin whose message was only summarized stays. The undone turns leave the window kept for handoffs when it is
         this thread's, whichever thread the engine is bound to, and each automatic handoff that may quote them is
-        written again."""
-        if self.inner is not None and hasattr(self.inner, 'on_session_switch'):
-            self.inner.on_session_switch(new_session_id, rewound=rewound, **kwargs)
+        written again. The inner compressor gets only the keywords its own ``on_session_switch`` declares."""
+        if self.inner is not None and hasattr(self.inner, 'on_session_switch'):  # only the keywords it declares
+            fn = self.inner.on_session_switch
+            fn(new_session_id, **_accepted_kwargs(fn, {'rewound': rewound, **kwargs}))
         if not rewound or messages is None:
             self._bind(new_session_id)
             return

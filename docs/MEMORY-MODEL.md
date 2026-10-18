@@ -56,11 +56,12 @@ built from it and their results (the core checks `SessionStore.private`, which w
   `feedback.send` on its answers returns `recorded: false` with the reason, and so does a verdict on a delegate
   child's answer (a client opens one with `/tasks` and `/open`). A reject or should_have_been on either files no
   finding, since every thread can list findings (`exo_trace`, `/findings`). `ui.respond` on a panel a private
-  thread opened is not noted in the ledger: its value can carry a comment. The event log tells which thread
-  opened the panel.
+  thread opened is not noted in the ledger: its value can carry a comment. Neither is one on a panel it updated,
+  since `ui update` takes a known panel id from any thread. The event log tells which threads showed the panel.
 - **Context notes.** Other threads' notes leave it out.
 - **Subagents.** A delegate child of a private thread, and any child of that child, opens with
-  `memory_zoom(subagent=)` only from that private thread. Another thread's lookup skips it, by role or by id.
+  `memory_zoom(subagent=)` only from that private thread or a fork of it. Another thread's lookup skips it, by
+  role or by id. A fork of a private thread is private too, so the original cannot open the fork's children.
 - **Harness findings.** These are not memory, so they still run: the anomaly rules check its turns, and
   `exo_harness_report` files from it. Every thread lists open findings by title. An anomaly title names no
   text from the thread. Its detail can (a tool's error, a subagent goal), and so can a failed tool's signature.
@@ -73,12 +74,13 @@ Each model call is built fresh, in this order:
    (all threads, oldest first). The view ends at the last summarized node: small spans after it (too
    small to summarize, or a summary still running) stay in the recent part below. So the system message is
    byte-identical for every thread of the agent until a real summary lands.
-2. **This thread's verbatim tail**: every message of the thread after the tree frontier, and at least its
-   last `tail_messages`, widened back so it never starts with an orphan tool result. Context notes stored
-   in the thread are part of it. A fork's copies count at their original's log position, so a fork opens with
-   its parent's tail, not the parent's whole transcript, and `/compact` shrinks a fork's tail too. A copy
-   counts only while the tree can hold its original: the copies of a private thread's entries, and of entries
-   the parent undid after the fork, stay in the fork's tail.
+2. **This thread's verbatim tail**: every message of the thread after the tree frontier, and at least its last
+   `tail_messages`, widened back so it never starts with an orphan tool result. Context notes stored in the
+   thread are part of it. A fork's copies count at their original's log position, so a fork opens with its
+   parent's tail, not the parent's whole transcript, and `/compact` shrinks a fork's tail too. A copy counts only
+   while the tree can hold its original. A private thread's fork has a tree of its own (below), which summarizes
+   its copies. A copy of an entry the parent undid after the fork counts nowhere. It stays in the tail only until
+   the fork's own later entries are summarized, and then the fork's calls no longer carry it.
 3. **Context notes.** Before a model call, entries other threads committed since this thread last looked
    (and after the frontier) are written into this thread as one compact note: `In thread "tui 2", 4 min
    ago: user: ... / you: ...`. The note is stored (thread-local, not in the log), so the next call sees
@@ -89,15 +91,18 @@ Each model call is built fresh, in this order:
    sat in the system message and changed every turn, which broke the cache for the whole prompt; now the
    prefix up to the previous turn stays cached.
 
-A private thread's entries never enter the agent tree, so the agent's frontier says nothing about them. A
-private thread therefore keeps a summary tree of its own over its own messages, as a subagent thread does
-(key: its session id, ranges: message numbers). Its tail starts at that tree's frontier, not the agent's, and
-the tree's view opens the tail as an unstored message headed "Earlier in this private thread". As in the
-agent view, that view ends at its last summarized node: spans too small to summarize, or a summary still
-running, stay whole in the tail. Until the first summary lands, the whole thread stays verbatim. The system
-message is the same as in the agent's other threads, so the cached prefix holds. Plugin hooks never see that
-tree: no `on_pre_compress` (and its `checkpoint`), `capture_principal` or `on_compacted`. `/context` counts
-its view in the recent tail, and `/compact` folds only the agent tree.
+A private thread's entries never enter the agent tree, so the agent's frontier says nothing about them. A private
+thread therefore keeps a summary tree of its own over its own messages, as a subagent thread does (key: its
+session id, ranges: message numbers). Its tail starts at that tree's frontier, not the agent's, and the tree's
+view opens the tail as an unstored message headed "Earlier in this private thread". As in the agent view, that
+view ends at its last summarized node: spans too small to summarize, or a summary still running, stay whole in
+the tail. Until the first summary lands, the whole thread stays verbatim. A long private thread with no tree yet,
+such as one from before it had one, gets its leaves on its next turn. That turn waits for them as the agent
+tree's turns do (see "A turn does not wait for memory upkeep"), so a fast summarizer bounds the call. A slow one
+does not: the first calls can then carry most of the thread. The system message is the same as in the agent's
+other threads, so the cached prefix holds. Plugin hooks never see that tree: no `on_pre_compress` (and its
+`checkpoint`), `capture_principal` or `on_compacted`. `/context` counts its view in the recent tail, and
+`/compact` folds only the agent tree.
 
 A fork copies its parent's finished per-session summaries, but it numbers its copies 1 to n. Undo hides
 rows that are in the agent log, so their numbers stay used, and it deletes rows outside the log, such as a
@@ -165,7 +170,8 @@ turn picks it up. Nothing the turn says is delayed by bookkeeping.
 
 The one exception is size. If that view (finished summaries, unfinished spans verbatim, and the tail) is over
 `view_budget`, the turn waits for pending summaries, but only for `overflow_settle` seconds (5 by default, never
-more than `settle_timeout`), then builds with what is ready. The rule lives in `src/exo/turn_settle.py`.
+more than `settle_timeout`), then builds with what is ready. The rule lives in `src/exo/turn_settle.py`. A private
+thread checks its own tree the same way, after the agent tree.
 
 The turn never sees a half-merged memory. `build` reads the summary tree and the tail in one synchronous step, and a
 summary node turns `done` (text and status together) in one step, so each span is either its old verbatim or leaf
@@ -237,10 +243,13 @@ What uses it:
 - The learning loop's chat capture (`record_chat_signals`) and `/handoff` pins read the same flags.
 - The context plugin's `select_context` gets `author` and `principal` on each message, with `principal` read from
   the author alone. exo-context pins a ruling or correction, and quotes it in a handoff as the principal's words,
-  only from a principal message. A fork's copy of the principal's message keeps its author, so the child thread
-  pins it too (`is_principal` skips the copy, so capture does not take it twice). The recalled-memory block before
-  each turn is authored `system`. A pinned block inside peer, bus, job, tool or agent text is not carried into a
-  handoff.
+  only from a principal message. A fork's copy of the principal's message keeps its author, so the child thread pins
+  it too (`is_principal` skips the copy, so capture does not take it twice). A copy of a message stored before D-040
+  has no author to keep. It reads as `system`, so the fork does not pin it. The recalled-memory block before each
+  turn is authored `system`. A handoff carries a pinned block only from a message that opens with it (exo-context's
+  own block) or with a compaction marker (a host's summary). One in peer, bus, job, tool or agent text is not
+  carried, and neither is one quoted further down a message. The core's system message quotes each span too small to
+  summarize word for word, a peer's turn included, so a peer's block there is data too.
 - Peer, bus and job text enters the context inside its own tag (`[peer message from ...]`, `[bus message from
   ...]`, `[job notice ...]`), with a closing line that says it is not the user.
 

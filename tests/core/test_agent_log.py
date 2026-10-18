@@ -134,6 +134,35 @@ def test_private_covers_a_private_threads_children_at_any_depth():
     assert [st.private(x) for x in (t.id, tkid.id, plain.id, "s_missing", "", None)] == [False] * 6
 
 
+def test_a_private_threads_subagent_opens_from_that_thread_and_its_forks_only():
+    """D-028: memory_zoom(subagent=) opens a delegate child of a private thread from that thread or a fork of it.
+    A fork of a private thread is private too, with the original as its parent: its own children still open from it.
+    A normal thread, another private thread, the original (for the fork's children) and no caller do not."""
+    from exo.core.agentlog import AgentLogView
+
+    st = SessionStore()
+    p = st.create_session(agent="razi", kind="private")
+    st.append_message(p.id, Message.user("secret plan"))
+    f = st.fork(p.id)
+    t, q = st.create_session(agent="razi"), st.create_session(agent="razi", kind="private")
+    kids = {}
+    for owner, title in ((p, "p-kid"), (f, "f-kid")):
+        kid = st.create_session(agent="razi", kind="subagent", parent=owner.id, title=title)
+        st.append_message(kid.id, Message.assistant(f"{title} result"))
+        kids[title] = kid.id
+    view = AgentLogView(st, "razi")
+
+    def opens(name, caller):
+        return f"{name} result" in view.subagent(kids[name], caller=caller)
+
+    assert f.kind == "private" and st.get_session(f.id).parent == p.id
+    assert opens("f-kid", f.id) and opens("p-kid", p.id) and opens("p-kid", f.id)
+    assert not any(opens("f-kid", c) for c in (p.id, t.id, q.id, None))
+    assert not any(opens("p-kid", c) for c in (t.id, q.id, None))
+    st._q("UPDATE sessions SET parent=? WHERE id=?", (f.id, p.id))  # a parent loop must not hang the walk
+    assert opens("f-kid", f.id) and not opens("f-kid", t.id)
+
+
 def test_agent_search_gives_positions():
     st = SessionStore()
     a = st.create_session(agent="razi")

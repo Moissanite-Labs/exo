@@ -129,6 +129,33 @@ def test_the_tree_and_its_hooks_never_carry_a_private_thread():
     assert not any("zebracorn" in t for t, k in zip(summ.prompts, summ.keys) if k == AgentContext.key("razi"))
 
 
+def test_a_private_threads_delegate_child_calls_no_plugin_hook():
+    """D-028: a delegate child of a private thread, and its child, keep trees of their own over briefs built from
+    it. Those trees compact, but no plugin hook (pre-compress, capture, compacted) ever sees them. A normal
+    thread's child still calls them."""
+    store, ctx, prov, loop, _ = setup(leaf_size=2, tail_messages=2)
+    hooked = []
+    ctx.on_pre_compress = lambda session, msgs: hooked.append(("pre", session))
+    ctx.on_capture = lambda session, msgs: hooked.append(("capture", session))
+    ctx.on_compacted = lambda session, node: hooked.append(("compacted", session))
+
+    async def go():
+        p = await loop.create_session(agent="razi", kind="private")
+        t = await loop.create_session(agent="razi")
+        kid = store.create_session(agent="razi", kind="subagent", parent=p.id, title="researcher")
+        grandkid = store.create_session(agent="razi", kind="subagent", parent=kid.id, title="checker")
+        normal = store.create_session(agent="razi", kind="subagent", parent=t.id, title="ferry")
+        for sid in (kid.id, grandkid.id, normal.id):
+            for i in range(4):
+                await loop.send(sid, f"zebracorn step {i}")
+            await ctx.settle(sid, 5, None)
+        return kid.id, grandkid.id, normal.id
+    kid, grandkid, normal = run(go())
+    assert all(n.status == "done" for n in store.summaries(kid)) and store.summaries(grandkid)  # they compacted
+    assert not any(h[1] in (kid, grandkid) for h in hooked)
+    assert {h[0] for h in hooked if h[1] == normal} == {"pre", "capture", "compacted"}
+
+
 def test_system_message_is_shared_by_threads_and_holds_the_agent_tree():
     store, ctx, prov, loop, summ = setup(leaf_size=2, tail_messages=2)
 
@@ -283,6 +310,31 @@ def test_a_private_threads_small_spans_stay_whole_in_its_tail():
     assert all(nxt[:len(prev)] == prev for prev, nxt in zip(calls[:14], calls[1:15]))
     assert ctx._view(AgentContext.key("razi"))[1] > 31  # the agent frontier is past the private turns before i=15
     assert len(store.summaries(p.id)) > 2 and {n.status for n in store.summaries(p.id)} == {"skipped"}
+
+
+def test_a_long_private_thread_waits_for_its_first_summaries():
+    """D-068 on a private thread's own tree: a long private thread with no tree yet (one from before it had one)
+    schedules its leaves on its next turn. Its verbatim view overflows view_budget, so the turn waits up to
+    overflow_settle for them, as it does for the agent tree, and the call is not the whole thread."""
+    from exo.core.context import estimate_tokens
+
+    store, ctx, prov, loop, _ = setup()
+
+    async def go():
+        a = await loop.create_session(agent="razi", title="public")
+        p = await loop.create_session(agent="razi", kind="private", title="private")
+        for i in range(60):
+            store.append_message(p.id, Message.user(f"private note {i} " + "z" * 1500))
+            store.append_message(p.id, Message.assistant(f"noted {i}"))
+        for i in range(3):
+            await loop.send(a.id, f"public work {i} " + "y" * 3000)
+            await ctx.settle(AgentContext.key("razi"), 5, None)
+        assert store.summaries(p.id) == []
+        await loop.send(p.id, "what did I note first?")
+        return prov.calls[-1]
+    call = run(go())
+    assert call[1].text().startswith(PRIVATE_HEAD) and len(call) < 30, len(call)
+    assert sum(estimate_tokens(m) for m in call) < ctx.view_budget
 
 
 class Keep(Summ):
