@@ -157,6 +157,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - The judge score parser no longer misreads plain judge replies. "0.9 - nothing wrong with it" and "On a scale of
   0 to 1, 0.8" scored 0, and "Not correct." scored 1. A named scale is now only a label, "nothing wrong" does not
   count as wrong, and "not correct" does. A number that opens the reply is the score.
+- A store made with `exo init <id> --root DIR` or `exo import-store --root DIR` is found by its id. Both record DIR
+  in config `principals.<id>`, but nothing read it: the store commands said "no principal store", exo-memory and
+  learning were off, `exo memory verify` said "nothing to verify" while the store's ledger went unchecked, the
+  command center's decisions panel showed an empty queue, and check-prose skipped the store's internal names. Every
+  reader now maps an id to its store through `exo.store.principal_root`. The gate protects that store's policies,
+  state, keys and ledger, and reads its policies. If you followed the old hint and made a second store under
+  `$EXO_HOME/principals/<id>`, `exo config unset principals.<id>` goes back to that one.
+- Recall sees beliefs accepted after the first turn. exo-memory read the belief nodes once per process, so a lesson
+  that `exo proposals accept` or learning's own promotion wrote never reached recall until a restart, a reverted one
+  kept showing, and an edited node showed its old text. It now reloads when a node file was added, changed or removed
+  (`PrincipalStore.refresh`). The pack stays built once, for prompt caching. Learning's `proposal_accept` also
+  lints and links against the disk, so a node removed by another process no longer breaks a promotion.
 
 ## [0.2.0] (egg) - 2026-10-13
 

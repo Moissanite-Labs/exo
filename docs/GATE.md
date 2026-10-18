@@ -255,8 +255,10 @@ The gate does not claim to stop that; it stops the one-step forms. A sandbox is 
 The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/`
 (including `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of
 `$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets) and `$EXO_HOME/seats`, any
-`seat.toml`, and `$EXO_PRINCIPAL_STORE`. Distinctive names match anywhere, so a relative
-`policies/gates.yaml` or `state/approval-grants.json` counts too.
+`seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store root recorded in config `principals`
+(`exo init --root`, `exo import-store --root`), for every id, not only the active one.
+Distinctive names match anywhere, so a relative `policies/gates.yaml` or
+`state/approval-grants.json` counts too.
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,

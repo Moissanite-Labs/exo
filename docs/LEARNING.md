@@ -58,7 +58,8 @@ Explicitly accepting a proposal uses the separate `proposal_accept` path and can
 without automatic promotion. A citation establishes authorship, not that the cited words support the derived claim.
 Semantic evidence matching for ordinary unguarded proposals remains outside this policy.
 
-A promotion can be reverted (`exo.learn.revert`), and the revert is a ledger row too.
+A promotion can be reverted (`exo.learn.revert`), and the revert is a ledger row too. A promoted, accepted or reverted
+belief reaches recall on the next turn, with no restart: exo-memory reads the nodes fresh each turn.
 
 ## The slow loop
 
