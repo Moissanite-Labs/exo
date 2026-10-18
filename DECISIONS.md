@@ -779,6 +779,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   command's output (or a variable's value) as arithmetic too, any expansion or quoting there also asks through the
   `indirection` signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
   without expansion and plain names keep their class; a bare name such as `a[i]` is a known limit (GATE.md).
+  *Amendment 2026-10-17 (issue #167):* the lexer decoded `$'..'` with Python's `unicode_escape`. Bash's short
+  escapes (`\u65`, `\x4`, `\U41`), its 8-bit octal (`\545` is `e`), `\x{..}` and its NUL cut-off differ from that,
+  so `git push $'--forc\u65' origin main` read as a plain push while bash ran a force push. `$'..'` is now decoded
+  by bash 5.2's ANSI-C rules in a UTF-8 locale (`gate._ansi_c`), checked escape by escape against bash. A `\u` or
+  `\U` value that is no character is written as bash's u32toutf8 writes it (up to six bytes that are not ASCII,
+  nothing from 0x80000000 on), so every `$'..'` word is read. Category and target vetoes see the decoded word; a
+  `command:` regex still sees the raw line until the literal-word view (#187) uses the same decoder.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
