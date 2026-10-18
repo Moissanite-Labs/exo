@@ -308,7 +308,11 @@ A command is `allow` only when every program in it is known and nothing is hidde
   attribute) and a subscripted name given to `readonly` or `export` (bash rejects it as not a
   valid identifier) change nothing. An unquoted compound value
   (`declare -a b=($(ls))`) is read by the line's own parse, as before, and a quoted operand after
-  it on the same line (`declare -a b=() 'c=($(cmd))'`) is read too.
+  one or more of them on the same line (`declare -a b=() x=(1) 'c=($(cmd))'`) is read too. Bash
+  drops a backslash-newline from a compound value before it reads the value again as words, and so
+  does the gate: in `declare -a 'b=($\<newline>(cmd))'` cmd runs and is classified. A `\\<newline>`
+  is an escaped backslash and a newline, and stays; so does a backslash-newline in an `-i` or `-n`
+  value, which bash keeps.
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is

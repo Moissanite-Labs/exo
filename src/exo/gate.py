@@ -535,7 +535,8 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
         kind, v = toks[i]
         if kind == "op":
             last = cur.words[-1] if cur.words else None
-            opens = cur if last and not last.quoted and last.text.endswith("=") else None
+            # a NAME=( after an earlier NAME=(..) is still an operand of that earlier command
+            opens = (after if after is not None else cur) if last and not last.quoted and last.text.endswith("=") else None
             if v == "(" and cur.words and toks[i + 1:i + 2] == [("op", ")")]:
                 func = True
                 i += 2
@@ -1080,7 +1081,10 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
         m = re.match(r"[^=\[]*\[", name) if prog not in _DECLARES[3:] else None
         end, subs, other = _arith_scan(name, m.end()) if m else (name.find("="), [], False)
         value = re.match(r"\+?=(.*)", name[end:], re.S) if prog in _DECLARES and end >= 0 else None
-        v, odd = value.group(1) if value else "", False
+        raw = value.group(1) if value else ""
+        # a compound value is parsed again as words, and bash drops each \newline first (not an escaped
+        # `\\<newline>`); an -i or -n value keeps it
+        v, odd = re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", raw) if raw.startswith("(") else raw, False
         more: list[str] = []
         if v.startswith("("):         # a compound value; one the line expanded is parsed again as code
             more, odd = _compound_scan(v, "i" in attrs)

@@ -86,6 +86,17 @@ POSTS = [
     f"declare -a 'a=([0]=<({GH}))'",
     f"declare -a b=() 'c=($({GH}))'",
     f"declare -a b=(1) x 'c=([$({GH})]=1)'",
+    # Bash drops a \newline before it parses the value again; and an operand after a second unquoted compound
+    # belongs to the same declare. Before the review fix these were `read` and `opaque_exec`.
+    f"declare -a 'b=($\\\n({GH}))'",
+    f"declare -a $'b=($\\\\\\n({GH}))'",
+    f"declare -a b=(1) x=(2) 'c=($({GH}))'",
+    f"declare -a b=() x=() 'c=($({GH}))'",
+    # An escaped backslash before the newline stays a backslash, so `$(` after it still runs.
+    f"declare -i x='a[\\\\\n$({GH})]'",
+    f"declare -n r='a[\\\\\n$({GH})]'; echo $r",
+    f"typeset -i 'x=a[\\\\\n$({GH})]'",
+    f"declare -i x='a[\\\\\n`{GH}`]'",
 ]
 
 
@@ -119,6 +130,9 @@ UNREADABLE = [
     'local -n out="$2"',
     "declare -a 'b=($(date))'",
     "export -a 'b=(<(cat f.txt))'",
+    # bash keeps a backslash-newline in an -i or -n value (only a compound value is read again as words)
+    "declare -i x='a[\\\n1]'",
+    "declare -n r='a\\\nb'",
 ]
 
 
