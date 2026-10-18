@@ -19,7 +19,9 @@ start, the page shows the reason and the log path. If the agent is held by a win
 says to close that window or run `exo stop`. The background core stays up after the page closes (`exo stop` ends it).
 With `--socket` or `--url` nothing is started; the page says the core is not reachable.
 When the core ends the event stream (a restart, or a stream 4,096 events behind, D-079), `exo web` reconnects and
-replays from the last event it applied, so no reply or approval card is lost.
+replays from the last event it applied, so no reply or approval card is lost. That holds up to 16,384 missed
+events. After a longer gap, such as a long outage while the core kept working, it replays the newest 5,000 as on
+start, so an approval asked before them does not show.
 
 ## Opening the page and the page token (D-039)
 

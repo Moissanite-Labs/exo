@@ -116,6 +116,18 @@ def cooldown_until(now: float, status: int | None, strikes: int, reset_at: float
     return reset_at or now + min(SOLE_TTL * 2 ** (strikes - 1), LONG_TTL)
 
 
+def merge_provider(base: Any, spec: Any) -> Any:
+    """A provider table over the entry it overrides (the catalog's, or config.json's under a seat): the keys it sets
+    win and the rest stay. A table that sets ``base_url`` uses only the ``key_env`` it sets, so a key never follows a
+    new URL. A value that is not a table replaces the entry as given."""
+    if not isinstance(spec, dict):
+        return spec
+    base = base if isinstance(base, dict) else {}
+    if "base_url" in spec:
+        base = {k: v for k, v in base.items() if k != "key_env"}
+    return {**base, **spec}
+
+
 class Router:
     """Resolves roles to routes and streams with fallback.
 
@@ -139,10 +151,7 @@ class Router:
         cat = load_catalog() if catalog is None else catalog
         self.providers: dict[str, dict] = dict(cat.get("providers", {}))
         for name, spec in (providers or {}).items():  # a partial table keeps the catalog transport, key and roles
-            base = self.providers.get(name, {})
-            if isinstance(spec, dict) and "base_url" in spec:  # a table that sets base_url uses only its own key_env
-                base = {k: v for k, v in base.items() if k != "key_env"}
-            self.providers[name] = {**base, **spec} if isinstance(spec, dict) else spec
+            self.providers[name] = merge_provider(self.providers.get(name), spec)
         self.models: dict[str, dict] = dict(cat.get("models", {}))
         self.roles: dict[str, list[str]] = {**cat.get("roles", {}), **(roles or {})}
         self.instances = dict(instances or {})

@@ -57,11 +57,16 @@ turn_wall_s = 90              # also model_call_s, model_call_routes, turn_total
 ```
 
 The `[models]` tables (`roles`, `providers`, `models` for prices, `fake`) merge over config.json's `models`
-entry by entry. A role, a provider or a `provider:model` price entry the seat names replaces config.json's entry
-of that name whole. Every other entry stays as config.json set it. So the example above sets only `fast` (which
-`tier` then makes the seat's main model) and keeps config.json's `aux` and `decision` routes, and
-`roles = { decision = [] }` empties that one role. A price field the seat's entry leaves out comes from the
-catalog, not from config.json.
+entry by entry. A role or a `provider:model` price entry the seat names replaces config.json's entry of that name
+whole. Every other entry stays as config.json set it. So the example above sets only `fast` (which `tier` then
+makes the seat's main model) and keeps config.json's `aux` and `decision` routes, and `roles = { decision = [] }`
+empties that one role. A price field the seat's entry leaves out comes from the catalog, not from config.json.
+
+A provider entry merges one level deeper, key by key over config.json's entry of that name, by the same rule as
+a provider table over the catalog (`docs/PROVIDERS.md`). The keys the seat sets win and the rest stay. So a seat
+that sets only `read_timeout = 300` under `[models.providers.openai]` keeps the `base_url` config.json gave that
+provider, a LAN server for example, and sends no key there unless config.json named one. A seat entry that sets
+`base_url` drops config.json's `key_env`: no key follows a new URL unless the seat names it.
 
 When a thread starts, or a shell call works (its `cwd` argument or a leading `cd`) in a folder that is not inside
 a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.

@@ -119,7 +119,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   event for every subscriber without a limit. Now a subscriber 4,096 unread events behind has its stream ended
   after the last event it read, and it resumes with `since`. Every client in the repo resumes and misses nothing:
   the protocol client with `reconnect`, the terminal window (run in process, joined or taken over), stdio, the
-  exo-bus link, and `exo web`, which now replays from the last event it applied instead of the newest 5,000.
+  exo-bus link, and `exo web`, which now replays from the last event it applied instead of the newest 5,000. It
+  does so for up to 16,384 missed events. A longer gap replays the newest 5,000, as before.
 - A shell command that prints fast no longer floods the event stream. Its output chunks went out as one
   `tool.output` (and one database write) each, and one command could queue thousands before any client read one.
   The chunks queued between two loop turns now go out as one event.
@@ -128,11 +129,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   read about double on those routes and the cache share about half. Subagents there were stopped for `budget` after
   a few calls with a large cached prompt, while on Anthropic the budget ignored cached context. The per-child budget
   now counts uncached input, cache writes and output. Cache reads do not count. Context-engine plugins get the
-  whole prompt in `prompt_tokens`. Cost and model spend are unchanged.
+  whole prompt of the turn's last model call in `prompt_tokens`, not the sum of every call in a tool-using turn.
+  Cost and model spend are unchanged.
 - A seat's `[models]` tables (`roles`, `providers`, prices) now merge over config.json's entry by entry instead of
   replacing the whole table. A seat that set one role used to send `main` and `aux` back to the catalog's cloud
   defaults and drop config.json's prices. Under the `docs/SEATS.md` example, a local-only config sent aux and
-  decision calls to cloud routes.
+  decision calls to cloud routes. A seat's provider entry merges key by key over config.json's entry, by the rule
+  for provider tables below. A seat that sets only `read_timeout` keeps config.json's `base_url`, so a provider
+  that config.json points at a LAN server stays there and never gets the catalog key.
 - A partial `[models.providers.NAME]` table now merges over the catalog entry instead of replacing it. The
   documented Laya port override (`base_url` only) no longer turns Laya into a chat provider open to every role,
   and a one-key table such as `read_timeout = 300` no longer makes streams through that provider fail with
@@ -146,9 +150,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   child's row now reads `in parent` and is left out of the sums. A running child, a scheduled job and a fork are
   still summed, since nothing rolls them up.
 - `exo chat` can give a standing grant: typing `allow_always`, as the approval prompt offers it, then Enter to
-  confirm sends `allow_always`. Before, the client read only the first letter, so it sent `allow`. A reply
-  that only starts with a or y (`abort`, `yeah no`) no longer approves, and `Allow` no longer denies: a reply
-  is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else denies.
+  confirm sends `allow_always`. Before, the client read only the first letter, so it sent `allow`. `Allow` no
+  longer denies.
 
 ### Security
 - Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
@@ -164,6 +167,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- `exo chat` approvals no longer fail open. A reply that only starts with a or y (`abort`, `yeah no`) used to
+  approve. Now a reply is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else
+  denies.
 
 ## [0.2.0] (egg) - 2026-10-13
 

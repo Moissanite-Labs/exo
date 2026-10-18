@@ -1391,7 +1391,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the last event the client read and the publisher never waits. `Hub.closed` tells this close from a shutdown.
   - Every client in the repo resumes with `since`: the protocol client with `reconnect`, the exo-bus link, the
     terminal window's `LocalClient` and stdio `serve_lines` (they subscribe again until the hub closes, so a window
-    that took over keeps its core), and `exo web`, whose re-bootstrap replays from the last event it applied.
+    that took over keeps its core), and `exo web`, whose re-bootstrap replays from the last event it applied. It
+    does so for up to `4 * MAX_LAG` (16,384) missed events. A longer gap, such as a long outage while the core kept
+    working, replays the newest 5,000 as on start, so one response never carries an unbounded backlog (a
+    100,000-event gap took 2 s in one reply).
   - A reader that keeps up must stay far below the cap. Tool threads hand output to the loop with
     `call_soon_threadsafe`, and every callback queued between two loop turns runs before any reader does. On main one
     chatty shell command queued 7,946 publishes in one turn. `run_tool` now joins a thread's chunks into one
@@ -1429,6 +1432,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
     Cache reads do not count. The receipt's tokens in are the same count.
   - Readers that need the prompt size add the three counters: the TUI and web context gauges, the cache share
     (cache reads over the whole prompt), and the `prompt_tokens` handed to context engines.
+  - A context engine gets the usage of the turn's last model call (`TurnResult.last_usage`), so `prompt_tokens`
+    is one prompt. The turn's sum would count the cached context once per call: three calls of a 30k prompt read
+    as 90k, so a 75% threshold could fire after one tool-using turn with the window less than a third full.
 - **Rejected:**
   - Keeping the flag and teaching every reader about it: each new reader would have to know, and four did not.
   - Counting all context processed (`input + cache read + cache write + output`) for the budget: every round
@@ -1439,8 +1445,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Revisit if:** a transport reports cache counters in yet another shape, or children hit `budget` on routes that
   report no cache counts at all (local servers with their own prompt cache), where every call's full prompt counts.
 - **Follow-up:** `spend.py` and `billing.Price.actual` still take an `includes_cache` argument, now always false.
-  Remove it once PR #129 (tiered spend rates, same files) lands. The turn usage handed to `on_turn_complete` is the
-  sum of the turn's calls, not the last call's prompt.
+  Remove it once PR #129 (tiered spend rates, same files) lands.
 - **Validation:** `tests/core/models` (transport split, router price, spend settlement), `tests/agents`,
   `tests/clients/tui`, `tests/core/plugins`, `tests/trace`, the core budget test, `ruff check`, the mypy baseline.
 - **Docs:** `docs/TRACE.md` "Cost", `docs/MODEL-SPEND.md`, `docs/CORE-V2-INTERFACES.md`, `docs/AGENT-WIRE.md`

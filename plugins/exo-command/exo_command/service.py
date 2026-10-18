@@ -4,7 +4,7 @@
 
 * ``bootstrap()`` asks the core for the picture (``hello``, ``session.list``, ``tasks.list``) and
   replays recent events so approvals and usage are not missed; after a reconnect, every event since the last one
-  applied.
+  applied, up to ``RESUME_GAP`` events back.
 * ``follow()`` then folds the live event stream; ``sync()`` does one poll through
   ``events.subscribe`` for callers with no stream (tests, a one-shot digest).
 
@@ -20,6 +20,7 @@ import traceback
 from typing import Any, Dict, List, Optional
 
 from exo.protocol import schema as s
+from exo.server.engine import MAX_LAG
 
 from . import costs, decisions, projects
 from .config import Settings, load_settings
@@ -29,6 +30,7 @@ from .state import TASK_ORDER, TERMINAL_TASK, State
 SECTIONS = ("projects", "sessions", "tasks", "approvals", "decisions", "costs")
 PROJECTS_CACHE_FLOOR = 120
 REPLAY_WINDOW = 5000      # events replayed on start, newest first-seq minus this
+RESUME_GAP = 4 * MAX_LAG  # a reconnect replays every missed event up to this many; a longer gap gets the window
 SESSION_LIMIT = 200
 EVENT_RING = 3000         # recent events kept for the chat stream (late browsers, reconnects)
 
@@ -55,9 +57,10 @@ class CommandCentre:
         hello = await src.call(s.Hello(client="exo-command"))
         seq = int(hello.get("seq") or 0)
         # A reconnect resumes where this page stopped, so every event published while the stream was down applies
-        # (the core ends a stream that falls behind, D-079). A first start, or a newer core whose log is behind this
-        # page, replays only the newest window.
-        since = self.state.seq if 0 < self.state.seq <= seq else max(0, seq - REPLAY_WINDOW)
+        # (the core ends a stream that falls behind, D-079). A first start, a newer core whose log is behind this
+        # page, or a gap above RESUME_GAP (a long outage, one large reply) replays only the newest window.
+        resume = 0 < self.state.seq <= seq <= self.state.seq + RESUME_GAP
+        since = self.state.seq if resume else max(0, seq - REPLAY_WINDOW)
         replay = await src.call(s.EventsSubscribe(since=since))
         self.state.apply_all(replay.get("events") or [])
         for ev in replay.get("events") or []:
