@@ -79,27 +79,20 @@ def _drain(proc: subprocess.Popen, out: _Capped, emit: Callable[[str], None] | N
 def _safe_cut(raw: str, vals: list[str]) -> int:
     """Where ``raw`` may split so the stream equals whole-output redaction, whatever output follows.
 
-    Redaction takes the values in ``vals`` order, and each value's matches from the left, skipping text already
-    taken. A match that ends before a point is taken the same way whatever follows that point. So the cut starts
-    before a tail that could start a key. Then, value by value, it moves back to the start of the first match that
-    could cross it, skipping matches that overlap one taken before the cut. Later output can then add or drop only
-    matches that start at or after the cut, so no part of a key that whole-output redaction hides goes out. Each
-    value moves the cut at most once, so the held text stays under twice the length of all values together. One
-    limit: a value that holds ``[`` or ``]`` can match across a ``[redacted]`` marker in the whole output, and there
-    the stream can differ."""
-    cut, taken = len(raw) - _key_start(raw, vals), bytearray(len(raw))  # taken: by matches that end before the cut
-    for v in vals:
-        n, i = len(v), raw.find(v)
-        while i >= 0:
-            if 1 in taken[i:i + n]:
-                i = raw.find(v, i + 1)
-            elif i + n <= cut:
-                taken[i:i + n] = b"\x01" * n
-                i = raw.find(v, i + n)
-            else:
-                cut = min(cut, i)
-                break
-    return cut
+    The stream and the whole output take their spans from the same ``secret_spans``, which finds each value's
+    matches in the output itself, never across a ``[redacted]`` marker. When no span of the whole output crosses
+    the cut, the text before the cut gives the same spans alone, and so does the text after it. So the cut must be
+    a point that no span can cross, whatever output follows.
+
+    The cut starts before a tail that could start a key, so every match that later output adds starts at or after
+    it. Then ``secret_spans`` runs with the cut as ``end``, value by value in redaction order. Before each value,
+    the earlier values' spans in the whole output that start before the cut are the ones taken here, and they stop
+    at or before it. So a match that stops at or before the cut is taken or skipped as in the whole output. A
+    value's first match that stops after the cut moves the cut back to its start, if it starts before it, and the
+    value's later matches start after that. That keeps the rule true for the next value. Each value moves the cut at
+    most once, by less than its length, so the held text stays under twice the length of all values together."""
+    from exo.core.models.keys import secret_spans
+    return secret_spans(raw, vals, len(raw) - _key_start(raw, vals))[1]
 
 
 def _key_start(text: str, vals: list[str]) -> int:
