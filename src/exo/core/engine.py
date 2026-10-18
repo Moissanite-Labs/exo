@@ -528,8 +528,8 @@ class CoreRuntime:
                 "cursor": {"instance": self.hub.instance, "seq": self.hub.seq}}
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
-        info = self._info(b.session)
-        return {"session": to_dict(info), "messages": to_dict(self.store.messages(b.session))}
+        info, queued = self._info(b.session), [m.id for m in self.loop.state(b.session).steer]  # chips a client still draws
+        return {"session": to_dict(info), "messages": to_dict(self.store.messages(b.session)), "steers": queued}
 
     async def _session_resume(self, b: s.SessionResume) -> dict[str, Any]:
         self._info(b.session)
@@ -558,7 +558,7 @@ class CoreRuntime:
         except SessionLocked as exc:  # a finished child session takes no new turns
             raise CommandFailed("session_locked", str(exc)) from None
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
-        if b.mode == "steer" and self.loop.state(b.session).running:
+        if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
             queue = self.loop.state(b.session).steer
             return {"steered": True, "message_id": (queue[-1].id if queue else "") or ""}
