@@ -77,8 +77,9 @@ def _drain(proc: subprocess.Popen, out: _Capped, emit: Callable[[str], None] | N
 
 
 def _safe_cut(raw: str, vals: list[str]) -> int:
-    """Where ``raw`` may split so the stream still equals whole-output redaction: before a tail that could start a
-    key, and never inside a key that redaction takes (longest first, skipping one inside a key already taken)."""
+    """Where ``raw`` may split so the stream equals whole-output redaction: before a tail that could start a key,
+    and not inside a key that redaction takes (longest first, skipping one inside a key already taken). This covers
+    a key inside another and a key whose end starts another. Three keys chained by partial overlap can still differ."""
     cut, taken = len(raw) - _key_start(raw, vals), bytearray(len(raw))
     for v in vals:
         i = raw.find(v)

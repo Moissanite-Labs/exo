@@ -149,7 +149,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Streamed `bash` output no longer leaks a known key split between two reads. The output went out per 64 KiB read
   and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
   halves. A read now holds back an ending that could start a key until the next read, and the stream matches
-  redacting the whole output, also when one key holds another. The stream and the result also decode a character
+  redacting the whole output, also when one key holds another or one key's end starts another. Three keys that
+  chain by partial overlap can still differ in the stream. The stream and the result also decode a character
   split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
 
 ## [0.2.0] (egg) - 2026-10-13
