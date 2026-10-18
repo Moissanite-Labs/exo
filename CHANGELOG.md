@@ -52,6 +52,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `credentials`. Until D-075 lands, a coproc is denied only when its inner command outranks `opaque_exec`.
   A `credentials` line keeps the highest reversibility of its parts, so `coproc env; rm -rf x` stays
   irreversible and a policy that denies irreversible actions still denies it.
+- The gate reads the array subscript in the variable names of `printf -v`, `read`, `declare`, `typeset`, `local`,
+  `unset`, `test -v`/`[ -v` and `wait -p` (#179, D-038). Bash runs a `$( )` or backticks there even inside single
+  quotes, so `printf -v 'a[$(gh pr comment ...)]' %s x` was allowed; it is now a `github_post`. Bash also evaluates
+  the command's output or a variable's value there, so any expansion or quoting in such a subscript asks
+  (`unset "arr[$i]"` and `printf -v 'a[$(date)]' %s x` were allowed and now ask). A nested subscript
+  (`a[b[0]+$(cmd)]`) is read to its end. A `\$` or `` \` `` at the subscript's top level is literal, as bash
+  reads it; bash before 5.2 expands a nested subscript again, so there the gate reads the command. Past the
+  nesting limit such a command is `opaque_exec`.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit

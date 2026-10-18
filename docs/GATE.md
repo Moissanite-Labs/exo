@@ -331,6 +331,24 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- Bash evaluates an array subscript in a variable name as arithmetic, and that runs a `$( )` or
+  backticks in it, even inside single quotes. So the name arguments of `printf -v`, `read` (and
+  `read -a`), `declare`, `typeset`, `local`, `unset`, `test -v` and `[ -v`, and `wait -p` are read
+  for a subscript (#179). Each command in it is classified like a `$( )`, so
+  `printf -v 'a[$(gh pr comment 3 --body hi)]' %s x` is a `github_post`. Its output is evaluated
+  as well, so any expansion or quoting in the subscript (`$(cat f)`, `$i`, `${x}`, `$(( ))`, `"k"`)
+  also adds the `indirection` signal and asks: a value such as `b[$(cmd)]` runs cmd. It is a
+  signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
+  without expansion (`a[0]`; for a bare name such as `a[i]` see the known limit below) and the
+  other arguments (printf's format, read's prompt) change nothing. The subscript runs to the `]`
+  that ends it as bash finds it: a nested `[ ]` (`a[b[0]+$(cmd)]`), a quoted `]` or a `\]` does
+  not end it. At the subscript's top level a `\$` or `` \` `` is literal, as in bash
+  (`a[\$(cmd)]` runs no command); bash before 5.2 expands a nested subscript (`a[b[\$(cmd)]]`)
+  again and runs it, so the gate reads it there. Past the nesting limit a command there is
+  `opaque_exec`, as an unquoted `$( )` is. A command read
+  from the subscript is a part of the line like any `$( )`, so it can outrank the line's own
+  category: `printf -v 'a[$(git push origin main)]' %s x > /tmp/f` is a `vcs_push` and asks, and
+  until D-075 and #191 land a deny on `local_write` no longer applies to it.
 - Nesting is read four levels deep. Past that the text is `opaque_exec` and asks. An `ssh` or
   `mosh` chain with more hops than that is not read either: the hops that were read keep the
   `remote host` exposure and the first host as target (so a `target:` deny on it still
@@ -521,6 +539,15 @@ folder from more than one level above its parent (`cd / && cd srv/exo-home/keys`
 `CDPATH`, `HOME` set on the line and `shopt -s dotglob`; and a store reached through a folder
 link whose name does not say so.
 
+Known limit. The gate does not model a variable's value. Bash evaluates a bare name in an
+arithmetic context as arithmetic too (`a[i]`, `$(( x ))`, `declare -i`), so a value such as
+`b[$(cmd)]` set earlier runs cmd there. Only an expansion written in the name argument of the
+builtins above asks; one in an assignment word (`a[$i]=v`) or an arithmetic expression
+(`$(( a[$i] ))`) does not. The gate cannot tell an associative array from an indexed one, so a
+subscript of an associative array asks too, although bash does not evaluate it as arithmetic.
+A quoted value that declare, typeset or local reads as an array or arithmetic value
+(`declare -a 'b=($(cmd))'`, `declare -i x='a[$(cmd)]'`, `declare -n`) runs cmd too and is not
+read yet (#188).
 Known limit (#160). Some wrapper forms are not read and ask as `opaque_exec`, as they did before:
 BSD and macOS `script -q FILE CMD`, `screen -R` and `-RR` (they start the command when no session
 is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot`, `strace`,
