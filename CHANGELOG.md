@@ -93,6 +93,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   where the seat wakes instead of being queued behind a turn that was over. The web chat keeps a `steer queued`
   chip until the message lands or is cancelled, and drops one the core no longer holds (#147, #151).
 
+### Fixed
+- Model spend (#128): a pinned route rate below the audited long-prompt tier is refused, at policy validation and
+  at request admission, in all four classes (input, output, cache read, cache write). `claude-haiku-5-5` bills
+  $0.50/$2.50 input/output, $0.05 cache read and $0.625 5-minute cache write per MTok above 100K prompt tokens,
+  so a headline pin under-reserved and under-settled long prompts, cache-heavy ones most. The floors are
+  validation floors only; every charge still uses the pinned rates. The native-contract admission checks now
+  live in `exo.model_spend.admit_native`.
+
 ### Security
 - `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
   requests from the web server only, no inline script, style attribute or eval, no framing, plus
