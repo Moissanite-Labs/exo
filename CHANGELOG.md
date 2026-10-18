@@ -165,6 +165,40 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   skill say `exo`, not the `exo-tui` command the installer does not provide. The user guide's screenshot paths
   exist, and it gains a glossary (principal, store, ledger, seat, thread, gate, grant, finding, wave, D-number)
   that the README links before those words appear. `tests/docs/test_first_user_docs.py` keeps these true.
+- History brought in with `exo ingest` now feeds the rule of three in `exo consolidate`. Ingest writes your own
+  messages with role `principal`, and consolidation read only role `user`, so an import never drafted a belief. Rows
+  read before this fix are not in the cluster cache: delete `<store>/proposals/state.json` and the next run rebuilds
+  it from them. Superseded text does not count: the older versions of an edited ChatGPT prompt, and Hermes rows
+  marked inactive. Imported evidence carries the time you said it, not the time of the import. Promotion rule 4
+  never applies a lesson whose evidence is all imported: you review that first batch. Only the nightly climb can
+  add such a lesson, and only when the eval shows it helps.
+- The nightly climb follows rule 5 and D-054. It no longer adds a gated lesson (a type in `eval_gate_for` or a
+  domain in `high_impact_domains`) or one with a critic objection: rule 5 alone promotes those, with its critic,
+  weight, session and held-out checks. A climb candidate with no held-out case in its domains fails the gate
+  instead of passing on zero cases. A climb promotion records the lesson's real type and domain for the brief.
+- Eval cases respect authorship (D-040): a replay comes only from the principal's own verdict, answer or ruling,
+  asked by the principal's own message. The agent's `exo_should_have_been` reports and peer messages no longer
+  become gold answers for the climb, the rule 5 gate or the regression check.
+- A lesson's own evidence is no longer its proof: the rule 5 gate and the climb ignore the replay or preference pair
+  built from the verdict the lesson cites. This holds when the climb adds a lesson and when it drops one. A skill
+  whose only held-out case was its own evidence now fails the gate.
+- The climb's cached incumbent scores are scored again when the eval cases' contents, the checks, the rubric, the
+  judge samples or the main or eval route models change. Before, only the config and the case ids were checked,
+  so a lesson that changed nothing could be kept against stale scores.
+- The judge score parser no longer misreads plain judge replies. "0.9 - nothing wrong with it" and "On a scale of
+  0 to 1, 0.8" scored 0, and "Not correct." scored 1. A named scale is now only a label, "nothing wrong" does not
+  count as wrong, and "not correct" does. A number that opens the reply is the score.
+- A store made with `exo init <id> --root DIR` or `exo import-store --root DIR` is found by its id. Both record DIR
+  in config `principals.<id>`, but nothing read it: the store commands said "no principal store", exo-memory and
+  learning were off, `exo memory verify` said "nothing to verify" while the store's ledger went unchecked, the
+  command center's decisions panel showed an empty queue, and check-prose skipped the store's internal names. Every
+  reader now maps an id to its store through `exo.store.principal_root`. If you followed the old hint and made a
+  second store under `$EXO_HOME/principals/<id>`, `exo config unset principals.<id>` goes back to that one.
+- Recall sees beliefs accepted after the first turn. exo-memory read the belief nodes once per process, so a lesson
+  that `exo proposals accept` or learning's own promotion wrote never reached recall until a restart, a reverted one
+  kept showing, and an edited node showed its old text. It now reloads when a node file was added, changed or removed
+  (`PrincipalStore.refresh`). The pack stays built once, for prompt caching. Learning's `proposal_accept` also
+  lints and links against the disk, so a node removed by another process no longer breaks a promotion.
 - Terminal event feed: a boot that failed after `hello` left the window without its feed, so `/new` and a message
   worked but no reply or approval card ever showed. The feed now starts whatever the boot does, and a `--session`
   id the core does not know opens a new thread and says so. One event the window cannot read no longer ends the
@@ -251,6 +285,25 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- Rebuilding the rule-of-three cache (`proposals/state.json` missing or stale) counts only your own utterances
+  (D-040). Before, a rebuild also counted Hermes briefs of doubtful authorship (`hermes:unverified-user`) and peer,
+  bus and job turns, so one matching sentence from you could complete a rule-of-three proposal, which promotion
+  rule 4 could then apply with no review. Summaries from an import (`secondary`) do not count either.
+- `exo taste export-house` no longer ships the principal's own name, organisation or email domain. Onboarding
+  writes them into the body of `person/identity` and the `PRINCIPAL.md` heading, and the deny list read neither. Now
+  the heading name (also when half filled in) and the domain of every email address fail the export. The words of
+  the onboarding name and role answers hold an item for review, read from the ledger too when the node withholds an
+  answer with a phone number. So do the labels of an email domain (`acme` of `mail.acme.io`): its parent domain
+  `acme.io` holds but does not fail. A generic word in an answer ("team") only holds, a value item too, and never
+  fails the built-in house soul. While the heading is still the template's, the name answer
+  gives the name written as one word (`quillvarden`, held) and the initial plus surname (`qvarden`). These terms
+  also match when joined to another word by `-` or `_` or to digits, as in a handle or a repo name. The initial
+  plus surname fails only as a handle (`@alee`, `alee42`), and an email domain matches only as written, so `me.com`
+  does not fail "Show me commands".
+- The gate protects a store made with `--root` (config `principals.<id>`) as it protects the stores in the home: its
+  policies, state, keys and ledger. It also reads that store's policies. A recorded root that names an unknown user
+  (`~nosuchuser/x`), holds a NUL byte or is relative is skipped, and the id falls back to
+  `$EXO_HOME/principals/<id>`. Such a root no longer stops the gate and every store reader with an error.
 - Gate (#224, D-038): brace sets are expanded as bash does before a write is matched against the Exo store, as
   #184 does for secret-store reads. `echo x > ~/.exo/polic{i..i}es/default.yaml`,
   `cp x ~/.exo/{state,zz}/approval-grants.json`, `dd of=~/.exo/polic{i,x}es/default.yaml` and a `write_file` to

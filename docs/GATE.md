@@ -420,8 +420,10 @@ link whose name does not say so.
 The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/`
 (including `approval-grants.json`), `ledger.sqlite*` and `keys/` of the principal store and of
 `$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets) and `$EXO_HOME/seats`, any
-`seat.toml`, and `$EXO_PRINCIPAL_STORE`. Distinctive names match anywhere, so a relative
-`policies/gates.yaml` or `state/approval-grants.json` counts too.
+`seat.toml`, `$EXO_PRINCIPAL_STORE`, and every store root recorded in config `principals`
+(`exo init --root`, `exo import-store --root`), for every id, not only the active one.
+Distinctive names match anywhere, so a relative `policies/gates.yaml` or
+`state/approval-grants.json` counts too.
 
 Absolute paths are checked in both their lexical form and their resolved symlink form, including
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and

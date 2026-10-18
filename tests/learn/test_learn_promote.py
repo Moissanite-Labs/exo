@@ -1,12 +1,15 @@
+import json
 import re
 
 import pytest
 
-from exo.consolidate import load_state, proposal_accept, proposals_list
+from exo import eval as E
+from exo.consolidate import consolidate_run, load_state, proposal_accept, proposals_list
+from exo.ingest import ingest
 from exo.learn import export_taste, learned_since, revert
 from exo.learn.promote import accepted_rules, apply_policy
 
-from helpers import correction, propose, ruling, scripted_model, write_qa
+from helpers import chatgpt_export, correction, propose, ruling, scripted_model, write_qa
 
 
 def status(lr, pid):
@@ -183,6 +186,31 @@ def test_rule4_needs_two_sessions_and_no_objection(learner):
     assert d2.action == "wait" and status(learner, res2["id"]) == "proposed"
 
 
+TABLES = ["Answer with a table, not bullet points.", "please answer with a table, not bullet points",
+          "Answer with a table rather than bullet points, every time."]
+
+
+def test_rule4_imported_history_alone_waits_for_review(learner, tmp_path):
+    """The first import is a batch the principal reviews: repeats found only in `exo ingest` history, here from
+    2023, never auto-promote. Before, they were applied on the next policy run with no review."""
+    rt = learner.runtime
+    ingest("chatgpt", chatgpt_export(tmp_path / "conversations.json", TABLES), rt.ledger, "principal")
+    (pid,) = consolidate_run(rt.store, rt.ledger, author="exo-learn").proposals
+    (d,) = apply_policy(learner)
+    assert (d.id, d.action, d.rule) == (pid, "wait", 4) and "imported" in d.reason
+    assert status(learner, pid) == "proposed" and learned_since(learner.engine) == []
+
+
+def test_rule4_imported_history_with_a_live_repeat_auto_promotes(learner, tmp_path):
+    rt = learner.runtime
+    ingest("chatgpt", chatgpt_export(tmp_path / "conversations.json", TABLES[:2]), rt.ledger, "principal")
+    rt.ledger.append("utterance", {"text": TABLES[2], "role": "user"}, "principal", session="live")
+    (pid,) = consolidate_run(rt.store, rt.ledger, author="exo-learn").proposals
+    (d,) = apply_policy(learner)
+    assert (d.id, d.action, d.rule) == (pid, "auto_promoted", 4)
+    assert status(learner, pid) == "accepted"
+
+
 def test_rule5_skill_patch_needs_the_gate(learner):
     rt = learner.runtime
     ev = [correction(rt, "write status plain", "s1")["id"], correction(rt, "plain status", "s2")["id"]]
@@ -201,6 +229,47 @@ def test_rule5_skill_patch_needs_the_gate(learner):
     text = (rt.root / "skills" / "status-update" / "SKILL.md").read_text()
     assert "Write plain status lines, always." in text and res["id"] in text
     assert status(learner, res["id"]) == "accepted"
+
+
+def test_rule5_agent_verdicts_are_not_held_out_cases(learner):
+    """D-040: a peer's question and the agent's exo_should_have_been verdict on its reply are not the principal's,
+    so they cannot become the held-out cases that let a skill through."""
+    rt = learner.runtime
+    ev = [correction(rt, "write status plain", "s1")["id"], correction(rt, "plain status", "s2")["id"]]
+    propose(rt, "skill", evidence=ev, skill="status-update", patch="Write plain status lines, always.",
+            claim="Status lines are plain.")
+    learner._complete = scripted_model()
+    for k in range(4):
+        rt.ledger.append("utterance", {"text": f"Write status line {k}", "role": "user"}, "peer:other", session=f"p{k}")
+        a = rt.ledger.append("utterance", {"text": f"Status fine {k}", "role": "assistant"}, "agent", session=f"p{k}")
+        rt.ledger.append("verdict", {"verdict": "should_have_been", "target": a["id"], "wanted": f"Status ok {k}"},
+                         "agent", session=f"p{k}")
+    (d,) = apply_policy(learner, allow_eval=True)
+    assert (d.action, d.rule) == ("gate_failed", 5) and "no held-out" in d.reason
+    assert not (rt.root / "skills").exists()
+
+
+@pytest.mark.parametrize("kind", ["replay", "pair"])
+def test_rule5_skill_gate_ignores_its_own_evidence(learner, monkeypatch, kind):
+    """The case a lesson was learned from is not held out from it: re-scoring it proves nothing."""
+    rt = learner.runtime
+    rt.ledger.append("utterance", {"text": "Write status line 7", "role": "user"}, "principal", session="s1")
+    out = rt.ledger.append("utterance", {"text": "Status fine 7", "role": "assistant"}, "agent", session="s1")
+    edit = rt.ledger.append("verdict", {"verdict": "edit", "target": out["id"], "chosen": "Status ok 7"}, "principal",
+                            session="s1")
+    pairs = rt.root / "training" / "preference-pairs.jsonl"
+    pairs.parent.mkdir(parents=True, exist_ok=True)
+    pairs.write_text(json.dumps({"id": "pp-own", "context": "Write status line 7", "rejected": "Status fine 7",
+                                 "chosen": "Status ok 7", "evidence": [edit["id"]]}) + "\n")
+    res = propose(rt, "skill", evidence=[edit["id"]], skill="status-update", patch="Write plain status lines.",
+                  claim="Status lines are plain.")
+    learner._complete = scripted_model()
+    own = (lambda i: i.get("source") == edit["id"]) if kind == "replay" else (lambda i: i["id"] == "pp-own")
+    monkeypatch.setattr(E, "split", lambda items, **kw: {"train": [], "dev": [i for i in items if not own(i)],
+                                                         "held": [i for i in items if own(i)]})
+    (d,) = apply_policy(learner, allow_eval=True)
+    assert (d.action, d.rule) == ("gate_failed", 5) and "no held-out" in d.reason
+    assert status(learner, res["id"]) == "proposed" and not (rt.root / "skills").exists()
 
 
 def test_rule5_gate_blocks_a_skill_that_does_not_help(learner):
