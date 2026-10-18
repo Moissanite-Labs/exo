@@ -64,10 +64,11 @@ some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the 
 **The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the
 lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`
 (generated protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
-`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813, and main counts 14,999. A real reduction lowers
-the floor, and the floor never rises. Section 7 has the rules (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude
-counted modules to pass. Put a product feature built on the engine outside the counted core, as compose, diagnostics,
-`subagents.py` and `turn_settle.py` do. The protocol has its own cap (section 2).
+`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the
+headroom left (run it with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the
+rules (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on
+the engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol
+has its own cap (section 2).
 
 **Core, plugins, clients.** The core does the work and holds the state. Plugins add tools, commands, hooks, a memory
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
@@ -98,10 +99,10 @@ Source of truth: `src/exo/protocol/schema.py`. Commands go in, events come out, 
 client resumes with `events.subscribe(since=seq)`. Reference: `docs/CORE-V2-INTERFACES.md` and
 `docs/STANDALONE.md` section 5.
 
-The protocol is capped at 30 commands and under 30 events (`MAX_COMMANDS` and `MAX_EVENTS` in `schema.py`; the file
-header says "under 30 event types"). Registering past a cap raises an error. All 30 command slots are used and 29 of
-the 30 event slots, so a new feature does not get a new command type. Add a field to an existing type, or add a built-in
-`command.run` command (below).
+The protocol is capped at 30 commands and under 30 events. `MAX_COMMANDS` and `MAX_EVENTS` in `schema.py` make
+registering a 31st type raise an error, and `tests/protocol/test_schema.py` keeps events under 30. All 30 command
+slots and all 29 event slots are used, so a new feature does not get a new command or event type. Add a field to an
+existing type, or add a built-in `command.run` command (below).
 
 The 30 commands:
 
@@ -115,7 +116,7 @@ The 30 commands:
 | Learning and panels | `taste.list`, `taste.edit`, `feedback.send`, `ui.respond` |
 | Scheduling and peers | `schedule.edit`, `peers` |
 
-The events (29 of the 30 slots): `session.created`, `session.updated`, `turn.started`, `turn.completed`,
+The 29 events (every slot): `session.created`, `session.updated`, `turn.started`, `turn.completed`,
 `message.delta`, `message.completed`, `reasoning.delta`, `tool.started`, `tool.output`, `tool.completed`,
 `approval.requested`, `approval.resolved`, `steer.cancelled` (D-045), `question.asked`, `context.compacted`, `memory.summarized`,
 `job.updated`, `handoff.written`, `task.updated`, `usage.updated`, `decision.queued`, `taste.updated`, `ui.panel`,
@@ -606,10 +607,11 @@ a narrower toolset (`BLOCKED_TOOLS` lists what it never gets), and returns one r
 - **The wire.** Check or read a packet with `exo wire check` and `exo wire render` (`docs/COMMANDS.md`). Models only
   ever read the English form.
 - **Control (D-070).** The built-in `command.run` name `subagent` has the verbs `list`, `open`, `send` and `stop`, and
-  lives in `src/exo/subagents.py`. Through this built-in only the principal or the task's parent session may act.
-  Anyone else gets `forbidden`. A finished child answers `conflict`. A note typed by the principal is stored with
-  author `principal`. The parent session speaks as `delegate` (D-040). The receipt records "steered by principal" or
-  "stopped by parent". The built-in is not the only path: a child is a session, so any local caller can still steer
+  lives in `src/exo/subagents.py`. Through this built-in only the principal may act: `command()` calls `steer` and
+  `stop` without `by`, so the parent-session path (`by=<parent session id>`, which speaks as `delegate`, D-040) is
+  in the rules but nothing on main calls it yet. Anyone else gets `forbidden`. A finished child answers `conflict`.
+  A note typed by the principal is stored with author `principal`. The receipt records "steered by principal" or
+  "stopped by principal". The built-in is not the only path: a child is a session, so any local caller can still steer
   it with `turn.send` or stop it with `turn.interrupt` on its session id (D-070 "Limits"). Such a note is stored with
   that caller's author and leaves no mark on the receipt.
   Tests: `tests/agents/test_delegate.py` and `tests/clients/tui/test_subagents.py`.
