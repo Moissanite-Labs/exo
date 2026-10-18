@@ -218,6 +218,114 @@ def test_a_code_redeems_once_and_a_second_try_replaces_the_token(capsys):
     assert third[0] == 403 and "token" not in third[2] and web.token == new
 
 
+class Recording(Src):
+    def __init__(self):
+        self.calls = []
+
+    async def call(self, body):
+        self.calls.append(type(body).TYPE)
+        return await super().call(body)
+
+
+# Requests that act: each one names the token in its headers, then waits for its body.
+HELD = [("/api/approvals/r1", {"decision": "allow_always"}),
+        ("/api/chat/sessions/s1/send", {"text": "the attacker's prompt"}),
+        ("/api/providers/anthropic/key", {"key": "sk-attacker"})]
+
+
+async def held_posts(web, port):
+    """Open the HELD POSTs with the current token, headers only, and return once each has passed the token check."""
+    passed, refuse = [], web._refuse
+    web._refuse = lambda *a: passed.append(a[1]) or refuse(*a)
+    conns = []
+    for path, _ in HELD:
+        r, w = await asyncio.open_connection("127.0.0.1", port)
+        w.write("POST {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Exo-Token: {}\r\nContent-Length: 200\r\n\r\n"
+                .format(path, port, web.token).encode())
+        await w.drain()
+        conns.append((r, w))
+    for _ in range(500):
+        if len(passed) == len(HELD):
+            break
+        await asyncio.sleep(0.01)
+    assert sorted(passed) == sorted(p for p, _ in HELD)
+    await asyncio.sleep(0.05)   # each is now waiting in readexactly() for its body
+    return conns
+
+
+async def finish(conns):
+    """Send each held body and return the raw answer (b"" when the server ended the connection instead)."""
+    got = []
+    for (r, w), (_, body) in zip(conns, HELD):
+        try:
+            w.write(json.dumps(body).encode().ljust(200))
+            await w.drain()
+            got.append(await asyncio.wait_for(r.read(), 5))
+        except ConnectionError:
+            got.append(b"")
+        w.close()
+    return got
+
+
+def test_replacing_the_token_ends_requests_that_passed_the_old_one(monkeypatch):
+    """A request that sent its headers with the old token before the replacement must not act when its body arrives
+    after it: no approval answered, no turn sent, no key stored."""
+    handled = []
+
+    async def handle(*a, **k):
+        handled.append(a[2])
+        return 200, {"ok": True}
+    monkeypatch.setattr(prov, "handle", handle)
+
+    async def go():
+        src = Recording()
+        web = WebServer(CommandCentre(load_settings({}), src), token=TOKEN)
+        port = await web.start("127.0.0.1", 0)
+        try:
+            code = code_of(web.launch_url("127.0.0.1", port))
+            first = await raw(port, "POST", "/api/launch", body={"code": code})
+            conns = await held_posts(web, port)
+            second = await raw(port, "POST", "/api/launch", body={"code": code})
+            got = await finish(conns)
+            return web, src, first, second, got
+        finally:
+            await web.close()
+
+    web, src, first, second, got = asyncio.run(go())
+    assert first[2] == {"token": TOKEN} and second[0] == 403 and web.token != TOKEN
+    assert got == [b""] * len(HELD), got      # each connection ended without an answer
+    assert handled == [] and not {"approval.respond", "turn.send"} & set(src.calls), (handled, src.calls)
+
+
+def test_a_body_is_checked_against_the_current_token(monkeypatch):
+    """Defence in depth: the token is checked again once the body is read, so a request that slipped past the
+    replacement is refused, not run."""
+    handled = []
+
+    async def handle(*a, **k):
+        handled.append(a[2])
+        return 200, {"ok": True}
+    monkeypatch.setattr(prov, "handle", handle)
+
+    async def go():
+        src = Recording()
+        web = WebServer(CommandCentre(load_settings({}), src), token=TOKEN)
+        port = await web.start("127.0.0.1", 0)
+        try:
+            conns = await held_posts(web, port)
+            web.token = "a-new-token-set-without-ending-connections"
+            return src, await finish(conns)
+        finally:
+            await web.close()
+
+    src, got = asyncio.run(go())
+    for answer in got:
+        top, _, payload = answer.partition(b"\r\n\r\n")
+        assert top.startswith(b"HTTP/1.1 403 "), answer
+        assert "page token" in json.loads(payload)["error"]
+    assert handled == [] and not {"approval.respond", "turn.send"} & set(src.calls), (handled, src.calls)
+
+
 def test_an_expired_or_unknown_code_is_refused_without_replacing_the_token(monkeypatch):
     async def go():
         web = _web()
@@ -304,7 +412,7 @@ export const h=(tag,attrs,...children)=>({tag,attrs,children,classList:{remove()
                                       'export const restart=async()=>{globalThis.restarted++;};')
     for name in ("chat", "tasks", "schedule", "command", "providers"):
         (tmp_path / f"{name}.mjs").write_text('export const mount=()=>{globalThis.mounted++;return ()=>{};};')
-    (tmp_path / "test.mjs").write_text('''
+    (tmp_path / "test.mjs").write_text(r'''
 import assert from "node:assert/strict";
 let stored={};globalThis.sessionStorage={getItem:k=>stored[k],setItem:(k,v)=>stored[k]=v};
 globalThis.location={hash:"#code=good&tasks",pathname:"/",search:""};

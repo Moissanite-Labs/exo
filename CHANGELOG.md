@@ -113,8 +113,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Security
 - `exo web` no longer puts the page token in the browser launcher's argv, which other users of the host can read in
   `/proc` (#166, D-039). The browser opens a one-time launch code (`#code=`, one use, 120 seconds) that the page
-  trades for the token over loopback; a code used twice replaces the token and warns in the terminal. The printed
-  `#token=` link is unchanged. With a non-loopback `--host` no browser is opened; use the printed link.
+  trades for the token over loopback; a code used twice replaces the token and warns in the terminal. Replacing the
+  token ends every other connection, including a request that passed the token check and still waits for its body,
+  and a body is checked against the current token again once read. The warning shows only when the launched page
+  redeems the code too, so a browser that runs no script (a text browser) gives none. The printed `#token=` link is
+  unchanged. With a non-loopback `--host` no browser is opened; use the printed link.
 - Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
   `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.

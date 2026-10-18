@@ -867,11 +867,19 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   rejected above is now how the browser opens: `exo web` opens `#code=<one-time code>` (fresh per launch, in memory,
   one use, 120 seconds), and the page trades it for the token at `POST /api/launch`, the only `/api/` route without
   the token, with every other check of `providers.guard`. A used code that comes back means two parties held it: the
-  token is replaced, the old token's streams end, and the terminal gets a warning and the new link. The printed
-  `#token=` link is unchanged (stdout is the user's own); with a non-loopback `--host` no browser is opened. Limit,
-  stated plainly: the hop from the browser to the web server is not checked by uid. Any process on the host that has
-  the token, or wins the race for an unused code inside its 120 seconds, is the page. The race shows up as a
-  replaced token and a terminal warning. `docs/ui/WEB.md` "Opening the page and the page token".
+  token is replaced, every other connection ends (the old token's streams, and requests that passed the token check
+  but still wait for their body), a body is checked against the current token again once read, and the terminal
+  gets a warning and the new link, to paste into the open browser rather than click (a click puts it back in a
+  launcher's argv). The printed `#token=` link is unchanged (stdout is the user's own); with a non-loopback `--host`
+  no browser is opened. Limit, stated plainly: the hop from the browser to the web server is not checked by uid. Any
+  process on the host that has the token, or wins the race for an unused code inside its 120 seconds, is the page.
+  The race shows up as a replaced token and a terminal warning only when the launched page also redeems the code
+  after the winner: the first redemption is silent. A browser that never runs the page's script (a text browser
+  such as `lynx` or `w3m`, which `webbrowser` falls back to with no display) never redeems, so the winner keeps a
+  working token and nothing warns. Rejected for now: opening a 0600 local file that redirects to the `#token=` link
+  (the other fix #166 named). It needs no second redemption, but leaves the token on disk until removed, and a
+  sandboxed browser (snap, flatpak) may not read the file. Revisit if launches without a script-running browser
+  matter. `docs/ui/WEB.md` "Opening the page and the page token".
 
 ## D-040 (2026-10-12) Who wrote it: authors on every message, pinned keys, an anchored ledger head
 - **Why:** the 12 October audit (priorities 4 and 6). (a) `exo_note` let the agent write `kind="ruling"`, and
