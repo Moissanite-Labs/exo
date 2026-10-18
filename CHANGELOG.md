@@ -118,7 +118,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `forbidden`. While the child starts or finishes, no round can take a steer, so `turn.send` fails with `conflict`.
   It never starts a main-loop turn in the child. A send that waited behind a child that was locked meanwhile runs
   no turn. An unaddressed peer message never picks a subagent's session or a scheduled run: it goes to the user's
-  thread.
+  live thread. With none live, a message delivered at once is refused and a held one waits with no thread.
 - Opening a thread whose turn is still running (`/resume`, `/sessions`, `exo tui --session` or `--resume`,
   `exo chat --resume`) no longer writes "not run: session was interrupted" for the tool call in flight, so the
   model never sees two results for one call. `session.resume` still closes a round a crash left open.

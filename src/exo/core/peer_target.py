@@ -64,7 +64,7 @@ class EngineTarget(Target):
         live = self.live_sessions()
         if live:
             return live[0]["id"]
-        return None  # the caller creates one
+        return None  # no live thread: a delivered message is refused, a held one waits with no thread
 
     def state(self, session: str) -> str:
         st = self.e.loop._state.get(session)
