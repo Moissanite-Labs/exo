@@ -94,7 +94,8 @@ back, and the shorter chain still links. So each append also writes the head (se
   an append catches the anchors up when the beside anchor trails the head or no anchor is at the head. It refuses
   ("cannot be written") when the beside anchor trails and cannot be written, or when no anchor is at the head and
   none can be written. So appends never go on more than one event past every anchor. The refusal names the files
-  to make writable again. `exo log anchor` reports an anchor it cannot write in one line, with exit code 1.
+  to make writable again. `exo log anchor` reports an anchor beside the ledger it cannot write in one line, with
+  exit code 1. A keys/heads copy it cannot write is a warning only.
   `verify()` reports `anchored_seq`, the lowest seq an anchor holds, next to the head.
 - The anchor check before an append counts the ledger once per anchor. The write after COMMIT takes indexed
   lookups only, so an append costs what it did before the anchor moved after COMMIT.
