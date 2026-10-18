@@ -29,6 +29,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   verbatim from the file, a one-line `old_string`, and escape- or Unicode-normalized matches are replaced in place
   as before, keeping the line's indent and the file's typography; `replace_all` on adjacent lines and an empty
   `new_string` no longer touch text outside the match (#127).
+- `scripts/promo_shots_web.py` works under the web page's Content-Security-Policy (#162). The layout pin and the
+  composer typing it adds to the copied page were inline scripts, which the policy refuses, so regenerated shots
+  came out in the inverse layout with an empty composer. They are now a file in the copied static folder, loaded
+  by `src`.
 
 ### Changed
 - Command deny and reservation regexes also match a literal-word view of the command (#136, D-038

@@ -230,7 +230,8 @@ with `--use-mock-keychain --password-store=basic` so no keychain prompt appears.
 
 `python scripts/promo_shots_web.py` serves the static client over a stand-in source that replays protocol
 events for a scripted turn, and captures each state with headless Chrome. Nothing is captured from a live
-`~/.exo`. See `docs/media/README.md`.
+`~/.exo`. See `docs/media/README.md`. What it adds to its copy of the page (the classic layout pin, the typed
+composer text) is a script file loaded by `src`, because the page's policy refuses inline scripts.
 The Providers shots use a stub `/api/providers` table with demo names (no real status, no keys), captured with
 `Google Chrome --headless=old --screenshot` against a `WebServer` over a fake source at `/?boot=0#providers&token=demo`.
 
