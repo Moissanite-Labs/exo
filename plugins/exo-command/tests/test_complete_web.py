@@ -98,6 +98,24 @@ def test_guidance_is_unknown_while_config_get_fails_and_on_for_an_older_core():
     assert dispatch(Src(guidance=ConnectionError("down")), "/api/complete/commands")[1]["guidance"] is None
     assert dispatch(Src(guidance=SourceError("internal", "x")), "/api/complete/commands")[1]["guidance"] is None
     assert dispatch(Src(guidance=SourceError("unknown_command", "x")), "/api/complete/commands")[1]["guidance"] is True
+    # the core answers not_found for an unset key: the default (on) holds, and the page stops asking
+    unset = SourceError("not_found", "guidance.enabled is not set")
+    assert dispatch(Src(guidance=unset), "/api/complete/commands")[1]["guidance"] is True
+
+
+def test_a_real_core_with_a_fresh_home_settles_the_guidance_setting(tmp_path):
+    """A real core answers config.get for the unset guidance.enabled with not_found; the route reads that as on."""
+    from exo.core.engine import CoreEngine
+    from exo.protocol import schema as s
+    from exo.server.app import Dispatcher
+    from exo_command.source import DispatcherSource
+
+    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={})
+    src = DispatcherSource(Dispatcher(eng))
+    code, d = dispatch(src, "/api/complete/commands")
+    assert code == 200 and d["guidance"] is True and d["core"]
+    asyncio.run(src.call(s.ConfigSet(key="guidance.enabled", value=False)))
+    assert dispatch(src, "/api/complete/commands")[1]["guidance"] is False
 
 
 def test_guidance_config_key_turns_the_line_off():

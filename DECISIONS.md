@@ -750,8 +750,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   stays in the box with a note rather than becoming a message; a line close to no name (`/tmp is full`, `/data is
   corrupted`, `/Users is big`) is a message. Until the page has the core's names it holds every `/name` line that is
   not its own or the terminal client's, and asks again with no limit (1 s doubling to every 30 s, and on each send,
-  which does not move the backoff on); only an older core that answers `unknown_command` or `unsupported` for
-  `commands.list` ends the asking, with no core names.
+  which does not move the backoff on). The asking ends once the core has given its names (an older core that
+  answers `unknown_command` or `unsupported` for `commands.list` counts, with no core names) and its
+  `guidance.enabled` (an unset key, answered `not_found`, is on).
 - **Rejected:** a model call to suggest commands (cost, latency, and the rules are enough); a second ranking in each
   client (they would drift); storing history in the browser (the web client keeps none across page loads, on purpose).
 - **Not done:** file completion for bare paths (`./x`, `~/x`) outside `@`; `/findings <id>` (the core takes only
