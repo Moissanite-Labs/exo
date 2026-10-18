@@ -794,13 +794,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   ask. Each text is classified once per line and a shared stdin is listed once, and the parser finds command
   position and a closer's opener without rescanning, so the cost stays linear (a group of shells fed a body that
   is itself a group of fed shells was read width to the power of depth times, n here-strings fed to n shells cost
-  n squared, and so did n openers in a row). A line read this way leaves `opaque_exec` for its inner category,
-  so it carries the issue #178 floor (only naming `opaque_exec` at `log` or `allow` turns the indirection floor
-  off): under `deny: [opaque_exec]` or `categories: {opaque_exec: deny}` these lines now ask where they were
-  denied, as `bash <<EOF` already does, until D-075 (#126) / #191; under `categories: {opaque_exec: deny}` the
-  floor keeps them at ask rather than falling to the push's own `log`. `coproc W { ...; } <<EOF` and
-  `function NAME { ...; } <<EOF` are fed the same way once #181 reads their bodies; the body of `time { ...; }` is
-  not read at all, so it still asks as `opaque_exec`.
+  n squared, and so did n openers in a row; a body after `<<$'EOF'`, which is also read as commands, was read
+  once per command it reached, so nested groups of plain commands took a minute for 462 bytes). A line read this
+  way leaves `opaque_exec` for its inner category, so it carries the issue #178 floor (only naming `opaque_exec`
+  at `log` or `allow` turns the indirection floor off): under `deny: [opaque_exec]` or
+  `categories: {opaque_exec: deny}` these lines now ask where they were denied, as `bash <<EOF` already does,
+  until D-075 (#126) / #191; under `categories: {opaque_exec: deny}` the floor keeps them at ask rather than
+  falling to the push's own `log`. `coproc W { ...; } <<EOF` and `function NAME { ...; } <<EOF` are fed the same
+  way, as #181 reads their bodies; the body of `time { ...; }` is not read at all, so it still asks as
+  `opaque_exec`. A closer heredoc wins over a pipe in on stdin only; the lexer drops fd numbers, so one on
+  another fd (`{ bash; } 3<<EOF`) is read conservatively as stdin (its body fed, a pipe in not), and a shell
+  read that way still asks at least, as `bash 3<<EOF` does.
   *Amendment 2026-10-16 (issue #136):* a `command:` regex in `deny` and `reserved` matched the command text
   only, so `'git' push`, `g\it push`, `git pu''sh` and `$'rm' -rf` walked past a veto the lexer had already
   decoded. Those regexes now also match a literal-word view (`_policy_command_view`: the lexer's decoded words,
