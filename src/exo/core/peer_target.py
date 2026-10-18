@@ -117,6 +117,8 @@ class EngineTarget(Target):
 
         async def ask() -> None:
             decision = await self.e.approvals.ask(sid, summary, None, "medium", options=["allow", "deny"], opened=opened)
+            if decision == "allow" and self.pick_session(ing) is None:  # nothing live takes it: a new thread does
+                ing.session = (await self.e._session_create(s.SessionCreate(title=f"{label} {ing.sender}")))["session"]["id"]
             if path is not None:
                 path.resolve(ing.id, decision == "allow")
 
