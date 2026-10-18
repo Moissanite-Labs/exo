@@ -1512,7 +1512,8 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
                     skip.add(i + 1 + m)
         elif prog in ("jq", "yq", "gojq", "jaq"):    # the filter (`jq .`) is not a path, unless it is read from a file
             first = next((f for f, a in enumerate(rest) if not a.startswith("-")), None)
-            from_file = any(a == "--from-file" or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a) for a in rest)
+            from_file = any(a == "--from-file" or a.startswith("--from-file=") or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a)
+                            for a in rest)
             if first is not None and not from_file:
                 skip.add(i + 1 + first)
         elif prog in _SHELLS:

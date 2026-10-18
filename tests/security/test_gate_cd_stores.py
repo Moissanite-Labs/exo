@@ -220,6 +220,7 @@ DENY_FORMS = ({"gates": {"categories": {"credentials": "deny"}}}, {"gates": {"de
     "cd ~/.docker && jq -n -f config.json",
     "cd ~/.docker && jq -nf config.json",
     "cd ~/.docker && jq --from-file config.json",
+    "cd ~/.docker && jq --from-file=x.jq config.json",
     # a brace range spells its words; one that names a store folder still enters it
     "cd ~/.config/g{h..h} && cat hosts.yml",
     "cd ~/.kub{e..e} && cat config",
