@@ -19,6 +19,7 @@
 #   --python PY          interpreter for the venv (default: newest python3.11+ on PATH)
 #   --plugins LIST       comma list of plugins to install (default and `all`: every plugins/*/plugin.yaml). Remembered
 #                        for re-runs and `exo update`; removes the other Exo-installed plugins from $EXO_HOME/plugins.
+#                        Always keeps exo-gate (the tool approval gate). A name that matches no plugin stops it.
 #   --principal ID       principal id for the interview
 #   --answers FILE       answers YAML for a non-interactive interview
 #   --no-pin             with --with-hermes: do not pin (use an existing checkout, or skip Hermes)
@@ -73,7 +74,7 @@ while [ $# -gt 0 ]; do
     --bin-dir) need_arg "$@"; BIN_DIR_ARG="$2"; shift ;;
     --modify-path) MODIFY_PATH=1 ;;
     -y|--yes) YES=1 ;;
-    -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,41p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option $1 (see --help)" ;;
   esac
   shift
@@ -274,16 +275,39 @@ if [ "$PLUGINS_EXPLICIT" -eq 0 ] && [ -n "$CFG_SEL" ]; then
   PLUGINS="$CFG_SEL"
   say "plugins: keeping the --plugins selection in config.json ($CFG_SEL); pass --plugins all for every plugin"
 fi
+PLUGINS="${PLUGINS//[[:space:]]/}"  # "exo-gate, exo-memory" names both
 [ "$PLUGINS" != all ] || PLUGINS=""
-SELECTED=()
+# Without the approval gate the core refuses every tool call, so a list always keeps exo-gate.
+if [ -n "$PLUGINS" ] && [ -f "$EXO_SRC/plugins/exo-gate/plugin.yaml" ]; then
+  case ",$PLUGINS," in *,exo-gate,*) ;; *)
+    PLUGINS="$PLUGINS,exo-gate"
+    say "plugins: adding exo-gate to the list: without the approval gate the core refuses every tool call" ;;
+  esac
+fi
+SELECTED=() AVAIL=()
 for d in "$EXO_SRC"/plugins/*/; do
   [ -f "$d/plugin.yaml" ] || continue
   name="$(basename "$d")"
+  AVAIL+=("$name")
   if [ -n "$PLUGINS" ]; then
     case ",$PLUGINS," in *",$name,"*) ;; *) continue ;; esac
   fi
   SELECTED+=("$name")
 done
+# A name that matches no plugin (a typo) must not narrow the install: the list also removes and is remembered.
+UNKNOWN=""
+if [ -n "$PLUGINS" ]; then
+  IFS=, read -ra WANT <<< "$PLUGINS"
+  for w in "${WANT[@]}"; do
+    [ -n "$w" ] || continue
+    case " ${AVAIL[*]:-} " in *" $w "*) ;; *) UNKNOWN="$UNKNOWN $w" ;; esac
+  done
+fi
+if [ -n "$UNKNOWN" ] && [ "$PLUGINS_EXPLICIT" -eq 1 ]; then
+  die "--plugins names no plugin called:$UNKNOWN. Plugins here: ${AVAIL[*]:-none}"
+elif [ -n "$UNKNOWN" ]; then  # a remembered list may name a plugin this checkout no longer has
+  warn "config.json plugin_selection names plugins this checkout does not have:$UNKNOWN"
+fi
 [ "${#SELECTED[@]}" -gt 0 ] || die "no plugins selected from $EXO_SRC/plugins${PLUGINS:+ (asked for: $PLUGINS; see --plugins)}"
 
 # The standalone core discovers EXO_HOME/plugins without launcher environment setup.

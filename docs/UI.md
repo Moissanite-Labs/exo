@@ -71,7 +71,9 @@ read over that prompt. Input is the uncached part on every provider (D-080), so 
 
 Switching threads (`/new`, `/sessions`, `/resume`, `/fork`, `/open`): the old thread's events stop reaching the
 window, so it drops that thread's turn state (`LIVE`, the activity line, steer mode, a queued steer, an open
-question), its approval card and its numbers. `MEM` and `CACHE` are empty until the new thread's next model call.
+question), its approval card and its numbers. A card with no thread stays (a held peer message that no live session
+could take, D-026): it belongs to every thread, so the window asks `approvals.list` with no session filter and keeps
+those cards. A new thread, and a window started on one, show them too. `MEM` and `CACHE` are empty until the new thread's next model call.
 `COST` is kept per thread. The core's total for a thread counts all of it, so a thread the window showed before gets
 back what the window saw of it, and the `+` for an unpriced call stays on its next total (D-032). A thread the
 window never showed reads `–` until its next model call, and its `+` is a lower bound, as in a fresh window. So is
