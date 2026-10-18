@@ -377,10 +377,10 @@ def test_shutdown_covers_accepted_client_before_handler_registration(sock_dir):
         release = asyncio.Event()
 
         class DeferredHandlerServer(HttpServer):
-            async def _client(self, reader, writer):
+            async def _client(self, reader, writer, peer):
                 entered.set()
                 await release.wait()  # simulate a handler task scheduled behind daemon shutdown
-                await super()._client(reader, writer)
+                await super()._client(reader, writer, peer)
 
         srv = DeferredHandlerServer(Dispatcher(EchoEngine()))
         path = sock_dir / "closing.sock"
@@ -416,7 +416,7 @@ def test_shutdown_does_not_wait_for_peer_to_drain_response(sock_dir):
         server_writer = None
 
         class BufferedResponseServer(HttpServer):
-            async def _request(self, reader, writer):
+            async def _request(self, reader, writer, peer):
                 nonlocal server_writer
                 server_writer = writer
                 writer.write(b"x" * (4 * 1024 * 1024))
