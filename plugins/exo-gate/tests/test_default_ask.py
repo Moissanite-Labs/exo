@@ -89,8 +89,8 @@ def test_shell_inspection_depth_limit(policy, wrapper, capped, wrappers, categor
 
 def test_category_deny_sees_the_dominant_part_only():
     """A compound line keeps its most severe part, and `categories:` applies to that category alone, so the
-    inspected post is not denied and the line asks for the delete (GATE.md "Known limits"). The `deny:` list
-    form is not pinned here: D-075 (#126) makes it match every part."""
+    inspected post is not denied and the line asks for the delete (GATE.md "Known limits"; tracked in #191). The
+    `deny:` list form is not pinned here: D-075 (#126) makes it match every part."""
     c = classify(sh(f"{GH} && rm -rf build"))
     assert c.category == "delete", c
     assert decide(c, DENY_GH["categories"]).outcome == "ask"
