@@ -761,6 +761,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   stricter; the `indirection` signal makes `decide` ask even if the inner part only logs. An "always" on opaque code
   covers that exact command only. The principal can lower `opaque_exec` only by naming it in a category line or rule.
   The old program and prefix cases are gone; one classifier serves the core and the `exo-gate` plugin.
+  *Amendment 2026-10-17 (issue #178):* naming `opaque_exec` at any level turned the indirection floor off, so
+  `categories: {opaque_exec: deny}` let `bash -c 'git push origin main'` fall back to the push's own `log`. Only a
+  name that lowers it (a category line, or the first matching rule on `opaque_exec`, at `log` or `allow`) turns the
+  floor off now. Naming it at `ask` or `deny` keeps the floor, so a command read inside a wrapper asks at least.
   *Amendment 2026-10-17 (issue #184):* a path word is matched against the secret stores after bash brace
   expansion, scanned as bash scans it: a shell word from its source text, so only unquoted braces expand. The word
   and every word its comma groups and `{x..y}` sequences make are checked, and a hit on any counts; past 1,024

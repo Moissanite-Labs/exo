@@ -327,8 +327,11 @@ A command is `allow` only when every program in it is known and nothing is hidde
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
-- The principal can lower `opaque_exec` only by naming it: `categories: {opaque_exec: act}` or a
-  rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
+- The principal can lower `opaque_exec` only by naming it below ask: `categories: {opaque_exec: act}`
+  or a rule whose match has `category: opaque_exec` and whose decision is `act` or `report` (for
+  example with a `command` regex for `make`). Naming it at `ask` or `deny` keeps the indirection
+  floor: a command the gate reads inside a wrapper still asks at least, whatever its own category
+  says (#178).
 
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
 `npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
