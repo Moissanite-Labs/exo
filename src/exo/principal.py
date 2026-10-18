@@ -254,7 +254,10 @@ def _demote(peer: Peer, why: str) -> str:
     DEMOTED.set(why)
     if (key := f"{peer.pid}:{why}") not in _SAID and len(_SAID) < 256:
         _SAID.add(key)
-        print(f"exod: the principal credential from pid {peer.pid} is taken as local: {why}", file=sys.stderr)
+        try:  # a closed or broken stderr must not change the answer
+            print(f"exod: the principal credential from pid {peer.pid} is taken as local: {why}", file=sys.stderr)
+        except (OSError, ValueError):
+            pass
     return LOCAL
 
 
@@ -276,8 +279,8 @@ def stamp(sent: str | None, token: str | None, peer: Peer | object, label: str =
         return _demote(peer, "the process that connected is gone or its pid was reused")
     if descends_from(peer.pid, os.getpid()):  # a tool subprocess of this core holds no consent
         return _demote(peer, "it runs under this core (a tool process)" if lineage(peer.pid) is not None else
-                       "an ancestor of it cannot be read (/proc hidden by hidepid or ProtectProc?), so it is "
-                       "treated as a tool process")
+                       "an ancestor of it cannot be read (on Linux, /proc hidden by hidepid or ProtectProc; on "
+                       "macOS, ps could not read it), so it is treated as a tool process")
     return principal_as(label)
 
 
@@ -347,14 +350,6 @@ def read_record(sock: str | os.PathLike) -> dict:
             and isinstance(rec.get("instance", ""), str)):
         raise PeerRefused("launch record is not a v1 record (a core from before peer authentication?)")
     return rec
-
-
-def read(sock: str | os.PathLike) -> str | None:
-    """The token of a well-formed launch record, or None. Disclosing it needs ``verify_daemon`` first."""
-    try:
-        return read_record(sock)["token"]
-    except PeerRefused:
-        return None
 
 
 def revoke(sock: str | os.PathLike, token: str) -> None:
