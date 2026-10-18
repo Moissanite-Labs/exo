@@ -17,6 +17,7 @@ import os
 import secrets
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -136,15 +137,29 @@ class SessionStore:
         self._db.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         with self._lock:
-            self._db.execute("PRAGMA journal_mode=WAL")
+            for wait in (0.05,) * 40 + (0,):  # a new file's switch to WAL can be busy without waiting (#246)
+                try:
+                    self._db.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc) or not wait:
+                        raise
+                    time.sleep(wait)
             self._db.execute("PRAGMA foreign_keys=ON")
-            self._db.executescript(SCHEMA)
-            for table, col, decl in UPGRADES:
-                have = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}
-                if col not in have:
-                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
-            self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS messages_log ON messages (agent, pos)"
-                             " WHERE pos IS NOT NULL")
+            # One write transaction: two processes opening the file at once cannot both add a column (#246).
+            # BEGIN goes inside the script because executescript commits a pending transaction first.
+            self._db.executescript("BEGIN IMMEDIATE;" + SCHEMA)
+            try:
+                for table, col, decl in UPGRADES:
+                    have = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}
+                    if col not in have:
+                        self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+                self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS messages_log ON messages (agent, pos)"
+                                 " WHERE pos IS NOT NULL")
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
         if migrate:
             self.migrate_agents()
 

@@ -171,6 +171,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
   refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
   changes under `site/`.
+- Two processes opening one `sessions.sqlite` at once no longer crash (#246). The second core, seat or client
+  died with "duplicate column name" when both added a column a new or older file lacked, or with "database is
+  locked" when both switched a new file to WAL. The columns are now added in one write transaction, and a busy
+  switch to WAL is tried again for up to two seconds.
 
 ### Security
 - An `ssh` or `mosh` chain with more hops than the gate reads (four) is `opaque_exec` and asks, keeping the
