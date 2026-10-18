@@ -88,6 +88,12 @@ back, and the shorter chain still links. So each append also writes the head (se
   the write lock, so they only move forward. A writer killed in between (SIGKILL, out of memory, power loss) leaves
   them one event behind, never ahead: verify still passes and the next append catches them up. If the anchor write
   fails after the COMMIT, the event stands and a warning is logged.
+- When the anchor beside the ledger cannot be written, the copy under `keys/heads/` still is. The next append
+  tries the beside anchor again before it writes and refuses ("cannot be written") if it still fails, so appends
+  never go on with the anchor frozen: it trails the ledger by one event at most. `verify()` reports
+  `anchored_seq`, the lowest seq an anchor holds, next to the head.
+- The anchor check before an append counts the ledger once. The write after COMMIT takes indexed lookups only, so
+  an append costs what it did before the anchor moved after COMMIT.
 - `verify()` checks every anchor it finds: the ledger must reach that seq and the chain hash there must match. It also
   fails when an append-only trigger was missing when the ledger was opened (the open puts it back).
 - `append()` refuses to write when an anchor does not match, so the next event cannot hide a truncation.
@@ -105,7 +111,8 @@ back, and the shorter chain still links. So each append also writes the head (se
 
 What this does not protect against: a process running as the same user that rewrites the database and both anchor
 files together, or deletes both anchors. The gate is what stands in the way of that: `keys/` and the store are
-credentials to it.
+credentials to it. Nor a store folder deleted whole: `exo memory verify` lists only the stores that exist, so that
+store's anchor under `keys/heads/` is read only with `--principal <id>`.
 
 Kinds: `utterance`, `ruling`, `verdict`, `action`, `artifact`, `ingest`, `question`, `answer`,
 `belief_proposed`, `belief_accepted`, `note`.

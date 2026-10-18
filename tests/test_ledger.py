@@ -25,7 +25,7 @@ def test_append_iter_head(tmp_path, signer):
     assert [e["id"] for e in led.iter(since=b["ts"])][0] == b["id"]
     assert led.get(b["id"])["refs"] == [a["id"]]
     assert led.get(a["id"])["body"] == {"text": "hello"}
-    assert led.verify() == {"ok": True, "checked": 3, "head": c["chain"], "anchored": True}
+    assert led.verify() == {"ok": True, "checked": 3, "head": c["chain"], "anchored": True, "anchored_seq": 3}
 
 
 def test_verdict_requires_target(tmp_path, signer):
@@ -169,3 +169,43 @@ led.append("note", {"i": 2})
         assert led.verify()["ok"]
         assert led.append("note", {"i": 3})["seq"] == next_seq
         assert led.verify()["anchored"] and [a["seq"] for _, a in led.anchors()] == [next_seq, next_seq]
+
+
+def test_an_anchor_that_cannot_be_written_stops_appends_one_event_later(tmp_path, signer, monkeypatch):
+    """A store-only writer must not freeze both anchors and then truncate past them (#221 review)."""
+    from exo import ledger as ledger_mod
+    led = Ledger(tmp_path / "l.sqlite", signer)
+    for i in range(3):
+        led.append("note", {"i": i}, "agent")
+    beside, home = led.anchor_paths()
+    real = ledger_mod._atomic_write
+
+    def broken(path, data):
+        if path == beside:
+            raise PermissionError(13, "read-only", str(path))
+        return real(path, data)
+    monkeypatch.setattr(ledger_mod, "_atomic_write", broken)
+    assert led.append("note", {"i": 3}, "agent")["seq"] == 4      # committed; the anchor is one event behind
+    assert [a["seq"] for _, a in led.anchors()] == [3, 4]          # the copy under keys/ still moved
+    with pytest.raises(LedgerError, match="cannot be written"):
+        led.append("note", {"i": 4}, "agent")
+    assert led.head().seq == 4
+    assert led.verify()["anchored_seq"] == 3
+    monkeypatch.setattr(ledger_mod, "_atomic_write", real)
+    assert led.append("note", {"i": 4}, "agent")["seq"] == 5      # caught up, then appended
+    assert [a["seq"] for _, a in led.anchors()] == [5, 5] and led.verify()["ok"]
+
+
+def test_an_append_counts_the_ledger_only_in_the_anchor_check(tmp_path, signer):
+    """The post-COMMIT anchor write takes indexed lookups only: no second pass over every event (#221 review)."""
+    led = Ledger(tmp_path / "l.sqlite", signer)
+    for i in range(5):
+        led.append("note", {"i": i}, "agent")
+    seen: list[str] = []
+    led.db.set_trace_callback(seen.append)
+    led.append("note", {"i": 5}, "agent")
+    led.db.set_trace_callback(None)
+    counts = [q for q in seen if "COUNT(*)" in q]
+    assert len(counts) == len(led.anchor_paths())                  # one per anchor, as before the fix
+    assert all("seq <=" in q for q in counts)
+    assert [(a["seq"], a["count"]) for _, a in led.anchors()] == [(6, 6), (6, 6)]
