@@ -27,6 +27,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- A store made with `exo init <id> --root DIR` or `exo import-store --root DIR` is found by its id. Both record DIR
+  in config `principals.<id>`, but nothing read it: the store commands said "no principal store", exo-memory and
+  learning were off, `exo memory verify` said "nothing to verify" while the store's ledger went unchecked, the
+  command center's decisions panel showed an empty queue, and check-prose skipped the store's internal names. Every
+  reader now maps an id to its store through `exo.store.principal_root`. The gate protects that store's policies,
+  state, keys and ledger, and reads its policies. If you followed the old hint and made a second store under
+  `$EXO_HOME/principals/<id>`, `exo config unset principals.<id>` goes back to that one.
+- Recall sees beliefs accepted after the first turn. exo-memory read the belief nodes once per process, so a lesson
+  that `exo proposals accept` or learning's own promotion wrote never reached recall until a restart, a reverted one
+  kept showing, and an edited node showed its old text. It now reloads when a node file was added, changed or removed
+  (`PrincipalStore.refresh`). The pack stays built once, for prompt caching. Learning's `proposal_accept` also
+  lints and links against the disk, so a node removed by another process no longer breaks a promotion.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
