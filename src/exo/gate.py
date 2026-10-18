@@ -1479,25 +1479,35 @@ def is_store_path(path: str, ancestors: bool = False) -> bool:
     p = _expand_text(str(path or "")).strip().replace("\\", "/")
     if not p:
         return False
-    if _STORE_NAMES.search(p):
+    try:
+        _store_cands = {p, os.path.realpath(p)} if p.startswith("/") else {p}
+    except (OSError, ValueError):
+        _store_cands = {p}
+    if any(_STORE_NAMES.search(c) for c in _store_cands):
         return True
+    # relative: names only; the tool's working folder is not known here
     if not p.startswith("/"):
-        return False                     # relative: names only; the tool's working folder is not known here
+        return False
     p = os.path.normpath(p)
-    for root, names, principals in _store_roots():
-        for r in {root, os.path.realpath(root)}:
-            if ancestors and (r == p or r.startswith(p.rstrip("/") + "/")):
-                return True
-            if not p.startswith(r + "/"):
-                continue
-            parts = p[len(r) + 1:].split("/")
-            if _protected_rel(parts, names):
-                return True
-            if principals and parts[0] == "principals":
-                if len(parts) <= 2 and ancestors:
+    try:
+        _store_cands = {p, os.path.realpath(p)}
+    except (OSError, ValueError):
+        _store_cands = {p}
+    for pc in _store_cands:
+        for root, names, principals in _store_roots():
+            for r in {root, os.path.realpath(root)}:
+                if ancestors and (r == pc or r.startswith(pc.rstrip("/") + "/")):
                     return True
-                if _protected_rel(parts[2:], _STORE_PROTECTED):
+                if not pc.startswith(r + "/"):
+                    continue
+                parts = pc[len(r) + 1:].split("/")
+                if _protected_rel(parts, names):
                     return True
+                if principals and parts[0] == "principals":
+                    if len(parts) <= 2 and ancestors:
+                        return True
+                    if _protected_rel(parts[2:], _STORE_PROTECTED):
+                        return True
     return False
 
 
