@@ -144,6 +144,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
   halves. A read now holds back an ending that could start a key until the next read. The stream and the result also
   decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
+- `edit_file` and `apply_patch` no longer rewrite a single line whose text differs from `old_string` (or the hunk's
+  `-` line) beyond whitespace, escaping or Unicode. A stale `TIMEOUT = 30` used to replace the file's newer
+  `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
+  closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
 
 ## [0.2.0] (egg) - 2026-10-13
 

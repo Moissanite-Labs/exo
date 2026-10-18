@@ -12,6 +12,21 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 | `bash` | shell | high | Shell with timeout and output cap; `background: true` starts a job (docs/JOBS.md) |
 | `jobs`, `job_output`, `job_kill` | shell | low, low, medium | List, read and stop background jobs (D-032) |
 
+## Edit matching
+
+`edit_file` finds `old_string`, and `apply_patch` finds each hunk's context and `-` lines, with the fuzzy matcher
+lifted from Hermes (`exo.core.tools.builtin.fuzzy`). Its strategies run in order and the first that finds the text
+wins: exact, trimmed lines, collapsed whitespace, unescaped `\n` and `\t`, Unicode punctuation read as ASCII, then
+two similarity strategies. `block_anchor` needs the first and last lines to match and scores the lines between them.
+`context_aware` takes a block whose every non-blank line is at least 80% similar. Without `replace_all` the match
+must be unique, and `replace_all` refuses several similarity matches. `edit_file` names a non-exact strategy in its
+result.
+
+The similarity strategies need two or more non-blank lines. A one-line `old_string` (blank lines around it do not
+count) must match up to whitespace, escaping or Unicode. When the file's line has other text, for example
+`TIMEOUT = 45` where `old_string` says `TIMEOUT = 30`, the call fails and shows the closest lines. Before, such a
+stale edit overwrote the newer line.
+
 ## Environment of bash and jobs
 
 `bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,
