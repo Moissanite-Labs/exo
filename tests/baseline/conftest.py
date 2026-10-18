@@ -93,3 +93,21 @@ def build_principal_store(root: Path) -> PrincipalStore:
 @pytest.fixture
 def principal_store(tmp_path):
     return build_principal_store(tmp_path / "principal")
+
+
+ORG = "varnworks"       # the made-up principal's organisation; the domain is f"{ORG}.io"
+
+
+def build_onboarded_store(root: Path, heading: str | None = None) -> PrincipalStore:
+    """A store made the way `exo init` makes one: the made-up principal answers the onboarding name and role
+    questions, so their name, organisation and email live only in the body of `person/identity`."""
+    from exo import onboard
+    s = onboard.create_store("quill", root)
+    onboard.run_interview(s, "quill", onboard.file_asker({
+        "identity.name": "Quill Varden; call me quill in chat",
+        "identity.role": f"I run {ORG} ({ORG}.io) and build tools; mail quill@{ORG}.io"}),
+        count_skips=False, seed=0)
+    if heading is not None:
+        (s.root / "PRINCIPAL.md").write_text(f"# PRINCIPAL: {heading}\n\nOne page.\n", encoding="utf-8")
+    s.reload()
+    return s
