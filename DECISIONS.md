@@ -772,6 +772,33 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+  *Amendment 2026-10-17 (issue #192):* on a line that enters a folder that can hold a secret store, a relative read of
+  a store file is `credentials`. The hints come from the sample store paths, per call: the store folders (a dot folder
+  along a sample below home by its name, a plain one only below its parent, such as `.config/gh`, `.exo/keys` or
+  `/proc`, so a checkout called `exo` is not one) and the store file names. A line enters a store folder when any
+  `cd`, `pushd`, `git -C`, `env -C`, `sudo -D` or `tar -C` target in it, wherever it stands and however it is spelt,
+  has a store folder among its parts (`..` resolved as bash's `cd` does, a brace set as its words), or goes by a
+  relative name, also through `..` or after `cd ..`, into a plain store folder below another target (a dot parent by
+  its name, a plain one by its path; a folder entered this way is a parent in turn). On such a line a relative name in
+  its words, redirections, uploads and `$( )`, `<( )` or `bash -c` bodies (not the targets' own words, the program and
+  the words before it, a `git` subcommand, a jq filter, or prose with a space and no unquoted brace set) counts when
+  its file name is a store file name (a glob, read with bash's bracket and leading-dot rules: when it could match one)
+  or it goes into a store folder; the folder itself (`.`) counts when a target is a store folder, and any relative
+  name when a target is itself a store, a glob target included. A name that goes into a plain store folder from its
+  parent counts on any line when it names a store. Chosen over following the folder per command or per line, which
+  review showed misses shell semantics (`||`, `!`, `time`, a `cd` in `$( )`), grows exponentially on scripts that walk
+  folders and needed caps that failed open or asked on ordinary scripts. This model is linear, and where it bounds
+  work (16 brace words, 64 `cd ..` levels or glob candidates, many `[`) it fails closed. The cost, failing closed:
+  neither the order nor the success of the commands is followed, so a word named like a store file asks on such a line
+  even when it is elsewhere or not a file (`cd ~/.kube && cd ~/project && cat config`,
+  `cd ~/.config/fish && cat config`, `npm config` in `~/.config/nvim`), and `.` asks in a store folder. Lines that
+  enter no store folder and name none are unchanged. A `store_write` line stays `store_write`, the principal's alone.
+  Known limits: a target in a variable or made by a command (`cd $X`), a name made by a command or with a space in it
+  (`cat $(ls)`, `"$(pwd -P)/config"`), a dot store folder named last in an operand (`tar czf x ../.kube`), a relative
+  target taken from another relative one (`cd ~/.config && cd nvim && cd ../gcloud`), a glob in the parent of a plain
+  store folder (`cd /sr?/exo-home && cd keys`), a plain store folder reached from more than one level above its parent
+  (`cd / && cd srv/exo-home/keys`), other `${PWD...}` forms, the text `eval` runs, `cd -` and `OLDPWD`, `CDPATH`,
+  `HOME` set on the line, `dotglob`, and a store reached through a folder link whose name does not say so.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

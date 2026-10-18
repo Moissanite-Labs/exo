@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -212,6 +213,7 @@ class _Word:
     dynamic: bool = False      # holds $var, ${..}, $(..) or `..` outside single quotes
     quoted: bool = False
     glob: bool = False         # an unquoted * or ?, or a [ or { after the first character
+    brace: bool = False        # an unquoted {
     started: bool = False
 
 
@@ -320,6 +322,8 @@ class _Lexer:
             else:
                 if ch in "*?" or (ch in "[{" and w.started):
                     w.glob = True
+                if ch == "{" and isinstance(w, _Word):
+                    w.brace = True
                 w.text += ch
                 w.started = True
                 self.i += 1
@@ -1232,6 +1236,406 @@ def _piped_text(k: _Cmd) -> str | None:
     return None
 
 
+# Store folders and files that _SENSITIVE_PATH names and _SENSITIVE_SAMPLES does not show (/proc/<pid>/environ).
+_STORE_FOLDERS = ("/proc", ".config/gcloud", ".config/muse", ".config/netlify", ".vercel")
+_STORE_FILES = ("environ",)
+_CHDIR_OPTS = {"env": ("-C", "--chdir"), "sudo": ("-D", "--chdir")}
+_GLOBBY = re.compile(r"[*?\[]")
+# The current folder at the start of a path: ~+, ~0, ~-0 (the folder stack), $PWD, ${PWD}, ${PWD:-x} and the like,
+# $(pwd), `pwd`; and its parents, ${PWD%/*} and ${PWD%/*/*}.
+_HERE = re.compile(r"^(~\+\d*|~-?\d+|\$PWD|\$\{PWD(?::?[-=?][^}]*)?\}|\$\{PWD%(?:/\*)+\}|\$\(pwd(?: -[LP])?\)|"
+                   r"`pwd(?: -[LP])?`)(?=/|$)")
+
+
+def _store_hints() -> tuple[set, dict, set]:
+    """(store folder names, {(parent, folder): its sample path}, store file names) from the sample store paths. A
+    dot folder (`.kube`) or `Netlify` is a store folder by its name; a plain one only below its parent (`.config/gh`,
+    `.config/exo`, `.exo/keys`, `/proc`), so a checkout called exo or gh is not. Folders below home count from home
+    ("~") down, one outside home (EXO_HOME, its keys) by its last part. HOME and EXO_HOME apply per call."""
+    home = os.path.normpath(_home())
+    root = home.rstrip("/") + "/"                   # HOME=/ too
+    singles, pairs, names = {"Netlify"}, {}, set(_STORE_FILES)
+    keys, keys_file, claude = _dynamic_secret_paths()
+    files = [os.path.join(home, s) for s in _SENSITIVE_SAMPLES] + [os.path.join(keys, "seat.key"), keys_file,
+                                                                    claude + "/"]
+    folders = [os.path.join(home, d) for d in _STORE_FOLDERS] + [os.path.dirname(keys)]     # and EXO_HOME
+    for folder, name in [x.rpartition("/")[::2] for x in files] + [(d, "") for d in folders]:
+        folder = os.path.normpath(folder)
+        if folder == home or folder.startswith(root):
+            parts, start = ["~"] + folder[len(root):].split("/"), 1
+        elif root.startswith(folder + "/"):
+            parts, start = [], 0
+        else:
+            parts = folder.split("/")
+            start = max(1, len(parts) - 1)
+        for k in range(start, len(parts)):
+            if parts[k].startswith("."):
+                singles.add(parts[k])
+            elif parts[k]:
+                pairs[parts[k - 1], parts[k]] = "/".join(parts[:k + 1])
+        names.add(name)
+    return singles, pairs, names - {""}
+
+
+def _brace_glob(text: str) -> str:
+    """A brace set (`{config,x}`, `config{,.bak}`) as a glob that matches at least what it names."""
+    return re.sub(r"\{.*\}", "*", text, flags=re.S) if re.search(r"\{[^{}]*(,|\.\.)", text) else text
+
+
+def _brace_alts(text: str) -> list:
+    """The words a brace set spells (`~/.{ssh,x}`: ~/.ssh and ~/.x), up to 16, in a word of up to 4096 characters;
+    past that, one glob (_brace_glob). A range (`{a..c}`) stays for _brace_glob."""
+    if len(text) > 4096:
+        return [_brace_glob(text)]
+    out, todo = [], [text]
+    while todo:
+        t = todo.pop()
+        m = re.search(r"\{([^{},]*(?:,[^{},]*)+)\}", t)     # an innermost set with a comma
+        if not m:
+            out.append(t)
+            continue
+        alts = m.group(1).split(",")
+        if len(out) + len(todo) + len(alts) > 16:
+            return [_brace_glob(text)]
+        todo += [t[:m.start()] + x + t[m.end():] for x in alts]
+    return out
+
+
+_POSIX_CLASSES = {"alpha": "a-zA-Z", "upper": "A-Z", "lower": "a-z", "digit": "0-9", "alnum": "a-zA-Z0-9",
+                  "xdigit": "0-9A-Fa-f", "word": "a-zA-Z0-9_", "space": " \t\n\r\x0b\x0c", "blank": " \t",
+                  "punct": ":-@!-/[-`{-~", "print": " -~", "graph": "\"-~!", "cntrl": "\x00-\x1f\x7f"}
+_NESTED_CLASS = re.compile(r"\[[!^]?\]?[^\][]*\[[:=.]")
+
+
+def _fn_glob(glob: str) -> str | None:
+    """A bash glob as an fnmatch pattern, or None when it could match anything (a long run of `[`, on which fnmatch
+    is quadratic, or an unknown class). `[^x]` is `[!x]`; a `]` first in a set is a member; a class inside a set
+    (`[[:alpha:]]`, `[[=e=]]`) is spelt out; a `[` that opens no set is a literal `[`."""
+    if glob.count("[") > 32:
+        return None
+    out, i, n = [], 0, len(glob)
+    while i < n:
+        if glob[i] != "[":
+            out.append(glob[i])
+            i += 1
+            continue
+        j = i + 1
+        neg = j < n and glob[j] in "!^"
+        j += neg
+        body = []
+        if j < n and glob[j] == "]":
+            body.append("]")
+            j += 1
+        closed = False
+        while j < n:
+            if glob[j] == "]":
+                closed = True
+                break
+            if glob[j] == "[" and glob[j + 1:j + 2] in (":", "=", "."):
+                kind = glob[j + 1]
+                end = glob.find(kind + "]", j + 2)
+                if end >= 0:
+                    name = glob[j + 2:end]
+                    if kind == ":" and name not in _POSIX_CLASSES or kind != ":" and len(name) != 1:
+                        return None
+                    body.append(_POSIX_CLASSES[name] if kind == ":" else name)
+                    j = end + 2
+                    continue
+            body.append(glob[j])
+            j += 1
+        if not closed:
+            out.append("[[]")
+            i += 1
+            continue
+        out.append("[" + ("!" if neg else "") + "".join(body) + "]")
+        i = j + 1
+    return "".join(out)
+
+
+def _glob_names(glob: str, names) -> list:
+    """The ``names`` a bash glob could match (see _fn_glob); all of them when it could match anything."""
+    pat = _fn_glob(glob)
+    return list(names) if pat is None else fnmatch.filter(names, pat)
+
+
+def _could_name(glob: str, hints: set) -> bool:
+    """A glob that could match one of ``hints``: its literal parts are tried as substrings first, which is cheap."""
+    pat = _fn_glob(glob)
+    if pat is None:
+        return True
+    lits, blob = [x for x in re.split(r"[*?]|\[!?\]?[^\]]*\]", pat) if x], "/".join(hints)
+    return all(t in blob for t in lits) and any(all(t in h for t in lits) for h in hints) \
+        and bool(fnmatch.filter(hints, pat))
+
+
+def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
+    """From simple commands: the working-folder targets (cd, pushd, git -C, env -C, sudo -D, tar -C, also after
+    time, command, builtin, ! or an assignment), the words that may name a path (all but the program and the
+    targets, and redirection targets; with whether bash expands a brace set in them) and the text a shell runs
+    (`bash -c`, a heredoc fed to a shell)."""
+    for k in cmds:
+        ws = [w.text for w in k.words]
+        i = 0
+        skip: set = set()                           # the targets' own words: entering a folder reads nothing
+        while i < len(ws) and (ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) or ws[i].rsplit("/", 1)[-1] in _PREFIXES):
+            base = "" if ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) else ws[i].rsplit("/", 1)[-1]
+            i += 1
+            while base in _PREFIXES and i < len(ws) and ws[i].startswith("-") and ws[i] != "-":
+                word, i = ws[i], i + 1
+                opt, eq, val = word.partition("=")
+                if len(opt) >= (3 if base == "env" else 5) and "--chdir".startswith(opt):
+                    opt = "--chdir"                 # getopt takes a unique prefix: env --c=dir, sudo --chd=dir
+                c = next((j for j in range(1, len(word)) if "-" + word[j] in _PREFIXES[base]), 0)
+                if word[1:2] != "-" and len(word) > 2 and c:        # a short cluster or value: -iC dir, -Cdir
+                    opt, eq, val = "-" + word[c], word[c + 1:], word[c + 1:]
+                if not eq and (opt in _PREFIXES[base] or opt in _CHDIR_OPTS.get(base, ())) and i < len(ws):
+                    val, i = ws[i], i + 1
+                if opt in _CHDIR_OPTS.get(base, ()):
+                    targets += [val, val[1:]] if val.startswith("=") else [val]     # -C=dir: getopt's "=dir"
+                    skip.add(i - 1)
+            if base == "timeout" and i < len(ws) and re.fullmatch(r"[\d.]+[smhd]?", ws[i]):
+                i += 1
+        prog, rest = (ws[i].rsplit("/", 1)[-1], ws[i + 1:]) if i < len(ws) else ("", [])
+        if prog in ("cd", "pushd"):
+            j = next((j for j, a in enumerate(rest) if not re.fullmatch(r"-[LPen@]*|--", a)), len(rest))
+            targets += rest[j:j + 1]
+            skip.add(i + 1 + j)
+        elif prog == "git":
+            j = 0
+            while j < len(rest) and rest[j].startswith("-"):
+                if rest[j] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"):
+                    if rest[j] == "-C" and j + 1 < len(rest):
+                        targets.append(rest[j + 1])
+                        skip.add(i + 2 + j)
+                    j += 1
+                j += 1
+            skip.add(i + 1 + j)                     # the subcommand (`git config`) is not a path
+        elif prog == "tar":                         # tar -C dir: the names after it are in dir
+            j = 0
+            while j < len(rest):
+                a, j = rest[j], j + 1
+                opt, eq, val = a.partition("=")
+                if len(opt) >= 5 and "--directory".startswith(opt):        # --directory dir, --dir=dir
+                    m = None if eq else j
+                elif re.fullmatch(r"-C.+", a):                              # -Cdir
+                    val, m = a[2:], None
+                elif re.fullmatch(r"-[A-Za-z]*C", a) or j == 1 and re.fullmatch(r"[A-Za-z]*C[A-Za-z]*", a):
+                    # -C dir, -xC dir, -cfC x.tar dir, old-style czfC x.tar dir: the values follow in letter order
+                    m = j + sum(c in "fbgFHIKLNTVX" for c in a[:a.index("C")])
+                else:
+                    continue
+                if m is None:
+                    targets.append(val)
+                    skip.add(i + j)
+                elif m < len(rest):
+                    targets.append(rest[m])
+                    skip.add(i + 1 + m)
+        elif prog in ("jq", "yq", "gojq", "jaq"):    # the filter (`jq .`) is not a path
+            first = next((f for f, a in enumerate(rest) if not a.startswith("-")), None)
+            if first is not None:
+                skip.add(i + 1 + first)
+        elif prog in _SHELLS:
+            for j, a in enumerate(rest):
+                if a == "-c" or (re.fullmatch(r"-[a-zA-Z]+", a) and "c" in a):
+                    bodies += rest[j + 1:j + 2]
+                    break
+                if not a.startswith(("-", "+")):
+                    break
+            else:
+                bodies += [h.body for h in k.heredocs] + [w.text for w in k.herestrings]
+        # not the program, the targets, or the words before the program but assignments (`! time sudo -u root`)
+        words = [w for j, w in enumerate(k.words) if j not in skip and (j > i or _ASSIGN.fullmatch(w.text))] + \
+            [t for _, t in k.redirs]
+        # (text, has an unquoted {); a word with a space is prose (a commit message, an echo, awk's '{print $1}'),
+        # not a path, unless bash expands a brace set in it ({config,"a b"})
+        pieces += [(w.text, w.brace) for w in words if w.brace or not re.search(r"\s", w.text)]
+
+
+def _cd_store_read(cmds: list, subs: list) -> str:
+    """D-038 (#192): a line that enters a folder that can hold a secret store may read it by a relative name. It
+    enters one when a working-folder target anywhere in it ($( ), <( ) and a shell's text included) has a store
+    folder among its parts (~/.kube, ~/.config/nvim, /proc/self; see _store_hints), or goes by a relative name into
+    a plain store folder below another target (`cd ~/.config && cd ./gh`, `cd / && cd proc`). Then a relative name
+    counts when its file name is a store file's (a glob or brace set: when it could match one) or it goes into a
+    store folder (`gh/x` after ~/.config, `../.docker/x`); any relative name counts when the target is itself a
+    store. The targets' own words are not names. The name, or ''. One pass over the words; neither the order nor
+    the success of the commands is followed, so this fails closed."""
+    targets: list = []
+    pieces: list = []
+    bodies: list = []
+    _cd_walk(cmds, targets, pieces, bodies)
+    queue = [(s, 0) for s in subs] + [(b, 1) for b in bodies]
+    seen: set = set()
+    while queue:                # each $( ), <( ) and shell text once, nested ones too (subs may list them already)
+        text, n = queue.pop()
+        if text in seen:
+            continue
+        seen.add(text)
+        c2, s2 = _parse(text)[:2]
+        more: list = []
+        _cd_walk(c2, targets, pieces, more)
+        if n < _DEPTH:
+            queue += [(s, n + 1) for s in s2] + [(b, n + 1) for b in more]
+    if not targets:
+        return ""
+    singles, pairs, names = _store_hints()
+    home = os.path.normpath(_home())
+    root = home.rstrip("/") + "/"
+    hp = home.rstrip("/").split("/")                # "/home/u": ["", "home", "u"]
+    kin: dict = {}                                  # plain store folder name -> [(its parent, its sample path)]
+    for (a, b), path in pairs.items():
+        kin.setdefault(b, []).append((a, path))
+    deep = max(len(p.split("/")) for p in pairs.values())       # the parts of the deepest sample store folder
+
+    def here(t: str) -> str:                        # the current folder as `.`, ${PWD%/*/*} as `../..`
+        return _HERE.sub(lambda m: "/".join([".."] * m.group(0).count("/*")) if "%" in m.group(0) else ".", t)
+
+    def folders(t: str) -> tuple:
+        t = here(t)
+        if re.match(r"~[\w.-]+(/|$)", t):          # ~root/..: that home, before .. is resolved
+            t = os.path.expanduser(t)
+        p = _expand_text(t)
+        p = os.path.normpath(p) if p else p         # bash's logical cd: /tmp/../proc is /proc, ./gh is gh
+        p = "~" if p == home else "~/" + p[len(root):] if p.startswith(root) else p
+        parts = _brace_glob(p).split("/")
+        parts[0] = "~" if parts[0].startswith("~") else parts[0]        # ~user/.kube: its folders
+        return p, [s for j, s in enumerate(parts) if s not in ("", ".") or j == 0 and s == ""] or ["."]
+
+    def could_be(s: str, prev) -> set:
+        """The store folder names a glob part could be below the part ``prev``, as bash matches: a dot name only
+        when the glob spells the dot, a folder that is a store by its name anywhere (Netlify) only when the glob
+        has a character of its own, and a plain store folder only below its parent."""
+        own = bool(re.sub(r"[*?]|\[[^\]]*\]?", "", s))
+        return {x for x in singles if (x[:1] == ".") == (s[:1] == ".") and (x[:1] == "." or own)} | \
+            {b for a, b in pairs if a == prev and (b[:1] == ".") == (s[:1] == ".")}
+
+    def last_store_folder(parts: list) -> int:
+        return max((k for k, s in enumerate(parts) if s in singles or k and (parts[k - 1], s) in pairs or
+                    _GLOBBY.search(s) and _could_name(s, could_be(s, parts[k - 1] if k else None))), default=-1)
+
+    # A plain store folder's parent above each target: name -> {levels up: its paths}. A target below home also
+    # has home's own folders above it; a relative one only its own parts (what it is below is not known). A path
+    # deeper than any sample store folder's parent keeps only its name, which is all a dot parent needs.
+    parents = {a for a, _ in pairs}
+    anc: dict = {}
+    lo: dict = {}                                   # the fewest levels up at which / is
+
+    def index(parts: list) -> None:
+        up = [(hp[m], "/".join(hp[:m + 1])) for m in range(len(hp) - 1)] if parts[0] == "~" else []
+        chain = up + [(s, "/".join(parts[:j + 1]) if j < deep else None) for j, s in enumerate(parts) if s != ".."]
+        for n, (name, path) in enumerate(reversed(chain)):
+            if name in parents:
+                anc.setdefault(name, {}).setdefault(n, set()).add(path)
+                if name == "":
+                    lo[""] = min(lo.get("", n), n)
+
+    split = [(p, parts, last_store_folder(parts)) for t in dict.fromkeys(targets) for alt in _brace_alts(t)
+             for p, parts in [folders(alt)]]
+    for _, parts, _ in split:
+        index(parts)
+    # `cd ..`, `cd ../..`, `cd .. && cd ..`: every number of levels up to all of them together (order is not
+    # followed); past 64, any number
+    total = sum(len(parts) for t in targets if ".." in here(t) for alt in _brace_alts(t) for _, parts in [folders(alt)]
+                if set(parts) == {".."})
+    ups = set(range(min(total, 65) + 1))
+
+    def reach(n: int, a: str, need) -> bool:
+        """A folder named ``a`` (at path ``need`` for a plain parent) n levels above a target, or above a `cd ..`
+        after one. `..` stops at /."""
+        levels = anc.get(a, {})
+        if a == "" and lo.get("", n + max(ups) + 1) <= n + max(ups):
+            return True
+        cands = [n + u for u in ups] if len(ups) <= 64 else [m for m in levels if m >= n]
+        return any(m in levels and (need is None or need in levels[m]) for m in cands)
+
+    matched: dict = {}                              # a glob -> the plain store folder names it could match
+
+    def into(parts: list, globs: bool = True) -> list:
+        """A relative path into a plain store folder below another target (`cd ~/.config && cd ./gh`, `cd / && cd
+        proc/self`, `cd ~/.config/nvim && cd ../gcloud`): [(that store folder's sample path, the rest)]. The other
+        target names a dot parent by its name (any .config) and a plain one by its path (/, EXO_HOME)."""
+        n = next((j for j, s in enumerate(parts) if s != ".."), len(parts))
+        if n == len(parts) or parts[0] in ("", "~"):
+            return []
+        first = parts[n]
+        if globs and _GLOBBY.search(first) and first not in matched:
+            matched[first] = _glob_names(first, kin) if _could_name(first, set(kin)) else []
+        hits = matched[first] if globs and _GLOBBY.search(first) else [first] if first in kin else []
+        return [(path, parts[n + 1:]) for b in hits for a, path in kin[b]
+                if reach(n, a, None if a in singles else path.rpartition("/")[0])]
+
+    # A relative target into a plain store folder enters it, at that folder's sample path. Its own folders then
+    # count as parents too (`cd /srv && cd exo-home && cd keys` with EXO_HOME=/srv/exo-home); a chain is as deep
+    # as the sample paths, so this ends.
+    after: dict = {}
+    new = {"/".join([path, *rest]): None for _, parts, _ in split for path, rest in into(parts)}
+    while new.keys() - after.keys():
+        fresh = new.keys() - after.keys()
+        after.update(new)
+        for full in fresh:
+            index(full.split("/"))
+        new = {"/".join([path, *rest]): None for _, parts, _ in split for path, rest in into(parts)}
+    split += [(full, full.split("/"), last_store_folder(full.split("/"))) for full in after]
+    entered = [(p, parts, k) for p, parts, k in split if k >= 0]
+    stored: dict = {}
+
+    def is_store(folder: str) -> bool:
+        """Is the folder a store? A glob in it (`~/.s?h`) is tried as each store folder name it could be
+        (could_be). Past 64 such paths, it counts as one."""
+        if folder not in stored:
+            parts = folder.split("/")
+            opts = [_glob_names(s, could_be(s, parts[j - 1] if j else None)) if _GLOBBY.search(s) else [s]
+                    for j, s in enumerate(parts)]
+            count = 1
+            for o in opts:
+                count = min(count * len(o), 65)
+            paths = ["/".join(x) for x in itertools.product(*opts)] if count <= 64 else []
+            stored[folder] = count > 64 or any(_SENSITIVE_PATH.search(x) or is_sensitive_path(x) for x in paths)
+        return stored[folder]
+
+    def candidates():
+        """The relative names on the line: (name, its parts, whether it is a glob); no parts is the folder itself
+        (`.`, `$PWD`). A quoted glob counts too, for the tools that match it themselves (`find -name 'conf*'`)."""
+        for word, brace in dict.fromkeys(pieces):
+            for text in [here(_brace_glob(x)) for x in _brace_alts(word)] if brace else [here(word)]:
+                # --kubeconfig=config, -d@config, f:=@config; a glob class (e[[:alpha:]]viron) stays whole
+                whole = text.count("[") > 32 or _NESTED_CLASS.search(text)
+                for q in re.split(r"[=@:,]", text) + ([text] if whole else []):
+                    q = here(q)
+                    q = _expand_text(q) if q[:1] in ("$", "~") else q
+                    if not q or q.startswith(("/", "-")) or q.startswith("~") and q[1:2] not in ("+", "-"):
+                        continue
+                    q = os.path.normpath(q) if "/.." in "/" + q else q         # lua/../../gcloud is ../gcloud
+                    yield q, [s for s in q.split("/") if s not in ("", ".")], bool(_GLOBBY.search(q))
+
+    if not entered:
+        # A name can still go into a plain store folder below a target: it counts when it names a store file or
+        # goes into a store (`cd /srv && tar cf - exo-home/keys` with EXO_HOME=/srv/exo-home).
+        for q, parts, globbed in candidates():
+            for path, rest in into(parts, globbed) if parts else []:
+                fp = f"{path}/{'/'.join(rest)}".rstrip("/").split("/")
+                if parts[-1] in names or is_store("/".join(fp[:last_store_folder(fp) + 1])):
+                    return q
+        return ""
+    nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
+    # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
+    roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in entered)
+    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in entered) or any(map(is_store, roots))
+    hints = names | singles | nxt
+    held = any(k == len(parts) - 1 for _, parts, k in entered)     # a target is itself a store folder (~/.kube)
+    for q, parts, globbed in candidates():
+        if every or not parts and held:             # `tar czf - .` in a store, or in a store folder
+            return q
+        if not parts:
+            continue
+        inner = parts[:-1]              # a store folder counts when the name goes into it (`mkdir .kube` reads none)
+        if parts[-1] in names or not singles.isdisjoint(inner) or into(parts, globbed) or \
+                not pairs.keys().isdisjoint(zip(inner, inner[1:])) or globbed and any(
+                    _could_name(s, hints) for s in parts if _GLOBBY.search(s)):
+            return q
+    return ""
+
+
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part."""
     cmds, subs, func = _parse(cmd or "")
@@ -1254,6 +1658,14 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         signals = c.signals
         c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
+        c.signals = signals + ["secret store"]
+    # D-038: a relative read on a line that enters a store folder may read the store; store_write stays.
+    found = _cd_store_read(cmds, subs) if c.category not in ("credentials", "store_write") else ""
+    if found:
+        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
+        signals = c.signals
+        c = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
+                  reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
     c.command = cmd
     # Outbound text: if several gh segments post text, keep the most severe one's text.
