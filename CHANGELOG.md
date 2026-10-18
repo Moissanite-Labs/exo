@@ -21,11 +21,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `GIT_WORK_TREE=` follow the same rule, each `-C` moves on from the one before as `cd` does, and git's other
   folders and file names resolve from the last (`git -C ~ -C my-exo/plugins/foo pull`; a writing line with more
   than 64 `-C` asks); `git diff --output` counts as a write. Before, a plain local write could drop the gate plugin
-  from `core_plugins` or point `exo update` at another interpreter without an ask. Not covered: symlink aliases of
-  the protected paths (deferred to the store-path resolution of #130 and #156), glob, brace, case and
-  `${VAR:-...}` spellings, abbreviated long options (`tar --dir`), archivers other than `tar` and `unzip`, a custom
-  home spelled relatively from a folder the gate does not know, and `plugins/`, `venv/`, `src/` and `bin/` under
-  the home (`docs/GATE.md`, "Limits").
+  from `core_plugins` or point `exo update` at another interpreter without an ask. A symlink alias of either path
+  asks too (the store-path resolution of #130, below). Not covered: glob, brace, case and `${VAR:-...}` spellings,
+  abbreviated long options (`tar --dir`), archivers other than `tar` and `unzip`, a custom home spelled relatively
+  from a folder the gate does not know, and `plugins/`, `venv/`, `src/` and `bin/` under the home (`docs/GATE.md`,
+  "Limits").
+- Absolute symlink aliases into protected Exo stores retain the principal-only write approval floor (#130),
+  including missing leaves, deletion of store ancestors, and `cd`, `pushd` or `git -C` into an alias of the store.
+  A path the gate cannot resolve (a NUL byte) keeps its lexical check instead of raising. `cp -s`, `cp -l` and a
+  relative `ln -s` target that alias the store ask too. `docs/GATE.md` lists what stays open (hardlinks, protected
+  entries that link out of the store, case-insensitive filesystems, glob and brace spellings).
 - Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
   retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
   `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
@@ -134,6 +139,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 
 ### Security
+- Gate (#184, D-038): brace sets are expanded as bash does before a path is matched against the secret stores.
+  `cat ~/.config/gh/{hosts,x}.yml`, `cat ~/.docker/{*,}`, `cat ~/{},.netrc}`, `cat ''{},.env}`,
+  `cat $""{.env,x}` and `cat .{d..f}{m..o}{u..w}` were allowed reads, as was `ls /srv/exo{007..1000..993}/keys`
+  with `EXO_HOME=/srv/exo0007` (bash pads the sequence to `0007 1000`); they are `credentials` now and ask. A shell
+  word is expanded from its source text, so quoted and escaped braces stay literal and keep their class; the
+  word as written is still checked, and `$"..."` is also read as plain `"..."`. A word that expands past 1,024
+  words, 32 levels of nesting, a sequence bound over 18 digits or a zero-padded bound past a 32-bit int (bash
+  wraps those), and any brace word after one tool call has expanded 4,096 words in all (globs count more), asks
+  as a secret-store path; so does `echo {1..2000}`, and so does a string literal in code holding compact JSON
+  with 11 or more objects, since code literals are read as shell commands.
 - Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
   `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
