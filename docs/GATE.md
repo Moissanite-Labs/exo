@@ -103,6 +103,38 @@ both reads the file without the gate seeing it and detaches from the core's proc
 still pass. The full fix is an OS sandbox for tools; until then the gate and the process-tree
 check are the guard.
 
+## Secret-store paths
+
+A path names a secret store (`credentials`, always asks) when it matches the store list in `exo.gate`
+(`~/.ssh`, `~/.aws`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `.env`, `*.key`,
+token files, Exo's `keys/`...), or when it is a glob that could match one of the sample store paths. This holds
+for shell words, redirection targets, `bash -c` and `$( )` text, string literals in code, and the path arguments
+of file tools. Brace sets are expanded as bash does before matching (issue #184). In a shell word the gate
+expands the source text, quotes kept, and then removes the quotes from each word, so only unquoted braces
+expand: `'{a,b}'`, `"{a,b}"` and `\{a,b\}` stay literal, while in `''{},.env}` the `{` follows a quote, is not
+at the start of the word, and opens a group. A `$"..."` is also read as the plain `"..."` bash gives it without
+a message catalog, so `cat $""{.env,x}` asks. A path argument of a file tool has no quoting and is expanded as
+written. The scan follows bash's: a group ends at the first top-level `}` after a comma or `..`, so `{},hosts}`
+is one group; a `{x..y[..n]}` sequence expands to its members, padded as bash pads them (a leading zero on
+either bound pads every member to the longer bound, so `{007..1000..993}` is `0007 1000`); nested groups expand
+too; `${...}`, `$(...)` and groups with neither a comma nor a sequence stay literal. The word as written and
+every word it expands to are checked, and a hit on any counts, so `cat ~/.config/gh/{hosts,x}.yml`,
+`cat ~/.docker/{*,}` and `cat ~/{},.netrc}` ask.
+
+The work is bounded. A word that would expand to more than 1,024 words (or past a million characters in all),
+nests groups more than 32 deep, or has a sequence bound longer than 18 digits counts as a store path (asks)
+rather than being matched in part. So does a zero-padded sequence with a bound past a 32-bit int: bash prints
+its members as C ints, so they wrap (`{04294967296..04294967296}` is `00000000000`). One tool call expands at
+most 4,096 words in all, across its words, redirections, nested commands and code literals (a glob word counts
+four times, and a long word once more per 64 characters); past that, each further word with a brace set counts
+as a store path too. The trade-off: this fails closed, so an ordinary line past a limit, such as
+`echo {1..2000}` or `for i in {1..2000}`, is `credentials` and asks every time with no grant. A string literal
+in code is read as a shell command, so compact JSON with 11 or more objects in one literal
+(`'[{"a":1,"b":2},...]'`) goes past the cap the same way.
+Known limit: the folder a `cd` enters is tracked for stores matched by name (`cd ~/.aws && cat credentials`
+asks), not for stores matched only by sample paths (`cd ~/.config/gh && cat hosts.yml`; #192).
+Tests: `tests/security/test_gate_brace_sets.py`.
+
 ## Muse CLI credentials
 
 `muse login`, `muse auth` and `muse logout` are `credentials` acts, like `vercel login`: they always ask and never
@@ -229,6 +261,58 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- Nesting is read four levels deep. Past that the text is `opaque_exec` and asks. An `ssh` or
+  `mosh` chain with more hops than that is not read either: the hops that were read keep the
+  `remote host` exposure and the first host as target (so a `target:` deny on it still
+  matches), and the rest asks as `opaque_exec` (#153). A chain the gate can read to the end is
+  classified by what runs at the end.
+- Options of trusted programs whose value is a command are followed as a nested command, like
+  `find -exec` (#154): `tar --to-command`, `-I`, `--use-compress-program`, `--rsh-command`,
+  `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
+  --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp` and
+  `sftp -S`, `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`, `LocalCommand`, `RemoteCommand` (with the
+  `remote host` exposure) and `KnownHostsCommand`; `git rebase -x`/`--exec`, `git bisect run`,
+  `git submodule foreach` (also after `-q`, `--quiet`), `--upload-pack` (`clone`, `fetch`,
+  `pull`, `ls-remote`), `git push --receive-pack`/`--exec`, `git archive --exec`; `rg --pre`;
+  `zip -TT`; `less +cmd` and `more +cmd` with a `!` (macOS `more` is `less`); the `.shell` and
+  `.system` dot-commands of `sqlite3` and `duckdb`, and `.once`, `.output`, `.import` and `.read`
+  with an argument starting with `|`, also after options (as an argument, via `-cmd`, or on
+  stdin); `psql -o '|cmd'`/`--output`, and `\!`, backquotes in a meta-command's arguments, and a
+  `|command` after `\o`, `\out`, `\g`, `\gx` (also after `(options)`), `\w` or `\write`, quoted
+  or not, anywhere on a `psql` line; `\!` and `system` in `mysql`; and a command set in
+  `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PAGER`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`,
+  `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `RSYNC_RSH`, `PAGER`, `MANPAGER`, `EDITOR`,
+  `VISUAL`, `LESSOPEN` or `LESSCLOSE` before the program (also through `env`; `export NAME=value`
+  counts when the value is a known hazard).
+- Options are read as the program's `getopt` reads them: an unambiguous abbreviation of the long
+  name, one letter or more (`--to-com=`, `psql --o`), or the value attached to the short letter or in the next word. In a
+  cluster the first letter that takes a value ends the word (`-xIcmd`, `-oProxyCommand=cmd`,
+  `-avze ssh`), and the gate knows which letters and long options take a value for `ssh`,
+  `scp`, `sftp`, `tar` (also its old style, `tar xIf cmd a.tar`), `rsync`, `man`, `rg`, `psql`
+  and the `git` subcommands, so a value is not read as options (`ssh -oServerAliveInterval=60`
+  is not `-I`). A letter it does not know only makes it read more words. Options end at `--`;
+  `ssh` reads them before and after its destination and stops at the remote command, so `ssh
+  host curl -I URL` is the `curl` line; when a word before that may expand to no word or several
+  (`$A`, `"$@"`, a glob), the destination cannot be counted and every word is read. An `ssh -o` setting is split as ssh's config reader
+  splits it: leading whitespace, a quoted keyword, any case, and `Keyword value`,
+  `Keyword=value` or `Keyword = value`. `less` reads `+cmd` as keystrokes: `!` runs a shell
+  command after any of them (`+G!cmd`, `+:n!cmd`), while a search (`+/pattern`) takes the rest
+  as its pattern unless a newline or another control key ends it.
+- A known program in an option's value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
+  `allow`; a program the gate does not know asks, as it would on its own. A value the gate cannot
+  read is `opaque_exec`: a variable, a script file (`tar --info-script`, `sqlite3 -init` or
+  `--init`, `.read`, `.load`), `.once`/`.output FILE`, `.read '|cmd'` (what the command prints is
+  run), `less +!` with no command or `+!!`, `psql ... PROGRAM`, `TAR_OPTIONS`, and a library
+  `ssh` loads (`-I`, `-o PKCS11Provider`, `-o SecurityKeyProvider`). `sed` scripts with `e` or
+  `s///e` and `awk` programs calling `system()` were already opaque. An argument that merely
+  looks like an assignment (`grep EDITOR=vim`) and a data load (`sqlite3 '.import f.csv t'`) are
+  not commands.
+- Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
+  `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
+  `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
+  or `hatch run`, or inside an `if`, `for` or `while` body, classify as `credentials` just as the
+  bare command does. A runner followed by ordinary work (`uv run pytest -q`) is unchanged.
+  `uvx`, `pipx run` and `npx` stay `opaque_exec`.
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
@@ -243,12 +327,93 @@ A command is `allow` only when every program in it is known and nothing is hidde
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
-- The principal can lower `opaque_exec` only by naming it: `categories: {opaque_exec: act}` or a
-  rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
+- The principal can lower `opaque_exec` only by naming it below ask: `categories: {opaque_exec: act}`
+  or a rule whose match has `category: opaque_exec` and whose decision is `act` or `report` (for
+  example with a `command` regex for `make`). Naming it at `ask` or `deny` keeps the indirection
+  floor: a command the gate reads inside a wrapper still asks at least, whatever its own category
+  says (#178).
 
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
-`npm install` runs package scripts) can run code the agent wrote earlier with a local write.
-The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+`npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
+`~/.ssh/config` with a `ProxyCommand`) can run code the agent wrote earlier with a local write.
+The same goes for options that read more options from a file (`curl --config`, `gcc -wrapper`,
+`-specs`) and for `git grep -O`, whose pager takes the matching files as arguments. The gate does
+not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+
+The working folder (#192). A line that enters a folder that can hold a secret store, and reads a
+file there by a relative name, is `credentials`: `cd ~/.config/gh && cat hosts.yml`,
+`cd ~/.kube/cache && cat ../config`, `time cd ~/.kube && cat config`,
+`cd ~/.kube && tar czf - .` and `git -C ~/.kube diff --no-index config /dev/null` ask like
+`cat ~/.kube/config`. The gate does not follow the folder from command to command; it reads the
+whole line in one pass:
+
+- Store folders and store file names come from the sample store paths the path matchers use, per
+  call so that `HOME` and `EXO_HOME` apply. A dot folder along a sample below home is a store
+  folder by its name (`.kube`, `.docker`, `.config`, `.ssh`, `.aws`, `.exo`, `.vercel`, also
+  `Netlify`). A plain folder is one only below its parent in the sample (`.config/gh`,
+  `.config/gcloud`, `.exo/keys`, `.hermes/p`, `/proc`, `EXO_HOME` and its `keys` when `EXO_HOME`
+  is outside home), so a checkout called `exo` or `gh` is not. The store file names are the
+  samples' file names (`config`, `config.json`, `hosts.yml`, `environ`, `token`, ...).
+- The targets are those of `cd`, `pushd`, `git -C`, `env -C`/`--chdir`, `sudo -D`/`--chdir` and
+  `tar -C`/`--directory`, wherever they stand (after `&&`, `||`, `;`, `|` or `&`, behind `time`,
+  `command`, `builtin` or `!`, in a loop, `( )`, `{ }`, `$( )`, `<( )` or the text a shell
+  runs), however the command is spelt (`c\d`, `"cd"`, `$'\x63d'`) and with the option attached,
+  in a cluster, old-style or cut to a unique prefix (`env -C~/.kube`, `sudo -iD ~/.kube`,
+  `tar czfC - ~/.kube`, `env --c=~/.kube`, `tar --dir ~/.kube`). A brace set is the words it
+  spells (`~/.{ssh,x}`, a range `{1..3}`, `{007..010}` or `{a..c}`, padded as bash pads), up to
+  16 in a word of up to 4096 characters, and one glob past that or for a stepped range
+  (`{1..9..2}`).
+- A line enters a store folder when a target has one among its parts (`~user/` and folders
+  outside home count by their parts: `/proc/self`, `/srv/app/.kube`), or goes by a relative name
+  into a plain one below another target: `cd ~/.config && cd ./gcloud`, `cd / && cd proc/self`,
+  `cd ~/.config/nvim && cd ../gcloud`, `cd ~/.config/nvim/lua && cd .. && cd .. && cd gcloud`.
+  The other target names a dot parent by its name (any `.config`) and a plain one by its path
+  (`/`, `EXO_HOME`); a folder entered this way is a parent in turn. `..` is resolved as bash's
+  `cd` does and stops at `/`. `~+`, `~0`, `$PWD`, `${PWD}`, `${PWD:-x}` and `$(pwd)` are the
+  current folder, and `${PWD%/*}` is its parent.
+- On such a line a relative name counts when its file name is a store file name, when it goes
+  into a store folder (`gh/hosts.yml` after `cd ~/.config`, `../.docker/config.json`,
+  `lua/../../gcloud/x` after `cd ~/.config/nvim`), and when it is a glob or brace set that could
+  match one. The folder itself (`.`, `./`, `$PWD`) counts when a target is a store folder
+  (`cd ~/.kube && tar czf - .`), and any relative name counts when a target is itself a store
+  (`~/.ssh`, `~/.s?h`). A name that goes into a plain store folder from its parent counts on any
+  line when it names a store (`cd /srv && tar cf - exo-home/keys` with
+  `EXO_HOME=/srv/exo-home`).
+- Globs are read as bash reads them: `[^x]` is `[!x]`, a `]` first in a set is a member, a class
+  is spelt out (`e[[:alpha:]]viron`), a `[` that opens no set is a literal, and only a glob that
+  spells a leading dot matches one (`*` is not `.ssh`). A glob with an unknown class or many `[`
+  could match anything. A glob part with no character of its own (`cd */`, `cd node_modules/*/`)
+  is not a store folder by its name. A quoted glob counts too, for the tools that match it
+  themselves (`find -name 'conf*'`), so a quoted regex, `tr` set or jq slice names a store only
+  when its pattern could match a store name.
+- Names are read from the words and their pieces (`--kubeconfig=config`, `-d@config`,
+  `f:=@config`), redirection targets and the bodies of `$( )`, `<( )` and the text a shell runs
+  (`bash -c`, a heredoc fed to `bash`). They are not read from the program, the words before it
+  (`sudo -u root`) except assignments (`KUBECONFIG=config kubectl` counts), the targets' own words
+  (`mkdir -p .kube && cd .kube && ls` keeps its class), a `git` subcommand, a jq filter (`jq .`;
+  not one read from a file with `-f`), other heredoc text or a word with a space in it (a commit
+  message, an `echo`, `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
+
+A line that enters no store folder, and names none, is classified as before. The work is linear
+in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64
+store tests per store folder (one per glob candidate), and a parent path kept only as deep as
+the deepest sample store folder. The trade-off, which fails closed: neither the order nor the
+success of the commands is followed, so on a line that enters a store folder a word named like a
+store file asks even when it is elsewhere or is not a file
+(`cd ~/.kube && cd ~/project && cat config`, `cat config; cd ~/.kube`,
+`cd ~/.config/fish && cat config`, `cd ~/.config/nvim && ls *`,
+`cd ~/.config/nvim && npm config get prefix`), and `.` asks in a store folder even for a listing
+(`cd ~/.config && find . -name '*.toml'`). A line that is already `store_write` stays
+`store_write` (the principal's alone). Known limits: a target in a variable or made by a command
+(`X=~/.kube; cd $X`, `cd $(...)`); a name made by a command or with a space in it (`cat $(ls)`,
+`"$(pwd -P)/config"`); a dot store folder named last in an operand
+(`cd ~/.config && tar czf x ../.kube`, as for `tar czf x ~/.kube`); a relative target taken from
+another relative one (`cd ~/.config && cd nvim && cd ../gcloud`); a glob in the parent of a
+plain store folder (`cd /sr?/exo-home && cd keys`); a relative path that reaches a plain store
+folder from more than one level above its parent (`cd / && cd srv/exo-home/keys`); other
+`${PWD...}` forms; the text `eval` runs (it asks as `opaque_exec`); `cd -` and `OLDPWD`,
+`CDPATH`, `HOME` set on the line and `shopt -s dotglob`; and a store reached through a folder
+link whose name does not say so.
 
 ## The store is credentials (D-038)
 
@@ -257,6 +422,35 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 `$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets) and `$EXO_HOME/seats`, any
 `seat.toml`, and `$EXO_PRINCIPAL_STORE`. Distinctive names match anywhere, so a relative
 `policies/gates.yaml` or `state/approval-grants.json` counts too.
+
+Absolute paths are checked in both their lexical form and their resolved symlink form, including
+missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
+directory aliases into protected stores, aliases used to delete a store or its ancestors, a `cd` into
+an alias of the store, and `//` or `/proc/self/root` spellings. Resolution preserves `symlink/..`
+filesystem order; lexical protection still applies when a protected path links outside the store. A
+path that cannot be resolved (a NUL byte) keeps its lexical check, so the floor never depends on
+resolution working. `cp -s` and `cp -l` count as writes to whatever they alias, and a relative `ln -s`
+target is read against the link's folder in the two-operand form (`ln -s TARGET LINK`). Relative paths only use the distinctive-name checks because
+the tool's working directory is unknown here.
+
+Brace sets are expanded first, as bash does and as for secret-store paths (issue #224). A shell word is
+expanded from its source text, so only unquoted braces expand. A file tool's path is expanded as written. The
+word and every word it expands to are checked, and a hit on any counts, so
+`echo x > ~/.exo/polic{i..i}es/default.yaml`, `cp x ~/.exo/{state,zz}/approval-grants.json` and
+`cd ~/.e{x,}o` reach the store. A word is split at `=`, `:` and `,` only after its braces expand, so
+`dd of=~/.exo/polic{i,x}es/default.yaml` counts too. A word past the brace limits counts as the store. The store
+checks have their own budget of 4,096 expanded words per tool call, so they never use up the secret-store
+checks' budget, and each spelling is expanded once per line, however many commands use it.
+
+Known limits. These are classification checks, not a filesystem sandbox: a symlink can change
+between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
+without a link to resolve, so only distinctive names catch a write through it. Only the store roots
+are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
+write to the outside spelling is a local write. Name and prefix checks are case-sensitive, so a
+case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
+(`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
+and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
+followed, and the bash tool's `cwd` argument is not read.
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
