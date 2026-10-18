@@ -126,3 +126,11 @@ def test_build_body_reasoning_and_model_normalization():
     assert legacy["thinking"] == {"type": "enabled", "budget_tokens": 6976}
     assert thinking_params("claude-opus-5-5", None, 8000) == {}
     assert normalize_model("gpt-5.4") == "gpt-5.4"
+
+
+def test_build_body_tool_choice_none_keeps_the_tools():
+    prov, spec = AnthropicProvider(api_key="k"), ToolSpec(name="read_file", description="read")
+    on = prov.build_body([Message.user("x")], [spec], model="claude-opus-5-5")
+    off = prov.build_body([Message.user("x")], [spec], model="claude-opus-5-5", tool_choice="none")
+    assert off["tools"] == on["tools"] and off["tool_choice"] == {"type": "none"} and "tool_choice" not in on
+    assert "tool_choice" not in prov.build_body([Message.user("x")], [], model="claude-opus-5-5", tool_choice="none")
