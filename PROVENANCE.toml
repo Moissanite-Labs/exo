@@ -80,7 +80,7 @@ mode = "lift"
 upstream = ["tools/fuzzy_match.py"]
 commit = "dce1e9b37581dd62e480a9064dc04a709c2940d3"
 reconciled = "2026-10-12"
-changes = "Strategy chain, escape-drift guards, reindent and Unicode preservation kept; metrics hook dropped; docstrings shortened."
+changes = "Strategy chain, escape-drift guards, reindent and Unicode preservation kept; metrics hook dropped; docstrings shortened. Two fixes: whitespace-normalized spans start at the match, and a dedented pattern matched after a line's indent is re-anchored on it."
 
 [[module]]
 exo = "src/exo/core/tools/builtin/patch.py"
