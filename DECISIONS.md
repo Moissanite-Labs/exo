@@ -1367,8 +1367,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Parts are checked for `deny` and `reserved` only: rules, category overrides, the opaque bump, third-party
   escalation, posting checks and the floors still see the dominant part, which sets the card, the category and
   everything else. A part carries the tool of the call it came in on (`tool:execute_code` names the tool, not
-  `python -c` run from bash), the `ssh` hop is a part of its own whose target is the bare host (no `user@`, `ssh://` or
-  `:port`) and the destination as written, and the inner commands of an `ssh` line are `internal` like the line. A
+  `python -c` run from bash) and the decoded views of its line (#136), so a `command` entry matches a part as it
+  matches the line (`g''it push origin main && rm -rf build`), the `ssh` hop is a part of its own whose target is
+  the bare host (no `user@`, `ssh://` or `:port`) and the destination as written, and the inner commands of an `ssh`
+  line are `internal` like the line. A
   string literal in code is kept when any simple command in it is non-benign, whatever the order. A mapping entry in
   `deny` or `reserved` counts only its match keys: `reason`, `name`, a note or a typo is dropped, so it widens the entry
   and never voids it (rejecting it at load would fall back to the defaults and lose the whole list). `Decision.reserved`
@@ -1376,18 +1378,28 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   hook refuses a standing grant for the line's category when one of them lies outside the grant; it compares the targets
   as written, and only the decision's ledger view redacts URL userinfo. `ssh` options are read as getopt reads them, so
   a value-taking letter at the end of a cluster (`-vp 22`) or `-B`/`-P`/`-I` no longer puts the option's value in the
-  host's place; such a line asks. `mosh` long options are read the same way, and the command given to `mosh --ssh`,
-  `--client` or `--server` is read as a command and the line asks (the `--ssh` and `--client` helpers run locally and
-  keep their own exposure; `--server` runs on the remote host). The ledger view of a classification (`as_dict`)
-  leaves the parts out, so approval bindings and trace rows are unchanged.
+  host's place; such a line asks, and wherever the gate now reads another host than it used to, the line asks and
+  both readings' parts are matched. A `--` right after the `ssh` host ends the options. `mosh` options are read as mosh's
+  Perl Getopt::Long reads them in its default mode, against mosh's own option list: one or two dashes or `+`, any
+  case, a unique prefix, `=value` or the next word, options after the host, `--` ending them, and mosh's own short
+  options (`-o` takes no value, `-l` is `--local`). A word that names no single option stops mosh and the line asks.
+  The command given to `mosh --ssh`, `--client` or `--server` is read as a command and the line asks (the `--ssh` and
+  `--client` helpers run locally and keep their own exposure; `--server` runs on the remote host, and with `--local`
+  the server and the command run locally too, so nothing on the line is `internal`). Another option's value that
+  reads as `--server`, `--ssh` or `--client` (`--port '--server=...'`) is not run by mosh, but the gate read it as
+  the command before, so it still does and the line asks. Words after the host that mosh takes as options or values
+  are also read as the command and the line asks, since with `POSIXLY_CORRECT` set mosh runs them as the command;
+  the same holds where the host the gate reads changed. The
+  ledger view of a classification (`as_dict`) leaves the parts out, so approval bindings and trace rows are unchanged.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).
 - **Limits:** a literal inside `python -c` or `execute_code` counts only when one of its commands classifies as a
   non-benign category (an all-`web_read` or all-`local_write` literal is dropped), and code can reach a target with
   no literal at all. Deny → ask: where the gate cannot read the command it files the line as `opaque_exec`, so a
-  `deny` on the hidden action becomes an `ask`, for example `coproc` (addressed by #140), nesting past the depth
-  cap (#137, #141), `eval $(...)`, a command arriving on stdin (`echo ... | xargs -I{} sh -c '{}'`) and the
+  `deny` on the hidden action becomes an `ask`, for example a heredoc after a `coproc` block (the rest of `coproc` is
+  read since #140 / #181), nesting past the depth cap (#137, #141), `eval $(...)`, a command arriving on stdin
+  (`echo ... | xargs -I{} sh -c '{}'`) and the
   wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`; the list is not closed. Deny → allow: the fallback
   has gaps where the line is `allow` outright even under `deny`: an `ssh`/`mosh` chain past the hop cap (#153);
   command-valued options of allowlisted programs (`tar --to-command`, `split --filter`, `sort

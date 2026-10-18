@@ -274,6 +274,137 @@ def test_ssh_value_inside_the_word_and_plain_value_options_read_as_before():
     assert decide(classify(sh("ssh -P tag prod-db ls"))).outcome == "ask"
 
 
+# mosh reads its options with Perl's Getopt::Long in its default mode: one or two dashes (or `+`), any case, a
+# unique prefix, `--opt=value` or `--opt value`, and options after the host. `--` ends the options.
+
+@pytest.mark.parametrize("command", [
+    "mosh --serv='rm -rf /data' prod-db",                     # a unique prefix
+    "mosh -server='rm -rf /data' prod-db",                    # one dash
+    "mosh --cl='rm -rf /tmp/d' prod-db",
+    "mosh -ssh='rm -rf /tmp/d' prod-db",
+    "mosh --SERVER='rm -rf /data' prod-db",                   # any case
+    "mosh +server='rm -rf /data' prod-db",
+    "mosh prod-db --server='rm -rf /data'",                   # after the host
+    "mosh prod-db --serv 'rm -rf /data'",
+    "mosh -o prod-db rm ls",                                  # -o is --predict-overwrite and takes no value
+    "mosh prod-db -- rm -rf /data",                           # `--` ends the options; the command follows
+    "mosh -- prod-db rm -rf /data",
+    "ssh prod-db -- rm -rf /data",
+])
+def test_mosh_options_are_read_as_getopt_long_reads_them(command):
+    d = decide(classify(sh(command)), normalize_policies({"gates": {"deny": ["delete"]}}))
+    assert (d.outcome, d.rule) == ("deny", "deny"), (command, d)
+    assert decide(classify(sh(command))).outcome == "ask", command
+
+
+@pytest.mark.parametrize("command", [
+    "mosh --s='rm -rf /data' prod-db ls",                     # server, ssh or ssh-pty: mosh stops on it
+    "mosh --pre=always prod-db ls",                           # predict or predict-overwrite
+    "mosh --sx=1 prod-db ls",
+    "mosh --local=1 prod-db ls",                              # takes no value
+    "mosh --server= prod-db ls",                              # an empty value is an error
+    "mosh prod-db ls -x",
+])
+def test_mosh_word_that_names_no_single_option_asks(command):
+    assert decide(classify(sh(command))).outcome == "ask", command
+
+
+def test_mosh_options_that_resolve_read_the_host_and_command():
+    for command in ("mosh prod-db ls", "mosh -a -n -4 -6 --no-init --nossh-pty --predict-o prod-db ls",
+                    "mosh -p 22 prod-db ls", "mosh --po=22 prod-db ls", "mosh prod-db -- ls", "ssh prod-db -- ls"):
+        assert decide(classify(sh(command))).outcome == "allow", command
+
+
+def test_mosh_local_runs_the_server_and_the_command_here():
+    private = normalize_policies({"gates": {"deny": [{"match": {"category": "delete", "exposure": "private"}}]}})
+    internal = normalize_policies({"gates": {"deny": [{"match": {"category": "delete", "exposure": "internal"}}]}})
+    for command in ("mosh --local --server='rm -rf /tmp/data' 127.0.0.1", "mosh --loc 127.0.0.1 rm -rf /tmp/data",
+                    "mosh -l 127.0.0.1 -- rm -rf /tmp/data"):
+        c = classify(sh(command))
+        assert decide(c, private).outcome == "deny", command
+        assert decide(c, internal).outcome != "deny", command
+        assert decide(c).outcome == "ask", command
+
+
+def test_command_entry_matches_a_part_through_the_line_views():
+    # `g''it` decodes to `git` only in the line's views (#136); each part matches with them too.
+    pol = normalize_policies({"gates": {"deny": [{"match": {"category": "vcs_push", "command": "git push"}}]}})
+    for command in ("g''it push origin main", "g''it push origin main && rm -rf build",
+                    "rm -rf build; g\\it push origin main", "bash -c \"g''it push origin main\" && rm -rf build"):
+        d = decide(classify(sh(command)), pol)
+        assert (d.outcome, d.rule) == ("deny", "deny"), (command, d)
+    assert decide(classify(sh("g''it status && rm -rf build")), pol).outcome != "deny"
+
+
+def test_line_views_are_searched_once_per_pattern_not_once_per_part(monkeypatch):
+    # Each `$(..)` part adds its own views to the line's; matching every part over all of them is quadratic.
+    import re
+
+    import exo.gate as gate
+
+    searches = 0
+
+    class Counting:
+        def __init__(self, rx):
+            self.rx = rx
+
+        def search(self, text, *a):
+            nonlocal searches
+            searches += 1
+            return self.rx.search(text, *a)
+
+        def __getattr__(self, name):
+            return getattr(self.rx, name)
+
+    class Re:
+        def __getattr__(self, name):
+            return getattr(re, name)
+
+        def compile(self, pattern, flags=0):
+            return Counting(re.compile(pattern, flags))
+
+    pol = normalize_policies({"gates": {"deny": [{"match": {"command": "git push"}}, {"match": {"command": "x+y"}}],
+                                        "reserved": [{"match": {"command": "deploy"}}]}})
+    n = 300
+    c = classify(sh(" ".join(f"echo $(echo a{i});" for i in range(n)) + " ls"))
+    monkeypatch.setattr(gate, "re", Re())
+    assert decide(c, pol).outcome == "allow"
+    assert searches < 40 * n, searches
+
+
+def test_mosh_option_value_that_reads_as_a_command_option_still_asks():
+    # mosh takes `--server=...` here as the port or bind address and never runs it, but the gate read it as
+    # the server command before, and still does.
+    for command in ("mosh --po '--server=rm -rf /data' prod-db cat f",
+                    "mosh --bind-s '--server=rm -rf /data' prod-db cat f", "mosh -p '-ssh=rm -rf /d' prod-db ls"):
+        d = decide(classify(sh(command)), normalize_policies({"gates": {"deny": ["delete"]}}))
+        assert (d.outcome, d.rule) == ("deny", "deny"), (command, d)
+        assert decide(classify(sh(command))).outcome == "ask", command
+
+
+@pytest.mark.parametrize("command,category", [
+    ("mosh prod-db ls --port 'x; rm -rf /data'", "delete"),
+    ("mosh prod-db ls -p 'x && rm -rf /data'", "delete"),
+    ("mosh prod-db ls --bind-server '$(rm -rf /data)'", "delete"),
+    ("mosh prod-db ls --predict 'x;git push origin main'", "vcs_push"),
+    ("POSIXLY_CORRECT=1 mosh prod-db sh -e -c 'rm -rf /data'", "delete"),
+    ("env POSIXLY_CORRECT=1 mosh prod-db sh -e -c 'rm -rf /data'", "delete"),
+])
+def test_words_mosh_takes_as_options_after_the_host_are_still_read(command, category):
+    # In its default mode mosh takes these as its options, but with POSIXLY_CORRECT set Getopt::Long stops at
+    # the host and mosh runs them as the command, so the words after the host are read both ways and the line asks.
+    c = classify(sh(command))
+    assert decide(c).outcome == "ask", (command, c)
+    d = decide(c, normalize_policies({"gates": {"deny": [category]}}))
+    assert d.outcome == "deny", (command, d)
+
+
+def test_mosh_double_dash_after_the_host_needs_no_second_reading():
+    c = classify(sh("mosh prod-db -- rm -rf /data"))
+    assert decide(c, normalize_policies({"gates": {"deny": ["delete"]}})).outcome == "deny", c
+    assert "POSIXLY_CORRECT" not in c.summary, c
+
+
 # Decision.reserved reaches the ledger: no URL userinfo, and each hit once.
 
 def test_reserved_hits_carry_no_url_userinfo_and_are_listed_once():

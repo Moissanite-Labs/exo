@@ -189,10 +189,54 @@ def redact_userinfo(s: str) -> str:
 _SSH_VALUE_OPTS = "BbcDEeFIiJLlmOoPpQRSWw"
 _SSH_VALUE_OPTS_READ = ("-i", "-p", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-W", "-b", "-c", "-E", "-m", "-O", "-Q",
                         "-S", "-w", "-e")
-# mosh's long options that take a value (mosh(1)), given as `--opt=value` or `--opt value`; the first three name a
-# command mosh runs.
-_MOSH_VALUE_OPTS = ("--client", "--server", "--ssh", "--predict", "--family", "--port", "--bind-server",
-                    "--experimental-remote-ip")
+# mosh's options as mosh.pl gives them to Perl's Getopt::Long: each name (the negated forms of `!` options too)
+# with its option and whether it takes a value. `client`, `server` and `ssh` name a command mosh runs.
+_MOSH_OPTS: dict[str, tuple[str, bool]] = {
+    **{n: (n, True) for n in ("client", "server", "ssh", "predict", "port", "p", "family", "bind-server",
+                              "experimental-remote-ip")},
+    **{n: (n, False) for n in ("a", "n", "4", "6", "local", "help", "version")},
+    **{neg + n: (opt, False) for opt, names in (("predict-overwrite", ("predict-overwrite", "o")), ("ssh-pty", ("ssh-pty",)),
+                                                ("init", ("init",)), ("fake-proxy", ("fake-proxy",)))
+       for n in names for neg in ("", "no", "no-")},
+}
+
+
+def _mosh_args(rest: list[str]) -> tuple[list[str], list[tuple[str, str]], str]:
+    """mosh's arguments as Getopt::Long reads them in its default mode: the host and command words, each
+    option with its value, and the first word that names no single option ('' if none).
+
+    An option starts with `--`, `-` or `+`, in any case, and may be a unique prefix of a name; its value follows
+    `=` or is the next word, and options may follow the host. `--` ends the options. From a word that names no
+    single option (mosh stops there) on, the words are read as the host and command, the word itself as well
+    once a host is read."""
+    words: list[str] = []
+    opts: list[tuple[str, str]] = []
+    i = 0
+    while i < len(rest):
+        w = rest[i]
+        i += 1
+        if w == "--":
+            words += rest[i:]
+            break
+        m = re.match(r"(--|-|\+)(.*)", w, re.S)
+        if not m or w == "-":
+            words.append(w)
+            continue
+        name, val = m.group(2), None
+        if (eq := name.find("=", 1)) > 0:
+            name, val = name[:eq], name[eq + 1:]
+        key = name.lower()
+        hits = {_MOSH_OPTS[key]} if key in _MOSH_OPTS else {o for n, o in _MOSH_OPTS.items() if n.startswith(key)}
+        opt, valued = next(iter(hits)) if len(hits) == 1 else ("", False)
+        if valued and val is None and i < len(rest):
+            val, i = rest[i], i + 1
+        elif valued and val == "":
+            opt = ""                  # `--server=` is an error; `--server ''` is not
+        if not opt or (val is None) == valued:
+            words += rest[i - 1 if words else i:]
+            return words, opts, w
+        opts.append((opt, val or ""))
+    return words, opts, ""
 
 
 def _ssh_host(dest: str) -> str:
@@ -1166,55 +1210,82 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
         return [_classify_http(argv, cmd)]
     if prog in ("ssh", "mosh"):
-        rest, i, moved, runs = argv[1:], 0, "", []
-        while i < len(rest) and rest[i].startswith("-"):
+        rest, i, moved, runs, here = argv[1:], 0, "", [], False
+        # The host and command as the gate read them before D-075, for both programs.
+        old = 0
+        while old < len(rest) and rest[old].startswith("-"):
+            old += 2 if rest[old] in _SSH_VALUE_OPTS_READ else 1
+        old_tail = rest[old + 1:]
+        old_dest, old_inner = (rest[old] if old < len(rest) else ""), " ".join(old_tail[old_tail[:1] == ["--"]:])
+        if prog == "mosh":
+            # mosh reads its options with Perl's Getopt::Long, not getopt (see _mosh_args); `--local` runs the
+            # server and the command on this machine.
+            rest, opts, bad = _mosh_args(rest)
+            runs = [(o, v) for o, v in opts if o in ("ssh", "client", "server")]
+            here = any(o == "local" for o, _ in opts)
+            moved = f"{bad.partition('=')[0]}: not one of mosh's options" if bad else ""
+            # Another option's value that reads as --server, --ssh or --client (`--port '--server=...'`): mosh
+            # takes it as that value and does not run it, but the gate read it as a command before, so it still
+            # does, and the line asks.
+            for opt, val in opts:
+                for o2, v2 in _mosh_args([val])[1] if val and opt not in ("ssh", "client", "server") else ():
+                    if o2 in ("ssh", "client", "server"):
+                        runs.append((o2, v2))
+                        moved = moved or f"--{opt}: takes a value that reads as --{o2}"
+        while prog == "ssh" and i < len(rest) and rest[i].startswith("-"):
             w = rest[i]
             i += 1
             if w.startswith("--"):
-                name, eq, val = w.partition("=")
-                if prog == "mosh" and name in _MOSH_VALUE_OPTS:
-                    if not eq and i < len(rest):
-                        val, i = rest[i], i + 1
-                        moved = moved or name
-                    if name in _MOSH_VALUE_OPTS[:3]:
-                        runs.append((name, val))
                 continue
             # Short options cluster as in getopt: the first letter that takes a value ends the word, and the
             # value is the rest of it or the next word (`-vp 22`, `-oPort=22`, `-B eth0`).
             v = next((j for j, ch in enumerate(w[1:], 1) if ch in _SSH_VALUE_OPTS), 0)
             if v and v == len(w) - 1:
                 i += 1
-                if w not in _SSH_VALUE_OPTS_READ:
-                    moved = moved or w
         dest = rest[i] if i < len(rest) else ""
         host = _ssh_host(dest)
-        inner = " ".join(rest[i + 1:])
+        tail = rest[i + 1:]
+        if prog == "ssh" and tail[:1] == ["--"]:      # a `--` right after the host ends ssh's options
+            tail = tail[1:]
+        inner = " ".join(tail)
         if inner and depth < _DEPTH:
             c = classify_shell(inner, inner_depth)
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
+        dests = [host, dest]
+        if dest != old_dest:
+            # The gate used to read another word as the host. The line asks and both readings' parts are
+            # matched, so a line the old reading asked about or denied is not allowed now.
+            moved = moved or f"{dest or 'no host'}: the gate used to read {old_dest or 'no word'} as the host"
+            dests += [_ssh_host(old_dest), old_dest]
+        elif old_inner != inner:
+            # mosh took words after the host as its options or their values (`mosh host ls --port 'x; rm ..'`).
+            # With POSIXLY_CORRECT set, Getopt::Long stops at the host and mosh runs them as the command, so
+            # the old reading's parts are matched too and the line asks.
+            moved = moved or f"{dest}: words after the host run as the command when POSIXLY_CORRECT is set"
+        if old_inner and old_inner != inner and depth < _DEPTH:
+            c = _combine([c, classify_shell(old_inner, inner_depth)], cmd)
         if moved:
-            # The gate used to read this option's value as the host. The parts are read as above, and the line
-            # asks, so a line that used to ask on a host it misread is not allowed now.
-            c = _combine([_opaque(f"{prog} {moved}: the host follows the option's value", cmd), c], cmd)
+            c = _combine([_opaque(f"{prog} {moved}", cmd), c], cmd)
         local = []
         for name, val in runs:                # mosh --ssh, --client, --server: a command it runs; it asks
             run = classify_shell(val, inner_depth) if val and depth < _DEPTH else _make("shell", command=cmd)
-            if name == "--server":            # the server helper runs on the remote host, like the inner command
-                c = _combine([_opaque(f"mosh {name}: runs a command", cmd), run, c], cmd)
-            else:                             # the ssh and client helpers run here
-                local.append(_combine([_opaque(f"mosh {name}: runs a command", cmd), run], cmd))
+            if name == "server" and not here:  # the server helper runs on the remote host, like the inner command
+                c = _combine([_opaque(f"mosh --{name}: runs a command", cmd), run, c], cmd)
+            else:                             # the ssh and client helpers run here, and with --local the server
+                local.append(_combine([_opaque(f"mosh --{name}: runs a command", cmd), run], cmd))
         # The hop is a part too, so a `target:<host>` entry matches when the inner command has its own target:
         # the bare host, and the destination as written when it carries a user, a scheme or a port.
         c.parts += [_make("shell", summary=f"ssh {dest}", target=t, command=cmd, signals=["remote host"])
-                    for t in dict.fromkeys((host, dest)) if t]
-        for p in _each_part(c):               # every part runs on the remote host (D-075)
+                    for t in dict.fromkeys(dests) if t]
+        for p in _each_part(c) if not here else ():   # every part runs on the remote host (D-075)
             if EXPOSURE.index(p.exposure) < 1:
                 p.exposure = "internal"
         if local:                             # local helpers keep their own exposure
             c = _combine(local + [c], cmd)
         c.target = c.target or dest
-        c.signals.append("remote host")
+        if not here:
+            c.signals.append("remote host")
         return [c]
     if prog in ("vercel", "netlify"):
         if "login" in argv:
@@ -2266,15 +2337,19 @@ def _policy_command_view(command: str) -> str:
     return " ".join(rendered)
 
 
-def _command_matches(pattern: str, c: Classification, *, veto: bool = False) -> bool:
+def _command_matches(pattern: str, c: Classification, *, veto: bool = False,
+                     line: Callable[[str], bool] | None = None) -> bool:
     regex = re.compile(pattern)
     texts = [c.command or ""]
+    if veto and line is not None:       # a part of a line: its own text, or any decoded view of the line (#136)
+        return bool(regex.search(texts[0])) or line(pattern)
     if veto:
         texts.extend(c._command_views)
     return any(regex.search(text) for text in texts)
 
 
-def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False) -> bool:
+def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False,
+                  line: Callable[[str], bool] | None = None) -> bool:
     for k, want in match.items():
         if k == "category" and c.category not in [str(x) for x in _as_list(want)]:
             return False
@@ -2282,7 +2357,7 @@ def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False) -> b
             return False
         if k == "target" and not _glob_any(c.target, _as_list(want)):
             return False
-        if k == "command" and not any(_command_matches(str(p), c, veto=veto) for p in _as_list(want)):
+        if k == "command" and not any(_command_matches(str(p), c, veto=veto, line=line) for p in _as_list(want)):
             return False
         if k == "exposure" and c.exposure not in _as_list(want):
             return False
@@ -2295,7 +2370,7 @@ def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False) -> b
     return True
 
 
-def _list_matches(entries: Iterable, c: Classification) -> str:
+def _list_matches(entries: Iterable, c: Classification, line: Callable[[str], bool] | None = None) -> str:
     """Reserved/deny entries: a category name, `tool:<glob>`, `command:<regex>`, `target:<glob>`,
     or a mapping like a rule's match. Plain prose that matches none of these is ignored."""
     for e in entries:
@@ -2304,7 +2379,7 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
             # widens a deny or reserved entry instead of voiding it: these lists only make a decision stricter.
             raw = e["match"] if isinstance(e.get("match"), Mapping) else e
             match = {k: v for k, v in raw.items() if k in _MATCH_KEYS}
-            if e and _rule_matches(match, c, veto=True):
+            if e and _rule_matches(match, c, veto=True, line=line):
                 return str(e.get("reason") or e.get("name") or e)
             continue
         s = str(e).strip()
@@ -2315,7 +2390,7 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
             return s
         if kind == "target" and _glob_any(c.target, [val.strip()]):
             return s
-        if kind == "command" and val.strip() and _command_matches(val.strip(), c, veto=True):
+        if kind == "command" and val.strip() and _command_matches(val.strip(), c, veto=True, line=line):
             return s
     return ""
 
@@ -2338,9 +2413,18 @@ def _each_part(c: Classification) -> Iterator[Classification]:
 def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classification, str]]:
     """Each part of the classification (the combined result first, then every simple command it was built
     from) with the reserved or deny entry that matches it (D-075): a compound line is denied when any simple
-    command on it is."""
+    command on it is. A `command` pattern matches a part on the part's own text or on any decoded view of the
+    line (#136); each pattern is run over the line's views once, not once per part."""
     entries = list(entries)
-    return [(p, hit) for p in _each_part(c) if (hit := _list_matches(entries, p))]
+    views = list(dict.fromkeys(v for p in _each_part(c) for v in p._command_views))
+    seen: dict[str, bool] = {}
+
+    def line(pattern: str) -> bool:
+        if pattern not in seen:
+            regex = re.compile(pattern)
+            seen[pattern] = any(regex.search(v) for v in views)
+        return seen[pattern]
+    return [(p, hit) for p in _each_part(c) if (hit := _list_matches(entries, p, line))]
 
 
 def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
