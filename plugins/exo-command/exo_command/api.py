@@ -294,7 +294,8 @@ async def _complete_commands(c, p, q, body):
         got = await c.source.call(s.ConfigGet(key="guidance.enabled"))
         guidance = got.get("value") is not False
     except SourceError as exc:
-        if exc.code not in ("unknown_command", "unsupported"):
+        # not_found: the key is unset, so the default (on) holds; unknown_command/unsupported: an older core.
+        if exc.code not in ("unknown_command", "unsupported", "not_found"):
             guidance = None   # not known yet (a core down or restarting): the page asks again
     except Exception:
         guidance = None

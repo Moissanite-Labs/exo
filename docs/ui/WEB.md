@@ -167,12 +167,13 @@ it, as in the TUI). `GET /api/complete/commands` lists them as `core` and `clien
 cannot answer. Until the core's names have loaded every `/name` line that is not the page's or the terminal client's
 waits in the box, and the page asks again with no limit: a timer, 1 s doubling to every 30 s, and each send, which does
 not move the backoff on. So a long core restart never turns a core command into a model turn, and the names are used
-as soon as the core answers. Only an older core that answers `unknown_command` or `unsupported` for `commands.list`
-ends the asking (`core` is `[]`); a core-only name the page then cannot know goes as a message.
+as soon as the core answers. An older core that answers `unknown_command` or `unsupported` for `commands.list` also
+counts as an answer (`core` is `[]`); a core-only name the page then cannot know goes as a message.
 A `/word` close to no command by the TUI's rule (`/tmp is full`, `/data is corrupted`, `/Users is big`) is sent as a message. One dim guidance line above the box (a failed call,
 a finished job, open findings, a slow turn, a long thread), one new line per 25 seconds at most, off when the core
 config key `guidance.enabled` is `false` (each `GET /api/complete/commands` answer says so, or says it does not know
-yet, and the page asks again until it does, so a core down at page load still turns the line off once it is back),
+yet, and the page asks again until it does, so a core down at page load still turns the line off once it is back; an
+unset key, which the core answers with `not_found`, is on, and the asking ends once both answers are in),
 no timer under reduced motion. An answer redraws an open menu only when the core's names arrive, so retries do not
 move its selected row.
 The logic is `static/complete.js` (pure, tested in node against the Python engine); the drawing is `static/composer.js`.

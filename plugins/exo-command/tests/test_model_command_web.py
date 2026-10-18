@@ -49,8 +49,8 @@ class ModelSrc:
             return {"models": [{"route": "fake:x", "role": "main"}], "available": [{"route": "fake:y"}]}
         if t == "turn.send":
             return {"message_id": "m%d" % len(self.calls)}
-        if t == "config.get":
-            return {"key": body.key, "value": None}
+        if t == "config.get":   # as the real core answers for an unset key
+            raise SourceError("not_found", "%s is not set" % body.key)
         return {}
 
     def sent(self):
