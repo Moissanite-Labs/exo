@@ -41,11 +41,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   composer typing it adds to the copied page were inline scripts, which the policy refuses, so regenerated shots
   came out in the inverse layout with an empty composer. They are now a file in the copied static folder, loaded
   by `src`.
-- Terminal event feed: a boot that failed after `hello` left the window without its feed, so `/new` and a message
-  worked but no reply or approval card ever showed. The feed now starts whatever the boot does, and a `--session`
-  id the core does not know opens a new thread and says so. One event the window cannot read no longer ends the
-  feed either. Under `strict=False` a Literal value the client does not know (such as a newer core's `ui.panel`
-  kind) is kept, `Client.events` skips and logs an event that still fails to decode, and a feed that dies says so.
 
 ### Changed
 - Command deny and reservation regexes also match a literal-word view of the command (#136, D-038
@@ -114,21 +109,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
   with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
-
-### Security
-- Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
-  `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
-  family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
-
-### Security
-- `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
-  requests from the web server only, no inline script, style attribute or eval, no framing, plus
-  `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
-  computed widths now go through the CSSOM instead of `style` attributes; nothing looks different.
-- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
-  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
-  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
-  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- Terminal event feed: a boot that failed after `hello` left the window without its feed, so `/new` and a message
+  worked but no reply or approval card ever showed. The feed now starts whatever the boot does, and a `--session`
+  id the core does not know opens a new thread and says so. One event the window cannot read no longer ends the
+  feed either. Under `strict=False` a Literal value the client does not know (such as a newer core's `ui.panel`
+  kind) is kept, `Client.events` skips and logs an event that still fails to decode, and a feed that dies says so.
 - The web Chat view draws a peer, bus or job message as a card with its real author, never as a line the user
   typed: on reload and thread switch too, and the live `peer.message` and its stored message are one card. An
   approval with no thread (a held peer message that no live session could take) shows in every thread, as in the
@@ -161,6 +146,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
   refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
   changes under `site/`.
+
+### Security
+- Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
+  `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
+  family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
+
+### Security
+- `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
+  requests from the web server only, no inline script, style attribute or eval, no framing, plus
+  `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
+  computed widths now go through the CSSOM instead of `style` attributes; nothing looks different.
+- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
+  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
+  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
+  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
 
 ## [0.2.0] (egg) - 2026-10-13
 
