@@ -13,15 +13,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `credentials`. Until D-075 lands, a coproc is denied only when its inner command outranks `opaque_exec`.
   A `credentials` line keeps the highest reversibility of its parts, so `coproc env; rm -rf x` stays
   irreversible and a policy that denies irreversible actions still denies it.
-### Fixed
-- Bus channel: a bus message steered into a turn you typed in a bus session no longer posts your answer to the
-  sending seat, and neither does your next turn after one. The channel replies only for the turn that an
-  auto-delivered message itself opened (D-040).
-- Bus channel: one sealed envelope that cannot be opened (malformed, or sealed to an old key) no longer stops a
-  seat's inbox for good. It reads as `<encrypted body could not be opened>` and the cursor moves past it.
-- Bus ingress: only a channel exod runs (the new caller `channel`, D-039) can hand the core a bus message. Before,
-  any local caller, a tool subprocess on the socket included, could pin an unseen seat's key to its own and send
-  messages as that seat.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
@@ -118,6 +109,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
   with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
+- The signed ledger's head anchor (D-040) is now written after the append's COMMIT, so a writer killed in between
+  leaves it one event behind, never ahead. Before, a kill at that moment made the ledger report "events were
+  removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match,
+  which used to hide a real truncation. `exo log anchor --force` repairs a store an older version left stuck.
+- `exo import-store` of a store Exo made no longer fails partway and leaves a half-copied store. The ledger's
+  `.head` anchor is skipped with the ledger, and a stale anchor a deleted store left for the destination is dropped.
+- `exo memory verify` fails a store whose `ledger.sqlite` was deleted while a head anchor remains. It used to print
+  "nothing to verify" and exit 0.
 
 ### Security
 - Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
@@ -133,6 +132,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- Bus channel: a bus message steered into a turn you typed in a bus session no longer posts your answer to the
+  sending seat, and neither does your next turn after one. The channel replies only for the turn that an
+  auto-delivered message itself opened (D-040).
+- Bus channel: one sealed envelope that cannot be opened (malformed, or sealed to an old key) no longer stops a
+  seat's inbox for good. It reads as `<encrypted body could not be opened>` and the cursor moves past it.
+- Bus ingress: only a channel exod runs (the new caller `channel`, D-039) can hand the core a bus message. Before,
+  any local caller, a tool subprocess on the socket included, could pin an unseen seat's key to its own and send
+  messages as that seat.
 - Bus relay: the web view at `/`, which takes no auth, no longer shows plaintext bodies (DMs included) that the API
   gives only to signed seats. It lists seq, sender, recipients, kind, time and thread. `EXO_BUS_WEB_BODIES=1` shows
   bodies again, for a relay only seats can reach.
@@ -145,14 +152,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   off: `exo update` refuses until it is fixed, and `--dry-run` says whether the check is on. `exo update
   --pin-trust REV` no longer adopts any commit's list: once a pin exists, the commit that set the list must verify
   against it (`docs/INSTALL.md`).
-- The signed ledger's head anchor (D-040) is now written after the append's COMMIT, so a writer killed in between
-  leaves it one event behind, never ahead. Before, a kill at that moment made the ledger report "events were
-  removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match,
-  which used to hide a real truncation. `exo log anchor --force` repairs a store an older version left stuck.
-- `exo import-store` of a store Exo made no longer fails partway and leaves a half-copied store. The ledger's
-  `.head` anchor is skipped with the ledger, and a stale anchor a deleted store left for the destination is dropped.
-- `exo memory verify` fails a store whose `ledger.sqlite` was deleted while a head anchor remains. It used to print
-  "nothing to verify" and exit 0.
 
 ## [0.2.0] (egg) - 2026-10-13
 
