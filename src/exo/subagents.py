@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from exo import provenance
-from exo.principal import current_caller, ingress_author, is_principal
+from exo.principal import current_caller, demoted, ingress_author, is_principal
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
 
@@ -53,7 +53,8 @@ def _act(eng: CoreEngine, ref: str, by: str | None, verb: str) -> tuple[dict[str
     elif is_principal(current_caller()):
         author, who = ingress_author(), "principal"
     else:
-        raise CommandFailed("forbidden", f"only the principal or the parent session can {verb} a subagent")
+        raise CommandFailed("forbidden", f"only the principal or the parent session can {verb} a subagent"
+                            + demoted())
     if not live(eng, row):
         raise CommandFailed("conflict", f"task {row['task_id']} is finished ({row['status']}); nothing to {verb}")
     return row, author, who

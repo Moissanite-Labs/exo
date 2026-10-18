@@ -224,7 +224,12 @@ tools, accept). For each task the delegator:
 2. records a `tasks` row (status queued) and publishes `task.updated`;
 3. waits for a slot, creates a child session (`parent` set to the parent session), and runs a child `Loop` on
    the same store, hub, router and tool runner, so approvals and plugin hooks (exo-gate) apply to the child's
-   tool calls exactly as to the parent's;
+   tool calls exactly as to the parent's. The child loop also shares the engine's per-session state, so the
+   engine sees the child's turn running. `session.list` shows it `live`, and `session.resume` leaves its open tool
+   call alone. The principal typing into the child's session (`turn.send`, any mode) steers it (D-070). Any other
+   caller gets `forbidden` there (D-052): the parent uses `subagent send`. While the child starts or finishes, no
+   round can take a steer, so `turn.send` fails with `conflict` and never starts a turn in the child.
+   An unaddressed peer message never picks a child;
 4. gives the child a focused system prompt (lifted from Hermes) and the brief in English as its first message;
 5. builds the `Receipt` from what the harness measured, signs it if a signer is set, stores it, publishes
    `task.updated`, and returns the English receipt to the parent model. Several tasks are labelled
@@ -246,7 +251,8 @@ waits for it to stop cleanly; a child's own `delegate` call is cancelled the sam
 stops. `turn.interrupt` on a child session stops just that child, and the parent gets a cancelled receipt.
 
 **Outcomes.** done; failed with a reason code (`timeout`, `turns`, `budget`, `error`); cancelled (`cancelled`
-by the parent, `interrupted` by a client). After a restart, tasks left queued or running are marked failed.
+by the parent, `interrupted` by a client). After a restart, the agent's own tasks left queued or running are
+marked failed once its core holds the writer lock (`run/agent-<id>.lock`).
 
 **Protocol.** `tasks.list` now works (rows with English `detail`, the brief and receipt lines, signature).
 `exo chat` prints `[task running]` and `[task done]` lines.
