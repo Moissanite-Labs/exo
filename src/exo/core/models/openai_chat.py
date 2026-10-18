@@ -103,6 +103,8 @@ class OpenAIChatProvider(HttpTransport):
                                 "stream": True, "stream_options": {"include_usage": True}}
         if tools:
             body["tools"] = convert_tools(tools)
+            if opts.get("tool_choice"):
+                body["tool_choice"] = opts["tool_choice"]
         if opts.get("max_tokens"):
             key = "max_completion_tokens" if "api.openai.com" in self.base_url else "max_tokens"
             body[key] = int(opts["max_tokens"])

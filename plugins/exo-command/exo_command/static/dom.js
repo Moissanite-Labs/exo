@@ -7,6 +7,7 @@ export function h(tag, attrs, ...kids) {
     if (k === "class") el.className = v;
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else if (k === "value") el.value = v;
+    else if (k === "style") el.style.cssText = v;   // through the CSSOM: the CSP (#162) refuses style attributes
     else el.setAttribute(k, v === true ? "" : v);
   }
   add(el, kids);

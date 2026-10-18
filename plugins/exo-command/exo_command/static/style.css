@@ -347,8 +347,11 @@ body { margin: 0; background: #08090a; }
 .xc-dl-hunk { color: var(--cold); }
 .xc-dl-meta { color: var(--fg-3); }
 .xc-ln { display: inline-block; min-width: 3ch; margin-right: 1ch; text-align: right; color: var(--fg-3); user-select: none; }
-.xc-md { font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; color: var(--fg-2); }
+.xc-md { white-space: normal; min-width: 0; max-width: 100%; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; color: var(--fg-2); }
 .xc-md p, .xc-md ul, .xc-md ol { margin: 0 0 8px; }
+.xc-md p { white-space: pre-wrap; }   /* a paragraph keeps its line breaks and indentation, as the streamed text showed them */
+.xc-md li > p { margin: 0; }   /* text indented under a list item reads as the item's next line */
+.xc-md blockquote { margin: 0 0 8px; padding: 0 0 0 10px; border-left: 2px solid var(--line-2); color: var(--fg-3); }
 .xc-md h3, .xc-md h4, .xc-md h5, .xc-md h6 { margin: 10px 0 4px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--fg); }
 .xc-tasklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 .xc-tasklist li { display: flex; flex-wrap: wrap; gap: 4px 8px; }
@@ -763,3 +766,15 @@ body { margin: 0; background: #08090a; }
   .xc-job-when { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .xc-tally-key .xc-tally-total { margin-left: 0; }
 }
+
+/* Tables stay inside their message, with keyboard-accessible horizontal scrolling. */
+.xc-table-scroll { max-width: 100%; min-width: 0; overflow-x: auto; margin: 8px 0 12px; }
+.xc-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.xc-md table { width: 100%; min-width: max-content; border-collapse: collapse; font: inherit; }
+.xc-md th, .xc-md td { padding: 7px 12px; border: 1px solid var(--line-2); vertical-align: top; }
+.xc-md th { background: var(--xc-raise); color: var(--fg); font-weight: 600; }
+.xc-md [data-align="left"] { text-align: left; }
+.xc-md [data-align="center"] { text-align: center; }
+.xc-md [data-align="right"] { text-align: right; }
+.xc-md .xc-code { white-space: pre; max-width: 100%; overflow-x: auto; }
+.xc-table-cell { min-width: 6rem; max-width: 28rem; overflow-wrap: anywhere; white-space: normal; }

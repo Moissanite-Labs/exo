@@ -135,7 +135,8 @@ _OBJS = ", ".join(['{"a":1,"b":2}'] * 11)
     ('cat "/srv/{.netrc,x}"', "read", "allow"),
     ("cat \\{.netrc,x\\}", "read", "allow"),
     ("echo 'x{1..5000}'", "read", "allow"),
-    ('cat $"x"{.env,y}', "read", "allow"),          # bash: `x.env` and `xy`
+    # bash: `x.env` and `xy`, so not a store read; a non-empty $"..." may be translated (#136), so it asks
+    ('cat $"x"{.env,y}', "read", "ask"),
 ])
 def test_ordinary_brace_lines_keep_their_class(cmd, category, outcome):
     c = _bash(cmd)
