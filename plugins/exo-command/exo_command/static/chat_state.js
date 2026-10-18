@@ -11,9 +11,9 @@ export function mergeTranscript(snapshot, previous) {
   return snapshot.concat(previous.filter((x) => !ids.has(x.id) && (x.streaming || x.status === "running")));
 }
 export function slashInput(text) {
-  const m = /^\/([a-z]+)(?:\s+(.*))?$/s.exec(text);
+  const m = /^\/([a-z][a-z0-9_-]*)(?:\s+(.*))?$/is.exec(text);
   if (!m) return null; // paths and punctuation are message text, not command typos
-  return { name: m[1], args: (m[2] || "").trim() };
+  return { name: m[1].toLowerCase(), args: (m[2] || "").trim() };
 }
 export function commandUsage({ name, args }) {
   if (name === "new" && !["", "private"].includes(args)) return "usage: /new [private]";
