@@ -17,10 +17,11 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 `bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,
 `exo.envscrub.scrub_env` (D-039). Removed:
 
-- shell startup hooks, which bash acts on before `bash -c` reaches the command: `BASH_ENV`, `ENV`, exported
-  functions (`BASH_FUNC_<name>%%`, or `BASH_FUNC_<name>()` from bash before 4.4, which shadow builtins and
-  commands), `SHELLOPTS`, `BASHOPTS` and `PS4`. These
-  match by exact name only (`ENV=dev` is dropped; `env`, `DEPLOY_ENV` and a `?env=` URL query are not secrets and stay);
+- shell startup hooks. bash itself acts on `BASH_ENV`, exported functions (`BASH_FUNC_<name>%%`, or
+  `BASH_FUNC_<name>()` in Red Hat-patched bash, which shadow builtins and commands), `SHELLOPTS` and `BASHOPTS`
+  when it starts. `ENV` is read by interactive POSIX shells a command starts (`sh -i`). `PS4` matters once xtrace
+  is on: bash expands it before every traced line, so a `$(...)` in it runs a command each time. These match by
+  exact name only (`ENV=dev` is dropped; `env`, `DEPLOY_ENV` and a `?env=` URL query are not secrets and stay);
 - every provider key named by `key_env` in the model catalog;
 - names ending `_API_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, `_CREDENTIALS`, `_KEY`, `_KEYS`, `_KEYS_DIR`,
   `_KEYS_FILE` or `_DSN`, and names containing `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY`,
@@ -38,15 +39,18 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 
 A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_deny` wins over `env_allow`.
 Allowing `BASH_ENV`, `ENV` or an exported function (`env_allow = ["BASH_FUNC_module%%"]` for Lmod, for example)
-also allows shell startup code; only allow a startup file or function you trust. This is
+also allows shell startup code; only allow a startup file or function you trust. The bash tool and background
+jobs start bash as `bash --norc -c`: with `SSH_CLIENT` or `SSH2_CLIENT` set and `SHLVL` unset or 0, a plain
+`bash -c` (in many builds) sources `~/.bashrc` and skips an allowed `BASH_ENV`. The `/bin/sh`
+fallback, used only when no bash is on `PATH`, reads no startup file. This is
 a heuristic: an unrecognized secret under an innocent name still passes, so keep keys in the key store. `EXO_HOME` stays: tools
 run `exo` commands, and the default path is no secret.
 
 Not scrubbed, on purpose: loader and interpreter hooks such as `LD_PRELOAD`, `PYTHONPATH` (`sitecustomize`),
-`NODE_OPTIONS`, `PERL5OPT`, `RUBYOPT`, `GIT_CONFIG_PARAMETERS`, `GIT_SSH_COMMAND` and `GIT_EXTERNAL_DIFF`. They
+`NODE_OPTIONS`, `PERL5OPT`, `RUBYOPT`, `GIT_SSH_COMMAND` and `GIT_EXTERNAL_DIFF`. They
 can run code in the programs a command starts, but they are general process hooks with everyday development
 uses (virtualenvs, debuggers, CA bundles, git over a jump host), and `PYTHONPATH` is deliberately on the
-claude-cli allowlist. The scrub's startup-hook list is limited to what bash itself runs before the command;
+claude-cli allowlist. The scrub's startup-hook list is limited to the shell's own hooks above;
 whoever controls the core's launch environment as the same OS user controls these too (D-039 Limits). A seat
 that wants them gone lists them in `env_deny`.
 

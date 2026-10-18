@@ -855,14 +855,25 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   identity, the core socket and credential variables, and a new seat `[tools] env_deny` (names or patterns).
   `env_allow` keeps a name; `env_deny` wins. The claude-cli child gets `minimal_env` (PATH, HOME, locale, terminal,
   CLAUDE_CONFIG_DIR, proxies, CA bundles) plus its switches.
-  *Amendment 2026-10-16 (issue #135):* the scrub also drops the shell startup hooks bash acts on before `bash -c`
-  reaches the command: `BASH_ENV`, `ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS`, `BASHOPTS` and
-  `PS4` (`envscrub.EXEC_HOOKS`). They are a separate exact-case set, not secret names: `is_secret_name` case-folds
-  and also classifies URL query keys and CLI diagnostics, so `ENV=dev` or `?env=staging` must not count as a
-  credential. The same `env_allow` (exact) and `env_deny` precedence applies. Limits: loader and interpreter hooks
-  (`LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS`, `PERL5OPT`, `RUBYOPT`, `GIT_CONFIG_PARAMETERS`, `GIT_SSH_COMMAND`,
-  `GIT_EXTERNAL_DIFF`) pass, since they have everyday development uses; `bash -p` was rejected because it would
-  silently defeat an exact `env_allow` for a trusted startup file. Documented in `docs/TOOLS.md`.
+  *Amendment 2026-10-16 (issue #135):* the scrub also drops inherited shell startup hooks (`envscrub.EXEC_HOOKS`):
+  `BASH_ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS` and `BASHOPTS`, which bash itself acts on at
+  startup; `ENV`, which an interactive POSIX shell the command starts reads; and `PS4`, which matters once xtrace is
+  on (bash expands it before every traced line, so a `$(...)` in it runs a command). They are a separate exact-case
+  set, not secret names: `is_secret_name` case-folds and also classifies URL query keys and CLI diagnostics, so
+  `ENV=dev` or `?env=staging` must not count as a credential. The same `env_allow` (exact) and `env_deny` precedence
+  applies. The bash tool and background jobs start bash as `bash --norc -c`: with `SSH_CLIENT` or `SSH2_CLIENT` set
+  and `SHLVL` unset or 0, a plain `bash -c` (in many builds) sources `~/.bashrc`, a file the default
+  gate lets a tool call write, and skips an allowed `BASH_ENV`; `--norc` stops the first and still honours the
+  second. Limits: loader and interpreter hooks (`LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS`, `PERL5OPT`, `RUBYOPT`,
+  `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`) pass, since they have everyday development uses; `bash -p` was rejected
+  because it would silently defeat an exact `env_allow` for a trusted startup file. Documented in `docs/TOOLS.md`.
+  *Amendment 2026-10-18 (issue #159):* git's environment config is dropped by default, since its values can carry
+  credentials (an `http.extraHeader` bearer token): `GIT_CONFIG_PARAMETERS`, kept only by an exact `env_allow`, and
+  the numbered family `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`. The family is one unit,
+  because a count without its keys fails every git command: it is kept whole only when `env_allow` names
+  `GIT_CONFIG_COUNT`, and dropped whole when `env_deny` or the token-format value check drops any member. So an exact
+  `env_allow` of a single `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` no longer keeps it, an exception to
+  "`env_allow` keeps a name". Documented in `docs/TOOLS.md`.
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
