@@ -238,7 +238,15 @@ A command is `allow` only when every program in it is known and nothing is hidde
   also adds the `indirection` signal and asks: a value such as `b[$(cmd)]` runs cmd. It is a
   signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
   without expansion (`a[0]`; for a bare name such as `a[i]` see the known limit below) and the
-  other arguments (printf's format, read's prompt) change nothing.
+  other arguments (printf's format, read's prompt) change nothing. The subscript runs to the `]`
+  that ends it as bash finds it: a nested `[ ]` (`a[b[0]+$(cmd)]`), a quoted `]` or a `\]` does
+  not end it. At the subscript's top level a `\$` or `` \` `` is literal, as in bash
+  (`a[\$(cmd)]` runs no command); bash before 5.2 expands a nested subscript (`a[b[\$(cmd)]]`)
+  again and runs it, so the gate reads it there. Past the nesting limit a command there is
+  `opaque_exec`, as an unquoted `$( )` is. A command read
+  from the subscript is a part of the line like any `$( )`, so it can outrank the line's own
+  category: `printf -v 'a[$(git push origin main)]' %s x > /tmp/f` is a `vcs_push` and asks, and
+  until D-075 and #191 land a deny on `local_write` no longer applies to it.
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is

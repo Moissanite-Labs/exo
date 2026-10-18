@@ -804,6 +804,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   command's output (or a variable's value) as arithmetic too, any expansion or quoting there also asks through the
   `indirection` signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
   without expansion and plain names keep their class; a bare name such as `a[i]` is a known limit (GATE.md).
+  The scan finds the `]` that ends the subscript as bash does: a nested `[ ]` counts, and a `\` outside single
+  quotes hides the next character, so `a[\$(cmd)]` reads no command, as bash runs none. In a nested subscript
+  bash before 5.2 runs a `\$( )` again, so the gate reads it there. Past the depth cap a command there is
+  `opaque_exec`, as an unquoted `$( )` is.
   *Amendment 2026-10-17 (issue #167):* the lexer decoded `$'..'` with Python's `unicode_escape`. Bash's short
   escapes (`\u65`, `\x4`, `\U41`), its 8-bit octal (`\545` is `e`), `\x{..}` and its NUL cut-off differ from that,
   so `git push $'--forc\u65' origin main` read as a plain push while bash ran a force push. `$'..'` is now decoded

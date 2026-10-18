@@ -987,7 +987,7 @@ def _subscript_parts(prog: str, args: list[str], cmd: str, depth: int, done: lis
         m = re.match(r"[^=\[]*\[", name)
         if not m:
             continue
-        lx, level, other, q = _Lexer(name), 1, False, ""
+        lx, level, other, q, inner = _Lexer(name), 1, False, "", 0
         lx.i = m.end()
         while lx.i < len(name) and level:     # to the ] that ends it as bash finds it: a quote or \ hides a ]
             ch = name[lx.i]
@@ -995,15 +995,21 @@ def _subscript_parts(prog: str, args: list[str], cmd: str, depth: int, done: lis
                 (lx._dollar if ch == "$" else lx._backtick)(_Word())
                 other = True
                 continue
-            if ch == "\\" and q != "'" and name[lx.i + 1:lx.i + 2] not in ("$", "`"):
+            if ch == "\\" and q != "'":   # a top-level \$ or \` is literal; bash < 5.2 expands a nested [ ] again
                 lx.i += 1
+                if name[lx.i:lx.i + 1] in ("$", "`") and (level > 1 or inner > 0):
+                    other = True
+                    continue
             elif ch in "'\"" and q in ("", ch):
-                q = "" if q else ch
+                q, inner = ("" if q else ch), 0
             elif not q:
                 level += {"[": 1, "]": -1}.get(ch, 0)
+            elif q == '"':   # bash 3.2 reads a [ ] in double quotes as a nested subscript
+                inner += {"[": 1, "]": -1}.get(ch, 0)
             other = other or ch in "\\'\"$"   # quoting or a variable: bash reads it, the gate does not
             lx.i += 1
-        parts += [classify_shell(sub, depth + 1) for sub in lx.subs if depth < _DEPTH and sub not in done]
+        parts += [classify_shell(sub, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd)
+                  for sub in lx.subs if sub not in done]
         if other:   # a signal, not an opaque part, so a deny on another part of the line still wins
             why = f"{prog} evaluates an array subscript the gate cannot read ({name[:40]})"
             parts.append(_make("read", summary=why[:120], command=cmd, signals=["indirection"]))
