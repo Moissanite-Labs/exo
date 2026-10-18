@@ -217,7 +217,9 @@ class Scheduler:
             if stop == "end":
                 status = "done"
             else:
-                answer = f"it stopped early ({stop}). " + str(getattr(res, "error", "") or "")
+                wrapped = stop == "max_iterations" and answer and res.message.meta.get("wrap_up")  # not a tool round
+                report = f"\n\n{answer}" if wrapped else ""  # the round-cap wrap-up
+                answer = f"it stopped early ({stop}). " + str(getattr(res, "error", "") or "") + report
         except asyncio.CancelledError:
             status, answer = "failed", "it was stopped before it finished."
             raise
