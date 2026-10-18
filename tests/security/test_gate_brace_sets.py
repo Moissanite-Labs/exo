@@ -218,6 +218,15 @@ def test_over_cap_brace_words_ask_as_a_store(action):
     ("x{a..{b,c}}", {"xa..b", "xa..c"}),
     ("x{05..1}", {"x05", "x04", "x03", "x02", "x01"}),
     ("x{1..10..3}", {"x1", "x4", "x7", "x10"}),
+    # a leading zero on either bound pads every member to the longer bound
+    ("x{007..1000..993}", {"x0007", "x1000"}),
+    ("x{-01..1}", {"x-01", "x000", "x001"}),
+    ("x{08..011}", {"x008", "x009", "x010", "x011"}),
+    ("x{1..010..3}", {"x001", "x004", "x007", "x010"}),
+    ("x{+01..3}", {"x1", "x2", "x3"}),
+    ("x{02147483647..02147483647}", {"x02147483647"}),
+    ("x{-02147483648..-02147483648}", {"x-02147483648"}),
+    ("x{2147483648..2147483648}", {"x2147483648"}),
     ("x{a..e..2}", {"xa", "xc", "xe"}),
     ("x{a..1}", set()),
     ("'{a,b}'", set()),
@@ -230,6 +239,27 @@ def test_over_cap_brace_words_ask_as_a_store(action):
 ])
 def test_brace_words_follow_bash(word, words):
     assert set(gate._brace_words(word)) == words | {word}
+
+
+# bash prints a zero-padded member as a C int, so past int32 it wraps; the gate does not follow it there and
+# counts the word as a store path instead.
+@pytest.mark.parametrize("word", [
+    "x{04294967296..04294967296}", "x{02147483648..02147483648}", "x{-02147483649..-02147483649}",
+    "x{1..02147483648..2147483647}",
+])
+def test_zero_padded_sequence_past_int32_is_over_the_limit(word):
+    assert gate._brace_words(word) is None
+
+
+@pytest.mark.parametrize("home,cmd", [
+    ("/srv/exo0007", "ls /srv/exo{007..1000..993}/keys"),             # bash: /srv/exo0007/keys, /srv/exo1000/keys
+    ("/srv/exo00000000000", "ls /srv/exo{04294967296..04294967296}/keys"),   # bash: /srv/exo00000000000/keys
+    ("/srv/exo-2147483648", "ls /srv/exo{02147483648..02147483648}/keys"),   # bash: /srv/exo-2147483648/keys
+])
+def test_zero_padded_sequence_reaching_the_store_is_credentials(monkeypatch, home, cmd):
+    monkeypatch.setenv("EXO_HOME", home)
+    c = _bash(cmd)
+    assert (c.category, gate.decide(c).outcome) == ("credentials", "ask")
 
 
 def test_shell_words_keep_their_source_text():
