@@ -300,13 +300,22 @@ resolution working. `cp -s` and `cp -l` count as writes to whatever they alias, 
 target is read against the link's folder in the two-operand form (`ln -s TARGET LINK`). Relative paths only use the distinctive-name checks because
 the tool's working directory is unknown here.
 
+Brace sets are expanded first, as bash does and as for secret-store paths (issue #224). A shell word is
+expanded from its source text, so only unquoted braces expand. A file tool's path is expanded as written. The
+word and every word it expands to are checked, and a hit on any counts, so
+`echo x > ~/.exo/polic{i..i}es/default.yaml`, `cp x ~/.exo/{state,zz}/approval-grants.json` and
+`cd ~/.e{x,}o` reach the store. A word is split at `=`, `:` and `,` only after its braces expand, so
+`dd of=~/.exo/polic{i,x}es/default.yaml` counts too. A word past the brace limits counts as the store. The store
+checks have their own budget of 4,096 expanded words per tool call, so they never use up the secret-store
+checks' budget, and each spelling is expanded once per line, however many commands use it.
+
 Known limits. These are classification checks, not a filesystem sandbox: a symlink can change
 between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
 without a link to resolve, so only distinctive names catch a write through it. Only the store roots
 are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
 write to the outside spelling is a local write. Name and prefix checks are case-sensitive, so a
-case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob or brace spelling
-(`sta*/gate-grants.json`, `{state,x}/...`) is expanded by the shell, not seen here. A link planted
+case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
+(`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
 followed, and the bash tool's `cwd` argument is not read.
 

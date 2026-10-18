@@ -1102,8 +1102,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             i += 1
         return parts
     if prog in ("cd", "pushd"):
-        dest = next((a for a in argv[1:] if not a.startswith("-")), "")
-        if dest and _in_store_dir(dest):
+        target = next((w for w in words[1:] if not w.text.startswith("-")), None)
+        dest = target.text if target else ""
+        if target and _in_store_dir_words(_shell_words(target, ctx.setdefault("store_braces", {}), "dir")):
             ctx["store_cwd"] = True
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
@@ -1261,11 +1262,43 @@ def _classify_exo(argv: list[str], cmd: str) -> Classification:
     return _opaque(f"exo {sub} starts, stops or changes Exo itself", cmd)
 
 
+# A store check on a spelling makes the checks it covers redundant: a word checked with its ancestors and pieces
+# ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check ("target").
+_COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"}}
+
+
+def _shell_words(w: _Word, seen: dict, check: str) -> list[str] | None:
+    """The words bash makes of shell word ``w`` for a store check (#224): its text, plus its source spelling
+    brace-expanded and then dequoted, as _shell_credential_hit reads it. A word the gate built (an `ln` target) has
+    no source spelling and keeps its text. ``seen`` keeps each spelling's words for the line, so a spelling is
+    expanded and charged once; [] when a check covering ``check`` already ran on it. None past the cap."""
+    src = w.raw.replace("\\\n", "")
+    if "{" not in src:
+        return [w.text]
+    if src not in seen:
+        words = _brace_words(src, pool=1)
+        seen[src] = (None if words is None else list(dict.fromkeys([w.text] + [d for e in words[1:] for d in _dequote(e)])),
+                     set())
+    words, done = seen[src]
+    if done & _COVERS[check]:
+        return []
+    done.add(check)
+    return words
+
+
+def _in_store_dir_words(words: list[str] | None) -> bool:
+    """_in_store_dir for any of a word's _shell_words; past the cap counts."""
+    return words is None or any(_in_store_dir(x) for x in words)
+
+
 def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
     """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
+    seen = ctx.setdefault("store_braces", {})
     for op, t in k.redirs:
-        if op in _WRITE_REDIRS and is_store_path(t.text):
-            return t.text
+        if op in _WRITE_REDIRS:
+            targets = _shell_words(t, seen, "target")
+            if targets is None or any(_store_word(x) for x in targets):
+                return t.text
     if all(p.category == "read" for p in parts):
         return ""
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
@@ -1275,11 +1308,14 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     if prog == "ln" and len(argv) > 2 and not argv[-2].startswith(("-", "/")) and _expand_text(argv[-1]).startswith("/"):
         words = words + [_Word(os.path.join(os.path.dirname(_expand_text(argv[-1])), argv[-2]))]  # relative link target
     for i, w in enumerate(words):
-        for piece in dict.fromkeys([w.text] + re.split(r"[:=,]", w.text)):
-            if piece and is_store_path(piece, ancestors=wide):
+        expanded = _shell_words(w, seen, "wide" if wide else "narrow")   # braces first: `of=x{a,b}` is `of=xa of=xb`
+        if expanded is None:
+            return w.text
+        for piece in dict.fromkeys(p for e in expanded for p in [e] + re.split(r"[:=,]", e)):
+            if piece and _store_word(piece, ancestors=wide):
                 return piece
         if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and \
-                _in_store_dir(words[i + 1].text):
+                _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")):
             return words[i + 1].text            # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
         return "a path inside the store (after cd)"
@@ -1466,7 +1502,8 @@ def _dynamic_secret_paths() -> list[str]:
 
 
 _BRACE_CAP = 1024
-_BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_cost)
+_BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_cost), once for the secret-store checks
+                       # and once for the Exo-store checks (#224)
 _BRACE_SEQ = re.compile(r"([-+]?\d+)\.\.([-+]?\d+)(?:\.\.([-+]?\d+))?|([A-Za-z])\.\.([A-Za-z])(?:\.\.([-+]?\d+))?")
 _brace_left: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_brace_left", default=None)
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -1487,7 +1524,7 @@ def _brace_budget(fn: _F) -> _F:
     def run(*a: Any, **kw: Any) -> Any:
         if _brace_left.get() is not None:
             return fn(*a, **kw)
-        token = _brace_left.set([_BRACE_BUDGET])
+        token = _brace_left.set([_BRACE_BUDGET, _BRACE_BUDGET])
         try:
             return fn(*a, **kw)
         finally:
@@ -1516,16 +1553,16 @@ def _brace_seq(s: str) -> list[str] | None:
     return [f"{v:0{width}d}" for v in vals]
 
 
-def _brace_words(tok: str) -> list[str] | None:
+def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
     """``tok`` and the words bash brace expansion makes of it, read as bash's brace_gobbler does: a group
     ends at the first top-level `}` after a comma or `..`; quoted or escaped braces, ${...} and $(...) do
     not expand; a group without a comma is a {x..y[..n]} sequence or literal. None past _BRACE_CAP words (fewer
     for a long word: a million characters in all), past what is left of the call's _BRACE_BUDGET, or past 32
-    levels of nesting: callers count that as a hit."""
+    levels of nesting: callers count that as a hit. ``pool`` 1 charges the Exo-store checks' budget."""
     if "{" not in tok:
         return [tok]
     left = _brace_left.get()
-    cap = max(1, min(_BRACE_CAP, (1 << 20) // len(tok), _BRACE_CAP if left is None else left[0] // _brace_cost(tok)))
+    cap = max(1, min(_BRACE_CAP, (1 << 20) // len(tok), _BRACE_CAP if left is None else left[pool] // _brace_cost(tok)))
     ev: list[tuple[int, str]] = []   # unquoted { } , and `..`; `$` is the brace of ${
     i, quoted = 0, ""
     while i < len(tok):
@@ -1633,7 +1670,7 @@ def _brace_words(tok: str) -> list[str] | None:
     except _BraceLimit:
         return None
     if left is not None and len(words) > 1:
-        left[0] -= sum(map(_brace_cost, words))
+        left[pool] -= sum(map(_brace_cost, words))
     return list(dict.fromkeys([tok] + words))
 
 
@@ -1763,8 +1800,15 @@ def _path_forms(p: str) -> set[str]:
 
 
 def is_store_path(path: str, ancestors: bool = False) -> bool:
-    """True when ``path`` is (or, with ``ancestors``, contains) a protected part of the Exo store."""
-    p = _expand_text(str(path or "")).strip().replace("\\", "/")
+    """True when ``path`` is (or, with ``ancestors``, contains) a protected part of the Exo store. A brace set
+    counts when the path or any word bash expands it to is in the store, or when it expands past the cap (#224)."""
+    words = _brace_words(str(path or ""), pool=1)
+    return words is None or any(_store_word(w, ancestors) for w in words)
+
+
+def _store_word(path: str, ancestors: bool = False) -> bool:
+    """is_store_path for one word whose braces are already expanded."""
+    p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
     if _STORE_NAMES.search(p):
