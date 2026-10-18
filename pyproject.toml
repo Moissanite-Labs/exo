@@ -24,6 +24,7 @@ bus = ["fastapi>=0.110", "starlette>=0.37", "uvicorn>=0.29", "websockets>=12"]
 
 [project.scripts]
 exo = "exo.cli:main"
+exo-witness = "exo.ledger_authority.witness_transport:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/exo", "clients/tui/exo_tui"]
@@ -33,6 +34,9 @@ packages = ["src/exo", "clients/tui/exo_tui"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "real_claude: runs one real turn through the claude CLI; needs EXO_TEST_REAL_CLAUDE=1 and claude on PATH",
+]
 
 # Lint: pyflakes rules only (F). Findings fail CI.
 [tool.ruff]

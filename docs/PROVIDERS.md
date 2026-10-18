@@ -100,7 +100,8 @@ private auth files, or network models. This remaining compatibility scope is tra
 
 Every stream exit cancels and awaits the stderr reader. It retains a bounded, scrubbed diagnostic tail rather
 than waiting for a descendant to close stderr. The adapter stops its process group even after the leader exits,
-and finishes cleanup before returning a terminal response to the router.
+and finishes cleanup before returning a terminal response to the router. A cancel (Esc) while the stream is read
+stops it, even when it lands just as a line arrives (#163).
 
 ## Use a Muse Code subscription (`muse-cli`)
 
@@ -200,7 +201,7 @@ unclear whether a plain API key works. The entry is commented out in `catalog.to
 
 Decision models (Jev, Laya) return probabilities, not text. They speak `POST {base_url}/systemone`
 with `state`, `model` and typed `questions` (choice, score, noul); the reply has `answers`. Docs:
-https://docs.typesafe.ai/api.md. Code: `exo/core/models/decision.py`. Use `ask_choice` and `ask_score`
+https://docs.typesafe.ai/api.md. Code: `exo/core/models/decision.py`. Use `ask_choice_result`
 there; they go through the `decision` role. If the route is a chat model, the same call asks for a JSON
 answer and reports the pick as probability 1.0 with `source="generative"`. A decision model may only make
 a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:

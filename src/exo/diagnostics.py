@@ -14,14 +14,16 @@ from typing import TYPE_CHECKING, Any
 
 from exo.core import jobs as jobs_mod
 from exo.core import trace, workspace
-from exo.core.context import AgentContext, _maybe_await
+from exo.core.context import AgentContext
+from exo.core.hooks import maybe_await
 from exo.core.findings import STATUSES
+from exo.core.types import to_dict
 from exo.principal import current_caller, is_principal
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
 
 if TYPE_CHECKING:
-    from exo.core.engine import CoreEngine
+    from exo.core.engine import CoreRuntime as CoreEngine
 
 MISSING = object()
 
@@ -82,8 +84,9 @@ def trace_text(eng: CoreEngine, session: str | None, last: int = 10, calls: bool
     head = [f"running on: {eng.loop.model or '-'} (session model {info.model if info else '-'}, last call served "
             f"by {served}); chain: {', '.join(r.ref for r in eng.router.chain('main')) or '-'}",
             f"harness {eng.findings.version}; {eng.findings.summary()}"]
-    if fixed := eng.findings.list("fixed")[:5]:
-        head.append("fixed, awaiting re-verification: " + ", ".join(f"{r['id']} (in {r['fixed_in']})" for r in fixed))
+    open_rows = [r for r in eng.findings.list() if r["status"] in ("open", "reopened")][:5]
+    if open_rows:
+        head.append("open findings: " + ", ".join(f"{r['id']} {r['title'][:60]}" for r in open_rows))
     if not session:
         return "\n".join(head)
     peers = trace.peer_text(eng.store, session)
@@ -92,7 +95,7 @@ def trace_text(eng: CoreEngine, session: str | None, last: int = 10, calls: bool
                      + (["", peers] if peers else []) + (["", jobs] if jobs else []))
 
 def agent_ctx(eng: CoreEngine, session: str | None) -> AgentContext:
-    tree = getattr(eng.loop.context, "tree", eng.loop.context)
+    tree = eng.context_tree
     if not session or eng.store.get_session(session) is None:
         raise CommandFailed("bad_request", "no thread to look at")
     if not isinstance(tree, AgentContext) or tree._agent_key(session) is None:
@@ -164,7 +167,7 @@ async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = ""
     facts["trace"] = eng.trace_text(info.id, 3)
     for key, fn in eng.handoff_sources.items():
         try:
-            facts[key] = await _maybe_await(fn(info.id))
+            facts[key] = await maybe_await(fn(info.id))
         except Exception as exc:  # a broken source must not block the handoff
             trace.report(f"handoff source {key}", exc, info.id)
             facts[key] = []
@@ -191,6 +194,21 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         for m in gone:
             eng.hub.publish(s.SteerCancelled(message_id=m.id or "", text=m.text()), b.session)
         return {"cancelled": [{"id": m.id, "text": m.text()} for m in gone]}
+    if b.name == "subagent":  # #97: list, open, send to and stop a running child; exo.subagents holds the rules
+        from exo import subagents
+        return await subagents.command(eng, b)
+    if b.name == "rename":  # D-069: the session title, principal only (D-052); announced as session.updated
+        if not b.session:
+            raise CommandFailed("bad_request", "rename needs a session")
+        if not is_principal(current_caller()):
+            raise CommandFailed("forbidden", "only the principal can rename a session")
+        title = " ".join(b.args.split())[:200]
+        if not title:
+            raise CommandFailed("bad_request", "usage: /rename <title>")
+        eng._info(b.session)
+        info = eng.store.update_session(b.session, title=title)
+        eng.hub.publish(s.SessionUpdated(session=info), b.session)
+        return {"session": to_dict(info)}
     if b.name == "providers":  # D-034: status, or "reload [name]" after a client stored a key. Never a key.
         word, _, rest = b.args.strip().partition(" ")
         if word == "reload":
