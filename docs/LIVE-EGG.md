@@ -1,8 +1,38 @@
 # The live egg: x0 reacts to repo activity (D-059)
 
-Status: **Proposed** (2026-10-13), revised the same day for instant events, the name x0 and meditation. Nothing here is
-built. D-059 in `DECISIONS.md`. The XP rules the feed applies are in `docs/EXOPET.md` section 3 (D-058). The egg
-itself is `site/brand/egg.js` (`docs/BRAND.md`, D-049).
+Status: **Proposed** (2026-10-13), revised the same day for instant events, the name x0 and meditation, and on
+2026-10-18 after the review of PR #107. Nothing here is built. D-059 in `DECISIONS.md`. The XP rules the feed applies
+are in `docs/EXOPET.md` section 3 (D-058). The egg itself is `site/brand/egg.js` (`docs/BRAND.md`, D-049). This page
+does not depend on the event-activation decision (D-057), and D-057 does not depend on this page.
+
+## The decision, in plain words
+
+**What you are deciding.** Whether the egg on the project site should react, within about 17 seconds, to what happens in
+the project's repository, and whether it should "meditate" now and then to take in the work a maintainer validated. The
+feed behind it shows only the kind of event, its time and its size, never a title or an author.
+
+**What it takes.** Four small functions on the site's host (one that receives GitHub's calls, one that serves the feed,
+one that starts a meditation and a daily cleanup), a small key-value store, a GitHub webhook on the repository (GitHub
+calls our address when something happens) and a read-only token for ion's reactions. The functions keep keyed hashes and
+no logins. Staging and production are separate, so a test never moves the live egg. Hosted GitHub Actions jobs do not
+start for this repository at present, so a maintainer's signed call, not a workflow, starts a meditation.
+
+**The options.**
+
+- **A. Adopt feed `v: 2` as revised (recommended).** Instant animations for issues, pull requests, reviews, merges and
+  releases, and the meditation for validated work. #108, the site side, was written against `v: 1` and drops every
+  `v: 2` event, so it moves to `v: 2` before it merges.
+- **B. Ship `v: 1` first.** Instant animations only, as #108 is built. Cost: validated XP, the larger share of x0's fill
+  (D-058), has nothing to show, and the meditation arrives later as a second rework of the client.
+- **C. A static x0.** The total is read from a JSON file the team updates by hand. No functions, store or secrets to
+  run. Cost: no instant satisfaction, which the brief asked for, and a chore that depends on someone remembering it.
+  This fits the brief worst.
+
+**The call.** A. The backend is small and stores only hashes, staging comes first, and B saves little: #108 needs rework
+either way, and the meditation is the part of the brief that makes validated work visible.
+
+Depends on D-058 (the rules the feed applies). `egg.js` is shared with the web client, and D-061's test needs the two
+copies to stay byte identical.
 
 The idea: the egg on the project site is the community egg, named **x0** (read "x-o", which sounds like "exo"). Each
 person's own copy stays "your Exo". Every time something happens in the repository, x0 shows it at once, so a
@@ -15,8 +45,9 @@ inward, breathes slowly, and absorbs each contribution that was validated (an is
 pull request merged or salvaged, a review the reviewer bot marked as meaningful), gaining XP for each. Then it wakes.
 This mirrors how Exo learns: a little at once from experience, most of it on reflection.
 
-The org's automated reviewer is ion, the org's review bot. The function identifies the bot by its numeric
-GitHub account id, never by name, so a rename would change no rule.
+The org's automated reviewer is ion, a dedicated machine account (a user, not a GitHub App, as `docs/EXOPET.md` section
+3 explains). The function identifies it by its numeric GitHub account id, never by name, so a rename would change no
+rule.
 
 ## 1. The interface (stable)
 
@@ -31,7 +62,7 @@ change it. A change here needs a new `v` number in the feed and a note in D-059.
 |---|---|
 | `since` | optional. The `cursor` from the previous response. Only newer events are returned. Absent or unknown: the replay window (section 2.3). |
 
-Response, `200`, `content-type: application/json`, `cache-control: public, s-maxage=5, stale-while-revalidate=15`:
+Response, `200`, `content-type: application/json`, `cache-control: public, s-maxage=5`:
 
 ```json
 {
@@ -43,7 +74,7 @@ Response, `200`, `content-type: application/json`, `cache-control: public, s-max
     "xp": 1290,
     "pending": 64,
     "target": 2048,
-    "stage": 0.504,
+    "stage": 0.157,
     "state": "meditating",
     "meditation": {
       "started": "2026-10-20T15:00:00Z",
@@ -76,7 +107,7 @@ Fields:
 | `egg.xp` | integer | counted community XP. Authoritative. Never compute it from `events`. |
 | `egg.pending` | integer | validated XP waiting for the next meditation. It will be added then (caps permitting). Draw it as a faint second fill, or ignore it. |
 | `egg.target` | integer | XP at which the egg starts to crack. |
-| `egg.stage` | number | the value to pass to `egg.setStage()`, 0 to 4, computed by the server (section 3.6). |
+| `egg.stage` | number | the value to pass to `egg.setStage()`, computed by the server (section 3.6). `setStage` accepts 0 to 4 (`MAX_STAGE`: 0 is the egg, 1 the hatchling). The feed stays below 1 until the hatch: at most 0.25 while `egg.state` is `filling`, `meditating` or `waking`, easing from 0.25 to 1 while `cracking`, and 1 once `hatched`. Only the "keeps evolving" option (`docs/EXOPET.md` open question 3) sends more than 1. |
 | `egg.state` | string | `filling`, `meditating`, `waking`, `cracking` or `hatched`. A page treats any other value as `filling`. |
 | `egg.meditation` | object or null | present while `state` is `meditating` or `waking`, else `null`. |
 | `egg.meditation.started` | string | UTC time the meditation began. |
@@ -101,12 +132,19 @@ one meditation are shuffled, so their order says nothing about which items they 
 Changes from `v: 1`, for anyone holding the earlier draft: `poll_s` and the cache are shorter; `egg.pending` now means
 validated XP waiting for meditation (it was XP inside a settle window); `egg.state` gains `meditating` and `waking`;
 `egg.meditation`, the `review` and `validated` types and `events[].kind` are new; `weight` is now the instant share.
-No client was built against `v: 1`. A `v: 1` page would still read `egg` and grow the fill correctly.
+A `v: 1` page still reads `egg` and grows the fill correctly, and drops every event.
+
+#108 is such a page. It was written against `v: 1`: its client (`site/brand/egg-feed.js`) updates the egg block from a
+feed whose `v` is above 1 and ignores the events, its demo feed is one `v: 1` response, its `ExoEgg.EVENTS` has
+`issue`, `pr`, `merge` and `release` only, and its comments cite section 1.2 for the feed client, which is section 1.3
+here. Either #108 moves to `v: 2` before it merges (recommended), or `v: 1` stays the deployed contract and this page
+waits. This page does not change #108.
 
 Errors: `429` with a `retry-after` header when a client polls too fast; `503` when the store is down. On any error the
 page keeps the last good state and retries after `poll_s` (or `retry-after`), doubling up to 300 seconds.
 
-**The demo feed.** `site/brand/egg-feed.demo.json` (to be added by the site build) has the same shape, with `v: 2`.
+**The demo feed.** `site/brand/egg-feed.demo.json` has the same shape, with `v: 2` (#108 adds a `v: 1` file at this
+path, one response, which the `v: 2` file replaces).
 It is an array of responses, played in order, one per poll, then looped: about 20 events across all five repository
 types, then a meditation of 8 `validated` events (3 `pr`, 3 `issue`, 2 `review`) with `meditating` responses whose
 `done` rises, one `waking` response, and a return to `filling`. A page given `?feed=demo` reads it and ignores `t`
@@ -177,9 +215,11 @@ XP counter that adds `weight` as each `validated` event plays, and must reset it
 
 ## 2. What each event looks like
 
-All motion uses the egg's existing parts: packets on edges, lit dots, cell glow, the core heartbeat and the stage.
-Orange means "something happened now", as everywhere in Exo. Cold blue means "learned", as in the pet (EXOPET section
-5), so the absorb glow in meditation is cold blue.
+The repository events use the egg's existing parts: packets on edges, lit dots, cell glow, the core heartbeat and the
+stage. Meditation needs three things `site/brand/egg.js` does not have: a fold of the lattice, a dim of the line alpha
+and a slow breath (the egg has a one-percent breathing of its scale, which is not that). They are new work, listed in
+section 5. Orange means "something happened now", as everywhere in Exo. Cold blue means "learned", as in the pet (EXOPET
+section 5), so the absorb glow in meditation is cold blue.
 
 ### 2.1 Repository events: instant
 
@@ -193,8 +233,10 @@ Orange means "something happened now", as everywhere in Exo. Cold blue means "le
 
 No delay is added anywhere. An event starts the moment the poll that carries it returns, if nothing is playing.
 GitHub delivers the webhook within a second or two, the edge cache adds at most 5 seconds and the poll at most 10, so a
-contributor watching the site sees their event in about 15 seconds at worst, and within a few seconds when they switch
-back to the tab.
+contributor watching the site sees their event in about 17 seconds at worst, and within a few seconds when they switch
+back to the tab. The feed's `cache-control` has no `stale-while-revalidate`: with it the edge may serve an entry up to
+15 seconds older than its 5, and a model of one viewer polling every 10 seconds then gave a mean of 15 to 16 seconds and
+a worst case near 22 (a simulation, not a measurement on Vercel).
 
 Pacing, only when several events arrive in the same poll, so a burst stays readable:
 
@@ -209,7 +251,7 @@ Pacing, only when several events arrive in the same poll, so a burst stays reada
 
 | Phase | Motion | Length |
 |---|---|---|
-| Enter (`egg.meditate(true)`) | packets already in flight finish; the lattice folds inward toward close packing (the fold mechanism, closing about two thirds of the way) and the shell draws in by 6 percent; line alpha dims to 80 percent; `activity` eases to 0.15 | 3 s |
+| Enter (`egg.meditate(true)`) | packets already in flight finish; the lattice folds inward toward close packing (a new fold control, 0 open to 1 closed, eased to about two thirds) and the shell draws in by 6 percent; line alpha dims to 80 percent; `activity` eases to 0.15 | 3 s |
 | Breathe | a slow, calm breath: in over 2.5 s (the fold opens slightly, the core brightens by 10 percent), hold 0.5 s, out over 3 s. No packets, no orange. Runs until the wake | 6 s a cycle |
 | Absorb (each `validated` event) | a soft cold-blue glow appears at a random outer dot, travels inward along lattice edges to the core, lighting each dot it passes faintly, and the core glows cold blue once as it arrives. Size by kind: issue small, review medium, pr large with a short trail. Starts on the next in-breath | 2 s |
 | Wake (`egg.meditate(false)`) | one deep breath; the lattice unfolds to its open pose and the shell returns; line alpha returns to full; one soft orange beat; `activity` returns to its value before meditation | 2.5 s |
@@ -244,8 +286,8 @@ Under `prefers-reduced-motion` the egg already draws one still frame. With the f
 ```
 GitHub (private repo) --webhook, HMAC-signed--> POST /api/egg/hook      (Vercel function)
                                                    |  verify, classify, instant XP, record validations
-maintainer --GitHub Actions, HMAC-signed------> POST /api/egg/meditate  (Vercel function)
-                                                   |  read the bot's reactions, schedule the absorbs
+maintainer --signed call (HMAC)---------------> POST /api/egg/meditate  (Vercel function)
+                                                   |  read ion's reactions, schedule the absorbs
                                                    v
                                          small key-value store (private: item log, validation queue, totals)
                                                    |
@@ -270,18 +312,26 @@ client code or the feed.
 3. **Replay.** Keep each `X-GitHub-Delivery` id for 48 hours; a repeat gets `200` and is ignored.
 4. **Repository.** Accept only the one configured repository id (`EGG_REPO_ID`).
 5. **Events taken.** `issues` (`opened`, `closed`, `labeled`, `deleted`, `transferred`), `pull_request` (`opened`,
-   `closed`, `edited`, `labeled`), `pull_request_review` (`submitted`), `release` (`published`), `ping`. Everything
-   else gets `204`.
-6. **Bots.** Events whose `sender.type` is `Bot` or whose login ends in `[bot]` are dropped: no XP and no animation, so
-   a bot loop cannot make the egg flicker. This includes reviews by ion, the org's review bot.
+   `closed`, `edited`, `labeled`), `pull_request_review` (`submitted`), `create` with `ref_type` `tag`, `ping`.
+   Everything else gets `204`. The webhook is subscribed to issues, pull requests, pull request reviews and branch or
+   tag creation. A `create` event counts as a release only when the tag is `exo-v` plus a version with no pre-release
+   suffix (`exo-v0.3.0`, not `exo-v0.3.0-rc.1`) and the sender is a core account. The repository cuts a release by
+   pushing an annotated tag (`docs/VERSIONING.md` section 7) and publishes no GitHub Release, so a `release` event
+   would never arrive.
+6. **Bots.** Events whose `sender.type` is `Bot`, whose login ends in `[bot]`, or whose sender id is ion's
+   (`EGG_REVIEWER_BOT_ID`) are dropped: no XP and no animation, so a bot loop cannot make the egg flicker. ion is a user
+   account, so the id check is what drops its reviews. An App on the organization's agent list (`EGG_AGENT_APP_IDS`) is
+   not dropped: its events are classed `agent` and follow the agent table in `docs/EXOPET.md` (they animate, earn no
+   instant XP, and its merged pull requests count inside the core cap). The rule looks at the sender, the account that
+   acted. Credit for a merged pull request still goes to the pull request's author.
 7. **Classify and score.** Apply D-058 (`docs/EXOPET.md` section 3): author class (core, agent, outside), instant XP
    and its caps, voids. The private record keeps an HMAC of the item's repository number and of the author login
    (keyed with `EGG_HASH_KEY`), the GitHub node id of reviews (needed to read reactions), the class, the type, the time
    and the status. Logins in the clear are never stored. The list of core logins is an environment variable, not a
    file in the repo.
 8. **Record validations.** On a merged pull request, and on an `edited` merged pull request up to 7 days after the
-   merge, apply the detection rules in section 3.3. Each validated item joins the validation queue with its kind and
-   XP; `egg.pending` rises.
+   merge when the edit's sender is a core account, apply the detection rules in section 3.3. An edit by anyone else
+   counts nothing. Each validated item joins the validation queue with its kind and XP; `egg.pending` rises.
 9. **Publish.** Append the public event (`id`, `t`, `type`, `level`, `weight`) to the feed list, trimmed to the last
    500 and to 7 days. Instant XP goes straight into the totals, so `egg.xp` and `egg.stage` move on the same poll that
    carries the event.
@@ -296,8 +346,8 @@ form.
 | Kind | Validated when | How the function detects it |
 |---|---|---|
 | issue | a pull request that fixes it was merged | the merged pull request's title or body contains a GitHub closing keyword (`close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, `resolved`, any case, optional colon) followed by `#N` or `<this repo>#N`. These are the same words GitHub uses to close the issue itself, and the team's pull requests already say "Fixes #N". Issue N must be known to the store, not voided, not already validated, and opened before the merge. At most 3 issues per merged pull request. |
-| pr | it was merged, or it was salvaged: its commits or a substantial part of its diff landed through another pull request | merged: the `pull_request` `closed` event with `merged: true`. Salvaged: the landing pull request, when merged, has a line `Salvaged-from: #N` in its body (one per line, any case, at most 3). Pull request N must be closed without merge, not voided, not already validated, and opened by a different account than the landing pull request (an author who re-lands their own work is credited by that merge). The maintainer who merges is answerable for the line; ion, the org's review bot may propose it when it sees the same commits. |
-| review | ion, the org's review bot judged it a meaningful contribution | at meditation start, for each recorded review from the last 30 days not yet validated, the function asks the GitHub GraphQL API for the review's `ROCKET` reactions and checks whether one is from the account whose numeric id is `EGG_REVIEWER_BOT_ID`. Reactions from any other account, including maintainers, are ignored. A reaction removed before the meditation does not count; once absorbed, a validation stands. |
+| pr | it was merged, or it was salvaged: its commits or a substantial part of its diff landed through another pull request | merged: the `pull_request` `closed` event with `merged: true`. Salvaged: the landing pull request, when merged, has a line `Salvaged-from: #N` in its body (one per line, any case, at most 3). Pull request N must be closed without merge, not voided, not already validated, and opened by a different account than the landing pull request (an author who re-lands their own work is credited by that merge). The maintainer who merges is answerable for the line; ion, the org's review bot, may propose it when it sees the same commits. |
+| review | ion, the org's review bot, judged it a meaningful contribution | at meditation start, for each recorded review from the last 30 days not yet validated, the function asks the GitHub GraphQL API for the review's `ROCKET` reactions and checks whether one is from the account whose numeric id is `EGG_REVIEWER_BOT_ID`. Reactions from any other account, including maintainers, are ignored. A reaction removed before the meditation does not count; once absorbed, a validation stands. |
 
 **The reaction is `rocket`.** It is the one reaction that says "this moved the work forward", which is what a
 meaningful review does. `+1`, `heart` and `hooray` are what people use every day for agreement, thanks and
@@ -306,17 +356,23 @@ celebration, so a bot's mark there would blur into the crowd and read as praise 
 who sees it on their review, and survives the bot's rename because the check is on the bot's account id, not the
 emoji alone.
 
-The edit window (7 days after the merge) lets a maintainer add a missed "Fixes #N" or `Salvaged-from: #N` line by
-editing the merged pull request's body.
+The edit window (7 days after the merge) lets a maintainer, meaning a core sender, add a missed "Fixes #N" or
+`Salvaged-from: #N` line by editing the merged pull request's body. An edit by anyone else counts nothing.
 
 ### 3.4 Meditation: `POST /api/egg/meditate`
 
-**Start: a maintainer action.** A GitHub Actions workflow, `x0-meditate`, run by hand (`workflow_dispatch`) when the
-team sits down to review community work. Only people with write access can run it, every run is in the Actions log,
-and ion, the org's review bot can dispatch it too at the end of a batch run. The workflow sends
-`{"action": "start", "ts": <unix seconds>, "nonce": <random>}` signed with HMAC-SHA256 under `EGG_MEDITATE_SECRET`
-(held as a repository Actions secret and a Vercel variable) in the `X-Egg-Signature-256` header. The function rejects
-a bad signature (`401`), a `ts` more than 5 minutes off, or a nonce seen in the last 48 hours.
+**Start: a signed call from a maintainer's machine.** `scripts/x0_meditate.py --target staging|production`, run by hand
+when the team sits down to review community work, sends `{"action": "start", "ts": <unix seconds>, "nonce": <random>}`
+signed with HMAC-SHA256 under `EGG_MEDITATE_SECRET` in the `X-Egg-Signature-256` header. The secret is kept on the
+maintainers' machines in the macOS Keychain or the Linux Secret Service where there is one, as provider keys are, else
+in a 0600 file under `$EXO_HOME/keys/`, and in the site's Vercel project as a variable. The function rejects a bad
+signature (`401`), a `ts` more than 5 minutes off, or a nonce seen in the last 48 hours, and every start is kept in the
+meditation record (`started`).
+
+A GitHub Actions workflow, `x0-meditate`, can be a second route once hosted jobs run again. They do not start at
+present, so nothing depends on it. Neither route is open to ion: dispatching a workflow takes the `Actions: write`
+permission, which GitHub does not narrow to one workflow (from GitHub's documentation, not reproduced), and ion's part
+is the reaction.
 
 A label was considered and rejected: labels live on one issue or pull request, while a meditation covers the whole
 batch, and a label event says less about who acted. A fixed schedule was rejected as the trigger because it would
@@ -326,11 +382,14 @@ if validated XP has waited 14 days with no meditation, the daily cron starts one
 **What start does.**
 
 1. Refuse with `409` if a meditation is running.
-2. Read the bot's reactions for candidate reviews (section 3.3) and add newly validated reviews to the queue.
-3. Take every item in the queue. If there are none, return `200 {"total": 0}`: x0 does not meditate on nothing.
+2. Read ion's reactions for candidate reviews (section 3.3) and add newly validated reviews to the queue.
+3. Take the items in the queue, at most 300 (the rest stay queued for the next meditation). If there are none, return
+   `200 {"total": 0}`: x0 does not meditate on nothing.
 4. Apply the caps (`docs/EXOPET.md` section 3) and compute each item's XP.
-5. Shuffle the items and give each an absorb time: the first 6 seconds after start (the enter phase), then one every
-   `clamp(900 / total, 3, 8)` seconds, so a meditation lasts between about 30 seconds and 15 minutes.
+5. Shuffle the items and give each an absorb time: the first at 6 seconds after start (the 3 second enter phase of
+   section 2.2 is part of them), then one every `clamp(900 / total, 3, 8)` seconds. The page plays each absorb on the
+   next in-breath at or after its time. A meditation lasts 6 seconds for one item, 14 for two, 30 for four, and about 15
+   minutes for anything from 112 to 300 items (6 + 299 x 3 = 903 seconds at 300).
 6. Store the meditation record (`started`, `ends`, the items with their times) and return `200 {"total": N}`.
 
 **End.** The feed computes the state from the record and the clock: `meditating` until `ends`, `waking` for 30 seconds
@@ -354,15 +413,20 @@ meditation, and deletes private rows (section 4). Counted totals are kept as per
 
 ### 3.6 Stage from XP
 
-The server computes `egg.stage` so the page does not need the rules:
+The server computes `egg.stage` so the page does not need the rules. The mapping follows `site/brand/egg.js`, which
+draws the shell at full strength up to stage 0.25 and then thins it (`sh = 1 - smooth((s - 0.25) / 1.15)`, and a shell
+edge is dropped when its random seed is below `(1 - sh) * 1.1`). A fill of `0.8 * xp / target` would crack the shell
+from about 31 percent of the target and leave about half of its edges gone at the target, so the fill uses 0.25.
 
 | State | Stage |
 |---|---|
-| `filling`, `meditating`, `waking` | `0.8 * xp / target`, so the shell stays whole until the target |
-| `cracking` (24 hours from reaching the target) | eases from 0.8 to 0.95 over the 24 hours |
+| `filling`, `meditating`, `waking` | `0.25 * min(xp, target) / target`, so the shell stays whole until the target, also when a meditation takes `xp` past it |
+| `cracking` (24 hours from reaching the target) | eases from 0.25 to 1 over the 24 hours: the shell thins and its edges drop out until about 79 percent are gone |
 | `hatched` | 1, then one more stage per factor of 8 in community XP if the principal picks the "keeps evolving" option (`docs/EXOPET.md` open question 3) |
 
-Because most XP arrives during meditation, x0 usually reaches its target while meditating: it wakes, then cracks.
+While filling, the egg changes little: the six face cells fade in around the yolk, to about 16 percent of their full
+strength at the target. The page therefore shows the fill as text too (`egg.xp` of `egg.target`). Because most XP
+arrives during meditation, x0 usually reaches its target while meditating: it wakes, then cracks.
 
 ### 3.7 Storage and hosting
 
@@ -370,8 +434,13 @@ One small key-value store from the Vercel Marketplace (a Redis-compatible store)
 queue, the meditation record and a few counters; atomic increments keep two hooks from racing. The site stays static;
 the functions live in `site/api/` and the deploy script copies that folder into the git-free deploy copy (D-047).
 Staging and production are separate Vercel projects: each has its own store, secrets, token and webhook, so testing on
-staging never moves the production egg. The `x0-meditate` workflow takes the target (staging or production) as an
-input.
+staging never moves the production egg. The meditation script takes the target (staging or production) as an argument.
+
+The daily settle cron is a `crons` entry in `site/vercel.json`. `scripts/deploy-site.sh` copies `site/` (including
+`site/api`) into the git-free copy, but for staging it then overwrites `vercel.json` with the noindex header alone, which
+would drop the `crons` entry: voids, the backstop meditation and the deletion of private rows would never run on staging.
+Wave 2 changes the script to merge the noindex header into the existing `vercel.json`, and tests that the staging copy
+keeps `crons` and gains the header.
 
 ### 3.8 When the repository goes public
 
@@ -387,6 +456,13 @@ but only as new optional fields under a new decision.
 | an opaque id made for the feed, unlinked between an event and its validation | authors, logins, avatars, author class |
 | community totals, meditation progress | per-person or per-class counts, which items were validated |
 
+**What a close viewer can infer.** `egg.xp` moves in the same response as its event, so a viewer who records `egg.xp`
+before and after one event can tell whether that event added its nominal XP (a capped, agent or excluded event adds
+nothing), and `egg.pending` jumps at a merge by what the merge validated. The table promises no identity, class or count
+per person, and the feed holds none. It does not promise that a viewer cannot learn whether one event was counted. If
+that ever matters, totals can be published once a minute in a batch, at the cost of up to a minute of fill lag. That is
+not proposed.
+
 The private store holds keyed hashes, not logins. Rows for items that can still be validated (open issues, pull
 requests closed without merge, reviews) are kept until validated, voided or 90 days old (reviews: 30 days), then
 dropped; other rows go after 8 days. Function logs record status codes and counts, never payloads. The time of each
@@ -397,11 +473,20 @@ brief.
 
 1. **Site side, now, against the demo feed.** `egg.event` for all six types, `egg.meditate`, `egg.meditating`,
    `egg.signal`, the queues, the animations, the meditation phases, reduced motion stills and text, `egg-feed.js`,
-   `?feed=demo`. Staging only.
+   `?feed=demo`. Staging only. Three things in the meditation are new work in `egg.js`, which has no fold, no dim and
+   no slow breath today (it has packets, lit dots, cell glow, the core heartbeat, a one-percent breathing of its scale
+   and the stage): the fold control, the line-alpha dim and the breath. `egg.js` is copied into the web client
+   (`plugins/exo-command/exo_command/static/egg.js`), and `test_egg_is_the_site_copy` fails unless the two files are
+   byte identical, so this step copies the new file there in the same change. #108 moves to `v: 2` here.
 2. **Functions.** `site/api/egg/hook`, `meditate`, `feed`, `settle`; the store; secrets and the read-only token in both
-   Vercel projects; webhooks on the repo; the `x0-meditate` workflow (staging first). Tests: a fixture payload with a
-   good and a bad signature, a replayed delivery, a bot event, a spam-labelled issue that never validates, a merged
-   pull request with "Fixes #N" and a `Salvaged-from` line, a review with a `rocket` from the bot's id and one from a
-   maintainer, a meditation start with a bad signature, an empty queue, and a stop.
+   Vercel projects; webhooks on the repo; `scripts/x0_meditate.py` (staging first); the `deploy-site.sh` change that
+   keeps `crons` on staging (section 3.7). Tests: a fixture payload with a good and a bad signature, a replayed
+   delivery, a bot event, an App on the agent list, a spam-labelled issue that never validates, a merged pull request
+   with "Fixes #N" and a `Salvaged-from` line, an `edited` merged pull request edited by its author and by a core
+   account, a tag `create` event from a core account, from anyone else and for a pre-release tag, a review with a
+   `rocket` from the bot's id and one from a maintainer, a meditation start with a bad signature, an empty queue, and a
+   stop. A site test reads `egg.js` and checks that at stage 0.25 no shell edge is dropped. A feed test checks that
+   `egg.stage` is at most 0.25 while `egg.state` is `filling`, `meditating` or `waking` (also when a meditation takes
+   `xp` past the target) and below 1 until `hatched`.
 3. **Production.** Point the production webhook, check the feed and one meditation for a day on staging, then
    promote.
