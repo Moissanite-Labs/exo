@@ -152,6 +152,41 @@ def test_apply_patch_refuses_a_file_over_the_cap(run, tmp_path, monkeypatch):
     assert (tmp_path / "big.txt").read_text() == "old\n" + "x" * 10
 
 
+GROW = {
+    "read_file": lambda run: run("read_file", path="app.log"),
+    "edit_file": lambda run: run("edit_file", path="app.log", old_string="TIMEOUT = 30", new_string="TIMEOUT = 60"),
+    "apply_patch": lambda run: run("apply_patch", patch=P("*** Update File: app.log", "-TIMEOUT = 30", "+TIMEOUT = 60")),
+}
+
+
+@pytest.mark.parametrize("how", GROW)
+def test_a_file_that_grows_past_the_cap_while_it_is_read_is_refused(run, tmp_path, monkeypatch, how):
+    """fstat saw a file under the cap, then an appender pushed it past: a read cut at the cap would go back as the
+    whole file. A file that grows but stays under the cap is read whole, appended bytes included."""
+    from exo.core.tools.builtin import patch
+    monkeypatch.setattr(fs, "MAX_READ_BYTES", 20)
+    monkeypatch.setattr(patch, "MAX_READ_BYTES", 20)
+    log, real_fstat, late = tmp_path / "app.log", os.fstat, []
+
+    def fstat(fd):  # a concurrent appender, right after the size check
+        st = real_fstat(fd)
+        if late and os.path.samestat(st, os.stat(log)):
+            with open(log, "a") as f:
+                f.write(late.pop())
+        return st
+    monkeypatch.setattr(os, "fstat", fstat)
+    log.write_text("TIMEOUT = 30\nEND\n")  # 17 bytes
+    late.append("late: 1\n")  # 25 bytes once appended
+    res = GROW[how](run)
+    assert not late and res.is_error and "grew past the 20-byte limit" in res.text(), res.text()
+    assert log.read_text() == "TIMEOUT = 30\nEND\nlate: 1\n"
+    log.write_text("TIMEOUT = 30\nEND\n")
+    late.append("z\n")  # 19 bytes: under the cap
+    res = GROW[how](run)
+    assert not late and not res.is_error, res.text()
+    assert ("     3|z" in res.text()) if how == "read_file" else log.read_text() == "TIMEOUT = 60\nEND\nz\n"
+
+
 @needs_fifo
 def test_apply_patch_does_not_block_on_a_fifo_swapped_in_after_the_check(run, tmp_path, monkeypatch):
     # is_file() said "regular file", then the path became a FIFO: the open must not wait for a writer.
