@@ -269,9 +269,11 @@ not read.
   delete is the more severe part and would otherwise set the card. Only those two lists see the
   parts: rules, category overrides, the opaque bump, third-party escalation, posting checks and
   the floors see the dominant part. A part carries the tool of the call it came in on
-  (`tool:execute_code` matches the `execute_code` tool, not `python -c` run from bash), the `ssh`
-  hop is a part whose target is the bare host (`user@`, `ssh://` and a `:port` stripped) and the
-  destination as written, and the inner commands of an `ssh` line are `internal`. A mapping entry
+  (`tool:execute_code` matches the `execute_code` tool, not `python -c` run from bash) and the
+  views of its line, so a `command` regex matches a part as it matches the line (`g''it push
+  origin main && rm -rf build` is denied under `{category: vcs_push, command: 'git push'}`), the
+  `ssh` hop is a part whose target is the bare host (`user@`, `ssh://` and a `:port` stripped) and
+  the destination as written, and the inner commands of an `ssh` line are `internal`. A mapping entry
   in `reserved` or `deny` counts only its match keys: any other key (`reason`, `name`, a note, a
   typo) is dropped, so it widens the entry instead of voiding it, and an entry left with no match
   key matches every action. The ledger view of a classification (`as_dict`) leaves the parts out.
@@ -330,12 +332,33 @@ that takes a value ends the word, and the value is the rest of the word or the n
 the gate took the value of `-B`, `-P`, `-I` or of a cluster ending in a value letter for the host
 and the host for the program, so `ssh -vp 22 host rm -rf /data` was `allow` even under `deny:
 [delete]`. Now the inner command is read, and a line written that way also asks, because a few
-such lines used to ask on the program the gate misread. `mosh` long options that take a value
-(`--port 60001`, `--family inet`) are read the same way. The value of `mosh --ssh`, `--client` or
-`--server` is a command that runs, so the gate reads it as one: `mosh --ssh='rm -rf /data' host`
-denies under `deny: [delete]`, and any such line asks. The `--ssh` and `--client` helpers run on
-this machine, so they keep their own exposure; only `--server` runs on the remote host and is
-`internal` like the inner command.
+such lines used to ask on the program the gate misread. Wherever the gate now reads another word
+as the host than it used to, the line asks and the parts of both readings are matched. A `--`
+right after the host ends `ssh`'s options, and the command after it is read (`ssh host -- rm -rf
+/data`).
+
+`mosh` reads its options with Perl's Getopt::Long in its default mode, and the gate reads them the
+same way, against mosh's own option list: `--`, `-` or `+` before the name, any case, a unique
+prefix of the name (`--serv`, `-ssh`, `--SERVER`), the value after `=` or in the next word, and
+options after the host (`mosh host --server=...`). `--` ends the options, so the command after
+`mosh host --` is read. The short options are mosh's, not ssh's: `-a`, `-n`, `-4`, `-6`, `-p
+PORT`, `-o` (`--predict-overwrite`, which takes no value) and `-l` (a prefix of `--local`). A word
+that names no single option (`--s`, which could be `--server`, `--ssh` or `--ssh-pty`;
+`--local=1`; an unknown name) stops mosh, and the line asks; the words after it, and the word
+itself once a host is read, are read as the host and command. The value of `mosh --ssh`,
+`--client` or `--server` is a command that runs, so the gate reads it as one: `mosh --serv='rm -rf
+/data' host` denies under `deny: [delete]`, and any such line asks. The `--ssh` and `--client`
+helpers run on this machine, so they keep their own exposure; `--server` runs on the remote host
+and is `internal` like the inner command. With `--local`, mosh runs the server and the command on
+this machine, so nothing on the line is marked `internal`. Another option's value that itself
+reads as `--server`, `--ssh` or `--client` (`mosh --port '--server=rm -rf /data' host`) is taken
+by mosh as that value and never run, but the gate used to read it as the command, so it still
+does and the line asks. Words after the host that mosh takes as its options or their values
+(`mosh host ls --port 'x; rm -rf /data'`) are read both ways: with `POSIXLY_CORRECT` set,
+Getopt::Long stops at the host and mosh runs them as the command, so their parts are matched as
+that command too and the line asks. The same holds where the gate used to read another word as the
+host. A `--` right after the host needs no second reading (`mosh host -- rm -rf /data` denies under
+`deny: [delete]`).
 
 ## The store is credentials (D-038)
 
