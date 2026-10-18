@@ -6,11 +6,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
-- Tool subprocesses (bash, background jobs, `code_find`) drop the shell startup hooks bash acts on before the
-  command: `BASH_ENV`, `ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS`, `BASHOPTS` and `PS4` (#135,
-  D-039 amendment). They match by exact name and are not secret names, so `ENV=dev`, a `?env=` URL query and
-  claude-cli diagnostics are unaffected. Exact `env_allow` entries restore them; `env_deny` wins. Loader and
-  interpreter hooks (`LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS`, ...) are documented as not scrubbed.
+- Tool subprocesses (bash, background jobs, `code_find`) drop inherited shell startup hooks (#135, D-039
+  amendment): bash itself acts on `BASH_ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS` and
+  `BASHOPTS` at startup; `ENV` is read by interactive POSIX shells a command starts; `PS4` matters once xtrace is
+  on. They match by exact name and are not secret names: `ENV` itself is dropped (keep it with
+  `env_allow = ["ENV"]`), while `DEPLOY_ENV`, lowercase `env`, a `?env=` URL query and claude-cli diagnostics are
+  unaffected. Exact `env_allow` entries restore them; `env_deny` wins. The bash tool and background jobs start
+  bash with `--norc`, so `SSH_CLIENT` or `SSH2_CLIENT` with `SHLVL` unset or 0 no longer makes every call source
+  `~/.bashrc` and skip an allowed `BASH_ENV`. Loader and interpreter hooks (`LD_PRELOAD`, `PYTHONPATH`,
+  `NODE_OPTIONS`, ...) are documented as not scrubbed.
 - Absolute symlink aliases into protected Exo stores retain the principal-only write approval floor (#130),
   including missing leaves, deletion of store ancestors, and `cd`, `pushd` or `git -C` into an alias of the store.
   A path the gate cannot resolve (a NUL byte) keeps its lexical check instead of raising. `cp -s`, `cp -l` and a

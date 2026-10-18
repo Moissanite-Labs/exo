@@ -10,9 +10,9 @@ A variable is dropped when any of these holds:
 - it contains TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL, APIKEY, API_KEY, PRIVATE_KEY, ACCESS_KEY or _KEY_;
 - it starts with AWS_, GH_, EXO_BUS_, EXOD_ or EXO_PRINCIPAL, or is GITHUB_TOKEN or ends in DATABASE_URL;
 - it is an EXO_ variable that names a socket (contains SOCK): the core's socket and credential stay out of tools;
-- it is a shell startup hook bash imports before ``bash -c`` runs the command: ``BASH_ENV``, ``ENV``, an exported
-  function (``BASH_FUNC_<name>%%``, or ``BASH_FUNC_<name>()`` from bash before 4.4), ``SHELLOPTS``, ``BASHOPTS``
-  or ``PS4``, matched by exact name only;
+- it is a shell startup hook, matched by exact name only: bash itself acts on ``BASH_ENV``, an exported function
+  (``BASH_FUNC_<name>%%``, or ``BASH_FUNC_<name>()`` in Red Hat-patched bash), ``SHELLOPTS`` and ``BASHOPTS`` when
+  it starts; ``ENV`` is read by an interactive POSIX shell a command starts; ``PS4`` matters once xtrace is on;
 - it is a known credential/configuration name (including database passwords, package/docker auth and kube config);
 - its value has a recognized token/private-key format, or its URL/URI/proxy value carries userinfo or a credential query;
 - it is git's environment config (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_<n>, GIT_CONFIG_VALUE_<n>, GIT_CONFIG_PARAMETERS):
@@ -41,8 +41,9 @@ PREFIXES = ("AWS_", "GH_", "EXO_BUS_", "EXOD_", "EXO_PRINCIPAL")
 NAMES = frozenset({"GITHUB_TOKEN", "STRIPE_SK", "NPM_CONFIG__AUTH", "DOCKER_AUTH_CONFIG", "KUBECONFIG",
                    "PGPASSFILE", "PGSERVICEFILE", "PGSSLKEY", "SLACK_WEBHOOK_URL"})
 # Shell startup hooks: exact case, never through ``is_secret_name`` (it case-folds and has other callers, and ``ENV=dev``
-# or a ``?env=`` URL query is no secret). Exported functions arrive as ``BASH_FUNC_<name>%%`` (``BASH_FUNC_<name>()``
-# before bash 4.4) and shadow commands.
+# or a ``?env=`` URL query is no secret). Exported functions arrive as ``BASH_FUNC_<name>%%`` (upstream bash since the
+# 2014 Shellshock patches; ``BASH_FUNC_<name>()`` in Red Hat-patched bash) and shadow commands. ``PS4`` is expanded
+# before every traced line once xtrace is on (``set -x`` in the command), so a ``$(...)`` in it runs a command.
 EXEC_HOOKS = frozenset({"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PS4"})
 VALUE_SECRET = re.compile(r"^(?:sk-|gh[pousr]_|xox[baprs]-|whsec_)[A-Za-z0-9_-]{16,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----")
 URL_SECRETS = frozenset({"token", "access_token", "api_key", "apikey", "password", "passwd", "secret",
@@ -88,7 +89,8 @@ def is_secret_name(name: str) -> bool:
 
 
 def is_exec_hook(name: str) -> bool:
-    """A variable bash acts on at startup, before the command (exact name; see ``EXEC_HOOKS``)."""
+    """A shell startup hook (exact name; see ``EXEC_HOOKS``): bash acts on ``BASH_ENV``, exported functions,
+    ``SHELLOPTS`` and ``BASHOPTS`` at startup, interactive POSIX shells read ``ENV``, xtrace expands ``PS4``."""
     return name in EXEC_HOOKS or (name.startswith("BASH_FUNC_") and name.endswith(("%%", "()")))
 
 

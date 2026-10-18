@@ -3,6 +3,7 @@ for the claude CLI provider."""
 from __future__ import annotations
 
 import shlex
+import shutil
 
 import pytest
 
@@ -16,7 +17,8 @@ SECRETS = {
     "EXOD_TOKEN": "t", "EXO_PRINCIPAL_TOKEN": "t", "EXO_SOCKET": "/s", "SECRET_KEY_BASE": "s",
     "STRIPE_APIKEY": "s",
 }
-# Shell startup hooks: bash acts on these before `bash -c` runs the command (#135). Exact names, not secrets.
+# Shell startup hooks (#135), exact names, not secrets: bash acts on BASH_ENV, exported functions, SHELLOPTS and
+# BASHOPTS at startup; interactive POSIX shells a command starts read ENV; PS4 matters once xtrace is on.
 HOOKS = {"BASH_ENV": "/startup", "ENV": "/startup", "SHELLOPTS": "xtrace", "BASHOPTS": "xpg_echo",
          "PS4": "$(true)+ ", "BASH_FUNC_trap%%": '() { builtin trap "$@"; }',
          "BASH_FUNC_trap()": '() { builtin trap "$@"; }'}
@@ -185,10 +187,55 @@ def _tool_output(command: str, tmp_path, background: bool, allow: list[str], den
     return output
 
 
+def _ssh_session(tmp_path, monkeypatch, var: str = "SSH_CLIENT", shlvl: str | None = None):
+    """Pin what a core started by a non-interactive ssh command can inherit: ``var`` set, SHLVL unset or ``shlvl``, and
+    a HOME whose .bashrc only writes a marker in tmp_path. Returns the marker, which must never appear."""
+    home = tmp_path / "userhome"
+    home.mkdir()
+    marker = tmp_path / "bashrc-ran"
+    (home / ".bashrc").write_text("printf bashrc >> " + shlex.quote(str(marker)) + "\n")
+    monkeypatch.setenv("HOME", str(home))
+    for name in ("SSH_CLIENT", "SSH2_CLIENT", "SHLVL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(var, "10.0.0.1 5555 22")
+    if shlvl is not None:
+        monkeypatch.setenv("SHLVL", shlvl)
+    return marker
+
+
+@pytest.mark.parametrize("background", [False, True], ids=["foreground", "background"])
+@pytest.mark.parametrize("var", ["SSH_CLIENT", "SSH2_CLIENT"])
+@pytest.mark.parametrize("shlvl", [None, "0"], ids=["shlvl-unset", "shlvl-0"])
+@pytest.mark.parametrize("bash_env", [False, True], ids=["no-bash-env", "bash-env-allowed"])
+def test_ssh_client_does_not_make_bash_read_bashrc(tmp_path, monkeypatch, background, var, shlvl, bash_env):
+    # bash as many builds compile it (SSH_SOURCE_BASHRC): with SSH_CLIENT or SSH2_CLIENT set and SHLVL unset or 0,
+    # a non-interactive `bash -c` sources ~/.bashrc and skips BASH_ENV. Tools start bash with --norc (#135).
+    bashrc = _ssh_session(tmp_path, monkeypatch, var, shlvl)
+    marker = tmp_path / "startup-sourced"
+    startup = tmp_path / "startup.sh"
+    startup.write_text("printf sourced > " + shlex.quote(str(marker)) + "\n")
+    monkeypatch.setenv("BASH_ENV", str(startup))
+
+    output = _tool_output("printf cmd", tmp_path, background, ["BASH_ENV"] if bash_env else [], [])
+    assert output == "cmd"
+    assert not bashrc.exists()
+    assert marker.exists() is bash_env
+
+
+def test_tool_bash_is_started_with_norc(monkeypatch):
+    """Pins the argv itself, so a bash built without the ssh rc path still catches a dropped --norc (#135)."""
+    from exo.core.tools.builtin import shell
+    if shutil.which("bash"):
+        assert shell.wrap_pipestatus("true", 3, {})[1:3] == ["--norc", "-c"]
+    monkeypatch.setattr(shell.shutil, "which", lambda name: None)
+    assert shell.wrap_pipestatus("true", 3, {})[:2] == ["/bin/sh", "-c"]
+
+
 @pytest.mark.parametrize("background", [False, True], ids=["foreground", "background"])
 @pytest.mark.parametrize("policy,expected", [("default", "unset:unset"),
                                               ("allow", "set:set"), ("deny", "unset:unset")])
 def test_shell_startup_file_is_not_sourced_without_explicit_allow(tmp_path, monkeypatch, background, policy, expected):
+    bashrc = _ssh_session(tmp_path, monkeypatch)  # the same result whatever the runner's SSH_CLIENT and SHLVL are
     marker = tmp_path / "startup-sourced"
     startup = tmp_path / "startup.sh"
     startup.write_text("printf sourced > " + shlex.quote(str(marker)) + "\n")
@@ -204,6 +251,7 @@ def test_shell_startup_file_is_not_sourced_without_explicit_allow(tmp_path, monk
     assert marker.exists() is (policy == "allow")
     if policy == "allow":
         assert marker.read_text() == "sourced"
+    assert not bashrc.exists()
 
 
 @pytest.mark.parametrize("background", [False, True], ids=["foreground", "background"])
@@ -211,6 +259,7 @@ def test_shell_startup_file_is_not_sourced_without_explicit_allow(tmp_path, monk
 def test_exported_functions_and_shellopts_do_not_reach_the_command(tmp_path, monkeypatch, background, policy):
     # An exported function named after a builtin runs its payload when the wrapper's own `trap` runs, with no file
     # on disk and no sign in the (harmless) command text; SHELLOPTS=xtrace would echo every command to stderr.
+    bashrc = _ssh_session(tmp_path, monkeypatch)
     marker = tmp_path / "trap-ran"
     monkeypatch.setenv("BASH_FUNC_trap%%", "() { touch " + shlex.quote(str(marker)) + '; builtin trap "$@"; }')
     monkeypatch.setenv("SHELLOPTS", "xtrace")
@@ -219,3 +268,4 @@ def test_exported_functions_and_shellopts_do_not_reach_the_command(tmp_path, mon
     output = _tool_output("true", tmp_path, background, allow, [])
     assert output == ""
     assert marker.exists() is (policy == "allow")
+    assert not bashrc.exists()
