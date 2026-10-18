@@ -206,7 +206,8 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any],
     tried = 0
     attempted: set[tuple[str, str]] = set()  # each (credential, model) at most once per call
     spared = router.chain(spare) if spare else []
-    for route in [r for r in router.chain(role) if r not in spared]:
+    routes = [r for r in router.chain(role) if r not in spared]
+    for route in routes:
         while (picked := await router._pick_async(route, attempted=attempted)) is not None:
             cred, sole = picked
             attempted.add((cred.id, route.model))
@@ -237,8 +238,13 @@ async def _run(router: Any, role: str, state: Any, question: dict[str, Any],
     if last is not None:
         raise DecisionError(f"all routes for {role!r} failed; last error: {last}", last.status,
                             last.retryable, last.retry_after)
-    raise DecisionError(f"no decision route available for role {role!r}" + ("" if tried else
-                        " (no credentials: set the provider key or start the local server)"), None, False)
+    if tried:
+        why = ""
+    elif spare and not routes and router.chain(role):  # every route was spared, so credentials are not the cause
+        why = f" outside the {spare!r} routes, which this call skips (D-081): set an aux or decision model"
+    else:
+        why = " (no credentials: set the provider key or start the local server)"
+    raise DecisionError(f"no decision route available for role {role!r}{why}", None, False)
 
 
 async def _generative(router: Any, route: Any, cred: Any, sole: bool, state: Any,

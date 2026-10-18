@@ -110,7 +110,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
-  is off: no principal store is set" no longer prints right after an install created a store.
+  is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
+  only a string names a principal.
 - With no principal store yet (an install that skipped the interview), memory is a quiet off state. One dim notice
   names `exo init <id>`, the memory tools are not offered, and nothing prints over the terminal. Before, it was a
   harness error, a warning and a `bug` finding that grew with every launch.
@@ -125,8 +126,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   said "memory ready".
 - A rejected key no longer reads as an outage. When the last route fails with HTTP 401, 402 or 403, the error names
   the provider and the key to fix (`anthropic rejected the key (HTTP 401: ...): fix ANTHROPIC_API_KEY or add a key
-  in /providers`) and the turn is not retried three times. Later turns in the key's cooldown keep that cause instead
-  of "all routes failed or are cooling down". A local server that refuses the connection is reported as `ollama is
+  in /providers`) and the turn is not retried three times. Later turns in the key's cooldown keep that cause and the
+  provider's text instead of "all routes failed or are cooling down". Some providers send 403 for flagged input, and
+  that text says so. A local server that refuses the connection is reported as `ollama is
   not running at 127.0.0.1:11434: start it, then test it in /providers`, not a raw `ConnectError`. A background
   summary that hits either error still tries again once the route reopens. The terminal
   client's first run no longer says "add a key" when the default is a keyless local server or CLI, and the
@@ -145,8 +147,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - The gate's decision call no longer uses the main model (D-081). With only the claude CLI login, every tool call
   the rules allowed started a hidden main-model call (2 to 10 s), and one failed call cooled the login, so the
   next turn failed with "all routes for 'main' failed or are cooling down". The call now uses the decision and aux
-  routes only, keeps the rule outcome when there are none, and a failure cools only the model that failed
-  (`docs/GATE.md`, `docs/PROVIDERS.md`).
+  routes only, keeps the rule outcome when there are none, and a failure cools only the model that failed. A later
+  main-role error does not name that model's refusal as its cause. With only main routes, the gate's log line says
+  that this call skips them (D-081), not that credentials are missing (`docs/GATE.md`, `docs/PROVIDERS.md`).
 - Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`) classify as reads in the gate, so a new
   user's first screen is no longer an approval card for loading the intro skill (`docs/GATE.md`).
 
@@ -164,6 +167,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- The gate's decision call no longer falls back to the main model (D-081). With no decision or aux route, the rule
+  outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
+  stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
+  call the rules allow into an ask (`docs/GATE.md`).
 
 ## [0.2.0] (egg) - 2026-10-13
 
