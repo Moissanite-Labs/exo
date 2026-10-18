@@ -52,7 +52,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `declare -a 'a=([$i]=1)'` and `declare -a "b=($x)"` were allowed and now ask). When such a command outranks the
   line's own category, a deny on that category becomes ask (`declare -a 'b=($(sudo ls))' > /tmp/f` under
   `deny: [local_write]`), never allow or log, also when the policy names `opaque_exec`. A command nested deeper
-  than the gate reads asks.
+  than the gate reads asks. A backslash-newline in a compound value is dropped before it is read, as bash drops
+  it (`declare -a 'b=($\<newline>(gh ...))'` was allowed and is now a `github_post`), and a quoted operand after
+  two unquoted compound values (`declare -a b=(1) x=(2) 'c=($(gh ...))'`, `opaque_exec` before) belongs to the same
+  declare and is a `github_post` too.
 - Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
