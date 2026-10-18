@@ -2,6 +2,7 @@
 // composer, and the side panel area on the right. All state comes from /api/chat/* and the /api/events stream.
 import { h, api, short, when, partsText, tag, empty } from "./dom.js";
 import * as bus from "./bus.js";
+import { renderMarkdown } from "./markdown.js";
 import { renderPanel } from "./panels.js";
 import { createHero } from "./hero.js";
 import { attachComposer } from "./composer.js";
@@ -79,6 +80,8 @@ export function mount(root) {
   function fail(e) { flash(e && e.message ? e.message : String(e)); }
 
   function fromMessages(msgs) {
+    for (const m of msgs) if (m.role === "user" && m.id) { landed.add(m.id); delete steers[m.id]; }
+    drawSteers();
     const out = [];
     const byCall = {};
     for (const m of msgs) {
@@ -115,7 +118,6 @@ export function mount(root) {
       landed.add(b.message.id);   // the event can beat the reply to the send
       if (steers[b.message.id]) { delete steers[b.message.id]; drawSteers(); }
     }
-    if (ev.type === "turn.completed" && Object.keys(steers).length) { for (const k of Object.keys(steers)) if (steers[k].session === ev.session) delete steers[k]; drawSteers(); }
     switch (ev.type) {
       case "steer.cancelled": if (steers[b.message_id]) { delete steers[b.message_id]; drawSteers(); } return;
       case "session.created": case "session.updated": refreshSessions(); return;
@@ -192,7 +194,11 @@ export function mount(root) {
     if (m.role === "assistant") {
       const text = partsText(m.content);
       const it = find(m.id);
-      if (it) { it.text = text || it.text; it.streaming = false; it.complete = true; redraw(it); }
+      if (it) {
+        const keep = nearHome(layout, logEl.scrollTop, logEl.scrollHeight, logEl.clientHeight);   // judged before the redraw: a rendered table is taller than its streamed text
+        it.text = text || it.text; it.streaming = false; it.complete = true; redraw(it);
+        if (keep) { home(); requestAnimationFrame(home); }
+      }
       else if (text) push({ kind: "assistant", id: m.id, text, complete: true });
       for (const c of m.tool_calls || []) if (!find(c.id)) push({ kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "running" });
     } else if (m.role === "tool") {
@@ -289,7 +295,7 @@ export function mount(root) {
     if (it.kind === "user") {
       el = h("div", { class: "xc-msg xc-user" + fresh }, h("span", { class: "xc-prompt" }, "\u203A"), h("span", { class: "xc-text" }, it.text));
     } else if (it.kind === "assistant") {
-      it.textEl = h("div", { class: "xc-text" }, it.text);
+      it.textEl = h("div", { class: "xc-text" }, it.streaming ? it.text : markdown(it.text));
       el = h("div", { class: "xc-msg xc-asst" + (it.streaming ? " xc-streaming" : "") + fresh }, it.textEl, it.streaming ? null : feedbackBar(it));
     } else if (it.kind === "sys") {
       el = h("div", { class: "xc-msg xc-sysline" + (it.tone === "tip" ? " xc-tip" : "") + fresh },
@@ -423,14 +429,15 @@ export function mount(root) {
   async function open(id) {
     modelPicker.hidden = true; ++pickerGeneration;
     modelPicker.replaceChildren();
-    const generation = ++snapshotGeneration;
+    const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
-    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; steers = {}; flash("");
+    current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
     drawSessions(); drawLog(); drawApprovals(); drawSide(); drawSteers();
     try {
       const d = await api("GET", "/api/chat/sessions/" + encodeURIComponent(id));
       if (current !== id || generation !== snapshotGeneration) return;
       items = fromMessages(d.messages || []);
+      dropSteers(id, had, d.steers);
       loadedSeq = d.seq || 0;
       const live = sessions.find((s) => s.id === id);
       busy = !!(live && live.status === "live");
@@ -444,7 +451,7 @@ export function mount(root) {
   }
 
   async function recover() {
-    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq();
+    const id = current, generation = ++snapshotGeneration, cutoff = bus.lastSeq(), had = Object.keys(steers);
     loading = true;
     try {
       const freshSessions = (await api("GET", "/api/chat/sessions")).sessions || [];
@@ -453,6 +460,7 @@ export function mount(root) {
       sessions = freshSessions;
       if (d) {
         items = mergeTranscript(fromMessages(d.messages || []), items);
+        dropSteers(id, had, d.steers);
         loadedSeq = Math.min(cutoff, d.seq || 0);
         busy = sessions.some((s) => s.id === id && s.status === "live");
         model = d.session.model || model;
@@ -622,12 +630,19 @@ export function mount(root) {
       h("button", { class: "xc-btn xc-x", title: "Pull this back into the box (Up in an empty box does the same)", "aria-label": "Cancel queued steer",
         onclick: () => unsteer(x) }, "\u00D7"))));
   }
+  // A chip the core no longer queues (a restart lost the message, D-045) goes when the thread is read again. Only a
+  // chip drawn before the read was asked for can be judged by it; a core without the list leaves them all.
+  function dropSteers(sid, had, queued) {
+    if (!Array.isArray(queued)) return;
+    for (const k of had) if (steers[k] && steers[k].session === sid && !queued.includes(k)) delete steers[k];
+    drawSteers();
+  }
   async function unsteer(x) {
     try {
       const d = await api("POST", "/api/chat/sessions/" + encodeURIComponent(x.session) + "/unsteer", { message_id: x.id });
       delete steers[x.id]; drawSteers();
       if ((d.cancelled || []).length) { input.value = input.value.trim() ? x.text + "\n" + input.value : x.text; input.focus(); input.dispatchEvent(new Event("input")); }
-      else flash("that message already landed");
+      else flash("no longer queued");
     } catch (e) { fail(e); }
   }
 
@@ -678,4 +693,9 @@ export function mount(root) {
   sessionStorage.removeItem("xc-open");
   refreshSessions().then(() => { if (!current && (asked || sessions.length)) open(asked || sessions[0].id); });
   return off;
+}
+
+// A completed reply as Markdown, or its plain text if the renderer fails: one reply must never blank the thread.
+function markdown(text) {
+  try { return renderMarkdown(text); } catch (e) { return text; }
 }

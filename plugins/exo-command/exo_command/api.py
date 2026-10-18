@@ -6,7 +6,7 @@ centre's source. A core that does not handle a command yet answers 501.
 
   GET  /api/chat/sessions                  session.list
   POST /api/chat/sessions                  session.create        {title, seat, model, cwd}
-  GET  /api/chat/sessions/<id>             session.get           the transcript so far
+  GET  /api/chat/sessions/<id>             session.get           the transcript so far, and the ids of queued steers
   POST /api/chat/sessions/<id>/send        turn.send             {text, mode}
   POST /api/chat/sessions/<id>/interrupt   turn.interrupt
   POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
@@ -152,7 +152,8 @@ async def _create(c, p, q, body):
 async def _transcript(c, p, q, body):
     since = c.state.seq  # before the RPC: replay events arriving while the snapshot is read
     res = await c.source.call(s.SessionGet(session=p[2]))
-    return {"session": res.get("session"), "messages": res.get("messages") or [], "seq": since}
+    return {"session": res.get("session"), "messages": res.get("messages") or [], "steers": res.get("steers") or [],
+            "seq": since}
 
 
 async def _send(c, p, q, body):

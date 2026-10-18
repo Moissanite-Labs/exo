@@ -255,9 +255,11 @@ class ClaudeCliProvider(CliProvider):
                 yield terminal  # the router sees terminal output only after reader/process cleanup
 
     async def _read_line(self, proc: asyncio.subprocess.Process) -> bytes:
-        """One stdout line; a stall longer than the read timeout raises TimeoutError (the clock restarts per line)."""
+        """One stdout line; a stall longer than the read timeout raises TimeoutError (the clock restarts per line).
+        Not ``wait_for``: on Python 3.11 it drops a cancel (Esc) that lands as the line arrives (#163)."""
         assert proc.stdout
-        return await asyncio.wait_for(proc.stdout.readline(), self._read)
+        async with asyncio.timeout(self._read):
+            return await proc.stdout.readline()
 
     async def _run(self, proc: asyncio.subprocess.Process, frames: list[dict[str, Any]], names: set[str],
                    st: StreamState) -> AsyncGenerator[ProviderEvent, None]:

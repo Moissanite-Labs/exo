@@ -15,7 +15,7 @@ from exo.core.models.fake import FakeProvider
 from exo.core.models.fake import tool_turn
 from exo.scheduler import PROMPT, Scheduler, next_run, parse_cron
 from exo.core.seats import Seat
-from exo.core.types import ToolSpec
+from exo.core.types import ProviderEvent, ToolSpec
 from exo.core.agents.delegate import BLOCKED_TOOLS
 from exo.protocol import schema as s
 
@@ -138,6 +138,43 @@ async def test_failed_run_warns(tmp_path):
     assert bodies(eng, s.Notice)[-1].level == "warn"
     assert sch.get(job["id"])["last_status"] == "failed"
     assert not sch.loops
+
+
+@aio
+async def test_capped_run_reports_its_wrap_up(tmp_path, monkeypatch):
+    import exo.scheduler
+
+    monkeypatch.setattr(exo.scheduler, "Loop", functools.partial(exo.scheduler.Loop, max_iterations=2))
+    eng = mk(tmp_path, [tool_turn("no_such_tool", call_id="c1"), tool_turn("no_such_tool", call_id="c2"),
+                        "did half the report; next: the totals"])
+    sch = eng.scheduler = Scheduler(eng)
+    sch.launch(sch.add("every 1h", "x", title="R"))
+    await sch.wait()
+    assert bodies(eng, s.TaskUpdated)[-1].status == "failed"
+    note = bodies(eng, s.Notice)[-1]
+    assert note.level == "warn" and "stopped early (max_iterations)" in note.text
+    assert note.text.endswith("did half the report; next: the totals")  # the job's status carries the report
+
+
+@pytest.mark.parametrize("last, wrap_up", [
+    (ProviderEvent(kind="error", error="HTTP 400: bad request", retryable=False), True),  # failed, no text
+    (tool_turn("no_such_tool", call_id="c3"), True),  # only a stray tool call
+    ("unused", False),  # wrap-up off
+])
+@aio
+async def test_capped_run_without_a_wrap_up_reports_no_tool_round_text(tmp_path, monkeypatch, last, wrap_up):
+    import exo.scheduler
+
+    monkeypatch.setattr(exo.scheduler, "Loop",
+                        functools.partial(exo.scheduler.Loop, max_iterations=2, wrap_up=wrap_up))
+    eng = mk(tmp_path, [tool_turn("no_such_tool", call_id="c1", text="Opening the ledger."),
+                        tool_turn("no_such_tool", call_id="c2", text="Now the totals sheet."), last])
+    sch = eng.scheduler = Scheduler(eng)
+    sch.launch(sch.add("every 1h", "x", title="R"))
+    await sch.wait()
+    note = bodies(eng, s.Notice)[-1]
+    assert "stopped early (max_iterations)" in note.text
+    assert "totals sheet" not in note.text and "ledger" not in note.text  # a mid-task line is not the report
 
 
 @aio

@@ -38,6 +38,7 @@ if mode in ("orphan", "orphanfail", "orphansleep"):
     if mode == "orphansleep":
         time.sleep(60)
 if mode == "fail":
+    sys.stdin.read()  # fail the request, not the start: exiting first breaks the provider's write (#163)
     sys.stderr.write("boom\\n")
     sys.exit(3)
 if mode == "sleep":
@@ -329,6 +330,26 @@ def test_cancelling_cli_stops_its_descendant(tmp_path):
                 os.kill(int(pidf.read_text()), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+def test_cancel_as_a_line_arrives_still_cancels():
+    # #163: Python 3.11's wait_for returned the line and dropped a cancel that landed with it, so Esc was lost
+    # and the turn ran on until the next line or the read timeout.
+    async def go():
+        line = asyncio.get_running_loop().create_future()
+        class Out:
+            async def readline(self):
+                return await line
+        class Proc:
+            stdout = Out()
+        task = asyncio.create_task(claude_cli.ClaudeCliProvider(env={})._read_line(Proc()))
+        for _ in range(5):
+            await asyncio.sleep(0)  # the read is waiting on the line
+        line.set_result(b"{}\n")
+        task.cancel()  # in the same loop step as the line
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    asyncio.run(go())
 
 
 def test_cleanup_timeout_closes_transport_when_pipe_stays_open(monkeypatch):
