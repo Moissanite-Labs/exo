@@ -406,13 +406,13 @@ def _preserve_unicode_in_replacement(region: str, new_string: str, plan: tuple[s
 
 
 def _dedented_form(region: str, old_string: str) -> bool:
-    """True when old_string's first indented continuation line sits shallower than the file's: the block
-    was dedented to column 0, so its lines need the file's indent back. A verbatim copy (continuation
-    lines already at the file's depth) and a one-line old_string are not."""
+    """True when old_string's first indented continuation line sits shallower than the file's (a tab
+    counts to the next multiple of 8 columns, so spaces against a tab-indented file compare too): the
+    block was dedented to column 0, so its lines need the file's indent back. A verbatim copy
+    (continuation lines already at the file's depth) and a one-line old_string are not."""
     for old_line, file_line in zip(old_string.split("\n")[1:], region.split("\n")[1:]):
         if old_line.strip():
-            old_indent, file_indent = _leading_ws(old_line), _leading_ws(file_line)
-            return old_indent != file_indent and file_indent.startswith(old_indent)
+            return len(_leading_ws(old_line).expandtabs(8)) < len(_leading_ws(file_line).expandtabs(8))
     return False
 
 
