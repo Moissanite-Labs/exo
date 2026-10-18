@@ -31,6 +31,19 @@ def propose(rt, ptype="taste", *, evidence, claim=None, wants="plain status line
     return res
 
 
+def chatgpt_export(path, texts, start=1672531200):
+    """A ChatGPT conversations.json with one conversation per text, a day apart from `start` (2023-01-01)."""
+    def msg(nid, role, text, at):
+        return {"id": nid, "author": {"role": role}, "create_time": at,
+                "content": {"content_type": "text", "parts": [text]}, "recipient": "all"}
+    convs = [{"id": f"c{i}", "title": "t", "current_node": f"a{i}", "mapping": {
+        f"u{i}": {"id": f"u{i}", "parent": None, "children": [f"a{i}"], "message": msg(f"mu{i}", "user", t, start + 86400 * i)},
+        f"a{i}": {"id": f"a{i}", "parent": f"u{i}", "children": [],
+                  "message": msg(f"ma{i}", "assistant", "Will do.", start + 86400 * i + 1)}}} for i, t in enumerate(texts)]
+    Path(path).write_text(json.dumps(convs))
+    return path
+
+
 def write_qa(root, n=24, domain="mind"):
     f = Path(root) / "training" / "eval-qa.jsonl"
     f.parent.mkdir(parents=True, exist_ok=True)

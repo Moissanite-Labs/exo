@@ -162,9 +162,20 @@ exo import-store ~/hafiz --id a --include-private --root /path/to/fresh/dir
 ## 4. Config
 
 `exo.config` owns `$EXO_HOME/config.json`: `principal`, `hermes_dir`, `hermes_home`, `venv`,
-`plugins`, `plugin_config.<plugin>`, `principals.<id>` (explicit store roots). Each value
+`plugins`, `plugin_selection` (the installer's remembered `--plugins` list), `plugin_config.<plugin>`,
+`principals.<id>` (explicit store roots). Each value
 resolves from the environment (`EXO_PRINCIPAL`, `EXO_HERMES_DIR`, `EXO_HERMES_HOME`,
 `EXO_VENV`), then the file, then the default. Environment values are never written back.
+
+`exo init <id> --root DIR` and `exo import-store --root DIR` record DIR as `principals.<id>`.
+A DIR at the default `$EXO_HOME/principals/<id>` clears it instead. From then on the id finds that
+store everywhere: the store commands, `exo memory verify`, exo-memory, learning, handoffs, the
+gate's policies, the command center's decisions queue and check-prose's policy. They all go
+through one function, `exo.store.principal_root`. The gate protects
+that store's `policies/`, `state/`, `keys/` and ledger as it protects the stores in the home.
+`exo memory verify` with no `--principal` checks every store in the home and every recorded root.
+A recorded root must be an absolute path once `~` is expanded. One that is relative, holds a NUL byte or names an
+unknown user (`~nosuchuser/x`) is skipped, and the id finds `$EXO_HOME/principals/<id>` instead.
 
 ```sh
 exo config show
