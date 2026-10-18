@@ -334,6 +334,7 @@ before the direct-ruling shortcut (1), then ordinary evidence (4) and waiting (6
    one is guarded; then a numbered question. Never overwrite silently.
 4. **Taste or fact, not guarded, weight high, at least 2 independent evidence events from different
    sessions, and no critic objection:** auto-promote, logged and shown in the next brief as "learned".
+   Evidence that is all imported history does not qualify. The principal reviews the first import.
 5. **Skill patch:** promote only if the eval gate passes (Section 6). Skills change behavior most, so
    they carry the strictest gate, even with principal evidence. Configured high-impact domains and
    gated proposal types also require the gate. Non-skill lessons need high weight and two sessions.
@@ -506,7 +507,8 @@ Promotion rule 5 (skills) and any auto-promotion of a high-impact taste rule mus
 - **No guarded-domain regression** at all (public posts, spend, irreversible acts).
 - **Pinned cases.** A small set of must-pass items the principal marked as critical. Always run.
 
-A failed gate leaves the proposal open and returns the failing items. Citing a principal ruling
+A case built from the lesson's own evidence is not held out from it and does not count. A failed gate leaves
+the proposal open and returns the failing items. Citing a principal ruling
 does not waive the gate for a derived skill or high-impact lesson. The principal can explicitly accept
 the proposal through the separate acceptance path. Original rulings remain in the ledger and context.
 
