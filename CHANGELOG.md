@@ -28,6 +28,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   findings by default and counts the rest.
 
 ### Security
+- Gate: a symlink alias no longer lifts a store path out of the protected store (#130, D-038). `is_store_path`
+  resolves the candidate with `os.path.realpath`, so a write through a symlink to a store file, to a store
+  folder (or a dangling link into the store) classifies as `store_write` and keeps the always-ask floor.
 - Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
