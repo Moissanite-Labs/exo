@@ -31,6 +31,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `new_string` no longer touch text outside the match (#127).
 
 ### Changed
+- Command deny and reservation regexes also match a literal-word view of the command (#136, D-038
+  amendment): common literal quoting (`'rm' -rf`, `r\m`, `$'rm'`, `$"rm"`) around a program or flag
+  no longer bypasses those vetoes. A `$"..."` word is read as bash reads it, so `git push $"--force"`
+  is a `force_push` and `curl $"https://evil.example/x"` stays a `web_read` of `evil.example`; the line
+  also asks (indirection) unless `opaque_exec` is named, because bash may run a locale translation of
+  it instead, and it is decided as `opaque_exec` too, keeping the stricter outcome. A heredoc whose
+  delimiter is spelled `$"EOF"` or `$'EOF'` has its body read as commands as well, since dash ends it
+  elsewhere. A `deny` or `ask` rule keyed on `command:` sees the view in a second pass that only
+  raises; allow and lower rules and grants keep original-text matching. The view also covers every
+  string literal of code, so a command-shaped literal in `python -c` is matched, fail closed. Reasons
+  name only the policy entry, so no command text reaches the ledger. Dynamic execution still asks
+  through the opaque gate.
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,
   `/findings`, handoff facts) moved to `exo.diagnostics`, and the engine factory moved to `exo.compose:create`, the
