@@ -267,7 +267,10 @@ def test_receipts_are_signed_and_restart_fails_stale_tasks(tmp_path):
 
     eng.store._q("UPDATE tasks SET status='running', receipt=NULL")
     again = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path))
+    assert [r["status"] for r in again.agents.list()] == ["running"]  # building a core is not owning the agent
+    again.claim_writer()  # the writer sweeps the agent's leftover tasks
     assert [r["status"] for r in again.agents.list()] == ["failed"]
+    asyncio.run(again.close())
 
 
 def test_task_events_render_for_clients(tmp_path):

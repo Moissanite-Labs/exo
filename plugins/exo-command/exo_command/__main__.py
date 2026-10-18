@@ -30,7 +30,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "port": a.port})
     try:
         web = WebServer(CommandCentre(st))
-        web.open_browser = not a.no_open and sys.stdout.isatty()  # the URL carries the page token (D-034)
+        web.open_browser = not a.no_open and sys.stdout.isatty()  # opens a one-time code, never the token (#166)
         asyncio.run(web.run(st.host, st.port))
     except KeyboardInterrupt:
         return 130
