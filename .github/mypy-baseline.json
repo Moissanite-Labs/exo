@@ -963,20 +963,8 @@
     },
     {
       "path": "src/exo/principal.py",
-      "message": "\"None\" has no attribute \"proc_pidinfo\"",
-      "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/principal.py",
       "message": "\"object\" has no attribute \"getsockopt\"",
       "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/principal.py",
-      "message": "Incompatible types in assignment (expression has type \"CDLL\", variable has type \"None\")",
-      "code": "assignment",
       "count": 1
     },
     {
