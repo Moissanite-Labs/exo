@@ -7,11 +7,12 @@
         --verify-against "<patched-file>" [--open]
 
 What it does (all gates from the github-draft-review-html SOP, in order):
-  1. prose gate            check-prose.py must exit 0 (a finding or an error blocks)
+  1. prose gate            check-prose.py must exit 0 (a finding, an error or a missing
+                           check-prose.py blocks)
   2. visual value gate     visual-value-gate.py decides if content warrants a visual
                            (advisory only: never blocks; --skip-visual-gate opts out)
   2b. mermaid gate         check-mermaid.py runs iff a ```mermaid fence is present
-                           (blocks on invalid fences)
+                           (blocks on invalid fences, or when check-mermaid.py is missing)
   3. identifier gate       no /Users paths, usernames, profile/agent names, hostnames, emails;
                            --allow-identifier exempts one exact token, never a whole class
   4. verbatim gate         every ```python fence must appear in one --verify-against source
@@ -37,6 +38,7 @@ Principal-specific settings come from the environment, never from this file:
 from __future__ import annotations
 
 import argparse
+import bisect
 import os
 import html as _html
 import re
@@ -157,24 +159,35 @@ def verbatim_gate(text: str, sources: list[tuple[str, str | None]]) -> tuple[boo
 
 _TOKEN_STOP = "`\"'<>()[]{}*"
 _TOKEN_TRIM = ".,;:!?"
+_TOKEN_RUN = re.compile(r"[^\s" + re.escape(_TOKEN_STOP) + r"]+")
 
 
-def _token_at(text: str, start: int, end: int) -> str:
-    """The whole token around a match, so '/Users/' in '/Users/sam/.ssh/id' gives the path.
-    It grows to whitespace, a quote, a bracket or emphasis, minus trailing punctuation."""
-    while start > 0 and not text[start - 1].isspace() and text[start - 1] not in _TOKEN_STOP:
-        start -= 1
-    while end < len(text) and not text[end].isspace() and text[end] not in _TOKEN_STOP:
-        end += 1
-    return text[start:end].rstrip(_TOKEN_TRIM)
+def _token_spans(text: str) -> tuple[list[int], list[int]]:
+    """Starts and ends of the runs between whitespace, quotes, brackets and emphasis, found once per text."""
+    runs = [m.span() for m in _TOKEN_RUN.finditer(text)]
+    return [a for a, _ in runs], [b for _, b in runs]
+
+
+def _token_at(spans: tuple[list[int], list[int]], start: int, end: int) -> tuple[int, int]:
+    """The whole token around a match, so '/Users/' in '/Users/sam/.ssh/id' gives the path: the match
+    grows over the run that touches its start and the run that touches its end."""
+    starts, ends = spans
+    i = bisect.bisect_right(starts, start - 1) - 1
+    if i >= 0 and ends[i] > start - 1 >= 0:
+        start = starts[i]
+    i = bisect.bisect_right(starts, end) - 1
+    if i >= 0 and ends[i] > end:
+        end = ends[i]
+    return start, end
 
 
 def identifier_gate(text: str, allowed: list[str]) -> tuple[bool, dict[str, list[str]]]:
     """Denylisted identifiers by class. An allowed literal exempts only a token equal to it."""
     allow = {a.rstrip(_TOKEN_TRIM).lower() for a in allowed}
-    hits = {}
+    spans, hits = _token_spans(text), {}
     for key, pat in DEFAULT_IDENTS.items():
-        tokens = {_token_at(text, m.start(), m.end()) for m in re.finditer(pat, text, re.I)}
+        found_at = {_token_at(spans, m.start(), m.end()) for m in re.finditer(pat, text, re.I)}
+        tokens = {text[a:b].rstrip(_TOKEN_TRIM) for a, b in found_at}  # trailing punctuation is not the token
         found = sorted(t for t in tokens if t.lower() not in allow)
         if found:
             hits[key] = found
@@ -183,8 +196,8 @@ def identifier_gate(text: str, allowed: list[str]) -> tuple[bool, dict[str, list
 
 def prose_gate(md: Path, python: str) -> tuple[bool, str]:
     cp = SKILL_DIR.parent / "clean-writing" / "scripts" / "check-prose.py"
-    if not cp.is_file():
-        return True, "check-prose.py not found (skipped)"
+    if not cp.is_file():  # no checker is no check: block, so a partial install never posts unchecked text
+        return False, f"check-prose.py not found at {cp}; install the clean-writing skill"
     # "--" ends the options, so a draft named --help is checked rather than printing usage.
     p = run([python, str(cp), "--", str(md)])
     out = (p.stdout + p.stderr).strip()
@@ -217,8 +230,8 @@ def mermaid_gate(md: Path, python: str) -> tuple[bool, str] | None:
     """Run check-mermaid.py iff the draft holds a ```mermaid fence.
 
     Returns None when no fence is present (no behavior change for
-    non-diagram drafts); otherwise (passed, note) — a failing fence
-    BLOCKS the pipeline.
+    non-diagram drafts); otherwise (passed, note) — a failing fence,
+    or a missing check-mermaid.py, BLOCKS the pipeline.
     """
     try:
         text = md.read_text(encoding="utf-8")
@@ -226,8 +239,8 @@ def mermaid_gate(md: Path, python: str) -> tuple[bool, str] | None:
         return None
     if not re.search(r"^\s*```mermaid\s*$", text, re.M):
         return None
-    if not MERMAID_CHECK.is_file():
-        return True, "check-mermaid.py not found (skipped)"
+    if not MERMAID_CHECK.is_file():  # a fence with no checker blocks, as a failing fence does
+        return False, f"check-mermaid.py not found at {MERMAID_CHECK}; install the charts-in-posts skill"
     p = run([python, str(MERMAID_CHECK), str(md)])
     out = (p.stdout + p.stderr).strip()
     last = out.splitlines()[-1] if out else "no output"

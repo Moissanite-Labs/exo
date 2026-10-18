@@ -7,30 +7,15 @@ Relative paths resolve against ``ToolContext.cwd``.
 from __future__ import annotations
 
 import os
-import stat
 from pathlib import Path
 from typing import Any
 
 from exo.core.tools.builtin.fuzzy import format_no_match_hint, fuzzy_find_and_replace
-from exo.core.tools.builtin.patch import apply_patch, write_atomic
+from exo.core.tools.builtin.patch import MAX_READ_BYTES, apply_patch, read_regular, write_atomic
 from exo.core.tools.registry import Registry, ToolContext, ToolError
 
 DEFAULT_LIMIT = 2000
 MAX_LINE_CHARS = 2000
-MAX_READ_BYTES = 50_000_000
-
-
-def read_regular(p: Path, cap: int) -> bytes:
-    """Bytes of a regular file (links followed). A FIFO or device is refused before it is opened."""
-    if not p.is_file():
-        raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
-    with open(os.open(p, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)), "rb") as f:  # a FIFO swapped in: no block
-        st = os.fstat(f.fileno())
-        if not stat.S_ISREG(st.st_mode):
-            raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
-        if st.st_size > cap:
-            raise ToolError(f"{p} is {st.st_size:,} bytes, over the {cap:,}-byte limit; use grep, or sed -n in bash")
-        return f.read(cap)
 
 
 def _read_existing(ctx: ToolContext, path: str) -> str:

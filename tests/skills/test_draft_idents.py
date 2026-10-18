@@ -85,3 +85,13 @@ def test_internal_names_stay_whole_names(gate):
     assert gate("myalpha-boxes alpha-box2 xseat.alpha.y my.agentsx", []) == (True, {})
     # a non-word edge needs no boundary, so a name inside a longer dotted token still counts
     assert not gate("seat.alpha.example and config.agents", [])[0]
+
+
+def test_token_widening_stays_linear(gate):
+    # Each hit used to walk out to its token's edges on its own: 2000 hits in one long token took about 12 s.
+    import time
+    text = "x" + "localhost," * 2000
+    t0 = time.perf_counter()
+    ok, hits = gate(text, [])
+    assert time.perf_counter() - t0 < 2.0
+    assert not ok and hits == {"localhost": [text.rstrip(",")]}

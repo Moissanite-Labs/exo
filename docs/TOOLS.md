@@ -25,7 +25,8 @@ result.
 The similarity strategies need two or more non-blank lines. A one-line `old_string` (blank lines around it do not
 count) must match up to whitespace, escaping or Unicode. When the file's line has other text, for example
 `TIMEOUT = 45` where `old_string` says `TIMEOUT = 30`, the call fails and shows the closest lines. Before, such a
-stale edit overwrote the newer line.
+stale edit overwrote the newer line. In `apply_patch` a hunk's context lines count toward the two, so a hunk with
+one context line can still replace a `-` line that changed since it was read.
 
 ## Environment of bash and jobs
 
@@ -70,10 +71,11 @@ turns the note off. The trace rule `shell.masked_exit` (docs/TRACE.md) flags it.
 
 While a foreground `bash` command runs, its output also goes out in pieces as `tool.output` events: clients show
 them live and sessions.sqlite keeps them. The output is read as one UTF-8 stream, so a character split between two
-reads stays whole in the stream and in the result. Only a sequence cut off by the end of the output becomes U+FFFD.
-Known key values are cut out of the stream as `[redacted]`, even when a key is split between two reads. The end of
-a read that could be the start of a key waits for the next read or for the end of the command. Other output is not
-held back. The result is redacted as a whole when the call returns.
+reads stays whole in the stream and in the result. Invalid bytes, and a sequence cut off by the end of the output,
+become U+FFFD. Known key values are cut out of the stream as `[redacted]`, even when a key is split between two
+reads. The end of a read that could be the start of a key waits for the next read or for the end of the command.
+Other output is not held back. The stream is never cut inside a key, so it matches redacting the whole output, also
+when one key holds another (a URL with a password in it). The result is redacted as a whole when the call returns.
 
 ## Execution brokers (D-020)
 
@@ -100,10 +102,10 @@ caps inline/URL payload, not remote asset download sizes; metadata and serializa
   and the link stays. Before, the rename replaced the link with a regular file and left the target unchanged.
   `apply_patch` checks this before it writes anything, and its Delete File removes only the link, as `rm` does.
   A hard-linked file becomes its own copy, as with any atomic rename. A symlinked parent folder is still followed.
-- **Reads** (`read_file`, `edit_file`, `grep`) open regular files only. A FIFO, socket or device, or a link to one,
-  is refused before it is opened (`grep` skips it), so a FIFO cannot block the core and `/dev/zero` cannot fill
-  its memory. `read_file` and `edit_file` refuse files over 50 MB (`MAX_READ_BYTES`). Use `grep`, or `sed -n` in
-  `bash`, for those. `grep` skips files over 2 MB.
+- **Reads** (`read_file`, `edit_file`, `apply_patch`, `grep`) open regular files only. A FIFO, socket or device, or
+  a link to one, is refused before it is opened (`grep` skips it), so a FIFO cannot block the core and `/dev/zero`
+  cannot fill its memory. `read_file`, `edit_file` and `apply_patch` refuse files over 50 MB (`MAX_READ_BYTES`).
+  Use `grep`, or `sed -n` in `bash`, for those, and `bash` to move or delete them. `grep` skips files over 2 MB.
 
 ## code_find (D-029)
 

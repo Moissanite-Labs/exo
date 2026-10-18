@@ -117,7 +117,7 @@ gate reports VALIDATION instead of suggesting one.
 
 Mermaid fences are validated automatically: whenever the draft holds
 a ```mermaid fence, the pipeline runs `check-mermaid.py` and fails if
-it exits non-zero. Never hand-run the gates around this sequence.
+it exits non-zero or is missing. Never hand-run the gates around this sequence.
 
 ## One command per draft (scaffolding — use it, do not hand-run the gates)
 
@@ -126,7 +126,7 @@ it exits non-zero. Never hand-run the gates around this sequence.
       --title "<draft title>" --owners {{github_owner}} \
       --verify-against "origin/main:<path>" --open
 
-One pass runs every gate in SOP order: prose (check-prose.py must exit 0) -> visual value (advisory)
+One pass runs every gate in SOP order: prose (check-prose.py must be installed and exit 0) -> visual value (advisory)
 + mermaid fences (check-mermaid.py, only when a ```mermaid fence is present) ->
 identifier sweep -> verbatim
 fences (`--verify-against REF:PATH` or a file path, repeatable) -> oversight blockquote -> render

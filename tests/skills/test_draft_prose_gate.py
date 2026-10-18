@@ -13,13 +13,18 @@ SCRIPT = Path(__file__).parents[2] / "skills/github-draft-review-html/scripts/dr
 
 
 @pytest.fixture
-def prose_gate(monkeypatch):
+def pipeline(monkeypatch):
     for var in ("EXO_PRINCIPAL_STORE", "EXO_PRINCIPAL", "EXO_PROSE_POLICY", "EXO_INTERNAL_NAMES"):
         monkeypatch.delenv(var, raising=False)
     spec = importlib.util.spec_from_file_location("draft_pipeline", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return lambda path: mod.prose_gate(path, sys.executable)
+    return mod
+
+
+@pytest.fixture
+def prose_gate(pipeline):
+    return lambda path: pipeline.prose_gate(path, sys.executable)
 
 
 def _draft(tmp_path, rel, text):
@@ -59,3 +64,14 @@ def test_unreadable_draft_blocks_even_under_a_clean_path(prose_gate, tmp_path):
 def test_clean_draft_passes(prose_gate, tmp_path):
     ok, note = prose_gate(_draft(tmp_path, "fix.md", "Fixes the parser.\n"))
     assert ok is True and note.startswith("check-prose: clean")
+
+
+def test_a_missing_checker_blocks_instead_of_skipping(pipeline, tmp_path, monkeypatch):
+    # A partial install (no clean-writing or charts-in-posts next to this skill) used to pass unchecked.
+    draft = _draft(tmp_path, "fix.md", "Fixes the parser.\n\n```mermaid\ngraph TD\n  A --> B\n```\n")
+    monkeypatch.setattr(pipeline, "SKILL_DIR", tmp_path / "skills" / "github-draft-review-html")
+    monkeypatch.setattr(pipeline, "MERMAID_CHECK", tmp_path / "skills" / "charts-in-posts" / "check-mermaid.py")
+    ok, note = pipeline.prose_gate(draft, sys.executable)
+    assert ok is False and "check-prose.py not found" in note
+    ok, note = pipeline.mermaid_gate(draft, sys.executable)
+    assert ok is False and "check-mermaid.py not found" in note
