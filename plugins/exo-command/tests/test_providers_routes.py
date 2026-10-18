@@ -150,7 +150,7 @@ def test_non_loopback_peer_is_refused():
 
 
 def test_other_routes_need_the_token_too():
-    """D-039: every /api/ route needs the page token now, and none echoes it."""
+    """D-039: every /api/ route but `POST /api/launch` (#166) needs the page token now, and none echoes it."""
     async def go(web, port):
         return [await raw(port, "GET", "/api/health"),
                 await raw(port, "GET", "/api/health", {"X-Exo-Token": TOKEN})]
