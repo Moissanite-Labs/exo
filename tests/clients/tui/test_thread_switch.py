@@ -175,6 +175,54 @@ def test_a_refused_answer_brings_the_card_back(tmp_path):
     run_with(tmp_path, sc, RefusingClient)
 
 
+def threadless(eng) -> s.ApprovalRequested:
+    """The card of a held peer message that no live session could take: the core opens it with no session."""
+    req = s.ApprovalRequested(request_id="r_peer", summary="held peer message", options=["allow", "deny"])
+    pending_approval(eng, None, req)
+    return req
+
+
+def test_a_card_with_no_thread_stays_in_every_thread(tmp_path):
+    """D-026: such a card belongs to every thread. The periodic check, /new and /resume keep it, and it still goes
+    when the core closes it."""
+    async def sc(app, pilot, client, eng):
+        a = app.session
+        threadless(eng)
+        await until(lambda: app.card is not None, pilot)
+        app.reconcile_every, app._reconciled = 0.0, 0.0
+        await app.reconcile_approvals()
+        assert app.card is not None and app.card.req.request_id == "r_peer"  # the core still holds it
+        await send(app, pilot, "/new")
+        await until(lambda: app.session != a, pilot)
+        assert app.card is not None and app.card.req.request_id == "r_peer"
+        await send(app, pilot, f"/resume {a}")
+        await until(lambda: app.session == a, pilot)
+        await app.reconcile_approvals()
+        assert app.card is not None and [r.request_id for r in app.approvals] == ["r_peer"]  # not twice
+        assert len(app.query(ApprovalCard)) == 1
+        eng.approvals.open.pop("r_peer")  # closed in the core with no event this window saw
+        await app.reconcile_approvals()
+        await until(lambda: app.card is None, pilot)
+
+    run(tmp_path, sc)
+
+
+def test_a_window_opened_later_shows_the_card_with_no_thread(tmp_path):
+    eng = make_engine(tmp_path)
+    client = FakeServerClient(eng)
+
+    async def main():
+        a = (await client.call(s.SessionCreate(title="old", seat="tester")))["session"]["id"]
+        threadless(eng)
+        app = ExoApp(client, seat="tester", session=a)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await asyncio.wait_for(app.ready.wait(), 5)
+            await until(lambda: app.card is not None, pilot)
+            assert app.card.req.request_id == "r_peer" and "r_peer" in app.threadless
+
+    asyncio.run(main())
+
+
 # ---------------------------------------------------------------- turn state stays with its thread
 def test_a_switch_while_a_turn_runs_leaves_the_new_thread_idle(tmp_path):
     async def sc(app, pilot, client, eng):

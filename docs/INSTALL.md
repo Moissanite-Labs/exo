@@ -48,7 +48,8 @@ loads every folder in `$EXO_HOME/plugins`, so a list also removes the plugins an
 list leaves out. Folders without the `.exo-managed` marker stay, and a Hermes home is left as is, since its
 `config.yaml` decides what loads. An install from before `plugin_selection` existed has no list on record, so its
 next refresh installs every plugin. After that update, run `scripts/install.sh --no-pip --plugins LIST` once: it
-records your list and removes the plugins the refresh added.
+records your list and removes the plugins the refresh added. A remembered name that this checkout no longer has
+gets a warning, and the refresh goes on without it.
 
 After updating, finish active turns, close your clients, run `exo stop`, then reopen `exo` or `exo web`.
 The running shared core and clients retain their loaded code until restarted. The updater prints this
@@ -120,7 +121,7 @@ pinned checkout. Hermes exact-pins its dependencies, so the result matches upstr
 | `--tag TAG` | Hermes release tag (needs `--with-hermes`) |
 | `--exo-source SRC` | a local exo checkout or a git URL (cloned into `$EXO_HOME/src/exo`) |
 | `--python PY` | interpreter for the venv |
-| `--plugins LIST` | comma list, for example `exo-memory,exo-context`. Remembered for re-runs and `exo update`. `all` means every plugin. Removes the other plugins an earlier run installed in `$EXO_HOME/plugins`. |
+| `--plugins LIST` | comma list, for example `exo-gate,exo-memory,exo-context`. Remembered for re-runs and `exo update`. `all` means every plugin. Removes the other plugins an earlier run installed in `$EXO_HOME/plugins`. Always keeps `exo-gate`: without it the core refuses every tool call. A name that matches no plugin stops the installer before it removes anything. |
 | `--principal ID`, `--answers FILE` | run the interview without prompts |
 | `--no-pin`, `--no-pip`, `--no-interview` | skip a step |
 | `--strict-patches` | fail when a patch does not apply (needs `--with-hermes`) |
