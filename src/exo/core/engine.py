@@ -335,8 +335,10 @@ class CoreRuntime:
         """Become the one writer of this agent's log and tree (raises agentlog.WriterBusy if another process is)."""
         if self._writer is None:
             self._writer = agentlog.claim_writer(self.home, self.agent)
+            self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
+        self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
         agentlog.release_writer(self._writer)
         self._writer = None
         trace.remove_sink(self._on_harness_error)
@@ -589,6 +591,11 @@ class CoreRuntime:
             self.store.assert_open(b.session)
         except SessionLocked as exc:  # a finished child session takes no new turns
             raise CommandFailed("session_locked", str(exc)) from None
+        if b.session in self.agents.loops:  # typing into a running subagent steers it, never a new turn (D-070, D-052)
+            require_principal("steer a subagent")
+            if not self.loop.state(b.session).accepting_steers:  # starting or finishing: no round can take it
+                raise CommandFailed("conflict", "the subagent is starting or finishing and takes no message now")
+            b.mode = "steer"
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
@@ -706,13 +713,13 @@ class CoreRuntime:
     # ------------------------------------------------------------ self-observation (D-025)
 
     def _on_harness_error(self, body: s.HarnessError, session: str | None) -> None:
-        """Sink for ``trace.report``: publish the error. Outside a running turn (no turn-end check is coming)
-        it also becomes a finding right away."""
+        """Sink for ``trace.report``: publish the error. Outside a running turn, or in a subagent's (its loop has no
+        turn-end check, and a parent's reads only direct children), it also becomes a finding right away."""
         if session and self.store.get_session(session) is None:
             return  # another engine's session
         self.hub.publish(body, session)
         st = self.loop._state.get(session) if session else None
-        if self._trace_on and (st is None or not st.running):
+        if self._trace_on and (st is None or not st.running or session in self.agents.loops):
             self.findings.file(f"harness.error:{body.where}:{body.error_type}", f"Harness error in {body.where}",
                                severity="bug", detail=f"{body.error_type}: {body.message}", session=session)
 
