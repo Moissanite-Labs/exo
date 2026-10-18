@@ -275,17 +275,21 @@ from where something came from, never from what it says about itself.
 
 - **Read the command, not just its name.** The gate used to judge a shell command by the program it named. A
   command that hid its real work (a script, `python -c "..."`, a variable in the program's place) walked past
-  it. Now the gate finds every program in the line, and the command runs without asking only when each one
-  is on a list of trusted everyday programs, such as `ls`, `git status` or `pytest`, and none is hidden.
-  Anything it cannot see into asks, once, for that exact command. This is an *allowlist*: a list of what is
-  allowed, where everything else is not, the safer of the two ways to write such a list. Programs on the
-  list are trusted by name, though, and some can run other code: a test runner runs project files, and some
-  options of trusted programs run a command the gate does not yet read. Section 15.4 names this gap and the
-  change in review that narrows it.
+  it. Now the gate reads the line and finds the program in each command its parser recognizes, and the
+  command runs without asking only when each one is on a list of trusted everyday programs, such as `ls`,
+  `git status` or `pytest`, and none is hidden. Anything it knows it cannot read asks, once, for that exact
+  command. This is an *allowlist*: a list of what is allowed, where everything else is not, the safer of the
+  two ways to write such a list. The parser does not read every shell form yet: a command inside a parameter
+  expansion such as `${x:-$(...)}` is never found, so it runs without asking (#143), and past four levels
+  of nesting a denied act only asks (#137). Programs on the list are trusted by name, too, and some can run
+  other code: a test runner runs project files, and some options of trusted programs run a command the gate
+  does not yet read. Section 15.4 names these gaps and the changes in review that narrow them.
 - **The store is like a key.** The agent could once rewrite its own policy files and grants with an ordinary
-  allowed write. Now any write to the principal store's policies, grants, ledger or keys asks you every
-  time, like a password would. And a policy file that changes during a session can only make the gate
-  stricter until you accept the change.
+  allowed write. Now a write the gate sees going to the principal store's policies, grants, ledger or keys
+  asks you every time, like a password would. The gate goes by the path as the command spells it, though: a
+  relative name such as `gates.yaml` written from inside the policies folder, or a write through a symbolic
+  link that points into the store, is an ordinary write on main (#130, section 15.4). And a policy file that
+  changes during a session can only make the gate stricter until you accept the change.
 - **Who answered is the connection.** Your window and your web page carry a secret that is new each time
   the core starts. A command the agent runs is refused even with it while it runs under the core, so it
   cannot answer the agent's own approval cards, whatever it puts in its message. Reading the secret's file by
@@ -641,9 +645,16 @@ can message each other. Held messages live in memory today, so a restart drops t
 
 Messages from the bus, the relay that links agents on different machines, now take the same path. The core
 checks each one against the key it pinned for that seat the first time it saw it (a changed key is refused),
-marks the message as written by `bus:<seat>`, and holds it for the principal by default. A peer message that
-claims to be typed by a person is treated as typed by an agent unless it came over a principal connection,
-so a program cannot make the receiver believe the principal wrote it.
+marks the message as written by `bus:<seat>`, and holds it for the principal by default. On the sending side,
+a peer message that claims to be typed by a person is sent as typed by an agent unless it came over a
+principal connection, so a program cannot use its own core to send a message as the principal. The
+receiving side does not check this yet (#132). It verifies a peer's signature against the key in the
+sender's presence file, and it takes the sender's principal from that same file and "typed by a person"
+from the signed message. Presence files are owner-only, but any program running as the same user can write
+one. Such a program can sign with its own key a message that the receiver labels as the principal typing in
+another client, or as another session of the principal, and either is delivered at once. Checking the
+signature against the seat key pinned in the principal's key folder would close this, and no change for it
+is in review yet.
 
 The second source is the end notice of a background shell job (section 15.5). Chat channels, the scheduler
 and external event feeds are meant to plug into the same path, each bringing only its transport.
@@ -934,15 +945,23 @@ posting checks. The outcome is allow, log, ask or deny.
 no word in it says so, and the same goes for a heredoc fed to a shell, `python -c`, a shell function or an
 alias. An early gate judged by the program name it could see, and the audit walked past it this way. Now a
 small *lexer* (a program that splits text into its pieces, as a compiler's first stage does) splits the line
-into simple commands and finds the program in each. The command is allowed only when every program is on
-the gate's list and none is hidden in a program's place. Anything else falls into a category called
-`opaque_exec` and asks:
+into simple commands and finds the program in each. The command is allowed only when every program it found
+is on the gate's list and none is hidden in a program's place. Anything it knows it cannot read falls into a
+category called `opaque_exec` and asks:
 variables or `$( )` in a program's place, script files, interpreters given text to run, `make`, `npm run`,
 `npx`, `xargs`, `find -exec`, `eval`, `source`, functions and aliases, and unknown programs. Where the gate can
 see inside (a `bash -c` with plain text), it classifies the inner command too and keeps the stricter answer.
 An "always" on opaque code covers that exact command only. About 70 everyday commands (`pytest`, `git
 status`, `ls`, `rg`, `npm install`, `cargo test` and so on) are pinned by a test to run without asking, so
 the gate stays usable.
+
+The lexer does not read every shell form yet. It copies a parameter expansion, `${...}`, as one word up to
+the first `}` without looking inside it, so a command substitution there (`echo ${x:-$(git push --force)}`,
+or an array subscript such as `${a[$(...)]}`) is never classified, and a quoted `}` inside it can hide the
+commands after it on the line. Such a line is read as `echo` and allowed, and a deny does not hold (#143).
+A change in review (#158) reads these words as bash does and classifies every command inside them. Nesting
+is read four levels deep (`bash -c` inside `bash -c`, and so on). Past that the rest is opaque, so it asks,
+but a deny written for the deeper command only asks too (#137).
 
 The known gap is honest. Programs on the list are trusted by name, and some of them can run other code. A
 test runner runs project files (`pytest` runs `conftest.py`), git runs hooks and `npm install` runs package
@@ -959,18 +978,24 @@ sandbox closes the rest.
 **The store is a credential.** The principal store's policy files, its standing grants, the ledger, the key
 folder, seat files and the core's sockets are on a protected list. Any write there is `store_write`: it asks
 the principal every time, no grant covers it, and a seat cannot be named to approve it. Reading stays a
-plain read, except the keys, which stay credentials.
+plain read, except the keys, which stay credentials. The gate matches the path as the call spells it. An
+absolute path is checked against the store's folders, a relative one only by its distinctive names
+(`policies/gates.yaml`), because the gate does not use the tool's working folder: `printf x > gates.yaml`
+run with its working folder in the policies folder is an ordinary local write. A path is not resolved
+through symbolic links either, so a write through a link elsewhere that points into the store is an
+ordinary write too (#130). A change in review (#156) resolves links, also after a `cd` into a linked
+folder. The working-folder case stays open.
 
 **Policy changes only tighten during a session.** The gate fixes the policy it loaded at start. If a policy
 file changes while Exo runs, the change is logged with the files' hashes and each call is decided under both
 the old and the new policy, and the stricter answer wins. A loosening takes effect only after the principal
 runs `/gate accept`, or on restart. So no write by a tool, seen by the gate or not, can loosen the policy
 during a session, while the principal's own tightening takes effect at once. At the next start the gate loads
-whatever is on disk, so a write it did not see (the gap above) would take effect then, with nobody reviewing
-it.
+whatever is on disk, so a write it did not see (the gaps above) would take effect then, with nobody
+reviewing it.
 
 Under the person's policy sit two *floors* that no policy, rule, grant or scope can lower. They apply to
-what the gate classifies, so an act hidden from it, as in the gap above, never reaches them. The operator
+what the gate classifies, so an act hidden from it, as in the gaps above, never reaches them. The operator
 floor: an irreversible public act that touches a third party always asks. Amplifying a person is neutral. It
 would amplify a bad actor too, so rules that protect other people sit outside the model of the person. The
 credentials floor: logins, key files, password stores and anything else that handles secrets always ask the
@@ -1926,9 +1951,10 @@ third-party actions wait for the person. The operator floor and the credentials 
 the person's own policy, and a decision model can only tighten. An approval of an outward act covers its
 exact text only. Standing grants are scoped, expire and are the principal's alone. A seat that approves must
 sign. Peers and other ingress sources can never approve. Shell commands with a hidden program ask, programs on
-the allowlist are trusted by name, writes to the principal store ask every time, and a policy file changed
-mid-session can only tighten until the principal accepts it or Exo restarts. The floors apply to what the gate
-classifies, and section 15.4 names what it does not yet read.
+the allowlist are trusted by name, writes the gate sees going to the principal store ask every time, and a
+policy file changed mid-session can only tighten until the principal accepts it or Exo restarts. The floors
+apply to what the gate classifies, and section 15.4 names the shell forms it does not yet read and the store
+paths it misses.
 
 **Identity from the connection.** Whether a caller is the principal is decided by the transport: a client
 running the core in its own process, or a connection that presents the per-launch principal credential from a
@@ -2205,6 +2231,11 @@ knows where the work is going, and they may change before they land.
   among them), the gate's own settings and the models, and the signed-update trust list of section 26 sits
   beside it. Today a tool can rewrite them with an ordinary local write. The change puts both on the store's
   protected list, so a write asks the principal every time, as section 15.4 describes for the store.
+- **Reading parameter expansions** (#158, for #143). The lexer reads a `${...}` word as bash does and
+  classifies every command inside it, which closes the `${...}` gap of section 15.4.
+- **Store paths through links** (#156, for #130). The gate resolves symbolic links before it matches a store
+  path, also after `cd`, `pushd` or `git -C` into a linked folder. A relative name the tool resolves against
+  its working folder stays a gap.
 - **Reading command options of trusted programs** (#164). The gate follows options whose value is a command,
   such as `tar --to-command` or `sqlite3`'s `.shell`, as nested commands. That closes the part of the gap in
   section 15.4 that sits in one command line. Code a trusted program runs from a file stays a gap.

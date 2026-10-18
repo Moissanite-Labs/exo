@@ -21,15 +21,18 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Whitepaper v0.3 (draft, tagged `whitepaper-v0.3` when published), covering main up to D-077: the security wave
   (D-038 to D-040) with its limits stated (allowlisted programs are trusted by name, the principal credential check
   passes a same-user process that detaches, a wildcard read of a key file is an ordinary read, `config.json` is an
-  ordinary write until D-074), principal authority (D-052 to D-054), required executor mode (#70, #91), ledger
+  ordinary write until D-074, a command inside `${...}` is not classified (#143), a deny past four nesting levels
+  only asks (#137), a store write by a relative name from the tool's working folder or through a symbolic link is an
+  ordinary write (#130), and a received peer message is checked against the key in a presence file any same-user
+  program can write (#132)), principal authority (D-052 to D-054), required executor mode (#70, #91), ledger
   authority (#80) and the opt-in witness transport (#88), model-spend ceilings (#87), signed updates (D-073), the
   composer, keys and layouts (D-037, D-043, D-045, D-046), the house taste wave 1 (D-044), the engine split and the
   core budget ratchet (#46, D-067, D-077), turns that do not wait for memory upkeep (D-068), versioning (D-056), the
   web sub-pages (D-061), subagent controls and `/rename` (D-069, D-070), and an "In progress" section that names the
-  open changes and issues (#96, #109, #125, #164, #169). The user guide, developer guide, command reference and docs
-  map are brought up to date with main, and the docs map has one coverage table. `scripts/build_whitepaper.py` takes
-  the version and the month from the paper's header line only, and stops with a message when that line is missing or
-  reworded.
+  open changes and issues (#96, #109, #125, #156, #158, #164, #169). The user guide, developer guide, command
+  reference and docs map are brought up to date with main, and the docs map has one coverage table.
+  `scripts/build_whitepaper.py` takes the version and the month from the paper's header line only, and stops with a
+  message when that line is missing or reworded.
 - Web chat: a completed reply renders as Markdown, GFM pipe tables included (#149, #152). Streaming stays plain
   text. Tables scroll sideways inside the message. A reply builds at most 10,000 table cells and a table at most 64
   columns and no more padded cells than source characters; past that, a table is shown as its source text. Quotes

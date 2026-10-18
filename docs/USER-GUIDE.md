@@ -273,9 +273,15 @@ What the gate asks about, and why:
   runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like. These are
   trusted by name, so a test runner still runs your project's files, and some options of trusted programs that run
   a command are not read yet (`tar --to-command`, `sort --compress-program` and the like; #164 is in review).
-- **Your store is like a key (D-038).** A write to your store's `policies/`, `state/` (your standing grants), the
-  ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always" covers it. Reading your
-  policies does not ask. `config.json` is not on that list yet: a change in review (D-074, #125) adds it.
+  The gate finds programs only in the shell forms its parser reads. A command inside a parameter expansion such as
+  `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in #158). A command nested more than
+  four levels deep (`bash -c` inside `bash -c` and so on) asks, even when your policy denies it (#137).
+- **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
+  standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
+  covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,
+  #125) adds it. The gate goes by the path as the command spells it, so two writes are not seen as store writes
+  yet: a relative name such as `gates.yaml` written by a tool whose working folder is `policies/`, and a write
+  through a symbolic link elsewhere that points into the store (#130, a fix for the link case is in review in #156).
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
@@ -301,6 +307,9 @@ Peers are other live sessions on the machine: Exo sessions, Hermes agents and bu
 - Your own sessions deliver at once. A message from another person, or from a bus seat, is held until you allow it.
   A held message that nobody answers expires after 30 minutes.
 - A peer message shows as "from another session, not from you". It is input, not an order.
+- The receiving side trusts the key in the sender's presence file, which any program running as you can write. So
+  such a program can send a message that is labelled as you typing in another client, or as one of your sessions,
+  and is delivered at once (#132).
 - A bus seat's message is checked against the key Exo pinned for that seat the first time, held for you by default,
   and answered on the bus only if your rules let that seat through on its own. `exo keys` shows the pinned seats.
 
