@@ -6,13 +6,18 @@ The loop: record, read, report, verify.
 ## What is recorded
 - `model.call` (event): per model call, the role and route asked for, the route that served it, every attempt
   (`route`, `outcome` ok, timeout, error or fallback, short `error`, `ms`), time to first token, total time,
-  tokens (cache reads and writes too), the estimated cost in USD, loop retries.
+  tokens (cache reads and writes too), the estimated cost in USD, loop retries. A call that a stop cuts short is
+  recorded too, with `stop_reason` `interrupted`. It keeps the attempts of routes that timed out or failed before
+  the stop, so a stop on the fallback route still raises `model.timeout` or `model.fallback` for the route before.
+  When its only tries timed out, it raises no `model.slow`, because `model.timeout` already names that route.
 - `turn.started.soul`: a short hash of the seat's `SOUL.md` text the turn ran under (empty without one), so the trace
   shows which instructions a turn used after an edit.
 - `tool.completed`: `duration_ms` and `is_error` on every call.
 - `turn.completed.timing`: `wall_ms`, `model_ms`, `tool_ms` (without approval waits), `approval_ms`,
   `model_calls`, `fallbacks`, `tool_errors`. When a stop (ctrl+c or `/stop`) cuts a tool short, its time up to the interrupt counts in
-  `tool_ms`, and `interrupted_tool` names it, so an interrupted test run does not read as harness time.
+  `tool_ms`, and `interrupted_tool` names it, so an interrupted test run does not read as harness time. A model call
+  cut short the same way, mid stream or in the backoff before a retry, counts in `model_ms` and `model_calls`, so a
+  stopped slow model does not read as harness time either: a long wait shows as `model.wait`, `model.slow` or `model.timeout`.
 - `harness.error` (event): an exception caught in a hook, handler, plugin, memory call, channel or the TUI
   event path: `where`, `error_type`, `message`, a short `traceback`. Never silent.
 - Keys, auth headers and token-like strings are removed before any of this is written.
@@ -23,7 +28,8 @@ calls, fallbacks, tools, tool errors, tokens, cost, flag count, then the calls o
 every shown turn; each with route, time, tokens in and out, cache read and write, cost), then the flags. Subagent sessions roll into the parent's
 turn. Sessions recorded before D-025 have none of the new events, so their rows are derived from timestamps
 (marked `~`). In a session `/trace` and the `exo_trace` tool (`last`, `calls`) show the same table plus the model
-you run on.
+you run on and the route that served the last call. A call cut short by a stop or an error names no route, so the
+header names the last call that does.
 
 ### Cost (D-032)
 Cost is an estimate in USD per call and per turn (subagent turns included). The router prices each call from
@@ -63,6 +69,8 @@ A row in the `findings` table of sessions.sqlite: id, signature, source (anomaly
 (blocker, bug, papercut, idea), title, detail, session, turn, model, harness version, first and last seen,
 count, status, fixed_in. One row per signature; a recurrence bumps the count.
 - Anomalies are filed at turn end, with no model call.
+- A `harness.error` in a main or scheduled turn is filed when that turn ends. One outside a turn, or in a
+  subagent's turn, is filed at once.
 - The agent files with `exo_harness_report(title, detail, severity)`; the same title dedups.
 - `feedback.send` with reject or should_have_been files a principal finding (the learning step still runs). It files
   none for a private thread or a session under it, such as its delegate child (D-028): findings are listed in every

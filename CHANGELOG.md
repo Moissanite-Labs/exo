@@ -6,6 +6,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- The gate reads the command behind wrappers that run one (#160, D-038): `setsid`, `flock`, `chroot`, `unshare`,
+  `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`, `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`,
+  `xvfb-run`, `systemd-run` and `watch`, after their options and fixed operands, and the command strings of
+  `flock -c`, `script -c`, `watch`, `tmux new-session`/`new-window`/`split-window`/`respawn-pane`/`respawn-window`/
+  `run-shell`, `tmux -c`, `screen -dm` and `parallel CMD ::: args`. `setsid git push origin main` was `opaque_exec`,
+  so a deny on `vcs_push` only asked; it is now `vcs_push` and denied. Until D-075 lands, a wrapped line is denied
+  only when its inner command outranks `opaque_exec`; `setsid systemctl enable foo` under `deny: [schedule]` still
+  asks. A tmux command list is split at an argument ending in `;` (`'sleep 3;'`), not only at a `;` word, so
+  `tmux new-session -d 'sleep 3;' new-window 'git push origin main'` is `vcs_push` too, and tmux's default
+  aliases `splitp` and `split-pane` are read as `split-window`. An environment dump behind a wrapper
+  (`setsid printenv GITHUB_TOKEN`, `taskset 1 env`, `xvfb-run -a env`) is `credentials` like the bare command
+  (#155), so `deny: [credentials]` denies it; it was `opaque_exec` and asked. The wrapper keeps the
+  `indirection` floor, so a line that asked still asks; `chroot`, `nsenter`, `unshare` and `systemd-run` add a
+  signal like `sudo`. A command the gate cannot read (`setsid $CMD`, `tmux send-keys`, `parallel` reading its
+  input) stays `opaque_exec`. A deny on `opaque_exec` itself (`deny:`, a category line or a rule) now asks for
+  such a line instead of denying it; naming `opaque_exec` at `ask` or `deny` no longer turns off the indirection
+  floor (#178), so none of these lines logs.
 - Gate (#192, D-038): on a line that enters a folder that can hold a secret store, a relative read of a store file is
   `credentials` and asks. `cd ~/.config/gh && cat hosts.yml`, `cd ~/.kube && cat config`,
   `cd ~/.docker && cat config.json`, `cd ~/.kube && tar czf - .` and `cd ~/.config/g{h..h} && cat hosts.yml` were
@@ -35,6 +52,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `credentials`. Until D-075 lands, a coproc is denied only when its inner command outranks `opaque_exec`.
   A `credentials` line keeps the highest reversibility of its parts, so `coproc env; rm -rf x` stays
   irreversible and a policy that denies irreversible actions still denies it.
+- The gate reads the array subscript in the variable names of `printf -v`, `read`, `declare`, `typeset`, `local`,
+  `unset`, `test -v`/`[ -v` and `wait -p` (#179, D-038). Bash runs a `$( )` or backticks there even inside single
+  quotes, so `printf -v 'a[$(gh pr comment ...)]' %s x` was allowed; it is now a `github_post`. Bash also evaluates
+  the command's output or a variable's value there, so any expansion or quoting in such a subscript asks
+  (`unset "arr[$i]"` and `printf -v 'a[$(date)]' %s x` were allowed and now ask). A nested subscript
+  (`a[b[0]+$(cmd)]`) is read to its end. A `\$` or `` \` `` at the subscript's top level is literal, as bash
+  reads it; bash before 5.2 expands a nested subscript again, so there the gate reads the command. Past the
+  nesting limit such a command is `opaque_exec`.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
@@ -170,6 +195,48 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   handoffs too, and each handoff that may quote them is written again at once, including another thread's on an
   agent tree. The pinned block no longer links a handoff written before the undo. A ruling that was only summarized
   stays pinned.
+- Turn state (D-070, D-052): a scheduled run and a subagent now share the engine's per-session state, so a turn
+  running there is a running turn everywhere. `session.list` shows it `live`. A job or peer notice is steered in,
+  and a `turn.send` steer lands in that turn. Before, the engine saw these sessions as idle: a notice was stored
+  between a tool call and its result or started a second turn at the same time, and the model got a false
+  "not run" result for a command that did run. The principal typing into a running subagent's session steers it,
+  whatever the mode, and the terminal shows the line as a queued steer that up pulls back. Anyone else gets
+  `forbidden`. While the child starts or finishes, no round can take a steer, so `turn.send` fails with `conflict`.
+  It never starts a main-loop turn in the child. A send that waited behind a child that was locked meanwhile runs
+  no turn. An unaddressed peer message never picks a subagent's session or a scheduled run: it goes to the user's
+  live thread. With none live, a message delivered at once is refused and a held one waits with no thread.
+- Opening a thread whose turn is still running (`/resume`, `/sessions`, `exo tui --session` or `--resume`,
+  `exo chat --resume`) no longer writes "not run: session was interrupted" for the tool call in flight, so the
+  model never sees two results for one call. `session.resume` still closes a round a crash left open.
+- Two seats in one `$EXO_HOME` now run side by side. Each core numbered events from its own counter, so the core
+  that fell behind failed every publish with a UNIQUE constraint error until it restarted. The database now numbers
+  each event past the table's highest. `hello`, `events.subscribe` and `/health` report that highest number, so a
+  window that joins one seat's core does not replay the other seat's job cards as new notes. Starting any core, even
+  one that then failed the writer lock, also marked every agent's running delegate tasks failed. Now only an agent's
+  writer fails its own leftovers.
+- Scheduled jobs on a home with several seats: both seats' timers ran the same due job, and a job's `seat` was
+  never read, so a job for one seat could run as another. A timer now claims the slot before it runs it, a
+  seat-bound job runs only in its seat, `run_now` from another seat is refused, and `add` refuses a seat no core
+  could run.
+- Background jobs (D-032): shutting down exod with a job running no longer sends the thread a "was killed"
+  notice. With `wake` unset or on, that notice started a model turn while the engine was closing, a paid call
+  at every such shutdown. The job now ends with one `killed` record and one `job.updated`. Once shutdown has
+  begun no job notice starts a turn. A notice still in delivery is queued for the next one.
+- Scheduled jobs when clocks go back: a cron job added, resumed or overdue in the repeated hour's second pass got
+  a next run in the hour's first pass, up to an hour in the past, so the timer ran it again each time a run ended
+  until that hour was over. The next run is now always later than now (`docs/SCHEDULE.md`, "Clock changes").
+- A second `exo serve --seat NAME` beside a running exod no longer takes over its socket and `run/exod.pid`. It
+  deleted the live core's `run/exod.sock`, bound its own and wrote its pid, so `exo stop` stopped the second core
+  and left the first running with the agent's writer lock and no way to reach it. `exo serve` now refuses a socket
+  that another core answers on, exits 1 and names `--socket`, and a core removes `run/exod.pid` on exit only if
+  the file still holds its own pid.
+- Trace (D-025, D-032): a model call stopped with ctrl+c or `/stop` is now recorded, whether the stop came mid
+  stream, before the first token or in the backoff before a retry. It gets a `model.call` event with `stop_reason`
+  `interrupted`, and its time counts in `model_ms`. Before, the wait counted as harness overhead, so stopping a slow
+  model after 30 s filed a false `turn.slow` finding and could reopen a fixed one. The record keeps the routes that
+  timed out or failed before the stop, so stopping the fallback route still flags the route before it. A call whose
+  only tries timed out files no `model.slow`, because `model.timeout` already names that route. The `/trace`
+  header names the route that served the last call, not "no model call recorded yet", after a stop.
 - History brought in with `exo ingest` now feeds the rule of three in `exo consolidate`. Ingest writes your own
   messages with role `principal`, and consolidation read only role `user`, so an import never drafted a belief. Rows
   read before this fix are not in the cluster cache: delete `<store>/proposals/state.json` and the next run rebuilds
@@ -243,6 +310,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   changes under `site/`.
 
 ### Security
+- `exo web` no longer puts the page token in the browser launcher's argv, which other users of the host can read in
+  `/proc` (#166, D-039). The browser opens a one-time launch code (`#code=`, one use, 120 seconds) that the page
+  trades for the token over loopback; a code used twice replaces the token and warns in the terminal. Replacing the
+  token ends every other connection, including a request that passed the token check and still waits for its body,
+  and a body is checked against the current token again once read. The warning shows only when the launched page
+  redeems the code too, so a browser that runs no script (a text browser) gives none. The printed `#token=` link is
+  unchanged. Unless `--host` is `127.0.0.1`, `localhost`, `::1` or a wildcard bind, no browser is opened; use the
+  printed link. A refused browser link tells you to paste the printed link into the tab, not click it in the
+  terminal (a click hands the token to the URL opener's argv).
 - An `ssh` or `mosh` chain with more hops than the gate reads (four) is `opaque_exec` and asks, keeping the
   `remote host` exposure and the first host as target; it used to pass as plain `shell` (#153, D-038).
 - Options of trusted programs that run a command are followed as nested commands: `tar --to-command`, `-I`,
@@ -279,9 +355,46 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
+- Unix peer authentication (#109, D-060): principal clients ask the kernel who serves the socket before the
+  credential moves, and the core asks who connected before it stamps the principal. The credential file
+  (`run/<socket>.principal.key`) is now a JSON launch record, so restart the core and every running `exo`, `exo web`
+  and `exo chat` after updating: a new client refuses an old core (the page says to run `exo stop`), and an old
+  client against a new core is quietly local. Protocol additions: `hello` reports `instance` and `heartbeat`, the
+  event stream opens with a comment naming both, `approvals.list` returns a `cursor`, and the Python client ends a
+  stream with no event or heartbeat for 45 s. Event frames are raw UTF-8, and a frame too large to read is skipped
+  instead of stalling the stream, also for a caller that keeps its own cursor (the exo-bus channel, so bus replies
+  after it still go out). A joined terminal window never resends a turn or approval answer whose reply was
+  lost; it says so and keeps the text. Under `hidepid` or `ProtectProc` clients are local, with the reason logged and
+  named in refusals.
 - Gate (#178, D-038): naming `opaque_exec` at `ask` or `deny` (a category line or a rule) no longer turns off the
   indirection floor. Before, `categories: {opaque_exec: deny}` let `bash -c 'git push origin main'` log. Only
   lowering `opaque_exec` to `log` or `allow` turns the floor off, as before.
+- The run folder is a secret store, like `~/.ssh` (#169, D-039). The folder itself (`$EXO_HOME/run`, `.exo/run`,
+  `$EXO_HOME/principals/<name>/run`, in any spelling such as `run/`, `run/.`, `run/jobs/..` or `..` after a
+  symlink to `run/jobs`, also one right in `~`), its credential files (`exod.principal.key`,
+  `<socket stem>.principal.key`, `exod.token`) and a wildcard there that could match one (`run/*`,
+  `run/exod.principal.k*`, `run/exod.tok*`,
+  `run/agent-default.principal.k*`, and the same for `$EXO_SEAT` and up to 64 seats under `$EXO_HOME/seats`,
+  the first 64 by name once other files there are skipped) are
+  `credentials` and ask, also nested in `bash -c`, `$( )`, interpreter code and `execute_code`. Before, only a
+  call that named the key file asked: `cat $EXO_HOME/run/*`, `grep -r . $EXO_HOME/run` and the built-in `grep` or
+  `glob` on the folder were allowed reads.
+  Deletes, moves and replacements of the run folder or its credential files (`rm -rf ~/.exo/run`,
+  `rm ~/.exo/run/*`, `mv ~/.exo/run/* /tmp/`, and of the folder that holds the core sockets: `mv ~/.exo/run
+  ~/.exo/run.old`, `ln -sfn /tmp/x ~/.exo/run`, `cp -rT /tmp/x ~/.exo/run`, `mkdir -p ~/.exo/run`, `chmod 777
+  ~/.exo/run`) are now `credentials` like `keys/` (previously `store_write`, which only the principal answers), so
+  a seat delegated `credentials` approvals in `approvals.yaml`, or listed in its `default:` with no `credentials:`
+  line, may approve them, and a `deny: [store_write]` entry no longer matches them (`deny: [credentials]` does);
+  D-038 is amended. Job output in `run/jobs/` keeps its class, and a bare `run` (`uv run`, `gh run list`,
+  `ls run`) is not the folder. Every secret-store wildcard is now matched with `.` and `..` resolved
+  (`cat ./.env*` asks like `cat .env*`). A wildcard with no folder is matched against the run secrets' own names
+  (an agent key only by its `agent-` or `.principal` part): a bare `cat exod*`, `cat *.principal.key` or
+  `ls agent-*` asks in any folder, as `cat id_rs*` already did (`rm exod*` is `credentials`, was `delete`), while
+  `ls *run*`, `find . -name 'run*'`, `ls *main*`, `ls */*default*` and `ls ~/*test*` keep their class, also with
+  a seat named `main`; `ls *prin*` asks. Brace sets are expanded (#184): `run/{*,}` and `$EXO_HOME/r{u,}n/*`
+  ask, and so do `cd ~/.exo/run && cat age*` and `cd ~/.exo/run/jobs && cat ../*` (#192). Limits are in
+  `docs/GATE.md`: `~/.exo/ru?`, `cat *` with the bash tool's `cwd` argument at `~/.exo/run` and `~/.exo/RUN/*` on
+  a case-insensitive disk are not caught, as for `~/.ssh`.
 - `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
   requests from the web server only, no inline script, style attribute or eval, no framing, plus
   `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
