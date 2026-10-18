@@ -1227,34 +1227,42 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Docs:** `docs/VERSIONING.md`, `CHANGELOG.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-057 (2026-10-13) Event-driven activation: triggers, masked connectors, a runs dashboard, root causes
-- **Status:** Proposed 2026-10-13, revised 2026-10-18 after review. Design in docs/EVENT-ACTIVATION.md, options and
+- **Status:** Proposed 2026-10-13, revised 2026-10-18 after the reviews. Design in docs/EVENT-ACTIVATION.md, options and
   recommendation first. Nothing built. Independent of D-048, D-058 and D-059.
+- **Amends:** D-052. Job edits (`schedule.edit`, every action but `list`) join the operations that need a live principal
+  caller. D-052 left jobs off that list and let local automation drive turns, so a local script can edit jobs today.
 - **Why (principal, 2026-10-13):** Railtown AI's platform (railtown.ai: build, feed, observe the agent) gave the idea
   of agents started by events, not only by a person or a timer. Credited as the inspiration; none of its names are used.
 - **Proposal:** a trigger is a scheduled job with `on` (an event source) instead of `when`, managed by `schedule.edit`:
-  four new fields (`on`, `connector`, `limits`, `tools`), no new protocol command or event. Stage 0 first, three fixes
-  that repair gaps on main and stand alone: only the principal changes jobs (`schedule.edit` has no principal check
-  today), a run can call only the tools it was given (a scheduled run is shown a shorter list but runs any registered
-  tool by name), and notes and learning read who wrote a line (scheduled-run text reaches other threads as `user:`).
-  Then trigger runs that can only read: `read_file`, `glob` and `grep`, in a thread of their own (kind `triggered`, not
-  in the agent log, no memory provider), author `trigger:<id>`, the envelope inside a D-040 tag, started through D-026's
-  ingress path and under the gate. Webhook first (signed, timestamped, replay-checked, secret under the credentials
+  five new fields (`on`, `connector`, `limits`, `tools`, `roots`), no new protocol command or event. Stage 0 first,
+  five fixes that repair gaps on main and stand alone: only the principal changes jobs (`schedule.edit` has no
+  principal check today), a run can call only the tools it was given (a scheduled run is shown a shorter list but runs
+  any registered tool by name), notes and learning read who wrote a line (scheduled-run text reaches other threads as
+  `user:`), file search skips secret stores (`grep` and `glob` over the home folder return credential files with no
+  question today), and one search cannot freeze the core (a backtracking pattern stops the event loop, and nothing
+  limits a run's time). Then trigger runs that can only read: `read_file`, `glob` and `grep`, limited to the folders
+  the trigger names, in a thread of their own (kind `triggered`, not in the agent log, no memory provider), author
+  `trigger:<id>`, the envelope inside a D-040 tag, started through D-026's ingress path and under the gate, with the
+  answer going to the principal's notices only (channel delivery comes with a reply tool in a later stage). Webhook
+  first (signed, timestamped, replay-checked by signature, delivery id and body hash, secret under the credentials
   floor), then folder and git, then connectors, masking and mail. Masking is a reduction for the envelope text and
   nothing rests on it: placeholders never resolve, and a body read by reference arrives raw. Limits: debounce, minimum
-  gap, runs per hour and day, tool rounds, tokens per run, per trigger and for all triggers, and USD only where
-  `models.spend` is set. A reached cap, a cap of 0 or an unreadable meter pauses the trigger. A runs dashboard (`runs`
-  built-in). Root-cause notes are off by default, filed as source `rca`, and leave the digest only after the principal
-  promotes one. A trigger that must write, run commands or reach the network is a later ruling that needs an
-  untrusted-input mode of the gate and a loop guard first. An Exo SDK for third-party agents is on the roadmap only.
+  gap, runs per hour and day, tool rounds, wall clock per run, tokens per run, per trigger and for all triggers, and
+  USD only where `models.spend` is set. A reached cap, a cap of 0 or an unreadable meter pauses the trigger. A runs
+  dashboard (`runs` built-in). Root-cause notes are off by default, filed as source `rca`, and leave the digest only
+  after the principal promotes one. A trigger that must write, run commands or reach the network is a later ruling that
+  needs an untrusted-input mode of the gate and a loop guard first. An Exo SDK for third-party agents is on the roadmap
+  only.
 - **Rejected:** a hosted event relay (breaks D-050); installing git hooks in the user's repositories (watching refs is
-  enough and changes nothing); letting the agent add its own triggers (it could widen its own reach); the
-  scheduled-run tool list under the ordinary gate (a plain `curl` GET with data in the URL passes the gate with no
-  question, so text from a stranger could send data out); resolving placeholders in tool arguments
-  (a placeholder in a URL or a file leaves with no card); tying spend caps to `budget.yaml` `per_day_max` (it governs
-  priced tool actions only, never model calls).
+  enough and changes nothing); letting the agent add its own triggers (it could widen its own reach); the scheduled-run
+  tool list under the ordinary gate (a plain `curl` GET with data in the URL passes the gate with no question, so text
+  from a stranger could send data out); resolving placeholders in tool arguments (a placeholder in a URL or a file
+  leaves with no card); tying spend caps to `budget.yaml` `per_day_max` (it governs priced tool actions only, never
+  model calls); channel delivery of a stage-1 answer (the post is not a tool call, so the gate never sees it); bounding
+  a search by refusing nested quantifiers (a filter that misses shapes such as `(a|a)+$`, not a bound).
 - **Open:** how events enter (D-026's ingress path, recommended, or a separate path), what a trigger run may do (read
-  only, recommended), which source first (the webhook, recommended), root-cause default (off, recommended), default
-  limits, who may add a trigger (only the principal, recommended).
+  only, in the folders it names, recommended), which source first (the webhook, recommended), root-cause default (off,
+  recommended), default limits, who may add a trigger (only the principal, recommended).
 - **Depends on:** stage 0 (nothing in it exists on main), and for the ingress door a `Target` and a `trigger` branch in
   `frame()` in `src/exo/core/ingress.py`.
 
@@ -1274,8 +1282,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
   a merged pull request ("Fixes #N") 4 XP, a pull request merged or salvaged (`Salvaged-from: #N` in the landing pull
   request) 10 XP, and a review that ion, the org's review bot, marks meaningful with a `rocket` reaction from its own
   account 4 XP. ion is a dedicated machine account, a user and not a GitHub App. Target 2^11 = 2,048. Instant XP is
-  capped per account (3 a day), has global caps (15 an hour, 60 a day), fills at most 25 percent of the target and is
-  never taken back. There is no account-age rule: a webhook carries no creation date and the caps bound new accounts. A
+  capped per account (3 a day), has global caps (15 an hour, 60 a day), fills at most 25 percent of the target, is
+  awarded once for each item and action and is never taken back. There is no account-age rule: a webhook carries no creation date and the caps bound new accounts. A
   post-merge edit counts only from a core sender. The core team, founders and their agents count up to 40 XP a day and
   25 percent of the target, instant and validated together, a cap rather than a discount. Agent issues, pull requests
   and reviews earn nothing until a pull request is merged, and an App on the organization's agent list counts as an
@@ -1300,8 +1308,8 @@ ruling carries Status, Why, Proposal, Rejected and Open instead, and takes Decis
 - **Why (principal, 2026-10-13):** "event triggered animation ... on the 3d egg that happens every time there's
   activity on the github. different types and levels of animations for different types of events." Revision: "they
   should be instant triggered so users can see the satisfaction of their contribution triggering an animation."
-- **Proposal:** a GitHub webhook calls a Vercel function on the site's host, which verifies the HMAC signature, ignores
-  bots (an App on the agent list excepted), applies D-058 and appends to a public feed holding only event type, kind,
+- **Proposal:** a GitHub webhook calls a Vercel function on the site's host, which verifies the HMAC signature, drops a
+  repeated delivery id or body, ignores bots (an App on the agent list excepted), applies D-058 and appends to a public feed holding only event type, kind,
   time, level and nominal weight, plus the community totals, the egg's stage and state. A release is the push of an
   `exo-vX.Y.Z` tag by a core account (the repository publishes no GitHub Release). The page polls `GET /api/egg/feed`
   (`v: 2`, 5 second edge cache with no `stale-while-revalidate`, 10 second poll, an extra poll when the tab becomes

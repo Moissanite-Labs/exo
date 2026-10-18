@@ -1,10 +1,11 @@
 # Event-driven activation: triggers, connectors, runs and root causes (D-057)
 
-Status: **Proposed** (2026-10-13), revised 2026-10-18 after the review of PR #107. Nothing here is built. D-057 in
+Status: **Proposed** (2026-10-13), revised 2026-10-18 after the reviews of PR #107. Nothing here is built. D-057 in
 `DECISIONS.md`. Builds on D-022 (scheduled jobs, `docs/SCHEDULE.md`), D-026 (one ingress path), D-040 (authors), the
-gate (`docs/GATE.md`), the trace and findings (`docs/TRACE.md`, D-025) and D-050 (local first). Present tense in this
-page describes the proposal. "Today" and "on main" describe what exists, checked at `c937a85` (main on 2026-10-18).
-This decision stands apart from the egg decisions (D-048, D-058, D-059): each can be ruled on alone.
+gate (`docs/GATE.md`), the trace and findings (`docs/TRACE.md`, D-025) and D-050 (local first). It amends D-052 in one
+place (section 0.1). Present tense in this page describes the proposal. "Today" and "on main" describe what exists,
+checked at `6551eed` (main on 2026-10-18). This decision stands apart from the egg decisions (D-048, D-058, D-059):
+each can be ruled on alone.
 
 ## The decision, in plain words
 
@@ -26,17 +27,22 @@ the run is able to do. In today's code (the main branch), the parts that would h
 - Any local program can add, pause or remove scheduled jobs. Only the principal (you) can change settings.
 - Text from a scheduled run is filed in the agent's shared memory and shown to your other threads as `user:` text, as if
   you had written it.
+- The file search tools, `grep` and `glob`, walk into folders that hold passwords and keys and return them with no
+  question. Reading the same file by name asks first.
+- One badly built search pattern can freeze all of Exo, every conversation and both clients, for minutes or longer.
+  Nothing limits how long a run may take.
 
 **The options.**
 
-- **A. Adopt it, safe floor first (recommended).** First build three fixes that repair these gaps whether or not
+- **A. Adopt it, safe floor first (recommended).** First build five fixes that repair these gaps whether or not
   triggers ever ship (section 0). Then ship triggers whose runs can only read and report: three tools (`read_file`,
-  `glob`, `grep`), a transcript of their own (kept apart from your conversations), no shell and no network. Start with
-  one source, a signed local webhook, then add folder, git and mail in that order. Letting a run do more than read is a
-  later ruling. Cost: the first triggers observe and tell you. They cannot move a file or answer a mail yet.
+  `glob`, `grep`) that see only the folders the trigger names, a transcript of their own (kept apart from your
+  conversations), no shell and no network. The answer goes to your notices and nowhere else. Start with one source, a
+  signed local webhook, then add folder, git and mail in that order. Letting a run do more than read is a later ruling.
+  Cost: the first triggers observe and tell you. They cannot move a file, answer a mail or post to a channel yet.
 - **B. Adopt it with five sources and the scheduled-run tool list.** The ordinary gate is the only guard. Fastest to
   show. Cost: text from a stranger can make a run send your data out with no question asked. This is the worst option.
-- **C. Do not adopt now. Build only the three fixes.** No new risk and no new feature. Cost: the idea waits. The fixes
+- **C. Do not adopt now. Build only the five fixes.** No new risk and no new feature. Cost: the idea waits. The fixes
   repair today's gaps, so they are worth doing under any ruling. The best case for C is that nobody has named a trigger
   they need yet.
 
@@ -48,7 +54,7 @@ cannot be taken back once it has left.
 | Choice | Recommended | Why |
 |---|---|---|
 | How events enter | Through D-026's ingress path | Exo already has one door for messages that do not come from your keyboard, with a hold-and-ask policy |
-| What a trigger run may do | Read only. Widening is a later ruling | A run cannot misuse text it has no way to act on |
+| What a trigger run may do | Read only, in the folders it names. Widening is a later ruling | A run cannot misuse text it has no way to act on, and cannot read what it was not pointed at |
 | First source | The signed local webhook | Its sender is authenticated and its data is structured |
 | Root-cause notes | Off until asked for | Each note needs the principal's promotion. Until you want that queue, notes only cost tokens |
 
@@ -72,8 +78,8 @@ pass** writes a note for the principal when a run fails.
 
 ## 0. What must be true first
 
-Three fixes repair gaps that exist on main today. Each ships alone, under any ruling on D-057. The first trigger waits
-for all three.
+Five fixes repair gaps that exist on main today. Each ships alone, under any ruling on D-057. Sections 0.4 and 0.5
+change the same two tools and can share a pull request. The first trigger waits for all five.
 
 ### 0.1 Only the principal changes jobs
 
@@ -82,6 +88,9 @@ for all three.
   it reaches through `Scheduler.edit`. In a throwaway engine, `add`, `pause`, `resume`, `run_now` and `remove` all
   succeeded for the callers `local`, `unknown` and `seat:helper`, and `config.set` was refused for them. D-052 lists
   feedback, panel answers, settings, model choice and policy acceptance as principal-only. Jobs are not on that list.
+- **Amends D-052.** D-052 says local automation may still drive turns, and it leaves jobs off its principal-only list.
+  So a local script can edit jobs today. This section puts job edits on the list. Local automation can still send turns
+  as `local`. It can no longer add, pause, resume, run or remove a job.
 - **Change.** `_schedule_edit` requires a live principal caller for every action except `list`. It is the only path to
   `handle_schedule_edit` in the product code, so the one check covers both. This is the one thing that makes "only the
   principal adds a trigger" true. Blocking the `cronjob_manage` tool would not: it is not an Exo tool, and
@@ -124,23 +133,77 @@ for all three.
 - **Test.** A user line authored `schedule` is labelled as such in a note and in the summarizer's input. `is_unattended`
   is true for the kinds `scheduled` and `triggered` whatever the title says.
 
+### 0.4 Search does not walk into secret stores
+
+- **Today.** The gate classes `grep` and `glob` as `read` by name and checks only the path a call names. Both tools
+  then walk every folder below it, skipping `.git`, `node_modules` and caches (`SKIP_DIRS` in `builtin/search.py`) and
+  nothing else. Result redaction cuts only provider key values the process already knows. Probed at `6551eed` with fake
+  files in a temp home, through `exo.gate` with the template policies and the tool registry: `grep` for `.` over the
+  home folder, over `$EXO_HOME` and with no path (the engine's working folder, which `Scheduler.run` uses) was `allow`.
+  Between them the three calls returned lines of `~/.aws/credentials`, `keys/exo-gate.key`, a webhook secret file in
+  `keys/`, `run/exod.principal.key` and a project's `.env`. Only a `keys.env` value came back as `[redacted]`. `glob`
+  for `**/*` listed all of those files. `read_file` of any of them asks, and so does a `grep` whose `path` is the
+  `keys/` folder itself. A walk that starts higher up gets through. #169 tracks the limit.
+- **Change.** A walk skips each secret store it would enter below the path the call names, after resolving symlinks,
+  and the result says how many paths it skipped. A call that names a secret store itself still asks, and once approved
+  it searches that folder. The test is the function that already answers `read_file`'s question (`is_sensitive_path`
+  in `exo.gate`), so the two cannot disagree. Its list has gaps of its own, and they become gaps in the walk. The known
+  one is the run folder, `$EXO_HOME/run` (#169, fix open as #185), so 0.4 ships after that fix or adds the folder. A new
+  import of the gate into the core goes against the engine split (`docs/ENGINE-SPLIT.md`), so either the gate plugin
+  hands the function to the registry when it attaches, or the list moves to a small module that both import. That
+  choice is part of the build. Rejected: classing a search as `credentials` when its root holds a store. The gate sees
+  only the root's own name, so it would miss a `.env` inside a project folder, and a search of the home folder would ask
+  every time.
+- **Risk.** Small to medium. A search no longer finds text in those files, so "where did I leave a key" returns fewer
+  hits. The skipped count tells the model, and a read by name still asks. A path the list misses is still read, so this
+  is a floor and not a proof. For a trigger run, the read roots in section 1 limit what such a gap can show.
+- **Test.** Fake secret files in a temp home: `.aws/credentials`, `keys/*`, `run/*.key`, a project `.env` and a symlink
+  to one of them in an ordinary folder. `grep .` and `glob **/*` over the home folder, over `$EXO_HOME` and with no path
+  return no line and no name from them, and report the skipped count. A `grep` whose `path` is one of those folders
+  searches it, because the gate has already asked. `read_file` of one still asks.
+
+### 0.5 One search cannot freeze the core
+
+- **Today.** `Registry._run` runs `grep` and `glob` in a worker thread with no time limit. Python's `re` holds the
+  interpreter lock for the whole match, so the event loop stops until the match ends. The pattern is the model's, and
+  the text it searches is whatever sits in the files. Probed at `6551eed` with a ticker on the same loop: `grep` with
+  `(a+)+$` over a line of 24 `a` and a `b` took 1.2 s with a longest loop gap of 1.2 s, and the time grew about four
+  times for every 2 characters, so a 40-character line would run for about a day (extrapolated, not run). `glob` turns
+  its pattern into a regex too: 12 repeats of `**/` took 1.0 s against a 17-part path, about 2.5 times longer for each
+  repeat added. While a match runs, every session, both clients, approval answers and the pause-all switch wait. A
+  `wait_for` cannot fire while the loop is stopped, so no timer can end the run either.
+- **Change.** A search runs its match in a child process that the core can kill. A call gets 30 s by default. At the
+  limit the child is killed and the call returns an error result ("search stopped after 30 s, narrow the pattern").
+  The child gets the same arguments and the same skip list as 0.4 and returns the same text, so a search that fits the
+  limit behaves as it does today. Rejected: refusing nested quantifiers and backreferences (it misses `(a|a)+$` and
+  other shapes, so it is a filter and not a bound), and a linear-time regex engine (a new dependency for a module that
+  uses the standard library only).
+- **Risk.** Medium for its size. Each search starts a process, which adds tens of milliseconds (to be measured in the
+  build). The child and the parent must return identical text. A search over a very large tree that now takes longer
+  than the limit fails where it once finished.
+- **Test.** A scripted model calls `grep` with `(a+)+$` over a 40-character line, and `glob` with 20 repeats of `**/`
+  over a deep path. With the limit set to 1 s in the test, each returns the error result, no child process is left
+  running, and a ticker on the same loop sees no gap over 100 ms. A search that fits the limit returns the text it
+  returns today.
+
 ## 1. Triggers
 
 ### What a trigger is
 
 A trigger is a scheduled job whose `when` is an event instead of a time. It lives in the same table
-(`$EXO_HOME/schedule.sqlite`) and is managed by the same protocol command, `schedule.edit`, with four new fields. No new
+(`$EXO_HOME/schedule.sqlite`) and is managed by the same protocol command, `schedule.edit`, with five new fields. No new
 protocol command (30 of 30 are used) and no new event type (29 of 30): a run reports through `task.updated` and ends
-with a `notice` or a channel post, as a job does.
+with a `notice`, as a job does (a channel post waits for stage 6).
 
 | Field | Meaning |
 |---|---|
 | `on` | the source and its filter, for example `{"source": "webhook"}` or `{"source": "fs", "path": "~/Inbox", "glob": "*.pdf"}`. A job with `on` is a trigger. A job with `when` is a timer. |
 | `prompt` | what the run should do. The envelope follows it as data, inside a tag (below). |
-| `title`, `seat`, `tier`, `deliver` | as for jobs (`docs/SCHEDULE.md`). `tier` defaults to `fast`. |
+| `title`, `seat`, `tier`, `deliver` | as for jobs (`docs/SCHEDULE.md`). `tier` defaults to `fast`. In stage 1 `deliver` is `notice` and nothing else. |
 | `connector` | which connector shapes and masks the event. Each source has a default. |
 | `limits` | debounce, rates and caps (section 3). Defaults per source. |
 | `tools` | the tools the run gets. The default is `read_file`, `glob` and `grep`. It can remove names. In stage 1 it can add none. |
+| `roots` | the folders the run may read. The default is the trigger's own spool folder. A source that watches a folder (folder, git, a local Maildir) adds that folder. |
 
 `action` gains no new values: `list`, `add`, `remove`, `pause`, `resume` and `run_now` work on triggers as on jobs.
 `run_now` on a trigger replays its last envelope.
@@ -161,19 +224,27 @@ Notes:
 
 - **Webhook stays local.** The listener binds to the loopback address. Exposing it to the internet (for example GitHub
   calling in through a tunnel) is the user's choice, outside Exo, and `exo trigger add webhook` says so in one line. A
-  call with a bad signature, a timestamp more than 5 minutes old, or a signature already seen in the last 10 minutes is
-  dropped with a counter, never a run. The timestamp is inside the signed text, so a captured delivery does not stay
-  valid for ever. The listener refuses bodies over 1 MB and parses nothing before the signature check. A run cannot sign
-  a call to its own listener: the secret is under the credentials floor, and an unsigned call from the loopback address
-  is dropped like any other.
+  call with a bad signature, a timestamp more than 5 minutes off (early or late, as the meditate call in
+  `docs/LIVE-EGG.md` checks), or a signature already seen in the last 15 minutes is dropped with a counter, never a run.
+  The timestamp is inside the signed text, so a captured delivery stops being accepted once it is 5 minutes off. A
+  timestamp is accepted from 5 minutes before to 5 minutes after the listener's clock, a span of 10 minutes, so the
+  seen-signature list keeps each entry for 15. A check for "too old" alone would let a sender whose clock runs ahead be
+  replayed after the list had forgotten it. The listener refuses bodies over 1 MB and parses nothing before the
+  signature check. A run cannot sign a call to its own listener: the secret is under the credentials floor, and an
+  unsigned call from the loopback address is dropped like any other.
 - **The secret lives under the credentials floor.** Each trigger's secret is made at add time and kept in the macOS
   Keychain or the Linux Secret Service where there is one, as provider keys are (`exo.providers_setup`), else in a 0600
   file under `$EXO_HOME/keys/`. It is never kept in `schedule.sqlite`, which `read_file` reads without a question. The
-  gate classes reads of `keys/`, the Keychain and the Secret Service as credentials and asks every time (checked). The
-  add screen shows the secret once.
+  gate asks every time for a `read_file` of a file in `keys/`, for a shell lookup in the Keychain or the Secret Service,
+  and for a `grep` or `glob` whose `path` is the `keys/` folder itself (checked at `6551eed`). It does not ask for a
+  `grep` or `glob` that starts higher up and walks into `keys/`: on main that returns the files. Section 0.4 closes
+  that, and no trigger runs before it is built. The add screen shows the secret once.
 - **GitHub deliveries** (pull requests, issues) come through the webhook source with a `github` connector. GitHub signs
-  the body only, so these replays are stopped by remembering each `X-GitHub-Delivery` id for 48 hours, as
-  `docs/LIVE-EGG.md` does.
+  the body only and sends no timestamp, so the 5-minute window cannot apply to these. The `X-GitHub-Delivery` id is a
+  header outside the signature: a captured body and signature replays under a new id, and the id alone stops nothing.
+  The source remembers the SHA-256 of each raw body as well as the id, for 48 hours, and drops a repeat of either, as
+  `docs/LIVE-EGG.md` section 3.2 does. A replay after 48 hours is possible. For a trigger it costs one read-only run,
+  and the caps in section 3 bound that.
 - **Mail is outside text by definition** and ships last of the user-facing sources. Mail credentials are kept like
   the webhook secret. A `from` filter matches a header the sender wrote, so it selects mail and does not authenticate
   it. The connector reads the `Authentication-Results` header that the user's own mail server added and puts the
@@ -221,8 +292,24 @@ A trigger run starts from a scheduled run (`docs/SCHEDULE.md`, "Rules of the run
   no web tools, and no `code_find`, whose first backend is a remote model service that sees the files it searches
   (D-029). `read_file`, `glob` and `grep` are plain file reads in Python (`builtin/fs.py` and `builtin/search.py` under
   `src/exo/core/tools/`): none opens a connection or starts a program. The run's runner refuses every other name
-  (section 0.2). The run can look at files and report. It cannot send, write, run or fetch anything. Its answer goes to
-  the principal as a notice, or to the channel named in `deliver`, marked as the answer of a run that read outside text.
+  (section 0.2). With them the run can look at files and report. It has no tool that writes, runs, fetches or sends. On
+  main, though, `grep` and `glob` walk into secret stores and one pattern can freeze the core, so no trigger run starts
+  before sections 0.4 and 0.5 are built.
+- **Only the folders it names.** The trigger lists the folders its run may read (`roots`, shown on the add screen). The
+  default is its own spool folder under `$EXO_HOME/triggers/`, and a source that watches a folder adds that folder.
+  The runner's wrapper (section 0.2) resolves every `path` with symlinks followed and refuses one outside a root. A
+  `grep` or `glob` with no `path` searches the roots and never the engine's working folder, and a symlink that leaves a
+  root is not followed. Without this, a stranger's envelope could aim the run at the home folder or at `$EXO_HOME`,
+  where `schedule.sqlite` holds every other trigger's prompt and filter and `read_file` reads it without a question.
+  Section 0.4 skips secret stores whatever the roots are. The roots limit what is left, and a root is the principal's
+  choice.
+- **One place for the answer.** In stage 1 the answer goes to the principal's notices and nowhere else, and a trigger
+  whose `deliver` names a channel is refused when it is added. `Scheduler._deliver` hands the text to a channel's
+  `deliver` method directly. That is not a tool call, so the gate never sees it, and whatever the run read can be steered
+  into the answer. No shipped channel has a `deliver` method today (a job aimed at one falls back to a notice), so for
+  jobs the gap is latent. The `deliver` field would make it live for triggers. Channel delivery comes with the reply
+  tool in stage 6. The notice says the answer was written by a run that read outside text, and the add screen says the
+  answer can quote anything the run read.
 - **Under the gate, always.** Every tool call is classified and logged. A call that asks (reading a credentials file, for
   instance) waits for the principal. A run that waits on an approval for more than 30 minutes ends with a notice
   ("waiting on you: approve or dismiss") rather than holding a slot forever. Standing grants apply as for any turn.
@@ -297,11 +384,18 @@ Defaults, each overridable per trigger in `limits`. They are starting values, no
 | Runs per day | 40 | the trigger pauses until the next UTC day, with one notice |
 | Concurrent trigger runs per seat | 1, queue of 10 | the oldest queued batch is merged into the next |
 | Tool rounds per run | 24 (the loop's `max_iterations`) | the run stops with a notice |
+| Wall clock per run | 15 minutes, not counting a wait for an approval | the run is interrupted, with a notice |
 | Tokens per run | 50,000 | the run is stopped, as the delegator stops a child that passes its token limit |
 | Tokens per trigger per day | 400,000 | the trigger pauses until the next UTC day, with one notice |
 | Tokens, all triggers, per day | 1,000,000 | every trigger pauses until the next UTC day |
 | USD per trigger per day, only where `models.spend` is set | the smaller of 1 USD and a tenth of its `daily_usd` | the trigger pauses until the next day, with one notice |
 | USD, all triggers, per day, only where `models.spend` is set | a quarter of its `daily_usd` | every trigger pauses until the next day |
+
+**Time.** The wall-clock row needs a timer that interrupts the run, which `Scheduler.interrupt` already does for a live
+loop. A timer can fire only while the event loop runs. On main one `grep` or `glob` pattern can hold the loop for
+minutes or longer, and the tool registry puts no time limit on a call (section 0.5), so the row means nothing until 0.5
+ships. A single `grep` or `glob` call has its own 30 s limit for every caller (section 0.5). A wait for an approval ends
+at 30 minutes on its own (section 1, "Under the gate, always").
 
 **The meters.** `budget.yaml` `per_day_max` cannot be the meter. On main that number is read in one place,
 `gate.decide`, for tool calls that carry a cost (the `payment` category). Model calls never reach the gate: the gate
@@ -340,8 +434,8 @@ The tier defaults to `fast`, the cheapest that can do the job (D-017).
 - **Automatic pauses:** three failed runs in a row, a cap, or a loop guard firing. Each says why in one notice.
 - **Adding a trigger** is a principal act. After section 0.1, `schedule.edit` refuses every caller that is not the
   principal's own client, so a script, a channel link or the agent cannot add, pause or resume one. The add screen shows
-  the source, the filter, the limits, the tools the run gets, where the answer goes and what the model will see, before
-  it saves.
+  the source, the filter, the limits, the tools and folders the run gets, where the answer goes (your notices) and what
+  the model will see, before it saves. It says that the answer can quote anything the run read.
 
 ## 5. Observe: the runs dashboard
 
@@ -399,9 +493,9 @@ The third job, build: a way for other people to make agents that run on Exo. Not
 
 | Stage | What | Done when |
 |---|---|---|
-| 0 | The three fixes in section 0 | each test in section 0 passes |
-| 1 | Trigger engine in `src/exo/scheduler.py` (or a sibling outside the counted core): the `on` field, the ingress door and its `Target`, the `webhook` source with its signature, timestamp and replay checks and its secret under the credentials floor, kind `triggered`, author `trigger:<id>`, the tag, the three-tool default and its runner, debounce, rates, token caps (and USD caps where `models.spend` is set), pause and pause-all | a signed call starts one run. Ten in a second start one. A bad signature, a stale timestamp and a replayed call start nothing. A scripted model that asks for `bash`, `write_file`, `web_extract`, a plugin tool or a blocked name gets an error and nothing runs. Outside text in a triggered thread is absent from another thread's note and from the summarizer's input. `local`, `unknown` and `seat:` callers cannot add a trigger. A run at its cap pauses the trigger. A cap of 0, or a meter that cannot be read, pauses it before its first run, and with `models.spend` unset the USD rows read "not measured" while the token rows still bind |
-| 2 | `fs` and `git` sources | a file saved into the watched folder starts one run. A commit starts one run. Ten saves in a second start one |
+| 0 | The five fixes in section 0 | each test in section 0 passes |
+| 1 | Trigger engine in `src/exo/scheduler.py` (or a sibling outside the counted core): the `on` field, the ingress door and its `Target`, the `webhook` source with its signature, timestamp and replay checks and its secret under the credentials floor, kind `triggered`, author `trigger:<id>`, the tag, the three-tool default with its read roots and its runner, the answer to notices only, debounce, rates, the wall-clock limit, token caps (and USD caps where `models.spend` is set), pause and pause-all | a signed call starts one run. Ten signed calls in a second start one run at once and a second run, holding the other nine, when the 60 s gap ends. A bad signature, a timestamp more than 5 minutes off in either direction, a repeated signature and the same GitHub body under a new delivery id start nothing. A scripted model that asks for `bash`, `write_file`, `web_extract`, a plugin tool or a blocked name gets an error and nothing runs. With fake `~/.aws/credentials`, `keys/` and `run/*.key` files in place, a scripted model that reads, globs or greps the home folder, `$EXO_HOME`, a `..` out of a root or a symlink out of a root, or that searches with no path, gets an error or only files inside the roots, and no line or name of those fake files appears. A trigger whose `deliver` names a channel is refused. A scripted run that passes its wall-clock limit is interrupted with a notice. A scripted `grep` with `(a+)+$` over a 40-character line in a trigger run, with the search limit set to 1 s, returns the error from section 0.5, and a ticker on the same loop sees no gap over 100 ms. Outside text in a triggered thread is absent from another thread's note and from the summarizer's input. `local`, `unknown` and `seat:` callers cannot add a trigger. A run at its cap pauses the trigger. A cap of 0, or a meter that cannot be read, pauses it before its first run, and with `models.spend` unset the USD rows read "not measured" while the token rows still bind |
+| 2 | `fs` and `git` sources | a file saved into the watched folder starts one run. A commit starts one run. Ten saves in a second start one run, after the 2 s of quiet. A run can read the watched folder and its spool and nothing else |
 | 3 | Connectors and masking, and the `mail` source: the connector hook, the allowlist rule, the detectors, the spool, the `auth` verdict | a fixture mail with an address, a phone number and keys in the middle of a sentence (`ghp_`, `sk-`, `AKIA`, `github_pat_`) reaches the model as placeholders. A placeholder passed to `read_file`, a URL or a file write is never resolved. A by-reference read returns raw text, and a test pins that. A fixture mail with a forged `From` and a failing `Authentication-Results` is marked `auth: fail` and does not match a filter that requires `pass` |
 | 4 | The runs dashboard: the `runs` built-in, `exo runs`, the web panel | every scheduled and triggered run of a fixture day appears with its status and tokens |
 | 5 | Root-cause notes: the post-run step, source `rca`, the verify rule, `exo findings promote`, the daily cap | a fixture failed run files one `rca` note with a cause and evidence. A second identical failure bumps the count. The digest leaves the note out until it is promoted |
@@ -411,10 +505,11 @@ The third job, build: a way for other people to make agents that run on Exo. Not
 
 Each stage updates `docs/SCHEDULE.md`, the user guide, the developer guide and the docs map as it lands.
 
-**Budget.** Stage 0 and the ingress door touch a few lines in counted core files (`src/exo/core/engine.py`,
-`context.py`, `sessions.py`, `ingress.py`, `findings.py` and `src/exo/protocol/schema.py`). At `c937a85` the core
-counts 15,076 lines against D-077's ceiling of 15,813, so 737 lines are left, and the number moves with every merge.
-The trigger engine, its sources and the connectors live outside the count, in `src/exo/scheduler.py` and siblings
+**Budget.** Stage 0 and the ingress door touch counted core files: `src/exo/core/engine.py`, `context.py`, `sessions.py`,
+`ingress.py`, `findings.py`, `src/exo/protocol/schema.py` and, for 0.4 and 0.5, `src/exo/core/tools/builtin/search.py`
+with a search worker beside it. Sections 0.4 and 0.5 are the largest part, an estimate of 100 to 150 lines. At `6551eed`
+the core counts 15,099 lines against D-077's ceiling of 15,813, so 714 lines are left, and the number moves with every
+merge. The trigger engine, its sources and the connectors live outside the count, in `src/exo/scheduler.py` and siblings
 (D-067). D-077 never lets the count block a security or robustness fix.
 
 **Stage 6, widening.** A trigger that names a write tool, `bash` or a tool that reaches the network needs all of these
@@ -430,12 +525,14 @@ first:
   and for a short window after it, and keys mail by Message-ID and In-Reply-To. The rate caps stay the backstop. Tests:
   a loop between two triggers, and a loop through a shell write.
 - **A reply tool** with its recipient bound to the sender of the event, shown in full on the approval card.
+- **Channel delivery.** An answer posted to a channel goes through a gated send (a tool call the gate classes as
+  `message_send`), not through `Scheduler._deliver`, because the post carries whatever the run read.
 - **An add card** that says what the choice allows ("this trigger's text can make Exo run shell commands").
 
 ## Not covered
 
-- Writes, shell, network and replies from trigger runs (stage 6).
-- What a channel client does with links or images in a delivered answer.
+- Writes, shell, network, replies and channel delivery from trigger runs (stage 6).
+- What a channel client does with links or images in a delivered answer (stage 6).
 - Processes running as the same user (D-052).
 - The gate's shell reader. Its known gaps have their own issues and pull requests, and stage 1 does not depend on it.
 
@@ -452,11 +549,12 @@ The first four are the choices from the top, each with the recommended option fi
    would run it on the envelope fields or tune it. (b) A separate path inside the scheduler, with wake, policy and limit
    rules of its own. Fewer parts to build first. It is a second door for outside input to audit, and a departure from
    D-026's "one path" that this decision would have to amend.
-2. **What a trigger run may do.** (a) Read only (recommended): `read_file`, `glob`, `grep`. Widening is a later
-   ruling. (b) The scheduled-run tool list behind a new untrusted-input mode of the gate. Every `web_read` and network
-   shell call asks, and standing grants are ignored. More useful at once. The gate becomes the only guard and its shell
-   reader still has known gaps, and a stranger's mail could stall a run on a question. (c) The scheduled-run list under
-   the ordinary gate, with no new mode. It leaves a path for data to leave, so it is not a real option.
+2. **What a trigger run may do.** (a) Read only (recommended): `read_file`, `glob`, `grep`, in the folders the trigger
+   names. Widening is a later ruling. (b) The scheduled-run tool list behind a new untrusted-input mode of the gate.
+   Every `web_read` and network shell call asks, and standing grants are ignored. More useful at once. The gate becomes
+   the only guard and its shell reader still has known gaps, and a stranger's mail could stall a run on a question.
+   (c) The scheduled-run list under the ordinary gate, with no new mode. It leaves a path for data to leave, so it is not
+   a real option.
 3. **Which source first.** (a) The signed webhook (recommended). Its sender is authenticated, its data is structured, and
    it needs no OS permission and no stored mail password. (b) A folder: the most asked for, but file names and contents
    come from downloads, and it needs file watching on two systems. (c) Mail: strangers wrote the text. It goes last.

@@ -1,7 +1,7 @@
 # Exopet: Exo as a living lattice (D-048)
 
 Status: **Proposed** (2026-10-12), revised 2026-10-13 by D-058 (the community egg, x0, grows from repository
-activity, with an instant share and a validated share earned in meditation; section 3) and 2026-10-18 after the review
+activity, with an instant share and a validated share earned in meditation; section 3) and 2026-10-18 after the reviews
 of PR #107. Nothing here is built. D-048 and D-058 in `DECISIONS.md`.
 Builds on D-040 (signed authors, anchored ledger), D-012 and D-022 (the learning loop), D-044 (taste baseline), D-031
 (the Exo look) and D-049 (the brand egg). The open questions for the principal are at the end. This page does not
@@ -337,6 +337,9 @@ merge or the reviewer bot to mark.
 
 - At most 3 instant XP per account per UTC day across issues, opened pull requests and reviews. Merges and releases
   have no per-account cap, because a maintainer decides them.
+- Each item earns each instant award once. The award is keyed by the item and the action (`opened`, `merged`, a
+  review's node id, a release's tag), so a replayed or repeated event adds nothing. Merges and releases have no
+  per-account cap, so this is what stops a replayed merge from adding its 2 XP again (`docs/LIVE-EGG.md` section 3.2).
 - A review on one's own pull request earns nothing.
 - At most 15 outside instant XP an hour and 60 a day across everyone, and at most 25 percent of the target (512) over
   x0's life. Past a cap, events still animate.
