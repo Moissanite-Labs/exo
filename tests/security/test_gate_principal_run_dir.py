@@ -19,7 +19,7 @@ def run_dir(request, tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    for k in ("EXO_KEYS_FILE", "EXO_PRINCIPAL_STORE", "EXO_PRINCIPAL", "CLAUDE_CONFIG_DIR"):
+    for k in ("EXO_KEYS_FILE", "EXO_PRINCIPAL_STORE", "EXO_PRINCIPAL", "CLAUDE_CONFIG_DIR", "EXO_SEAT"):
         monkeypatch.delenv(k, raising=False)
     if request.param.startswith("custom"):
         exo_home = tmp_path / "elsewhere" / "exo"
@@ -78,6 +78,13 @@ SECRET = [
     lambda r: sh(f"cat {r}/jobs/../*"),
     lambda r: sh(f"ls {r}/jobs/.."),
     lambda r: ("list_dir", {"path": f"{r}/jobs/.."}),
+    lambda r: sh(f"cat {r}/agent-default.principal.k*"),   # the default agent's key (exo_tui.conn)
+    lambda r: sh(f"cat {r}/agent-default.*"),
+    lambda r: sh(f"cat {r}/agent-d*"),
+    lambda r: sh(f"cat {r}/{{*,}}"),                        # brace sets (#184) are expanded first
+    lambda r: sh(f"cat {{{r},x}}/*"),
+    lambda r: sh(f"cat {Path(r).parent}/{{run,x}}/*"),
+    lambda r: sh(f"cat {Path(r).parent}/r{{u,}}n/*"),
 ]
 
 
@@ -192,6 +199,102 @@ def test_the_run_folder_follows_the_ssh_rule(shape, run_dir):
     want = gate.classify(shape(ssh, "id_rsa", "id_rs")).category
     got = gate.classify(shape(run_dir, "exod.principal.key", "exod.principal.k")).category
     assert got == want == "credentials"
+
+
+@pytest.mark.parametrize("shape", ["cat {}/agent-{}.principal.k*", "cat {}/agent-{}.*", "head -n 1 {}/agent-{}*"])
+def test_a_seat_or_agent_principal_key_is_credentials(shape, run_dir, monkeypatch):
+    """Each agent serves at run/agent-<seat>.sock with its key beside it: $EXO_SEAT and the seats the home
+    defines ($EXO_HOME/seats/<name>.toml, .json or <name>/) are sampled, not one stand-in name."""
+    seats = Path(gate._exo_home()) / "seats"
+    seats.mkdir(parents=True)
+    (seats / "scout.toml").write_text('name = "scout"\n')
+    (seats / "ops.json").write_text("{}")
+    (seats / "ops-desk").mkdir()
+    monkeypatch.setenv("EXO_SEAT", "lead")
+    for name in ("lead", "scout", "ops", "ops-desk"):
+        assert gate.classify(sh(shape.format(run_dir, name))).category == "credentials", name
+
+
+# A glob with no folder is matched against the run secrets by their own names, not their paths (fnmatch's `*`
+# crosses `/`), no agent name is made up, and an agent key counts only by its `agent-` or `.principal` part (a
+# seat named `main` or `test` does not make `*main*` ask): these keep main's class in any folder.
+BARE_KEEP = [("ls *main*", "read"), ("git branch --list '*main*'", "read"), ("find . -name '*main*'", "read"),
+             ("git log --all -- '*main*'", "read"), ("find . -name 'run*'", "read"), ("ls *run*", "read"),
+             ("grep 'run*' notes.txt", "read"), ("ls -d *run*/", "read"), ("ls *test*", "read"),
+             ("find . -name '*test*'", "read"), ("git branch --list '*test*'", "read"), ("ls *default*", "read"),
+             ("ls age*", "read"),
+             # a folder part that is only wildcards, or a literal folder that is not a run folder, cannot reach a
+             # run folder's agent keys in bash, though fnmatch's `*` crosses `/`
+             ("ls */*default*", "read"), ("ls */*main*", "read"), ("ls ~/*test*", "read"),
+             ("find . -path '*/*test*'", "read")]
+# A bare name that could be a run secret in the folder it is run in, and any glob that names the run folder path.
+BARE_ASK = ["cat exod*", "cat exod.tok*", "cat *.principal.key", "cat agent-*", "ls agent-d*", "rm exod*",
+            "cat *-default.principal*", "cat agent-default*",
+            "ls ~/.exo/run*", "ls */run*", "ls .exo/run*", "grep -r . ~/.exo/run*/",
+            "cat ~/.exo/*/*default*", "cat */agent-*", "cat .exo/run/*default*"]
+
+
+@pytest.fixture
+def plain_home(monkeypatch):
+    """A home whose path names nothing these globs could match (a CI home such as /home/runner would)."""
+    monkeypatch.setenv("HOME", "/nonexistent/u")
+    for k in ("EXO_HOME", "EXO_KEYS_FILE", "EXO_PRINCIPAL_STORE", "EXO_PRINCIPAL", "CLAUDE_CONFIG_DIR", "EXO_SEAT"):
+        monkeypatch.delenv(k, raising=False)
+
+
+@pytest.mark.parametrize("cmd,main", BARE_KEEP)
+def test_a_bare_glob_elsewhere_keeps_mains_class(cmd, main, plain_home, monkeypatch):
+    """Also when a sampled seat is named in it (a seat file is sampled the same way as $EXO_SEAT)."""
+    for seat in (None, "main", "test"):
+        if seat:
+            monkeypatch.setenv("EXO_SEAT", seat)
+        assert gate.classify(sh(cmd)).category == main, seat
+
+
+@pytest.mark.parametrize("cmd", BARE_ASK)
+def test_a_bare_secret_name_or_a_run_folder_glob_asks(cmd, plain_home):
+    assert gate.classify(sh(cmd)).category == "credentials"
+
+
+LINKED = [
+    lambda lk: sh(f"grep -r . {lk}/.."),
+    lambda lk: sh(f"cat {lk}/../*"),
+    lambda lk: sh(f"ls {lk}/.."),
+    lambda lk: sh(f"cat {lk}/../exod.tok*"),
+    lambda lk: ("list_dir", {"path": f"{lk}/.."}),
+    lambda lk: ("grep", {"pattern": ".", "path": f"{lk}/.."}),
+]
+
+
+@pytest.fixture
+def jobs_link(run_dir, tmp_path):
+    """A real symlink to run/jobs, outside the home: its `..` is the run folder, not the link's own folder."""
+    (Path(run_dir) / "jobs").mkdir(parents=True)
+    link = tmp_path / "links" / "jobs"
+    link.parent.mkdir()
+    link.symlink_to(Path(run_dir) / "jobs")
+    return str(link)
+
+
+@pytest.mark.parametrize("make", LINKED, ids=lambda m: _id(m("LINK")))
+def test_dotdot_through_a_link_to_the_jobs_folder_is_the_run_folder(make, jobs_link):
+    assert gate.classify(make(jobs_link)).category == "credentials"
+
+
+@pytest.mark.parametrize("make", LINKED, ids=lambda m: _id(m("LINK")))
+def test_dotdot_through_a_link_in_the_home_is_the_run_folder(make, run_dir):
+    """The link right in $HOME: `~/jl/..` is $HOME once normalised, but bash goes through the link."""
+    (Path(run_dir) / "jobs").mkdir(parents=True)
+    home = Path(gate._home())
+    (home / "jl").symlink_to(Path(run_dir) / "jobs")
+    for lk in (str(home / "jl"), "~/jl", "$HOME/jl", "${HOME}/jl"):
+        assert gate.classify(make(lk)).category == "credentials", lk
+
+
+@pytest.mark.parametrize("make", [lambda lk: sh(f"cat {lk}/*"), lambda lk: sh(f"ls {lk}"),
+                                  lambda lk: ("list_dir", {"path": lk})], ids=["cat", "ls", "list_dir"])
+def test_job_output_through_a_link_stays_read(make, jobs_link):
+    assert gate.classify(make(jobs_link)).category == "read"
 
 
 def test_only_the_folder_itself_is_the_run_folder(run_dir):
