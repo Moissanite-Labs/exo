@@ -77,11 +77,13 @@ reads. The end of a read that could be the start of a key waits for the next rea
 Other output is not held back. Redaction finds the keys in the output itself, longest key first, and skips a match
 that overlaps one already taken. The markers go in only after that, so no key can match across a `[redacted]`
 marker. The stream is cut only where no match that redaction could take crosses the cut, whatever output follows.
-So the stream equals redacting the whole output, for any set of known key values. That holds when one key holds
-another (a URL with a password in it), when keys overlap in a chain and when a key holds `[` or `]`. The held text
-stays under twice the length of all key values together. Each piece is redacted once more on its way to clients,
-for a key value learned after the command started. That pass keeps the markers already in the piece, so it does
-not change what the stream redaction did. The result is redacted as a whole when the call returns.
+So the stream equals redacting the whole output with the key values known when the command started, for any set
+of them. That holds when one key holds another (a URL with a password in it), when keys overlap in a chain and when
+a key holds `[` or `]`. The held text stays under twice the length of all key values together. Each piece is
+redacted once more on its way to clients. That pass keeps the markers already in the piece, so it does not change
+what the stream redaction did. It cuts out a key value learned after the command started, but only inside one
+piece, so such a key split between two pieces still goes out in two parts. The result is redacted as a whole, with
+every key value known by then, when the call returns.
 
 ## Execution brokers (D-020)
 

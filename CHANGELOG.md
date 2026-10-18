@@ -396,9 +396,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   key in the text itself and puts the `[redacted]` markers in after, so a key no longer matches across a marker.
   Output changes only for a key value that holds `[` or `]` or is part of the word "redacted". The stream is cut
   only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output
-  for any set of known key values, also when keys nest, overlap in a chain or hold `[` or `]`. The stream and the
-  result also decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md
-  "Streamed output".
+  for any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or
+  `]`. A key value learned while the command runs is cut out only inside one piece. The stream and the result also
+  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
 - Rebuilding the rule-of-three cache (`proposals/state.json` missing or stale) counts only your own utterances
   (D-040). Before, a rebuild also counted Hermes briefs of doubtful authorship (`hermes:unverified-user`) and peer,
   bus and job turns, so one matching sentence from you could complete a rule-of-three proposal, which promotion
