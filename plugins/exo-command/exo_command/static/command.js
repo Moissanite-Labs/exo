@@ -18,6 +18,7 @@ export function mount(app) {
       if (v == null || v === false) continue;
       if (k === "class") el.className = v;
       else if (k.slice(0, 2) === "on") el.addEventListener(k.slice(2), v);
+      else if (k === "style") el.style.cssText = v;   // the CSP (#162) refuses style attributes
       else el.setAttribute(k, v);
     }
     for (var i = 2; i < arguments.length; i++) add(el, arguments[i]);
