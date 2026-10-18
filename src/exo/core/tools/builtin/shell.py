@@ -67,13 +67,30 @@ def _drain(proc: subprocess.Popen, out: _Capped, emit: Callable[[str], None] | N
         eof = not chunk
         text = dec.decode(chunk, final=eof)
         out.add(text)
-        if emit:
-            buf = redact_secrets(held + text, vals)
-            cut = len(buf) if eof else len(buf) - _key_start(buf, vals)
-            held, text = buf[cut:], buf[:cut]
+        if emit:  # cut the raw text, then redact what goes out: a key inside a longer key is not cut out first
+            raw = held + text
+            cut = len(raw) if eof else _safe_cut(raw, vals)
+            held, text = raw[cut:], redact_secrets(raw[:cut], vals)
             if text:
                 with contextlib.suppress(Exception):
                     emit(text)
+
+
+def _safe_cut(raw: str, vals: list[str]) -> int:
+    """Where ``raw`` may split so the stream still equals whole-output redaction: before a tail that could start a
+    key, and never inside a key that redaction takes (longest first, skipping one inside a key already taken)."""
+    cut, taken = len(raw) - _key_start(raw, vals), bytearray(len(raw))
+    for v in vals:
+        i = raw.find(v)
+        while i >= 0:
+            if 1 in taken[i:i + len(v)]:
+                i = raw.find(v, i + 1)
+                continue
+            taken[i:i + len(v)] = b"\x01" * len(v)
+            if i < cut < i + len(v):
+                cut = i
+            i = raw.find(v, i + len(v))
+    return cut
 
 
 def _key_start(text: str, vals: list[str]) -> int:

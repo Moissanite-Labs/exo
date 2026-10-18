@@ -1,6 +1,8 @@
 """Tool results never carry key values the core knows (env, keys file, values it looked up)."""
 import asyncio
 
+import pytest
+
 from exo.core.models import keys
 from exo.core.tools import ToolContext, default_registry
 from exo.core.types import ToolCall
@@ -72,3 +74,37 @@ def test_streamed_output_redacts_a_key_across_a_64k_read_edge(monkeypatch, tmp_p
     joined = "".join(seen)
     assert SECRET not in joined and joined == "x" * (65536 - 10) + "[redacted]\n" + "y" * 100_000
     assert SECRET not in r.text() and r.text().endswith("[exit 0]")
+
+
+class _Proc:
+    """A process whose stdout hands out fixed reads, so each read edge is placed exactly."""
+
+    def __init__(self, chunks):
+        self.stdout = self
+        self._chunks = list(chunks)
+
+    def read1(self, n):
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+NESTED = "postgres://svc:" + SECRET + "@db.internal:5432/prod"  # a key that holds another key
+OVERLAP = SECRET[-6:] + "QQQQ-tail-xyz"  # a key that starts with the end of another key
+
+
+@pytest.mark.parametrize("output", [f"url {NESTED}\nnext\n", f"x {SECRET}QQQQ-tail-xyz done\n"])
+def test_stream_equals_whole_output_redaction_at_every_read_edge(monkeypatch, output):
+    """Wherever a read ends, the stream matches redacting the whole output: the outer key of a nested pair is not
+    sent half redacted, and no part of a key goes out because a longer tail starts another key."""
+    from exo.core.tools.builtin.shell import _Capped, _drain
+    monkeypatch.setenv("SOME_API_KEY", SECRET)
+    monkeypatch.setenv("DB_PASSWORD", NESTED)
+    monkeypatch.setenv("OTHER_TOKEN", OVERLAP)
+    monkeypatch.setenv("EXO_KEYS_FILE", "/nonexistent")
+    whole = keys.redact_secrets(output)
+    assert SECRET not in whole and "db.internal" not in whole
+    data = output.encode()
+    for k in range(1, len(data)):
+        seen = []
+        _drain(_Proc([data[:k], data[k:]]), _Capped(10_000), seen.append)
+        assert "".join(seen) == whole, k
+        assert not any(SECRET[:8] in c for c in seen), k

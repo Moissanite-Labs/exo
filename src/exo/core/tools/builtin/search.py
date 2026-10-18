@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterator
 
-from exo.core.tools.builtin.fs import read_regular
+from exo.core.tools.builtin.patch import read_regular
 from exo.core.tools.registry import Registry, ToolContext, ToolError
 
 SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv",

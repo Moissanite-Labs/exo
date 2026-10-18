@@ -15,6 +15,7 @@ from __future__ import annotations
 import difflib
 import os
 import re
+import stat
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -25,6 +26,9 @@ from exo.core.tools.builtin.fuzzy import (
     fuzzy_find_and_replace,
     is_already_applied,
 )
+from exo.core.tools.registry import ToolError
+
+MAX_READ_BYTES = 50_000_000
 
 
 class OperationType(Enum):
@@ -181,10 +185,17 @@ def _diff(path: str, old: str | None, new: str | None) -> str:
         tofile="/dev/null" if new is None else f"b/{path}"))
 
 
-def read_text(p: Path) -> str:
-    """Read UTF-8 text keeping line endings as they are on disk."""
-    with open(p, encoding="utf-8", newline="") as f:
-        return f.read()
+def read_regular(p: Path, cap: int) -> bytes:
+    """Bytes of a regular file (links followed). A FIFO or device is refused before it is opened."""
+    if not p.is_file():
+        raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
+    with open(os.open(p, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)), "rb") as f:  # a FIFO swapped in: no block
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
+        if st.st_size > cap:
+            raise ToolError(f"{p} is {st.st_size:,} bytes, over the {cap:,}-byte limit; use grep, or sed -n in bash")
+        return f.read(cap)
 
 
 def write_atomic(p: Path, text: str) -> None:
@@ -218,7 +229,7 @@ def apply_patch(text: str, resolve: Callable[[str], Path]) -> tuple[bool, str]:
         if p in overlay:
             return overlay[p]
         if p not in originals:
-            originals[p] = read_text(p) if p.is_file() else None
+            originals[p] = read_regular(p, MAX_READ_BYTES).decode("utf-8") if p.is_file() else None
         return originals[p]
 
     def put(p: Path, label: str, value: str | None) -> None:

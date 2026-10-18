@@ -6,6 +6,7 @@ refuses FIFOs and devices instead of blocking on them or reading forever.
 import os
 import stat
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -140,6 +141,25 @@ def test_read_refuses_a_file_over_the_cap(run, tmp_path, monkeypatch):
     res = run("read_file", path="big.log")
     assert res.is_error and "over the 10-byte limit" in res.text() and "grep" in res.text()
     assert run("read_file", path="ok.log").text() == "     1|xxxxxxxxxx"
+
+
+def test_apply_patch_refuses_a_file_over_the_cap(run, tmp_path, monkeypatch):
+    from exo.core.tools.builtin import patch
+    monkeypatch.setattr(patch, "MAX_READ_BYTES", 10, raising=False)  # the message check catches a rename
+    (tmp_path / "big.txt").write_text("old\n" + "x" * 10)
+    res = run("apply_patch", patch=P("*** Update File: big.txt", "-old", "+new"))
+    assert res.is_error and "over the 10-byte limit" in res.text()
+    assert (tmp_path / "big.txt").read_text() == "old\n" + "x" * 10
+
+
+@needs_fifo
+def test_apply_patch_does_not_block_on_a_fifo_swapped_in_after_the_check(run, tmp_path, monkeypatch):
+    # is_file() said "regular file", then the path became a FIFO: the open must not wait for a writer.
+    fifo, is_file = tmp_path / "notes.txt", Path.is_file
+    os.mkfifo(fifo)
+    monkeypatch.setattr(Path, "is_file", lambda self: self == fifo or is_file(self))
+    res = _bounded(lambda: run("apply_patch", patch=P("*** Update File: notes.txt", "-old", "+new")), [fifo])
+    assert res.is_error and "not a regular file" in res.text()
 
 
 @needs_fifo

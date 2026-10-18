@@ -116,6 +116,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `-` line) beyond whitespace, escaping or Unicode. A stale `TIMEOUT = 30` used to replace the file's newer
   `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
   closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
+  In `apply_patch` a hunk's context lines count toward the two, so a hunk with one context line can still replace a
+  changed `-` line.
 
 ### Security
 - Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
@@ -132,21 +134,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
 - Skill gates fail closed. The draft pipeline's prose gate passes only when `check-prose.py` exits 0. Before, it
-  passed whenever the output held the word "clean", so a draft named `cleanup.md` passed with findings.
-  `--allow-identifier` exempts only the token it names: allowing `localhost:8080` no longer hides
-  `localhost:9999/secret`, and a refused hit names the whole token. Internal names that start or end with `.`, `~`
-  or `@` now match, in `check-prose.py` and in the draft pipeline.
+  passed whenever the output held the word "clean", so a draft named `cleanup.md` passed with findings. A missing
+  `check-prose.py` now blocks, as does a missing `check-mermaid.py` when the draft has a mermaid fence. Both were
+  skipped, so a partial install posted unchecked drafts. `--allow-identifier` exempts only the token it names:
+  allowing `localhost:8080` no longer hides `localhost:9999/secret`, and a refused hit names the whole token.
+  Internal names that start or end with `.`, `~` or `@` now match, in `check-prose.py` and in the draft pipeline.
 - File tools: a write no longer follows a link planted at its temp name (`.<name>.exo-tmp`), which sent the
   bytes, and the file's mode, to wherever the link pointed while the gate had classified only the named path. A
   write to a symlinked file is refused with the link's target named, instead of replacing the link with a regular
-  file and leaving the target unedited. `read_file`, `edit_file` and `grep` refuse or skip FIFOs and devices,
-  which hung the core (cancel could not stop it) or read `/dev/zero` until memory ran out, and `read_file` and
-  `edit_file` refuse files over 50 MB. `code_find` passes the question to jg after `--`, so a question such as
+  file and leaving the target unedited. `read_file`, `edit_file`, `apply_patch` and `grep` refuse or skip FIFOs and
+  devices, which hung the core (cancel could not stop it) or read `/dev/zero` until memory ran out. All but `grep`
+  refuse files over 50 MB. `code_find` passes the question to jg after `--`, so a question such as
   `- --include-sensitive` can no longer turn off jg's sensitive-file filter (docs/TOOLS.md).
 - Streamed `bash` output no longer leaks a known key split between two reads. The output went out per 64 KiB read
   and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
-  halves. A read now holds back an ending that could start a key until the next read. The stream and the result also
-  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
+  halves. A read now holds back an ending that could start a key until the next read, and the stream matches
+  redacting the whole output, also when one key holds another. The stream and the result also decode a character
+  split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
 
 ## [0.2.0] (egg) - 2026-10-13
 
