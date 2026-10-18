@@ -843,6 +843,27 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   vetoes and never authorizes. Accepted cost, fail closed: a literal that code only prints, and separately
   quoted data arguments under an unanchored regex, are matched too. The reason names only the policy entry,
   never the matched words: the hook writes decisions to the signed ledger, which holds no command text.
+  *Amendment 2026-10-17 (issue #160):* wrappers that run a command were unknown or opaque programs, so the command
+  was never classified and a deny on its category asked (`setsid git push origin main`, `flock /tmp/l git push`,
+  `watch git push`, `script -qc '...'`, `tmux new-session -d '...'`, `screen -dm ...`, `parallel git push :::
+  origin`). The gate now reads them as it reads `xargs` (`gate._WRAPPERS`, `_classify_wrapper`): options and fixed
+  operands are skipped as getopt reads them, and the argv or the command string (`flock -c`, `script -c`, `watch`
+  through `sh -c`, a tmux shell-command, a parallel template) is classified as a nested command beside an opaque
+  part, so the line asks as before. Until D-075 lands, the line is denied only when what runs outranks
+  `opaque_exec` (`delete`, `vcs_push`, `credentials`); a category that ties with it or ranks below it
+  (`schedule`; `web_read`, `local_write`) still asks, as for `coproc`. A tmux command list is split as tmux
+  splits it: an argument ending in `;` ends a command, one ending in `\;` does not; tmux's default aliases
+  `splitp` and `split-pane` name `split-window`. An environment dump behind a wrapper is `credentials`, as behind a
+  prefix or runner (#155): the wrapped argv goes through the same `_env_dump` check. `chroot`, `nsenter`, `unshare`
+  and `systemd-run` follow the `sudo` precedent: a signal named after the wrapper, reversible counts as costly. Forms
+  the gate cannot read (a variable, `tmux send-keys`, `screen -X stuff`, `parallel` without a template) stay
+  `opaque_exec`. A deny on `opaque_exec` itself no longer reaches a wrapped command that outranks it, as with
+  `bash -c` and `xargs`, so the line asks there (it was denied) until D-075. To keep that an ask and not the inner
+  category's `log`, this change carries #178's floor rule: only naming `opaque_exec` at `log` or `allow` turns the
+  indirection floor off. A `parallel` template is read per argument only on the line itself (16 distinct
+  arguments, four times that command's own length, each text sized before it is built); a nested one is read
+  alone, so a template that is a parallel line cannot multiply the work. `function NAME {` from the same issue is
+  read by #181.
   *Amendment 2026-10-17 (issue #167):* the lexer decoded `$'..'` with Python's `unicode_escape`. Bash's short
   escapes (`\u65`, `\x4`, `\U41`), its 8-bit octal (`\545` is `e`), `\x{..}` and its NUL cut-off differ from that,
   so `git push $'--forc\u65' origin main` read as a plain push while bash ran a force push. `$'..'` is now decoded
