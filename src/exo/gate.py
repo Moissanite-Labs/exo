@@ -1369,7 +1369,9 @@ def _brace_alts(text: str) -> list:
             if abs(b - a) >= 16:
                 return [_brace_glob(text)]
             step = 1 if b >= a else -1
-            alts, hit = [str(x) if r.group(1) else chr(x) for x in range(a, b + step, step)], r
+            # a bound with a leading zero pads every word to the wider bound, as bash does: {007..10} is 007 ... 010
+            pad = max(map(len, r.group(1, 2))) if r.group(1) and any(re.match(r"-?0\d", n) for n in r.group(1, 2)) else 0
+            alts, hit = [f"{x:0{pad}d}" if r.group(1) else chr(x) for x in range(a, b + step, step)], r
         else:
             out.append(t)
             continue

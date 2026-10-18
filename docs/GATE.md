@@ -270,8 +270,9 @@ whole line in one pass:
   runs), however the command is spelt (`c\d`, `"cd"`, `$'\x63d'`) and with the option attached,
   in a cluster, old-style or cut to a unique prefix (`env -C~/.kube`, `sudo -iD ~/.kube`,
   `tar czfC - ~/.kube`, `env --c=~/.kube`, `tar --dir ~/.kube`). A brace set is the words it
-  spells (`~/.{ssh,x}`, a range `{1..3}` or `{a..c}`), up to 16 in a word of up to 4096
-  characters, and one glob past that or for a stepped range (`{1..9..2}`).
+  spells (`~/.{ssh,x}`, a range `{1..3}`, `{007..010}` or `{a..c}`, padded as bash pads), up to
+  16 in a word of up to 4096 characters, and one glob past that or for a stepped range
+  (`{1..9..2}`).
 - A line enters a store folder when a target has one among its parts (`~user/` and folders
   outside home count by their parts: `/proc/self`, `/srv/app/.kube`), or goes by a relative name
   into a plain one below another target: `cd ~/.config && cd ./gcloud`, `cd / && cd proc/self`,
