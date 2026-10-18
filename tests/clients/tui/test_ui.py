@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from exo.core.types import ToolCall
 from exo.protocol import schema as s
+from exo_tui import boot
 from exo_tui import theme as th
 from exo_tui.app import ExoApp
 from exo_tui.boot import BootScreen
@@ -280,11 +281,26 @@ def boot_run(tmp_path, scenario, **kw):
     asyncio.run(main())
 
 
-def test_boot_sequence_runs_marks_real_steps_and_ends(tmp_path):
+class BootClock:
+    """The boot screen's clock. It moves only when the test moves it, so a slow start never ends the boot early (#163)."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+def test_boot_sequence_runs_marks_real_steps_and_ends(tmp_path, monkeypatch):
+    clock = BootClock()
+    monkeypatch.setattr(boot, "time", clock)
+
     async def sc(app, pilot):
         assert isinstance(app.screen, BootScreen)
         await until(lambda: app.ready.is_set(), pilot)
         assert set(app.boot_screen.done) == {"core", "agent", "memory", "model"}
+        assert isinstance(app.screen, BootScreen)  # every step is done, but the sequence has a minimum length
+        clock.now = boot.MIN_SECONDS
         await until(lambda: not isinstance(app.screen, BootScreen), pilot, timeout=3)
         assert isinstance(app.focused, Composer)
 
