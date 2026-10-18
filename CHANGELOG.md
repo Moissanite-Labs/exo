@@ -101,6 +101,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   validation floors only; every charge still uses the pinned rates. The native-contract admission checks now
   live in `exo.model_spend.admit_native`.
 
+### Fixed
+- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
+  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
+  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
+
+### Security
+- Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
+  `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
+  family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
+
 ### Security
 - `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
   requests from the web server only, no inline script, style attribute or eval, no framing, plus
