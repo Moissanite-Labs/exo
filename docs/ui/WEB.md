@@ -12,7 +12,8 @@ or file from outside.
 `run/agent-<seat>.sock` (a terminal window running the core in process, D-028), and joins whichever answers. If
 neither does it starts `exo serve` detached (log `$EXO_HOME/logs/exod.log`, pid `run/exod.pid`), under a start lock so
 two clients never start two. A short helper (`python -P`, so the current folder is not on the import path) starts a
-new session, forks the core and exits, so the core is a child of init (or the nearest subreaper), not of `exo web`; it passes the core's pid
+new session, forks the core and exits, so the core is a child of init (or the nearest subreaper), not of `exo web`
+(unless `exo web` is PID 1 or a subreaper; it then reaps a core that exits at its next start); it passes the core's pid
 back on the last line of its output. If the core exits while starting, the page says so at once, with its exit code
 when this process reaped it. While it starts, the page shows "Exo core is not running, starting it...". If it cannot
 start, the page shows the reason and the log path. If the agent is held by a window that is not sharing it, the page
