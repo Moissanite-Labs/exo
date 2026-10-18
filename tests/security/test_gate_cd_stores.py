@@ -216,6 +216,10 @@ DENY_FORMS = ({"gates": {"categories": {"credentials": "deny"}}}, {"gates": {"de
     # a brace set whose other member has a space still names config
     "cd ~/.kube && cat {config,\"a b\"}",
     "cd ~/.kube && cat {config,a\\ b}",
+    # jq reads its filter from a file named by its first operand under -f / --from-file
+    "cd ~/.docker && jq -n -f config.json",
+    "cd ~/.docker && jq -nf config.json",
+    "cd ~/.docker && jq --from-file config.json",
     # a brace range spells its words; one that names a store folder still enters it
     "cd ~/.config/g{h..h} && cat hosts.yml",
     "cd ~/.kub{e..e} && cat config",
@@ -566,6 +570,7 @@ SHAPES = {
     "open-brackets-name": "cd /tmp && echo " + "[" * 50000,
     "wide-brace": "cd {" + "a," * 8000 + "a}" + "x" * 8000 + " && ls",
     "open-brace": "cd {" + "a," * 30000 + " && ls",
+    "unclosed-brace-run": "cd ~/.kube && cat " + "{" * 120000 + ",x",
     "glob-parts": "cd " + "/*" * 4000 + " && cat a",
 }
 

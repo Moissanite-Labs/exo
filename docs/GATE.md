@@ -299,9 +299,9 @@ whole line in one pass:
   `f:=@config`), redirection targets and the bodies of `$( )`, `<( )` and the text a shell runs
   (`bash -c`, a heredoc fed to `bash`). They are not read from the program, the words before it
   (`sudo -u root`) except assignments (`KUBECONFIG=config kubectl` counts), the targets' own words
-  (`mkdir -p .kube && cd .kube && ls` keeps its class), a `git` subcommand, a jq filter (`jq .`),
-  other heredoc text or a word with a space in it (a commit message, an `echo`,
-  `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
+  (`mkdir -p .kube && cd .kube && ls` keeps its class), a `git` subcommand, a jq filter (`jq .`;
+  not one read from a file with `-f`), other heredoc text or a word with a space in it (a commit
+  message, an `echo`, `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
 
 A line that enters no store folder, and names none, is classified as before. The work is linear
 in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64
