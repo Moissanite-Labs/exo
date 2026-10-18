@@ -62,6 +62,8 @@ class CommandCentre:
         resume = 0 < self.state.seq <= seq <= self.state.seq + RESUME_GAP
         since = self.state.seq if resume else max(0, seq - REPLAY_WINDOW)
         replay = await src.call(s.EventsSubscribe(since=since))
+        if int(hello.get("seq") or 0) < self.state.seq:
+            self._start_over()
         self.state.apply_all(replay.get("events") or [])
         for ev in replay.get("events") or []:
             self.record(ev)
@@ -139,9 +141,24 @@ class CommandCentre:
             try:
                 q.put_nowait(ev)
             except asyncio.QueueFull:   # a slow reader: end its stream, it resumes from Last-Event-ID
-                self._event_subs.remove(q)
-                q.get_nowait()
-                q.put_nowait(None)
+                self._end_stream(q)
+
+    def _end_stream(self, q: asyncio.Queue) -> None:
+        """End one reader's stream. Everything still queued is newer than the last id it wrote, so it is dropped
+        and not written: the reader reconnects from that id and replays it from the ring or the core's log."""
+        self.unsubscribe_events(q)
+        while not q.empty():
+            q.get_nowait()
+        q.put_nowait(None)
+
+    def _start_over(self) -> None:
+        """The core's log is behind what this page holds (a new home, a wiped log): that picture is another log's.
+        Start from nothing, and end every chat stream so it reconnects and gets the reset from ``replay_events``."""
+        self.state, self.panels, self._ring_seq = State(), {}, 0
+        self.ring.clear()
+        self._cache.clear()
+        for q in list(self._event_subs):
+            self._end_stream(q)
 
     def events_since(self, since: int = 0, session: Optional[str] = None) -> List[Dict[str, Any]]:
         return [e for e in self.ring if e["seq"] > since and (session is None or e.get("session") in (None, session))]
