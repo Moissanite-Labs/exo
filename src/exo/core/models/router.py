@@ -442,7 +442,7 @@ class Router:
                 if candidate is not None:
                     if last is not None:
                         resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} failed ({(last.error or '')[:80]}); "
-                                                       f"trying {candidate.ref} as a last resort")
+                                                       f"trying {candidate.ref} as a last resort", attempts=attempts)
                     pending_routes = [candidate]
                     skip.clear()
                     last_resort = True
@@ -491,7 +491,7 @@ class Router:
                 if nxt is not None:  # tell the user why the wait ended and where the call goes next
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
-                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}")
+                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
                 if attempts and (cs := attempts[-1].get("cooldown_s")):
                     yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for {cs / 60:.0f} min")
         if attempts and attempts[-1]["outcome"] == "fallback":

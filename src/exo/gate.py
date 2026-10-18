@@ -2453,6 +2453,12 @@ _SENSITIVE_PATH = re.compile(
     r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
     r"proc/[^/]+/environ)(/|$)")
 
+# D-039: a run folder holds the principal credential and the TCP token beside each socket, so the folder itself
+# is a secret store; what is below it keeps its own class (job output in run/jobs/ stays readable). A relative
+# path counts only when it spells `.exo/run`: a bare `run` is not resolved against the gate's working folder (a
+# relative `keys` is). The secrets are glob samples (_run_secrets); their names already match _SENSITIVE_PATH.
+_RUN_DIR = re.compile(r"(^|/)\.exo/(principals/[^/]+/)?run$")
+
 # Concrete examples a shell glob is tested against ("could this glob match a secret store?").
 _SENSITIVE_SAMPLES = ("keys.env", ".exo/keys", ".config/exo/keys.env", ".divan/seat.key", "auth.json",
                       "google_token.json", ".unii/acct/token", "client_secret_1.json", ".hermes/p/.env",
@@ -2489,6 +2495,39 @@ def _dynamic_secret_paths() -> list[str]:
     claude_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(_home(), ".claude")
     paths.append(os.path.expanduser(claude_dir))
     return paths
+
+
+def _is_run_dir(path: str, real: str = "") -> bool:
+    """The run folder itself (D-039), in any spelling: `$EXO_HOME/run`, `.exo/run` or a principal's `run`. An
+    absolute path is also resolved as written, links before `..` (``real``, when the caller has resolved it)."""
+    raw = path.replace("\\", "/")
+    path = os.path.normpath(raw)
+    if _RUN_DIR.search(path):
+        return True
+    if not path.startswith("/"):
+        return False
+    try:
+        cands = {c for c in (path, real or os.path.realpath(raw)) if c.endswith("/run")}
+        homes = {os.path.normpath(_exo_home()), os.path.realpath(_exo_home())} if cands else set()
+    except (OSError, ValueError):
+        return False
+    return any(re.fullmatch(re.escape(h) + r"(/principals/[^/]+)?/run", c) for c in cands for h in homes)
+
+
+def _run_secrets() -> list[str]:
+    """The credential files a run folder can hold: the core's, and the principal key of each agent that may serve
+    there, run/agent-<seat>.principal.key (`default`, $EXO_SEAT and up to 64 seats under $EXO_HOME/seats, named
+    as internal_names does: filtered, then sorted, then capped, so other files there take no place; the scan reads
+    at most 4,096 entries)."""
+    names = ["default", os.environ.get("EXO_SEAT") or ""]
+    try:
+        with os.scandir(os.path.join(_exo_home(), "seats")) as it:   # bounded: this runs for every glob word
+            seats = {e.name if e.is_dir() else os.path.splitext(e.name)[0] for e in itertools.islice(it, 4096)
+                     if not e.name.startswith((".", "_")) and (e.is_dir() or e.name.endswith((".toml", ".json")))}
+            names += sorted(seats)[:64]
+    except OSError:
+        pass
+    return ["exod.principal.key", "exod.token"] + [f"agent-{n}.principal.key" for n in dict.fromkeys(names) if n]
 
 
 _BRACE_CAP = 1024
@@ -2685,8 +2724,8 @@ def _real(path: str, memo: dict[str, str]) -> str:
 
 def is_sensitive_path(path: str) -> bool:
     """True when ``path`` names one of the secret stores (ssh, cloud and netrc credentials, Exo's key
-    stores, signing keys, token and client-secret files, .env files). Never reads the file. A brace set
-    counts when the path or any word bash expands it to names a store, or when it expands past the cap."""
+    stores and run folders, signing keys, token and client-secret files, .env files). Never reads the file. A
+    brace set counts when the path or any word bash expands it to names a store, or when it expands past the cap."""
     words = _brace_words(str(path or ""))
     return words is None or _sensitive_words(words)
 
@@ -2702,10 +2741,11 @@ def _sensitive_words(words: list[str]) -> bool:
     for w in words:
         try:
             a = os.path.abspath(w)
-            cands = {a, os.path.realpath(w) if ".." in w.split(os.sep) or a.startswith("//") else _real(a, memo)}
+            real = os.path.realpath(w) if ".." in w.split(os.sep) or a.startswith("//") else _real(a, memo)
+            cands = {a, real}
         except (OSError, ValueError):
-            cands = {w}
-        if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots):
+            real, cands = "", {w}
+        if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots) or _is_run_dir(w, real):
             return True
     return False
 
@@ -2726,16 +2766,33 @@ def _glob_words(words: list[str]) -> bool:
     home = _home()
     samples = [os.path.join(home, x) for x in _SENSITIVE_SAMPLES] + [os.path.join(_exo_home(), "keys", "seat.key"),
                                                                        _dynamic_secret_paths()[1]]
-    return any(_glob_word(w, home, samples) for w in words)
+    secrets = _run_secrets()
+    runs = [os.path.join(_exo_home(), "run"), os.path.join(home, ".exo", "run"), ".exo/run"]
+    return any(_glob_word(w, home, samples, secrets, runs) for w in words)
 
 
-def _glob_word(tok: str, home: str, samples: list[str]) -> bool:
+def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
+    raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
+    tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
-    in_store_dir = bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
+    linked = bool(d_abs) and _is_run_dir(raw if raw.startswith("/") else os.path.join(home, raw))
+    if linked:                                           # also when normpath lost it: ~/<link to run/jobs>/..
+        runs = runs + [d_abs]
+    keys = "agent-" in tok or ".principal" in tok
+    if "/" in tok:   # an agent key only when the glob spells its key part, names a run folder, or has a literal
+        # folder part around its wildcards (`~/.exo/*/`); not for `*/*default*` or `~/*test*`, which bash cannot
+        # expand into a run folder but fnmatch's `*` would match across `/`
+        reach = keys or linked or (d_abs in [os.path.normpath(os.path.join(home, r)) for r in runs] if d_abs else any(
+            q and not re.fullmatch(r"[*?]+|\.{1,2}", q) for q in d.split("/")))
+        samples = samples + [os.path.join(r, x) for r in runs for x in secrets if reach or x.startswith("exod.")]
+    in_store_dir = linked or bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
     if len(stem) < 3 and not in_store_dir:
         return False
+    if "/" not in tok:   # a bare name: a run secret by its own name, an agent key only by its `agent-` or key part
+        if any(_glob_rx(tok).match(x) for x in secrets if keys or x.startswith("exod.")):
+            return True
     head, tail = re.split(r"[*?\[]", tok, maxsplit=1)[0], re.split(r"[*?\[\]]", tok)[-1]   # literal: narrow first
     xs = [x for x in samples + list(_SENSITIVE_SAMPLES)
           if x.endswith(tail) and (x.startswith(head) if tok.startswith("/") else head in x)]

@@ -431,6 +431,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Subagents keep their own logs (`memory_zoom(subagent=...)`); their report reaches the parent as the delegate
   result. exo-memory reads the core log instead of writing its own. Existing sessions were imported once, in time
   order, with `origin=import`; nothing deleted.
+  *Amendment 2026-10-18 (several seats in one home):* seats whose files sit in one `$EXO_HOME` are separate agents.
+  Each runs its own core with its own writer lock, and all of them share `sessions.sqlite` and `schedule.sqlite`.
+  The database numbers each event past the table's highest, so two cores never reuse a `seq`. `hello` reports that
+  highest number, so a joining client skips the other seat's past events. Only an agent's writer fails that agent's
+  leftover delegate tasks. A scheduled job with a `seat` runs only in that seat's core. A job with no seat runs once
+  per slot, in the seat whose timer claims the slot first. `add` refuses a seat that no core could run
+  (docs/SEATS.md "Several seats in one home", docs/SCHEDULE.md).
 - **Protocol:** still 30 commands: `session.create` takes `kind`, `SessionInfo` carries `agent` and `kind`. One
   event, `memory.summarized` (27 of 30): tree upkeep was showing as `context.compacted`, which read as context
   compaction in the trace and TUI.
@@ -783,6 +790,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   written. A hit on any expanded word counts, and a word past the brace limits counts as the store. The store
   checks have their own 4,096-word budget per tool call. `echo x > ~/.exo/polic{i..i}es/default.yaml` was an
   allowed local write.
+  *Amendment 2026-10-18 (issue #169):* the run folder is a secret store (D-039 limits, `docs/GATE.md` "Who
+  answered"), and a secret wins over the store rule, as for `keys/`. So a write, delete, move or replacement that
+  touches the folder itself or a credential file in it is `credentials`, not `store_write`: `rm -rf ~/.exo/run`,
+  `rm ~/.exo/run/*`, and moving or replacing the folder that holds the core sockets (`mv ~/.exo/run x`,
+  `ln -sfn /tmp/x ~/.exo/run`, `cp -rT /tmp/x ~/.exo/run`, `mkdir -p ~/.exo/run`, `chmod 777 ~/.exo/run`). It
+  still always asks and is never granted, but it is no longer principal-only: a seat that `approvals.yaml`
+  delegates `credentials` to, or lists in `default:` with no `credentials:` line, may answer it, and
+  `deny: [store_write]` no longer matches it. Job output in `run/jobs/` and a socket or pid file named alone stay
+  `store_write`. Chosen because one class per call keeps the read and write rules of a secret store the same;
+  keeping the store part principal-only through `_combine` is a follow-up.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -943,12 +960,34 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
   today).
 - **Limits:** a tool process is the same OS user. Code that reads the credential file without the gate seeing it
-  (the gate classes a plain read as `credentials`, always ask; indirection is the gate branch's work) and also
-  detaches from the core's process tree could still pass. The real fix is an OS sandbox for tool subprocesses.
-  The page link sits in browser history and, briefly, in the browser launcher's argv. The env scrub is a
+  (the gate classes a read of the file, of its run folder or of a wildcard there as `credentials`, always ask,
+  #169; indirection is the gate branch's work) and also detaches from the core's process tree could still pass.
+  The real fix is an OS sandbox for tool subprocesses. The page link sits in browser history and, briefly, in the
+  browser launcher's argv. The env scrub is a
   heuristic.
 - **Not changed:** the TUI approval card's focus behaviour (another branch is editing the TUI); noted for later.
   The echo engine (a test double) still accepts any answer.
+- **Later (2026-10-17, #166):** the launcher's argv was a real leak, not a brief one: `webbrowser.open` hands the
+  `#token=` link to `xdg-open` and the browser, whose command lines any user of the host can read in `/proc` unless
+  it is mounted with `hidepid`, and the token answers approvals as `principal:web`. So the one-time bootstrap code
+  rejected above is now how the browser opens: `exo web` opens `#code=<one-time code>` (fresh per launch, in memory,
+  one use, 120 seconds), and the page trades it for the token at `POST /api/launch`, the only `/api/` route without
+  the token, with every other check of `providers.guard`. A used code that comes back means two parties held it: the
+  token is replaced, every other connection ends (the old token's streams, and requests that passed the token check
+  but still wait for their body), a body is checked against the current token again once read, and the terminal
+  gets a warning and the new link, to paste into the open browser rather than click (a click puts it back in a
+  launcher's argv). The printed `#token=` link is unchanged (stdout is the user's own); with a non-loopback `--host`
+  no browser is opened. Limit, stated plainly: the hop from the browser to the web server is not checked by uid. Any
+  process on the host that has the token, or wins the race for an unused code inside its 120 seconds, is the page.
+  The race shows up as a replaced token and a terminal warning only when the launched page also redeems the code
+  after the winner: the first redemption is silent. A browser that never runs the page's script (a text browser
+  such as `lynx` or `w3m`, which `webbrowser` falls back to with no display) never redeems, so the winner keeps a
+  working token and nothing warns. Kernel peer checks do not cover this hop either: D-060 (#175, Unix peer
+  authentication) checks clients of the core's socket, not a browser on TCP, and must name this hop in its Limits
+  when it lands. Rejected for now: opening a 0600 local file that redirects to the `#token=` link
+  (the other fix #166 named). It needs no second redemption, but leaves the token on disk until removed, and a
+  sandboxed browser (snap, flatpak) may not read the file. Revisit if launches without a script-running browser
+  matter. `docs/ui/WEB.md` "Opening the page and the page token".
 
 ## D-040 (2026-10-12) Who wrote it: authors on every message, pinned keys, an anchored ledger head
 - **Why:** the 12 October audit (priorities 4 and 6). (a) `exo_note` let the agent write `kind="ruling"`, and
@@ -1490,6 +1529,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   loop is never repaired mid-turn.
 - **Limits:** child approvals shown in the parent, and `followup` or `resume`, are follow-ups. Typing straight into a
   child's session still steers it through `turn.send`; that path works but leaves no note on the receipt.
+  *Amendment 2026-10-18 (fix sweep, core sessions):* the child's loop shares the engine's per-session state. So
+  `turn.send` into a running child steers it in any mode, and only the principal may send it (D-052). While the
+  child starts or finishes, no round can take a steer, and `turn.send` fails with `conflict`. It never starts a
+  main-loop turn in the child. A send that waited behind a child that was locked meanwhile runs no turn. A peer
+  message with no session never picks a child (docs/AGENT-WIRE.md).
 - **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-073 (2026-10-13) Signed updates verify against a pinned trust list (issue #42)

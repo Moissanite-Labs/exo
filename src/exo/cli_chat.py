@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from exo.core.private import private_file
-from exo.ensure_core import exod_socket, home_dir
+from exo.ensure_core import exod_socket, home_dir, pid_path, probe
 from exo.protocol import schema as s
 
 TOKEN_ENV = "EXOD_TOKEN"
@@ -78,6 +78,11 @@ def cmd_serve(a: Any, store: Any = None) -> int:
     raise_nofile_limit()  # tools inherit this; macOS defaults to 256 open files
     if a.seat:
         os.environ["EXO_SEAT"] = a.seat
+    socket = Path(a.socket).expanduser() if a.socket else default_socket()
+    if not a.stdio and probe(socket) == "alive":  # never take a live core's socket or pid file
+        print(f"exod: another core is listening on {socket}. Stop it first, or give this one its own --socket.",
+              file=sys.stderr)
+        return 1
     from exo.core.agentlog import WriterBusy
     try:
         engine = load_engine(a.engine)
@@ -94,7 +99,6 @@ def cmd_serve(a: Any, store: Any = None) -> int:
         token_path = Path(a.token_file).expanduser() if a.token_file else default_token_file()
         token = _server_token(token_path)
         print(f"exod: TCP token in {token_path}", file=sys.stderr)
-    socket = Path(a.socket).expanduser() if a.socket else default_socket()
     async def main() -> None:
         task = asyncio.create_task(serve(engine, socket=socket, tcp=tcp, token=token,
                                          ready=lambda w: print(f"exod: listening on {w}", file=sys.stderr)))
@@ -106,15 +110,14 @@ def cmd_serve(a: Any, store: Any = None) -> int:
         except asyncio.CancelledError:
             pass
 
-    from exo.ensure_core import pid_path
     pidfile = pid_path(socket.parent.parent) if socket == default_socket() else None
     if pidfile is not None:
         private_file(pidfile).write_text(f"{os.getpid()}\n")
     try:
         asyncio.run(main())
     finally:
-        if pidfile is not None:
-            pidfile.unlink(missing_ok=True)
+        if pidfile is not None and pidfile.is_file() and pidfile.read_text().strip() == str(os.getpid()):
+            pidfile.unlink()  # only our own pid: a core that lost a start race leaves the winner's
     return 0
 
 

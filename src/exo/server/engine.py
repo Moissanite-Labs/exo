@@ -168,6 +168,12 @@ class Hub:
     def since(self, seq: int, session: str | None = None) -> list[Event]:
         return list(self.log.read(seq, session))
 
+    def head(self) -> int:
+        """The log's highest seq, the cursor a joining client starts from. Seats of one home share the log, so
+        another seat's core may have written past this hub's last publish; a client never replays those."""
+        self.seq = max(self.seq, self.log.last_seq())
+        return self.seq
+
     def subscribe(self, since: int = 0, session: str | None = None) -> Subscription:
         return Subscription(self, since, session)
 
