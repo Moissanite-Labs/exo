@@ -111,14 +111,15 @@ def handle_feedback(engine: Any, body: Any) -> dict:
     return {"recorded": True, "event": ev["id"], "verdict": verdict, "pair": pair, "review": started}
 
 
-def _panel_session(engine: Any, panel_id: str) -> str | None:
-    """The session that opened panel `panel_id`, from the `ui.panel` events in sessions.sqlite; None if unknown."""
+def _panel_sessions(engine: Any, panel_id: str) -> list[str]:
+    """Every session with a `ui.panel` event for panel `panel_id` in sessions.sqlite: the one that opened it and any
+    that updated it (`ui update` takes a known id from any thread). Empty if unknown."""
     store = getattr(engine, "store", None)
     if not panel_id or store is None:
-        return None
-    rows = store._q("SELECT session FROM events WHERE type='ui.panel' AND json_extract(body, '$.panel_id')=? LIMIT 1",
+        return []
+    rows = store._q("SELECT DISTINCT session FROM events WHERE type='ui.panel' AND json_extract(body, '$.panel_id')=?",
                     (panel_id,))
-    return rows[0]["session"] if rows else None
+    return [r["session"] for r in rows]
 
 
 def handle_ui_respond(engine: Any, body: Any) -> dict:
@@ -127,7 +128,8 @@ def handle_ui_respond(engine: Any, body: Any) -> dict:
     rt = lr.runtime
     if rt is None:
         return {"recorded": False, "reason": lr.notices[0] if lr.notices else "learning is off"}
-    if lr.private(_panel_session(engine, getattr(body, "panel_id", ""))):  # D-028: its value can hold a comment
+    shown = _panel_sessions(engine, getattr(body, "panel_id", ""))
+    if any(lr.private(x) for x in shown):  # D-028: its value can hold a comment
         return {"recorded": False, "reason": "this panel is from a private thread: what you did with it is not "
                                              "remembered"}
     value = dict(getattr(body, "value", None) or {})

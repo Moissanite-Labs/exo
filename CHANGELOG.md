@@ -114,24 +114,32 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   in them. The learning loop and `feedback.send` ignore them: a reject or should_have_been on one files no finding.
   The context plugin never sees them, so no exo-context handoff or pin carries them. The tree's hooks never name
   them, and `/compact` no longer offers a private reply as the output a correction in another thread judges.
-  `memory_zoom(subagent=)` opens a private thread's delegate children only from that thread. All of this holds
-  for those children too, at any depth: feedback on a child's answer records nothing and files no finding. A
-  response to a panel a private thread opened is no longer noted in the ledger.
+  `memory_zoom(subagent=)` opens a private thread's delegate children only from that thread or a fork of it. All
+  of this holds for those children too, at any depth: feedback on a child's answer records nothing and files no
+  finding. A response to a panel a private thread opened or updated is no longer noted in the ledger.
 - Undo in one thread no longer loses other threads' news: the context note stored during the undone turn stays,
   and undo deletes only the summaries that hold an undone entry and the merges above them, not every later one.
 - A forked thread no longer resends its parent's whole transcript on every model call: the fork's copies count at
   their original's log position, so the fork opens with its parent's tail, and `/compact` shrinks a fork's tail too.
-  Copies the tree cannot hold (a private thread's, or an entry the parent undid after the fork) stay in the tail.
+  A private thread's fork summarizes its copies in its own tree. Known limit: a copy of an entry the parent undid
+  after the fork counts nowhere, so it stays in the tail only until the fork's own later entries are summarized.
 - A private thread no longer forgets its own start (D-028). Its entries stay out of the agent tree, but its tail was
   still cut at the agent's frontier, so once another thread's leaves were summarized only its last 12 messages were
   left. It now keeps a summary tree of its own, and its tail starts at that tree's last summary, so spans too small
   to summarize stay whole. Plugin hooks never see that tree, and no other thread, agent summary or search sees it
-  either. A fork made after an undo copies only the summaries that still match its renumbered messages.
+  either. A fork made after an undo copies only the summaries that still match its renumbered messages. A long
+  private thread from before this fix gets its leaves on its next turn, and that turn waits up to
+  `overflow_settle` for them, as the agent tree's turns do. With a slow summarizer its first calls can still carry
+  most of the thread.
 - exo-context no longer pins peer, bus or job text as the principal's words (D-040). `select_context` now gets each
   message's author, and handoff extraction skips every user message that is not the principal's. A peer message or
   a job notice that said "From now on ..." was put back into the system message as a principal ruling once it left
-  the tail, and written to handoffs. The recalled-memory block is now authored `system`. A pinned block inside
-  peer, bus, job, tool or agent text is no longer carried into a handoff.
+  the tail, and written to handoffs. The recalled-memory block is now authored `system`. A handoff now carries a
+  pinned block only from a message that opens with it (exo-context's own block) or with a compaction marker (a
+  host's summary). A block in peer, bus, job, tool or agent text is not carried, and neither is one quoted further
+  down a message. The core's system message quotes a span too small to summarize word for word, so a peer's block
+  in such a span was carried as a principal ruling. A fork's copy of a message stored before D-040 has no author,
+  so it is not pinned.
 - `/undo` now reaches exo-context (D-041): the pins of the undone turns are dropped, so an undone ruling no longer
   comes back on the next turn as the principal's verbatim words. The summaries the undo deleted leave exo-context's
   handoffs too, and each handoff that may quote them is written again at once, including another thread's on an

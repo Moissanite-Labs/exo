@@ -837,7 +837,9 @@ class AgentContext(TreeContext):
         return {"taken": taken, "uncaptured": len(self.uncaptured(key)), "store": self.on_capture is not None}
 
     def pending(self, session: str, lane: str | None = None) -> list[asyncio.Task]:
-        return super().pending(self._agent_key(session) or session, lane)
+        """The agent tree's jobs, and a private thread's own tree's too: its view reads both (D-028)."""
+        tasks = super().pending(self._agent_key(session) or session, lane)
+        return tasks + super().pending(session, lane) if self._own(session) else tasks
 
     # ---- context notes: what other threads did since this thread last looked
 
@@ -992,6 +994,8 @@ class AgentContext(TreeContext):
         self.note(session)
         if settle:
             await settle_for_turn(self, key)
+            if self._own(session):  # D-068 on its own tree: a long private thread's first leaves are nearly done
+                await settle_for_turn(self, session)
         top, frontier, parts = self._view(key)
         text = system
         if parts:
