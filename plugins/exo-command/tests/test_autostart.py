@@ -69,3 +69,34 @@ def test_unreachable_core_shows_actionable_text(home):
 
     msg = asyncio.run(go())
     assert "Errno" not in msg and "ConnectError" not in msg
+
+
+def test_refused_principal_names_the_reason_and_the_restart(home):
+    """A core from before D-060 (a plain-token record) answers the socket but fails the peer check. The page says so
+    and how to recover, not 'not reachable'."""
+    from exo import principal as pr
+    from exo.server.app import Dispatcher, HttpServer
+    from exo.server.echo import EchoEngine
+
+    sock = home / "exod.sock"
+
+    async def go():
+        srv = HttpServer(Dispatcher(EchoEngine()), principal=True)
+        await srv.start_unix(sock)
+        task = asyncio.create_task(srv.serve_forever())
+        try:
+            pr.token_path(sock).write_text("a-plain-token\n")
+            c = CommandCentre(load_settings({"socket": str(sock)}))
+            c.connect()
+            with pytest.raises(Exception) as e:
+                await c.bootstrap()
+            await c.aclose()
+            return core_message(e.value)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await srv.close()
+
+    msg = asyncio.run(go())
+    assert "principal connection refused" in msg and "before peer authentication" in msg
+    assert "exo stop" in msg and "not reachable" not in msg

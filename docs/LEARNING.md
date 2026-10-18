@@ -22,7 +22,14 @@ Only your own words are signals (D-040). The loop reads a ruling, verdict, answe
 you (`exo.provenance.principal_names`: `principal`, your store's id, and the principal ids in the key registry). A
 ruling the agent wrote with `exo_note`, a correction it reported with `exo_should_have_been`, or text that came from a
 peer, a bus seat or a job notice is never read as yours, whatever it says. Consolidation counts these as
-`not_principal` and skips them.
+`not_principal` and skips them. History you import with `exo ingest` is authored as you, so it counts like a live
+turn. A Hermes row that may be an agent's brief is authored `hermes:unverified-user` and never does. The eval cases
+built from the ledger follow the same rule: see "The slow loop".
+
+Imported history counts as of when you said it: its evidence carries the row's source time, not the time of the
+import. Superseded text does not count for the rule of three: the older versions of an edited ChatGPT prompt
+(`branch: alt`) and Hermes rows marked inactive. Rule 4 never applies a lesson whose evidence is all imported. You
+review that first batch (`exo proposals`).
 
 ## The fast loop
 
@@ -42,11 +49,14 @@ numbers stay fixed for ledger records:
 - Rule 5: skill patches always need the held-out eval gate. Types in `eval_gate_for` and domains in
   `high_impact_domains` need it too. A ruling citation cannot bypass this check or a critic objection.
   Non-skill gated proposals also need high weight and `min_sessions` (2) sessions. The fast loop waits.
-  The slow loop evaluates. With no held-out cases the gate fails and the proposal remains open.
+  The slow loop evaluates. With no held-out cases the gate fails and the proposal remains open. A case built
+  from the lesson's own evidence (the replay of a cited verdict, or a preference pair that cites it) does not
+  count as held out.
 - Rule 1: an ordinary unguarded, ungated proposal citing your ruling or answer promotes immediately.
   The event's author is checked, so an agent-written ruling never triggers this rule (D-040).
 - Rule 4: ordinary taste or fact with high weight, at least `min_sessions` sessions, and no critic objection
-  promotes automatically and is logged for the brief.
+  promotes automatically and is logged for the brief. When all its evidence came from `exo ingest`, it waits for
+  your review instead.
 - Rule 6: anything else stays a proposal. After `stale_days` (14) it becomes a question or decays.
 
 These checks govern lessons derived by the reviewer. Your original rulings remain in the ledger and context.
@@ -54,7 +64,8 @@ Explicitly accepting a proposal uses the separate `proposal_accept` path and can
 without automatic promotion. A citation establishes authorship, not that the cited words support the derived claim.
 Semantic evidence matching for ordinary unguarded proposals remains outside this policy.
 
-A promotion can be reverted (`exo.learn.revert`), and the revert is a ledger row too.
+A promotion can be reverted (`exo.learn.revert`), and the revert is a ledger row too. A promoted, accepted or reverted
+belief reaches recall on the next turn, with no restart: exo-memory reads the nodes fresh each turn.
 
 ## The slow loop
 
@@ -62,6 +73,26 @@ A promotion can be reverted (`exo.learn.revert`), and the revert is a ledger row
 lesson, or drop an auto-promoted one. It replaces the incumbent only if it scores better on the dev cases by a margin,
 is not worse on held-out cases, and passes the gate. The night is capped by `climb.candidates` (10) and
 `climb.judge_samples` (3). The judge is the `eval` role, which defaults to the main route (D-018).
+
+The climb adds only ordinary lessons: not guarded, not gated by rule 5, and with no critic objection. Only rule 5
+promotes a gated lesson on its own. It runs earlier the same night and keeps its critic, weight, session and
+held-out checks. A candidate with no held-out case in its domains fails the gate. A lesson's own evidence never
+counts for or against it, on dev or on held-out cases, whether the candidate adds the lesson or drops it. The climb
+can add a lesson drawn only from imported history, but only when the eval shows it helps.
+
+The cases are your eval Q&A, your preference pairs, and replays built from the ledger. A replay comes only from
+your own verdict, answer or ruling, and its question is your own message before it (D-040). An agent's
+`exo_should_have_been` report, or a peer's message, is never a gold answer or a question.
+
+The incumbent's scores are cached in `<store>/eval/incumbent.json`. They are scored again when the incumbent's rules
+or skills change, or when anything else that moves a score changes: an eval case (its text, not only its id), the
+checks in `eval/rules.jsonl`, the rubric in `eval/rubric.md`, the judge samples, or the models on the main and
+eval routes.
+
+The judge's reply is read as a score from 0 to 1 (`exo.eval.parse_score`). A named scale ("0 to 1", "(0-10)") is
+only a label. A number that opens the reply is the score, as the prompt asks. Otherwise a reply that calls the
+answer wrong, incorrect or not correct is 0 ("nothing wrong" does not), a bare "correct" is 1, and the first
+number counts. A full score in a reply that also calls the answer wrong is 0, and a reply with no number is 0.
 
 Nothing calls `nightly` on a timer yet. D-023 lists the trigger as open.
 
