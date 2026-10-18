@@ -217,7 +217,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   symlink to `run/jobs`, also one right in `~`), its credential files (`exod.principal.key`,
   `<socket stem>.principal.key`, `exod.token`) and a wildcard there that could match one (`run/*`,
   `run/exod.principal.k*`, `run/exod.tok*`,
-  `run/agent-default.principal.k*`, and the same for `$EXO_SEAT` and each seat under `$EXO_HOME/seats`) are
+  `run/agent-default.principal.k*`, and the same for `$EXO_SEAT` and up to 64 seats under `$EXO_HOME/seats`,
+  the first 64 by name once other files there are skipped) are
   `credentials` and ask, also nested in `bash -c`, `$( )`, interpreter code and `execute_code`. Before, only a
   call that named the key file asked: `cat $EXO_HOME/run/*`, `grep -r . $EXO_HOME/run` and the built-in `grep` or
   `glob` on the folder were allowed reads.
@@ -234,8 +235,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `ls agent-*` asks in any folder, as `cat id_rs*` already did (`rm exod*` is `credentials`, was `delete`), while
   `ls *run*`, `find . -name 'run*'`, `ls *main*`, `ls */*default*` and `ls ~/*test*` keep their class, also with
   a seat named `main`; `ls *prin*` asks. Brace sets are expanded (#184): `run/{*,}` and `$EXO_HOME/r{u,}n/*`
-  ask. Limits are in `docs/GATE.md`: `~/.exo/ru?`, `cd ~/.exo/run/jobs && cat ../*` and `~/.exo/RUN/*` on a
-  case-insensitive disk are not caught, as for `~/.ssh`.
+  ask, and so do `cd ~/.exo/run && cat age*` and `cd ~/.exo/run/jobs && cat ../*` (#192). Limits are in
+  `docs/GATE.md`: `~/.exo/ru?`, `cat *` with the bash tool's `cwd` argument at `~/.exo/run` and `~/.exo/RUN/*` on
+  a case-insensitive disk are not caught, as for `~/.ssh`.
 - `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
   requests from the web server only, no inline script, style attribute or eval, no framing, plus
   `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
