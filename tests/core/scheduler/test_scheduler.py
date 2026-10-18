@@ -6,6 +6,7 @@ import asyncio
 import functools
 import hashlib
 import sqlite3
+import time
 from datetime import datetime
 
 import pytest
@@ -86,6 +87,77 @@ def test_next_run_every():
         next_run("every 0m", 0)
     with pytest.raises(ValueError):
         next_run("every m", 0)
+
+
+# ---------------------------------------------------------------- daylight saving: cron fields are local time
+
+# zone -> (the day clocks go back, the day they go forward, the hour that day skips); 01:00-01:59 repeats in both
+DST = {"America/New_York": ((2026, 11, 1), (2026, 3, 8), 2), "Europe/London": ((2026, 10, 25), (2026, 3, 29), 1)}
+
+
+@pytest.fixture(params=sorted(DST))
+def dst(request):
+    """Run in a zone with daylight saving, then put the old zone back (only TZ: the autouse env stays)."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is POSIX only")
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("TZ", request.param)
+            time.tzset()
+            fall = DST[request.param][0]
+            if ts(*fall, 1, 30) == datetime(*fall, 1, 30, fold=1).timestamp():
+                pytest.skip(f"no time zone data for {request.param}")  # not a silent pass
+            yield DST[request.param]
+    finally:
+        time.tzset()
+
+
+def test_next_run_is_strictly_after_across_dst(dst):
+    """In the repeated hour's second pass next_run gave the first pass's time, up to an hour in the past."""
+    wrong = []
+    for day in dst[:2]:
+        after, end = ts(*day, 0, 0), ts(*day, 4, 0)
+        while after < end:
+            for line in ("*/15 * * * *", "30 1 * * *", "50 * * * *", "0 2 * * *", "30 2 * * *", "* * * * *"):
+                if not after < next_run(line, after) <= after + 2 * 86400:
+                    wrong.append((line, datetime.fromtimestamp(after)))
+            after += 37
+    assert not wrong, f"{len(wrong)} wrong, first {wrong[:3]}"
+
+
+def test_next_run_exact_times_across_dst(dst):
+    (y, mo, d), spring, gap = dst
+    second = datetime(y, mo, d, 1, 20, fold=1).timestamp()  # 01:20 in the repeated hour's second pass
+    assert next_run("*/15 * * * *", second) == datetime(y, mo, d, 1, 30, fold=1).timestamp() == second + 600
+    assert next_run("30 1 * * *", second) == second + 600
+    assert next_run("50 * * * *", second) == second + 1800
+    assert next_run("* * * * *", second) == second + 60
+    assert next_run("*/15 * * * *", ts(y, mo, d, 1, 20)) == ts(y, mo, d, 1, 30)  # the first pass as before
+    # a fixed-time job that ran in the first pass does not run again in the second
+    assert next_run("30 1 * * *", ts(y, mo, d, 1, 31)) == ts(y, mo, d + 1, 1, 30)
+    # a */n job that ran late in the first pass skips the second (docs/SCHEDULE.md)
+    assert next_run("*/15 * * * *", ts(y, mo, d, 1, 50)) == ts(y, mo, d, 2, 0) == ts(y, mo, d, 1, 50) + 70 * 60
+    # clocks going forward: a slot in the skipped hour runs an hour later
+    before = ts(*spring, gap - 1, 50)
+    assert next_run(f"30 {gap} * * *", before) == ts(*spring, gap + 1, 30) == before + 40 * 60
+    assert next_run("*/15 * * * *", before) == ts(*spring, gap + 1, 0) == before + 600
+
+
+@aio
+async def test_job_in_the_repeated_hour_runs_once(tmp_path, dst):
+    """Added, resumed or overdue in the second pass, a job got a past next_run and ran back to back for an hour."""
+    eng, clk = mk(tmp_path), Clock(datetime(*dst[0], 1, 20, fold=1).timestamp())
+    sch = Scheduler(eng, clk)
+    job = sch.add("*/15 * * * *", "x")
+    assert job["next_run"] == clk.t + 600
+    sch.pause(job["id"])
+    assert sch.pause(job["id"], False)["next_run"] == clk.t + 600
+    sch.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (clk.t - 5, job["id"]))  # overdue, as after a wake
+    sch.db.commit()
+    assert await sch.tick() == [job["id"]]
+    await sch.wait()
+    assert sch.get(job["id"])["next_run"] == clk.t + 600
+    assert await sch.tick() == []  # not relaunched as soon as the run ended
 
 
 def test_add_list_remove_and_due(tmp_path):
@@ -494,3 +566,242 @@ async def test_next_run_listing_error_is_reported_and_scheduler_survives(tmp_pat
         assert not any(b.where == "scheduler loop" for b in bodies(eng, s.HarnessError))
     finally:
         await sch.stop()
+
+
+# ---------------------------------------------------------------- the run's session state is the engine's
+
+async def live_run(tmp_path, **kw):
+    """A scheduled run held inside its first tool call until ``gate`` is set: (engine, run session, gate)."""
+    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={},
+                     attach_scheduler=Scheduler, **kw)
+    eng.loop.provider = FakeProvider([tool_turn("scheduled_hold"), "scheduled done", "next turn"], repeat=True)
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def hold(args, ctx):
+        entered.set()
+        await gate.wait()
+        return "held result"
+
+    eng.registry.register(ToolSpec(name="scheduled_hold", description="held fake tool", risk="low", toolset="test"), hold)
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: {"action": "allow"})
+    eng.scheduler.launch(eng.scheduler.add("every 1h", "report"))
+    await asyncio.wait_for(entered.wait(), 2)
+    return eng, next(t.child_session for t in bodies(eng, s.TaskUpdated) if t.status == "running"), gate
+
+
+async def settle(eng):
+    await asyncio.wait_for(eng.scheduler.wait(), 2)
+    while eng._tasks:
+        await asyncio.wait_for(asyncio.gather(*list(eng._tasks)), 2)
+
+
+def turns(eng, sid):
+    return [type(e.body).__name__ for e in eng.hub.since(0, sid) if isinstance(e.body, (s.TurnStarted, s.TurnCompleted))]
+
+
+def one_result_per_call(eng, sid):
+    """Each tool call has exactly one result, in the message right after it, and none is a made-up 'not run'."""
+    msgs = eng.store.messages(sid)
+    for i, m in enumerate(msgs):
+        if m.tool_calls:
+            assert [r.call_id for r in msgs[i + 1].tool_results] == [c.id for c in m.tool_calls]
+    results = [r for m in msgs for r in m.tool_results]
+    assert len(results) == sum(len(m.tool_calls) for m in msgs)
+    assert not any("not run" in r.text() for r in results)
+    return msgs
+
+
+@aio
+async def test_running_scheduled_session_is_live_and_a_steer_lands_in_its_turn(tmp_path):
+    """The run's own Loop shares the engine's session state: session.list shows it live, the peer and job targets
+    see it running, a turn.send steer lands in the run's turn, and session.resume leaves its open call alone."""
+    eng, sid, gate = await live_run(tmp_path)
+    listed = (await eng._session_list(s.SessionList()))["sessions"]
+    assert [r["status"] for r in listed if r["id"] == sid] == ["live"]
+    assert eng._peer_target.state(sid) == eng.jobs.target.state(sid) == "running"
+    got = await eng._session_resume(s.SessionResume(session=sid))  # a second window opens the run's thread
+    assert not [m for m in got["messages"] if m["role"] == "tool"]
+    out = await eng._turn_send(s.TurnSend(session=sid, text="also check the logs", mode="steer"))
+    assert out["steered"] and out["message_id"]
+    gate.set()
+    await settle(eng)
+    assert turns(eng, sid) == ["TurnStarted", "TurnCompleted"]  # one turn: the steer did not start another
+    msgs = one_result_per_call(eng, sid)
+    steer = next(m for m in msgs if m.text() == "also check the logs")
+    assert msgs[msgs.index(steer) - 1].role == "tool" and steer.meta["turn_id"] == msgs[0].meta["turn_id"]
+
+
+@aio
+async def test_turn_send_to_a_running_scheduled_session_waits_for_the_run(tmp_path):
+    """A plain send queues behind the run on the one per-session lock: never a second turn at the same time."""
+    eng, sid, gate = await live_run(tmp_path)
+    assert await eng._turn_send(s.TurnSend(session=sid, text="and then this")) == {"accepted": True}
+    await asyncio.sleep(0.05)
+    assert turns(eng, sid) == ["TurnStarted"]
+    gate.set()
+    await settle(eng)
+    assert turns(eng, sid) == ["TurnStarted", "TurnCompleted"] * 2
+    msgs = one_result_per_call(eng, sid)
+    assert [m.text() for m in msgs if m.role == "assistant" and m.text()] == ["scheduled done", "next turn"]
+
+
+@pytest.mark.parametrize("wake", [True, False])
+@aio
+async def test_job_notice_for_a_running_scheduled_run_is_steered_in(tmp_path, wake):
+    """A background job the run started ends mid-run: its notice is steered in after the tool result. It is not
+    stored between a call and its result (wake off), and it does not start a second turn (wake on)."""
+    eng, sid, gate = await live_run(tmp_path, jobs={"wake": wake})
+    t = time.time()
+    receipt = await eng.jobs.path.submit(eng.jobs._notice("j_test", "done", 0, "echo hi", t, t, sid))
+    assert receipt.mode == "steered"
+    gate.set()
+    await settle(eng)
+    assert turns(eng, sid) == ["TurnStarted", "TurnCompleted"]
+    msgs = one_result_per_call(eng, sid)
+    notice = next(i for i, m in enumerate(msgs) if m.meta.get("job"))
+    assert msgs[notice - 1].role == "tool"
+
+
+@pytest.mark.parametrize("user_running", [True, False])
+@aio
+async def test_an_unaddressed_peer_message_never_picks_a_running_run(tmp_path, user_running):
+    """A run reads as running, yet a peer message with no session goes to the user's thread, idle or running: the
+    run would answer with the job's prompt and narrowed tools and send the reply to the job's deliver target."""
+    from exo.core.ingress import Ingress
+
+    eng, sid, gate = await live_run(tmp_path)
+    target, ing = eng._peer_target, Ingress("peer", "x", "trusted", "hi")
+    assert target.state(sid) == "running"
+    assert target.pick_session(ing) is None  # only the run is live: no thread is picked
+    user = (await eng.loop.create_session(title="mine")).id
+    if user_running:
+        eng.loop.state(user).running = True  # stands in for a user turn held in a tool call
+    assert sid not in {r["id"] for r in target.live_sessions()}
+    assert target.pick_session(ing) == user
+    assert target.pick_session(Ingress("peer", "x", "trusted", "hi", session=sid)) == sid  # addressed: still the run
+    eng.loop.state(user).running = False
+    gate.set()
+    await settle(eng)
+
+
+# Two seats in one EXO_HOME share schedule.sqlite: each slot runs once, a seat-bound job only in its seat.
+
+def seat_mk(tmp_path, name, clk):
+    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={},
+                     seat=Seat(name=name), attach_scheduler=lambda e: Scheduler(e, clk))
+    eng.loop.provider = FakeProvider([f"report from {name}"], repeat=True)
+    return eng
+
+
+def queued_runs(tmp_path):
+    from exo.core.sessions import SessionStore
+    evs = SessionStore(tmp_path / "home" / "sessions.sqlite").events_since(0)
+    return [e.body for e in evs if isinstance(e.body, s.TaskUpdated) and e.body.status == "queued"]
+
+
+@aio
+async def test_two_timers_on_one_home_claim_a_slot_once(tmp_path, monkeypatch):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout, forge = seat_mk(tmp_path, "scout", clk), seat_mk(tmp_path, "forge", clk)
+    jid = scout.scheduler.add("every 1h", "make the report")["id"]  # no seat: any one seat runs it
+    clk.t += 3600
+    due_a, due_b = scout.scheduler.due(), forge.scheduler.due()
+    assert [j["id"] for j in due_a] == [jid] == [j["id"] for j in due_b]  # both timers woke for the same slot
+    monkeypatch.setattr(scout.scheduler, "due", lambda: due_a)
+    monkeypatch.setattr(forge.scheduler, "due", lambda: due_b)
+    assert await scout.scheduler.tick() + await forge.scheduler.tick() == [jid]
+    await scout.scheduler.wait()
+    await forge.scheduler.wait()
+    assert len(queued_runs(tmp_path)) == 1
+    assert scout.scheduler.get(jid)["next_run"] == clk.t + 3600
+
+
+@aio
+async def test_seat_bound_job_runs_only_in_its_seat(tmp_path):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout, forge = seat_mk(tmp_path, "scout", clk), seat_mk(tmp_path, "forge", clk)
+    (tmp_path / "home" / "seats").mkdir(exist_ok=True)
+    (tmp_path / "home" / "seats" / "scout.toml").write_text('[seat]\nname = "scout"\n')
+    jid = forge.scheduler.add("every 1h", "make the report", seat="scout")["id"]  # added from forge, for scout
+    clk.t += 3600
+    assert forge.scheduler.due() == [] and await forge.scheduler.tick() == []
+    r = await forge.scheduler.edit({"action": "run_now", "job_id": jid})
+    assert "scout" in r["error"] and "task_id" not in r
+    assert await scout.scheduler.tick() == [jid]
+    await scout.scheduler.wait()
+    assert len(queued_runs(tmp_path)) == 1
+    child = [e.body for e in scout.hub.since(0) if isinstance(e.body, s.TaskUpdated) and e.body.child_session]
+    assert scout.store.get_session(child[0].child_session).agent == "scout"
+
+
+@aio
+async def test_other_seats_due_job_does_not_spin_the_timer(tmp_path):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout, forge = seat_mk(tmp_path, "scout", clk), seat_mk(tmp_path, "forge", clk)
+    scout.scheduler.add("every 1h", "make the report", seat="scout")
+    clk.t += 3600  # scout's core is down: its job stays past due
+    sch, calls = forge.scheduler, []
+    real = sch.tick
+
+    async def counted():
+        calls.append(1)
+        return await real()
+
+    sch.tick = counted
+    sch.start()
+    try:
+        await asyncio.sleep(0.3)
+    finally:
+        await sch.stop()
+    assert 1 <= len(calls) <= 2  # it sleeps; it does not wake every 50 ms for a job it may not run
+    assert queued_runs(tmp_path) == []
+
+
+@aio
+async def test_a_job_another_seats_core_adds_starts_without_a_wake(tmp_path):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout, forge = seat_mk(tmp_path, "scout", clk), seat_mk(tmp_path, "forge", clk)
+    (tmp_path / "home" / "seats").mkdir(exist_ok=True)
+    (tmp_path / "home" / "seats" / "scout.toml").write_text('[seat]\nname = "scout"\n')
+    sch = scout.scheduler
+    sch.poll = 0.05  # 60 s in a real core; the other process's add cannot set this one's wake event
+    sch.start()
+    try:
+        await asyncio.sleep(0.1)  # scout's timer is asleep with no jobs
+        jid = forge.scheduler.add("every 1h", "make the report", seat="scout")["id"]
+        forge.scheduler.db.execute("UPDATE jobs SET next_run=? WHERE id=?", (clk.t - 1, jid))
+        forge.scheduler.db.commit()
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if sch.get(jid)["last_status"]:
+                break
+    finally:
+        await sch.stop()
+    assert sch.get(jid)["last_status"] == "done"
+
+
+@aio
+async def test_job_paused_between_due_and_claim_does_not_launch(tmp_path, monkeypatch):
+    eng, clk = mk(tmp_path), Clock(ts(2026, 10, 11, 8, 0))
+    sch = eng.scheduler = Scheduler(eng, clk)
+    jid = sch.add("every 1h", "x")["id"]
+    clk.t += 3600
+    due = sch.due()
+    sch.pause(jid)
+    monkeypatch.setattr(sch, "due", lambda: due)
+    assert await sch.tick() == []
+    assert sch.running == {} and queued_runs(tmp_path) == []
+
+
+@aio
+async def test_add_rejects_a_seat_no_core_could_run(tmp_path):
+    clk = Clock(ts(2026, 10, 11, 8, 0))
+    scout = seat_mk(tmp_path, "scout", clk)
+    with pytest.raises(ValueError, match="nosuch"):
+        scout.scheduler.add("every 1h", "x", seat="nosuch")
+    r = await scout.scheduler.edit({"action": "add", "when": "every 1h", "prompt": "x", "seat": "nosuch"})
+    assert "nosuch" in r["error"] and scout.scheduler.list() == []
+    assert scout.scheduler.add("every 1h", "x", seat="scout")["seat"] == "scout"  # its own seat
+    (tmp_path / "home" / "seats").mkdir(exist_ok=True)
+    (tmp_path / "home" / "seats" / "forge.toml").write_text('[seat]\nname = "forge"\n')
+    assert scout.scheduler.add("every 1h", "x", seat="forge")["seat"] == "forge"  # a seat file names it

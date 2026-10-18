@@ -224,6 +224,19 @@ def test_principal_store_override_is_protected(tmp_path, monkeypatch):
     assert classify(("write_file", {"path": str(tmp_path / "elsewhere" / "notes.md")})).category == "local_write"
 
 
+def test_explicit_store_root_is_protected(tmp_path, home):
+    """A store made with `exo init --root` is recorded in config `principals.<id>` and is the live store for that
+    id, outside the home: its policies, state, keys and ledger are protected like the home's stores."""
+    store = tmp_path / "elsewhere" / "pat"
+    (home / ".exo" / "config.json").write_text(json.dumps({"principal": "pat", "principals": {"pat": str(store)}}))
+    assert classify(("write_file", {"path": str(store / "policies" / "x.yaml")})).category == "store_write"
+    assert classify(sh(f"rm -rf {store}/state")).category == "store_write"
+    assert classify(sh(f"cp /tmp/k {store}/keys/seat.pub")).category == "store_write"
+    assert gate.is_store_path(str(store / "ledger.sqlite-wal"))
+    assert classify(("write_file", {"path": str(store / "nodes" / "work" / "x.md")})).category == "local_write"
+    assert classify(("write_file", {"path": str(tmp_path / "elsewhere" / "notes.md")})).category == "local_write"
+
+
 STORE_READS = [
     sh(f"cat {STORE_ME}/policies/gates.yaml"),
     sh("ls ~/.exo/state"),

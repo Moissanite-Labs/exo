@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from exo.config import Config, ConfigError
-from exo.store import PrincipalStore
+from exo.store import PrincipalStore, principal_root
 
 AGENT = "exo-learn"
 PRINCIPAL = "principal"
@@ -66,7 +66,8 @@ def load_settings(engine: Any) -> dict:
 
 
 def resolve_store(engine: Any, env: Mapping[str, str] | None = None) -> Path | None:
-    """The principal store root for this engine, or None when learning has nowhere to write."""
+    """The principal store root for this engine, or None when learning has nowhere to write. A principal id maps to
+    its store through `exo.store.principal_root`, which honours the explicit roots in config `principals`."""
     env = os.environ if env is None else env
     home = Path(getattr(engine, "home", None) or env.get("EXO_HOME") or Path.home() / ".exo")
     cfg = load_config(engine)
@@ -86,7 +87,7 @@ def resolve_store(engine: Any, env: Mapping[str, str] | None = None) -> Path | N
         return Path(str(root)).expanduser()
     pid = plugin_cfg.get("principal") or env.get("EXO_PRINCIPAL")
     if pid and PID_RE.match(str(pid)):
-        return home / "principals" / str(pid)
+        return principal_root(str(pid), home)
     return None
 
 
