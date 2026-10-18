@@ -13,7 +13,7 @@ import asyncio
 from collections import deque
 from typing import Any, AsyncIterator, Iterable, Protocol, runtime_checkable
 
-from exo.protocol.schema import Command, Event
+from exo.protocol.schema import Command, Event, new_id
 
 
 class CommandFailed(Exception):
@@ -103,9 +103,11 @@ class Subscription:
             ev = self._backlog.popleft()
             self.last = ev.seq
             return ev
+        loop = asyncio.get_running_loop()
+        end = None if timeout is None else loop.time() + timeout  # other sessions' events do not reset it
         while True:
             try:
-                ev = await asyncio.wait_for(self._queue.get(), timeout)
+                ev = await asyncio.wait_for(self._queue.get(), None if end is None else max(0.0, end - loop.time()))
             except TimeoutError:
                 return None
             if ev is None:
@@ -137,6 +139,7 @@ class Hub:
     def __init__(self, log: EventLog | None = None):
         self.log: EventLog = log if log is not None else MemoryLog()
         self.seq = self.log.last_seq()
+        self.instance = new_id("i")  # this launch; a client that sees it change takes a fresh snapshot (D-060)
         self._subs: set[asyncio.Queue[Event | None]] = set()
 
     def publish(self, body: Any, session: str | None = None) -> Event:
