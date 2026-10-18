@@ -492,8 +492,9 @@ class SessionStore:
         return ev
 
     def write_event(self, ev: Event) -> None:
-        """Store an event the server Hub numbered. Seats of one home each run a Hub on this file, so the seq is
-        raised past the table's highest inside the write transaction; ``Hub.publish`` then takes ``ev.seq``."""
+        """Store an event the server Hub numbered. Seats of one home each run a Hub on this file, and ``append_event``
+        lets SQLite pick the seq (#237), so the seq is raised past the table's highest inside the write transaction;
+        ``Hub.publish`` then takes ``ev.seq``."""
         def write(db: sqlite3.Connection) -> None:
             ev.seq = max(ev.seq, db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0] + 1)
             db.execute("INSERT INTO events (seq, id, session, type, ts, body) VALUES (?,?,?,?,?,?)",
