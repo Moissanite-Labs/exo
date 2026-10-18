@@ -152,17 +152,19 @@ Entry point: `exo = "exo.cli:main"` in `pyproject.toml`. The parser is built in 
 
 Commands that work on a principal store take two flags:
 
-- `--principal ID`: the principal id. Default: `$EXO_PRINCIPAL`.
+- `--principal ID`: the principal id. Default: `$EXO_PRINCIPAL`, then the active principal in config.json.
 - `--root DIR`: a store directory. It wins over `--principal`.
 
 With neither, the command stops and tells you to pass one. Stores live under `$EXO_HOME/principals/<id>`
-(`EXO_HOME` defaults to `~/.exo`). In the table, "store" means a command needs one.
+(`EXO_HOME` defaults to `~/.exo`), unless `exo init --root` or `exo import-store --root` put one elsewhere.
+Those record the directory in config `principals.<id>`, and the id finds it from then on
+(`exo.store.principal_root`). In the table, "store" means a command needs one.
 
 ### Store and ledger
 
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
-| `exo init <id>` | Creates a principal store and an empty signed ledger (mode 0600), and makes it the active principal if none is set. Prints the lint summary. | `--from-template [PATH]` start from a template folder (default: the bundled empty store). `--interview` run the onboarding interview. Also takes the interview flags below. `--root DIR` where to create it. | `cmd_init` in `src/exo/onboard.py` |
+| `exo init <id>` | Creates a principal store and an empty signed ledger (mode 0600), and makes it the active principal if none is set. Prints the lint summary. | `--from-template [PATH]` start from a template folder (default: the bundled empty store). `--interview` run the onboarding interview. Also takes the interview flags below. `--root DIR` where to create it, recorded in config `principals.<id>`. | `cmd_init` in `src/exo/onboard.py` |
 | `exo interview` | Asks the next onboarding questions for a store (store). | `--answers FILE` read answers from a YAML file. `--max-questions N` (default 12, 0 is all). `--generator MOD:ATTR` a model hook that drafts more questions. `--plan` print the questions in order and exit. `--seed-queue N` hand the next N unasked questions to the ask queue (default 8). | `cmd_interview` in `src/exo/onboard.py` |
 | `exo import-store <path>` | Copies an existing store into a new principal. Never edits the source. Skips `.git`, caches, key files, symlinks, and `corpus/private` and the ledger unless asked. | `--id ID`, `--root DIR`, `--include-private`, `--activate` | `cmd_import_store`, `import_store` in `src/exo/onboard.py` |
 | `exo find <words...>` | Ranked nodes for some words (store). | `-n N` (default 8) | `cmd_find` in `src/exo/cli.py` |
@@ -206,7 +208,7 @@ With neither, the command stops and tells you to pass one. Stores live under `$E
 
 | Command | What it does | Arguments | Implemented in |
 |---|---|---|---|
-| `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.compose:create`; `exo.core.engine:create` still works; or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). | `cmd_serve` in `src/exo/cli_chat.py` |
+| `exo serve` | Runs `exod`, the core protocol server. | `--socket PATH` (default `$EXO_HOME/run/exod.sock`). `--tcp HOST:PORT` also listen on TCP (a bearer token is required). `--token-file PATH`. `--stdio` JSON lines on stdin and stdout. `--engine MOD:FACTORY` (default `exo.compose:create`; `exo.core.engine:create` still works; or `echo`). `--seat NAME` load `$EXO_HOME/seats/<name>.toml`. `--stop` stop the background exod and exit (same as `exo stop`). Refuses, with exit 1, a socket that another core answers on: give a second seat its own `--socket`. Only the core on the default socket writes `run/exod.pid`, the file `exo stop` reads. | `cmd_serve` in `src/exo/cli_chat.py` |
 | `exo chat` | A line client for `exod`. Sends `/name args` lines as `command.run`. `/quit` and `/exit` leave. | `--socket PATH`, `--url URL`, `--token-file PATH`, `--session ID`, `--resume`, `--title T` | `cmd_chat` in `src/exo/cli_chat.py` |
 | `exo` (no command) | Opens the terminal client in the current directory, same as `exo tui`. Used when there are no arguments, or the first argument is a flag other than `-h`, `--help` or `--version`; all flags go to the client. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `main` and `cmd_tui` in `src/exo/cli.py` |
 | `exo resume` | Reopens the last session in the terminal client: `exo --resume`. Other flags pass through (`exo resume --seat X`). | same as `exo` | `main` in `src/exo/cli.py` |

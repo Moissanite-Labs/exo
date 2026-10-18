@@ -48,6 +48,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
 from exo.principal import require_principal
+from exo.store import principal_root
 
 logger = logging.getLogger("exo_gate")
 
@@ -105,7 +106,10 @@ def resolve_settings(overrides: Mapping[str, Any] | None = None,
     exo_home = Path(env.get("EXO_HOME") or Path.home() / ".exo").expanduser()
     store = get("principal_store") or env.get("EXO_PRINCIPAL_STORE") or ""
     if not store and env.get("EXO_PRINCIPAL"):
-        store = str(exo_home / "principals" / env["EXO_PRINCIPAL"])
+        try:  # config principals.<id> first: a store made with --root
+            store = str(principal_root(env["EXO_PRINCIPAL"], exo_home))
+        except ValueError:  # not a principal id: no store, so the default policies apply
+            store = ""
     author = str(get("author"))
     seat = env.get("EXO_SEAT") or author  # the seat's own signing key, the same file the bus client uses
     key_path = get("key_path") or str(exo_home / "keys" / f"{seat}.key")

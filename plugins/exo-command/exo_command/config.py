@@ -8,9 +8,9 @@ Resolution order for every key, first hit wins:
 
 Where the Exo core lives (``socket``, ``url``, ``token``) is just a setting; the default is the
 socket ``exod`` creates under ``$EXO_HOME/run``. Nothing here names a principal, a seat or a machine.
-The principal store has no default path unless ``EXO_PRINCIPAL_STORE`` or ``EXO_HOME`` plus
-``EXO_PRINCIPAL`` are set, so a fresh install shows an empty, labelled decisions panel instead of
-guessing.
+The principal store has no default path unless ``EXO_PRINCIPAL_STORE`` or ``EXO_PRINCIPAL`` is set,
+so a fresh install shows an empty, labelled decisions panel instead of guessing. ``EXO_PRINCIPAL``
+maps to its store through ``exo.store.principal_root``, so a store made with ``exo init --root`` is found.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ DEFAULTS: Dict[str, Any] = {
     "token_file": "",             # empty: $EXO_HOME/run/exod.token when it exists
     "host": "127.0.0.1",          # web client bind address
     "port": 7342,
-    "principal_store": "",        # empty: $EXO_PRINCIPAL_STORE, else $EXO_HOME/principals/$EXO_PRINCIPAL
+    "principal_store": "",        # empty: $EXO_PRINCIPAL_STORE, else the store of $EXO_PRINCIPAL
     "decisions_queue": "queues/decisions.jsonl",  # relative paths resolve inside the store
     "live_window_seconds": 900,   # a session counts as live if it moved in this window
     "past_window_hours": 24,      # finished subagent sessions shown under "past"
@@ -109,13 +109,18 @@ def _env_value(key: str, default: Any) -> Any:
 
 
 def default_principal_store() -> Optional[Path]:
+    """``$EXO_PRINCIPAL_STORE``, else the store of ``$EXO_PRINCIPAL`` by the core's rule
+    (``exo.store.principal_root``: config ``principals.<id>``, else ``$EXO_HOME/principals/<id>``)."""
     env = os.environ.get("EXO_PRINCIPAL_STORE")
     if env:
         return Path(env).expanduser()
     pid = os.environ.get("EXO_PRINCIPAL")
     if pid:
-        home = Path(os.environ.get("EXO_HOME") or "~/.exo").expanduser()
-        return home / "principals" / pid
+        from exo.store import principal_root
+        try:
+            return principal_root(pid, exo_home())
+        except ValueError:  # not a valid principal id: no store rather than a guess
+            return None
     return None
 
 

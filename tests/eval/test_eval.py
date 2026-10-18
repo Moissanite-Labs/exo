@@ -100,3 +100,23 @@ def test_retrieval_baseline_on_template(template_store):
     r = ev.retrieval_responder(template_store)
     assert isinstance(r("anything at all"), str)
     assert r("Situation: x\nA: one\nB: two\nReply") in ("A", "B")
+
+
+@pytest.mark.parametrize("reply,score", [
+    ("0.9", 0.9), ("1", 1.0), ("0", 0.0), ("7/10", 0.7), ("8", 0.8), ("80%", 0.8), ("**0.8**", 0.8),
+    ("0.9 - nothing wrong with it", 0.9),                  # "nothing wrong" does not call it wrong
+    ("0.9 - the answer isn\u2019t wrong", 0.9),
+    ("0.2 The answer is wrong about the conclusion.", 0.2),  # the opening number is the score the prompt asks for
+    ("On a scale of 0 to 1, 0.8", 0.8),                    # a named scale is a label, not the score
+    ("On a scale of 0 to 1, I give 0.8", 0.8),
+    ("Score (0-1): 0.6", 0.6),
+    ("Score (0.0-1.0): 0.7", 0.7),
+    ("Score: 0.8. The answer is not incorrect.", 0.8),
+    ("It's a 1.", 1.0), ("This deserves an 8.", 0.8), ("I'd go with 8.", 0.8), ("Strong match, so a 1.", 1.0),
+    ("Correct.", 1.0), ("Yes, the answer is correct.", 1.0),
+    ("Not correct.", 0.0), ("It isn't correct.", 0.0), ("Incorrect.", 0.0), ("The answer is wrong.", 0.0),
+    ("1 - but the date is wrong", 0.0),                    # a full score that calls the answer wrong fails safe
+    ("I cannot tell.", 0.0), ("", 0.0),
+])
+def test_parse_score(reply, score):
+    assert ev.parse_score(reply) == pytest.approx(score)

@@ -194,6 +194,9 @@ messages already recorded with the wrong author.
 - The TUI with no daemon runs the core in process, takes the lock and serves `run/agent-<id>.sock`. A second
   window for the same seat connects to that socket instead of starting a second core. If the holding
   window closes, the other windows reconnect and one of them takes over.
+- Seats in one home are separate cores on one `sessions.sqlite`, each with its own lock. An event's `seq` is
+  taken inside its write transaction, one above the table's highest, so two cores never reuse one. A core fails
+  its agent's leftover delegate tasks only once it holds the lock (docs/SEATS.md, "Several seats in one home").
 - Inside the writer, two threads can run turns at once (each thread has its own turn lock). Positions are
   given inside one SQLite write transaction, so they never collide. Each thread sees the other's committed
   entries at its next model call through a note.

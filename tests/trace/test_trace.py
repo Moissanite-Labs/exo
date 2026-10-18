@@ -330,6 +330,15 @@ def test_rule_model_slow_flags_the_route_per_call():
     assert Thresholds.of({"model_call_s": 45, "model_call_routes": {"p:a": 200, "p:z": -1}}).model_call_routes == {"p:a": 200.0}
 
 
+def test_rule_model_slow_charges_no_route_for_a_call_whose_only_tries_timed_out():
+    """A call stopped on the fallback route keeps only the timeout before it: model.timeout names that route, and
+    the call's total (the timeout plus the fallback's stream) is not filed as model.slow against it."""
+    stopped = tt(calls=[Call(route="", total_ms=130_000, ttft_ms=70_500,
+                             attempts=[{"route": "p:a", "outcome": "timeout", "ms": 60_000}])])
+    got = sigs(stopped)
+    assert "model.timeout:p:a" in got and not [x for x in got if x.startswith("model.slow")]
+
+
 def test_turn_total_wall_is_a_separate_high_cap():
     long = tt(wall_ms=2_000_000, timing={"wall_ms": 2_000_000, "tool_ms": 1_990_000, "approval_ms": 0})
     got = sigs(long)
@@ -679,6 +688,34 @@ def test_agent_tools(tmp_path):
     assert call(eng, "exo_harness_report", {"title": "x"}, sid).is_error
     out = call(eng, "exo_trace", {}, sid).text()
     assert "running on: fake:x" in out and "harness " in out and "findings 1: 1 open, 0 fixed (awaiting re-verification)" in out
+
+
+def test_trace_header_after_a_stop_names_the_route_that_served_the_last_call(tmp_path, monkeypatch):
+    """A call cut short by a stop names no route (usage comes at the end of a stream); the header skips it."""
+    eng = engine(tmp_path, [{"match": "go", "steps": ["ok"]}])
+    fake = eng.router.credentials("fake")[0].provider
+
+    async def stall(messages, tools, **opts):
+        yield ProviderEvent(kind="text", text="long answer")
+        await asyncio.Event().wait()
+
+    async def go():
+        sid = (await eng.loop.create_session(title="t")).id
+        await eng.loop.send(sid, "go")
+        monkeypatch.setattr(fake, "stream", stall)
+        task = asyncio.create_task(eng.loop.send(sid, "go on"))
+        while not any(e.type == "message.delta" and e.body.text == "long answer" for e in types(eng, sid)):
+            await asyncio.sleep(0.01)
+        assert eng.loop.interrupt(sid)
+        assert (await asyncio.wait_for(task, 5)).stop_reason == "interrupted"
+        return sid
+
+    sid = run(go())
+    calls = [e.body for e in types(eng, sid) if e.type == "model.call"]
+    assert [(c.route, c.stop_reason) for c in calls] == [("fake:x", "end"), ("", "interrupted")]
+    out = eng.trace_text(sid, 5)
+    assert "last call served by fake:x" in out.splitlines()[0]
+    assert "calls in turn 2" in out
 
 
 def test_trace_tools_are_not_for_subagents_and_seats_keep_them(tmp_path):

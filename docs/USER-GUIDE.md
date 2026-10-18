@@ -65,7 +65,7 @@ and the number of open findings. Screenshots are in `docs/ui/` (for example `doc
 Set `EXO_REDUCED_MOTION=1` to turn motion off. `NO_COLOR` turns colour off.
 
 **Web (`exo web`).** Run `exo web` in a terminal. It opens the page in your browser for you. If it does not (no
-browser, or `--no-open`), open the link it prints: `http://127.0.0.1:7342/#token=...`. The part after `#token=` is a
+browser, `--no-open`, or a `--host` other than `127.0.0.1`, `localhost`, `::1` or a wildcard bind), open the link it prints: `http://127.0.0.1:7342/#token=...`. The part after `#token=` is a
 key for this launch only; the page needs it for everything and refuses requests without it. After you restart
 `exo web`, use the new link: the old one stops working. Run `exo` and `exo web` in either order: both
 see the same agent and threads. `exo web` joins a terminal window's core, or `exo serve`, if one is running; if
@@ -251,6 +251,8 @@ Details: `docs/PEERS.md`.
 
 A seat is one named setup of an agent: whom it serves, which models, tools, skills and plugins it has, and where its
 threads start. Seat files live in `$EXO_HOME/seats/`. Run one with `exo serve --seat NAME` or `exo tui --seat NAME`.
+When an `exo serve` already runs, a second seat needs its own socket:
+`exo serve --seat NAME --socket $EXO_HOME/run/NAME.sock`. Without it, `exo serve` refuses to start and says so.
 Ready-made role templates are in `plugins/exo-orchestra/seats/`. To write your own, see `docs/SEATS.md`.
 
 A seat can set the folder its threads start in, with `[session] cwd` in `seat.toml`. Exo warns once when a thread's
@@ -284,6 +286,7 @@ Details and the cost rules: `docs/TRACE.md`.
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
 | The warning about "not inside a git repo" | The thread's folder is not a repo. Set `[session] cwd` in the seat, or `/cwd` to see where you are. |
 | The web page says "missing or wrong page token" | Open the link `exo web` printed this time. Each launch has a new token. |
+| The web page says "this browser link was already used or has expired" | The browser link is good once, for two minutes. Paste the link `exo web` printed in the terminal into this tab; do not click it in the terminal. If the terminal also warned that a link was used twice, paste the new link it printed into the browser that is already open. |
 | Keys must stay private | Exo never writes secrets through `config.set`, and removes known key values from tool output. See `docs/SEATS.md`. |
 
 ## 11. Your store and the ledger
@@ -293,7 +296,8 @@ log nobody can edit without it showing. These commands work on them from a shell
 reads and writes the store for you. They help when you want to look, check, or move things.
 
 Pick the store with `--principal ID` or `--root DIR`, or set `EXO_PRINCIPAL` once. Stores live in
-`~/.exo/principals/<id>` unless `EXO_HOME` says otherwise.
+`~/.exo/principals/<id>` unless `EXO_HOME` says otherwise. A store you made somewhere else with
+`exo init <id> --root DIR` or `exo import-store --root DIR` is remembered, so its id finds it from then on.
 
 **Make or adopt a store**
 
