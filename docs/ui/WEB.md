@@ -110,7 +110,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
 - **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
   `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
-  (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it.
+  (`POST /api/chat/sessions/<id>/unsteer`, D-045). The chip goes when the message lands or another window cancels it,
+  not when the turn ends: a steer that arrives while a turn is finishing starts the next turn (#147). Reopening the
+  thread drops a chip the core no longer queues (`GET /api/chat/sessions/<id>` lists the queued ids as `steers`).
 - **Thread list.** Double-click a thread to rename it (or type `/rename <title>`): `POST /api/chat/sessions/<id>/rename`,
   the core `rename` built-in, principal only (D-069).
 - **Event stream.** `bus.js` reopens the stream itself from the last seq when the browser gives up (EventSource never
@@ -239,7 +241,8 @@ with `--use-mock-keychain --password-store=basic` so no keychain prompt appears.
 
 `python scripts/promo_shots_web.py` serves the static client over a stand-in source that replays protocol
 events for a scripted turn, and captures each state with headless Chrome. Nothing is captured from a live
-`~/.exo`. See `docs/media/README.md`.
+`~/.exo`. See `docs/media/README.md`. What it adds to its copy of the page (the classic layout pin, the typed
+composer text) is a script file loaded by `src`, because the page's policy refuses inline scripts.
 The Providers shots use a stub `/api/providers` table with demo names (no real status, no keys), captured with
 `Google Chrome --headless=old --screenshot` against a `WebServer` over a fake source at `/?boot=0#providers&token=demo`.
 

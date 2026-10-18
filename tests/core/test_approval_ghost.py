@@ -83,3 +83,33 @@ def test_steer_can_be_cancelled_before_delivery(tmp_path):
         assert texts == ["slow"]  # neither cancelled steer reached the conversation
 
     asyncio.run(go())
+
+
+def test_late_steer_dispatch_preserves_principal_author_and_starts_next_turn(tmp_path):
+    async def go():
+        eng = engine(tmp_path)
+        d = Dispatcher(eng, caller="principal:tui")
+        closing, release = asyncio.Event(), asyncio.Event()
+        async def observer(session, turn):
+            if not closing.is_set():
+                closing.set()
+                await release.wait()
+        eng.loop.on_turn_end = observer
+        sid = (await d.run(s.Command.of(s.SessionCreate(title="t")))).result["session"]["id"]
+        await d.run(s.Command.of(s.TurnSend(session=sid, text="hello")))
+        await asyncio.wait_for(closing.wait(), 3)
+        late = (await d.run(s.Command.of(s.TurnSend(session=sid, text="hello again", mode="steer")))).result
+        assert late == {"accepted": True}
+        release.set()
+        for _ in range(100):
+            if not eng._tasks:
+                break
+            await asyncio.sleep(0.02)
+        users = [m for m in eng.store.messages(sid) if m.role == "user"]
+        assert [m.text() for m in users] == ["hello", "hello again"]
+        assert users[-1].meta["author"] == "principal"
+        assert users[-1].id
+        assert not eng.loop.state(sid).steer
+        assert len(events_of(eng.hub, "turn.completed")) == 2
+        await eng.close()
+    asyncio.run(go())
