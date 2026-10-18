@@ -42,6 +42,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Environment dumps (`printenv X`, a bare `env`, `set`, `export -p`, `declare -x`) are `credentials` behind
   `uv run`, `poetry run`, `pdm run`, `pipenv run`, `hatch run`, `coproc`, `sudo`, `nice`, `timeout`, `env` and
   the other prefixes, and inside `if`/`for`/`while` bodies, as they are on their own (#155, D-038).
+- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
+  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
+  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
+  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
 
 ## [0.2.0] (egg) - 2026-10-13
 
