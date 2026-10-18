@@ -373,15 +373,16 @@ its backslash. A NUL ends the quoted part, so `$'--forc\0x'e` is `--force`. A `\
 is no character is written as bash writes it: a few bytes that are not ASCII, or nothing at all from
 `\U80000000` on, so `$'--forc\UFFFFFFFFe'` is `--force` too.
 
-A command is `allow` only when every program in it is known and nothing the gate reads is hidden
-(the known forms it does not read yet are listed under "Known limits" below):
+A command is meant to be `allow` only when every program in it is known and nothing the gate reads
+is hidden; "Known limits" below names the paths where a known program still runs a command the
+gate does not read:
 
 - Known programs: `READ_PROGRAMS` (cat, ls, rg, head...), `SHELL_PROGRAMS` (mkdir, cp, pytest,
   ruff...), the tools with their own rules (git, gh, curl, vercel, stripe, ssh, exo...), and
   `TOOL_SUBCOMMANDS` (npm install, cargo test, go build, uv sync...). A program given by path
   runs as itself only from a system bin folder or a virtualenv or `node_modules/.bin` folder.
-- Everything else is `opaque_exec`, which asks: a variable, `$( )` or a glob in the program
-  position; a script file; `bash`/`sh`/`zsh` reading `-c`, a file, a pipe or a heredoc;
+- Everything else is `opaque_exec`, which asks. For example: a variable, `$( )` or a glob in the
+  program position; a script file; `bash`/`sh`/`zsh` reading `-c`, a file, a pipe or a heredoc;
   `python -c`, `node -e`, `perl -e`, `ruby -e`, `osascript`; `make`, `npm run`, `npm test`,
   `npx`, `uvx`; `xargs`; `find -exec`; `eval`, `source`, `.`, `alias`, `trap`, shell functions;
   git aliases and command-running git config; gh aliases and extensions; an unknown program.
@@ -390,6 +391,23 @@ A command is `allow` only when every program in it is known and nothing the gate
   `uv run`) it classifies the inner text too, within a bounded inspection depth (four levels,
   see "Known limits"). The result is the most severe part, and it keeps the `indirection`
   signal, so `decide` asks even when the inner part alone would only log.
+- The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
+  `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
+  `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
+  delete is the more severe part and would otherwise set the card. Only those two lists see the
+  parts: rules, category overrides, the opaque bump, third-party escalation, posting checks and
+  the floors see the dominant part. A part carries the tool of the call it came in on
+  (`tool:execute_code` matches the `execute_code` tool, not `python -c` run from bash) and the
+  views of its line, so a `command` regex matches a part as it matches the line (`g''it push
+  origin main && rm -rf build` is denied under `{category: vcs_push, command: 'git push'}`), the
+  `ssh` hop is a part whose target is the bare host (`user@`, `ssh://` and a `:port` stripped) and
+  the destination as written, and the inner commands of an `ssh` line are `internal`. A mapping entry
+  in `reserved` or `deny` counts only its match keys: any other key (`reason`, `name`, a note, a
+  typo) is dropped, so it widens the entry instead of voiding it, and an entry left with no match
+  key matches every action. The ledger view of a classification (`as_dict`) leaves the parts out.
+  `Decision.reserved` names the parts a reserved entry matched, once each, and the exo-gate hook
+  does not let a standing grant for the line's category cover one of them. Its ledger view
+  (`Decision.as_dict`) redacts URL userinfo (`https://***@host/...`).
 - Bash evaluates an array subscript in a variable name as arithmetic, and that runs a `$( )` or
   backticks in it, even inside single quotes. So the name arguments of `printf -v`, `read` (and
   `read -a`), `declare`, `typeset`, `local`, `unset`, `test -v` and `[ -v`, and `wait -p` are read
@@ -406,8 +424,9 @@ A command is `allow` only when every program in it is known and nothing the gate
   again and runs it, so the gate reads it there. Past the nesting limit a command there is
   `opaque_exec`, as an unquoted `$( )` is. A command read
   from the subscript is a part of the line like any `$( )`, so it can outrank the line's own
-  category: `printf -v 'a[$(git push origin main)]' %s x > /tmp/f` is a `vcs_push` and asks, and
-  until D-075 and #191 land a deny on `local_write` no longer applies to it.
+  category: `printf -v 'a[$(git push origin main)]' %s x > /tmp/f` is a `vcs_push` and asks. A
+  `deny:` entry for `local_write` still denies it (D-075); a `categories: {local_write: deny}`
+  line only asks until #191 lands.
 - Nesting is read four levels deep. Past that the text is `opaque_exec` and asks. An `ssh` or
   `mosh` chain with more hops than that is not read either: the hops that were read keep the
   `remote host` exposure and the first host as target (so a `target:` deny on it still
@@ -481,10 +500,10 @@ A command is `allow` only when every program in it is known and nothing the gate
   command's own length, each text sized before it is built; a nested `parallel` template is read
   alone, so the work stays linear in the line).
   The wrapper itself stays an `opaque_exec` part with `indirection`, so
-  the line asks as before. Until D-075 lands, a wrapped line is denied only when its inner
-  command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`: `setsid git push`); a
-  category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`:
-  `setsid systemctl enable foo`, `setsid curl URL`) still asks. `chroot`, `nsenter`,
+  the line asks as before. A `deny:` entry that matches the inner command denies the line
+  (D-075), also when its category ties with `opaque_exec` or ranks below it (`schedule`;
+  `web_read`, `local_write`: `setsid systemctl enable foo`, `setsid curl URL`). A `categories:`
+  line or a rule for such a category sees only the dominant part, so it still asks (#191). `chroot`, `nsenter`,
   `unshare` and `systemd-run` run the command with other privileges, namespaces or as a
   system unit: like `sudo`, the line carries a signal named after the wrapper and a reversible
   part counts as costly. What the gate cannot read stays `opaque_exec`: a program from a
@@ -501,15 +520,21 @@ A command is `allow` only when every program in it is known and nothing the gate
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
   skipped; before a simple command (`coproc w echo hi`) the first word is the program.
   `function NAME { ...; }` is read the same way. An environment dump inside (`coproc env`,
-  `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Until D-075 lands, a coproc is denied
-  only when its inner command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
-  category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`) still
-  asks. A heredoc after the closing `}` of a block (`coproc W { bash; } <<EOF`) attaches to the
-  `}` and is not fed to the inner command, which asks as `opaque_exec`; the same limit applies
-  to `{ ...; } <<EOF` on its own.
+  `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Before D-075, a coproc was denied
+  only when its inner command outranked `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
+  category that tied with it or ranked below it (`schedule`; `web_read`, `local_write`) still
+  asked. The inner commands are now parts, so a `deny` entry matching any of them denies
+  (`coproc w { curl https://example.com; }` under `deny: [web_read]`). A heredoc after the
+  closing `}` of a block (`coproc W { bash; } <<EOF`) attaches to the `}` and is not fed to the
+  inner command, which asks as `opaque_exec`; the same limit applies to `{ ...; } <<EOF` on its
+  own.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
-  (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
+  (`subprocess.run(['gh','pr','comment',...])` is a `github_post`). A literal is also read with
+  its `\n` and `\t` escapes applied. It becomes a part when any simple command in it classifies
+  as a non-benign category, whatever the order (`ls; git push` and `./build.sh; systemctl enable
+  x` alike); a literal that is all `read`, `web_read`, `local_write` and the like is dropped, and
+  code can reach a target with no literal at all.
 - The principal can lower `opaque_exec` only by naming it below ask: `categories: {opaque_exec: act}`
   or a rule whose match has `category: opaque_exec` and whose decision is `act` or `report` (for
   example with a `command` regex for `make`). Naming it at `ask` or `deny` keeps the indirection
@@ -670,6 +695,56 @@ folder from more than one level above its parent (`cd / && cd srv/exo-home/keys`
 `CDPATH`, `HOME` set on the line and `shopt -s dotglob`; and a store reached through a folder
 link whose name does not say so.
 
+Known limit: `deny` → `ask` (D-075). Where the gate cannot read a command it files the line as
+`opaque_exec`, which asks, so a `deny` entry on the hidden action becomes an `ask`. For example:
+a heredoc after a `coproc` block (the rest of `coproc` is read since #140 / #181); nesting past
+the depth cap (#137, #141); `eval $(...)`; a command arriving on stdin (`echo ... | xargs -I{} sh
+-c '{}'`); the wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`. These are examples,
+not a complete list.
+
+Known limit: `deny` → `allow`. The fallback has gaps. On these paths the line is `allow` outright,
+even with the hidden action in `deny`:
+
+- `${...}` bodies, which the lexer does not read (#143; open PR #158).
+
+Since #164, an `ssh` or `mosh` chain with more hops than the gate reads asks (#153), and the
+command-valued options of allowlisted programs (`tar --to-command`, `split --filter`, `rsync -e`,
+`ssh -o ProxyCommand=...`, `less '+!...'`, `PAGER=` and the rest; #154) are read, so a `deny`
+entry on what they run applies. `git -c core.pager=...` and the other command-running git config
+keys already ask.
+
+`ssh` options are read as getopt reads them: in a cluster such as `-vp 22`, the first letter
+that takes a value ends the word, and the value is the rest of the word or the next word. Before,
+the gate took the value of `-B`, `-P`, `-I` or of a cluster ending in a value letter for the host
+and the host for the program, so `ssh -vp 22 host rm -rf /data` was `allow` even under `deny:
+[delete]`. Now the inner command is read, and a line written that way also asks, because a few
+such lines used to ask on the program the gate misread. Wherever the gate now reads another word
+as the host than it used to, the line asks and the parts of both readings are matched. A `--`
+right after the host ends `ssh`'s options, and the command after it is read (`ssh host -- rm -rf
+/data`).
+
+`mosh` reads its options with Perl's Getopt::Long in its default mode, and the gate reads them the
+same way, against mosh's own option list: `--`, `-` or `+` before the name, any case, a unique
+prefix of the name (`--serv`, `-ssh`, `--SERVER`), the value after `=` or in the next word, and
+options after the host (`mosh host --server=...`). `--` ends the options, so the command after
+`mosh host --` is read. The short options are mosh's, not ssh's: `-a`, `-n`, `-4`, `-6`, `-p
+PORT`, `-o` (`--predict-overwrite`, which takes no value) and `-l` (a prefix of `--local`). A word
+that names no single option (`--s`, which could be `--server`, `--ssh` or `--ssh-pty`;
+`--local=1`; an unknown name) stops mosh, and the line asks; the words after it, and the word
+itself once a host is read, are read as the host and command. The value of `mosh --ssh`,
+`--client` or `--server` is a command that runs, so the gate reads it as one: `mosh --serv='rm -rf
+/data' host` denies under `deny: [delete]`, and any such line asks. The `--ssh` and `--client`
+helpers run on this machine, so they keep their own exposure; `--server` runs on the remote host
+and is `internal` like the inner command. With `--local`, mosh runs the server and the command on
+this machine, so nothing on the line is marked `internal`. Another option's value that itself
+reads as `--server`, `--ssh` or `--client` (`mosh --port '--server=rm -rf /data' host`) is taken
+by mosh as that value and never run, but the gate used to read it as the command, so it still
+does and the line asks. Words after the host that mosh takes as its options or their values
+(`mosh host ls --port 'x; rm -rf /data'`) are read both ways: with `POSIXLY_CORRECT` set,
+Getopt::Long stops at the host and mosh runs them as the command, so their parts are matched as
+that command too and the line asks. The same holds where the gate used to read another word as the
+host. A `--` right after the host needs no second reading (`mosh host -- rm -rf /data` denies under
+`deny: [delete]`).
 Known limit. The gate does not model a variable's value. Bash evaluates a bare name in an
 arithmetic context as arithmetic too (`a[i]`, `$(( x ))`, `declare -i`), so a value such as
 `b[$(cmd)]` set earlier runs cmd there. Only an expansion written in the name argument of the
@@ -686,10 +761,10 @@ is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot
 a tmux command name cut short (`new-w`) and an alias set in a tmux config file. Two are read but
 not fully: `systemd-run --on-calendar` (and its other timer options) is read as running its
 command, not as `schedule`, and `parallel -S` carries no remote-host signal. Both still ask.
-Under a non-default `deny: [opaque_exec]`, a wrapped line whose inner command outranks
-`opaque_exec` (a wrapped env dump is `credentials`, a wrapped push is `vcs_push`) is decided by
-that inner category and asks instead of being denied, until D-075 (#126) makes a `deny:` entry
-match any part of the line.
+Under a non-default `categories: {opaque_exec: deny}` or a rule that denies it, a wrapped line
+whose inner command outranks `opaque_exec` (a wrapped env dump is `credentials`, a wrapped push
+is `vcs_push`) is decided by that inner category and asks instead of being denied (#191). A
+`deny: [opaque_exec]` entry matches the wrapper part, so it denies the line (D-075).
 
 ## The store is credentials (D-038)
 
