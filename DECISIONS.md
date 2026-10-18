@@ -761,6 +761,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   stricter; the `indirection` signal makes `decide` ask even if the inner part only logs. An "always" on opaque code
   covers that exact command only. The principal can lower `opaque_exec` only by naming it in a category line or rule.
   The old program and prefix cases are gone; one classifier serves the core and the `exo-gate` plugin.
+  *Amendment 2026-10-17 (issue #178):* naming `opaque_exec` at any level turned the indirection floor off, so
+  `categories: {opaque_exec: deny}` let `bash -c 'git push origin main'` fall back to the push's own `log`. Only a
+  name that lowers it (a category line, or the first matching rule on `opaque_exec`, at `log` or `allow`) turns the
+  floor off now. Naming it at `ask` or `deny` keeps the floor, so a command read inside a wrapper asks at least.
   *Amendment 2026-10-17 (issue #184):* a path word is matched against the secret stores after bash brace
   expansion, scanned as bash scans it: a shell word from its source text, so only unquoted braces expand. The word
   and every word its comma groups and `{x..y}` sequences make are checked, and a hit on any counts; past 1,024
@@ -770,6 +774,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   or the principal store are on a protected list. Any write is `store_write`: a floor like credentials, no standing
   grant, principal-only (`approvals.yaml` cannot add seats), enforced in observe mode. Reads stay `read`; `keys/`
   reads stay `credentials`.
+  *Amendment 2026-10-18 (issue #224):* a write target is matched against the protected list after bash brace
+  expansion, read as for the secret stores (#184): a shell word from its source text, a file tool's path as
+  written. A hit on any expanded word counts, and a word past the brace limits counts as the store. The store
+  checks have their own 4,096-word budget per tool call. `echo x > ~/.exo/polic{i..i}es/default.yaml` was an
+  allowed local write.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -784,6 +793,34 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+  *Amendment 2026-10-17 (issue #192):* on a line that enters a folder that can hold a secret store, a relative read of
+  a store file is `credentials`. The hints come from the sample store paths, per call: the store folders (a dot folder
+  along a sample below home by its name, a plain one only below its parent, such as `.config/gh`, `.exo/keys` or
+  `/proc`, so a checkout called `exo` is not one) and the store file names. A line enters a store folder when any
+  `cd`, `pushd`, `git -C`, `env -C`, `sudo -D` or `tar -C` target in it, wherever it stands and however it is spelt,
+  has a store folder among its parts (`..` resolved as bash's `cd` does, a brace set or range as its words), or goes by
+  a relative name, also through `..` or after `cd ..`, into a plain store folder below another target (a dot parent by
+  its name, a plain one by its path; a folder entered this way is a parent in turn). On such a line a relative name in
+  its words, redirections, uploads and `$( )`, `<( )` or `bash -c` bodies (not the targets' own words, the program and
+  the words before it except assignments, a `git` subcommand, a jq filter (not `-f`), or prose with a space and no
+  unquoted brace set) counts when its file name is a store file name (a glob, read with bash's bracket and leading-dot
+  rules: when it could match one) or it goes into a store folder; the folder itself (`.`) counts when a target is a
+  store folder, and any relative name when a target is itself a store, a glob target included. A name that goes into a
+  plain store folder from its parent counts on any line when it names a store. Chosen over following the folder per
+  command or per line, which
+  review showed misses shell semantics (`||`, `!`, `time`, a `cd` in `$( )`), grows exponentially on scripts that walk
+  folders and needed caps that failed open or asked on ordinary scripts. This model is linear, and where it bounds
+  work (16 brace words, 64 `cd ..` levels or glob candidates, many `[`) it fails closed. The cost, failing closed:
+  neither the order nor the success of the commands is followed, so a word named like a store file asks on such a line
+  even when it is elsewhere or not a file (`cd ~/.kube && cd ~/project && cat config`,
+  `cd ~/.config/fish && cat config`, `npm config` in `~/.config/nvim`), and `.` asks in a store folder. Lines that
+  enter no store folder and name none are unchanged. A `store_write` line stays `store_write`, the principal's alone.
+  Known limits: a target in a variable or made by a command (`cd $X`), a name made by a command or with a space in it
+  (`cat $(ls)`, `"$(pwd -P)/config"`), a dot store folder named last in an operand (`tar czf x ../.kube`), a relative
+  target taken from another relative one (`cd ~/.config && cd nvim && cd ../gcloud`), a glob in the parent of a plain
+  store folder (`cd /sr?/exo-home && cd keys`), a plain store folder reached from more than one level above its parent
+  (`cd / && cd srv/exo-home/keys`), other `${PWD...}` forms, the text `eval` runs, `cd -` and `OLDPWD`, `CDPATH`,
+  `HOME` set on the line, `dotglob`, and a store reached through a folder link whose name does not say so.
   *Amendment 2026-10-16 (issue #136):* a `command:` regex in `deny` and `reserved` matched the command text
   only, so `'git' push`, `g\it push`, `git pu''sh` and `$'rm' -rf` walked past a veto the lexer had already
   decoded. Those regexes now also match a literal-word view (`_policy_command_view`: the lexer's decoded words,
@@ -820,6 +857,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `\U` value that is no character is written as bash's u32toutf8 writes it (up to six bytes that are not ASCII,
   nothing from 0x80000000 on), so every `$'..'` word is read. Category and target vetoes see the decoded word; a
   `command:` regex still sees the raw line until the literal-word view (#187) uses the same decoder.
+  *Amendment 2026-10-18 (issues #153, #154, #155):* an `ssh`/`mosh` chain past the four-level cap asks as
+  opaque_exec and keeps the first host as target. Options of allowlisted programs whose value is a command
+  (`tar -I`, `rsync -e`, `ssh -o ProxyCommand`, `git rebase -x`, `less +!`, sqlite3 and psql shell escapes,
+  `GIT_SSH_COMMAND=` before the program...) are classified as nested commands, and a value the gate cannot read
+  asks. The options are read as each program's getopt reads them, with the program's own value-taking options
+  and boundaries: a cluster ends at its first value letter (`-oProxyCommand=cmd` is `-o`), and ssh's options
+  end at its remote command (every word is read when one may expand to no word or several, `$A` or `"$@"`). Reading more than getopt would is fail closed, reading less is a bypass, so a table
+  of value-taking options lists only options known to take one. Rejected: scanning every word for option
+  letters (the earlier form of this change), which lost `-oProxyCommand` to a later `o` and asked on `ssh host
+  curl -I URL`. Environment dumps are credentials behind runners and prefixes too (`uv run printenv X`).
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
