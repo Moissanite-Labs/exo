@@ -7,6 +7,7 @@ the other changes course at its next step. In Exo this works between Exo session
 
 - `/peers` (TUI) or the `peers` tool lists live sessions on the machine: name, running or idle, folder.
   A seat with one session is just its name (`razi`); with several it is `razi/3fa91c2b`.
+  Subagents and scheduled runs are not listed, and a message to a bare seat name never lands in one.
 - `/send <peer> <text>` (you typing) or the `peer_send` tool (an agent) sends a message.
 - A running target takes it at its next tool round. An idle target queues it for its next turn, and wakes
   only if its seat allows (`wake`).
@@ -27,7 +28,8 @@ the other changes course at its next step. In Exo this works between Exo session
 Hold means an approval card (TUI and web) shows the sender and text. Allow delivers it; deny drops it;
 nothing happens in 30 minutes and it expires. A held message never enters the model's context. When the sender
 named no session and none is live (running, or used within `active_hours`, 12 by default), the card belongs to no
-thread: both clients show it in every thread, and allow opens a new thread for the message.
+thread: both clients show it in every thread, and allow opens a new thread of the seat for the message. If that
+thread cannot open, the message closes as not delivered and a notice says why.
 
 Change it per seat in the seat file (or `peers` in config.json):
 

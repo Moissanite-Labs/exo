@@ -53,7 +53,7 @@ the middle dot as separator come straight from the site.
    the selected row, a dim argument shape, up to eight rows then `N matches`. Ghost text is drawn dim after the caret.
    The placeholder doubles as the one-line guidance (`job j1 finished: ask for its job_output · tab fills it in`).
    No animation: the menu and the line change only on keys and events, so reduced motion needs no special case.
-   Subagent commands (D-070): `/tasks` lists the tasks this session handed out, `/open <task>` shows the child's session (read-only look; the child's loop is not resumed), `/steer <task> <text>` sends a running child a note and `/stop <task>` stops it. A bare `/stop` still stops the running turn.
+   Subagent commands (D-070): `/tasks` lists the tasks this session handed out, `/open <task>` shows the child's session (a read-only look: the child's loop is not resumed, and typing there steers the running child without a receipt note, as a queued steer that up pulls back), `/steer <task> <text>` sends a running child a note and `/stop <task>` stops it. A bare `/stop` still stops the running turn.
 6. Status strip: `MODEL` (the route that served, in orange with `← requested` when it fell back), `MEM` gauge,
    `CACHE` share of the last call, `COST`, open findings.
 7. Start: the site's hero motif in braille (`exo_tui/hero.py`): a shell of linked nodes around an orange core,
@@ -69,7 +69,9 @@ Where the numbers come from, all from events the core already sends: `model.call
 
 Switching threads (`/new`, `/sessions`, `/resume`, `/fork`, `/open`): the old thread's events stop reaching the
 window, so it drops that thread's turn state (`LIVE`, the activity line, steer mode, a queued steer, an open
-question), its approval card and its numbers. `MEM` and `CACHE` are empty until the new thread's next model call.
+question), its approval card and its numbers. A card with no thread stays (a held peer message that no live session
+could take, D-026): it belongs to every thread, so the window asks `approvals.list` with no session filter and keeps
+those cards. A new thread, and a window started on one, show them too. `MEM` and `CACHE` are empty until the new thread's next model call.
 `COST` is kept per thread. The core's total for a thread counts all of it, so a thread the window showed before gets
 back what the window saw of it, and the `+` for an unpriced call stays on its next total (D-032). A thread the
 window never showed reads `–` until its next model call, and its `+` is a lower bound, as in a fresh window. So is

@@ -14,7 +14,7 @@ import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem 
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
   let approvals = {}, steers = {}, gone = new Set(), panelsOpen = bus.openPanels(), notice = "", model = "", cost = null;
-  let capacity = null, capacities = {}, snapshotGeneration = 0;
+  let capacity = null, capacities = {}, snapshotGeneration = 0, pickerGeneration = 0, changingModel = false;
   let requested = "", ctxTokens = null, cacheShare = null, ctx = null, findings = null, calls = [], costSeen = false;   // instruments from model.call and usage.updated
   const seen = new Set();   // panels already reported as opened
   const landed = new Set();   // user messages the core has added to a conversation
@@ -30,8 +30,10 @@ export function mount(root) {
   const sendBtn = h("button", { class: "xc-btn xc-primary", onclick: () => send() }, "Send");
   const stopBtn = h("button", { class: "xc-btn", onclick: () => interrupt() }, "Stop");
   const promptEl = h("span", { class: "xc-cp", "aria-hidden": "true" }, "\u203A");
+  const modelPicker = h("div", { class: "xc-model-picker", hidden: true, "aria-label": "Model picker" });
+  modelPicker.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closePicker(); } });
   const inputWrap = h("div", { class: "xc-inwrap" }, input);
-  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn));
+  const composer = h("div", { class: "xc-composer" }, promptEl, inputWrap, h("div", { class: "xc-btnrow" }, sendBtn, stopBtn), modelPicker);
   const help = attachComposer({ input, composer, getSession: () => current,
     reducedMotion: window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches });
   const approvalView = attachApprovals({ root: apprEl, composer: input, answer });
@@ -432,6 +434,8 @@ export function mount(root) {
   }
 
   async function open(id) {
+    modelPicker.hidden = true; ++pickerGeneration;
+    modelPicker.replaceChildren();
     const generation = ++snapshotGeneration, had = Object.keys(steers);
     capacity = null;
     current = id; loading = true; pending = []; items = []; busy = false; cost = null; requested = ""; ctxTokens = null; cacheShare = null; ctx = null; findings = null; calls = []; costSeen = false; flash("");
@@ -510,17 +514,81 @@ export function mount(root) {
     } catch (e) { fail(e); }
   }
 
+  function closePicker() { modelPicker.hidden = true; ++pickerGeneration; input.focus(); }
+
+  // One model change at a time: send() and the picker wait for it, so a second Enter is not a second models.set.
+  async function chooseModel(ref, defaults, sid) {
+    changingModel = true;
+    try {
+      if (defaults) await api("POST", "/api/providers/default", { ref, role: "main" });
+      else await api("POST", "/api/chat/sessions/" + encodeURIComponent(sid) + "/model", { model: ref });
+    } catch (e) {   // D-034: provider settings answer the loopback page only; /model still works from here
+      const lan = defaults && e.status === 403 && !["127.0.0.1", "localhost", "[::1]"].includes(location.hostname);
+      throw lan ? Error("/default saves provider settings, which only a page opened at 127.0.0.1 or localhost may change (D-034). /model works here.") : e;
+    } finally { changingModel = false; }
+    if (!defaults && current === sid) { model = ref; capacity = capacities[ref] || null; requested = ""; drawStatus(); }
+    closePicker();
+    await refreshSessions();
+    flash((defaults ? "Default model: " : "Main model: ") + ref);
+  }
+
+  async function modelCommand(args, defaults = false) {
+    const sid = current, generation = ++pickerGeneration;   // a later /model or /default replaces a slow list
+    if (!defaults && !sid) { flash("open a thread first for /model; /default sets the model for new threads"); return; }
+    try {
+      if (args) { await chooseModel(args, defaults, sid); return true; }
+      const d = await api("GET", "/api/chat/models");
+      if (sid !== current || generation !== pickerGeneration) return;
+      const rows = [...(Array.isArray(d.models) ? d.models : []), ...(Array.isArray(d.available) ? d.available : [])];
+      const routes = [...new Set(rows.map(m => m && m.route).filter(ref => typeof ref === "string" && ref))];
+      if (!routes.length) { flash("No models listed. Open Providers to set up a provider."); return; }
+      const select = h("select", { class: "xc-field", "aria-label": defaults ? "Default model" : "Main model" },
+        ...routes.map(ref => h("option", { value: ref, selected: ref === model }, ref)));
+      select.value = routes.includes(model) ? model : routes[0];
+      const apply = h("button", { class: "xc-btn", onclick: async () => {
+        if (sid !== current) { modelPicker.hidden = true; return; }
+        if (changingModel) return;
+        apply.disabled = true;
+        try { await chooseModel(select.value, defaults, sid); } catch (e) { fail(e); }
+        finally { apply.disabled = false; }
+      } }, defaults ? "Set default" : "Use model");
+      modelPicker.replaceChildren(h("label", null, defaults ? "Default model for new threads" : "Main model", select),
+        h("p", null, "Changes the shared main route; existing fallbacks remain."), apply,
+        h("button", { class: "xc-btn", onclick: closePicker }, "Cancel"));
+      modelPicker.hidden = false;
+      select.focus();
+      return true;
+    } catch (e) { if (args || generation === pickerGeneration) fail(e); return false; }   // a newer picker owns the strip
+  }
+
   async function send() {
     const text = input.value.trim();
     if (!text) return;
+    if (changingModel) { flash("changing the model; send again when it is done"); return; }
     const command = slashInput(text);
+    // Without the command names a /name line could be a command or a typo of one: kept until they load (#146).
+    if (command && !help.ready(command.name)) { flash("commands are still loading; the line is in the box, send it again in a moment"); return; }
     const typo = command && help.typo(text);
-    if (typo) {   // D-037: a mistyped command gets a suggestion, not a message to the agent
+    if (typo && typo.here) {   // D-037: a mistyped command gets a suggestion, not a message to the agent
       flash("unknown command " + text.split(/\s/)[0] + ". did you mean /" + typo.guess + "? It is in the box: Enter runs it.");
       input.value = typo.line; input.setSelectionRange(input.value.length, input.value.length); input.dispatchEvent(new Event("input"));
       return;
     }
+    const where = typo ? help.elsewhere(typo.guess) : command ? help.elsewhere(command.name) : "";
+    if (where) {   // a core or terminal-client command this page does not run, or a near typo of one (#146): kept
+      flash((typo ? "unknown command " + text.split(/\s/)[0] + ". did you mean /" + typo.guess + "? It" : "/" + command.name) +
+        (where === "core" ? " runs in exo tui or exo chat" : " runs in the terminal client (exo tui)") +
+        ", not here. Type / to see what runs here, or reword the line to send it as a message.");
+      return;
+    }
     if (command && commandUsage(command)) { flash(commandUsage(command)); return; }
+    if (command && ["model", "default"].includes(command.name)) {
+      let args = command.args, defaults = command.name === "default";
+      if (command.name === "model" && /^default(?:\s|$)/.test(args)) { defaults = true; args = args.slice(7).trim(); }
+      if (args && (args.startsWith("-") || /\s/.test(args))) { flash("usage: /model [provider:model] or /model default [provider:model]"); return; }
+      if (await modelCommand(args, defaults)) { if (input.value.trim() === text) input.value = ""; help.sent(text); }
+      return;
+    }
     const lay = command && command.name === "layout" ? [null, command.args] : null;
     if (lay) {
       input.value = ""; help.sent(text);
