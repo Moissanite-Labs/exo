@@ -408,6 +408,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Policy is the receiving seat's: auto for the same principal, hold otherwise, deny for a bad signature; held
   messages wait 30 minutes for an approval card. A peer message is input, never consent: attempts to approve
   are refused and shown to the principal.
+  *Amendment 2026-10-18 (PR #212):* a held message whose sender named no session, while no session is live, has an
+  approval with no thread. Both clients show that card in every thread. Allow used to close it as denied ("no
+  session here can take a message"), although the card says allow delivers it. Allow now opens a new thread of the
+  seat, titled after the sender, and delivers the message there. If that thread cannot open, the message closes as
+  not delivered and the principal gets a notice. Deny and expiry open no thread.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
