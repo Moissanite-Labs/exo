@@ -262,6 +262,8 @@ class AnthropicProvider(HttpTransport):
             body["system"] = system
         if wire_tools:
             body["tools"] = wire_tools
+            if opts.get("tool_choice"):  # "none": tools stay declared (removing them is a prompt edit), use is off
+                body["tool_choice"] = {"type": opts["tool_choice"]}
         body.update(thinking_params(model, opts.get("reasoning"), max_tokens))
         if (opts.get("temperature") is not None and (is_legacy(model) or any(s in model for s in _NO_XHIGH))
                 and "thinking" not in body):
