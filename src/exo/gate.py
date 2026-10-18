@@ -711,7 +711,8 @@ _PRIVILEGED_WRAPPERS = ("chroot", "nsenter", "unshare", "systemd-run")
 _TMUX_RUNS = {"new-session": "cefFnstxy", "new-window": "ceFnt", "split-window": "ceFlpt", "respawn-pane": "cet",
               "respawn-window": "cet", "run-shell": "cdt"}
 _TMUX_ALIASES = {"new": "new-session", "neww": "new-window", "splitw": "split-window", "respawnp": "respawn-pane",
-                 "respawnw": "respawn-window", "run": "run-shell"}
+                 "respawnw": "respawn-window", "run": "run-shell", "splitp": "split-window",
+                 "split-pane": "split-window"}
 _OPAQUE_PROGRAMS = {"source": "reads and runs a shell file", ".": "reads and runs a shell file",
                     "alias": "defines an alias", "function": "defines a shell function",
                     "trap": "sets a command to run on a signal", "make": "runs Makefile recipes",
@@ -1173,6 +1174,9 @@ def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words)
     for text in texts:
         parts.append(classify_shell(text, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
     parts += inner_words(rest)
+    if _env_dump(_strip_prefixes_keep_env([w.text for w in rest])[0]):   # as for coproc and the prefixes (#155)
+        parts.append(_make("credentials", summary="shell touching environment dump", command=cmd,
+                           signals=["secret store"]))
     shown = " ".join(w.text for w in rest) or "; ".join(t for t in texts if t)
     if shown:
         head.summary = f"{prog} runs {shown}"[:120]

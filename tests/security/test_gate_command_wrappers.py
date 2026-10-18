@@ -79,6 +79,8 @@ OPTION_ROWS = [
     "script /dev/null -c 'git push origin main'",
     "tmux new-session -d -s x 'git push origin main'",
     "tmux new -ds x git push origin main",
+    "tmux splitp 'git push origin main'",           # tmux's default command-alias entries for split-window
+    "tmux split-pane -h 'git push origin main'",
     "tmux -L sock new-window -t x 'git push origin main'",
     "tmux run-shell 'git push origin main'",
     "tmux -c 'git push origin main'",
@@ -165,6 +167,53 @@ def test_wrapped_tie_category_is_denied():
     assert gate.decide(c, {"gates": {"deny": ["schedule"]}}).outcome == "deny"
 
 
+# An environment dump is credentials wherever a prefix or runner is stripped (#155); behind a wrapper too, so
+# each line takes the bare command's category and a deny on credentials applies.
+ENV_DUMP_ROWS = [
+    ("setsid printenv GITHUB_TOKEN", "printenv GITHUB_TOKEN"),
+    ("setsid env", "env"),
+    ("setsid -w env FOO=1", "env FOO=1"),
+    ("taskset 1 env", "env"),
+    ("taskset -c 0-3 printenv GITHUB_TOKEN", "printenv GITHUB_TOKEN"),
+    ("xvfb-run printenv GITHUB_TOKEN", "printenv GITHUB_TOKEN"),
+    ("xvfb-run -a env", "env"),
+    ("flock /tmp/l printenv GITHUB_TOKEN", "printenv GITHUB_TOKEN"),
+    ("flock -w 5 /tmp/l -c 'printenv GITHUB_TOKEN'", "printenv GITHUB_TOKEN"),
+    ("watch -x env", "env"),
+    ("watch -n 5 printenv GITHUB_TOKEN", "printenv GITHUB_TOKEN"),
+    ("script -qc env /dev/null", "env"),
+    ("chrt -f 10 env", "env"),
+    ("numactl -N 0 env", "env"),
+    ("chroot / env", "env"),
+    ("unshare -r printenv GITHUB_TOKEN", "printenv GITHUB_TOKEN"),
+    ("nsenter -t 1 -m env", "env"),
+    ("systemd-run --user env", "env"),
+    ("chronic printenv GITHUB_TOKEN", "printenv GITHUB_TOKEN"),
+    ("unbuffer env", "env"),
+    ("catchsegv env", "env"),
+    ("firejail --private env", "env"),
+    ("dbus-run-session -- env", "env"),
+    ("screen -dm printenv GITHUB_TOKEN", "printenv GITHUB_TOKEN"),
+    ("tmux new-session -d env", "env"),
+    ("parallel printenv ::: GITHUB_TOKEN", "printenv GITHUB_TOKEN"),
+    ("nice -n 5 setsid env", "nice -n 5 env"),
+    ("ionice -c 3 taskset 1 env", "ionice -c 3 env"),
+    ("timeout 5 setsid printenv GITHUB_TOKEN", "timeout 5 printenv GITHUB_TOKEN"),
+    ("setsid sudo env", "sudo env"),
+    ("setsid uv run printenv GITHUB_TOKEN", "uv run printenv GITHUB_TOKEN"),
+    ("setsid setsid env", "env"),
+]
+
+
+@pytest.mark.parametrize("line,bare", ENV_DUMP_ROWS)
+def test_wrapped_env_dump_is_credentials_like_the_bare_command(line, bare):
+    c = sh(line)
+    assert c.category == sh(bare).category == "credentials", c.summary
+    for pol in denies("credentials"):
+        assert gate.decide(c, pol).outcome == "deny", pol
+    assert gate.decide(c).outcome == "ask"
+
+
 def test_store_write_behind_a_wrapper_is_store_write():
     c = sh("setsid rm -rf ~/.exo")
     assert c.category == "store_write"
@@ -180,6 +229,8 @@ def test_store_write_behind_a_wrapper_is_store_write():
     ("taskset 1 ls", "opaque_exec", "ask"),
     ("chronic -e true", "opaque_exec", "ask"),
     ("nice -n 5 setsid ls", "opaque_exec", "ask"),
+    ("setsid env ls", "opaque_exec", "ask"),
+    ("setsid printenv HOME", "opaque_exec", "ask"),
     ("timeout 5 ls", "read", "allow"),
     ("nice -n 5 ls", "read", "allow"),
     ("env FOO=1 ls", "read", "allow"),
@@ -232,7 +283,8 @@ def test_parallel_template_keeps_the_indirection_signal():
     assert c.category == "vcs_push" and "indirection" in c.signals
 
 
-@pytest.mark.parametrize("line", ISSUE_ROWS + OPTION_ROWS + ["setsid ls", "watch -n 1 date", "setsid $CMD"])
+@pytest.mark.parametrize("line", ISSUE_ROWS + OPTION_ROWS + [r for r, _ in ENV_DUMP_ROWS] +
+                         ["setsid ls", "watch -n 1 date", "setsid $CMD"])
 def test_no_wrapped_line_is_allowed_or_logged(line):
     # Fail closed: every wrapper line asked on main; reading the command must not lower that.
     assert gate.decide(sh(line)).outcome in ("ask", "deny")
@@ -241,8 +293,8 @@ def test_no_wrapped_line_is_allowed_or_logged(line):
 # A deny on opaque_exec itself was a deny for every wrapper line on main. The wrapped push now takes the line's
 # category, so that deny no longer reaches it; the indirection floor keeps the line at ask (#178's rule, carried
 # here): naming opaque_exec at deny must not turn the floor off and let the push log. `bash -c` logged on main.
-@pytest.mark.parametrize("line", ISSUE_ROWS + OPTION_ROWS + ["bash -c 'git push origin main'",
-                                                             "setsid rm -rf /tmp/x"])
+@pytest.mark.parametrize("line", ISSUE_ROWS + OPTION_ROWS + [r for r, _ in ENV_DUMP_ROWS] +
+                         ["bash -c 'git push origin main'", "setsid rm -rf /tmp/x"])
 def test_a_deny_on_opaque_exec_never_lets_a_wrapped_command_log(line):
     c = sh(line)
     for pol in denies("opaque_exec"):

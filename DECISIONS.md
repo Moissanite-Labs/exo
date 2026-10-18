@@ -848,7 +848,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   part, so the line asks as before. Until D-075 lands, the line is denied only when what runs outranks
   `opaque_exec` (`delete`, `vcs_push`, `credentials`); a category that ties with it or ranks below it
   (`schedule`; `web_read`, `local_write`) still asks, as for `coproc`. A tmux command list is split as tmux
-  splits it: an argument ending in `;` ends a command, one ending in `\;` does not. `chroot`, `nsenter`, `unshare`
+  splits it: an argument ending in `;` ends a command, one ending in `\;` does not; tmux's default aliases
+  `splitp` and `split-pane` name `split-window`. An environment dump behind a wrapper is `credentials`, as behind a
+  prefix or runner (#155): the wrapped argv goes through the same `_env_dump` check. `chroot`, `nsenter`, `unshare`
   and `systemd-run` follow the `sudo` precedent: a signal named after the wrapper, reversible counts as costly. Forms
   the gate cannot read (a variable, `tmux send-keys`, `screen -X stuff`, `parallel` without a template) stay
   `opaque_exec`. A deny on `opaque_exec` itself no longer reaches a wrapped command that outranks it, as with
