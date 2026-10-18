@@ -1,4 +1,5 @@
-"""D-039: every route and both event streams of the web client need the per-launch page token; the Host header must
+"""D-039: every route and both event streams of the web client need the per-launch page token, except `POST /api/launch`
+(#166, which trades a one-time launch code for it; see test_web_launch.py) and the page shell; the Host header must
 be this server's own loopback address (DNS rebinding fails); the Origin check stays. Raw HTTP so every header is
 the test's. An approval answered from the page reaches the core as the principal, and the web re-attaches to a
 restarted core."""

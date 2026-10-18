@@ -138,8 +138,8 @@ class WebServer:
             pass
         if self.open_browser and not _loopback_shown(host):
             # /api/launch answers loopback only, and the token link must not go back into the launcher's argv
-            print("exo-command: not opening a browser: the one-time browser link works on a loopback address "
-                  "only. Open the link above.", flush=True)
+            print("exo-command: not opening a browser: the one-time browser link works only when --host is "
+                  "127.0.0.1, localhost, ::1 or a wildcard bind. Open the link above.", flush=True)
         elif self.open_browser:
             try:
                 import webbrowser

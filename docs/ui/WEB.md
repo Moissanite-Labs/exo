@@ -37,9 +37,11 @@ reload cannot send it twice), then posts it to `/api/launch`, which answers the 
 route is the only `/api/` route without the token; it makes every other check of the provider routes (loopback
 peer, Host, Origin, Sec-Fetch-Site), compares in constant time, and answers `Cache-Control: no-store`. A refused
 code (used, expired, unknown or malformed) gets 403 and no token, and the page says: this browser link was already
-used or has expired; open the link `exo web` printed in the terminal. Any other refusal (Host, Origin, peer) shows
-the server's reason. The launch route answers loopback only, so with
-`--host` on a non-loopback address `exo web` opens no browser and says so; open the printed link instead.
+used or has expired; paste the link `exo web` printed in the terminal into this tab. Any other refusal (Host,
+Origin, peer) shows the server's reason, with the same advice. Paste, not click: a click in the terminal hands the
+`#token=` link to the URL opener, whose argv is the leak #166 closes. The launch route answers loopback only, so
+unless `--host` is `127.0.0.1`, `localhost`, `::1` or a wildcard bind (`0.0.0.0`, `::`, shown as `127.0.0.1`),
+`exo web` opens no browser and says so; open the printed link instead.
 
 A used code that comes back means two parties held it. `exo web` then replaces the page token: every open page
 must re-open, and every other connection ends at once, both the event streams opened with the old token and the

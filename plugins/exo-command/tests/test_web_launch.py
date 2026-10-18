@@ -152,7 +152,7 @@ def test_a_non_loopback_bind_opens_no_browser_and_says_why(monkeypatch, capsys):
     assert opened == [] and web._codes == {}                    # no launcher, no code made
     lines = out.splitlines()
     assert lines[0] == "exo-command: http://192.0.2.2:{}/#token={}".format(web._shown[1], TOKEN)
-    assert any("not opening a browser" in x and "loopback" in x for x in lines)
+    assert any("not opening a browser" in x and "127.0.0.1, localhost, ::1 or a wildcard bind" in x for x in lines)
     assert sum(TOKEN in x for x in lines) == 1                  # only the link line holds the token
 
 
@@ -395,6 +395,56 @@ def test_redemption_passes_every_other_guard_check():
     assert prov.guard_peer({"host": "evil.example:7342"}, "127.0.0.1")[0] == 403
 
 
+class PeerAs:
+    """A server-side writer that reports another peer address; everything else is the real connection's."""
+
+    def __init__(self, writer, addr):
+        self._w, self._addr = writer, addr
+
+    def get_extra_info(self, name, default=None):
+        return (self._addr, 50000) if name == "peername" else self._w.get_extra_info(name, default)
+
+    def __getattr__(self, name):
+        return getattr(self._w, name)
+
+
+def test_the_launch_route_checks_its_own_peer_and_host(monkeypatch):
+    """The requests here pass `_refuse` (their Host is in `_hosts`), so only `_launch`'s own `guard_peer` stands
+    between them and the token: a peer off loopback, and a loopback peer naming the LAN address of a `--host` bind."""
+    listen = asyncio.start_server
+    # a test host has no LAN address to bind: the real start() names 192.0.2.2 in _hosts, the socket is on loopback
+    monkeypatch.setattr(asyncio, "start_server", lambda cb, host, port: listen(cb, "127.0.0.1", port))
+
+    async def go():
+        web = _web()
+        peer = {"addr": None}
+        web._request = lambda r, w: WebServer._request(web, r, PeerAs(w, peer["addr"]) if peer["addr"] else w)
+        port = await web.start("192.0.2.2", 0)
+        try:
+            body = {"code": code_of(web.launch_url("127.0.0.1", port))}
+            loop_host, lan_host = {"Host": "127.0.0.1:{}".format(port)}, {"Host": "192.0.2.2:{}".format(port)}
+            assert lan_host["Host"] in web._hosts
+            peer["addr"] = "192.0.2.7"
+            got = {"lan peer": await raw(port, "POST", "/api/launch", loop_host, body),
+                   "lan peer, lan host": await raw(port, "POST", "/api/launch", lan_host, body)}
+            peer["addr"] = None
+            got["lan host"] = await raw(port, "POST", "/api/launch", lan_host, body)
+            good = await raw(port, "POST", "/api/launch", loop_host, body)
+            return web, got, good
+        finally:
+            await web.close()
+
+    web, got, good = asyncio.run(go())
+    assert {k: (v[0], v[2]) for k, v in got.items()} == {
+        "lan peer": (403, {"error": "this route answers loopback clients only"}),
+        "lan peer, lan host": (403, {"error": "this route answers loopback clients only"}),
+        "lan host": (403, {"error": "bad Host header: open the page at 127.0.0.1 or localhost"}),
+    }
+    # none of those burned the code
+    assert good[0] == 200 and good[2] == {"token": TOKEN}
+    assert web.token == TOKEN
+
+
 # ---------------------------------------------------------------- app.js in Node, offline
 @pytest.mark.skipif(not NODE, reason="node is not installed")
 def test_the_page_strips_the_code_before_it_sends_it(tmp_path):
@@ -425,11 +475,14 @@ assert.deepEqual(sent,[["good","#tasks"]]);              // out of the address b
 assert.equal(stored["xc-token"],"the-token");assert.equal(location.hash,"#tasks");assert.equal(mounted,1);
 stored={};location.hash="#code=used&chat";await handlers.hashchange();
 assert.deepEqual(sent.at(-1),["used","#chat"]);assert.equal(stored["xc-token"],undefined);assert.equal(restarted,0);
-const main=app.children[1];assert.match(main.children[0].children.join(""),/already used or has expired/);
+const main=app.children[1];assert.match(main.children[0].children.join(""),/already used or has expired\. Paste the link/);
 location.hash="#code=host&chat";await handlers.hashchange();   // a refusal that is not about the code names its reason
 assert.match(main.children[0].children.join(""),/refused \(bad Host header/);assert.equal(stored["xc-token"],undefined);
 location.hash="#token=fresh&chat";await handlers.hashchange();
 assert.equal(stored["xc-token"],"fresh");assert.equal(restarted,1);assert.equal(sent.length,3);
+stored={};location.hash="#code=good&schedule";await handlers.hashchange();   // a good code while the page is open
+assert.deepEqual(sent.at(-1),["good","#schedule"]);assert.equal(stored["xc-token"],"the-token");
+assert.equal(restarted,2);assert.equal(location.hash,"#schedule");
 console.log("ok");
 ''')
     result = subprocess.run([NODE, str(tmp_path / "test.mjs")], text=True, capture_output=True, timeout=10)
@@ -462,7 +515,8 @@ def test_the_page_trades_a_launch_code_and_survives_a_reload():
             b.eval("sessionStorage.clear()")
             b.goto("http://127.0.0.1:{}/?boot=0#code={}".format(srv.port, "z" * 43))
             msg = b.wait("(document.querySelector('.xc-main [role=status]') || {}).textContent")
-            assert "already used or has expired" in msg and "printed in the terminal" in msg
+            assert "already used or has expired" in msg and "Paste the link exo web printed" in msg
+            assert "into this tab" in msg and "Open the link" not in msg   # a click hands it to a launcher (#166)
             assert "code" not in b.eval("location.href") and not b.eval("sessionStorage.getItem('xc-token')")
             assert srv.web.token == srv.token
     finally:
