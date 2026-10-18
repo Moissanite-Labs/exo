@@ -261,6 +261,58 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- Nesting is read four levels deep. Past that the text is `opaque_exec` and asks. An `ssh` or
+  `mosh` chain with more hops than that is not read either: the hops that were read keep the
+  `remote host` exposure and the first host as target (so a `target:` deny on it still
+  matches), and the rest asks as `opaque_exec` (#153). A chain the gate can read to the end is
+  classified by what runs at the end.
+- Options of trusted programs whose value is a command are followed as a nested command, like
+  `find -exec` (#154): `tar --to-command`, `-I`, `--use-compress-program`, `--rsh-command`,
+  `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
+  --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp` and
+  `sftp -S`, `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`, `LocalCommand`, `RemoteCommand` (with the
+  `remote host` exposure) and `KnownHostsCommand`; `git rebase -x`/`--exec`, `git bisect run`,
+  `git submodule foreach` (also after `-q`, `--quiet`), `--upload-pack` (`clone`, `fetch`,
+  `pull`, `ls-remote`), `git push --receive-pack`/`--exec`, `git archive --exec`; `rg --pre`;
+  `zip -TT`; `less +cmd` and `more +cmd` with a `!` (macOS `more` is `less`); the `.shell` and
+  `.system` dot-commands of `sqlite3` and `duckdb`, and `.once`, `.output`, `.import` and `.read`
+  with an argument starting with `|`, also after options (as an argument, via `-cmd`, or on
+  stdin); `psql -o '|cmd'`/`--output`, and `\!`, backquotes in a meta-command's arguments, and a
+  `|command` after `\o`, `\out`, `\g`, `\gx` (also after `(options)`), `\w` or `\write`, quoted
+  or not, anywhere on a `psql` line; `\!` and `system` in `mysql`; and a command set in
+  `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PAGER`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`,
+  `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `RSYNC_RSH`, `PAGER`, `MANPAGER`, `EDITOR`,
+  `VISUAL`, `LESSOPEN` or `LESSCLOSE` before the program (also through `env`; `export NAME=value`
+  counts when the value is a known hazard).
+- Options are read as the program's `getopt` reads them: an unambiguous abbreviation of the long
+  name, one letter or more (`--to-com=`, `psql --o`), or the value attached to the short letter or in the next word. In a
+  cluster the first letter that takes a value ends the word (`-xIcmd`, `-oProxyCommand=cmd`,
+  `-avze ssh`), and the gate knows which letters and long options take a value for `ssh`,
+  `scp`, `sftp`, `tar` (also its old style, `tar xIf cmd a.tar`), `rsync`, `man`, `rg`, `psql`
+  and the `git` subcommands, so a value is not read as options (`ssh -oServerAliveInterval=60`
+  is not `-I`). A letter it does not know only makes it read more words. Options end at `--`;
+  `ssh` reads them before and after its destination and stops at the remote command, so `ssh
+  host curl -I URL` is the `curl` line; when a word before that may expand to no word or several
+  (`$A`, `"$@"`, a glob), the destination cannot be counted and every word is read. An `ssh -o` setting is split as ssh's config reader
+  splits it: leading whitespace, a quoted keyword, any case, and `Keyword value`,
+  `Keyword=value` or `Keyword = value`. `less` reads `+cmd` as keystrokes: `!` runs a shell
+  command after any of them (`+G!cmd`, `+:n!cmd`), while a search (`+/pattern`) takes the rest
+  as its pattern unless a newline or another control key ends it.
+- A known program in an option's value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
+  `allow`; a program the gate does not know asks, as it would on its own. A value the gate cannot
+  read is `opaque_exec`: a variable, a script file (`tar --info-script`, `sqlite3 -init` or
+  `--init`, `.read`, `.load`), `.once`/`.output FILE`, `.read '|cmd'` (what the command prints is
+  run), `less +!` with no command or `+!!`, `psql ... PROGRAM`, `TAR_OPTIONS`, and a library
+  `ssh` loads (`-I`, `-o PKCS11Provider`, `-o SecurityKeyProvider`). `sed` scripts with `e` or
+  `s///e` and `awk` programs calling `system()` were already opaque. An argument that merely
+  looks like an assignment (`grep EDITOR=vim`) and a data load (`sqlite3 '.import f.csv t'`) are
+  not commands.
+- Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
+  `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
+  `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
+  or `hatch run`, or inside an `if`, `for` or `while` body, classify as `credentials` just as the
+  bare command does. A runner followed by ordinary work (`uv run pytest -q`) is unchanged.
+  `uvx`, `pipx run` and `npx` stay `opaque_exec`.
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
@@ -279,8 +331,11 @@ A command is `allow` only when every program in it is known and nothing is hidde
   rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
 
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
-`npm install` runs package scripts) can run code the agent wrote earlier with a local write.
-The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+`npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
+`~/.ssh/config` with a `ProxyCommand`) can run code the agent wrote earlier with a local write.
+The same goes for options that read more options from a file (`curl --config`, `gcc -wrapper`,
+`-specs`) and for `git grep -O`, whose pager takes the matching files as arguments. The gate does
+not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
 
 ## The store is credentials (D-038)
 
@@ -300,13 +355,22 @@ resolution working. `cp -s` and `cp -l` count as writes to whatever they alias, 
 target is read against the link's folder in the two-operand form (`ln -s TARGET LINK`). Relative paths only use the distinctive-name checks because
 the tool's working directory is unknown here.
 
+Brace sets are expanded first, as bash does and as for secret-store paths (issue #224). A shell word is
+expanded from its source text, so only unquoted braces expand. A file tool's path is expanded as written. The
+word and every word it expands to are checked, and a hit on any counts, so
+`echo x > ~/.exo/polic{i..i}es/default.yaml`, `cp x ~/.exo/{state,zz}/approval-grants.json` and
+`cd ~/.e{x,}o` reach the store. A word is split at `=`, `:` and `,` only after its braces expand, so
+`dd of=~/.exo/polic{i,x}es/default.yaml` counts too. A word past the brace limits counts as the store. The store
+checks have their own budget of 4,096 expanded words per tool call, so they never use up the secret-store
+checks' budget, and each spelling is expanded once per line, however many commands use it.
+
 Known limits. These are classification checks, not a filesystem sandbox: a symlink can change
 between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
 without a link to resolve, so only distinctive names catch a write through it. Only the store roots
 are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
 write to the outside spelling is a local write. Name and prefix checks are case-sensitive, so a
-case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob or brace spelling
-(`sta*/gate-grants.json`, `{state,x}/...`) is expanded by the shell, not seen here. A link planted
+case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
+(`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
 followed, and the bash tool's `cwd` argument is not read.
 
