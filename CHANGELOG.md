@@ -232,6 +232,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   changes under `site/`.
 
 ### Security
+- `exo web` no longer puts the page token in the browser launcher's argv, which other users of the host can read in
+  `/proc` (#166, D-039). The browser opens a one-time launch code (`#code=`, one use, 120 seconds) that the page
+  trades for the token over loopback; a code used twice replaces the token and warns in the terminal. Replacing the
+  token ends every other connection, including a request that passed the token check and still waits for its body,
+  and a body is checked against the current token again once read. The warning shows only when the launched page
+  redeems the code too, so a browser that runs no script (a text browser) gives none. The printed `#token=` link is
+  unchanged. Unless `--host` is `127.0.0.1`, `localhost`, `::1` or a wildcard bind, no browser is opened; use the
+  printed link. A refused browser link tells you to paste the printed link into the tab, not click it in the
+  terminal (a click hands the token to the URL opener's argv).
 - An `ssh` or `mosh` chain with more hops than the gate reads (four) is `opaque_exec` and asks, keeping the
   `remote host` exposure and the first host as target; it used to pass as plain `shell` (#153, D-038).
 - Options of trusted programs that run a command are followed as nested commands: `tar --to-command`, `-I`,

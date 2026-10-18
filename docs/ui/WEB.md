@@ -23,18 +23,48 @@ With `--socket` or `--url` nothing is started; the page says the core is not rea
 ## Opening the page and the page token (D-039)
 
 `exo web` makes a random page token for each launch and keeps it in memory only. It prints the page address with
-the token in the URL fragment, `http://127.0.0.1:7342/#token=...`, and, when run in a terminal, opens that address
-in the browser. A fragment is never sent to a server or written to a server log. The page moves the token to
-`sessionStorage` (this tab only) and takes it out of the address bar. A new launch makes a new token, so open the
-latest complete link after a restart; the bare URL shows instructions rather than a usable client. Tokens are
-not persisted across launches. Opening a new token fragment in the same tab reconnects it with that token; `--no-open` prints the link without opening it.
+the token in the URL fragment, `http://127.0.0.1:7342/#token=...`. A fragment is never sent to a server or written
+to a server log. The page moves the token to `sessionStorage` (this tab only) and takes it out of the address bar.
+A new launch makes a new token, so open the latest complete link after a restart; the bare URL shows instructions
+rather than a usable client. Tokens are not persisted across launches. Opening a new token fragment in the same tab
+reconnects it with that token; `--no-open` prints the link without opening it.
 
-Every `/api/` route needs the token: the page sends it as `X-Exo-Token` on every fetch (`api()` in `dom.js`) and as
-`?token=` on the two event streams (`stream()` in `dom.js`; a browser EventSource cannot send headers). The Host
-header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, so a DNS rebinding name gets nothing, not
-even the page. An Origin, when sent, must be that same host, and Sec-Fetch-Site must be same-origin or none. Only
-the page shell (`/`, `/static/`) loads without the token. Responses carry `Referrer-Policy: no-referrer`,
-`X-Content-Type-Options: nosniff` and the Content-Security-Policy below.
+When run in a terminal, `exo web` also opens the browser, but not on the token link: the URL handed to the browser
+launcher sits in its argument list, which other users of the host can read in `/proc` (#166). The browser gets
+`http://127.0.0.1:7342/#code=...` instead: a one-time launch code, made fresh for each browser launch, held in
+memory, good for one use and for at most 120 seconds. The page takes the code out of the address bar first (so a
+reload cannot send it twice), then posts it to `/api/launch`, which answers the token once and burns the code. That
+route is the only `/api/` route without the token; it makes every other check of the provider routes (loopback
+peer, Host, Origin, Sec-Fetch-Site), compares in constant time, and answers `Cache-Control: no-store`. A refused
+code (used, expired, unknown or malformed) gets 403 and no token, and the page says: this browser link was already
+used or has expired; paste the link `exo web` printed in the terminal into this tab. Any other refusal (Host,
+Origin, peer) shows the server's reason, with the same advice. Paste, not click: a click in the terminal hands the
+`#token=` link to the URL opener, whose argv is the leak #166 closes. The launch route answers loopback only, so
+unless `--host` is `127.0.0.1`, `localhost`, `::1` or a wildcard bind (`0.0.0.0`, `::`, shown as `127.0.0.1`),
+`exo web` opens no browser and says so; open the printed link instead.
+
+A used code that comes back means two parties held it. `exo web` then replaces the page token: every open page
+must re-open, and every other connection ends at once, both the event streams opened with the old token and the
+requests that passed the token check but still wait for their body. The old token gets 403 everywhere, and a
+request body is checked against the current token again once it is read. The terminal prints a warning and the new
+`#token=` link; paste it into the browser that is already open (a click in the terminal hands it to the URL opener,
+whose argv is the leak #166 closes). The leaked code causes this once; an expired or unknown code is refused without
+a new token. A browser can keep the launch URL in its own argument list for its whole life, so the warning can also
+come from a replay long after the launch; the replay gets no token either way. The printed link and `--no-open` are
+unchanged.
+
+Detection needs a second redemption. The first caller gets the token without a sound; only the launched page, coming
+second, shows the race. A browser that never runs the page's script never redeems: with no display (an SSH
+session), Python's `webbrowser` can fall back to a text browser such as `lynx` or `w3m`. A party that took the code
+from `/proc` then keeps a working token, and nothing warns.
+
+Every `/api/` route except `POST /api/launch` needs the token: the page sends it as `X-Exo-Token` on every fetch
+(`api()` in `dom.js`) and as `?token=` on the two event streams (`stream()` in `dom.js`; a browser EventSource cannot
+send headers). The Host header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, so a DNS rebinding
+name gets nothing, not even the page. An Origin, when sent, must be that same host, and Sec-Fetch-Site must be
+same-origin or none. Besides the launch route, only the page shell (`/`, `/static/`) loads without the token.
+Responses carry `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and the Content-Security-Policy
+below.
 
 The web process answers approvals as the principal: on each connection it checks with the kernel that the socket
 is served by the core named in its launch record (`run/<socket>.principal.key`), then sends that record's
