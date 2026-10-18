@@ -178,7 +178,8 @@ EXEC_OPTIONS = [
     (f"ssh $A host -o 'ProxyCommand {RM}' ls", "delete"),
     (f"ssh $A host -o 'ProxyCommand {RM}' -- ls", "delete"),
     (f"ssh \"$@\" srv1 -o 'LocalCommand={RM}' uptime", "delete"),
-    (f"ssh h* -o 'ProxyCommand {RM}' ls", "delete"),
+    (f"ssh h* host -o 'ProxyCommand {RM}' ls", "delete"),
+    (f"ssh {{,}} host -o 'ProxyCommand {RM}' ls", "delete"),     # bash drops the empty words of {,} (#232)
     # ssh settings spelled as ssh's config reader takes them
     (f"ssh -o '  ProxyCommand {RM}' h", "delete"),
     (f"ssh -o $'\\tProxyCommand {RM}' h", "delete"),
@@ -455,3 +456,125 @@ def test_runner_with_a_benign_command_is_unchanged(cmd):
     c = classify(sh(cmd))
     assert c.category != "credentials", c
     assert decide(c).outcome == "allow", c
+
+
+# --- #230, #232: follow-ups to #164 ----------------------------------------------------------
+
+FOLLOW_UPS = [
+    # tar takes any unambiguous abbreviation of --checkpoint-action (one longer than --checkpoint)
+    (f"tar -cf a.tar --checkpoint=1 --checkpoint-a='exec={RM}' .", "delete"),
+    (f"tar -cf a.tar --checkpoint=1 --checkpoint-ac='exec={RM}' .", "delete"),
+    (f"tar -cf a.tar --checkpoint=1 --checkpoint-act='exec={RM}' .", "delete"),
+    (f"tar -cf a.tar --checkpoint=1 --checkpoint-actio='exec={RM}' .", "delete"),
+    (f"tar -cf a.tar --checkpoint=1 --checkpoint-='exec={RM}' .", "delete"),
+    (f"tar -cf a.tar --checkpoint=1 --checkpoint-a 'exec={RM}' .", "delete"),
+    (f"tar -cf a.tar --checkpoint --checkpoint-action='exec={RM}' .", "delete"),
+    # git ls-remote takes a hidden --exec for --upload-pack
+    (f"git ls-remote --exec='{RM}' /tmp/r", "delete"),
+    (f"git ls-remote --exec '{RM}' /tmp/r", "delete"),
+    (f"git ls-remote --exe='{RM}' /tmp/r", "delete"),
+    # mosh --ssh is the command mosh runs to reach the host, like rsync -e
+    (f"mosh --ssh='{RM}' h", "delete"),
+    (f"mosh --ssh=\"ssh -oProxyCommand='{RM}'\" h", "delete"),
+    (f"mosh --ssh '{RM}' h", "delete"),
+    (f"mosh -ssh='{RM}' h", "delete"),
+    (f"mosh h --ssh='{RM}'", "delete"),
+    (f"mosh --SSH='{RM}' h", "delete"),                       # Getopt::Long ignores case and takes `+`
+    (f"mosh -Ssh='{RM}' h", "delete"),
+    (f"mosh -SSH '{RM}' h", "delete"),
+    (f"mosh +ssh='{RM}' h", "delete"),
+    # mysql runs `system` at the start of a line, also on stdin
+    (f"mysql <<EOF\nsystem {RM}\nEOF", "delete"),
+]
+
+
+@pytest.mark.parametrize("cmd,category", FOLLOW_UPS)
+def test_follow_up_exec_option_is_classified(cmd, category):
+    c = classify(sh(cmd))
+    assert c.category == category, c
+    assert decide(c, DENY).outcome == "deny"
+    assert decide(c).outcome in ("ask", "deny")
+
+
+@pytest.mark.parametrize("cmd", [
+    "ssh -o \"$OPT\" h",
+    "ssh -o $OPT h",
+    "ssh -o\"$OPT\" h",
+    "ssh -4o\"$OPT\" h ls",
+    "ssh -o \"${OPT}\" h",
+    "ssh -o \"$(cat opts)\" h",
+    "ssh -o Proxy* h",
+    "ssh h -o \"$OPT\"",
+    "scp -o \"$OPT\" a h:b",
+    "rsync -e 'ssh -o \"$OPT\"' a h:b",
+    "ssh -o '\"'\"$OPT\" h",                      # the expansion may close the quote: `"ProxyCommand" cmd`
+    "ssh -o \\\"$OPT h",
+    "ssh -o '\"Proxy'\"$X\" h",
+])
+def test_dynamic_ssh_setting_is_opaque(cmd):
+    c = classify(sh(cmd))
+    assert c.category == "opaque_exec" and "indirection" in c.signals, c
+    assert decide(c).outcome == "ask"
+
+
+@pytest.mark.parametrize("cmd", [
+    "FOO+=1 printenv GITHUB_TOKEN",
+    "FOO[0]=1 printenv GITHUB_TOKEN",
+    "sudo FOO+=1 printenv GITHUB_TOKEN",
+    "FOO+=1 uv run printenv GITHUB_TOKEN",
+    "env FOO+=1 printenv GITHUB_TOKEN",
+    "env FOO+=1",
+    "env FOO[0]=1",
+    "if true; then FOO+=1 printenv GITHUB_TOKEN; fi",
+])
+def test_env_dump_behind_an_append_or_array_assignment_is_credentials(cmd):
+    c = classify(sh(cmd))
+    assert c.category == "credentials" and "secret store" in c.signals, c
+    assert decide(c, DENY).outcome == "deny"
+
+
+# ssh_config's `none` turns a command or library setting off, so these stay as they were before #164; psql has no
+# `system` command (mysql's), so a line starting with that word is SQL there.
+FOLLOW_UP_ORDINARY = [
+    ("ssh -o ProxyCommand=none h", "shell"),
+    ("ssh -oProxyCommand=none h ls", "read"),
+    ("ssh -o RemoteCommand=none h", "shell"),
+    ("ssh -o LocalCommand=none h", "shell"),
+    ("ssh -o KnownHostsCommand=none h", "shell"),
+    ("ssh -o 'ProxyCommand NONE' h", "shell"),
+    ("ssh -o 'proxycommand = None ' h", "shell"),
+    ("scp -o ProxyCommand=none a h:b", "shell"),
+    ("ssh -o PKCS11Provider=none h", "shell"),
+    ("ssh -o SecurityKeyProvider=none h", "shell"),
+    ("psql <<EOF\nsystem text from t;\nEOF", "shell"),
+    ("psql -c 'system text from t'", "shell"),
+    ("mosh --ssh='ssh -p 2222' h", "shell"),
+    ("mosh --SSH='ssh -p 2222' h", "shell"),
+    ("mosh --ssh-pty h", "shell"),
+    ("mosh h", "shell"),
+    ("ssh -o \"ServerAliveInterval=$N\" h", "shell"),
+    ("tar --checkpoint=100 --checkpoint-action=dot -cf a.tar .", "shell"),
+    ("tar --checkpoint=100 --checkpoint-a=echo -cf a.tar .", "shell"),
+]
+
+
+@pytest.mark.parametrize("cmd,category", FOLLOW_UP_ORDINARY)
+def test_follow_up_ordinary_lines_stay_allow(cmd, category):
+    c = classify(sh(cmd))
+    assert c.category == category, c
+    assert decide(c).outcome == "allow", c
+
+
+@pytest.mark.parametrize("cmd", [
+    "ssh -o 'ProxyCommand \"none\"' h",
+    "ssh -o 'ProxyCommand none; ls' h",
+    "ssh -o PKCS11Provider=./none h",
+])
+def test_ssh_none_is_only_the_bare_word(cmd):
+    c = classify(sh(cmd))
+    assert decide(c).outcome == "ask", c
+
+
+def test_card_says_runs_once():
+    c = classify(sh("ssh -o ProxyCommand=victimprog h"))
+    assert c.summary == "ssh ProxyCommand runs victimprog, a program the gate does not know", c

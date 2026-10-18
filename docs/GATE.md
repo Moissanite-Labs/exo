@@ -269,41 +269,54 @@ A command is `allow` only when every program in it is known and nothing is hidde
 - Options of trusted programs whose value is a command are followed as a nested command, like
   `find -exec` (#154): `tar --to-command`, `-I`, `--use-compress-program`, `--rsh-command`,
   `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
-  --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp` and
-  `sftp -S`, `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`, `LocalCommand`, `RemoteCommand` (with the
-  `remote host` exposure) and `KnownHostsCommand`; `git rebase -x`/`--exec`, `git bisect run`,
-  `git submodule foreach` (also after `-q`, `--quiet`), `--upload-pack` (`clone`, `fetch`,
-  `pull`, `ls-remote`), `git push --receive-pack`/`--exec`, `git archive --exec`; `rg --pre`;
-  `zip -TT`; `less +cmd` and `more +cmd` with a `!` (macOS `more` is `less`); the `.shell` and
-  `.system` dot-commands of `sqlite3` and `duckdb`, and `.once`, `.output`, `.import` and `.read`
-  with an argument starting with `|`, also after options (as an argument, via `-cmd`, or on
-  stdin); `psql -o '|cmd'`/`--output`, and `\!`, backquotes in a meta-command's arguments, and a
-  `|command` after `\o`, `\out`, `\g`, `\gx` (also after `(options)`), `\w` or `\write`, quoted
-  or not, anywhere on a `psql` line; `\!` and `system` in `mysql`; and a command set in
+  --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `mosh --ssh`
+  (#232; its option names are read in any case and after `-` or `+`, as Perl's Getopt::Long reads
+  them: `--SSH=`, `-Ssh`, `+ssh=`); `scp` and `sftp -S`, `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`,
+  `LocalCommand`, `RemoteCommand` (with the `remote host` exposure) and `KnownHostsCommand`; `git
+  rebase -x`/`--exec`, `git bisect run`, `git submodule foreach` (also after `-q`, `--quiet`),
+  `--upload-pack` (`clone`, `fetch`, `pull`, `ls-remote`, and its hidden synonym `git ls-remote
+  --exec`, #230), `git push --receive-pack`/`--exec`, `git archive --exec`; `rg --pre`; `zip -TT`;
+  `less +cmd` and `more +cmd` with a `!` (macOS `more` is `less`); the `.shell` and `.system`
+  dot-commands of `sqlite3` and `duckdb`, and `.once`, `.output`, `.import` and `.read` with an
+  argument starting with `|`, also after options (as an argument, via `-cmd`, or on stdin); `psql
+  -o '|cmd'`/`--output`, and `\!`, backquotes in a meta-command's arguments, and a `|command`
+  after `\o`, `\out`, `\g`, `\gx` (also after `(options)`), `\w` or `\write`, quoted or not,
+  anywhere on a `psql` line; `\!` and, at the start of a line, `system` in `mysql` (psql has no
+  `system`, so a `psql` line starting with that word is SQL, #232); and a command set in
   `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PAGER`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`,
   `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `RSYNC_RSH`, `PAGER`, `MANPAGER`, `EDITOR`,
   `VISUAL`, `LESSOPEN` or `LESSCLOSE` before the program (also through `env`; `export NAME=value`
   counts when the value is a known hazard).
 - Options are read as the program's `getopt` reads them: an unambiguous abbreviation of the long
-  name, one letter or more (`--to-com=`, `psql --o`), or the value attached to the short letter or in the next word. In a
-  cluster the first letter that takes a value ends the word (`-xIcmd`, `-oProxyCommand=cmd`,
-  `-avze ssh`), and the gate knows which letters and long options take a value for `ssh`,
-  `scp`, `sftp`, `tar` (also its old style, `tar xIf cmd a.tar`), `rsync`, `man`, `rg`, `psql`
-  and the `git` subcommands, so a value is not read as options (`ssh -oServerAliveInterval=60`
-  is not `-I`). A letter it does not know only makes it read more words. Options end at `--`;
-  `ssh` reads them before and after its destination and stops at the remote command, so `ssh
-  host curl -I URL` is the `curl` line; when a word before that may expand to no word or several
-  (`$A`, `"$@"`, a glob), the destination cannot be counted and every word is read. An `ssh -o` setting is split as ssh's config reader
-  splits it: leading whitespace, a quoted keyword, any case, and `Keyword value`,
-  `Keyword=value` or `Keyword = value`. `less` reads `+cmd` as keystrokes: `!` runs a shell
-  command after any of them (`+G!cmd`, `+:n!cmd`), while a search (`+/pattern`) takes the rest
-  as its pattern unless a newline or another control key ends it.
+  name, one letter or more (`--to-com=`, `psql --o`), and for `tar --checkpoint-action` any
+  abbreviation longer than `--checkpoint`, which is an option of its own (`--checkpoint-a=exec=`,
+  #232), or the value attached to the short letter or in the next word. In a cluster the first
+  letter that takes a value ends the word (`-xIcmd`, `-oProxyCommand=cmd`, `-avze ssh`), and the
+  gate knows which letters and long options take a value for `ssh`, `scp`, `sftp`, `tar` (also its
+  old style, `tar xIf cmd a.tar`), `rsync`, `man`, `rg`, `psql` and the `git` subcommands, so a
+  value is not read as options (`ssh -oServerAliveInterval=60` is not `-I`). A letter it does not
+  know only makes it read more words. Options end at `--`; `ssh` reads them before and after its
+  destination and stops at the remote command, so `ssh host curl -I URL` is the `curl` line; when
+  a word before that may expand to no word or several (`$A`, `"$@"`, a glob), the destination
+  cannot be counted and every word is read (`ssh {,} host -o ...` too: bash drops the empty words
+  of `{,}`). An `ssh -o` setting is split as ssh's config reader splits it: leading whitespace, a
+  quoted keyword, any case, and `Keyword value`, `Keyword=value` or `Keyword = value`. The value
+  `none` (any case, as the bare word) turns a command or library setting off, as ssh_config
+  documents, so `-o ProxyCommand=none` runs nothing and stays `allow` (#232). A keyword the gate
+  cannot read (`-o "$OPT"`, `-o $OPT`, a glob, or an unclosed quote that the expansion may close,
+  `-o '"'"$OPT"`) is `opaque_exec` and asks, like any other value in a variable (#230). `less`
+  reads `+cmd` as keystrokes: `!` runs a shell command after any of them (`+G!cmd`, `+:n!cmd`),
+  while a search (`+/pattern`) takes the rest as its pattern unless a newline or another control
+  key ends it.
 - A known program in an option's value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
-  `allow`; a program the gate does not know asks, as it would on its own. A value the gate cannot
-  read is `opaque_exec`: a variable, a script file (`tar --info-script`, `sqlite3 -init` or
-  `--init`, `.read`, `.load`), `.once`/`.output FILE`, `.read '|cmd'` (what the command prints is
-  run), `less +!` with no command or `+!!`, `psql ... PROGRAM`, `TAR_OPTIONS`, and a library
-  `ssh` loads (`-I`, `-o PKCS11Provider`, `-o SecurityKeyProvider`). `sed` scripts with `e` or
+  `allow`; a program the gate does not know asks, as it would on its own. The compressors `tar
+  -I` usually names are known programs, none of them with an exec option: `gzip`, `bzip2`, `xz`,
+  `zstd` and `pigz`, `unpigz`, `pbzip2`, `lbzip2`, `lz4`, `lzop`, `lzip`, `lzma`, `unlzma`,
+  `zstdmt`, `brotli`. A value the gate cannot read is `opaque_exec`: a variable, a script file
+  (`tar --info-script`, `sqlite3 -init` or `--init`, `.read`, `.load`), `.once`/`.output FILE`,
+  `.read '|cmd'` (what the command prints is run), `less +!` with no command or `+!!`, `psql ...
+  PROGRAM`, `TAR_OPTIONS`, and a library `ssh` loads (`-I`, `-o PKCS11Provider`, `-o
+  SecurityKeyProvider`). `sed` scripts with `e` or
   `s///e` and `awk` programs calling `system()` were already opaque. An argument that merely
   looks like an assignment (`grep EDITOR=vim`) and a data load (`sqlite3 '.import f.csv t'`) are
   not commands.
@@ -311,7 +324,9 @@ A command is `allow` only when every program in it is known and nothing is hidde
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
   `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
   or `hatch run`, or inside an `if`, `for` or `while` body, classify as `credentials` just as the
-  bare command does. A runner followed by ordinary work (`uv run pytest -q`) is unchanged.
+  bare command does. Every assignment bash takes before a command counts as one, `NAME+=value` and
+  `NAME[i]=value` included, so `FOO+=1 printenv GITHUB_TOKEN` and `env FOO[0]=1` are dumps too
+  (#230). A runner followed by ordinary work (`uv run pytest -q`) is unchanged.
   `uvx`, `pipx run` and `npx` stay `opaque_exec`.
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
@@ -337,8 +352,9 @@ Known limit. A trusted program that runs project code (pytest runs conftest.py, 
 `npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
 `~/.ssh/config` with a `ProxyCommand`) can run code the agent wrote earlier with a local write.
 The same goes for options that read more options from a file (`curl --config`, `gcc -wrapper`,
-`-specs`) and for `git grep -O`, whose pager takes the matching files as arguments. The gate does
-not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+`-specs`, `ssh -F`, also from a heredoc or `<( )`: `ssh -F /dev/stdin h <<EOF`) and for
+`git grep -O`, whose pager takes the matching files as arguments. The gate does not claim to stop
+that; it stops the one-step forms. A sandbox is the real fix.
 
 The working folder (#192). A line that enters a folder that can hold a secret store, and reads a
 file there by a relative name, is `credentials`: `cd ~/.config/gh && cat hosts.yml`,
