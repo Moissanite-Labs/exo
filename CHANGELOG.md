@@ -6,6 +6,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Search tools skip secret stores (#241, D-038). The gate checks only the path a `grep` or `glob` call names, and the
+  tools walked everything below it, so `grep {pattern: "key", path: HOME}` (or the same search with no path from a cwd
+  of HOME, or of `$EXO_HOME`) returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and `$EXO_HOME/run/exod.principal.key`
+  as an allowed read. Both tools now leave out every folder and file below the root that `is_sensitive_path` matches,
+  as found or through a link (`notes.txt` pointing into `~/.ssh`), do not enter a store folder, and end with `[skipped
+  N secret-store paths; read one by name to be asked]`. A store named as `path` still asks and, once approved, is
+  read; `~/.ssh/..` is not a store for that and walks HOME with its stores left out, and a store-named link to an
+  ordinary folder (`backup.key` to HOME) returns nothing. A root whose real path is `/` (`/`, `/proc/self/root`, a
+  link to `/`) is refused, and stores are matched under the root's real path without a doubled `/`, so a custom
+  `$EXO_HOME` stays out there too. In a repo's own `.claude` folder (beside a `.git`) the `worktrees`, `commands`,
+  `agents` and `skills` folders are searched, so a `.claude/worktrees` checkout is not hidden; `~/.claude`, the rest
+  of a repo's `.claude` and any `.claude` that holds a Claude login, transcripts or shell snapshots (another home that
+  is a git checkout) stay out. `code_find` refuses a folder that is or holds a known store (the home folder,
+  `$EXO_HOME`, `~/.config`, `/`), since `jg` walks it itself. About 0.2 to 0.4 s more CPU on a 20,000-file tree.
 - Gate (#192, D-038): on a line that enters a folder that can hold a secret store, a relative read of a store file is
   `credentials` and asks. `cd ~/.config/gh && cat hosts.yml`, `cd ~/.kube && cat config`,
   `cd ~/.docker && cat config.json`, `cd ~/.kube && tar czf - .` and `cd ~/.config/g{h..h} && cat hosts.yml` were
