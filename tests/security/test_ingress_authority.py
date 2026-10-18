@@ -69,6 +69,7 @@ def test_steer_stamps_author_and_can_be_cancelled(learned_engine, caller, author
         sid = (await d.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
         state = eng.loop.state(sid)
         state.running = True
+        state.accepting_steers = True
         try:
             got = await d.run(s.Command.of(s.TurnSend(session=sid, text="Actually use staging.", mode="steer")))
             assert got.ok and got.result["steered"]
@@ -78,6 +79,7 @@ def test_steer_stamps_author_and_can_be_cancelled(learned_engine, caller, author
             assert cancel.ok and len(cancel.result["output"]["cancelled"]) == 1
             assert state.steer == []
         finally:
+            state.accepting_steers = False
             state.running = False
     asyncio.run(main())
 
@@ -329,6 +331,7 @@ def test_local_caller_cannot_pull_back_a_principal_steer(learned_engine, by_id):
         sid = (await tui.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
         state = eng.loop.state(sid)
         state.running = True
+        state.accepting_steers = True
         try:
             mine = await tui.run(s.Command.of(s.TurnSend(session=sid, text="Stop, do not deploy.", mode="steer")))
             mid = mine.result["message_id"]
@@ -341,5 +344,6 @@ def test_local_caller_cannot_pull_back_a_principal_steer(learned_engine, by_id):
             got = await tui.run(s.Command.of(s.CommandRun(name="unsteer", session=sid, args=mid if by_id else "")))
             assert [c["id"] for c in got.result["output"]["cancelled"]] == [mid] and state.steer == []
         finally:
+            state.accepting_steers = False
             state.running = False
     asyncio.run(main())
