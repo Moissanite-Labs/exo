@@ -711,6 +711,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   tools and approvals stay tied to its window). Web with `--socket`/`--url` never starts anything. Page errors are
   sentences (`core_message`), not exception text. No protocol change.
 - **Not done:** `--in-process` flag (the client already falls back in process); Windows.
+- **Later (#145, #148):** the core is started through a `python -P` helper that calls `setsid`, forks and exits, so
+  the core is reparented to init (or the nearest subreaper) and is not a child of the client, unless the client
+  is itself PID 1 or a subreaper. This is hardening: `principal.stamp` refuses
+  a peer that descends from the core, and the client that starts the core is its parent, so the old ancestry could
+  not refuse that client. The handshake is bounded, reads the pid from the helper's last output line, and a core
+  that dies while starting is reported at once (`waitpid` when this process adopted it, else a zombie or missing
+  pid), with no made-up exit code.
 
 ## D-037 (2026-10-12) Completion and guidance in the composer
 - **Why:** the principal asked for command autofill, suggestion and guidance, "a better version of what Hermes CLI
@@ -772,6 +779,24 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+  *Amendment 2026-10-16 (issue #136):* a `command:` regex in `deny` and `reserved` matched the command text
+  only, so `'git' push`, `g\it push`, `git pu''sh` and `$'rm' -rf` walked past a veto the lexer had already
+  decoded. Those regexes now also match a literal-word view (`_policy_command_view`: the lexer's decoded words,
+  operators kept, shell syntax inside a word escaped, dynamic words and heredoc bodies as placeholders made of
+  control characters, which no literal word renders to), merged through the classifier's existing recursion
+  into `$( )`, backticks, `bash -c`, `eval`, shell stdin and every string literal of code. A non-empty
+  `$"..."` word is read as bash reads it without a catalog, so the line keeps its category, target and the
+  vetoes keyed on them, and adds the `indirection` and `locale translation` signals, so it asks unless
+  opaque_exec is named: with a message catalog and a non-C locale bash runs the translation, and expands
+  `$( )` in it. The line is also decided as opaque_exec and the stricter outcome stands, so a veto on
+  opaque_exec holds for it too. `$"..."` inside `${...}` is left to the parameter-expansion work (#143,
+  #158). A heredoc delimiter spelled `$"EOF"` or `$'EOF'` ends the body on different lines in bash and in
+  dash (the shell tool's fallback when bash is missing), so that body is read as commands too. A `deny` or
+  `ask` rule keyed on `command:` sees the view in a second pass that only raises; the first-match rule is still
+  chosen on the original text. Allow and lower rules and grants match the original text only: the view adds
+  vetoes and never authorizes. Accepted cost, fail closed: a literal that code only prints, and separately
+  quoted data arguments under an unanchored regex, are matched too. The reason names only the policy entry,
+  never the matched words: the hook writes decisions to the signed ledger, which holds no command text.
   *Amendment 2026-10-17 (issue #179):* bash runs a `$( )` or backticks inside the array subscript of a variable
   name, even when the name is single-quoted, so `printf -v 'a[$(gh pr comment ...)]' %s x` was `read` (allow). The
   name arguments of `printf -v`, `read`, `declare`, `typeset`, `local`, `unset`, `test -v`/`[ -v` and `wait -p`
@@ -813,6 +838,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `[::1]:<port>`, for the page too. Origin and Sec-Fetch-Site checks stay. Only the page shell is served without
   the token. The token stays per launch, in memory, delivered in the URL fragment that `exo web` prints and opens.
   `asgi.py` is deleted (unused).
+  *Amendment 2026-10-17 (issue #162):* the page builds every node with `h()` and text nodes, and that discipline
+  was the only XSS defence, while every `ui` Markdown panel (and, with #149, every completed reply) goes through
+  `markdown.js`: one renderer slip would be a stored XSS reachable by prompt injection, holding the page token. Every
+  response the web server writes (page, static files, JSON, both event streams, errors) now carries one policy,
+  `server.CSP`: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self';
+  object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, with
+  `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. It is the issue's draft narrowed to what
+  the page uses: no WebSocket (fetch and EventSource only, so `connect-src 'self'`), no images from `data:`, no
+  fonts, and no native form posts (every form is handled in script). No `'unsafe-inline'`, `'unsafe-eval'`, hash
+  or nonce: the page had no inline script, and its few computed sizes (gauges, bars, the task board) now go
+  through the CSSOM (`el.style.cssText` in `h()`), which the policy does not block, instead of a `style`
+  attribute, which it does. Rejected: a `<meta>` policy (cannot set `frame-ancestors`, and misses the JSON and
+  stream responses); `'unsafe-inline'` for styles (would let injected markup restyle the page into a lure).
+  `docs/ui/WEB.md` "Content-Security-Policy".
 - **Decision, environment:** one function, `exo.envscrub.scrub_env`, for bash, jobs and `code_find`: catalog
   `key_env` names, secret suffixes and words, `AWS_*`, `GH_*`, `GITHUB_TOKEN`, `*DATABASE_URL`, `*_DSN`, the bus
   identity, the core socket and credential variables, and a new seat `[tools] env_deny` (names or patterns).

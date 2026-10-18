@@ -12,6 +12,8 @@ A variable is dropped when any of these holds:
 - it is an EXO_ variable that names a socket (contains SOCK): the core's socket and credential stay out of tools;
 - it is a known credential/configuration name (including database passwords, package/docker auth and kube config);
 - its value has a recognized token/private-key format, or its URL/URI/proxy value carries userinfo or a credential query;
+- it is git's environment config (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_<n>, GIT_CONFIG_VALUE_<n>, GIT_CONFIG_PARAMETERS):
+  the numbered family is kept or dropped as one unit, kept only when env_allow names GIT_CONFIG_COUNT (#159);
 - it matches the seat's ``[tools] env_deny`` (exact names or shell patterns like ``COMPANY_*``).
 
 A seat's ``[tools] env_allow`` (exact names) keeps a variable the rules above would drop. The denylist wins over
@@ -37,6 +39,12 @@ NAMES = frozenset({"GITHUB_TOKEN", "STRIPE_SK", "NPM_CONFIG__AUTH", "DOCKER_AUTH
 VALUE_SECRET = re.compile(r"^(?:sk-|gh[pousr]_|xox[baprs]-|whsec_)[A-Za-z0-9_-]{16,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----")
 URL_SECRETS = frozenset({"token", "access_token", "api_key", "apikey", "password", "passwd", "secret",
                         "auth", "authorization", "key", "signature", "sig"})
+# Git's environment config: GIT_CONFIG_COUNT with GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n>, and GIT_CONFIG_PARAMETERS
+# (git's own ``-c``). Values can carry credentials (an http.extraHeader bearer token) and update_cmd already refuses
+# GIT_CONFIG*, so all of it is dropped by default. The numbered family is one unit: a count without its keys
+# fails every git command (#159). env_allow naming GIT_CONFIG_COUNT keeps it whole; if env_deny or the token-format
+# value check drops any member, all of it goes (a bearer header is not a recognized format). GIT_CONFIG_PARAMETERS is kept only when env_allow names it.
+GIT_CONFIG_FAMILY = re.compile(r"GIT_CONFIG_(?:COUNT|KEY_[0-9]+|VALUE_[0-9]+)")
 
 # What the claude CLI may see from the parent: locale, paths, terminal, its own config, proxies and CA bundles.
 MINIMAL = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TMPDIR", "TZ", "CLAUDE_CONFIG_DIR",
@@ -92,8 +100,15 @@ def scrub_env(src: Mapping[str, str] | None = None, allow: Iterable[str] = (),
     src = os.environ if src is None else src
     allowed = {str(a) for a in allow or ()}
     denied = [str(d) for d in deny or () if str(d)]
+    keep_git = "GIT_CONFIG_COUNT" in allowed and not any(
+        any(fnmatch.fnmatchcase(k, d) for d in denied) or (k not in allowed and is_secret_value(k, v))
+        for k, v in src.items() if GIT_CONFIG_FAMILY.fullmatch(k))
 
     def drop(k: str, v: str) -> bool:
+        if GIT_CONFIG_FAMILY.fullmatch(k):
+            return not keep_git
+        if k == "GIT_CONFIG_PARAMETERS" and k not in allowed:
+            return True
         if any(fnmatch.fnmatchcase(k, d) for d in denied):
             return True
         return k not in allowed and (is_secret_name(k) or is_secret_value(k, v))
