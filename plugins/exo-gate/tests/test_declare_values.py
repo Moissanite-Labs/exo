@@ -97,6 +97,13 @@ POSTS = [
     f"declare -n r='a[\\\\\n$({GH})]'; echo $r",
     f"typeset -i 'x=a[\\\\\n$({GH})]'",
     f"declare -i x='a[\\\\\n`{GH}`]'",
+    # In a compound value bash reads `\\` as a backslash and the newline as a word break, so `$(` after it runs
+    # (UNREADABLE has the `[key]=` form of the same rule).
+    f"declare -a 'b=(\\\\\n$({GH}))'",
+    # A declare in the command an option runs (#154) is read the same way.
+    f"ssh -o \"ProxyCommand=declare -a 'b=($({GH}))'\" host",
+    f"ssh -o 'ProxyCommand=declare -a \"b=(\\$({GH}))\"' host",
+    f"git rebase -x \"declare -i x='a[\\$({GH})]'\" main",
 ]
 
 
@@ -133,6 +140,8 @@ UNREADABLE = [
     # bash keeps a backslash-newline in an -i or -n value (only a compound value is read again as words)
     "declare -i x='a[\\\n1]'",
     "declare -n r='a\\\nb'",
+    # `\\` is a backslash and the newline a word break, so `[$i]=` starts an element and its key is arithmetic
+    "declare -a 'a=(\\\\\n[$i]=1)'",
 ]
 
 
@@ -300,6 +309,9 @@ def test_unquoted_compound_keeps_its_class(category, outcome, line):
     *['declare -a "b=(' + "$(" * n + "true" + ")" * n + ')"' for n in (1, 2, 4, 6)],
     *['declare -ai "b=([$(' * n + "true" + ")]=1" * n + ')"' for n in (1, 3)],
     "declare -a b=($(echo $(true)))",
+    # the value scan drops the \newline the line's own parse kept in the body; it is still the same $( )
+    'declare -a "b=($(ls \\\n -l))"',
+    'declare -ai "b=([$(ls \\\n -l)]=1)"',
 ])
 def test_double_quoted_compound_is_read_once(monkeypatch, line):
     seen = []
@@ -316,3 +328,21 @@ def test_double_quoted_compound_is_read_once(monkeypatch, line):
     monkeypatch.setattr(gate, "_NAME_BUILTINS", {})
     sh(line)
     assert with_scan == len(seen)
+
+
+# The line's own $( ) keeps a \newline in single quotes, but bash dropped it from the double-quoted value it reads
+# again, so an escaped copy of that body runs another command there: it is read, not taken for the line's own.
+REREAD_DIFFERS = [
+    ("delete", "declare -a \"b=(\\$(find . '\\\n-delete') $(find . '\\\n-delete'))\""),
+    ("github_post", f"declare -a \"b=(\\$(find . '\\\n-exec' {GH} ';') $(find . '\\\n-exec' {GH} ';'))\""),
+    ("github_post", "declare -a \"b=(\\$(gh 'pr\\\n' comment 3 --body hi) $(gh 'pr\\\n' comment 3 --body hi))\""),
+]
+
+
+@pytest.mark.parametrize("category,line", REREAD_DIFFERS)
+def test_reread_body_unlike_the_lines_own_is_read(category, line):
+    c = sh(line)
+    assert c.category == category and "reread" in c.signals, c
+    assert decide(c, {"gates": {"categories": {"opaque_exec": "allow"}}}).outcome == "ask", c
+    for policies in denies(category):
+        assert decide(c, policies).outcome == "deny", (policies, c)

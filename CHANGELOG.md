@@ -53,7 +53,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   line's own category, a deny on that category becomes ask (`declare -a 'b=($(sudo ls))' > /tmp/f` under
   `deny: [local_write]`), never allow or log, also when the policy names `opaque_exec`. A command nested deeper
   than the gate reads asks. A backslash-newline in a compound value is dropped before it is read, as bash drops
-  it (`declare -a 'b=($\<newline>(gh ...))'` was allowed and is now a `github_post`), and a quoted operand after
+  it (`declare -a 'b=($\<newline>(gh ...))'` was allowed and is now a `github_post`; a `$( )` the line itself runs
+  in a double-quoted value is still read once, unless a backslash-newline in its single quotes or a here-document
+  makes a copy of it in the value run another command), and a quoted operand after
   two unquoted compound values (`declare -a b=(1) x=(2) 'c=($(gh ...))'`, `opaque_exec` before) belongs to the same
   declare and is a `github_post` too.
 
