@@ -28,6 +28,15 @@ Any client can use categories 2 and 3 with no client code. Only category 1 is sp
 `exo chat` has no client-side commands except `/quit` and `/exit`. It sends every other `/name args` line straight to
 `command.run`, so `/new` or `/model` there fail with `not_found`, while `/context` and `/grants` work.
 The web client (`exo web`) runs `/context`, `/findings` and `/trace` from its composer the same way.
+It also supports `/model [ref]`, `/model default [ref]` and `/default [ref]`: without a reference they open a picker
+(Esc closes it). As in the TUI, model selection changes the shared main route; `/model` also records the choice on the
+open thread. `/default` saves through the provider routes, so it works only on a page opened at 127.0.0.1 or localhost
+(D-034). A failed change keeps the line in the box. The web composer holds a `/name` it does not run but the core's
+`commands.list` has (`/grants`), or that is the terminal client's own (`/help`, `/quit`, `/usage`), or a near typo of
+one, with a note instead of starting a model turn. A near typo of a command the page runs (`/contex`) puts the
+corrected line back in the box. Until the page has the core's command names it holds every `/name` line that is not
+its own or the terminal client's, and keeps asking for them. Any other line is ordinary message text: paths such as
+`/etc/hosts` or `/tmp is full`, and words such as `/me waves` that are close to no command (D-037).
 
 ### Client commands (TUI)
 
@@ -97,7 +106,8 @@ a session, none while a turn runs, and a rule stops once you run its command. Ta
 `/tutorial off` (this also sets `guidance.enabled` to `false`; `/tutorial on` sets it back) or set that config key. It
 is the composer placeholder, so it never moves anything, and without a timer under `EXO_REDUCED_MOTION`.
 
-The web client has the same menu for the commands it runs (`/context`, `/findings`, `/trace`, `/new`), `@` files
+The web client has the same menu for the commands it runs (`/context`, `/model`, `/default`, `/findings`, `/trace`,
+`/new`, `/rename`, `/layout`), `@` files
 through `GET /api/complete/files`, ghost text, history for the page's life and the guidance line. See
 `docs/ui/WEB.md` "The composer".
 
