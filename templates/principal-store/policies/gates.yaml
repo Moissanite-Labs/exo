@@ -48,6 +48,8 @@ scopes:
 categories: {}
 
 # Rules for finer cases. The first match wins over the matrix and the category line.
+# A deny or ask rule's command regex also matches the decoded shell words ('rm' -rf reads
+# as rm -rf); that match can only raise the outcome, never pick a different rule.
 # Match keys: category, tool, target (glob), command (regex), exposure, reversibility,
 # third_party. Example:
 #   - match: {category: vcs_merge, target: "my-org/*"}
@@ -63,7 +65,8 @@ escalate:
 
 # Actions the principal keeps for themselves, whatever the cell says (always ask).
 # Each entry is a category name, "tool:<glob>", "target:<glob>", "command:<regex>",
-# or a mapping of match keys. Fill from their rulings.
+# or a mapping of match keys. A command regex also matches the decoded shell words.
+# Fill from their rulings.
 reserved: []
 
 # Actions no agent may take at all (block). Same entry format as reserved.
