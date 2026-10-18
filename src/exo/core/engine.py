@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import inspect
 import os
+import sqlite3
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
@@ -71,7 +72,16 @@ class SqliteLog:
         self.store = store
 
     def append(self, event: s.Event) -> None:
-        self.store.write_event(event)
+        try:
+            self.store.write_event(event)
+        except sqlite3.IntegrityError as exc:
+            # #237: append_event (AUTOINCREMENT) can advance events.seq past the Hub's in-memory
+            # counter while a core runs. Reseed on this event and retry once; Hub adopts event.seq
+            # after append, so its counter heals and subscribers keep seeing increasing seqs.
+            if "events.seq" not in str(exc):
+                raise
+            event.seq = self.store.last_event_seq() + 1
+            self.store.write_event(event)
 
     def read(self, since: int, session: str | None = None) -> Iterable[s.Event]:
         return self.store.events_since(since, session, limit=1 << 30, with_global=True)
@@ -319,8 +329,10 @@ class CoreRuntime:
         """Become the one writer of this agent's log and tree (raises agentlog.WriterBusy if another process is)."""
         if self._writer is None:
             self._writer = agentlog.claim_writer(self.home, self.agent)
+            self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
+        self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
         agentlog.release_writer(self._writer)
         self._writer = None
         trace.remove_sink(self._on_harness_error)
@@ -498,6 +510,8 @@ class CoreRuntime:
         info = self.store.get_session(sid)
         if info is None:
             raise CommandFailed("not_found", f"no session {sid}")
+        st = self.loop._state.get(sid)  # session.get and session.resume show a running turn, as session.list does
+        info.status = "live" if st is not None and st.running else "idle"
         return info
 
     async def _session_create(self, b: s.SessionCreate) -> dict[str, Any]:
@@ -524,7 +538,8 @@ class CoreRuntime:
         return {"sessions": rows}
 
     async def _approvals_list(self, b: s.ApprovalsList) -> dict[str, Any]:
-        return {"approvals": self.approvals.listing(b.session)}
+        return {"approvals": self.approvals.listing(b.session),  # one await-free copy (D-060)
+                "cursor": {"instance": self.hub.instance, "seq": self.hub.seq}}
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
         info, queued = self._info(b.session), [m.id for m in self.loop.state(b.session).steer]  # chips a client still draws
@@ -556,6 +571,11 @@ class CoreRuntime:
             self.store.assert_open(b.session)
         except SessionLocked as exc:  # a finished child session takes no new turns
             raise CommandFailed("session_locked", str(exc)) from None
+        if b.session in self.agents.loops:  # typing into a running subagent steers it, never a new turn (D-070, D-052)
+            require_principal("steer a subagent")
+            if not self.loop.state(b.session).accepting_steers:  # starting or finishing: no round can take it
+                raise CommandFailed("conflict", "the subagent is starting or finishing and takes no message now")
+            b.mode = "steer"
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
@@ -673,13 +693,13 @@ class CoreRuntime:
     # ------------------------------------------------------------ self-observation (D-025)
 
     def _on_harness_error(self, body: s.HarnessError, session: str | None) -> None:
-        """Sink for ``trace.report``: publish the error. Outside a running turn (no turn-end check is coming)
-        it also becomes a finding right away."""
+        """Sink for ``trace.report``: publish the error. Outside a running turn, or in a subagent's (its loop has no
+        turn-end check, and a parent's reads only direct children), it also becomes a finding right away."""
         if session and self.store.get_session(session) is None:
             return  # another engine's session
         self.hub.publish(body, session)
         st = self.loop._state.get(session) if session else None
-        if self._trace_on and (st is None or not st.running):
+        if self._trace_on and (st is None or not st.running or session in self.agents.loops):
             self.findings.file(f"harness.error:{body.where}:{body.error_type}", f"Harness error in {body.where}",
                                severity="bug", detail=f"{body.error_type}: {body.message}", session=session)
 

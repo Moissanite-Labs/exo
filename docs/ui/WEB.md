@@ -23,21 +23,55 @@ With `--socket` or `--url` nothing is started; the page says the core is not rea
 ## Opening the page and the page token (D-039)
 
 `exo web` makes a random page token for each launch and keeps it in memory only. It prints the page address with
-the token in the URL fragment, `http://127.0.0.1:7342/#token=...`, and, when run in a terminal, opens that address
-in the browser. A fragment is never sent to a server or written to a server log. The page moves the token to
-`sessionStorage` (this tab only) and takes it out of the address bar. A new launch makes a new token, so open the
-latest complete link after a restart; the bare URL shows instructions rather than a usable client. Tokens are
-not persisted across launches. Opening a new token fragment in the same tab reconnects it with that token; `--no-open` prints the link without opening it.
+the token in the URL fragment, `http://127.0.0.1:7342/#token=...`. A fragment is never sent to a server or written
+to a server log. The page moves the token to `sessionStorage` (this tab only) and takes it out of the address bar.
+A new launch makes a new token, so open the latest complete link after a restart; the bare URL shows instructions
+rather than a usable client. Tokens are not persisted across launches. Opening a new token fragment in the same tab
+reconnects it with that token; `--no-open` prints the link without opening it.
 
-Every `/api/` route needs the token: the page sends it as `X-Exo-Token` on every fetch (`api()` in `dom.js`) and as
-`?token=` on the two event streams (`stream()` in `dom.js`; a browser EventSource cannot send headers). The Host
-header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, so a DNS rebinding name gets nothing, not
-even the page. An Origin, when sent, must be that same host, and Sec-Fetch-Site must be same-origin or none. Only
-the page shell (`/`, `/static/`) loads without the token. Responses carry `Referrer-Policy: no-referrer`,
-`X-Content-Type-Options: nosniff` and the Content-Security-Policy below.
+When run in a terminal, `exo web` also opens the browser, but not on the token link: the URL handed to the browser
+launcher sits in its argument list, which other users of the host can read in `/proc` (#166). The browser gets
+`http://127.0.0.1:7342/#code=...` instead: a one-time launch code, made fresh for each browser launch, held in
+memory, good for one use and for at most 120 seconds. The page takes the code out of the address bar first (so a
+reload cannot send it twice), then posts it to `/api/launch`, which answers the token once and burns the code. That
+route is the only `/api/` route without the token; it makes every other check of the provider routes (loopback
+peer, Host, Origin, Sec-Fetch-Site), compares in constant time, and answers `Cache-Control: no-store`. A refused
+code (used, expired, unknown or malformed) gets 403 and no token, and the page says: this browser link was already
+used or has expired; paste the link `exo web` printed in the terminal into this tab. Any other refusal (Host,
+Origin, peer) shows the server's reason, with the same advice. Paste, not click: a click in the terminal hands the
+`#token=` link to the URL opener, whose argv is the leak #166 closes. The launch route answers loopback only, so
+unless `--host` is `127.0.0.1`, `localhost`, `::1` or a wildcard bind (`0.0.0.0`, `::`, shown as `127.0.0.1`),
+`exo web` opens no browser and says so; open the printed link instead.
 
-The web process answers approvals as the principal: it reads the core's principal credential
-(`run/<socket>.principal.key`) on each request, so it re-joins a core that restarted with a new one. The optional
+A used code that comes back means two parties held it. `exo web` then replaces the page token: every open page
+must re-open, and every other connection ends at once, both the event streams opened with the old token and the
+requests that passed the token check but still wait for their body. The old token gets 403 everywhere, and a
+request body is checked against the current token again once it is read. The terminal prints a warning and the new
+`#token=` link; paste it into the browser that is already open (a click in the terminal hands it to the URL opener,
+whose argv is the leak #166 closes). The leaked code causes this once; an expired or unknown code is refused without
+a new token. A browser can keep the launch URL in its own argument list for its whole life, so the warning can also
+come from a replay long after the launch; the replay gets no token either way. The printed link and `--no-open` are
+unchanged.
+
+Detection needs a second redemption. The first caller gets the token without a sound; only the launched page, coming
+second, shows the race. A browser that never runs the page's script never redeems: with no display (an SSH
+session), Python's `webbrowser` can fall back to a text browser such as `lynx` or `w3m`. A party that took the code
+from `/proc` then keeps a working token, and nothing warns.
+
+Every `/api/` route except `POST /api/launch` needs the token: the page sends it as `X-Exo-Token` on every fetch
+(`api()` in `dom.js`) and as `?token=` on the two event streams (`stream()` in `dom.js`; a browser EventSource cannot
+send headers). The Host header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, so a DNS rebinding
+name gets nothing, not even the page. An Origin, when sent, must be that same host, and Sec-Fetch-Site must be
+same-origin or none. Besides the launch route, only the page shell (`/`, `/static/`) loads without the token.
+Responses carry `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and the Content-Security-Policy
+below.
+
+The web process answers approvals as the principal: on each connection it checks with the kernel that the socket
+is served by the core named in its launch record (`run/<socket>.principal.key`), then sends that record's
+credential on that connection (D-060, `docs/GATE.md` "Unix peer authentication"). It re-joins a core that restarted
+with a new record, and refuses a socket that some other process serves. A refusal shows on the page with its reason
+(for a core from before D-060: "launch record is not a v1 record") and a restart hint: run `exo stop` (or close the
+Exo window that runs the core), then reopen the page. The optional
 ASGI app (`asgi.py`) is gone: it re-exposed the routes with no checks.
 
 The stream resumes through the core’s durable event log when its cursor has fallen outside the web event ring.
@@ -105,9 +139,14 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   a focused button shortcut, or clicking Always) requires a separate Enter or Confirm always button; Escape,
   another key, Cancel, or leaving the card cancels confirmation. Deny opens an optional note. The page reconciles
   its cards with the server's list on every thread open and stream reconnect, and the server asks the core first,
-  so a card the core no longer holds is dropped (D-045). Taste, diff and the
-  other panels are cold. A peer message has the sender in the header, a grey rule and the line "from another
-  session, not from you": it never looks like the user. Panels and new transcript items reveal on arrival.
+  so a card the core no longer holds is dropped (D-045). A card with no thread (a held peer message that no live
+  session could take) shows in every thread, as in the terminal client. Taste, diff and the other panels are cold.
+  A dismissed panel stays closed. The core sends no `ui.panel` close for a dismissal, so the page drops the panel
+  from its own list as well, and the next panel event, a tab switch or a reconnect does not bring it back. A peer
+  message has the sender in the header, a grey rule and the line "from another session, not from you": it never
+  looks like the user. That holds after a reload or a thread switch too. A stored peer, bus or job message
+  (`meta.peer`, `meta.bus`, `meta.job`) is the same card with its real author (`Bus · <seat>`, `Job · <id>`), and a
+  live `peer.message` and its stored message make one card. Panels and new transcript items reveal on arrival.
 - **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
   `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
@@ -120,6 +159,12 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
   the whole page history, so streamed text doubled. A stale page token shows "page link expired" in the corner.
+  A chat reader that falls 1000 events behind has its stream ended with nothing lost: the events still queued for it
+  are dropped unwritten, and the reconnect replays them from the ring or the core's log. Before, the oldest queued
+  event was thrown away and never replayed. `exo web` folds each core event into its state once, by `seq`, so its
+  re-bootstrap after the core's stream drops counts no message, tool call, task update or approval twice. A core
+  whose log is behind the page (a new `EXO_HOME`) starts the page over: the old picture goes, and every open stream
+  reconnects and gets the reset.
 - **Boot.** Four lines go green as real calls answer: core, agent, memory (message count on record), model
   route. A line the server cannot answer stays dim as `unavailable`. Skipped under reduced motion, with
   `?boot=0`, and after the first time in a tab.
@@ -236,6 +281,11 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   The form sits beside the list, with labelled fields; under 1100px it follows the list.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
+  An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with
+  the call and the page scrolls to its end: the page redraws on every core event, and a scroll box of its own would
+  jump back to its top each time.
+  Allow always is a standing grant, so as on the Chat card it waits for a separate Confirm always click. Cancel,
+  another section, Refresh or the request closing elsewhere drops the confirm. Allow and deny answer at once.
   At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
   Empty sections say what will appear and how.
 - **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count

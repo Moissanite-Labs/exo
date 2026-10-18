@@ -18,7 +18,7 @@ from textual.widgets import Input, OptionList, Static, TextArea
 from rich.theme import Theme as RichTheme
 
 from exo.config import exo_home
-from exo.core.types import ContentPart
+from exo.core.types import ContentPart, from_dict
 from exo.core.trace import money
 from exo import complete as cm
 from exo.protocol import schema as s
@@ -33,6 +33,7 @@ from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar
                              EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
 CLIENT_ID = "exo-tui"
+LOST = "connection_lost"  # post's code for a command whose reply never came (D-060: it is not resent)
 DEFAULT_WINDOW = 0  # unknown until the core reports this model's capacity
 MAX_FILE = 64 * 1024
 WINDOW = 60  # transcript entries mounted when a session opens; older ones stay as plain data
@@ -194,6 +195,8 @@ class ExoApp(App):
         self.cost: float | None = None  # session USD from priced calls; None = no priced call (D-032: unknown, never 0)
         self.calls_seen = 0  # model calls that used tokens, seen by this client
         self.unpriced = 0  # of those, calls with no price
+        self.call_usage = False  # a model.call's usage.updated comes next; one with no model.call is a roll-up
+        self.costs: dict[str, tuple[float | None, int, int]] = {}  # (cost, calls_seen, unpriced) of threads left
         self.findings = 0  # open harness findings (D-025), polled after each turn
         self.finding_states = ""  # "3 open, 2 fixed": the same findings by state, for the notice
         self.busy = False
@@ -420,6 +423,7 @@ class ExoApp(App):
 
     # ------------------------------------------------------------ boot and events
     async def boot(self) -> None:
+        hello: dict[str, Any] | None = None
         try:
             hello = await self.client.call(s.Hello(client=CLIENT_ID, capabilities=["markdown", "diff"],
                                                    screen_cols=self.size.width or None))
@@ -450,7 +454,7 @@ class ExoApp(App):
                 rows = [r for r in rows if r.get("kind") != "subagent"]  # resume a thread, not a child's log
                 self.session = rows[0]["id"] if rows else None
             if self.session:
-                await self.load_session(self.session)
+                await self.resume_or_new(self.session)
             else:
                 await self.new_session(announce=False)
             self.boot_mark("agent", self.seat or "main")
@@ -466,20 +470,27 @@ class ExoApp(App):
                 await self.intro("first")
         except Exception as exc:
             self.note(f"cannot start: {type(exc).__name__}: {exc}", "error")
+            if hello is not None and not any(w.name == "pump" for w in self.workers):
+                # whatever failed after hello, the window can still /new and send: replies and approvals must show
+                self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
         self.boot_end()
         self.refresh_status()
         self.ready.set()
 
     async def pump(self, since: int) -> None:
-        async for ev in self.client.events(since=since, reconnect=True):
-            if ev.session not in (None, self.session):
-                continue
-            try:
-                self.handle(ev)
-            except Exception as exc:  # a bad event must not stop the feed, and the harness is told (D-025)
-                self.note(f"event {ev.type}: {type(exc).__name__}: {exc}", "error")
-                if ev.type != "harness.error":  # never report the report of an error
-                    self.report_error(f"tui event {ev.type}", exc)
+        try:
+            async for ev in self.client.events(since=since, reconnect=True):
+                if ev.session not in (None, self.session):
+                    continue
+                try:
+                    self.handle(ev)
+                except Exception as exc:  # a bad event must not stop the feed, and the harness is told (D-025)
+                    self.note(f"event {ev.type}: {type(exc).__name__}: {exc}", "error")
+                    if ev.type != "harness.error":  # never report the report of an error
+                        self.report_error(f"tui event {ev.type}", exc)
+        except Exception as exc:  # the feed itself died: say so, never go quiet (D-025)
+            self.note(f"event feed stopped: {type(exc).__name__}: {exc}. /restart reopens this thread.", "error")
+            self.report_error("tui event feed", exc)
 
     def report_error(self, where: str, exc: Exception) -> None:
         """Send a caught exception to the core as a harness.error event."""
@@ -614,15 +625,21 @@ class ExoApp(App):
             opts = f" [{' / '.join(b.options)}]" if b.options else ""
             self.note(f"question: {b.text}{opts}  (type your answer)")
         elif isinstance(b, s.UsageUpdated):
-            u = b.usage
-            self.ctx_tokens = u.input_tokens + u.cache_read_tokens + u.cache_write_tokens
+            u, own, self.call_usage = b.usage, self.call_usage, False
             if b.session_total and b.session_total.cost_usd is not None:
                 self.cost = b.session_total.cost_usd
-            self.model = self.served or b.model or self.model  # a fallback that served stays visible
-            if self.cache_share is None:
-                self.cache_share = self.cache_of(u)
+            if not own:  # no model.call before it: a finished subagent's total, not this thread's context or model
+                if u.cost_usd is None and (u.input_tokens or u.output_tokens or u.cache_read_tokens
+                                           or u.cache_write_tokens):  # the child's calls had no price (D-032)
+                    self.calls_seen, self.unpriced = self.calls_seen + 1, self.unpriced + 1
+            else:
+                self.ctx_tokens = u.input_tokens + u.cache_read_tokens + u.cache_write_tokens
+                self.model = self.served or b.model or self.model  # a fallback that served stays visible
+                if self.cache_share is None:
+                    self.cache_share = self.cache_of(u)
         elif isinstance(b, s.ModelCall):
             self.gstate.provider_error = bool(b.error)
+            self.call_usage = b.usage is not None  # the loop sends this call's usage.updated right after it
             if b.route:
                 self.model = self.served = b.route  # the route that served, not the one asked for
                 self.window = self.capacities.get(b.route, 0)
@@ -687,6 +704,23 @@ class ExoApp(App):
         self.older = []
         self.earlier_row = None
         self.last_answer = (None, "")
+
+    async def leave_thread(self, to: str = "") -> None:
+        """Before another thread opens: the pump drops this one's events from now on, so a turn.completed or
+        approval.resolved for it would never arrive. Its turn state, card, queued steers and numbers go now. Its COST
+        counts wait for a return to it: the core's session_total keeps counting the whole thread, so the '+' for an
+        unpriced call must stay with it (D-032). `to` gets back what this window last saw of it, if anything."""
+        if self.card is not None:  # it keeps its slot until gone (a new card reuses its id); no await after this one
+            await self.card.remove()
+        self.card, self.approvals = None, []
+        self.busy, self.turn_t0, self.running_tools, self.cur_id, self.question = False, 0.0, 0, None, None
+        self.pending_steers.clear()
+        self.agents.clear()
+        if self.session:
+            self.costs[self.session] = (self.cost, self.calls_seen, self.unpriced)
+        (self.cost, self.calls_seen, self.unpriced), self.call_usage = self.costs.pop(to, (None, 0, 0)), False
+        self.ctx_tokens, self.cache_share, self.served, self.requested = 0, None, "", ""
+        self.refresh_activity()
 
     def history_entries(self, messages: list[dict[str, Any]]) -> list[tuple]:
         """Stored messages as plain tuples: ("block", kind, text) or ("tool", id, name, args, status, output)."""
@@ -798,8 +832,11 @@ class ExoApp(App):
 
     async def load_session(self, sid: str, resume: bool = True) -> None:
         got = await self.client.call(s.SessionResume(session=sid) if resume else s.SessionGet(session=sid))
+        if sid != self.session:
+            await self.leave_thread(sid)
         self.session = sid
         info = got["session"]
+        self.busy = info.get("status") == "live"  # a turn already running there: LIVE, steer, ctrl+c stops it
         self.seat = self.seat or info.get("seat")
         self.model = info.get("model") or self.model
         self.window = self.capacities.get(self.model, 0)
@@ -810,11 +847,23 @@ class ExoApp(App):
         title = info.get("title") or ""
         what = "private thread" if info.get("kind") == "private" else "thread"
         self.note(f"resumed {what} {title + ' ' if title else ''}({sid}, {n} messages)", "note")
+        await self.restore_approvals()  # a request that waited before this window showed the thread (D-045)
         self.refresh_status()
+
+    async def resume_or_new(self, sid: str) -> None:
+        """Resume thread ``sid``; an id the core does not know (a typo, a deleted thread) opens a new thread."""
+        try:
+            await self.load_session(sid)
+        except Exception as exc:
+            if getattr(exc, "code", None) != "not_found":
+                raise
+            await self.new_session(announce=True)
+            self.note(f"no thread {sid}; started a new one", "warn")  # after new_session, which clears the transcript
 
     async def new_session(self, kind: str = "", announce: bool = True) -> None:
         """A new thread of the same agent: a fresh focus with the same memory (D-028)."""
         got = await self.client.call(s.SessionCreate(title=self.title_arg, seat=self.seat, kind=kind))
+        await self.leave_thread()
         self.session = got["session"]["id"]
         self.model = got["session"].get("model") or self.model
         self.window = self.capacities.get(self.model, 0)
@@ -833,8 +882,16 @@ class ExoApp(App):
 
     # ------------------------------------------------------------ sending
     async def post(self, body: Any) -> s.Response:
+        import httpx
+
         self.sent.append(body)
-        resp = await self.client.send(body)
+        try:
+            resp = await self.client.send(body)
+        except (httpx.TransportError, OSError) as exc:  # the request may have reached the core: say so, never resend
+            self.note("connection lost; this may not have been delivered. Check before you send it again.", "error")
+            if isinstance(body, s.ApprovalRespond):
+                self.run_worker(self.restore_approvals(), exit_on_error=False)
+            return s.Response(id="", ok=False, error=s.ErrorInfo(code=LOST, message=str(exc)))
         if not resp.ok:
             self.note(f"error: {resp.error.code}: {resp.error.message}", "error")
         return resp
@@ -1071,7 +1128,10 @@ class ExoApp(App):
         if self.question and not command:
             qid, self.question = self.question, None
             self.add(Block(text, "user"))
-            await self.post(s.QuestionAnswer(question_id=qid, answer=text))
+            resp = await self.post(s.QuestionAnswer(question_id=qid, answer=text))
+            if resp.error is not None and resp.error.code == LOST:
+                self.question = qid  # still open as far as this window knows
+                self.keep_text(text)
             return
         if command:
             await self.slash(name, args.strip())
@@ -1087,10 +1147,21 @@ class ExoApp(App):
         self.close_cur()
         resp = await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
                                           mode="steer" if steering else "send"))
+        if resp.error is not None and resp.error.code == LOST:
+            self.keep_text(text)
         if steering and resp.ok and resp.result.get("message_id"):  # queued, not delivered: it can be pulled back
             self.pending_steers.append((resp.result["message_id"], block))
             block.pending = True
             block.flush()
+        elif resp.ok and resp.result.get("steered") and resp.result.get("message_id"):  # core steered a plain send into a child (D-070)
+            self.pending_steers.append((resp.result["message_id"], block))
+            block.steer = block.pending = True
+            block.flush()
+
+    def keep_text(self, text: str) -> None:
+        """A message whose delivery is unknown goes back in an empty composer, to send again or drop."""
+        if not self.composer.text:
+            self.put(text)
 
     def steer_landed(self, message_id: str) -> None:
         """The steer reached the conversation (message.completed): it is no longer pending."""
@@ -1118,6 +1189,8 @@ class ExoApp(App):
             return False
         mid, block = self.pending_steers[-1]
         resp = await self.post(s.CommandRun(name="unsteer", args=mid, session=self.session))
+        if resp.error is not None and resp.error.code == LOST:
+            return False  # unknown whether it was pulled back: it stays shown as pending
         gone = (resp.result.get("output") or {}).get("cancelled", []) if resp.ok else []
         if not gone:  # it landed while we asked
             self.steer_landed(mid)
@@ -1300,9 +1373,11 @@ class ExoApp(App):
         self.intro_pending = kind
         self.intro_turn, self.intro_reply = "", False
         try:
-            resp = await self.post(s.TurnSend(session=self.session, text=INTRO_PROMPT,
-                                              mode="steer" if self.busy else "send"))
+            resp: s.Response | None = await self.post(s.TurnSend(session=self.session, text=INTRO_PROMPT,
+                                                                 mode="steer" if self.busy else "send"))
         except Exception:
+            resp = None
+        if resp is None or (resp.error is not None and resp.error.code == LOST):
             self.intro_pending, self.intro_turn, self.intro_reply = "", "", False
             self.note("Could not start orientation. /intro retries when the core is available.", "warn")
             return
@@ -1619,6 +1694,24 @@ class ExoApp(App):
         if self.card is not None and self.card.req.request_id in gone:
             self.close_card()
 
+    async def restore_approvals(self) -> None:
+        """After an answer whose reply was lost: the core's list is the truth, so a request it still holds gets its
+        card back."""
+        try:
+            resp = await self.client.send(s.ApprovalsList(session=self.session))
+        except Exception:
+            return
+        if not resp.ok:
+            return
+        shown = {a.request_id for a in self.approvals} | ({self.card.req.request_id} if self.card else set())
+        for a in resp.result.get("approvals", []):
+            if a.get("request_id") not in shown:
+                self.approvals.append(from_dict(s.ApprovalRequested, a, strict=False))
+        if self.card is None:  # the answered card may still be on its way out, and the new one reuses its id
+            for old in self.query(ApprovalCard):
+                await old.remove()
+        self.show_approval()
+
     def close_card(self) -> None:
         restore = self.card is not None and (self.focused is self.card or self.card.has_focus_within)
         if self.card is not None:
@@ -1632,8 +1725,14 @@ class ExoApp(App):
         self.approvals = [a for a in self.approvals if a.request_id != msg.request_id]
         self.note(f"approval: {msg.decision}" + (f" ({msg.note})" if msg.note else ""))
         self.close_card()
-        self.run_worker(self.post(s.ApprovalRespond(request_id=msg.request_id, decision=msg.decision,
-                                                    note=msg.note, client=CLIENT_ID)), exit_on_error=False)
+        self.run_worker(self.answer_approval(s.ApprovalRespond(request_id=msg.request_id, decision=msg.decision,
+                                                               note=msg.note, client=CLIENT_ID)), exit_on_error=False)
+
+    async def answer_approval(self, body: s.ApprovalRespond) -> None:
+        """The card goes before the answer is sent. If the core refuses the answer, its list says whether the request
+        still waits; if it does, the card comes back to be answered again."""
+        if not (await self.post(body)).ok:
+            await self.restore_approvals()
 
     # ------------------------------------------------------------ panels
     def on_ui_panel(self, b: s.UiPanel) -> None:
