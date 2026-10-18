@@ -575,6 +575,15 @@ SHAPES = {
 }
 
 
+def test_a_range_with_a_leading_zero_spells_padded_words(monkeypatch):
+    """Bash pads every word of a range to the wider bound when a bound starts with 0: {0007..0008} is 0007 0008."""
+    assert sorted(gate._brace_alts("x{007..10}")) == ["x007", "x008", "x009", "x010"]
+    assert sorted(gate._brace_alts("a{-01..1}")) == ["a-01", "a000", "a001"]
+    assert sorted(gate._brace_alts("{0..3}")) == ["0", "1", "2", "3"]
+    monkeypatch.setenv("EXO_HOME", "/srv/exo0007")
+    assert _bash("cd /srv/exo{0007..0008}/keys && cat x").category == "credentials"
+
+
 def test_a_wide_brace_set_is_not_copied_per_member():
     """A brace set past 16 members is one glob: its words are never built (8000 members took 60 MB)."""
     line = "cd {" + "a," * 8000 + "a}" + "x" * 8000 + " && ls"
