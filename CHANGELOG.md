@@ -27,6 +27,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- Esc on a `claude-cli` turn is no longer lost when it lands just as the CLI prints a line (#163). On Python 3.11
+  the per-line read timeout (`asyncio.wait_for`) returned the line and swallowed the cancel, so the turn ran to the
+  end as if Esc had not been pressed. The line read now uses `asyncio.timeout`, which keeps the cancel.
+- Tests that failed on a loaded machine (#163): the claude-cli fallback test's fake CLI now reads its input before it
+  fails, so the provider's write never meets a closed pipe and the error always reports the exit code, and the TUI
+  boot test drives the boot screen's clock, so a slow start can no longer end the boot before the test looks at it.
+
 ### Security
 - Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
