@@ -18,6 +18,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
+- Web chat: a completed reply renders as Markdown, GFM pipe tables included (#149, #152). Streaming stays plain
+  text. Tables scroll sideways inside the message. A reply builds at most 10,000 table cells and a table at most 64
+  columns and no more padded cells than source characters; past that, a table is shown as its source text. Quotes
+  nest at most 8 deep and lists 9. Ordered lists keep their source numbers across blank lines, fences and nested
+  items; a table, quote or fence indented under an item renders inside it; paragraph line breaks, hard breaks and
+  `>` quotes are kept; a line that starts with inline code is not a fence; table cells unescape only `\|`; unclosed
+  `[` and link URLs no longer cost quadratic time; the classic layout keeps following the conversation when a reply
+  grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
 - `edit_file` after whitespace drift: when only the whitespace-normalized strategy matched (one stray double
