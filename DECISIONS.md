@@ -408,6 +408,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Policy is the receiving seat's: auto for the same principal, hold otherwise, deny for a bad signature; held
   messages wait 30 minutes for an approval card. A peer message is input, never consent: attempts to approve
   are refused and shown to the principal.
+  *Amendment 2026-10-18 (PR #212):* a held message whose sender named no session, while no session is live, has an
+  approval with no thread. Both clients show that card in every thread. Allow used to close it as denied ("no
+  session here can take a message"), although the card says allow delivers it. Allow now opens a new thread of the
+  seat, titled after the sender, and delivers the message there. If that thread cannot open, the message closes as
+  not delivered and the principal gets a notice. Deny and expiry open no thread.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -754,6 +759,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Under reduced motion there is no timer: it only updates on events.
 - **Typo help:** an unknown `/comand` is not sent. The note says "did you mean /compact?" and the corrected line waits
   in the composer. With nothing close, the line goes to the core as before. The web does the same for its commands.
+  *Amendment 2026-10-18 (issue #146):* on the web the names are the page's own commands, the core's `commands.list`
+  and the terminal client's own (its `COMMANDS` table: core plugin names such as `/grants` count only when
+  `commands.list` has them, as in the TUI), and "near" is the TUI's rule (a port of `complete.closest`, for
+  lower-case names only). A `/name` from those the page does not run (`/grants`, `/help`), or a near typo of one,
+  stays in the box with a note rather than becoming a message; a line close to no name (`/tmp is full`, `/data is
+  corrupted`, `/Users is big`) is a message. Until the page has the core's names it holds every `/name` line that is
+  not its own or the terminal client's, and asks again with no limit (1 s doubling to every 30 s, and on each send,
+  which does not move the backoff on). The asking ends once the core has given its names (an older core that
+  answers `unknown_command` or `unsupported` for `commands.list` counts, with no core names) and its
+  `guidance.enabled` (an unset key, answered `not_found`, is on).
 - **Rejected:** a model call to suggest commands (cost, latency, and the rules are enough); a second ranking in each
   client (they would drift); storing history in the browser (the web client keeps none across page loads, on purpose).
 - **Not done:** file completion for bare paths (`./x`, `~/x`) outside `@`; `/findings <id>` (the core takes only
@@ -1391,7 +1406,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   pid that still names that process and started before the accept (a pid reused after the accept fails), and a parent chain that reads
   cleanly to pid 1 without the core; an unreadable chain is the tool tree. `descends_from` fails closed
   accordingly; there is one walker. A credential taken as local is logged once per process with the reason, and
-  that connection's refusals name it. Other platforms: no principal over the socket.
+  that connection's refusals name it (`/rename` and the subagent verbs too); a log line that cannot be written
+  does not change the answer. Other platforms: no principal over the socket.
 - **Unchanged (D-039, D-052):** the principal comes from the connection; in-process clients are the principal by
   construction; stdio and TCP are local; only a principal caller acts as the principal. No command or event added.
 - **Snapshot and liveness (handoff items 2 and 3, the parts that ride on this):** `hello` reports `instance` and
@@ -1405,7 +1421,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   whose connection never opened. It says the change may not have been delivered, keeps the typed text and
   re-reads `approvals.list` to put back a card the core still holds. The client reads on after a skipped frame
   without `reconnect` too, so a caller that keeps its own `since` (the exo-bus channel, the web source) gets the
-  next event instead of asking for the skipped one again; a skipped frame that comes again ends such a stream.
+  next event. Until a later event arrives, each new stream it opens (after a restart or a dropped connection)
+  still asks for the skipped frame and skips it again: one re-read per reconnect, not a stall. A skipped frame
+  that comes again ends such a stream.
 - **Scope against the handoff:** no ruling conflicted. D-039's file name and gate credential class are kept, so the
   launch record replaces the token file's contents rather than adding a file. The OS surface lives in another
   repository and migrates there. Clients expose the stream `instance` but the terminal and web views do not yet
@@ -1422,7 +1440,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   exo` pass. The core logs it and the refusal says so. A client in another PID namespace than the core is refused
   (the kernel names pid 0), and a core that cannot read its own process entry warns and serves no principal. A pid
   reused between connect and accept is not detected (that window is the accept latency; Linux `SO_PEERPIDFD` would
-  pin the process).
+  pin the process). The browser-to-web hop (the `exo web` page to its own server, over TCP) is not peer-checked;
+  the page token protects it and, once #177 lands, the one-time launch code (D-039, #166).
 - **Validation:** `tests/security/test_unix_peer_auth.py`: a replaced socket gets zero bytes; stale, symlinked,
   shared, old-format and missing records refuse before any byte; an unsupported platform fails closed both ways; a
   mismatched kernel uid is local; a tool child through the real client, and the orphan of one that exited, are
@@ -1433,10 +1452,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `SharedClient.events` (an emoji message is delivered, a NEL one is skipped); a frame too large is skipped by
   seq; line separators and lone surrogates round-trip; a uid above 2^31; pid 0; a pid that names another process
   by stamp time; the parent walk with a clean, unreadable and descendant chain; the demotion reason in the log and
-  the refusal; a core without its own start identity; the record in place before the socket accepts; the refusal
-  type. `tests/clients/tui/test_lost_reply.py` and the web's `test_refused_principal_names_the_reason_and_the_restart`.
-  A skipped frame that comes again ends the stream (`test_unix_peer_auth_edges.py`), and the exo-bus channel's
-  event loop reads past one (`plugins/exo-bus/tests/test_bus_plugin.py`).
+  the refusal, also from `/rename` and the subagent verbs and with stderr closed or broken; a core without its own
+  start identity; the record in place before the socket accepts and revoked when the listen fails; a frame too
+  large with no `id:` ends the stream; the refusal type. `tests/clients/tui/test_lost_reply.py` (a lost turn,
+  approval answer, `question.answer` or unsteer) and the web's
+  `test_refused_principal_names_the_reason_and_the_restart`. A skipped frame that comes again ends the stream
+  (`test_unix_peer_auth_edges.py`), and the exo-bus channel's event loop reads past one
+  (`plugins/exo-bus/tests/test_bus_plugin.py`).
 - **Docs:** `docs/GATE.md` "Unix peer authentication", `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-061 (2026-10-13) Web sub-pages to the site v2 standard

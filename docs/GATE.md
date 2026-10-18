@@ -145,7 +145,9 @@ caught by this check (issue #31); an OS sandbox for tools is still the fix (D-03
 the core's log say so. This fails closed on purpose: stopping the walk at the first unreadable
 ancestor would let `tool -> sudo -u $USER exo` pass. A client in another PID namespace than the core
 is refused too. An old client against a new core sends the whole record as its token and is local
-without a message; restart `exo`, `exo web` and `exo chat` after an update.
+without a message; restart `exo`, `exo web` and `exo chat` after an update. The browser-to-web hop (the
+`exo web` page to its own server, over TCP) is not peer-checked; the page token protects it and, once
+#177 lands, the one-time launch code (D-039, #166).
 
 **Snapshot and liveness contract.** `hello` returns `instance` (this launch) and `heartbeat` (seconds
 between `: ping` comments on `GET /events`; the capability list has `heartbeat`). The event stream
