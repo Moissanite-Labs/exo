@@ -34,6 +34,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Tests that failed on a loaded machine (#163): the claude-cli fallback test's fake CLI now reads its input before it
   fails, so the provider's write never meets a closed pipe and the error always reports the exit code, and the TUI
   boot test drives the boot screen's clock, so a slow start can no longer end the boot before the test looks at it.
+### Security
+- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
+  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
+  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
+  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
 
 ## [0.2.0] (egg) - 2026-10-13
 
