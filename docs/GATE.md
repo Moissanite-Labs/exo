@@ -299,7 +299,9 @@ missing final components, and so is the folder of `cd`, `pushd`, `env -C`, `git 
 or its ancestors, a `cd` into an alias of the store, and `//` or `/proc/self/root` spellings.
 Resolution preserves `symlink/..` filesystem order; lexical protection still applies when a
 protected path links outside the store. A path that cannot be resolved (a NUL byte) keeps its
-lexical check, so the floor never depends on resolution working. `cp -s` and `cp -l` count as writes
+lexical check, so the floor never depends on resolution working. A relative `EXO_HOME` or
+`EXO_PRINCIPAL_STORE` names the store from the core's own folder, as the core reads it, so the
+absolute spelling of that folder counts too. `cp -s` and `cp -l` count as writes
 to whatever they alias, and a relative `ln -s` target is read against the link's folder in the
 two-operand form (`ln -s TARGET LINK`). A relative path is matched by its distinctive names, and
 against the folder a `cd`, `env -C` or the tool's `cwd` names when the gate knows it (below).

@@ -446,6 +446,37 @@ def test_a_custom_home_spelled_from_a_known_folder_counts(tmp_path, monkeypatch)
     assert home.is_dir()
 
 
+@pytest.mark.parametrize("command, args", [
+    ("cp /tmp/x {home}/config.json", {}),
+    ("cp /tmp/x {home}/", {}),
+    ("cp /tmp/x {home}/state/approval-grants.json", {}),
+    ("cd {home} && cp /tmp/x config.json", {}),
+    ("cd {home} && echo hi > state/foo", {}),
+    ("cp /tmp/x config.json", {"cwd": "{home}"}),
+    ("git -C {home} checkout -- .", {}),
+    ("tar -xf evil.tar -C {home}", {}),
+])
+def test_a_relative_exo_home_still_protects_the_absolute_home(tmp_path, monkeypatch, command, args):
+    # The core takes EXO_HOME as given, so a relative one names the home from the gate's own folder; a line
+    # that spells the home absolutely, or moves into it, writes the same store.
+    home = _home(tmp_path, monkeypatch, "rel-exo")
+    (home / "state").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("EXO_HOME", "rel-exo")
+    _asks(command.format(home=home), **{k: v.format(home=home) for k, v in args.items()})
+    c = gate.classify({"tool": "write_file", "args": {"path": str(home / "config.json"), "content": "{}"}})
+    assert c.category == "store_write"
+
+
+def test_a_relative_principal_store_still_protects_the_absolute_store(tmp_path, monkeypatch):
+    _home(tmp_path, monkeypatch)
+    (tmp_path / "ps" / "keys").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("EXO_PRINCIPAL_STORE", "ps")
+    _asks(f"cd {tmp_path / 'ps'} && cp /tmp/x keys/a")
+    _asks("cp /tmp/x keys/a", cwd=str(tmp_path / "ps"))
+
+
 def test_a_long_line_of_folder_moves_stays_fast(tmp_path, monkeypatch):
     # Outside the home each word is also resolved against the folder the line moved into; that stays cheap.
     home = _home(tmp_path, monkeypatch)

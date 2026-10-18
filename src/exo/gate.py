@@ -1915,8 +1915,9 @@ def _path_forms(p: str) -> set[str]:
     symlink loop) keeps its lexical form, so a resolution failure never weakens a check."""
     lex = re.sub(r"^//", "/", os.path.normpath(p))  # normpath keeps a leading `//`
     forms, memo = {lex}, _real_memo.get()
-    try:                                            # `..` must be resolved in filesystem order: no memo then
-        forms.add(_real(lex, memo) if memo is not None and ".." not in p.split("/") else os.path.realpath(p))
+    try:              # the memo takes absolute paths only; `..` must be resolved in filesystem order
+        forms.add(_real(lex, memo) if memo is not None and lex.startswith("/") and ".." not in p.split("/")
+                  else os.path.realpath(p))
     except (OSError, ValueError, RecursionError):
         pass
     return forms
