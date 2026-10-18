@@ -99,3 +99,6 @@ def test_stop_on_the_fallback_route_keeps_the_timeout_of_the_route_before(tmp_pa
     t = trace.last_turn(store, s.id)
     assert not t.derived and t.fallbacks == 1  # before, the call had no attempts and the timeout was lost
     assert "model.timeout:hang:m" in [f.signature for f in trace.detect(t, trace.Thresholds())]
+    # The stop came on ok:m: neither hang:m's wait nor ok:m's stream is charged to hang:m as a slow call.
+    scaled = [f.signature for f in trace.detect(t, trace.Thresholds(model_call_s=0.001))]
+    assert "model.timeout:hang:m" in scaled and not [x for x in scaled if x.startswith("model.slow")]

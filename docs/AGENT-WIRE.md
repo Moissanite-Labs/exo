@@ -225,7 +225,8 @@ tools, accept). For each task the delegator:
    tool calls exactly as to the parent's. The child loop also shares the engine's per-session state, so the
    engine sees the child's turn running. `session.list` shows it `live`, and `session.resume` leaves its open tool
    call alone. The principal typing into the child's session (`turn.send`, any mode) steers it (D-070). Any other
-   caller gets `forbidden` there (D-052): the parent uses `subagent send`.
+   caller gets `forbidden` there (D-052): the parent uses `subagent send`. While the child starts or finishes, no
+   round can take a steer, so `turn.send` fails with `conflict` and never starts a turn in the child.
    An unaddressed peer message never picks a child;
 4. gives the child a focused system prompt (lifted from Hermes) and the brief in English as its first message;
 5. builds the `Receipt` from what the harness measured, signs it if a signer is set, stores it, publishes

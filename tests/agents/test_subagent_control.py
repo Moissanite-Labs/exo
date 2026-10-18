@@ -218,6 +218,26 @@ def test_only_the_principal_can_type_into_a_running_child(tmp_path):
     asyncio.run(go())
 
 
+def test_typing_into_a_child_that_takes_no_steer_is_a_conflict(tmp_path):
+    """A child that is starting or finishing takes no steer. turn.send then fails with conflict: it never starts a
+    main-loop turn in the child, and never answers accepted and then drops the text."""
+    async def go():
+        eng, gate = make(tmp_path)
+        parent, child, turn = await start(eng)
+        eng.loop.state(child).accepting_steers = False  # the window after the child's last round (#147)
+        d = Dispatcher(eng, caller="principal:tui")
+        for mode in ("send", "queue", "steer"):
+            r = await turn_send(d, child, f"CHILD-A late note by {mode}", mode)
+            assert not r.ok and r.error.code == "conflict", r.result
+        gate.set()
+        await turn
+        await asyncio.sleep(0.05)  # a stray background turn would have started by now
+        assert turns(eng, child) == ["TurnStarted", "TurnCompleted"]
+        assert not [t for t, _ in users(eng, child) if "late note" in t]
+
+    asyncio.run(go())
+
+
 def test_resuming_a_running_child_leaves_its_tool_call_alone(tmp_path):
     """session.resume on a child whose tool is still running writes no 'not run' result for that call."""
     async def go():

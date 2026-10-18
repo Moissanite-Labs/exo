@@ -188,6 +188,7 @@ class Loop:
             st.steer.append(msg)
             return None
         async with st.lock:
+            self.store.assert_open(session)  # locked while this send waited (a child that finished): no turn runs
             st.running = st.accepting_steers = True
             st.interrupt.clear()
             try:

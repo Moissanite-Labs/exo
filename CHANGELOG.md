@@ -114,14 +114,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and a `turn.send` steer lands in that turn. Before, the engine saw these sessions as idle: a notice was stored
   between a tool call and its result or started a second turn at the same time, and the model got a false
   "not run" result for a command that did run. The principal typing into a running subagent's session steers it,
-  whatever the mode. Anyone else gets `forbidden`. An unaddressed peer message never picks a subagent's session.
+  whatever the mode, and the terminal shows the line as a queued steer that up pulls back. Anyone else gets
+  `forbidden`. While the child starts or finishes, no round can take a steer, so `turn.send` fails with `conflict`.
+  It never starts a main-loop turn in the child. A send that waited behind a child that was locked meanwhile runs
+  no turn. An unaddressed peer message never picks a subagent's session or a scheduled run: it goes to the user's
+  thread.
 - Opening a thread whose turn is still running (`/resume`, `/sessions`, `exo tui --session` or `--resume`,
   `exo chat --resume`) no longer writes "not run: session was interrupted" for the tool call in flight, so the
   model never sees two results for one call. `session.resume` still closes a round a crash left open.
 - Two seats in one `$EXO_HOME` now run side by side. Each core numbered events from its own counter, so the core
   that fell behind failed every publish with a UNIQUE constraint error until it restarted. The database now numbers
-  each event past the table's highest. Starting any core, even one that then failed the writer lock, also marked
-  every agent's running delegate tasks failed. Now only an agent's writer fails its own leftovers.
+  each event past the table's highest. `hello`, `events.subscribe` and `/health` report that highest number, so a
+  window that joins one seat's core does not replay the other seat's job cards as new notes. Starting any core, even
+  one that then failed the writer lock, also marked every agent's running delegate tasks failed. Now only an agent's
+  writer fails its own leftovers.
 - Scheduled jobs on a home with several seats: both seats' timers ran the same due job, and a job's `seat` was
   never read, so a job for one seat could run as another. A timer now claims the slot before it runs it, a
   seat-bound job runs only in its seat, `run_now` from another seat is refused, and `add` refuses a seat no core
@@ -142,7 +148,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   stream, before the first token or in the backoff before a retry. It gets a `model.call` event with `stop_reason`
   `interrupted`, and its time counts in `model_ms`. Before, the wait counted as harness overhead, so stopping a slow
   model after 30 s filed a false `turn.slow` finding and could reopen a fixed one. The record keeps the routes that
-  timed out or failed before the stop, so stopping the fallback route still flags the route before it. The `/trace`
+  timed out or failed before the stop, so stopping the fallback route still flags the route before it. A call whose
+  only tries timed out files no `model.slow`, because `model.timeout` already names that route. The `/trace`
   header names the route that served the last call, not "no model call recorded yet", after a stop.
 
 ### Security

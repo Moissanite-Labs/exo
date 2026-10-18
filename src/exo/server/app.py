@@ -82,12 +82,12 @@ class Dispatcher:
             if body.protocol != s.PROTOCOL_VERSION:
                 return _fail(cmd.id, "protocol_mismatch", f"server speaks {s.PROTOCOL_VERSION}, client {body.protocol}")
             result = {"protocol": s.PROTOCOL_VERSION, "server": "exod",
-                      "capabilities": SERVER_CAPABILITIES, "seq": self.hub.seq}
+                      "capabilities": SERVER_CAPABILITIES, "seq": self.hub.head()}
             return s.Response(id=cmd.id, result=result)
         if isinstance(body, s.EventsSubscribe):
             # Without a stream, subscribe is a one-shot replay; HTTP clients stream from GET /events.
             events = self.hub.since(body.since, body.session)
-            return s.Response(id=cmd.id, result={"events": [e.to_dict() for e in events], "seq": self.hub.seq})
+            return s.Response(id=cmd.id, result={"events": [e.to_dict() for e in events], "seq": self.hub.head()})
         try:
             result = await self.engine.handle(cmd, self.hub)
         except CommandFailed as exc:
@@ -229,7 +229,7 @@ class HttpServer:
             return await self._sse(writer, since, q.get("session", [None])[0])
         if url.path == "/health":
             return await self._json(writer, 200, {"ok": True, "protocol": s.PROTOCOL_VERSION,
-                                                  "seq": self.dispatcher.hub.seq})
+                                                  "seq": self.dispatcher.hub.head()})
         return await self._json(writer, 404, {"error": "not found"})
 
     def _caller(self, headers: dict[str, str], writer: asyncio.StreamWriter) -> str:
@@ -302,7 +302,7 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
             if cmd is not None and isinstance(cmd.body, s.EventsSubscribe) and resp.ok:
                 if feed:
                     feed.cancel()
-                resp = s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.seq})
+                resp = s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.head()})
                 write(resp.to_json())
                 feed = asyncio.create_task(pump(cmd.body.since, cmd.body.session))
                 await asyncio.sleep(0)  # start the replay before the next command

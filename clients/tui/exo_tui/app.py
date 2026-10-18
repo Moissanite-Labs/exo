@@ -1087,9 +1087,10 @@ class ExoApp(App):
         self.close_cur()
         resp = await self.post(s.TurnSend(session=self.session, text=send, parts=self.file_parts(text),
                                           mode="steer" if steering else "send"))
-        if steering and resp.ok and resp.result.get("message_id"):  # queued, not delivered: it can be pulled back
+        # Queued, not delivered: it can be pulled back. The core steers a send too (an opened running subagent).
+        if resp.ok and resp.result.get("steered") and resp.result.get("message_id"):
             self.pending_steers.append((resp.result["message_id"], block))
-            block.pending = True
+            block.steer = block.pending = True
             block.flush()
 
     def steer_landed(self, message_id: str) -> None:

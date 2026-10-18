@@ -1109,3 +1109,32 @@ def test_steer_during_turn_completion_runs_a_new_turn(tmp_path):
 
     s = run(go())
     assert [(m.role, m.text()) for m in store.messages(s.id)][-2:] == [("user", "late note"), ("assistant", "late answer")]
+
+
+def test_a_send_that_waited_for_a_session_locked_meanwhile_runs_no_turn(tmp_path):
+    """A send checks the session's lock again once it holds the turn lock: a child that finished and was locked while
+    the send waited behind its turn takes no new turn, and the text is not stored."""
+    from exo.core.sessions import SessionLocked
+
+    prov = Script(["WAIT", *reply("first answer")])
+    prov.gate = asyncio.Event()
+    store, loop, seen = make(tmp_path, prov)
+
+    async def go():
+        s = await loop.create_session()
+        first = asyncio.create_task(loop.send(s.id, "start"))
+        while not prov.calls:
+            await asyncio.sleep(0.01)
+        late = asyncio.create_task(loop.send(s.id, "queued behind the turn"))
+        await asyncio.sleep(0.02)
+        assert not late.done()  # waits on the session's lock
+        store.lock(s.id, "done")  # the delegator locks a finished child
+        prov.gate.set()
+        await first
+        with pytest.raises(SessionLocked):
+            await asyncio.wait_for(late, 2)
+        return s
+
+    s = run(go())
+    assert [e.type for e in seen].count("turn.started") == 1
+    assert "queued behind the turn" not in [m.text() for m in store.messages(s.id)]

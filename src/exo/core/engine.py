@@ -322,6 +322,7 @@ class CoreRuntime:
             self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
+        self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
         agentlog.release_writer(self._writer)
         self._writer = None
         trace.remove_sink(self._on_harness_error)
@@ -559,6 +560,8 @@ class CoreRuntime:
             raise CommandFailed("session_locked", str(exc)) from None
         if b.session in self.agents.loops:  # typing into a running subagent steers it, never a new turn (D-070, D-052)
             require_principal("steer a subagent")
+            if not self.loop.state(b.session).accepting_steers:  # starting or finishing: no round can take it
+                raise CommandFailed("conflict", "the subagent is starting or finishing and takes no message now")
             b.mode = "steer"
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:

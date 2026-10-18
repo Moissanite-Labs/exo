@@ -13,6 +13,7 @@ from exo.core.models.fake import FakeProvider
 from exo.core.seats import Seat
 from exo.core.sessions import SessionStore
 from exo.protocol import schema as s
+from exo.server.app import Dispatcher
 from exo.server.engine import Hub
 
 MODELS = {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}
@@ -69,6 +70,30 @@ def test_hubs_publishing_at_once_from_two_connections_never_collide(tmp_path):
     assert all(len(x) == n and x == sorted(x) for x in seqs)
     assert len(set(seqs[0]) | set(seqs[1])) == 2 * n
     assert SessionStore(db).last_event_seq() == 2 * n
+
+
+def test_a_client_joining_one_seat_starts_after_the_other_seats_events(tmp_path):
+    """hello, events.subscribe and /health report the log's highest seq, not this core's last publish. A window that
+    joins alpha's core starts after beta's job cards and notices, so it never replays them as new notes."""
+    db = tmp_path / "sessions.sqlite"
+    alpha, beta = Hub(SqliteLog(SessionStore(db))), Hub(SqliteLog(SessionStore(db)))
+    alpha.publish(notice(0), "s_alpha")
+    for i in range(3):  # session-less, like a scheduled job's card and its result
+        beta.publish(s.TaskUpdated(task_id=f"k{i}", status="done"))
+        beta.publish(notice(i))
+    assert alpha.seq == 1  # alpha's own last publish
+    d = Dispatcher(None, alpha)  # type: ignore[arg-type]  # hello and events.subscribe never reach the engine
+
+    async def main():
+        hello = await d.run(s.Command.of(s.Hello()))
+        once = await d.run(s.Command.of(s.EventsSubscribe(since=1, session="s_alpha")))
+        return hello.result["seq"], once.result
+
+    seq, once = asyncio.run(main())
+    assert seq == once["seq"] == 7
+    assert [e["seq"] for e in once["events"]] == [2, 3, 4, 5, 6, 7]  # an explicit replay still crosses seats
+    assert alpha.since(seq, "s_alpha") == []
+    assert alpha.publish(notice(9), "s_alpha").seq == 8
 
 
 def test_two_seats_on_one_home_both_run_turns(tmp_path):
