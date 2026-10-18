@@ -125,7 +125,10 @@ The technical reference, with arguments and where each command is implemented, i
 
 Plugins add commands. They show in `/help` under `other`. `/exo` (the dispatcher) and `/orchestra` are examples when
 those plugins load. The core answers `/context`, `/compact`, `/trace` and `/findings` itself. `/grants` comes from
-the `exo-gate` plugin. The web client runs `/context`, `/findings`, `/trace`, `/new`, `/rename` and `/layout` from its composer.
+the `exo-gate` plugin. The web client runs `/context`, `/findings`, `/trace`, `/new`, `/rename` and `/layout` from
+its composer, and `/model` and `/default` (with a reference, or bare for a picker; `/default` only on a page opened at
+127.0.0.1 or localhost). A command it does not run, such as `/grants` or `/help`, stays in the box with a note; a line
+like `/tmp is full` is sent as a message.
 
 ### Typing help
 
