@@ -27,6 +27,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- `exo update` no longer widens a `--plugins` install to every plugin. The installer records the list in
+  `config.json` (`plugin_selection`) and a re-run without `--plugins`, such as the one `exo update` makes, keeps it.
+  A list also removes the plugins an earlier run installed in `$EXO_HOME/plugins` and the list leaves out, since the
+  core loads every folder there. `--plugins all` goes back to every plugin. The re-run also refreshes the plugin copies
+  in the Hermes home an earlier `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME` run used (one inside `~/.hermes`
+  still needs `--hermes-home`). An install from before this change has no list on record, so its first update installs
+  every plugin: after it, re-run `install.sh --no-pip --plugins LIST` once to go back to yours.
+- `scripts/deploy-site.sh` no longer tags and pushes a version after a failed deploy, which burned the version and
+  exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
+  refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
+  changes under `site/`.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).
