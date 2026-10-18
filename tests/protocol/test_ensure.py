@@ -339,6 +339,50 @@ def test_core_dying_under_a_subreaper_is_reported_promptly_with_its_exit_code(ho
     assert got["zombies"] == [], got
 
 
+RESTART = r"""
+import ctypes, json, os, signal, sys, time
+from pathlib import Path
+assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0  # PR_SET_CHILD_SUBREAPER
+from exo import ensure_core as ensure
+home = Path(sys.argv[1])
+def zombies():
+    out = []
+    for stat in Path('/proc').glob('[0-9]*/stat'):
+        try:
+            state, ppid = stat.read_text().rsplit(')', 1)[1].split()[:2]
+        except (OSError, ValueError):
+            continue
+        if state == 'Z' and int(ppid) == os.getpid():
+            out.append(int(stat.parent.name))
+    return out
+ensure.ensure_core(home, timeout=30)
+first = int(ensure.pid_path(home).read_text())
+os.kill(first, signal.SIGTERM)  # the core dies after a good start, as after `exo stop` from another terminal
+deadline = time.monotonic() + 10
+while first not in zombies() and time.monotonic() < deadline:
+    time.sleep(0.05)
+dead = first in zombies()
+ensure.ensure_core(home, timeout=30)  # the client starts a new core
+second = int(ensure.pid_path(home).read_text())
+left = zombies()
+os.kill(second, signal.SIGKILL)
+print(json.dumps({'dead': dead, 'first': first, 'second': second, 'zombies': left}))
+"""
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="PR_SET_CHILD_SUBREAPER is Linux only")
+def test_a_reaper_client_reaps_a_core_that_died_after_starting(home, monkeypatch):
+    """A client that adopts its cores (PID 1 in a container, a subreaper) reaps one that exits after a good start,
+    so restarts do not pile up zombies."""
+    monkeypatch.setenv("EXO_ENGINE", "echo")
+    out = subprocess.run([sys.executable, "-c", RESTART, str(home)], capture_output=True, text=True, timeout=120,
+                         env=dict(os.environ, EXO_HOME=str(home)))
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got["dead"] and got["first"] != got["second"], got
+    assert got["first"] not in got["zombies"], got
+
+
 def test_core_dying_at_startup_is_reported_promptly_without_a_made_up_code(home, monkeypatch):
     dying_engine(home, monkeypatch)
     started = time.monotonic()
