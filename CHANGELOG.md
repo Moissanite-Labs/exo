@@ -100,8 +100,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   findings by default and counts the rest.
 - Gate docs (#137, #141, D-038 amendment): `docs/GATE.md` "Known limits" records the four-level shell inspection
   depth and what the card says at the cap, that a category deny fires on the category a compound line ends up
-  with (approving the card can run the denied part), the known forms still allowed outright on main (with the
-  issue and the PR in review where there is one), and the other deny-to-ask paths. The template's `deny:` comment
+  with (approving the card can run the denied part; #191), the known forms still allowed outright on main (with the
+  issue and the PR in review where there is one, including ssh fed commands on stdin, #240), where a `command:`
+  regex still sees only raw text, and the other deny-to-ask paths. The secret-store section records that the
+  built-in `grep` and `glob` tools search below their path unchecked (#241). The template's `deny:` comment
   uses the deny vocabulary and says which entries see the whole line, and the user guide says that a few forms
   run without asking and to read the whole command before allowing it. No behaviour change; the test pins the
   boundary and the compound-line case.

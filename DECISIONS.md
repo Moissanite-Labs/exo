@@ -790,12 +790,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (`pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test`...). New asks a user will see:
   `make`, `npm run`/`npm test`, scripts, `python -c`, unknown programs such as `kill` or `open`, and any write to the
   store. Each opaque ask is bound to the exact command.
-- *Amendment 2026-10-14 (issue #137):* `_DEPTH = 4` bounds recursive shell inspection, for a `bash -c`, `sh -c` or
+- *Amendment 2026-10-18 (issue #137):* `_DEPTH = 4` bounds recursive shell inspection, for a `bash -c`, `sh -c` or
   `eval` chain called from the bash tool. A GitHub comment inside four nested wrappers remains `github_post`; at five
   it becomes `opaque_exec` and asks by default. A command inside a code string (`python -c`, `execute_code`) gets one
   more level wherever the code sits (`classify_code` starts again at `_DEPTH - 1`), so a chain that mixes wrappers and
-  code strings can be read deeper than four; nested `$( )` is flattened and not capped. Past the cap the line asks,
-  except an ssh/mosh command reached at the cap, which is allowed (below). The card at the cap names the outermost
+  code strings can be read deeper than four; nested `$( )` is flattened and not capped, while nested backticks are
+  (five levels are `opaque_exec`, "nested too deep to read"). Past the cap the line asks; an ssh/mosh chain past it
+  asks too, with the first host as target (#153, fixed by #164). The card at the cap names the outermost
   wrapper (`bash runs shell commands`), the same card as `bash -c 'foo'`. Why not name the cap (#137's second remedy):
   `_combine` keeps the first of equally severe parts, so the `nested too deep to read` part that `xargs`,
   `find -exec`, `uv run` and `$( )` add at the cap reaches the card only when the outer part is benign; adding the
@@ -804,17 +805,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   when the denied category is the line's most severe part: on a compound line a more severe part takes over and the
   line asks, and approving it runs the denied action (`gh pr comment 3 --body hi && rm -rf build` is `delete`). A
   category name in the `deny:` list behaves the same until D-075 (#126, in review) makes it match every part within
-  the inspection depth; `categories:` keeps matching the dominant part. The known unread forms below are allowed
-  outright on main, not asked, and no entry for the hidden action's category reaches them: an ssh/mosh command reached
-  at the depth cap, after ssh hops, `uv run`-style runner prefixes or a `$( )` (#153), `${...}` bodies (#143) and the
-  command-valued options of trusted programs (#154), with fixes in review (#164, #158), and a `$( )` in a quoted array
-  subscript given to a builtin that takes a variable name (`printf -v`, `read`, `declare`, `local`, `unset`,
-  `test -v`, `wait -p`; #179). The other deny-to-ask paths (`eval $(...)`, stdin-fed `xargs -I{} sh -c '{}'`,
-  `watch`/`parallel`/`tmux`/`screen`/`setsid` (#160), a `coproc` or `function NAME {` whose inner command does not
-  outrank `opaque_exec` (#131; the inner command is read since #181), the heredoc-after-compound case (#161)) are
-  listed in `docs/GATE.md` "Known limits". Rejected: raising `_DEPTH` (each level re-lexes the inner text, and five
-  hand-nested wrappers are not a workflow, only a probe); naming the hidden command on the card (the gate did not read
-  it). This records the limit of the existing decision; the pinning test is `test_shell_inspection_depth_limit`.
+  the inspection depth; `categories:` keeps matching the dominant part (#191). The known unread forms below are
+  allowed outright on main, not asked, and no entry for the hidden action's category reaches them: `${...}` bodies
+  (#143, fix in review in #158), a `$( )` in a quoted array subscript given to a builtin that takes a variable name
+  (`printf -v`, `read`, `declare`, `unset`, `test -v`, `wait -p`; #179, fix in review in #189), a quoted array, `-i` or
+  `-n` value given to `declare` (#188, fix in review in #194), text piped or fed by heredoc to `ssh` with no remote
+  command (#240), and the command-valued options and env-dump prefixes #164 left unread (#230, #232). A `command:`
+  regex reaches them on the raw text only: the literal-word view (#136) is built from text the gate reads, so quoting
+  still evades the regex inside these forms. The other deny-to-ask paths (`eval $(...)`, stdin-fed
+  `xargs -I{} sh -c '{}'`, `watch`/`parallel`/`tmux`/`screen`/`setsid` (#160, fix in review in #196), a `coproc` or
+  `function NAME {` whose inner command does not outrank `opaque_exec` (#126, #191; the inner command is read since
+  #181), the heredoc-after-compound case (#161, fix in review in #198)) are listed in `docs/GATE.md` "Known limits".
+  Rejected: raising `_DEPTH` (each level re-lexes the inner text, and five hand-nested wrappers are not a workflow,
+  only a probe); naming the hidden command on the card (the gate did not read it). This records the limit of the
+  existing decision; the pinning test is `test_shell_inspection_depth_limit`.
 - **Not done:** the project-code limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).

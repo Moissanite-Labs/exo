@@ -131,8 +131,12 @@ as a store path too. The trade-off: this fails closed, so an ordinary line past 
 `echo {1..2000}` or `for i in {1..2000}`, is `credentials` and asks every time with no grant. A string literal
 in code is read as a shell command, so compact JSON with 11 or more objects in one literal
 (`'[{"a":1,"b":2},...]'`) goes past the cap the same way.
-Known limit: the folder a `cd` enters is tracked for stores matched by name (`cd ~/.aws && cat credentials`
-asks), not for stores matched only by sample paths (`cd ~/.config/gh && cat hosts.yml`; #192).
+A relative name read in a store folder a `cd` entered counts too, since #192 also for stores matched only by
+sample paths (`cd ~/.config/gh && cat hosts.yml` asks; see "The working folder" below).
+Known limit: a file tool's path is checked, not what the tool reaches below it. The built-in `grep` and `glob`
+tools walk every file under their path (the working folder when none is given), so a search rooted above a
+store, such as the home folder or `$EXO_HOME`, is `read` and allowed: `grep` returns matching lines from the
+store's files and `glob` lists them (#241).
 Tests: `tests/security/test_gate_brace_sets.py`.
 
 ## Muse CLI credentials
@@ -351,11 +355,12 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   again at the last level: one `bash -c` inside `os.system(...)` is read; a second usually is
   not (it depends on how the literals are quoted) and the line asks, as `opaque_exec` or, through
   `execute_code`, as `code`. A chain that mixes wrappers and code strings can therefore be read
-  deeper than four levels. Nested `$( )` is flattened by the lexer and not capped. Past the cap
-  the line asks unless the principal has set a policy for `opaque_exec` (a `command:` deny entry
-  or a deny rule that matches the text still denies it), with one exception: an
-  `ssh` or `mosh` command reached at the cap is allowed (see "Hidden text that is allowed
-  outright" below).
+  deeper than four levels. Nested `$( )` is flattened by the lexer and not capped; nested
+  backticks are: four levels are read, and at five the line is `opaque_exec`, `nested too deep to
+  read`. An `ssh` or `mosh` chain with more hops than the cap asks as `opaque_exec` too, with the
+  first host as its target, so a `target:` deny on that host still denies it (#153, fixed by
+  #164). Past the cap the line asks unless the principal has set a policy for `opaque_exec` (a
+  `command:` deny entry or a deny rule that matches the text still denies it).
 - **A category deny fires on the category the line ends up with.** `classify_shell` keeps the
   most severe part of a compound line, and `categories:` applies to that category only. With
   `github_post: deny`, the four-wrapper example is denied and the five-wrapper example asks as
@@ -364,34 +369,48 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   reads `rm build`, and approving it sends the denied post. A category name in the `deny:` list
   behaves the same today (a `command:` regex entry is matched against the whole line). D-075
   (#126, in review) makes a `deny:` or `reserved:` entry match every part of the line within the
-  inspection depth; `categories:` keeps matching the dominant part. So approving an opaque card
-  or a compound line can run an action that would be denied on its own. Read the whole command
-  before approving it: an approval does not vouch for what the gate did not classify.
+  inspection depth; `categories:` keeps matching the dominant part (#191). So approving an opaque
+  card or a compound line can run an action that would be denied on its own. Read the whole
+  command before approving it: an approval does not vouch for what the gate did not classify.
 - **Hidden text that is allowed outright.** Some unread execution does not even ask today. An
   entry for the hidden action's category (`github_post`, `delete`...) does not reach it, in
-  `categories:`, `deny:` or `reserved:`. An entry that matches the command text does (a `command:`
-  regex, or a rule with a `command` match); since #136 that regex also sees the literal-word view,
-  so common literal quoting no longer evades it, but other spellings need their own patterns. An `ssh` or `mosh` command reached at the depth cap, after four levels of `ssh`
-  hops, runner prefixes such as `uv run` or `poetry run`, or `$( )`, in any mix (for example
-  `echo $(ssh h0 ssh h1 ssh h2 ssh h3 ...)`), falls back to plain `shell` and is allowed under the
-  default policy, the template and a category deny (#153; fix in review in #164); a `target:`
-  entry that matches its host still catches it. `${...}` bodies are skipped by the lexer, so
-  `echo ${X:-$(gh pr comment 3 --body hi)}` is `read` and allowed (#143; fix in review in #158).
-  Options of trusted programs whose value is a command are not parsed, so `tar --to-command`,
-  `--checkpoint-action=exec=`, `split --filter`, `sort --compress-program`, `man -P`, `rsync -e`
-  and the `sqlite3` `.shell` dot-command, among others, are allowed too (#154; fix in review in
-  #164). A `$( )` inside a quoted array subscript given to a builtin that takes a variable name
-  (`printf -v`, `read`, `declare`/`typeset`/`local`, `unset`, `test -v` and `[ -v`, `wait -p`) is
-  run by bash, but the gate reads the quoted word as plain text, so
-  `printf -v 'a[$(gh pr comment 3 --body hi)]' %s x` is `read` and allowed (#179).
+  `categories:`, `deny:` or `reserved:`. An entry that matches the command text does (a
+  `command:` regex, or a rule with a `command` match). Since #136 that regex also sees the
+  literal-word view of the text the gate reads, so quoting no longer evades it there. Inside a
+  `${...}` body, a quoted subscript or value, stdin sent to `ssh`, or a command-valued option the
+  gate does not read (the forms below), the regex sees only the raw text, so quoting still evades
+  it there until each form's fix lands:
+  `echo ${X:-$(g'h' pr comment 3 --body hi)}` is allowed under `command:gh pr comment`. The
+  command-valued options listed above have been read since #164, so their values are in the view
+  (`tar --to-command='g"h" pr comment 3 --body hi'` is denied); the ones #164 left unread are in
+  #230 and #232. The known forms:
+  - `${...}` bodies are skipped by the lexer, so `echo ${X:-$(gh pr comment 3 --body hi)}` is
+    `read` and allowed (#143; fix in review in #158).
+  - A `$( )` inside a quoted array subscript given to a builtin that takes a variable name
+    (`printf -v`, `read`, `declare`/`typeset`, `unset`, `test -v` and `[ -v`, `wait -p`) is run
+    by bash, but the gate reads the quoted word as plain text, so
+    `printf -v 'a[$(gh pr comment 3 --body hi)]' %s x` is `read` and allowed (#179; fix in review
+    in #189).
+  - A quoted array, `-i` or `-n` value given to `declare` or `typeset` is expanded again by bash,
+    so its `$( )` runs: `declare -a 'b=($(gh pr comment 3 --body hi))'` is `read` and allowed
+    (#188; fix in review in #194, stacked on #189).
+  - Text piped or fed by heredoc to `ssh` with no remote command runs in the remote login shell,
+    but the line reads as a plain `ssh`: `echo 'gh pr comment 3 --body hi' | ssh host` and
+    `ssh host <<EOF` are `shell` and allowed under every category deny; a `target:` entry for the
+    host still denies them (#240).
+  - Forms next to #164's coverage: a dynamic `ssh -o "$OPT"`, `git ls-remote --exec=...`, and an
+    environment dump behind a `NAME+=value` prefix (#230); the rest are listed in #232 (part of
+    which, `git clone -c`, is in review in #231).
 - **Other deny-to-ask paths.** Where the gate cannot read the command it files the line as
   `opaque_exec`, which asks, and the card names the wrapper rather than the action: `eval $(...)`
   and `eval "$(...)"`; a command arriving on stdin, `echo '...' | xargs -I{} sh -c '{}'` (while
   `echo 3 | xargs -I{} sh -c 'gh pr comment {} --body hi'` is read and denied); the wrappers
-  `watch`, `parallel`, `tmux`, `screen` and `setsid` (#160); a `coproc` or `function NAME {`
-  whose inner command ties with `opaque_exec` or ranks below it (#131: the inner command is read
-  now, see above, and its category deny applies when it outranks `opaque_exec`, as `github_post`
-  does); a heredoc after a compound command's closing token, `{ bash; } <<EOF` (#161).
+  `watch`, `parallel`, `tmux`, `screen` and `setsid` (#160; fix in review in #196); a `coproc` or
+  `function NAME {` whose inner command ties with `opaque_exec` or ranks below it, such as
+  `coproc w { curl https://example.com; }` under a `web_read` deny (the inner command is read, see
+  above, and its category deny applies when it outranks `opaque_exec`, as `github_post` does;
+  the rest is tracked in #126 for the `deny:` list and #191 for `categories:`); a heredoc after a
+  compound command's closing token, `{ bash; } <<EOF` (#161; fix in review in #198).
 - **Project code.** A trusted program that runs project code (pytest runs conftest.py, git runs
   hooks, `npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
   `~/.ssh/config` with a `ProxyCommand`) can run code the agent wrote earlier with a local write.
