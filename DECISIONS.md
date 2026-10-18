@@ -431,6 +431,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Subagents keep their own logs (`memory_zoom(subagent=...)`); their report reaches the parent as the delegate
   result. exo-memory reads the core log instead of writing its own. Existing sessions were imported once, in time
   order, with `origin=import`; nothing deleted.
+  *Amendment 2026-10-18 (several seats in one home):* seats whose files sit in one `$EXO_HOME` are separate agents.
+  Each runs its own core with its own writer lock, and all of them share `sessions.sqlite` and `schedule.sqlite`.
+  The database numbers each event past the table's highest, so two cores never reuse a `seq`. `hello` reports that
+  highest number, so a joining client skips the other seat's past events. Only an agent's writer fails that agent's
+  leftover delegate tasks. A scheduled job with a `seat` runs only in that seat's core. A job with no seat runs once
+  per slot, in the seat whose timer claims the slot first. `add` refuses a seat that no core could run
+  (docs/SEATS.md "Several seats in one home", docs/SCHEDULE.md).
 - **Protocol:** still 30 commands: `session.create` takes `kind`, `SessionInfo` carries `agent` and `kind`. One
   event, `memory.summarized` (27 of 30): tree upkeep was showing as `context.compacted`, which read as context
   compaction in the trace and TUI.
@@ -1522,6 +1529,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   loop is never repaired mid-turn.
 - **Limits:** child approvals shown in the parent, and `followup` or `resume`, are follow-ups. Typing straight into a
   child's session still steers it through `turn.send`; that path works but leaves no note on the receipt.
+  *Amendment 2026-10-18 (fix sweep, core sessions):* the child's loop shares the engine's per-session state. So
+  `turn.send` into a running child steers it in any mode, and only the principal may send it (D-052). While the
+  child starts or finishes, no round can take a steer, and `turn.send` fails with `conflict`. It never starts a
+  main-loop turn in the child. A send that waited behind a child that was locked meanwhile runs no turn. A peer
+  message with no session never picks a child (docs/AGENT-WIRE.md).
 - **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-073 (2026-10-13) Signed updates verify against a pinned trust list (issue #42)
