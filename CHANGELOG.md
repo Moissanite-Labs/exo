@@ -134,6 +134,43 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
   with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
+- Terminal event feed: a boot that failed after `hello` left the window without its feed, so `/new` and a message
+  worked but no reply or approval card ever showed. The feed now starts whatever the boot does, and a `--session`
+  id the core does not know opens a new thread and says so. One event the window cannot read no longer ends the
+  feed either. Under `strict=False` a Literal value the client does not know (such as a newer core's `ui.panel`
+  kind) is kept, `Client.events` skips and logs an event that still fails to decode, and a feed that dies says so.
+- The web Chat view draws a peer, bus or job message as a card with its real author, never as a line the user
+  typed: on reload and thread switch too, and the live `peer.message` and its stored message are one card. An
+  approval with no thread (a held peer message that no live session could take) shows in every thread, as in the
+  terminal client, and allow now delivers it into a new thread instead of closing it as denied. A panel you dismiss
+  stays closed after the next panel event, a tab switch or a reconnect.
+- The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
+  the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
+  the card shows every argument of the call.
+- `exo web` folded the core's replayed events into its state a second time after the core's stream dropped: message,
+  tool call and task counts doubled, and a session stayed `waiting` after its approval was answered. Each event now
+  counts once, and a core whose log is behind the page (a new `EXO_HOME`) starts the page over.
+- A web chat reader that fell 1000 events behind lost one event for good. Its stream now ends with nothing lost, and
+  the reconnect replays every event it had not received.
+- Terminal thread switching (D-045, D-032): opening a thread (`/resume`, `/sessions`, `/fork`, `/open`,
+  `--session`, `--resume`) shows the approval it still waits on, from `approvals.list`, and `LIVE` when a turn runs
+  there, so ctrl+c stops it. `session.get` and `session.resume` now carry `status`, as `session.list` does. Before,
+  such a request had no card and the turn waited for good. Leaving a thread drops its turn state, card, queued
+  steer and numbers: the new thread no longer shows `LIVE`, `running tool` or steer mode once the old turn ends,
+  and `COST` no longer shows the other thread's dollars. A thread opened again keeps its `COST` and the `+` for an
+  unpriced call. An answer the core refuses brings its card back. A
+  finished subagent whose calls had no price adds the `+` to `COST`, and its roll-up no longer moves `MEM`.
+- `exo update` no longer widens a `--plugins` install to every plugin. The installer records the list in
+  `config.json` (`plugin_selection`) and a re-run without `--plugins`, such as the one `exo update` makes, keeps it.
+  A list also removes the plugins an earlier run installed in `$EXO_HOME/plugins` and the list leaves out, since the
+  core loads every folder there. `--plugins all` goes back to every plugin. The re-run also refreshes the plugin copies
+  in the Hermes home an earlier `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME` run used (one inside `~/.hermes`
+  still needs `--hermes-home`). An install from before this change has no list on record, so its first update installs
+  every plugin: after it, re-run `install.sh --no-pip --plugins LIST` once to go back to yours.
+- `scripts/deploy-site.sh` no longer tags and pushes a version after a failed deploy, which burned the version and
+  exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
+  refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
+  changes under `site/`.
 
 ### Security
 - An `ssh` or `mosh` chain with more hops than the gate reads (four) is `opaque_exec` and asks, keeping the
