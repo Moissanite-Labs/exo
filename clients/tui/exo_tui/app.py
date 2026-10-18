@@ -212,6 +212,7 @@ class ExoApp(App):
         self.last_answer: tuple[str | None, str] = (None, "")
         self.tools: dict[str, ToolBlock] = {}
         self.approvals: list[s.ApprovalRequested] = []
+        self.threadless: set[str] = set()  # requests of no thread (a held peer message): every thread shows them
         self.card: ApprovalCard | None = None
         self.reconcile_every = 3.0  # how often an open card is checked against the core's own list (D-045)
         self._reconciled = 0.0
@@ -618,11 +619,14 @@ class ExoApp(App):
             else:
                 self.update_older_tool(b.result.call_id, b.result.text(), status="error" if b.result.is_error else "done")
         elif isinstance(b, s.ApprovalRequested):
+            if ev.session is None:  # no live session could take it (D-026): the card stays across thread switches
+                self.threadless.add(b.request_id)
             self.approvals.append(b)
             self.show_approval()
             self.hint("approval")
         elif isinstance(b, s.ApprovalResolved):
             self.approvals = [a for a in self.approvals if a.request_id != b.request_id]
+            self.threadless.discard(b.request_id)
             if self.card is not None and self.card.req.request_id == b.request_id:
                 self.close_card()
         elif isinstance(b, s.SteerCancelled):
@@ -718,10 +722,12 @@ class ExoApp(App):
         """Before another thread opens: the pump drops this one's events from now on, so a turn.completed or
         approval.resolved for it would never arrive. Its turn state, card, queued steers and numbers go now. Its COST
         counts wait for a return to it: the core's session_total keeps counting the whole thread, so the '+' for an
-        unpriced call must stay with it (D-032). `to` gets back what this window last saw of it, if anything."""
-        if self.card is not None:  # it keeps its slot until gone (a new card reuses its id); no await after this one
-            await self.card.remove()
-        self.card, self.approvals = None, []
+        unpriced call must stay with it (D-032). `to` gets back what this window last saw of it, if anything.
+        A request of no thread stays: it is every thread's."""
+        if self.card is not None and self.card.req.request_id not in self.threadless:
+            await self.card.remove()  # it keeps its slot until gone (a new card reuses its id); no await after this one
+            self.card = None
+        self.approvals = [a for a in self.approvals if a.request_id in self.threadless]
         self.busy, self.turn_t0, self.running_tools, self.cur_id, self.question = False, 0.0, 0, None, None
         self.pending_steers.clear()
         self.agents.clear()
@@ -887,6 +893,7 @@ class ExoApp(App):
             if rows:
                 self.transcript.mount(Hero(rows))
             self.transcript.mount(Welcome(self.seat or "main", self.model, MEMORY_WORDS.get(self.memory, "")))
+        await self.restore_approvals()  # a request of no thread shows in a new thread too (D-026)
         self.refresh_status()
 
     # ------------------------------------------------------------ sending
@@ -1683,7 +1690,7 @@ class ExoApp(App):
     async def reconcile_approvals(self) -> None:
         """D-045: the core's list is the truth. A card whose request the core no longer holds (a missed
         approval.resolved, a restarted core, a replayed old request) is removed instead of lingering."""
-        if not (self.approvals or self.card) or not self.session:
+        if not (self.approvals or self.card):
             return
         now = time.monotonic()
         if now - self._reconciled < self.reconcile_every:
@@ -1692,30 +1699,34 @@ class ExoApp(App):
         # Only requests already shown when the list was asked for can be stale: one that arrives while the list is
         # in flight is newer than the answer and must not be closed by it.
         before = {a.request_id for a in self.approvals} | ({self.card.req.request_id} if self.card else set())
-        try:
-            resp = await self.client.send(s.ApprovalsList(session=self.session))
+        try:  # the whole list: a session filter would leave out the requests of no thread, which show here too
+            resp = await self.client.send(s.ApprovalsList())
         except Exception:
             return
         if not resp.ok:
             return
         gone = before - {a.get("request_id") for a in resp.result.get("approvals", [])}
         self.approvals = [a for a in self.approvals if a.request_id not in gone]
+        self.threadless -= gone
         if self.card is not None and self.card.req.request_id in gone:
             self.close_card()
 
     async def restore_approvals(self) -> None:
         """After an answer whose reply was lost: the core's list is the truth, so a request it still holds gets its
-        card back."""
+        card back. So does a request of no thread (D-026), which every thread shows."""
         try:
-            resp = await self.client.send(s.ApprovalsList(session=self.session))
+            resp = await self.client.send(s.ApprovalsList())
         except Exception:
             return
         if not resp.ok:
             return
         shown = {a.request_id for a in self.approvals} | ({self.card.req.request_id} if self.card else set())
         for a in resp.result.get("approvals", []):
-            if a.get("request_id") not in shown:
-                self.approvals.append(from_dict(s.ApprovalRequested, a, strict=False))
+            if a.get("session") not in (None, self.session) or a.get("request_id") in shown:
+                continue
+            if a.get("session") is None:
+                self.threadless.add(a.get("request_id", ""))
+            self.approvals.append(from_dict(s.ApprovalRequested, a, strict=False))
         if self.card is None:  # the answered card may still be on its way out, and the new one reuses its id
             for old in self.query(ApprovalCard):
                 await old.remove()

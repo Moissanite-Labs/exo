@@ -90,6 +90,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   by `src`.
 
 ### Changed
+- Web `/model` and `/default` (#146): the composer opens a model picker or sets the route without starting a model
+  turn, and a failed change keeps the line in the box. `/model` goes through the core's principal-only `models.set`
+  (`POST /api/chat/sessions/<id>/model`); `/default` saves through the loopback-only provider routes. A command the
+  page does not run, from the core's list (`/grants`) or the terminal client's own (`/help`, `/quit`; core plugin
+  names count only when the core lists them, as in the TUI), or a near typo of one, stays in the box with a note.
+  Until the page has the core's command names, every `/name` line that is not the page's or the terminal client's
+  waits, and the names are asked again with no limit (1 s doubling to every 30 s, and on each send, which does not
+  move the backoff on), so a long core restart never leaves the page sending core-only commands as model turns. The
+  asking ends once the core has answered both questions: its names (an older core that answers `unknown_command` or
+  `unsupported` for `commands.list` counts, with no names) and `guidance.enabled` (an unset key, which the core
+  answers with `not_found`, counts as on). The core's `guidance.enabled: false` still turns the guidance line off when
+  the core was down as the page loaded (or could not read the setting yet). `/tmp is full` and other lines close to
+  no command by the TUI's rule are still sent as messages (D-037). A `bad_model` or `bad_request` core error now
+  answers 400, not 502, on every route of the web plugin's `api.py` table (chat, tasks, schedule, feedback), not
+  only `/model`.
 - Command deny and reservation regexes also match a literal-word view of the command (#136, D-038
   amendment): common literal quoting (`'rm' -rf`, `r\m`, `$'rm'`, `$"rm"`) around a program or flag
   no longer bypasses those vetoes. A `$"..."` word is read as bash reads it, so `git push $"--force"`
@@ -288,11 +303,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - The web Chat view draws a peer, bus or job message as a card with its real author, never as a line the user
   typed: on reload and thread switch too, and the live `peer.message` and its stored message are one card. An
   approval with no thread (a held peer message that no live session could take) shows in every thread, as in the
-  terminal client, and allow now delivers it into a new thread instead of closing it as denied. A panel you dismiss
-  stays closed after the next panel event, a tab switch or a reconnect.
-- The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
-  the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
-  the card shows every argument of the call.
+  terminal client, and allow now delivers it into a new thread of the seat instead of closing it as denied. If that
+  thread cannot open, the message closes as not delivered and a notice says why. A panel you dismiss stays closed
+  after the next panel event, a tab switch or a reconnect.
 - `exo web` folded the core's replayed events into its state a second time after the core's stream dropped: message,
   tool call and task counts doubled, and a session stayed `waiting` after its approval was answered. Each event now
   counts once, and a core whose log is behind the page (a new `EXO_HOME`) starts the page over.
@@ -304,7 +317,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   such a request had no card and the turn waited for good. Leaving a thread drops its turn state, card, queued
   steer and numbers: the new thread no longer shows `LIVE`, `running tool` or steer mode once the old turn ends,
   and `COST` no longer shows the other thread's dollars. A thread opened again keeps its `COST` and the `+` for an
-  unpriced call. An answer the core refuses brings its card back. A
+  unpriced call. An answer the core refuses brings its card back. A card with no thread (a held peer message) now
+  stays in every thread, a new thread and a window started on one included. Before, the window's check against
+  `approvals.list` dropped it within seconds. A
   finished subagent whose calls had no price adds the `+` to `COST`, and its roll-up no longer moves `MEM`.
 - `exo update` no longer widens a `--plugins` install to every plugin. The installer records the list in
   `config.json` (`plugin_selection`) and a re-run without `--plugins`, such as the one `exo update` makes, keeps it.
@@ -312,7 +327,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   core loads every folder there. `--plugins all` goes back to every plugin. The re-run also refreshes the plugin copies
   in the Hermes home an earlier `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME` run used (one inside `~/.hermes`
   still needs `--hermes-home`). An install from before this change has no list on record, so its first update installs
-  every plugin: after it, re-run `install.sh --no-pip --plugins LIST` once to go back to yours.
+  every plugin: after it, re-run `install.sh --no-pip --plugins LIST` once to go back to yours. A list ignores spaces
+  and always keeps `exo-gate`, since without it the core refuses every tool call. A name given with `--plugins` that
+  matches no plugin stops the installer before it removes a plugin or writes config.json. A remembered name only
+  warns.
 - `scripts/deploy-site.sh` no longer tags and pushes a version after a failed deploy, which burned the version and
   exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
   refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
@@ -364,7 +382,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
-- Unix peer authentication (#109, D-060): principal clients ask the kernel who serves the socket before the
+- Unix peer authentication (#175, D-060): principal clients ask the kernel who serves the socket before the
   credential moves, and the core asks who connected before it stamps the principal. The credential file
   (`run/<socket>.principal.key`) is now a JSON launch record, so restart the core and every running `exo`, `exo web`
   and `exo chat` after updating: a new client refuses an old core (the page says to run `exo stop`), and an old
@@ -374,7 +392,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   instead of stalling the stream, also for a caller that keeps its own cursor (the exo-bus channel, so bus replies
   after it still go out). A joined terminal window never resends a turn or approval answer whose reply was
   lost; it says so and keeps the text. Under `hidepid` or `ProtectProc` clients are local, with the reason logged and
-  named in refusals.
+  named in refusals (`/rename` and the subagent verbs included, even when the core's stderr is closed).
 - Gate (#178, D-038): naming `opaque_exec` at `ask` or `deny` (a category line or a rule) no longer turns off the
   indirection floor. Before, `categories: {opaque_exec: deny}` let `bash -c 'git push origin main'` log. Only
   lowering `opaque_exec` to `log` or `allow` turns the floor off, as before.
@@ -441,6 +459,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `~/.exo/{policies,x}/default.yaml` were allowed local writes, so one tool call could rewrite the gate's policy
   or grants without a card. They are `store_write` now and ask the principal. Quoted and escaped braces stay
   literal, as in bash. The store checks have their own brace budget, so no secret-store outcome changes.
+- The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
+  the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
+  the card shows every argument of the call.
 
 ## [0.2.0] (egg) - 2026-10-13
 
