@@ -310,9 +310,10 @@ A command is `allow` only when every program in it is known and nothing is hidde
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
   `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
-  or `hatch run`, or inside an `if`, `for` or `while` body, classify as `credentials` just as the
-  bare command does. A runner followed by ordinary work (`uv run pytest -q`) is unchanged.
-  `uvx`, `pipx run` and `npx` stay `opaque_exec`.
+  or `hatch run`, inside an `if`, `for` or `while` body, or behind a wrapper below (`setsid env`,
+  `taskset 1 printenv GITHUB_TOKEN`), classify as `credentials` just as the bare command does. A
+  runner followed by ordinary work (`uv run pytest -q`) is unchanged. `uvx`, `pipx run` and `npx`
+  stay `opaque_exec`.
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and
@@ -324,12 +325,12 @@ A command is `allow` only when every program in it is known and nothing is hidde
   line asks, unlike the one-letter rule for the trusted programs above). The
   command-string forms are read like `bash -c`: `flock FILE -c CMD`,
   `script -c CMD` (`--command`), `watch CMD...` (the words joined, run through `sh -c`), the
-  shell-command of `tmux new-session`, `new-window`, `split-window`, `respawn-pane`,
-  `respawn-window` and `run-shell` in each command of a tmux command list and of `tmux -c` (the list
-  is split as tmux splits it: an argument ending in `;`, such as `';'` or `'sleep 3;'`, ends a
-  command and loses the `;`, one ending in `\;` does not), the argv of `screen [-dm] [-S name]` and
-  `screen -X screen`, and the template of `parallel CMD ::: args` with each argument appended or
-  put where `{}` stands (on the line itself, up to 16 distinct arguments and four times that
+  shell-command of `tmux new-session`, `new-window`, `split-window` (also by its default aliases
+  `splitp` and `split-pane`), `respawn-pane`, `respawn-window` and `run-shell` in each command of
+  a tmux command list and of `tmux -c` (the list is split as tmux splits it: an argument ending in
+  `;`, such as `';'` or `'sleep 3;'`, ends a command and loses the `;`, one ending in `\;` does
+  not), the argv of `screen [-dm] [-S name]` and `screen -X screen`, and the template of
+  `parallel CMD ::: args` with each argument appended or put where `{}` stands (on the line itself, up to 16 distinct arguments and four times that
   command's own length, each text sized before it is built; a nested `parallel` template is read
   alone, so the work stays linear in the line).
   The wrapper itself stays an `opaque_exec` part with `indirection`, so
@@ -453,10 +454,14 @@ link whose name does not say so.
 Known limit (#160). Some wrapper forms are not read and ask as `opaque_exec`, as they did before:
 BSD and macOS `script -q FILE CMD`, `screen -R` and `-RR` (they start the command when no session
 is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot`, `strace`,
-`prlimit`, `systemd-nspawn`, `ip netns exec`, and tmux's `if-shell`, `pipe-pane` and
-`display-popup`. Two are read but not fully: `systemd-run
---on-calendar` (and its other timer options) is read as running its command, not as `schedule`,
-and `parallel -S` carries no remote-host signal. Both still ask.
+`prlimit`, `systemd-nspawn`, `ip netns exec`, tmux's `if-shell`, `pipe-pane` and `display-popup`,
+a tmux command name cut short (`new-w`) and an alias set in a tmux config file. Two are read but
+not fully: `systemd-run --on-calendar` (and its other timer options) is read as running its
+command, not as `schedule`, and `parallel -S` carries no remote-host signal. Both still ask.
+Under a non-default `deny: [opaque_exec]`, a wrapped line whose inner command outranks
+`opaque_exec` (a wrapped env dump is `credentials`, a wrapped push is `vcs_push`) is decided by
+that inner category and asks instead of being denied, until D-075 (#126) makes a `deny:` entry
+match any part of the line.
 
 ## The store is credentials (D-038)
 

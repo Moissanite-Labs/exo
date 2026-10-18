@@ -14,7 +14,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   so a deny on `vcs_push` only asked; it is now `vcs_push` and denied. Until D-075 lands, a wrapped line is denied
   only when its inner command outranks `opaque_exec`; `setsid systemctl enable foo` under `deny: [schedule]` still
   asks. A tmux command list is split at an argument ending in `;` (`'sleep 3;'`), not only at a `;` word, so
-  `tmux new-session -d 'sleep 3;' new-window 'git push origin main'` is `vcs_push` too. The wrapper keeps the
+  `tmux new-session -d 'sleep 3;' new-window 'git push origin main'` is `vcs_push` too, and tmux's default
+  aliases `splitp` and `split-pane` are read as `split-window`. An environment dump behind a wrapper
+  (`setsid printenv GITHUB_TOKEN`, `taskset 1 env`, `xvfb-run -a env`) is `credentials` like the bare command
+  (#155), so `deny: [credentials]` denies it; it was `opaque_exec` and asked. The wrapper keeps the
   `indirection` floor, so a line that asked still asks; `chroot`, `nsenter`, `unshare` and `systemd-run` add a
   signal like `sudo`. A command the gate cannot read (`setsid $CMD`, `tmux send-keys`, `parallel` reading its
   input) stays `opaque_exec`. A deny on `opaque_exec` itself (`deny:`, a category line or a rule) now asks for
