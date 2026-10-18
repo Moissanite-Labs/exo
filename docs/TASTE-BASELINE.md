@@ -154,7 +154,23 @@ step 3), every value item must also pass:
    - the gate's internal-name sweep (seat names, registry names, agent names, home paths, internal ids,
      `policies/internal-names.txt`), reusing the builder from `docs/GATE.md` "The outbound scrub";
    - a deny list made from the source store itself: the titles, ids and aliases of every person,
-     relationship, entity and project node, and every email address and URL host found in the store;
+     relationship, entity and project node, the principal's name and short name from the `PRINCIPAL.md`
+     heading, and every email address, email domain and URL host found in the store or in an onboarding
+     answer. An address, domain or host matches as written (or as a subdomain), so `me.com` does not match
+     "Show me commands". The heading's initial plus surname fails only as a handle: after `@` or a host's
+     `/`, or joined to digits (`github.com/alee`, `alee42`), because it is often a plain word ("Pat Rice"
+     gives "price");
+   - the principal's own words, which hold an item for review, a value item too: the words of the onboarding
+     answers to the name, role and organisation questions, as `person/identity` (or `person/identity-said`) and
+     the ledger record them, the name answer's name words written as one ("Quill Varden" gives `quillvarden`),
+     and the labels of every email domain other than a public mail service (`gmail`, `outlook`, `web` and the
+     like name no organisation). They never fail an item, because an answer also holds generic words ("team",
+     "performed"). The built-in house soul is not checked against them. A soul the principal supplies is, and a
+     hit there fails, since a soul cannot be held. A name that is a plain word, such as Mark, holds an item only
+     when it is capitalised away from a sentence start, and only the heading and the name answer give one: a
+     plain word in the role answer, such as Python, is no name. These words and the heading name also match when
+     joined to another word by `-` or `_` or to digits, as in a handle (`mark42`) or a repo name. The initial
+     plus surname from the name answer (`qvarden`) fails as a handle, as the heading's does;
    - email addresses, URLs other than a short allow list of public docs, and capitalised words that are
      not in a plain dictionary (likely names), which are held for review rather than failed (failed, for
      value items);
@@ -700,6 +716,17 @@ How wave 1 settles details this page left open:
   item and fails a value item, and the fix is to reword or to allow the word knowingly.
 - **Hold.** A held item stays out of `items.jsonl` and is listed on the "Held" page of `review/REVIEW.md` with its
   reason. A fail anywhere (any item, or the soul) stops the whole export.
+- **The principal's own name and organisation.** Onboarding writes them only into the body of `person/identity`,
+  whose title stays "Who the principal is", so the check reads the answers there as well as the `PRINCIPAL.md`
+  heading. The heading name and the email domains are exact, so they fail. A part of the heading that still holds
+  the template's `<name>` or `<short name>` is skipped, and the rest counts. Words from the free-text answers only
+  hold, a value item too, because an answer also holds generic words (a role, a verb). A store that was only
+  onboarded still has the template's heading, so the name answer gives the name written as one word (`quillvarden`,
+  held) and the initial plus surname (`qvarden`, failed as a handle). Words of the question itself, plain words,
+  numbers and plain compounds ("full-time") are skipped, a contraction ("don't") is no word at all, and a possessive
+  counts as its name. The answers are read from the ledger too (read only), because the node withholds an answer
+  that looks like a contact detail or a secret, such as one with a phone number. A word that should ship goes in
+  `policies/house-allow.txt`.
 - **The decision-model pass.** `--decision` asks the `decision` role one yes or no question per item that passed
   the rules. A yes holds the item. A value item is also held when the model cannot be asked. It is never asked
   about an item the rules failed, so it cannot pass one.
