@@ -186,7 +186,8 @@ def _diff(path: str, old: str | None, new: str | None) -> str:
 
 
 def read_regular(p: Path, cap: int) -> bytes:
-    """Bytes of a regular file (links followed). A FIFO or device is refused before it is opened."""
+    """Bytes of a regular file (links followed). A FIFO or device is refused before it is opened. A file over
+    ``cap`` bytes is refused, also one that grows past it after ``fstat``: a cut copy would be written back whole."""
     if not p.is_file():
         raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
     with open(os.open(p, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)), "rb") as f:  # a FIFO swapped in: no block
@@ -195,7 +196,10 @@ def read_regular(p: Path, cap: int) -> bytes:
             raise ToolError(f"{p} is not a regular file (a FIFO, socket or device)")
         if st.st_size > cap:
             raise ToolError(f"{p} is {st.st_size:,} bytes, over the {cap:,}-byte limit; use grep, or sed -n in bash")
-        return f.read(cap)
+        raw = f.read(cap + 1)
+        if len(raw) > cap:
+            raise ToolError(f"{p} grew past the {cap:,}-byte limit while it was read; use grep, or sed -n in bash")
+        return raw
 
 
 def write_atomic(p: Path, text: str) -> None:

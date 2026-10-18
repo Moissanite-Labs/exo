@@ -240,8 +240,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   write to a symlinked file is refused with the link's target named, instead of replacing the link with a regular
   file and leaving the target unedited. `read_file`, `edit_file`, `apply_patch` and `grep` refuse or skip FIFOs and
   devices, which hung the core (cancel could not stop it) or read `/dev/zero` until memory ran out. All but `grep`
-  refuse files over 50 MB. `code_find` passes the question to jg after `--`, so a question such as
-  `- --include-sensitive` can no longer turn off jg's sensitive-file filter (docs/TOOLS.md).
+  refuse files over 50 MB, also a file that grows past that while it is read. `code_find` passes the question to
+  jg after `--`, so a question such as `- --include-sensitive` can no longer turn off jg's sensitive-file filter
+  (docs/TOOLS.md).
 - Streamed `bash` output no longer leaks a known key split between two reads. The output went out per 64 KiB read
   and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
   halves. A read now holds back an ending that could start a key until the next read, and the stream matches
