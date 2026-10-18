@@ -22,7 +22,10 @@ under `policies/`. Stdlib only; the YAML reader is a small subset parser (see `p
 """
 from __future__ import annotations
 
+import bisect
+import contextvars
 import fnmatch
+import functools
 import hashlib
 import json
 import os
@@ -30,7 +33,7 @@ import re
 import shlex
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, TypeVar, cast
 from urllib.parse import urlparse
 
 REVERSIBILITY = ("reversible", "costly", "irreversible")
@@ -244,6 +247,7 @@ class _Word:
     quoted: bool = False
     glob: bool = False         # an unquoted * or ?, or a [ or { after the first character
     started: bool = False
+    raw: str = ""              # the source text of the word, quotes kept
     locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
 
@@ -278,10 +282,12 @@ class _Lexer:
     def run(self, closer: bool = False) -> list:
         s, toks = self.s, []
         state = {"w": _Word(), "delim": None}
-        depth = 0
+        depth, start = 0, -1              # start: where the current word's source text begins
 
         def flush():
+            nonlocal start
             w = state["w"]
+            w.raw, start = s[start:self.i], -1
             if w.started:
                 if state["delim"] is not None:
                     hd = _Heredoc(w.text, state["delim"], w.quoted, w.dollar_quote)
@@ -294,6 +300,8 @@ class _Lexer:
 
         while self.i < len(s):
             w = state["w"]
+            if start < 0:
+                start = self.i
             ch, nxt = s[self.i], s[self.i + 1:self.i + 2]
             if ch in " \t\r":
                 flush()
@@ -333,7 +341,7 @@ class _Lexer:
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 if w.started and w.text.isdigit() and not w.quoted:
-                    state["w"] = _Word()       # an fd number belongs to the operator
+                    state["w"], start = _Word(), -1    # an fd number belongs to the operator
                 else:
                     flush()
                 op = next(o for o in _REDIR_OPS if s.startswith(o, self.i))
@@ -1316,7 +1324,7 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     if c.category == "credentials":  # a secret beside an irreversible command keeps that command's weight
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
     segs = [[w.text for w in k.words] for k in cmds if k.words]
-    hit = _shell_credential_hit(cmd, segs)
+    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
     if hit and c.category != "credentials":
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
         signals = c.signals
@@ -1454,22 +1462,219 @@ def _dynamic_secret_paths() -> list[str]:
     return paths
 
 
+_BRACE_CAP = 1024
+_BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_cost)
+_BRACE_SEQ = re.compile(r"([-+]?\d+)\.\.([-+]?\d+)(?:\.\.([-+]?\d+))?|([A-Za-z])\.\.([A-Za-z])(?:\.\.([-+]?\d+))?")
+_brace_left: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_brace_left", default=None)
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+class _BraceLimit(Exception):
+    pass
+
+
+def _brace_cost(word: str) -> int:
+    """What one expanded word takes from the budget: one, once more per 64 characters, four times for a glob."""
+    return (1 + len(word) // 64) * (4 if re.search(r"[*?\[]", word) else 1)
+
+
+def _brace_budget(fn: _F) -> _F:
+    """Give ``fn`` one _BRACE_BUDGET shared by every word it brace-expands, nested calls included."""
+    @functools.wraps(fn)
+    def run(*a: Any, **kw: Any) -> Any:
+        if _brace_left.get() is not None:
+            return fn(*a, **kw)
+        token = _brace_left.set([_BRACE_BUDGET])
+        try:
+            return fn(*a, **kw)
+        finally:
+            _brace_left.reset(token)
+    return cast(_F, run)
+
+
+def _brace_seq(s: str) -> list[str] | None:
+    """The members of a {x..y[..n]} sequence (``s`` is the text inside the braces), or None."""
+    m = _BRACE_SEQ.fullmatch(s)
+    if not m:
+        return None
+    if any(len(t) > 18 for t in m.group(1, 2, 3, 6) if t):
+        raise _BraceLimit
+    x, y = (int(m[1]), int(m[2])) if m[1] else (ord(m[4]), ord(m[5]))
+    step = abs(int(m[3] or m[6] or 1)) or 1
+    if abs(y - x) // step >= _BRACE_CAP:
+        raise _BraceLimit
+    vals = range(x, y + 1, step) if x <= y else range(x, y - 1, -step)
+    if not m[1]:
+        return [chr(v) for v in vals]
+    # a leading zero on either bound pads every member to the longer bound, as bash does: {007..1000..993}
+    width = max(len(m[1]), len(m[2])) if any(re.match(r"-?0\d", t) for t in m.group(1, 2)) else 0
+    if width and not -2**31 <= min(x, y) <= max(x, y) < 2**31:
+        raise _BraceLimit    # bash prints a padded member as a C int, so it wraps past int32
+    return [f"{v:0{width}d}" for v in vals]
+
+
+def _brace_words(tok: str) -> list[str] | None:
+    """``tok`` and the words bash brace expansion makes of it, read as bash's brace_gobbler does: a group
+    ends at the first top-level `}` after a comma or `..`; quoted or escaped braces, ${...} and $(...) do
+    not expand; a group without a comma is a {x..y[..n]} sequence or literal. None past _BRACE_CAP words (fewer
+    for a long word: a million characters in all), past what is left of the call's _BRACE_BUDGET, or past 32
+    levels of nesting: callers count that as a hit."""
+    if "{" not in tok:
+        return [tok]
+    left = _brace_left.get()
+    cap = max(1, min(_BRACE_CAP, (1 << 20) // len(tok), _BRACE_CAP if left is None else left[0] // _brace_cost(tok)))
+    ev: list[tuple[int, str]] = []   # unquoted { } , and `..`; `$` is the brace of ${
+    i, quoted = 0, ""
+    while i < len(tok):
+        c = tok[i]
+        if c == "\\" and quoted != "'":
+            i += 1
+        elif c == "$" and tok.startswith("{", i + 1) and quoted != "'":
+            if not quoted:
+                ev.append((i + 1, "$"))
+            i += 1
+        elif quoted:
+            quoted = "" if c == quoted else quoted
+        elif c in "'\"`":
+            quoted = c
+        elif c in "$<>" and tok.startswith("(", i + 1):
+            depth, i = 0, i + 1
+            while i < len(tok):
+                if tok[i] == "\\":
+                    i += 1
+                elif tok[i] in "'\"":
+                    j = tok.find(tok[i], i + 1)
+                    i = len(tok) if j < 0 else j
+                else:
+                    depth += {"(": 1, ")": -1}.get(tok[i], 0)
+                    if not depth:
+                        break
+                i += 1
+        elif c in "{},":
+            ev.append((i, c))
+        elif c == "." and tok.startswith(".", i + 1) and not tok.startswith("}", i + 2):
+            ev.append((i, "."))
+        i += 1
+    # Where each { closes: a group's level is the brace depth since it opened, never below zero; it closes
+    # at a `}` met at level 0 once a comma or `..` was met at level 0. Groups at level 0 share a bucket.
+    match: dict[int, int] = {}
+    buckets: list[list] = []          # [depth, still open with no comma yet, will close at the next `}`]
+    depth = 0
+    for q, k in ev:
+        top = buckets[-1] if buckets and buckets[-1][0] == depth else None
+        if k in "{$":
+            depth += 1
+            if k == "{":
+                buckets.append([depth, [q], []])
+        elif k in ",.":
+            if top:
+                top[2] += top[1]
+                top[1] = []
+        else:
+            depth -= 1
+            if top:
+                match.update((f, q) for f in top[2])
+                top[0], top[2] = depth, []
+                if not top[1]:
+                    buckets.pop()
+                elif len(buckets) > 1 and buckets[-2][0] == depth:
+                    lo = buckets[-2]
+                    big, small = (lo[1], top[1]) if len(lo[1]) >= len(top[1]) else (top[1], lo[1])
+                    big += small
+                    lo[1] = big
+                    buckets.pop()
+    pos = [q for q, _ in ev]
+
+    def expand(a: int, b: int, level: int) -> list[str]:     # the words of tok[a:b]
+        if level > 32:
+            raise _BraceLimit
+        out, cur = [""], a
+        while True:
+            n, k, p = 0, bisect.bisect_left(pos, cur), -1
+            while k < len(ev) and ev[k][0] < b:
+                q, kind = ev[k]
+                k += 1
+                if kind == "{" and not n:
+                    lone = (q == cur or tok[q - 1] in " \t\n") and (q + 1 >= b or tok[q + 1] in " \t\n}")
+                    if not lone and match.get(q, b) < b:
+                        p = q
+                        break
+                elif kind in "{$":
+                    n += 1
+                elif kind == "}" and n:
+                    n -= 1
+            if p < 0:
+                return [o + tok[cur:b] for o in out]
+            m = match[p]
+            if "," in re.sub(r"\\.", "", tok[p + 1:m], flags=re.S):
+                alts, start, n = [], p + 1, 0
+                for q, kind in ev[k:bisect.bisect_left(pos, m)] + [(m, ",")]:
+                    if kind in "{$":
+                        n += 1
+                    elif kind == "}" and n:
+                        n -= 1
+                    elif kind == "," and not n:
+                        alts += expand(start, q, level + 1)
+                        start = q + 1
+                        if len(alts) > cap:
+                            raise _BraceLimit
+            else:
+                alts = _brace_seq(tok[p + 1:m]) or [tok[p:m + 1]]
+            if len(out) * len(alts) > cap:
+                raise _BraceLimit
+            out = [o + tok[cur:p] + x for o in out for x in alts]
+            cur = m + 1
+
+    try:
+        words = expand(0, len(tok), 0)
+    except _BraceLimit:
+        return None
+    if left is not None and len(words) > 1:
+        left[0] -= sum(map(_brace_cost, words))
+    return list(dict.fromkeys([tok] + words))
+
+
+def _expand_words(words: list[str]) -> list[str]:
+    """_expand_text of each word, in one pass when no word holds a newline."""
+    if not any("~" in w or "$" in w for w in words):
+        return words
+    out = [] if any("\n" in w for w in words) else _expand_text("\n".join(words)).split("\n")
+    return out if len(out) == len(words) else [_expand_text(w) for w in words]
+
+
+def _real(path: str, memo: dict[str, str]) -> str:
+    """os.path.realpath of a normalized absolute path; ``memo`` shares the parent folders' lookups."""
+    if path not in memo:
+        d, base = os.path.split(path)
+        if base and d.count("/") >= 64 and d not in memo:
+            memo[d] = os.path.realpath(d)      # a deep folder is looked up whole, once
+        memo[path] = (path if not base else os.path.realpath(path) if os.path.islink(path)
+                      else os.path.join(_real(d, memo), base))
+    return memo[path]
+
+
 def is_sensitive_path(path: str) -> bool:
     """True when ``path`` names one of the secret stores (ssh, cloud and netrc credentials, Exo's key
-    stores, signing keys, token and client-secret files, .env files). Never reads the file."""
-    path = _expand_text(str(path or "")).strip()
-    if not path:
-        return False
-    if path.endswith(".pub"):
-        return False  # public keys are meant to be shared
-    if _SENSITIVE_PATH.search(path.replace("\\", "/")):
+    stores, signing keys, token and client-secret files, .env files). Never reads the file. A brace set
+    counts when the path or any word bash expands it to names a store, or when it expands past the cap."""
+    words = _brace_words(str(path or ""))
+    return words is None or _sensitive_words(words)
+
+
+def _sensitive_words(words: list[str]) -> bool:
+    """is_sensitive_path for any of ``words``, which are already brace-expanded."""
+    words = [w.strip() for w in _expand_words(words)]
+    words = [w for w in words if w and not w.endswith(".pub")]   # public keys are meant to be shared
+    if any(_SENSITIVE_PATH.search(w.replace("\\", "/")) for w in words):
         return True
-    try:
-        cands = {os.path.abspath(path), os.path.realpath(path)}
-    except (OSError, ValueError):
-        cands = {path}
-    for root in _dynamic_secret_paths():
-        roots = {os.path.abspath(root), os.path.realpath(root)}
+    roots = {r for root in _dynamic_secret_paths() for r in (os.path.abspath(root), os.path.realpath(root))}
+    memo: dict[str, str] = {}
+    for w in words:
+        try:
+            a = os.path.abspath(w)
+            cands = {a, os.path.realpath(w) if ".." in w.split(os.sep) or a.startswith("//") else _real(a, memo)}
+        except (OSError, ValueError):
+            cands = {w}
         if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots):
             return True
     return False
@@ -1477,22 +1682,43 @@ def is_sensitive_path(path: str) -> bool:
 
 def _glob_hits_secret(tok: str) -> bool:
     """A shell glob that could expand to a secret store. Bare `*` or `*.json` do not count; the last
-    component needs three literal characters, or the directory must itself be a secret store."""
-    tok = _expand_text(tok)
-    if not re.search(r"[*?\[]", tok):
+    component needs three literal characters, or the directory must itself be a secret store. Brace sets
+    are expanded first, as bash does; a hit on the word or on any word it expands to counts."""
+    words = _brace_words(tok)
+    return words is None or _glob_words(words)
+
+
+def _glob_words(words: list[str]) -> bool:
+    """_glob_hits_secret for any of ``words``, which are already brace-expanded."""
+    words = [w for w in _expand_words(words) if re.search(r"[*?\[]", w)]
+    if not words:
         return False
-    d, _, base = tok.rpartition("/")
-    stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     home = _home()
     samples = [os.path.join(home, x) for x in _SENSITIVE_SAMPLES] + [os.path.join(_exo_home(), "keys", "seat.key"),
                                                                        _dynamic_secret_paths()[1]]
+    return any(_glob_word(w, home, samples) for w in words)
+
+
+def _glob_word(tok: str, home: str, samples: list[str]) -> bool:
+    d, _, base = tok.rpartition("/")
+    stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
     in_store_dir = bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
     if len(stem) < 3 and not in_store_dir:
         return False
-    pats = [tok] if tok.startswith("/") else [tok, "*/" + tok]
-    samples += list(_SENSITIVE_SAMPLES)
-    return any(fnmatch.fnmatch(x, pat) for x in samples for pat in pats)
+    head, tail = re.split(r"[*?\[]", tok, maxsplit=1)[0], re.split(r"[*?\[\]]", tok)[-1]   # literal: narrow first
+    xs = [x for x in samples + list(_SENSITIVE_SAMPLES)
+          if x.endswith(tail) and (x.startswith(head) if tok.startswith("/") else head in x)]
+    if not xs:
+        return False
+    rx = _glob_rx(tok)
+    return any(rx.match(x) for x in xs)
+
+
+@functools.lru_cache(maxsize=4096)
+def _glob_rx(tok: str) -> re.Pattern[str]:
+    """fnmatch's pattern for ``tok``, also matching after any `/` when ``tok`` is relative."""
+    return re.compile(("" if tok.startswith("/") else r"(?s:.*/)?") + fnmatch.translate(tok))
 
 
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files and
@@ -1570,13 +1796,16 @@ _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "di
                   "src", "dest", "destination")
 
 
+@_brace_budget
 def args_sensitive(args: Mapping) -> str:
     """The first path-like tool argument that names a secret store, or ''."""
     for k in _PATH_ARG_KEYS:
         v = args.get(k)
         for item in (v if isinstance(v, (list, tuple)) else [v]):
-            if isinstance(item, str) and item and (is_sensitive_path(item) or _glob_hits_secret(item)):
-                return item
+            if isinstance(item, str) and item:
+                words = _brace_words(item)         # expanded once for both checks
+                if words is None or _sensitive_words(words) or _glob_words(words):
+                    return item
     return ""
 
 
@@ -1608,9 +1837,10 @@ def _env_dump(argv: list[str]) -> bool:
     return False
 
 
-def _shell_credential_hit(cmd: str, segs: list[list[str]]) -> str:
-    """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a
-    redirection or a quoted `bash -c` string), the Keychain, or a bare environment dump. '' if nothing."""
+def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | None = None) -> str:
+    """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a brace set
+    in the source text ``raws`` of a word or redirection target, or a quoted `bash -c` string), the Keychain,
+    or a bare environment dump. '' if nothing."""
     text = _expand_text(cmd)
     if _KEYCHAIN.search(text):
         return "keychain access"
@@ -1629,9 +1859,32 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]]) -> str:
             return "keychain access"
     for p in pieces:
         p = re.sub(r"^[\w-]+=", "", p) if "=" in p and not p.startswith("=") else p
-        if p and (is_sensitive_path(p) or _glob_hits_secret(p)):
+        if p and (_sensitive_words([p]) or _glob_words([p])):
             return p
+    groups: dict[str, list[str]] = {}         # bash expands only unquoted braces: expand, then dequote
+    for raw in dict.fromkeys(raws or []):
+        words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
+        if words is None:
+            return raw
+        if len(words) > 1 or '$"' in raw:
+            groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for w in words[1:] or words
+                           for d in _dequote(w)]
+    words = [w for ws in groups.values() for w in ws]
+    if words and (_sensitive_words(words) or _glob_words(words)):
+        return next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
     return ""
+
+
+def _dequote(word: str) -> list[str]:
+    """The words the lexer reads from one brace-expanded source word, quotes removed. A `$"..."` is also read
+    as the plain "..." bash gives it without a message catalog."""
+    if not re.search(r"[\\'\"$`<>#]", word):
+        return [word]
+    out: list[str] = []
+    for src in dict.fromkeys((word, word.replace('$"', '"'))):
+        toks = _Lexer("\\" + src if src.startswith("#") else src).run()
+        out += [w.text for kind, w in toks if kind == "w"]
+    return out
 
 
 def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
@@ -1705,6 +1958,7 @@ def _args_of(action: Any) -> tuple[str, dict]:
     return str(tool), dict(args or {})
 
 
+@_brace_budget
 def classify(action: Any) -> Classification:
     """Classify one tool call from its name and arguments. Pure; never raises on odd args."""
     tool, args = _args_of(action)
