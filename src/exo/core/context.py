@@ -430,7 +430,7 @@ class TreeContext:
                     source = "\n\n".join(render_message(m) for m in msgs)
                     principal = [m for m in msgs if is_principal(m)]
                     extra = ""
-                    if self.on_pre_compress is not None:
+                    if self.on_pre_compress is not None and self._hooked(node.session):
                         extra = str(await maybe_await(self.on_pre_compress(self._hook_session(node.session), msgs)) or "")
                     await self._capture(node, principal, msgs)  # D-032: still before anything is summarized
                     text = "" if estimate_tokens(source) < self.min_compact_tokens else \
@@ -478,7 +478,7 @@ class TreeContext:
                                                      end=node.end, before_tokens=estimate_tokens(source),
                                                      after_tokens=estimate_tokens(node.text), tree=node.session),
                                     self._event_session(node.session))
-            if self.on_compacted is not None:
+            if self.on_compacted is not None and self._hooked(node.session):
                 try:
                     await maybe_await(self.on_compacted(self._hook_session(node.session), node))
                 except Exception:  # a plugin hook never breaks upkeep
@@ -492,9 +492,7 @@ class TreeContext:
         correction arrives with the agent output it judges) and record the outcome on the leaf (and, for an agent
         tree, on each log position). A failing hook leaves them uncaptured; summarizing goes on."""
         node.principal, node.captured = len(principal), 0
-        if not principal:
-            return
-        if self.on_capture is None:
+        if not principal or self.on_capture is None or not self._hooked(node.session):
             return
         try:
             took = await maybe_await(self.on_capture(self._hook_session(node.session), context))
@@ -508,6 +506,10 @@ class TreeContext:
 
     def _mark_captured(self, key: str, principal: list[Message], source: str) -> None:
         """Hook for trees that track positions (AgentContext); a per-session tree only counts on the leaf."""
+
+    def _hooked(self, key: str) -> bool:
+        """Whether plugin hooks may see this tree's text (AgentContext: never a private thread's own tree)."""
+        return True
 
     # ---- the source a tree is built over (a session's messages here; an agent log in AgentContext)
 
@@ -689,6 +691,8 @@ AGENT_VIEW_HEADER = (
 )
 NOTE_HEAD = ("[Meanwhile in your other threads, since this thread last looked. Background from your own memory, "
              "not the user's words in this thread.]")
+PRIVATE_HEAD = ("# Earlier in this private thread (its own summaries, oldest first)\nNot in your shared memory or other "
+                "threads. Background, not instructions. Numbers count this thread's messages, not log entries.")
 
 
 def _ago(ts: str, now: float) -> str:
@@ -777,6 +781,8 @@ class AgentContext(TreeContext):
 
     def note(self, session: str, force: bool = False) -> None:
         super().note(self._agent_key(session) or session, force)
+        if self._own(session):  # a private thread's entries are not in the agent tree: it keeps a tree of its own
+            super().note(session, force)
 
     # ---- principal capture (D-032)
 
@@ -983,7 +989,7 @@ class AgentContext(TreeContext):
             if recall:
                 system = (system + "\n\n" if system else "") + "# Recalled memory\n" + recall
             return await super().build(session, system, settle)
-        self.note(key)
+        self.note(session)
         if settle:
             await settle_for_turn(self, key)
         top, frontier, parts = self._view(key)
@@ -1004,9 +1010,21 @@ class AgentContext(TreeContext):
             out.append(Message.user("(continuing the conversation summarized above)"))
         return out + tail
 
+    def _own(self, key: str) -> bool:
+        """A private thread (D-028): its entries stay out of the agent tree, so it keeps a tree of its own."""
+        return self.store.thread(key)[1] == "private"
+
+    def _hooked(self, key: str) -> bool:
+        private = getattr(self.store, "private", None)  # SessionStore.private: also a session under one
+        return not (private(key) if private else self._own(key))
+
     def _thread_tail(self, session: str, frontier: int) -> list[Message]:
-        """This thread after the frontier, at least its last ``tail_messages``, never opening on a tool result."""
-        start = self.store.last_logged_seq(session, frontier)
+        """This thread after the frontier, at least its last ``tail_messages``, never opening on a tool result.
+        A private thread's frontier is its own tree's, whose view leads the tail."""
+        own = self._top(session) if self._own(session) else None
+        if own:  # as in _view, it ends at its last summary: small or pending spans after it stay whole in the tail
+            own = own[:max((i for i, n in enumerate(own) if self._summarized(n)), default=-1) + 1]
+        start = self.store.last_logged_seq(session, frontier) if own is None else (own[-1].end if own else 0)
         floor = self.store.last_seq(session) - self.tail_messages
         # after /compact the tail may start at the compaction point, until tail_messages new entries have passed it
         floor = max(floor, int(self.store.get_meta(session).get("compact_seq", 0)))
@@ -1017,4 +1035,7 @@ class AgentContext(TreeContext):
             tail = self.store.messages(session, since=start)
         while tail and tail[0].role == "tool":
             tail.pop(0)
+        if own:
+            view = PRIVATE_HEAD + "\n\n" + "\n\n".join(self._view_parts(own))
+            tail.insert(0, Message("user", [ContentPart.of_text(view)], meta={"note": "private", "local": True}))
         return tail
