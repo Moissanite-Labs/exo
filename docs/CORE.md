@@ -37,7 +37,9 @@ stale without a failing test. After a schema change, run `python -m exo.protocol
 ## Where things live
 
 - `EXO_HOME` defaults to `~/.exo`.
-- A principal store defaults to `$EXO_HOME/principals/<id>`. Any directory works with `--root`.
+- A principal store defaults to `$EXO_HOME/principals/<id>`. Any directory works with `--root`. `exo init --root`
+  and `exo import-store --root` record theirs in config `principals.<id>`, and `exo.store.principal_root` maps the
+  id to it for every reader (store commands, `exo memory verify`, exo-memory, learning, the gate).
 - Keys default to `$EXO_HOME/keys/<name>.key`, with the public key in `<name>.pub`.
 - The ledger of a store is `<store>/ledger.sqlite`.
 - The empty store template is `templates/principal-store/`. Wheels carry it inside the package.

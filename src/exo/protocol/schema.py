@@ -10,7 +10,8 @@ The interface started fixed at wave 1 and has grown additively since. Stdlib onl
   defaults, or new types. Never rename or remove.
 - Commands are strict: unknown type or unknown field is rejected.
 - Events decode strictly by default; clients pass ``strict=False`` to accept
-  newer servers (unknown fields dropped, unknown types kept as raw dicts).
+  newer servers (unknown fields dropped, unknown types kept as raw dicts, unknown Literal values kept as
+  sent). ``Client.events`` skips and logs an event it still cannot decode, and the feed goes on.
 """
 
 from __future__ import annotations
@@ -89,7 +90,7 @@ class SessionInfo:
     created: str = ""
     updated: str = ""
     message_count: int = 0
-    status: str = ""  # set by session.list: "live" while a turn runs, else "idle"
+    status: str = ""  # set by session.list, session.get and session.resume: "live" while a turn runs, else "idle"
     agent: str | None = None  # the agent (seat) whose one memory this thread belongs to (D-028)
     kind: str = ""  # thread, private, scheduled or subagent; empty for a session outside any agent
 

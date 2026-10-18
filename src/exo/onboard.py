@@ -489,6 +489,8 @@ def _activate(pid: str, root: Path | None = None, force: bool = False) -> bool:
     if root is not None and Path(root).resolve() != (cfg.home / 'principals' / pid).resolve():
         cfg.set(f'principals.{pid}', str(Path(root).resolve()))
         changed = True
+    elif root is not None and cfg.unset(f'principals.{pid}'):  # --root at the default: the id names this store
+        changed = True
     if changed:
         cfg.save()
     return changed
