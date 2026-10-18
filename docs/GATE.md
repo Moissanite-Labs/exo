@@ -80,10 +80,11 @@ The core never takes the answerer from the `approval.respond` body. The transpor
 
 - **principal**: the terminal client's own in-process core, the web client, or a socket client
   that sends the core's per-launch principal credential in the `X-Exo-Principal` header. The
-  credential is a random token the core writes beside its socket when it starts
+  credential is a random token in a launch record the core writes beside its socket when it starts
   (`$EXO_HOME/run/exod.principal.key` or `run/agent-<seat>.principal.key`, mode 0600) and deletes
   when it stops. A credential sent from a process that is a child, grandchild and so on of the
-  core (a bash tool call or a background job) does not count.
+  core (a bash tool call or a background job) does not count, and neither does one from another
+  user or from a process the kernel cannot name (see "Unix peer authentication" below).
 - **local**: everything else on the socket (a tool subprocess, a channel, another daemon), and
   every stdio or TCP connection.
 
@@ -92,6 +93,75 @@ A principal connection answers as the principal; `client` is only a label (`prin
 empty `client`, `principal`, `exo-tui` or any other name from a local connection is refused as
 `forbidden`, so a tool that speaks the protocol cannot answer its own approval. The answerer shows
 in `approval.resolved` as `by`.
+
+### Unix peer authentication (D-060)
+
+Both ends of a principal connection on the Unix socket ask the kernel who is on the other end of that
+one connection before the credential moves. Code: `src/exo/principal.py` and `src/exo/peerauth.py`.
+
+| Platform | Peer user | Peer process | Process start and parent |
+|---|---|---|---|
+| Linux | `SO_PEERCRED` | `SO_PEERCRED` | `/proc/<pid>/stat` (start ticks, with the boot id) |
+| macOS | `LOCAL_PEERCRED` (the uid `getpeereid` reports) | `LOCAL_PEERPID` | `proc_pidinfo(PROC_PIDTBSDINFO)` |
+| anything else | none | none | none: principal mode is refused |
+
+The launch record is one JSON object: `v`, `token`, `pid`, `uid`, `start` (the core's process start
+identity) and `instance` (the launch id `hello` also reports). It is written atomically, before the
+socket accepts, so a client never reads a missing record or a crashed core's. A core that cannot read its
+own process entry warns in its log and writes an empty `start`, which clients refuse with that reason.
+
+**The client, before sending.** A principal client (`exo`, a joined window, `exo chat`, the web)
+connects, then checks that connection: the kernel's peer uid is this user, its pid is the record's
+pid, and that process's start identity equals the record's. The record is read through one
+descriptor with `O_NOFOLLOW`; it must be a regular file with one link, owned by this user, with no
+group or other access, at most 4 KiB, and a v1 record. Only then does the token from that record go
+on that same connection, and only on `POST /command`. Any failure is a connection error
+(`PrincipalRefused`, a `ConnectError`) that names the reason, with no byte written: a replaced socket, a
+stale record (a dead core, or a reused pid), a symlink, a shared file, a record from a core that predates
+D-060, a core in another PID namespace (the kernel names pid 0), or a platform with no peer call. The web
+page shows that reason with a restart hint (`exo stop`, then reopen the page) instead of "not reachable".
+There is no fallback to a credential-less or unchecked principal mode.
+
+**The core, before accepting.** The core takes the kernel's peer pid and uid, and that pid's process
+start identity, when it accepts the connection, before reading a byte (one request per connection, so
+this is per request too). The caller is the principal only when the token matches, the uid is this
+user, that pid still names the same process (the start identity taken at accept, and a start before
+the accept, so a pid reused after the accept fails), and its whole parent chain reads cleanly up to pid 1 without
+passing the core. A chain that cannot be read is treated as the core's own tool tree. The tree check
+runs when the request is read. The dead-peer check, not the parent walk, closes one detach route on
+Linux: a tool child that connects, then exits and leaves the connection to an orphan, is local,
+because the kernel's peer pid then names a dead process. On macOS `LOCAL_PEERPID` reports the last
+process to use the socket, so an orphan that writes before the core's accept is the process named; the
+claim holds reliably on Linux only. When a request with the right token is taken as local, the core
+says why once per process in its log (`exod: the principal credential from pid N is taken as local:
+...`), and that connection's refusals (approvals, principal-only commands) name the reason.
+
+**Limits.** Same-user code running outside the core's tree is trusted: it can read the record, as it
+could read the old token file. A tool child whose parent exits before it sends its request is not
+caught by this check (issue #31); an OS sandbox for tools is still the fix (D-038, D-039). Under
+`hidepid` or systemd `ProtectProc` (or `ProcSubset=pid`), root-owned ancestors such as `sshd`, `login`,
+`su` or `sudo` cannot be read, so every principal client started below them is local; the refusal and
+the core's log say so. This fails closed on purpose: stopping the walk at the first unreadable
+ancestor would let `tool -> sudo -u $USER exo` pass. A client in another PID namespace than the core
+is refused too. An old client against a new core sends the whole record as its token and is local
+without a message; restart `exo`, `exo web` and `exo chat` after an update.
+
+**Snapshot and liveness contract.** `hello` returns `instance` (this launch) and `heartbeat` (seconds
+between `: ping` comments on `GET /events`; the capability list has `heartbeat`). The event stream
+opens with `: exod instance=<id> heartbeat=<s>`. `approvals.list` returns
+`{approvals, cursor: {instance, seq}}`, copied in one await-free step: replace pending cards with it,
+then apply events above `seq`; a different `instance` means the core restarted and its pending asks
+are gone. The Python client ends a stream that brings no complete frame (an event or a heartbeat) for
+`idle` seconds (45 by default); partial bytes do not count. A frame over 16 Mi characters is skipped: the client
+resumes after that frame's seq, since resuming at it would replay it forever, with or without `reconnect`, so a
+caller that keeps its own `since` (the exo-bus channel) gets the next event. The core writes frames
+as raw UTF-8 (escaping U+0085, U+2028, U+2029 and lone surrogates, which line readers split on or
+cannot encode), so a frame stays near the size of the request that made it; text made of those
+escaped characters can still grow up to three times. A joined terminal window resends a command
+after a lost connection only when nothing was sent (the connect failed) or the command is a read; a
+lost reply to a turn or an approval answer is never repeated. The window says it may not have been
+delivered, puts the typed text back in an empty composer, and re-reads `approvals.list` to put back a
+card the core still holds.
 
 A seat may approve one exact text with `allow`. Only a principal connection can answer
 `allow_always`; anything else is refused.
