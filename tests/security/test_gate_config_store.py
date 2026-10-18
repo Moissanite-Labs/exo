@@ -548,3 +548,124 @@ def test_the_workdir_argument_counts_like_cwd(tmp_path, monkeypatch):
     c = gate.classify({"tool": "exec_command", "args": {"cmd": "sed -i s/a/b/ config.json", "workdir": str(home)}})
     assert c.category == "store_write"
     assert _bash("ls", workdir=7).category == "read"
+
+
+def _custom_home(tmp_path, monkeypatch):
+    # A home not named `.exo`: the name rule would catch `.exo` spellings even where the folder rule is missing.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("EXO_PRINCIPAL_STORE", raising=False)
+    home = _home(tmp_path, monkeypatch, "my-exo")
+    (home / "plugins" / "foo").mkdir()
+    (tmp_path / "project").mkdir()
+    return home
+
+
+@pytest.mark.parametrize("command", [
+    "git -C ~/my-exo/plugins/foo checkout -- ../../config.json",
+    "git -C ~/my-exo/plugins/$X pull",
+    "git -C ~/my-exo/plugins/foo stash pop",
+    "git --work-tree=~/my-exo/plugins/foo checkout .",
+    "git --work-tree ~/my-exo/plugins/foo checkout .",
+    "git --git-dir=$EXO_HOME/plugins/foo/.git checkout .",
+    "GIT_WORK_TREE=~/my-exo/plugins/foo git checkout .",
+    "GIT_DIR=~/my-exo/plugins/foo/.git git checkout .",
+    "env GIT_WORK_TREE=~/my-exo/plugins/foo git pull",
+    # Each `-C` moves on from the one before, as `cd` does, and the file names resolve from the last.
+    "git -C ~ -C my-exo/plugins/foo pull",
+    "git -C ~ -C my-exo/plugins/foo checkout -- ../../config.json",
+    "git -C ~/project -C ../my-exo/plugins/foo pull",
+    "git -C ~ checkout -- my-exo/config.json",
+    "git -C ~ --work-tree=my-exo/plugins/foo checkout .",
+    "git -C ~ commit -C HEAD -- my-exo/config.json",     # `commit -C` names a commit, not a folder
+    "cd ~ && git -C my-exo/plugins/foo pull",
+    # `--output` writes a file, relative to git's folder.
+    "git -C ~/my-exo/plugins/foo diff --output=../../config.json",
+    "git -C ~/my-exo/plugins/foo log -p --output ../../config.json",
+    "cd ~/my-exo && git diff --output=config.json",
+])
+def test_git_folders_in_the_home_follow_the_folder_rule(tmp_path, monkeypatch, command):
+    # git's `-C`, `--work-tree`, `--git-dir`, `GIT_DIR=` and `GIT_WORK_TREE=` work in a folder like `cd` does:
+    # from a folder of the home, `..` and whatever the subcommand writes reach the store.
+    _custom_home(tmp_path, monkeypatch)
+    _asks(command)
+
+
+def test_git_folders_elsewhere_stay_ordinary(tmp_path, monkeypatch):
+    _custom_home(tmp_path, monkeypatch)
+    for command in ("git -C ~/project pull", "git -C ~ -C project pull", "cd ~ && git commit -C HEAD",
+                    "git -C ~ commit -C HEAD -- project/a.py", "GIT_DIR=/tmp/x/.git git checkout .",
+                    "git diff --output=/tmp/x", "git -C ~/project diff --output=a.patch"):
+        assert _bash(command).category != "store_write", command
+    for command in ("git -C /tmp/x status", "git -C ~/my-exo/plugins/foo status",
+                    "git diff --output-indicator-new=+ HEAD"):
+        assert _bash(command).category == "read", command
+
+
+@pytest.mark.parametrize("command", [
+    'curl --output-dir /tmp --output-dir "$EXO_HOME" -O https://example.invalid/config.json',
+    "curl --output-dir=/tmp --output-dir ~/.exo -O https://e.test/config.json",
+    "wget -P /tmp -P ~/.exo https://e.test/config.json",
+    "wget -P /tmp --directory-prefix=~/.exo https://e.test/config.json",
+    "tar -xf a.tar -C /tmp -C ~/.exo",
+    "tar -C /tmp -xf a.tar -C ~/.exo",
+    "tar xCf /tmp a.tar -C ~/.exo",
+    "cp -t /tmp -t ~/.exo/principals/abc x",
+    "install -t /tmp --target-directory=~/.exo x",
+    "unzip z.zip -d /tmp -d ~/.exo",
+])
+def test_a_repeated_destination_option_counts_every_value(tmp_path, monkeypatch, command):
+    # curl and wget take the last value and each tar `-C` applies to the members after it, so no one value decides.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("EXO_PRINCIPAL_STORE", raising=False)
+    home = _home(tmp_path, monkeypatch, ".exo")
+    (home / "principals" / "abc").mkdir(parents=True)
+    _asks(command)
+    assert _bash("curl --output-dir /tmp -O https://e.test/x").category == "web_read"
+    assert _bash("tar -cf a.tar -C /tmp -C ~/.exo .").category != "store_write"
+
+
+@pytest.mark.parametrize("command", [
+    "cp -r -t ~/ -- -tx /tmp/.exo",                     # after `--`, `-tx` is a source, not a second folder
+    "cp -r -t ~/ /tmp/.exo -- -tx",
+    "cp -r -t ~/ -- --target-directory=y /tmp/.exo",
+    "mv -t ~/ -- -tx /tmp/.exo",
+    "cp -r -S -t/tmp/x -t ~/ /tmp/.exo",                # `-t/tmp/x` is the backup suffix; the last `-t` is the folder
+    # a word after `--` spelled like the source is a source too, never a reason to drop that source
+    "cp -r -t ~/ -- -t/tmp/.exo /tmp/.exo",
+    "cp -r -t ~/ -- -t /tmp/.exo",
+    "cp -r -t ~/ /tmp/.exo -- -t/tmp/.exo",
+    "cp -r -t ~/ -- --target-directory=/tmp/.exo /tmp/.exo",
+    "install -t ~/ -- -t/tmp/.exo /tmp/.exo",
+    "cp -r -S -t/tmp/.exo -t ~/ /tmp/.exo",
+    "cp -r -t ~/ -- -x/.exo",                           # a source named with a leading `-` after `--`
+])
+def test_a_target_option_that_is_not_one_still_pairs_the_sources(tmp_path, monkeypatch, command):
+    # cp refuses a second `-t`, so another one the gate reads is a source or another option's value: the sources
+    # still land in the first and in the last folder.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("EXO_HOME")
+    (tmp_path / ".exo").mkdir()
+    _asks(command)
+
+
+def test_many_destination_options_stay_fast(tmp_path, monkeypatch):
+    # Only the first and the last folder are paired with every source name; the others are checked alone.
+    home = _home(tmp_path, monkeypatch)
+    dests = " ".join(f"-t /var/d{i}" for i in range(500))
+    sources = " ".join(f"s{i}" for i in range(500))
+    start = time.monotonic()
+    assert _bash(f"cp {dests} {sources}").category != "store_write"
+    _asks(f"cp {dests} -t {home} {sources}")
+    assert time.monotonic() - start < 5
+
+
+def test_a_long_git_folder_chain_stays_fast(tmp_path, monkeypatch):
+    # Each `-C` moves on from the one before. Past 64 of them the gate stops following and asks, so a line of many
+    # relative folders does not resolve every word against an ever longer folder.
+    _custom_home(tmp_path, monkeypatch)
+    chain = " ".join(f"-C d{i}" for i in range(1000))
+    start = time.monotonic()
+    _asks(f"cd ~ && git {chain} checkout -- " + " ".join(f"f{i}" for i in range(1000)))
+    _asks("git -C ~ " + "-C . " * 62 + "-C my-exo/plugins/foo pull")      # 64 folders are still followed
+    assert _bash("git -C ~/project " + "-C . " * 63 + "pull").category != "store_write"
+    assert time.monotonic() - start < 5
