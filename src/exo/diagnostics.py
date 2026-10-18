@@ -18,7 +18,7 @@ from exo.core.context import AgentContext
 from exo.core.hooks import maybe_await
 from exo.core.findings import STATUSES
 from exo.core.types import to_dict
-from exo.principal import current_caller, is_principal
+from exo.principal import current_caller, demoted, is_principal
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
 
@@ -78,8 +78,9 @@ def render_compact(res: dict[str, Any]) -> str:
 def trace_text(eng: CoreEngine, session: str | None, last: int = 10, calls: bool = False) -> str:
     """What ``exo_trace`` and ``/trace`` show: the model this session runs on, then the per-turn table."""
     info = eng.store.get_session(session) if session else None
-    rows = eng.store._q("SELECT body FROM events WHERE session=? AND type='model.call' ORDER BY seq DESC LIMIT 1",
-                          (session,)) if session else []
+    # the newest call that names its route first: a call cut short by a stop or an error names none
+    rows = eng.store._q("SELECT body FROM events WHERE session=? AND type='model.call' ORDER BY "
+                        "COALESCE(json_extract(body, '$.route'), '') = '', seq DESC LIMIT 1", (session,)) if session else []
     served = (json.loads(rows[0]["body"]).get("route") if rows else "") or "no model call recorded yet"
     head = [f"running on: {eng.loop.model or '-'} (session model {info.model if info else '-'}, last call served "
             f"by {served}); chain: {', '.join(r.ref for r in eng.router.chain('main')) or '-'}",
@@ -201,7 +202,7 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         if not b.session:
             raise CommandFailed("bad_request", "rename needs a session")
         if not is_principal(current_caller()):
-            raise CommandFailed("forbidden", "only the principal can rename a session")
+            raise CommandFailed("forbidden", "only the principal can rename a session" + demoted())
         title = " ".join(b.args.split())[:200]
         if not title:
             raise CommandFailed("bad_request", "usage: /rename <title>")
