@@ -205,6 +205,35 @@ _WRITE_REDIRS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
 _REDIR_OPS = ("&>>", "&>", "<<<", "<<-", "<<", "<>", ">>", ">|", ">&", "<&", ">", "<")
 _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
 _ASSIGN = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=.*", re.S)
+_ANSI_C = re.compile(rb"\\(?:([abeEfnrtv\\'\"?])|([0-7]{1,3})|x\{([0-9A-Fa-f]*)\}?|x([0-9A-Fa-f]{1,2})"
+                     rb"|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c(\\\\?|.))", re.S)
+
+
+def _ansi_c(raw: str) -> str:
+    """The text bash 5.2 makes of a $'..' body in a UTF-8 locale (#167). Octal and \\x values keep their
+    low 8 bits, an escape bash does not know keeps its backslash, and a NUL ends the text. A \\u or \\U
+    value is written as bash's u32toutf8 writes it: UTF-8 of up to six bytes, surrogates included, and
+    nothing at all from 0x80000000 on (so `--forc\\UFFFFFFFFe` is `--force`)."""
+
+    def one(m: re.Match) -> bytes:
+        char, octal, brace, hexa, u, big, ctl = m.groups()
+        if char:
+            return bytes([dict(zip(b"abeEfnrtv", b"\a\b\x1b\x1b\f\n\r\t\v")).get(char[0], char[0])])
+        if u or big:
+            v = int(u or big, 16)
+            if v < 0x80 or v >= 0x80000000:
+                return bytes([v]) if v < 0x80 else b""
+            n = next(k for k, top in ((2, 0x800), (3, 0x10000), (4, 0x200000), (5, 0x4000000), (6, 0x80000000))
+                     if v < top)
+            lead = (0xFF00 >> n) & 0xFF | v >> 6 * (n - 1)
+            return bytes([lead] + [v >> 6 * k & 0x3F | 0x80 for k in range(n - 2, -1, -1)])
+        if ctl:                                # \c\\ takes the escaped backslash as its character
+            return b"\x7f" if ctl == b"?" else bytes([ctl[0] & 0x1F])
+        return bytes([(int(octal, 8) if octal else int(hexa or brace or b"0", 16)) & 0xFF])
+
+    out = _ANSI_C.sub(one, raw.encode("utf-8", "surrogatepass")).split(b"\0", 1)[0]
+    # Bytes that are not UTF-8 (\xff, \377) read as Latin-1 characters.
+    return re.sub("[\udc80-\udcff]", lambda b: chr(ord(b.group()) - 0xDC00), out.decode("utf-8", "surrogateescape"))
 
 
 @dataclass
@@ -433,7 +462,7 @@ class _Lexer:
                 j += step
             raw = "".join(out)
             try:
-                w.text += raw.encode("latin-1", "backslashreplace").decode("unicode_escape")
+                w.text += _ansi_c(raw)
             except (UnicodeError, ValueError):
                 w.text += raw
                 w.dynamic = True
