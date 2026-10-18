@@ -65,7 +65,11 @@ from the store with no model, so it is a floor to beat. `--responder module:func
 
 **Output.** `<store>/reports/eval-YYYY-MM-DD.json` and `.html`, and a one-line JSON summary on stdout. With
 `--no-write`, it prints the whole JSON report and writes nothing. `src/exo/eval.py` also holds the scoreboard
-(`reports/scoreboard.jsonl`) and the pieces the nightly learning loop uses to compare candidates.
+(`reports/scoreboard.jsonl`) and the pieces the nightly learning loop uses to compare candidates (`docs/LEARNING.md`,
+"The slow loop"). `build_replays` and `load_items` turn only the principal's own verdicts, answers and rulings into
+cases (D-040). Pass `principals` to name who that is. `climb` caches the incumbent's scores against its config, the
+cases' full contents, the checks and a caller's `fingerprint` (the models and rubric). A candidate's `exclude` names
+the ledger events its lesson came from. Cases built from them never count for or against it.
 
 ## `exo brief`: the morning brief
 
@@ -94,6 +98,9 @@ and `note` events of type `consolidate_pending`. Then:
 - Each correction (`edit`, `reject`, `should_have_been`) and each ruling becomes a **proposal** in positive form,
   "The principal wants Y, not X, because Z", with its evidence, domain, confidence, and a preference pair.
 - **Rule of three:** an instruction given in three or more utterances with no belief that encodes it gets a proposal.
+  Your live turns (role `user`) and the messages `exo ingest` imported as yours (role `principal`) both count. Only
+  your own authors count (D-040): a Hermes brief of doubtful authorship (`hermes:unverified-user`), a peer's turn or
+  an import's summary (`secondary`) never does.
 - **Reinforcement:** a new event that agrees with a known belief reinforces it. Weight decays by half life unless
   reinforced.
 - **Conflict:** an event that opposes a belief goes through the conflict rule. The default,
@@ -105,6 +112,8 @@ and `note` events of type `consolidate_pending`. Then:
 written), `<id>.diff` (when it edits a node) and `<id>.json`. Decided drafts move to `proposals/archive/`. Each run
 that reads events ends with a `consolidate_run` note holding the last sequence number, so the next run resumes there.
 Proposal ids are hashes of their evidence, so a lost watermark cannot duplicate proposals.
+`proposals/state.json` caches the rule-of-three clusters. Delete it and the next run rebuilds it from your
+utterances up to the watermark, with the same author check.
 
 **Flags.** `--dry-run` reports without writing (and so needs no key). Otherwise it signs with `--as SEAT`
 (default from `DEFAULT_AUTHOR` in the module) using `--key`, else `$EXO_HOME/keys/<seat>.key`.
