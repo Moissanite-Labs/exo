@@ -6,23 +6,47 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- A `deny` or `reserved` entry in `gates.yaml` now matches any simple command on a compound line, nested ones included
+  (D-075). Before, only the most severe part was checked, so `git push origin main && rm -rf build` asked about the
+  delete and ran the denied push on approval. Each part carries the tool of its call (`tool:execute_code` no longer
+  denies `python -c` run from bash) and the decoded views of its line (`g''it push origin main && rm -rf build` denies
+  under a `command: 'git push'` entry), the `ssh` hop and the `internal` exposure of an `ssh` line reach every part, and
+  a standing grant in exo-gate no longer covers a reserved part of the line. A denied command in a `python -c` or
+  `execute_code` string literal denies whatever its place in the literal (`./build.sh; systemctl enable x` was dropped
+  as opaque), and `\n` escapes split the literal. A mapping entry's keys that are not match keys (`reason`, a note, a
+  typo) widen it instead of making it match nothing. A `target:` entry matches the `ssh` host whatever the form
+  (`user@host`, `ssh://host:22`), and `ssh` options are read as getopt reads them: the value of `-B`, `-P`, `-I` or of a
+  cluster ending in a value letter (`ssh -vp 22 host rm -rf /data`) was read as the host, so the line was `allow` even
+  under `deny: [delete]`; such a line now asks or denies. `mosh` options are read as mosh's Getopt::Long reads them
+  (one dash or two, any case, a unique prefix, options after the host, mosh's own short options), so `mosh
+  --serv='rm -rf /data' host` and `mosh host --server=...` are read, and a word that names no single option asks. The
+  command given to `mosh --ssh`, `--client` or `--server` is read and asks; with `mosh --local` it runs here and is
+  not `internal`. An option's value that reads as `--server=...` (`mosh --port '--server=...' host`) is still read
+  as a command and asks, and so are words after the host that mosh takes as its options or values (with
+  `POSIXLY_CORRECT` set mosh runs them as the command). A `--` right after the `ssh` or `mosh` host ends the options,
+  and the command after it is read.
+  `Decision.reserved` lists each hit once, and its ledger view redacts URL userinfo. Where the gate cannot read a
+  command (for example a heredoc after a `coproc` block,
+  nesting past the depth cap, `eval $(...)`, a command on stdin, `watch`/`tmux`-style wrappers) the line asks as opaque
+  rather than denying, and so does an `ssh` chain past the hop cap (#153). `${...}` bodies are still `allow` even
+  under `deny` (#143); `docs/GATE.md` lists the open paths.
 - The gate reads the command behind wrappers that run one (#160, D-038): `setsid`, `flock`, `chroot`, `unshare`,
   `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`, `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`,
   `xvfb-run`, `systemd-run` and `watch`, after their options and fixed operands, and the command strings of
   `flock -c`, `script -c`, `watch`, `tmux new-session`/`new-window`/`split-window`/`respawn-pane`/`respawn-window`/
   `run-shell`, `tmux -c`, `screen -dm` and `parallel CMD ::: args`. `setsid git push origin main` was `opaque_exec`,
-  so a deny on `vcs_push` only asked; it is now `vcs_push` and denied. Until D-075 lands, a wrapped line is denied
-  only when its inner command outranks `opaque_exec`; `setsid systemctl enable foo` under `deny: [schedule]` still
-  asks. A tmux command list is split at an argument ending in `;` (`'sleep 3;'`), not only at a `;` word, so
+  so a deny on `vcs_push` only asked; it is now `vcs_push` and denied. With D-075 a `deny` entry for the inner
+  command denies the line even when it does not outrank `opaque_exec` (`setsid systemctl enable foo` under
+  `deny: [schedule]`). A tmux command list is split at an argument ending in `;` (`'sleep 3;'`), not only at a `;` word, so
   `tmux new-session -d 'sleep 3;' new-window 'git push origin main'` is `vcs_push` too, and tmux's default
   aliases `splitp` and `split-pane` are read as `split-window`. An environment dump behind a wrapper
   (`setsid printenv GITHUB_TOKEN`, `taskset 1 env`, `xvfb-run -a env`) is `credentials` like the bare command
   (#155), so `deny: [credentials]` denies it; it was `opaque_exec` and asked. The wrapper keeps the
   `indirection` floor, so a line that asked still asks; `chroot`, `nsenter`, `unshare` and `systemd-run` add a
   signal like `sudo`. A command the gate cannot read (`setsid $CMD`, `tmux send-keys`, `parallel` reading its
-  input) stays `opaque_exec`. A deny on `opaque_exec` itself (`deny:`, a category line or a rule) now asks for
-  such a line instead of denying it; naming `opaque_exec` at `ask` or `deny` no longer turns off the indirection
-  floor (#178), so none of these lines logs.
+  input) stays `opaque_exec`. A category line or a rule that denies `opaque_exec` itself now asks for such a line
+  instead of denying it (a `deny:` entry still denies it, D-075); naming `opaque_exec` at `ask` or `deny` no longer
+  turns off the indirection floor (#178), so none of these lines logs.
 - Gate (#192, D-038): on a line that enters a folder that can hold a secret store, a relative read of a store file is
   `credentials` and asks. `cd ~/.config/gh && cat hosts.yml`, `cd ~/.kube && cat config`,
   `cd ~/.docker && cat config.json`, `cd ~/.kube && tar czf - .` and `cd ~/.config/g{h..h} && cat hosts.yml` were
@@ -51,7 +75,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
   `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
   `function NAME { ...; }` is read the same way. An environment dump inside either (`coproc env`) is
-  `credentials`. Until D-075 lands, a coproc is denied only when its inner command outranks `opaque_exec`.
+  `credentials`. Before D-075, a coproc was denied only when its inner command outranked `opaque_exec`;
+  with it, a `deny` entry matching any inner command denies the coproc.
   A `credentials` line keeps the highest reversibility of its parts, so `coproc env; rm -rf x` stays
   irreversible and a policy that denies irreversible actions still denies it.
 - The gate reads the array subscript in the variable names of `printf -v`, `read`, `declare`, `typeset`, `local`,
@@ -92,6 +117,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   by `src`.
 
 ### Changed
+- Web `/model` and `/default` (#146): the composer opens a model picker or sets the route without starting a model
+  turn, and a failed change keeps the line in the box. `/model` goes through the core's principal-only `models.set`
+  (`POST /api/chat/sessions/<id>/model`); `/default` saves through the loopback-only provider routes. A command the
+  page does not run, from the core's list (`/grants`) or the terminal client's own (`/help`, `/quit`; core plugin
+  names count only when the core lists them, as in the TUI), or a near typo of one, stays in the box with a note.
+  Until the page has the core's command names, every `/name` line that is not the page's or the terminal client's
+  waits, and the names are asked again with no limit (1 s doubling to every 30 s, and on each send, which does not
+  move the backoff on), so a long core restart never leaves the page sending core-only commands as model turns. The
+  asking ends once the core has answered both questions: its names (an older core that answers `unknown_command` or
+  `unsupported` for `commands.list` counts, with no names) and `guidance.enabled` (an unset key, which the core
+  answers with `not_found`, counts as on). The core's `guidance.enabled: false` still turns the guidance line off when
+  the core was down as the page loaded (or could not read the setting yet). `/tmp is full` and other lines close to
+  no command by the TUI's rule are still sent as messages (D-037). A `bad_model` or `bad_request` core error now
+  answers 400, not 502, on every route of the web plugin's `api.py` table (chat, tasks, schedule, feedback), not
+  only `/model`.
 - Command deny and reservation regexes also match a literal-word view of the command (#136, D-038
   amendment): common literal quoting (`'rm' -rf`, `r\m`, `$'rm'`, `$"rm"`) around a program or flag
   no longer bypasses those vetoes. A `$"..."` word is read as bash reads it, so `git push $"--force"`
@@ -245,11 +285,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - The web Chat view draws a peer, bus or job message as a card with its real author, never as a line the user
   typed: on reload and thread switch too, and the live `peer.message` and its stored message are one card. An
   approval with no thread (a held peer message that no live session could take) shows in every thread, as in the
-  terminal client, and allow now delivers it into a new thread instead of closing it as denied. A panel you dismiss
-  stays closed after the next panel event, a tab switch or a reconnect.
-- The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
-  the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
-  the card shows every argument of the call.
+  terminal client, and allow now delivers it into a new thread of the seat instead of closing it as denied. If that
+  thread cannot open, the message closes as not delivered and a notice says why. A panel you dismiss stays closed
+  after the next panel event, a tab switch or a reconnect.
 - `exo web` folded the core's replayed events into its state a second time after the core's stream dropped: message,
   tool call and task counts doubled, and a session stayed `waiting` after its approval was answered. Each event now
   counts once, and a core whose log is behind the page (a new `EXO_HOME`) starts the page over.
@@ -261,7 +299,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   such a request had no card and the turn waited for good. Leaving a thread drops its turn state, card, queued
   steer and numbers: the new thread no longer shows `LIVE`, `running tool` or steer mode once the old turn ends,
   and `COST` no longer shows the other thread's dollars. A thread opened again keeps its `COST` and the `+` for an
-  unpriced call. An answer the core refuses brings its card back. A
+  unpriced call. An answer the core refuses brings its card back. A card with no thread (a held peer message) now
+  stays in every thread, a new thread and a window started on one included. Before, the window's check against
+  `approvals.list` dropped it within seconds. A
   finished subagent whose calls had no price adds the `+` to `COST`, and its roll-up no longer moves `MEM`.
 - `exo update` no longer widens a `--plugins` install to every plugin. The installer records the list in
   `config.json` (`plugin_selection`) and a re-run without `--plugins`, such as the one `exo update` makes, keeps it.
@@ -269,7 +309,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   core loads every folder there. `--plugins all` goes back to every plugin. The re-run also refreshes the plugin copies
   in the Hermes home an earlier `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME` run used (one inside `~/.hermes`
   still needs `--hermes-home`). An install from before this change has no list on record, so its first update installs
-  every plugin: after it, re-run `install.sh --no-pip --plugins LIST` once to go back to yours.
+  every plugin: after it, re-run `install.sh --no-pip --plugins LIST` once to go back to yours. A list ignores spaces
+  and always keeps `exo-gate`, since without it the core refuses every tool call. A name given with `--plugins` that
+  matches no plugin stops the installer before it removes a plugin or writes config.json. A remembered name only
+  warns.
 - `scripts/deploy-site.sh` no longer tags and pushes a version after a failed deploy, which burned the version and
   exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
   refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
@@ -394,6 +437,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `~/.exo/{policies,x}/default.yaml` were allowed local writes, so one tool call could rewrite the gate's policy
   or grants without a card. They are `store_write` now and ask the principal. Quoted and escaped braces stay
   literal, as in bash. The store checks have their own brace budget, so no secret-store outcome changes.
+- The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
+  the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
+  the card shows every argument of the call.
 
 ## [0.2.0] (egg) - 2026-10-13
 
