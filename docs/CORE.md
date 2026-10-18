@@ -90,12 +90,20 @@ back, and the shorter chain still links. So each append also writes the head (se
   the write lock, so they only move forward. A writer killed in between (SIGKILL, out of memory, power loss) leaves
   them one event behind, never ahead: verify still passes and the next append catches them up. If the anchor write
   fails after the COMMIT, the event stands and a warning is logged.
-- When the anchor beside the ledger cannot be written, the copy under `keys/heads/` still is. The next append
-  tries the beside anchor again before it writes and refuses ("cannot be written") if it still fails, so appends
-  never go on with the anchor frozen: it trails the ledger by one event at most. `verify()` reports
-  `anchored_seq`, the lowest seq an anchor holds, next to the head.
-- The anchor check before an append counts the ledger once. The write after COMMIT takes indexed lookups only, so
-  an append costs what it did before the anchor moved after COMMIT.
+- When the anchor beside the ledger cannot be written, the copy under `keys/heads/` still is. Before it writes,
+  an append catches the anchors up when the beside anchor trails the head or no anchor is at the head. It refuses
+  ("cannot be written") when the beside anchor trails and cannot be written, or when no anchor is at the head and
+  none can be written. So appends never go on more than one event past every anchor. The refusal names the files
+  to make writable again. `exo log anchor` reports an anchor it cannot write in one line, with exit code 1.
+  `verify()` reports `anchored_seq`, the lowest seq an anchor holds, next to the head.
+- The anchor check before an append counts the ledger once per anchor. The write after COMMIT takes indexed
+  lookups only, so an append costs what it did before the anchor moved after COMMIT.
+- The anchor under `keys/heads/` is named after the ledger's path with its folder resolved but not the file. A
+  ledger file swapped for a symlink to a truncated copy still meets that anchor. A ledger file that is a symlink
+  fails `verify()`, and `append()` and `anchor()` refuse it.
+- An anchor is read only as a regular file: a symlink in its place is unreadable. Anchors are written through a
+  fresh temporary file (`mkstemp`, with `O_EXCL` and `O_NOFOLLOW`), so a symlink planted in the anchor's folder
+  cannot redirect the write.
 - `verify()` checks every anchor it finds: the ledger must reach that seq and the chain hash there must match. It also
   fails when an append-only trigger was missing when the ledger was opened (the open puts it back).
 - `append()` refuses to write when an anchor does not match, so the next event cannot hide a truncation.

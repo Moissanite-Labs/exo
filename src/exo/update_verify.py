@@ -70,6 +70,11 @@ def pin_trust(root, rev: str = 'HEAD', read=_out) -> int:
     if r.returncode or not (r.stdout or '').strip():
         print(f'exo update: no {TRUST_PATH} at {rev}', file=sys.stderr)
         return 1
+    try:  # _out keeps bytes that are not UTF-8 as surrogates, and such a list cannot be pinned
+        r.stdout.encode('utf-8')
+    except UnicodeEncodeError:
+        print(f'exo update: the {TRUST_PATH} at {rev} is not UTF-8; nothing pinned', file=sys.stderr)
+        return 1
     p = pin_file()
     if p.is_file() and p.read_text() != r.stdout:  # a rotation: the commit that set the list must verify
         # --no-show-signature: a user's log.showSignature would print the signature check before the sha
