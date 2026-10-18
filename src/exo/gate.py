@@ -2471,6 +2471,82 @@ def _sensitive_words(words: list[str]) -> bool:
     return False
 
 
+class StoreSkip:
+    """For a tool that walks a folder (grep, glob): which entries below ``root`` it leaves out as secret stores
+    (#241). An entry is left out when is_sensitive_path matches it as found or as resolved, so a plainly named
+    link into ~/.ssh is left out too. When the path the caller ``named`` is itself a store, as spelled, normalised
+    and resolved, the gate asked about it, so what sits below it is read, except a link out of it into another
+    store. The root is never left out.
+    In a repo's own `.claude` folder (its parent holds `.git`; not HOME's, not CLAUDE_CONFIG_DIR, and no Claude login,
+    transcripts or shell snapshots in it) the worktrees, commands, agents and skills subfolders are searched, so a
+    worktree checkout under `.claude/worktrees` is too; the rest of it (settings.local.json) stays out.
+    Call it on each folder and file as the walk finds it; ``skipped`` counts what it left out. Folders below the
+    root are not links (the walk does not follow them), so the file system cost is one lstat per entry, plus a few
+    cached existence checks per `.claude` folder."""
+
+    _ODD = re.compile(r"[{}$~\\]|\s$")   # spellings is_sensitive_path expands or trims: ask it directly
+    _NO_CLAUDE = re.compile(_SENSITIVE_PATH.pattern.replace(r"\.claude(/[^/]*)*|", ""))
+    _CLAUDE_OK = ("worktrees", "commands", "agents", "skills")   # what a repo's .claude holds besides settings
+    _CLAUDE_CONF = (".credentials.json", "projects", "shell-snapshots", "history.jsonl")   # a Claude config folder
+
+    def __init__(self, root: str, named: str = "") -> None:
+        self.root, self.abs, self.real = root, os.path.abspath(root), os.path.realpath(root)
+        # A named store counts only when the folder walked is one: `~/.ssh/..` or a link `x.key` to HOME is not.
+        self.whole = bool(named) and all(map(is_sensitive_path, (named, self.abs, self.real)))
+        self.roots = {r for x in _dynamic_secret_paths() for r in (os.path.abspath(x), os.path.realpath(x))}
+        self.below = tuple(r + os.sep for r in self.roots)
+        self.skipped = 0
+        self._repo = {os.path.abspath(_home()): False, os.path.realpath(_home()): False}   # folder -> holds .git
+
+    def _hit(self, path: str) -> bool:
+        p = path.replace("\\", "/")
+        m = _SENSITIVE_PATH.search(p)
+        if m and m.group(2).startswith(".claude") and self._project_claude(p):
+            m = self._NO_CLAUDE.search(p)
+        return not path.endswith(".pub") and (   # public keys are meant to be shared, as in is_sensitive_path
+            bool(m) or path in self.roots or path.startswith(self.below))
+
+    def _project_claude(self, p: str) -> bool:
+        """Every `.claude` in ``p`` is a repo's, and ``p`` is that folder or in one of its _CLAUDE_OK subfolders."""
+        parts = p.split("/")
+        for i in (i for i, x in enumerate(parts) if x == ".claude"):
+            top = "/".join(parts[:i]) or "/"
+            if top not in self._repo:   # another home that is a git checkout still holds a config folder: not a repo's
+                d = os.path.join(top, ".claude")
+                self._repo[top] = os.path.lexists(os.path.join(top, ".git")) and not any(
+                    os.path.lexists(os.path.join(d, x)) for x in self._CLAUDE_CONF)
+            if not self._repo[top] or (parts[i + 1] not in self._CLAUDE_OK if i + 1 < len(parts)
+                                       else not os.path.isdir(p)):   # a file called .claude stays out
+                return False
+        return True
+
+    def __call__(self, path: str) -> bool:
+        # rel never starts with a separator, so a root whose real path is `/` gives `/srv/x`, not `//srv/x`.
+        rel, link = path[len(self.root):].lstrip(os.sep), os.path.islink(path)
+        full, real = os.path.join(self.abs, rel), os.path.realpath(path) if link else os.path.join(self.real, rel)
+        if self.whole:
+            hit = link and not real.startswith(self.real.rstrip(os.sep) + os.sep) and self._hit(real)
+        else:
+            hit = (self._hit(full) or (real != full and self._hit(real))
+                   or bool(self._ODD.search(rel)) and is_sensitive_path(full))
+        self.skipped += hit
+        return hit
+
+    def note(self) -> str:
+        """The line a tool appends when it left anything out, so a search is never silently incomplete."""
+        return f"[skipped {self.skipped} secret-store paths; read one by name to be asked]" if self.skipped else ""
+
+
+def holds_secret_store(folder: str) -> bool:
+    """True when ``folder`` is a secret store or holds a known one (the home folder, EXO_HOME, ``~/.config``...).
+    For a tool that hands a whole folder to another program, which cannot leave stores out as StoreSkip does."""
+    home = _home()
+    stores = [os.path.join(home, s) for s in _SENSITIVE_SAMPLES] + [_exo_home(), *_dynamic_secret_paths()]
+    forms = _path_forms(os.path.abspath(folder))
+    return is_sensitive_path(folder) or any(s == f or s.startswith(f.rstrip("/") + "/")
+                                            for f in forms for x in stores for s in _path_forms(x))
+
+
 def _glob_hits_secret(tok: str) -> bool:
     """A shell glob that could expand to a secret store. Bare `*` or `*.json` do not count; the last
     component needs three literal characters, or the directory must itself be a secret store. Brace sets

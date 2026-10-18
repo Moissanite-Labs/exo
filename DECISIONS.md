@@ -779,6 +779,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   written. A hit on any expanded word counts, and a word past the brace limits counts as the store. The store
   checks have their own 4,096-word budget per tool call. `echo x > ~/.exo/polic{i..i}es/default.yaml` was an
   allowed local write.
+  *Amendment 2026-10-18 (issue #241):* the store-read guarantee covers the search tools. The gate checks only the
+  `path` a `grep` or `glob` call names, and the tools walked everything below it, so `grep {pattern: "key", path:
+  HOME}` returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and the principal credential as an allowed read. The tools
+  now leave out every folder and file below the root that `is_sensitive_path` matches, as found and as resolved (a
+  link into `~/.ssh` by any name), do not enter a store folder, and end with `[skipped N secret-store paths; read one
+  by name to be asked]`. A store the call names is read after the gate asks; a link out of it into another store is
+  still left out. `~/.ssh/..` only looks like a store: it walks the home folder with the stores left out. A
+  store-named link to an ordinary folder (`x.key` to the home folder) returns nothing, since every path below it still
+  looks like a store (fail closed). A root whose real path is `/` is refused (the walk takes minutes). In a repo's own
+  `.claude` folder (beside a `.git`, not `~/.claude` or `CLAUDE_CONFIG_DIR`, holding no Claude login, transcripts or
+  shell snapshots) only `worktrees`, `commands`, `agents` and `skills` are searched, so a `.claude/worktrees` checkout
+  is searchable and another home's config folder is not. `code_find`, whose `jg` walks the folder itself, refuses a
+  folder that is or holds a known store. Chosen over a gate-side ask for every broad search because a search of a
+  project or the home folder stays an allowed read and only the stores drop out; the count keeps the result honest.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
