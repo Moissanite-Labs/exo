@@ -280,12 +280,21 @@ if { [ "$WITH_HERMES" -eq 1 ] || [ "$HERMES_HOME_EXPLICIT" -eq 1 ] || [ -n "${EX
 fi
 MARK=".exo-managed"
 foreign() { [ -e "$1" ] && [ ! -f "$1/$MARK" ]; }  # something is at $1 and Exo did not install it
+# Exo installed $1 under this name: its marker names it. cp -r copies the hidden marker too, so a copy or a renamed
+# folder still names the folder it came from, and it is yours.
+managed_as() { [ -f "$1/$MARK" ] && grep -qxF "name: $(basename "$1")" "$1/$MARK"; }
+mark_managed() {  # mark_managed DST SRC
+  if [ "$DRY" -eq 1 ]; then echo "+ write $1/$MARK"; else
+    printf 'installed by exo scripts/install.sh from %s\nname: %s\n' "$2" "$(basename "$1")" > "$1/$MARK"
+  fi
+}
 # copy_managed SRC DST LABEL [keep-tests]: copy a folder Exo ships to DST without caches (and without tests/ unless
 # keep-tests), then mark DST as Exo's. Says LABEL is up to date when nothing changed. Check foreign() first.
 copy_managed() {
   local src="$1" dst="$2" label="$3" skip=tests
   [ "${4:-}" = keep-tests ] && skip=.pytest_cache
   if [ -f "$dst/$MARK" ] && diff -rq -x "$MARK" -x "$skip" -x __pycache__ -x .pytest_cache "$src" "$dst" >/dev/null 2>&1; then
+    managed_as "$dst" || mark_managed "$dst" "$src"  # an adopted copy, or a marker from before markers named it
     [ -z "$label" ] || say "$label is up to date"
     return 0
   fi
@@ -300,7 +309,7 @@ copy_managed() {
         cp -p "$src/$f" "$dst/$f"
       done
   fi
-  if [ "$DRY" -eq 1 ]; then echo "+ write $dst/$MARK"; else echo "installed by exo scripts/install.sh from $src" > "$dst/$MARK"; fi
+  mark_managed "$dst" "$src"
 }
 for PDIR in "${PDIRS[@]}"; do
   [ -d "$PDIR" ] || run mkdir -p "$PDIR"
@@ -314,10 +323,11 @@ done
 # The skill pack (skills/ with MANIFEST.json) goes to $EXO_HOME/skills, where the core's skill index and exo-orchestra
 # find it; /intro needs its exo-intro skill. Each pack skill is its own marked folder, as plugins are, so a skill you
 # add there is never touched, and a folder of yours with a pack skill's name is left alone and wins (an unmarked
-# exact copy of the pack's, say from a hand copy of skills/, is adopted). A marked skill the pack no longer has is
-# removed. The root marker says MANIFEST.json is Exo's too. A link (the skills folder, a skill or the manifest) is
-# never adopted, replaced or removed: it is yours, one into the checkout keeps the pack live there, and rm -rf
-# through it would delete what it points at.
+# exact copy of the pack's, say from a hand copy of skills/, is adopted). A skill the pack no longer has is removed
+# only when its marker names it: a copy of a pack skill made to change it carries the marker of the skill it came
+# from, so it is yours, kept with a warning. The root marker says MANIFEST.json is Exo's too. A link (the skills
+# folder, a skill or the manifest) is never adopted, replaced or removed: it is yours, one into the checkout keeps
+# the pack live there, and rm -rf through it would delete what it points at.
 SKDIR="$EXO_HOME/skills"
 SKMAN="$EXO_SRC/skills/MANIFEST.json"
 if [ -f "$SKMAN" ] && [ "$SKDIR" -ef "$EXO_SRC/skills" ]; then
@@ -333,7 +343,8 @@ elif [ -f "$SKMAN" ]; then
     if [ "${d%/}" -ef "$dst" ]; then
       say "skill $name: $dst links to the pack's; left alone"
       continue
-    elif [ -L "$dst" ] || { foreign "$dst" && ! diff -rq -x __pycache__ -x .pytest_cache "${d%/}" "$dst" >/dev/null 2>&1; }; then
+    elif [ -L "$dst" ] || { [ -e "$dst" ] && ! managed_as "$dst" &&
+                              ! diff -rq -x "$MARK" -x __pycache__ -x .pytest_cache "${d%/}" "$dst" >/dev/null 2>&1; }; then
       warn "$dst was not installed by Exo; left alone (it stands in for the pack's $name skill)"
       continue
     fi
@@ -341,7 +352,13 @@ elif [ -f "$SKMAN" ]; then
     count=$((count + 1))
   done
   for d in "$SKDIR"/*/; do
-    if [ ! -L "${d%/}" ] && [ -f "$d$MARK" ] && [ ! -d "$EXO_SRC/skills/$(basename "$d")" ]; then run rm -rf "${d%/}"; fi
+    d="${d%/}"
+    [ ! -L "$d" ] && [ -f "$d/$MARK" ] && [ ! -d "$EXO_SRC/skills/$(basename "$d")" ] || continue
+    if managed_as "$d"; then
+      run rm -rf "$d"
+    else
+      warn "$d was not installed by Exo under this name (its $MARK came with a copy); left alone. Delete $d/$MARK to stop this warning."
+    fi
   done
   man="$SKDIR/MANIFEST.json"
   if [ -L "$man" ] || { [ -e "$man" ] && [ ! -f "$SKDIR/$MARK" ] && ! cmp -s "$SKMAN" "$man"; }; then
@@ -349,7 +366,7 @@ elif [ -f "$SKMAN" ]; then
   elif [ ! -f "$SKDIR/$MARK" ] || ! cmp -s "$SKMAN" "$man"; then
     run cp -p "$SKMAN" "$man"
     if [ "$DRY" -eq 1 ]; then echo "+ write $SKDIR/$MARK"; else
-      echo "installed by exo scripts/install.sh from $EXO_SRC/skills: MANIFEST.json and each folder holding $MARK." \
+      echo "installed by exo scripts/install.sh from $EXO_SRC/skills: MANIFEST.json and each folder whose $MARK names it." \
         "Other skills here are yours." > "$SKDIR/$MARK"
     fi
   fi

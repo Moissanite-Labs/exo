@@ -50,8 +50,9 @@ Then start the terminal client by typing the command, in the folder you want to 
     exo                     # same as `exo tui`; flags pass through: exo --resume (or `exo resume`), exo --seat NAME
 
 The first time it runs on an `EXO_HOME`, the agent gives a short orientation (`/intro`) and turns on tutorial mode.
-If no model provider works yet, it says so and tells you to type `/providers`. The orientation waits until you
-add one there.
+If no model provider works yet, a note says so and the providers panel opens. If one provider is set up but no
+main model is chosen, the model picker opens instead. The orientation waits until a provider works. Type
+`/providers` to open the panel again.
 Skip the orientation with `exo --no-intro`. Upgrade with `exo update`. `exo --version` shows what you have.
 More: `docs/ONBOARDING.md`.
 

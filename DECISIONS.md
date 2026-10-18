@@ -446,6 +446,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (77% against 79% with recall).
 - **Not done:** a live 20-turn cache measurement on the fixed code; importing exo-memory's old episodic log (it
   holds copies of the same sessions); summaries for imports are slow on glm-5.3-flash (about 75 s per leaf).
+  *Amendment 2026-10-18 (PR #213):* the system message now names the thread's working folder, after the memory
+  block and before the tree. The claude CLI runs in a private folder and names that folder in its own environment
+  note, so the agent said it worked there. The new line names the session's stored cwd and overrides any folder a
+  note names. Subagents get the same line in place of their own "Working directory" line. The line is fixed per
+  thread, so each thread's prefix still caches. The cost: the byte-stable prefix is now shared only by threads in
+  the same folder. Anthropic routes put one cache breakpoint at the end of the system message, so an agent with
+  threads in two folders caches its tree once per folder.
 
 ## D-029 (2026-10-12) jevgrep as code_find; native port later if the measured win holds
 - **Why:** "where is X decided" questions cost an agent many grep and read rounds. dzhng/jevgrep (MIT, `jg`
@@ -690,6 +697,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the user's shell); a top-level `--seat` or `--resume` on the main parser (clashes with subcommand flags).
 - **Not done:** Windows; a published package on PyPI (the git URL is the source until then); an
   `exo uninstall`.
+  *Amendment 2026-10-18 (PR #213):* the installer also installs the skill pack into `$EXO_HOME/skills`, where the
+  core's skill index and exo-orchestra read it. Each pack skill is its own folder with a `.exo-managed` marker, as
+  plugins are, and the marker names the folder. A re-run, and so `exo update`, replaces or removes a folder only
+  when its marker names it. `cp -r` copies the hidden marker, so a copy of a pack skill under a new name, or a
+  renamed one, carries a marker for another name. That folder is the user's and is kept with a warning. A folder
+  without a marker that differs from the pack's skill is left alone, and an exact copy is adopted. A link is never
+  adopted, replaced or removed. Rejected: one marked `$EXO_HOME/skills` folder, because a refresh would delete the
+  skills users add there. Rejected: removing every marked folder the pack lacks, because that deleted copies made to
+  change a skill. Rejected: shipping the pack as package data, because exo-orchestra and the documented search
+  order read `$EXO_HOME/skills`.
 
 ## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
 - **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
