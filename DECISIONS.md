@@ -717,7 +717,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a peer that descends from the core, and the client that starts the core is its parent, so the old ancestry could
   not refuse that client. The handshake is bounded, reads the pid from the helper's last output line, and a core
   that dies while starting is reported at once (`waitpid` when this process adopted it, else a zombie or missing
-  pid), with no made-up exit code.
+  pid), with no made-up exit code. A client that adopted its cores reaps any that exited later at its next start.
 
 ## D-037 (2026-10-12) Completion and guidance in the composer
 - **Why:** the principal asked for command autofill, suggestion and guidance, "a better version of what Hermes CLI
