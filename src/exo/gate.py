@@ -1086,8 +1086,12 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts[0].signals.append("sudo")
         if parts[0].reversibility == "reversible":
             parts[0].reversibility = "costly"
+    seen = ctx.setdefault("stdin", set())
     for h in k.heredocs:
-        if h.ambiguous:      # dash and ash may end the body early and run the rest: read it as commands too
+        # dash and ash may end the body early and run the rest: read it as commands too. Once per line, under
+        # _once's key for a shell reading it: a compound's heredoc reaches every command inside it.
+        if h.ambiguous and (classify_shell, h.body, depth + 1) not in seen:
+            seen.add((classify_shell, h.body, depth + 1))
             parts.append(classify_shell(h.body, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
     for op, t in k.redirs:
         if op not in _WRITE_REDIRS or (op == ">&" and re.fullmatch(r"\d+|-", t.text)):

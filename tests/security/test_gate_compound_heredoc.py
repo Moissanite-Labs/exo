@@ -27,17 +27,11 @@ def _classify(command):
     return gate.classify({"tool": "bash", "args": {"command": command}})
 
 
-# Without #181 a coproc or `function NAME { ...; }` body is not read at all (the whole line is opaque_exec), so
-# these rows can only reach vcs_push once both land.
-_COPROC_READ = gate.classify_shell(f"coproc W {{ {PUSH}; }}").category == "vcs_push"
-_FUNCTION_READ = gate.classify_shell(f"function f {{ {PUSH}; }}").category == "vcs_push"
-
 ISSUE_FORMS = [
     f"{{ bash; }} <<'EOF'\n{PUSH}\nEOF",
     f"( bash ) <<'EOF'\n{PUSH}\nEOF",
     f"while true; do bash; break; done <<'EOF'\n{PUSH}\nEOF",
-    pytest.param(f"coproc W {{ bash; }} <<'EOF'\n{PUSH}\nEOF",
-                 marks=pytest.mark.skipif(not _COPROC_READ, reason="needs the coproc body reading of #181")),
+    f"coproc W {{ bash; }} <<'EOF'\n{PUSH}\nEOF",
 ]
 
 VARIANTS = [
@@ -69,8 +63,7 @@ VARIANTS = [
     # bash reads before the exec; a nested closer's `<` keeps the outer stdin from its siblings only
     f"{{ bash; exec < evil.sh; }} <<< '{PUSH}'",
     f"{{ {{ true; }} < evil.sh; bash; }} <<< '{PUSH}'",
-    pytest.param(f"function f {{ bash; }} <<'EOF'\n{PUSH}\nEOF\nf",
-                 marks=pytest.mark.skipif(not _FUNCTION_READ, reason="needs the function body reading of #181")),
+    f"function f {{ bash; }} <<'EOF'\n{PUSH}\nEOF\nf",
 ]
 
 
@@ -190,9 +183,9 @@ def test_a_harmless_body_keeps_the_plain_class():
     assert (group.category, gate.decide(group).outcome) == (plain.category, gate.decide(plain).outcome)
 
 
-def _fed_groups(width, levels, body):
+def _fed_groups(width, levels, body, prog="bash", quote="'"):
     for lv in range(levels):
-        body = "{ " + "bash; " * width + "} <<'L%d'\n%s\nL%d" % (lv, body, lv)
+        body = "{ " + f"{prog}; " * width + "} <<%sL%d'\n%s\nL%d" % (quote, lv, body, lv)
     return body
 
 
@@ -234,6 +227,40 @@ def test_a_body_fed_to_many_shells_is_read_once(width, levels, counted):
     line = _fed_groups(width, levels, "\n".join(["ls"] * 50 + [PUSH]))
     assert _classify(line).category == "vcs_push"
     assert counted["shell"] <= 2 * levels + 2, counted
+
+
+@pytest.mark.parametrize("prog", ["ls", "bash", "python3", "command bash"])
+def test_an_ambiguous_body_fed_to_many_commands_is_read_once(prog, counted):
+    # A body after <<$'..' is also read as commands, since dash ends it on another line. Reading it again for
+    # every command the group's stdin reaches made 9,724 calls for (20, 3), where main makes 4.
+    levels = 3
+    line = _fed_groups(20, levels, PUSH, prog, "$'")
+    assert _classify(line).category == "vcs_push"
+    assert counted["shell"] <= 2 * levels + 2, counted
+
+
+def test_nested_groups_of_plain_commands_after_an_ambiguous_delimiter_stay_near_main(counted):
+    # The review's shape: 20 plain commands closed by <<$'..', nested 4 deep, under 500 bytes. It took 60 s;
+    # main reads each body once, on the closer, in levels + 1 calls.
+    levels = 4
+    line = _fed_groups(20, levels, PUSH, "ls", "$'")
+    start = time.perf_counter()
+    assert _classify(line).category == "vcs_push"
+    assert counted["shell"] <= levels + 2, counted
+    assert time.perf_counter() - start < 10      # main takes a few hundredths of a second
+
+
+@pytest.mark.parametrize("command", [
+    f"{{ bash; }} 3<<'X'\n{RM}\nX",
+    f"{{ bash; }} 3<<< '{RM}'",
+    f"echo '{RM}' | {{ bash; }} 3<<'X'\nls\nX",
+])
+def test_a_closer_heredoc_on_another_fd_is_read_as_stdin(command):
+    # The lexer drops fd numbers, so a closer heredoc on fd 3, where bash leaves stdin alone, is fed as stdin.
+    # Read that way, a body that deletes is still denied by a deny on delete.
+    c = _classify(command)
+    assert c.category == "delete", c
+    assert gate.decide(c, {"gates": {"deny": ["delete"]}}).outcome == "deny"
 
 
 @pytest.mark.parametrize("shape", [_many_herestrings, _nested_herestrings])

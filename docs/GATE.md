@@ -237,9 +237,8 @@ A command is `allow` only when every program in it is known and nothing is hidde
   `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Until D-075 lands, a coproc is denied
   only when its inner command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
   category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`) still
-  asks. A heredoc after the closing `}` of a block (`coproc W { bash; } <<EOF`) attaches to the
-  `}` and is not fed to the inner command, which asks as `opaque_exec`; the same limit applies
-  to `{ ...; } <<EOF` on its own.
+  asks. A heredoc after the closing `}` of a block (`coproc W { bash; } <<EOF`) is fed to the
+  commands inside it, as for `{ ...; } <<EOF` on its own (see "Compound commands" below).
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
@@ -258,21 +257,24 @@ compounds included: a heredoc or here-string after its closing `}`, `)`, `done`,
 and text the gate can read piped into it (`echo ... | ( bash )`, `... | while read l; do bash; done`).
 So `{ bash; } <<EOF`, `( bash ) <<EOF` and `while ...; do bash; done <<EOF` classify the body as
 `bash <<EOF` does, and `{ python3; } <<EOF` reads it as code. `coproc W { bash; } <<EOF` and
-`function f { bash; } <<EOF` are read the same way once #181 lands (before it, their bodies are not
-read and they ask as `opaque_exec`). As in bash, a command whose stdin is already set keeps it and
-is not fed: one with its own heredoc, here-string or `<` redirection (`{ cat <<EOF; bash; }` feeds
-cat only), one piped into from a command inside (`{ curl ... | bash; } <<< 'ls'` stays
-`opaque_exec`), and the commands of a nested compound with its own closer redirection or pipe.
+`function f { bash; } <<EOF` are read the same way. As in bash, a command whose stdin is already
+set keeps it and is not fed: one with its own heredoc, here-string or `<` redirection (`{ cat <<EOF;
+bash; }` feeds cat only), one piped into from a command inside (`{ curl ... | bash; } <<< 'ls'`
+stays `opaque_exec`), and the commands of a nested compound with its own closer redirection or pipe.
 Nothing more is fed after a command that may make a file the shell's stdin for good: `exec` with its
 own stdin however it is spelled or prefixed (`"exec"`, `\exec`, `command exec`, `X=1 exec`), and
 `eval`, `source`, `.`, a program name from a variable or a function defined on the line, which can
 run such an exec unseen. When the closer has its own `<`, nothing is fed (the gate keeps no order
 between a closer's redirections, so it does not guess which one bash applies last: `{ bash; } <<EOF
-< f`), and a closer heredoc or here-string wins over a pipe in. Every other inner command gets all
-of it. That over-approximates, and the fed text can change the line's category and the summary shown
-when it asks: only shells, interpreters and gh act on it, so `{ cat; } <<EOF` stays `read`, while `{
-bash; } <<EOF` with `rm -rf build` in the body is `delete`. Each text is read once per line, however
-many commands it reaches. Such a line was `opaque_exec` before; it now takes the inner category, and
+< f`), and a closer heredoc or here-string wins over a pipe in. That holds for stdin (fd 0). The
+lexer drops fd numbers, so a closer heredoc on another fd (`{ bash; } 3<<EOF`), where bash leaves
+stdin alone, is read conservatively as stdin: its body is fed (code inside can still run it, as
+`{ source /dev/fd/3; }` does) and a pipe in is not. A shell read that way still asks at least, as
+`bash 3<<EOF` does. Every other inner command gets all of it. That over-approximates, and the fed
+text can change the line's category and the summary shown when it asks: only shells, interpreters
+and gh act on it, so `{ cat; } <<EOF` stays `read`, while `{ bash; } <<EOF` with `rm -rf build` in
+the body is `delete`. Each text is read once per line, however many commands it reaches, and so is
+a body after `<<$'EOF'`, which is also read as commands. Such a line was `opaque_exec` before; it now takes the inner category, and
 the floor above keeps it at ask at least under a policy that names `opaque_exec` at `ask` or `deny`.
 So under `deny: [opaque_exec]` or `categories: {opaque_exec: deny}` these lines now ask where they
 were denied, as `bash <<EOF` already does, until D-075 (#126) / #191. Known limits: the body of
