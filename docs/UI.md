@@ -101,8 +101,8 @@ the default model, `[esc]` close (leaving a panel is soft; Esc never stops a tur
 composer, the transcript or any log, and a key typed after `/providers add <name>` in the composer is refused and
 not echoed. After a key change, or a test that passes, the client tells a running core to read keys again. That
 also clears the provider's cooldown and route breaker, so the next message reaches it. At start, if no provider is
-ready, one note says what the default needs: a key, a running local server (with its address), or a CLI that is
-installed and logged in.
+ready, one note says what the default needs: a key, a running local server (its host and port only, never a login
+in its URL), or a CLI that is installed and logged in.
 
 ## Focus, the big composer and the inverse layout (D-046)
 
