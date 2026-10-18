@@ -2,10 +2,13 @@
 import asyncio
 import json
 
+import httpx
 import pytest
 from nacl.signing import SigningKey
 
 from exo.bus import wire
+from exo.peerauth import MAX_FRAME
+from exo.protocol.client import Client
 from exo_bus_hermes import adapter, settings, tools
 
 
@@ -165,6 +168,43 @@ def test_poll_once_skips_own_messages_and_does_not_repeat(as_seat, client_for):
     assert len(texts) == 2 and "from alpha" in texts[0] and "to all" in texts[1]
     assert chan._cursor.get() == 3
     assert asyncio.run(chan.poll_once()) == 0
+
+
+def test_event_loop_reads_past_an_event_too_large_to_read():
+    """The channel keeps its own cursor and calls ``events(since)`` without reconnect: a skipped event must not
+    leave it asking for that event again, or every later reply is held back (D-060)."""
+    def frame(seq, text):
+        ev = {"id": f"e{seq}", "seq": seq, "session": None, "type": "notice", "ts": "", "body": {"text": text}}
+        return f"id: {seq}\nevent: notice\ndata: {json.dumps(ev)}\n\n"
+    log = [(1, frame(1, "before")), (2, frame(2, "x" * (MAX_FRAME + 10))), (3, frame(3, "after"))]
+    asked, got = [], []
+    link = Client(url="http://exod")
+    chan = adapter.BusChannel(link, {}, client=object())
+
+    def handler(request):
+        since = int(request.url.params["since"])
+        asked.append(since)
+        if len(asked) > 4:  # stuck at the same cursor: stop the loop instead of hanging
+            chan.running = False
+        body = ": exod instance=i_1 heartbeat=15\n\n" + "".join(f for seq, f in log if seq > since)
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=body.encode())
+    link._http = httpx.AsyncClient(base_url="http://exod", transport=httpx.MockTransport(handler))
+
+    async def on_event(ev):
+        got.append(ev.seq)
+        if ev.seq == 3:
+            chan.running = False
+    chan._on_event = on_event
+
+    async def main():
+        chan.running = True
+        try:
+            await asyncio.wait_for(chan._event_loop(), 15)
+        finally:
+            await link.aclose()
+    asyncio.run(main())
+    assert got == [1, 3]
+    assert asked == [0, 2]
 
 
 def test_standalone_send_needs_config_then_posts(as_seat, relay, monkeypatch):

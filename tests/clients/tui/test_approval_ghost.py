@@ -134,3 +134,29 @@ def test_delivered_steer_is_no_longer_pending(tmp_path):
         assert "nothing queued" in app.transcript_text()
 
     run(tmp_path, sc)
+
+
+def test_a_send_the_core_steers_shows_pending_and_up_pulls_it_back(tmp_path):
+    """Typing into an opened running subagent: the window is not busy, so it sends, and the core steers the text into
+    the child (D-070) with a message id. The line shows as a queued steer, and up pulls it back."""
+    async def sc(app, pilot, client, eng):
+        plain = client.send
+
+        async def send_steered(body):  # the core's answer for a running child's session, whatever the mode
+            if isinstance(body, s.TurnSend):
+                return s.Response(id="r", result={"steered": True, "message_id": "m_held"})
+            if isinstance(body, s.CommandRun) and body.name == "unsteer":
+                return s.Response(id="r", result={"output": {"cancelled": [body.args]}})
+            return await plain(body)
+        client.send = send_steered
+        assert not app.busy
+        await send(app, pilot, "note for the child")
+        await until(lambda: app.pending_steers, pilot)
+        ((mid, block),) = app.pending_steers
+        assert mid == "m_held" and block.steer and block.pending
+        app.composer.focus()
+        await pilot.press("up")
+        await until(lambda: not app.pending_steers, pilot)
+        assert app.composer.text == "note for the child"
+
+    run(tmp_path, sc)

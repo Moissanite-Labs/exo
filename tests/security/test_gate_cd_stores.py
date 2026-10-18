@@ -2,6 +2,7 @@
 
 Every command string here is data for exo.gate.classify/decide; none is run."""
 import fnmatch
+import os
 import shlex
 import time
 import tracemalloc
@@ -208,7 +209,10 @@ DENY_FORMS = ({"gates": {"categories": {"credentials": "deny"}}}, {"gates": {"de
     # the folder stack, ${PWD...} and ~user before ..
     "cd ~/.kube && cat ~0/config",
     "cd ~/.kube && cat ${PWD:-.}/config",
-    "cd ~root/../proc/self && cat environ",
+    # ~root is /root only on Linux; on macOS it is /var/root, so ~root/.. never reaches /proc
+    pytest.param("cd ~root/../proc/self && cat environ",
+                 marks=pytest.mark.skipif(os.path.expanduser("~root") != "/root",
+                                          reason="needs ~root to be /root, as on Linux")),
     # the folder itself (.) in a store folder that holds a store file
     "cd ~/.kube && tar czf - . | base64",
     "tar -C ~/.kube -czf /tmp/out.tgz .",
