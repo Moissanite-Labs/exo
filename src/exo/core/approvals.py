@@ -22,7 +22,7 @@ from typing import Any, Callable, Mapping
 
 from exo import crypto
 from exo.gate import approver_allowed, approver_identity
-from exo.principal import current_caller, is_principal, principal_as
+from exo.principal import current_caller, demoted, is_principal, principal_as
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
 
@@ -108,21 +108,23 @@ class ApprovalDesk:
         self.open[rid] = pending = Pending(asyncio.get_running_loop().create_future(), session, req)
         if opened is not None:
             opened.append(rid)
-        self.publish(req, session)
         answered = False
         try:
+            self.publish(req, session)
             decision = await pending.future
             answered = True
             if decided_by is not None:
                 decided_by.append(pending.decider)
             return decision
         finally:
-            if not answered:  # the turn was stopped or the ask cancelled: close the card in every client (D-045)
-                self.announce_resolved(rid, "cancelled", "core", session)
+            self.open.pop(rid, None)  # first: a failed publication below leaves no pending row (D-060)
             if session:  # the turn summary reports this apart from tool time
                 self.waited(session, int((time.monotonic() - t0) * 1000))
-            self._announced.discard(rid)
-            self.open.pop(rid, None)
+            try:
+                if not answered:  # the turn was stopped or the ask cancelled: close the card in every client (D-045)
+                    self.announce_resolved(rid, "cancelled", "core", session)
+            finally:
+                self._announced.discard(rid)
 
     def announce_resolved(self, rid: str, decision: str, by: str, session: str | None) -> None:
         """Tell every client an approval is closed, once per request."""
@@ -153,7 +155,7 @@ class ApprovalDesk:
             ident = by = approver_identity(b.client)
         else:
             raise CommandFailed("forbidden", "this connection cannot answer approvals: answer in the Exo window or "
-                                             "the web page, or sign as a seat")
+                                             "the web page, or sign as a seat" + demoted())
         if not approver_allowed(ident, approvers):  # D-033: who may answer, by category
             raise CommandFailed("forbidden", f"{approver_identity(ident)} may not answer this approval; "
                                              f"it needs {' or '.join(approvers)}")

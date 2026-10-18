@@ -288,7 +288,8 @@ log nobody can edit without it showing. These commands work on them from a shell
 reads and writes the store for you. They help when you want to look, check, or move things.
 
 Pick the store with `--principal ID` or `--root DIR`, or set `EXO_PRINCIPAL` once. Stores live in
-`~/.exo/principals/<id>` unless `EXO_HOME` says otherwise.
+`~/.exo/principals/<id>` unless `EXO_HOME` says otherwise. A store you made somewhere else with
+`exo init <id> --root DIR` or `exo import-store --root DIR` is remembered, so its id finds it from then on.
 
 **Make or adopt a store**
 

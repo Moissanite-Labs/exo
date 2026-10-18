@@ -20,15 +20,24 @@ def register(sp, common) -> None:
 
 
 def _stores(a) -> list:
-    """The principal stores to check: --root, --principal or $EXO_PRINCIPAL, else every store in this home."""
-    from .store import PrincipalStore, exo_home
+    """The principal stores to check: --root, --principal or $EXO_PRINCIPAL, else every store in this home and
+    every explicit root in config `principals` (`exo init --root`), each once."""
+    from .store import PrincipalStore, exo_home, explicit_roots
     if getattr(a, 'root', None):
         return [PrincipalStore(a.root)]
     pid = getattr(a, 'principal', None) or os.environ.get('EXO_PRINCIPAL')
     if pid:
         return [PrincipalStore.for_principal(pid)]
     d = exo_home() / 'principals'
-    return [PrincipalStore(p) for p in sorted(d.iterdir()) if p.is_dir()] if d.is_dir() else []
+    roots = [p for p in sorted(d.iterdir()) if p.is_dir()] if d.is_dir() else []
+    roots += [r for r in explicit_roots().values() if r.is_dir()]
+    return list({s.root: s for s in map(PrincipalStore, roots)}.values())
+
+
+def _name(out: dict, s) -> str:
+    """A store's name in the results: its folder name, or its whole path when another store already has that
+    name, so one result never hides another."""
+    return str(s.root) if s.root.name in out else s.root.name
 
 
 def verify_ledgers(a) -> dict[str, dict]:
@@ -40,7 +49,10 @@ def verify_ledgers(a) -> dict[str, dict]:
         if not stores:
             return {"authority": {"ok": False, "state": "unverifiable", "fresh": False,
                                    "error": "no principal store configured for authority verification"}}
-        return {s.root.name: verify_configured(s.ledger_path) for s in stores}
+        res: dict[str, dict] = {}
+        for s in stores:
+            res[_name(res, s)] = verify_configured(s.ledger_path)
+        return res
     from .keyring import KeyRegistry
     from .ledger import Ledger
     out: dict[str, dict] = {}
@@ -50,7 +62,7 @@ def verify_ledgers(a) -> dict[str, dict]:
     reg = KeyRegistry.load()
     for s in stores:
         with Ledger(s.ledger_path) as led:
-            out[s.root.name] = led.verify(trusted=reg)
+            out[_name(out, s)] = led.verify(trusted=reg)
     return out
 
 
