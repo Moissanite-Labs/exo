@@ -431,20 +431,27 @@ between a closer's redirections, so it does not guess which one bash applies las
 < f`), and a closer heredoc or here-string wins over a pipe in. That holds for stdin (fd 0). The
 lexer drops fd numbers, so a closer heredoc on another fd (`{ bash; } 3<<EOF`), where bash leaves
 stdin alone, is read as stdin too: its body is fed (code inside can still run it, as `{ source
-/dev/fd/3; }` does). The text piped in is still read, as for any `echo ... | bash`, so `echo 'rm -rf
-build' | { bash; } 3<<EOF` is a `delete` whichever text bash runs. A shell read that way still asks
-at least, as `bash 3<<EOF` does. Every other inner command gets all of it. That over-approximates, and the fed
-text can change the line's category and the summary shown when it asks: only shells, interpreters
-and gh act on it, so `{ cat; } <<EOF` stays `read`, while `{ bash; } <<EOF` with `rm -rf build` in
-the body is `delete`. Each text is read once per line, however many commands it reaches, and so is
-a body after `<<$'EOF'`, which is also read as commands. Such a line was `opaque_exec` before; it now takes the inner category, and
-the floor above keeps it at ask at least under a policy that names `opaque_exec` at `ask` or `deny`.
-So under `deny: [opaque_exec]` or `categories: {opaque_exec: deny}` these lines now ask where they
-were denied, as `bash <<EOF` already does, until D-075 (#126) / #191. Known limits: the body of
-`time { ...; }` is not read at all (`{` is an unknown program there), so a heredoc after it changes
-nothing; it asks as `opaque_exec`. As on main, text piped into a command is read even when the
-command's own `<` wins (`echo ... | bash < f`), and so is the pipe into the first command of `echo
-... | { bash; } < f`.
+/dev/fd/3; }` does), and text piped in reaches only the first command inside, as in any `echo ... |
+bash`. So `echo 'rm -rf build' | { bash; } 3<<EOF` is a `delete` whichever text bash runs, but in
+`echo 'rm -rf build' | { true; bash; } 3<<EOF` bash, which reads the pipe there, is read with the
+body only. A shell read that way still asks at least, as `bash 3<<EOF` does (main asks for these
+lines too). Outside these cases, every command inside gets all of the compound's stdin. That
+over-approximates, and the fed text can change the line's category and the summary shown when it
+asks: only shells, interpreters and gh act on it, so `{ cat; } <<EOF` stays `read`, while `{ bash; }
+<<EOF` with `rm -rf build` in the body is `delete`. Each text is read once per line, however many
+commands it reaches, and so is a body after `<<$'EOF'`, which is also read as commands, and the
+stdin of a `sqlite3`, `psql` or `mysql` client. Every command it reaches still counts what that
+reading found, so a later client whose argument is a store folder is still a `store_write` when the
+text deletes. Such a line was `opaque_exec` before; it now takes the inner category, and the floor
+above keeps it at ask at least under a policy that names `opaque_exec` at `ask` or `deny`. So under
+`deny: [opaque_exec]` or `categories: {opaque_exec: deny}` these lines now ask where they were
+denied, as `bash <<EOF` already does, until D-075 (#126) / #191. Likewise a line whose later
+command takes a store folder is `store_write`, which outranks `delete` (D-038), so under `deny:
+[delete]` it asks where main denied it as `delete`, until D-075. Known limits: the body of `time {
+...; }` is not read at all (`{` is an unknown program there), so a heredoc after it changes nothing;
+it asks as `opaque_exec`. As on main, text piped into a command is read even when the command's own
+`<` wins (`echo ... | bash < f`), and so is the pipe into the first command of `echo ... | { bash; }
+< f`.
 
 ## The store is credentials (D-038)
 

@@ -32,7 +32,7 @@ import json
 import os
 import re
 import shlex
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, TypeVar, cast
 from urllib.parse import urlparse
@@ -210,7 +210,8 @@ _WRITE_REDIRS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
 _REDIR_OPS = ("&>>", "&>", "<<<", "<<-", "<<", "<>", ">>", ">|", ">&", "<&", ">", "<")
 _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
 _ASSIGN = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=.*", re.S)
-_FUNC_NAMES = re.compile(r"\bfunction\s+([^\s(){};&|<>]+)|([^\s(){};&|<>'\"]+)\s*\(\s*\)")
+# `name()` is looked for only where a word starts, so a long word is not rescanned from each character
+_FUNC_NAMES = re.compile(r"\bfunction\s+([^\s(){};&|<>]+)|(?<![^\s(){};&|<>'\"])([^\s(){};&|<>'\"]+)\s*\(\s*\)")
 _ANSI_C = re.compile(rb"\\(?:([abeEfnrtv\\'\"?])|([0-7]{1,3})|x\{([0-9A-Fa-f]*)\}?|x([0-9A-Fa-f]{1,2})"
                      rb"|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c(\\\\?|.))", re.S)
 
@@ -1125,28 +1126,37 @@ def _feed_compound(cmds: list[_Cmd], start: int, closer: _Cmd, src: _Cmd | None,
         k = cmds[i]
         sets = _sets_shell_stdin(k, fnames)
         if not (redirected or sets or _own_stdin(k) or (i > start and k.piped_in)):
-            k.heredocs, k.herestrings = heredocs, texts      # shared, so _once can skip a repeat whole
+            k.heredocs, k.herestrings = heredocs, texts      # shared, so _once reads them once per line
         i += 1
     if len(cmds) > start:
         taken[start] = (len(cmds), sets)
 
 
-def _once(ctx: dict, fn, k: _Cmd, piped: str | None, *args) -> list[Classification]:
-    """fn(text, *args) for each stdin text of k that this command line has not yet given fn. A compound's
-    stdin reaches every command inside it (as the same lists), and _combine keeps the most severe part with
-    every part's signals, so a repeat adds nothing. Without this a body of fed shells, itself fed to many
-    shells, is read width ** depth times, and many here-strings fed to many shells cost their product."""
-    seen = ctx.setdefault("stdin", set())
-    whole = (fn, id(k.heredocs), id(k.herestrings), piped, *args)
-    if whole in seen:
-        return []
-    seen.add(whole)
-    parts = []
-    for text in _stdin_texts(k, piped):
-        if (fn, text, *args) not in seen:
-            seen.add((fn, text, *args))
-            parts.append(fn(text, *args))
-    return parts
+def _once(ctx: dict, key: tuple, k: _Cmd, piped: str | None, read: Callable[[str], list[Classification]],
+          ambiguous: bool = False) -> list[Classification]:
+    """read(text) for each stdin text of k (each heredoc body after an ambiguous delimiter, if ambiguous), run
+    once per command line and key. A compound's stdin reaches every command inside it (as the same lists), and
+    each command still gets copies of the parts, since its own store check (_store_touch) reads them; the same
+    lists again give the most severe part of each category, all that check and _combine look at. Without this a
+    body of fed shells, itself fed to many shells, is read width ** depth times, and many here-strings fed to
+    many shells cost their product."""
+    memo = ctx.setdefault("stdin", {})
+    whole = (*key, id(k.heredocs), id(k.herestrings), piped, ambiguous)
+    if whole in memo:
+        return [_copy(c) for c in memo[whole]]
+    got: list[Classification] = []
+    for text in [h.body for h in k.heredocs if h.ambiguous] if ambiguous else _stdin_texts(k, piped):
+        if (*key, text) not in memo:
+            memo[(*key, text)] = read(text)
+        got += memo[(*key, text)]
+    memo[whole] = [max((p for p in got if p.category == c), key=_severity)
+                   for c in dict.fromkeys(p.category for p in got)]
+    return [_copy(c) for c in got]
+
+
+def _copy(c: Classification) -> Classification:
+    """A part to hand out again: _combine and the callers change the one they get."""
+    return replace(c, signals=list(c.signals), _command_views=list(c._command_views))
 
 
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
@@ -1173,13 +1183,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts[0].signals.append("sudo")
         if parts[0].reversibility == "reversible":
             parts[0].reversibility = "costly"
-    seen = ctx.setdefault("stdin", set())
-    for h in k.heredocs:
+    if k.heredocs:
         # dash and ash may end the body early and run the rest: read it as commands too. Once per line, under
         # _once's key for a shell reading it: a compound's heredoc reaches every command inside it.
-        if h.ambiguous and (classify_shell, h.body, depth + 1) not in seen:
-            seen.add((classify_shell, h.body, depth + 1))
-            parts.append(classify_shell(h.body, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
+        parts += _once(ctx, (classify_shell, depth + 1), k, None, lambda t: [
+            classify_shell(t, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd)], True)
     for op, t in k.redirs:
         if op not in _WRITE_REDIRS or (op == ">&" and re.fullmatch(r"\d+|-", t.text)):
             continue
@@ -1272,7 +1280,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                 parts[0].summary = f"{prog} runs the script {a}"[:120]
                 return parts
         if depth < _DEPTH:
-            parts += _once(ctx, classify_shell, k, piped, inner_depth)
+            parts += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
         return parts
     if prog in _INTERPRETERS:
         return _classify_interpreter(prog, argv, k, cmd, depth, ctx, piped)
@@ -1605,12 +1613,13 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
                     break
     if prog in _SQL_COMMAND_OPTS:
         texts = [a for a in argv[1:] if not a.startswith("-")] + values(_SQL_COMMAND_OPTS[prog])
-        texts += _stdin_texts(k, piped)
         if prog == "psql":                           # `-o '|cmd'` pipes the output to the whole value, as `\o |cmd`
             for v in values(("-o", "--output")):
                 if v.lstrip().startswith("|"):
                     nested(v.lstrip()[1:], "psql -o")
-        for text in texts:
+
+        def read(text: str) -> list[Classification]:
+            n = len(parts)
             if prog in ("sqlite3", "duckdb"):
                 for m in _DOT_COMMAND.finditer(text):
                     name, arg = m.group(1), m.group(2).strip()
@@ -1644,6 +1653,13 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
                             nested(run, "psql backquote")
                 if _SQL_PROGRAM.search(text):
                     parts.append(_opaque(f"{prog} runs a program on the database server", cmd))
+            got = parts[n:]
+            del parts[n:]
+            return got
+
+        for text in texts:
+            parts += read(text)
+        parts += _once(ctx, (_exec_options, prog, depth), k, piped, read)    # a compound's stdin is shared
     return parts
 
 
@@ -1681,7 +1697,7 @@ def _classify_interpreter(prog: str, argv: list[str], k: _Cmd, cmd: str, depth: 
             break
         i += 2 if a in _INTERP_VALUE_FLAGS.get(prog, ()) else 1
     parts = [_opaque(f"{prog} reads code from its input", cmd)]
-    parts += _once(ctx, classify_code, k, piped)
+    parts += _once(ctx, (classify_code,), k, piped, lambda t: [classify_code(t)])
     return parts
 
 
