@@ -328,6 +328,24 @@ async def test_a_notice_in_flight_at_shutdown_is_kept_and_starts_no_turn(tmp_pat
     assert eng.jobs.target.can_wake(sid) is False  # wake = true, but exod is shutting down
 
 
+@aio
+async def test_a_job_that_ends_while_channels_stop_starts_no_turn(tmp_path):
+    """Channels and peers stop before the jobs do. A job that ends in that window is queued and starts no turn."""
+    eng = engine(tmp_path, jobs={"wake": True})
+    sid = (await eng.loop.create_session(agent="tester")).id
+    job = eng.jobs.start("sleep 0.3; echo built", str(tmp_path), sid)
+    plain = eng.stop_channels
+
+    async def slow_stop():  # stands in for a channel or peer transport that takes a moment to stop
+        await until(lambda: [e for e in events(eng) if e.job_id == job["id"] and e.state == "done"])
+        await plain()
+    eng.stop_channels = slow_stop
+    await eng.close()
+    await asyncio.sleep(0.1)
+    assert [e.detail for e in events(eng) if e.state == "done"] == ["notice queued"]
+    assert not [e for e in eng.hub.since(0) if e.type == "turn.started"]
+
+
 # ---------------------------------------------------------------- limits
 
 

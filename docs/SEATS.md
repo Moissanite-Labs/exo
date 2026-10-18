@@ -102,8 +102,10 @@ all of them use the home's `sessions.sqlite` and `schedule.sqlite`.
 
 - **Events.** Each core numbers its own events, and the database raises a number past the table's highest inside
   the write transaction, so two cores never reuse one. One core's stream still rises, with gaps where the other
-  seat wrote. Replay goes by number, not by seat: a client that subscribes with no session filter also gets the
-  other seat's events.
+  seat wrote. A core sends only its own events live. Replay goes by number, not by seat, so it returns the other
+  seat's events too. A session filter still lets through the ones with no session, such as a scheduled job's card.
+  `hello`, `events.subscribe` and `/health` report the table's highest number, so a client that starts from there
+  replays none of the other seat's past events.
 - **Delegate tasks.** A core fails the queued or running tasks a dead process left behind only for its own agent,
   and only once it holds the writer lock. Another seat's core, or a second core of the same seat that fails the
   lock, leaves live tasks alone.

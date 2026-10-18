@@ -253,6 +253,15 @@ def test_rule_model_slow_flags_the_route_per_call():
     assert Thresholds.of({"model_call_s": 45, "model_call_routes": {"p:a": 200, "p:z": -1}}).model_call_routes == {"p:a": 200.0}
 
 
+def test_rule_model_slow_charges_no_route_for_a_call_whose_only_tries_timed_out():
+    """A call stopped on the fallback route keeps only the timeout before it: model.timeout names that route, and
+    the call's total (the timeout plus the fallback's stream) is not filed as model.slow against it."""
+    stopped = tt(calls=[Call(route="", total_ms=130_000, ttft_ms=70_500,
+                             attempts=[{"route": "p:a", "outcome": "timeout", "ms": 60_000}])])
+    got = sigs(stopped)
+    assert "model.timeout:p:a" in got and not [x for x in got if x.startswith("model.slow")]
+
+
 def test_turn_total_wall_is_a_separate_high_cap():
     long = tt(wall_ms=2_000_000, timing={"wall_ms": 2_000_000, "tool_ms": 1_990_000, "approval_ms": 0})
     got = sigs(long)

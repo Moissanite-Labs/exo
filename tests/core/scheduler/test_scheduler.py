@@ -662,6 +662,28 @@ async def test_job_notice_for_a_running_scheduled_run_is_steered_in(tmp_path, wa
     assert msgs[notice - 1].role == "tool"
 
 
+@pytest.mark.parametrize("user_running", [True, False])
+@aio
+async def test_an_unaddressed_peer_message_never_picks_a_running_run(tmp_path, user_running):
+    """A run reads as running, yet a peer message with no session goes to the user's thread, idle or running: the
+    run would answer with the job's prompt and narrowed tools and send the reply to the job's deliver target."""
+    from exo.core.ingress import Ingress
+
+    eng, sid, gate = await live_run(tmp_path)
+    target, ing = eng._peer_target, Ingress("peer", "x", "trusted", "hi")
+    assert target.state(sid) == "running"
+    assert target.pick_session(ing) is None  # only the run is live: the caller makes a new thread
+    user = (await eng.loop.create_session(title="mine")).id
+    if user_running:
+        eng.loop.state(user).running = True  # stands in for a user turn held in a tool call
+    assert sid not in {r["id"] for r in target.live_sessions()}
+    assert target.pick_session(ing) == user
+    assert target.pick_session(Ingress("peer", "x", "trusted", "hi", session=sid)) == sid  # addressed: still the run
+    eng.loop.state(user).running = False
+    gate.set()
+    await settle(eng)
+
+
 # Two seats in one EXO_HOME share schedule.sqlite: each slot runs once, a seat-bound job only in its seat.
 
 def seat_mk(tmp_path, name, clk):

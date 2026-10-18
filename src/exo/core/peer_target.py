@@ -37,14 +37,16 @@ class EngineTarget(Target):
     # ---------------------------------------------------------------- sessions
 
     def live_sessions(self) -> list[dict[str, Any]]:
-        """Sessions a peer can reach: any with a running turn, and idle ones touched within ``active_hours``."""
+        """Sessions a peer can reach: any with a running turn, and idle ones touched within ``active_hours``. A peer
+        can still address a scheduled run by its id."""
         store, loop = self.e.store, self.e.loop
         cutoff = time.time() - self.e.peer_cfg.active_hours * 3600
         out = []
         for info in store.list_sessions(40):
             st = loop._state.get(info.id)
             running = bool(st and st.running)
-            if info.kind == "subagent" or store.get_meta(info.id).get("locked"):  # never a subagent (D-070)
+            # Never a subagent (D-070) or a scheduled run: a run answers with its job's prompt, tools and deliver target.
+            if info.kind in ("subagent", "scheduled") or store.get_meta(info.id).get("locked"):
                 continue
             try:
                 fresh = wire.parse_ts(info.updated).timestamp() >= cutoff

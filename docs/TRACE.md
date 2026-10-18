@@ -9,6 +9,7 @@ The loop: record, read, report, verify.
   tokens (cache reads and writes too), the estimated cost in USD, loop retries. A call that a stop cuts short is
   recorded too, with `stop_reason` `interrupted`. It keeps the attempts of routes that timed out or failed before
   the stop, so a stop on the fallback route still raises `model.timeout` or `model.fallback` for the route before.
+  When its only tries timed out, it raises no `model.slow`, because `model.timeout` already names that route.
 - `turn.started.soul`: a short hash of the seat's `SOUL.md` text the turn ran under (empty without one), so the trace
   shows which instructions a turn used after an edit.
 - `tool.completed`: `duration_ms` and `is_error` on every call.
@@ -16,7 +17,7 @@ The loop: record, read, report, verify.
   `model_calls`, `fallbacks`, `tool_errors`. When a stop (ctrl+c or `/stop`) cuts a tool short, its time up to the interrupt counts in
   `tool_ms`, and `interrupted_tool` names it, so an interrupted test run does not read as harness time. A model call
   cut short the same way, mid stream or in the backoff before a retry, counts in `model_ms` and `model_calls`, so a
-  stopped slow model does not read as harness time either: a long wait shows as `model.wait` or `model.slow` on its route.
+  stopped slow model does not read as harness time either: a long wait shows as `model.wait`, `model.slow` or `model.timeout`.
 - `harness.error` (event): an exception caught in a hook, handler, plugin, memory call, channel or the TUI
   event path: `where`, `error_type`, `message`, a short `traceback`. Never silent.
 - Keys, auth headers and token-like strings are removed before any of this is written.

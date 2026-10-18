@@ -58,7 +58,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-025 Trace, findings, re-verification | `docs/TRACE.md` | §9 | §4 (reporting errors) | WP §9, §23 |
 | D-026 Peers and one ingress path | `docs/PEERS.md`, `docs/GATE.md` | §7 | §2 (`peers` command) | WP §7, §8, §12.7 |
 | D-027 Reserved, not written (named in D-026 as the next ingress sources) | none | n/a | n/a | n/a |
-| D-028 One agent, one continuous memory | `docs/MEMORY-MODEL.md` | §4 | §4 | WP §5, §17 |
+| D-028 One agent, one continuous memory | `docs/MEMORY-MODEL.md`, `docs/SEATS.md` "Several seats in one home" | §4 | §4 | WP §5, §17 |
 | D-029 jevgrep as `code_find` | `docs/TOOLS.md` "code_find" | §10 | §3 | WP §15.1 |
 | D-030 Onboarding: `/intro` and tutorial mode | `docs/ONBOARDING.md` §1 | §1, §3 | §2 (intro skill must list every command) | WP §24 "Learning the tool" |
 | D-031 UI/UX overhaul, terminal half | `docs/UI.md`, `docs/ui/WEB.md` | §2 | §7 (colour token test) | WP §24 "Instruments, not chrome" |
@@ -136,7 +136,7 @@ real counts, and `tests/docs/test_docs_counts.py` keeps them honest. Still open:
 | D-054 Mandatory learning checks precede ruling citations, with explicit acceptance separate | `docs/LEARNING.md`, `research/LEARNING-LOOP.md` | n/a | n/a | n/a |
 | D-055 Keep staging current with verified status; core engine, browser polish, then Electron desktop packaging | `docs/SITE-STATUS.md`, `DECISIONS.md` D-055, `site/roadmap/index.html`, `site/app/index.html` | n/a (no user commands changed) | "Deploying the site" | Batched; desktop delivery direction only |
 | D-056 Versioning and naming: SemVer with codenames, site and doc versions, tags, branches, changelog | `docs/VERSIONING.md`, `CHANGELOG.md`, `DECISIONS.md` | n/a | `docs/DEVELOPER-GUIDE.md` "Cutting a release" | n/a |
-| D-070 Inspect, open and steer running subagents from the parent: `subagent` built-in, `/tasks` `/open` `/steer` `/stop <task>`, Tasks card controls | `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `src/exo/subagents.py` | `docs/USER-GUIDE.md` (keys and prefixes) | `docs/DEVELOPER-GUIDE.md` "Extend through `command.run` built-ins" | n/a |
+| D-070 Inspect, open and steer running subagents from the parent: `subagent` built-in, `/tasks` `/open` `/steer` `/stop <task>`, Tasks card controls | `docs/COMMANDS.md`, `docs/AGENT-WIRE.md`, `docs/UI.md`, `docs/ui/WEB.md`, `src/exo/subagents.py` | `docs/USER-GUIDE.md` (keys and prefixes) | `docs/DEVELOPER-GUIDE.md` "Extend through `command.run` built-ins" | n/a |
 | D-061 Web sub-pages to the site v2 standard: page heads, designed empty states, status in form, 400px layout | `docs/ui/WEB.md` "Sub-pages (D-061)", `scripts/shots_web_tabs.py` | n/a (no user commands changed) | n/a | n/a |
 | D-067 Engine split step 4 (core cap 15,000): dead code and duplicates deleted, `ApprovalDesk`, peer transport to `exo.peers`, scheduler to `exo.scheduler`, both attached by `exo.compose` | `docs/ENGINE-SPLIT.md` "Progress" and "Budget policy", `docs/CORE.md`, `docs/PEERS.md`, `docs/SCHEDULE.md`, `docs/WHITEPAPER.md`, `CHANGELOG.md` | n/a (no user commands changed) | §1 "The engine and what is attached to it" | n/a |
 | D-077 Core budget: a ratchet with headroom (`CORE_FLOOR` lowered by real reductions, `CORE_HEADROOM` 1,000, security and robustness fixes never blocked) | `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `tests/integration/test_wave1_acceptance.py`, `DECISIONS.md` D-077, `CHANGELOG.md` | n/a (no user commands changed) | `docs/DEVELOPER-GUIDE.md` §7 "The core line budget" | WP §11, §27 |
