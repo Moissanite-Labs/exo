@@ -87,6 +87,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   fails, so the provider's write never meets a closed pipe and the error always reports the exit code, and the TUI
   boot test drives the boot screen's clock, so a slow start can no longer end the boot before the test looks at it.
 
+### Fixed
+- A steer sent while a turn was finishing (its completion hooks still held the session) is no longer lost: it waits
+  for the lock and runs as the next turn, keeping its author. A peer, bus or job message in that window starts a turn
+  where the seat wakes instead of being queued behind a turn that was over. The web chat keeps a `steer queued`
+  chip until the message lands or is cancelled, and drops one the core no longer holds (#147, #151).
+
 ### Security
 - `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
   requests from the web server only, no inline script, style attribute or eval, no framing, plus
