@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import inspect
 import os
+import sqlite3
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
@@ -71,7 +72,16 @@ class SqliteLog:
         self.store = store
 
     def append(self, event: s.Event) -> None:
-        self.store.write_event(event)
+        try:
+            self.store.write_event(event)
+        except sqlite3.IntegrityError as exc:
+            # #237: append_event (AUTOINCREMENT) can advance events.seq past the Hub's in-memory
+            # counter while a core runs. Reseed on this event and retry once; Hub adopts event.seq
+            # after append, so its counter heals and subscribers keep seeing increasing seqs.
+            if "events.seq" not in str(exc):
+                raise
+            event.seq = self.store.last_event_seq() + 1
+            self.store.write_event(event)
 
     def read(self, since: int, session: str | None = None) -> Iterable[s.Event]:
         return self.store.events_since(since, session, limit=1 << 30, with_global=True)
@@ -526,7 +536,8 @@ class CoreRuntime:
         return {"sessions": rows}
 
     async def _approvals_list(self, b: s.ApprovalsList) -> dict[str, Any]:
-        return {"approvals": self.approvals.listing(b.session)}
+        return {"approvals": self.approvals.listing(b.session),  # one await-free copy (D-060)
+                "cursor": {"instance": self.hub.instance, "seq": self.hub.seq}}
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
         info, queued = self._info(b.session), [m.id for m in self.loop.state(b.session).steer]  # chips a client still draws
