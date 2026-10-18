@@ -175,6 +175,84 @@ def test_a_refused_answer_brings_the_card_back(tmp_path):
     run_with(tmp_path, sc, RefusingClient)
 
 
+def threadless(eng) -> s.ApprovalRequested:
+    """The card of a held peer message that no live session could take: the core opens it with no session."""
+    req = s.ApprovalRequested(request_id="r_peer", summary="held peer message", options=["allow", "deny"])
+    pending_approval(eng, None, req)
+    return req
+
+
+def test_a_card_with_no_thread_stays_in_every_thread(tmp_path):
+    """D-026: such a card belongs to every thread. The periodic check, /new and /resume keep it, and it still goes
+    when the core closes it."""
+    async def sc(app, pilot, client, eng):
+        a = app.session
+        threadless(eng)
+        await until(lambda: app.card is not None, pilot)
+        app.reconcile_every, app._reconciled = 0.0, 0.0
+        await app.reconcile_approvals()
+        assert app.card is not None and app.card.req.request_id == "r_peer"  # the core still holds it
+        await send(app, pilot, "/new")
+        await until(lambda: app.session != a, pilot)
+        assert app.card is not None and app.card.req.request_id == "r_peer"
+        await send(app, pilot, f"/resume {a}")
+        await until(lambda: app.session == a, pilot)
+        await app.reconcile_approvals()
+        assert app.card is not None and [r.request_id for r in app.approvals] == ["r_peer"]  # not twice
+        assert len(app.query(ApprovalCard)) == 1
+        eng.approvals.open.pop("r_peer")  # closed in the core with no event this window saw
+        await app.reconcile_approvals()
+        await until(lambda: app.card is None, pilot)
+
+    run(tmp_path, sc)
+
+
+def test_a_window_opened_later_shows_the_card_with_no_thread(tmp_path):
+    eng = make_engine(tmp_path)
+    client = FakeServerClient(eng)
+
+    async def main():
+        a = (await client.call(s.SessionCreate(title="old", seat="tester")))["session"]["id"]
+        threadless(eng)
+        app = ExoApp(client, seat="tester", session=a)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await asyncio.wait_for(app.ready.wait(), 5)
+            await until(lambda: app.card is not None, pilot)
+            assert app.card.req.request_id == "r_peer" and "r_peer" in app.threadless
+
+    asyncio.run(main())
+
+
+def test_a_window_started_on_a_new_thread_shows_the_card_with_no_thread(tmp_path):
+    """Plain `exo` opens a new thread: a held request of no thread that was already open shows there too (D-026)."""
+    eng = make_engine(tmp_path)
+    client = FakeServerClient(eng)
+
+    async def main():
+        threadless(eng)
+        app = ExoApp(client, seat="tester")
+        async with app.run_test(size=(120, 40)) as pilot:
+            await asyncio.wait_for(app.ready.wait(), 5)
+            await until(lambda: app.card is not None, pilot)
+            assert app.card.req.request_id == "r_peer" and "r_peer" in app.threadless
+
+    asyncio.run(main())
+
+
+def test_new_shows_a_card_with_no_thread_that_waited_behind_another_threads_card(tmp_path):
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "ask")
+        await until(lambda: app.card is not None, pilot)
+        own = app.card.req.request_id
+        threadless(eng)
+        await until(lambda: any(a.request_id == "r_peer" for a in app.approvals), pilot)   # queued behind the card
+        await send(app, pilot, "/new")
+        await until(lambda: app.card is not None and app.card.req.request_id == "r_peer", pilot)
+        assert own not in {a.request_id for a in app.approvals}                           # the old thread's stays behind
+
+    run(tmp_path, sc)
+
+
 # ---------------------------------------------------------------- turn state stays with its thread
 def test_a_switch_while_a_turn_runs_leaves_the_new_thread_idle(tmp_path):
     async def sc(app, pilot, client, eng):

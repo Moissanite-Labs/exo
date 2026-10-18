@@ -18,7 +18,7 @@ from exo.core.context import AgentContext
 from exo.core.hooks import maybe_await
 from exo.core.findings import STATUSES
 from exo.core.types import to_dict
-from exo.principal import current_caller, is_principal
+from exo.principal import current_caller, demoted, is_principal
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
 
@@ -202,7 +202,7 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         if not b.session:
             raise CommandFailed("bad_request", "rename needs a session")
         if not is_principal(current_caller()):
-            raise CommandFailed("forbidden", "only the principal can rename a session")
+            raise CommandFailed("forbidden", "only the principal can rename a session" + demoted())
         title = " ".join(b.args.split())[:200]
         if not title:
             raise CommandFailed("bad_request", "usage: /rename <title>")
