@@ -152,6 +152,21 @@ class _DetachedCore:
         return None
 
 
+_STARTED: set[int] = set()  # cores this process started
+
+
+def _reap_started() -> None:
+    """Reap started cores that have exited, if this process adopted them (PID 1 or a subreaper), so restarts do not
+    leave zombies. A core that is not our child is forgotten at once."""
+    for pid in list(_STARTED):
+        try:
+            if os.waitpid(pid, os.WNOHANG)[0] == 0:
+                continue  # still running
+        except ChildProcessError:
+            pass
+        _STARTED.discard(pid)
+
+
 def _exit_text(proc: subprocess.Popen | _DetachedCore) -> str:
     code = proc.poll()
     if code is None and getattr(proc, "gone", False):
@@ -179,6 +194,7 @@ def _spawn(home: Path, timeout: float = START_TIMEOUT) -> _DetachedCore:
         raise CoreUnavailable(f"Exo core startup helper failed (exit {proc.returncode}). "
                               f"See {log_path(home)}:\n{_tail(log_path(home))}")
     private_file(pid_path(home)).write_text(f"{int(pid)}\n")
+    _STARTED.add(int(pid))
     return _DetachedCore(int(pid))
 
 
@@ -215,6 +231,7 @@ def ensure_core(home: Path | None = None, agent: str | None = None, timeout: flo
     """Socket of a core for this agent, starting ``exo serve`` in the background if none is running."""
     home = home or home_dir()
     agent = agent or agent_name()
+    _reap_started()
     if (found := find_core(home, agent)) is not None:
         return found
     deadline = time.monotonic() + timeout

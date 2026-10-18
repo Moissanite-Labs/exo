@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Absolute symlink aliases into protected Exo stores retain the principal-only write approval floor (#130),
+  including missing leaves, deletion of store ancestors, and `cd`, `pushd` or `git -C` into an alias of the store.
+  A path the gate cannot resolve (a NUL byte) keeps its lexical check instead of raising. `cp -s`, `cp -l` and a
+  relative `ln -s` target that alias the store ask too. `docs/GATE.md` lists what stays open (hardlinks, protected
+  entries that link out of the store, case-insensitive filesystems, glob and brace spellings).
 - Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
   retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
   `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
@@ -13,6 +18,45 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `credentials`. Until D-075 lands, a coproc is denied only when its inner command outranks `opaque_exec`.
   A `credentials` line keeps the highest reversibility of its parts, so `coproc env; rm -rf x` stays
   irreversible and a policy that denies irreversible actions still denies it.
+- Gate (#184, D-038): brace sets are expanded as bash does before a path is matched against the secret stores.
+  `cat ~/.config/gh/{hosts,x}.yml`, `cat ~/.docker/{*,}`, `cat ~/{},.netrc}`, `cat ''{},.env}`,
+  `cat $""{.env,x}` and `cat .{d..f}{m..o}{u..w}` were allowed reads, as was `ls /srv/exo{007..1000..993}/keys`
+  with `EXO_HOME=/srv/exo0007` (bash pads the sequence to `0007 1000`); they are `credentials` now and ask. A shell
+  word is expanded from its source text, so quoted and escaped braces stay literal and keep their class; the
+  word as written is still checked, and `$"..."` is also read as plain `"..."`. A word that expands past 1,024
+  words, 32 levels of nesting, a sequence bound over 18 digits or a zero-padded bound past a 32-bit int (bash
+  wraps those), and any brace word after one tool call has expanded 4,096 words in all (globs count more), asks
+  as a secret-store path; so does `echo {1..2000}`, and so does a string literal in code holding compact JSON
+  with 11 or more objects, since code literals are read as shell commands.
+- Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
+  `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
+  family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
+- `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
+  requests from the web server only, no inline script, style attribute or eval, no framing, plus
+  `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
+  computed widths now go through the CSSOM instead of `style` attributes; nothing looks different.
+- The gate reads the array subscript in the variable names of `printf -v`, `read`, `declare`, `typeset`, `local`,
+  `unset`, `test -v`/`[ -v` and `wait -p` (#179, D-038). Bash runs a `$( )` or backticks there even inside single
+  quotes, so `printf -v 'a[$(gh pr comment ...)]' %s x` was allowed; it is now a `github_post`. Bash also evaluates
+  the command's output or a variable's value there, so any expansion or quoting in such a subscript asks
+  (`unset "arr[$i]"` and `printf -v 'a[$(date)]' %s x` were allowed and now ask). A nested subscript
+  (`a[b[0]+$(cmd)]`) is read to its end. A `\$` or `` \` `` at the subscript's top level is literal, as bash
+  reads it; bash before 5.2 expands a nested subscript again, so there the gate reads the command. Past the
+  nesting limit such a command is `opaque_exec`.
+- The gate reads the values `declare`, `typeset`, `local`, `readonly` and `export` evaluate again (#188, D-038).
+  With `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted (the gate reads it with or
+  without them), a `-i` value is arithmetic and a `-n` value is a name whose subscript runs when used, so
+  `declare -a 'b=($(gh pr comment ...))'`, `export -a 'b=(<(gh ...))'`, `declare -i x='a[$(gh ...)]'` and
+  `declare -n r='a[$(gh ...)]'` were allowed and are now a `github_post`. A command there, and an expansion bash
+  evaluates again, also asks (`declare -a 'b=($(date))'`, `local -i n=$1`, `local -n ref=$1`,
+  `declare -a 'a=([$i]=1)'` and `declare -a "b=($x)"` were allowed and now ask). When such a command outranks the
+  line's own category, a deny on that category becomes ask (`declare -a 'b=($(sudo ls))' > /tmp/f` under
+  `deny: [local_write]`), never allow or log, also when the policy names `opaque_exec`. A command nested deeper
+  than the gate reads asks.
+- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
+  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
+  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
+  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
@@ -78,10 +122,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   findings by default and counts the rest.
 - A core that `exo web` (or any client) starts is no longer that client's child (refs #145, D-036): a short helper
   starts a new session, forks the core and exits, so init (or the nearest subreaper) adopts the core. Process
-  ancestry changed; the principal and tool checks did not. The helper and the core run with `python -P`, so a
-  `pathlib.py` in the current folder no longer runs; an `EXO_ENGINE` module must now be installed or on `PYTHONPATH`,
-  not just in the folder the client started from; startup output from `sitecustomize` no longer breaks the start; and a core that dies while
-  starting is reported at once, with its real exit code when known and never a made-up one.
+  ancestry changed; the principal and tool checks did not. `exo stop` from another terminal now stops a core whose
+  `exo web` is still running (before, the core stayed that client's zombie and `exo stop` waited it out). The helper
+  and the core run with `python -P`, so a `pathlib.py` in the current folder no longer runs; an `EXO_ENGINE` module
+  must now be installed or on `PYTHONPATH`, not just in the folder the client started from. A core that dies while
+  starting is still reported at once, but the message gives its exit code only when the client is PID 1 or a
+  subreaper (the log tail still gives the reason). Such a client adopts the cores it starts and reaps one that exits
+  later at its next start, so restarts leave no zombies.
 
 ### Fixed
 - Esc on a `claude-cli` turn is no longer lost when it lands just as the CLI prints a line (#163). On Python 3.11
@@ -109,36 +156,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
   with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
-
-### Security
-- Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
-  `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
-  family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
-
-### Security
-- `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
-  requests from the web server only, no inline script, style attribute or eval, no framing, plus
-  `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
-  computed widths now go through the CSSOM instead of `style` attributes; nothing looks different.
-- The gate reads the array subscript in the variable names of `printf -v`, `read`, `declare`, `typeset`, `local`,
-  `unset`, `test -v`/`[ -v` and `wait -p` (#179, D-038). Bash runs a `$( )` or backticks there even inside single
-  quotes, so `printf -v 'a[$(gh pr comment ...)]' %s x` was allowed; it is now a `github_post`. Bash also evaluates
-  the command's output or a variable's value there, so any expansion or quoting in such a subscript asks
-  (`unset "arr[$i]"` and `printf -v 'a[$(date)]' %s x` were allowed and now ask).
-- The gate reads the values `declare`, `typeset`, `local`, `readonly` and `export` evaluate again (#188, D-038).
-  With `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted (the gate reads it with or
-  without them), a `-i` value is arithmetic and a `-n` value is a name whose subscript runs when used, so
-  `declare -a 'b=($(gh pr comment ...))'`, `export -a 'b=(<(gh ...))'`, `declare -i x='a[$(gh ...)]'` and
-  `declare -n r='a[$(gh ...)]'` were allowed and are now a `github_post`. A command there, and an expansion bash
-  evaluates again, also asks (`declare -a 'b=($(date))'`, `local -i n=$1`, `local -n ref=$1`,
-  `declare -a 'a=([$i]=1)'` and `declare -a "b=($x)"` were allowed and now ask). When such a command outranks the
-  line's own category, a deny on that category becomes ask (`declare -a 'b=($(sudo ls))' > /tmp/f` under
-  `deny: [local_write]`), never allow or log, also when the policy names `opaque_exec`. A command nested deeper
-  than the gate reads asks.
-- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
-  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
-  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
-  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
 
 ## [0.2.0] (egg) - 2026-10-13
 
