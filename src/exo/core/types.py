@@ -176,7 +176,8 @@ class Provider(Protocol):
 
     ``stream`` yields ProviderEvents and ends with exactly one ``done`` or
     ``error``. Common ``opts``: ``model``, ``max_tokens``, ``temperature``,
-    ``reasoning`` (effort string), ``stop``. Unknown opts are ignored.
+    ``reasoning`` (effort string), ``stop``, ``tool_choice`` (``"none"``: the
+    tools stay declared but may not be called). Unknown opts are ignored.
     System prompts are ``Message(role="system")`` items in ``messages``.
     """
 
