@@ -5,6 +5,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Security
+- Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
+  retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
+  `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
+  `function NAME { ...; }` is read the same way. An environment dump inside either (`coproc env`) is
+  `credentials`. Until D-075 lands, a coproc is denied only when its inner command outranks `opaque_exec`.
+  A `credentials` line keeps the highest reversibility of its parts, so `coproc env; rm -rf x` stays
+  irreversible and a policy that denies irreversible actions still denies it.
+
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
