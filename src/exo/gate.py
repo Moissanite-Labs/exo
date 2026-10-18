@@ -113,10 +113,12 @@ class Classification:
     text_file: str = ""               # body read from a file (the caller may load it)
     command: str = ""                 # shell command text, if any
     signals: list[str] = field(default_factory=list)
+    _command_views: list[str] = field(default_factory=list, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
+        d.pop("_command_views")
         for k in ("text", "title", "command"):
             v = d.pop(k)
             if v:
@@ -204,6 +206,35 @@ _WRITE_REDIRS = (">", ">>", ">|", "&>", "&>>", "<>", ">&")
 _REDIR_OPS = ("&>>", "&>", "<<<", "<<-", "<<", "<>", ">>", ">|", ">&", "<&", ">", "<")
 _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
 _ASSIGN = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=.*", re.S)
+_ANSI_C = re.compile(rb"\\(?:([abeEfnrtv\\'\"?])|([0-7]{1,3})|x\{([0-9A-Fa-f]*)\}?|x([0-9A-Fa-f]{1,2})"
+                     rb"|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c(\\\\?|.))", re.S)
+
+
+def _ansi_c(raw: str) -> str:
+    """The text bash 5.2 makes of a $'..' body in a UTF-8 locale (#167). Octal and \\x values keep their
+    low 8 bits, an escape bash does not know keeps its backslash, and a NUL ends the text. A \\u or \\U
+    value is written as bash's u32toutf8 writes it: UTF-8 of up to six bytes, surrogates included, and
+    nothing at all from 0x80000000 on (so `--forc\\UFFFFFFFFe` is `--force`)."""
+
+    def one(m: re.Match) -> bytes:
+        char, octal, brace, hexa, u, big, ctl = m.groups()
+        if char:
+            return bytes([dict(zip(b"abeEfnrtv", b"\a\b\x1b\x1b\f\n\r\t\v")).get(char[0], char[0])])
+        if u or big:
+            v = int(u or big, 16)
+            if v < 0x80 or v >= 0x80000000:
+                return bytes([v]) if v < 0x80 else b""
+            n = next(k for k, top in ((2, 0x800), (3, 0x10000), (4, 0x200000), (5, 0x4000000), (6, 0x80000000))
+                     if v < top)
+            lead = (0xFF00 >> n) & 0xFF | v >> 6 * (n - 1)
+            return bytes([lead] + [v >> 6 * k & 0x3F | 0x80 for k in range(n - 2, -1, -1)])
+        if ctl:                                # \c\\ takes the escaped backslash as its character
+            return b"\x7f" if ctl == b"?" else bytes([ctl[0] & 0x1F])
+        return bytes([(int(octal, 8) if octal else int(hexa or brace or b"0", 16)) & 0xFF])
+
+    out = _ANSI_C.sub(one, raw.encode("utf-8", "surrogatepass")).split(b"\0", 1)[0]
+    # Bytes that are not UTF-8 (\xff, \377) read as Latin-1 characters.
+    return re.sub("[\udc80-\udcff]", lambda b: chr(ord(b.group()) - 0xDC00), out.decode("utf-8", "surrogateescape"))
 
 
 @dataclass
@@ -213,6 +244,8 @@ class _Word:
     quoted: bool = False
     glob: bool = False         # an unquoted * or ?, or a [ or { after the first character
     started: bool = False
+    locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
+    dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
 
 
 @dataclass
@@ -220,6 +253,7 @@ class _Heredoc:
     delim: str
     strip: bool
     quoted: bool
+    ambiguous: bool = False    # delimiter spelled with $'..' or $"..": bash and dash end the body on different lines
     body: str = ""
 
 
@@ -250,7 +284,7 @@ class _Lexer:
             w = state["w"]
             if w.started:
                 if state["delim"] is not None:
-                    hd = _Heredoc(w.text, state["delim"], w.quoted)
+                    hd = _Heredoc(w.text, state["delim"], w.quoted, w.dollar_quote)
                     self.pending.append(hd)
                     toks.append(("hd", hd))
                     state["delim"] = None
@@ -362,7 +396,7 @@ class _Lexer:
                     w.text += nxt
                 self.i += 2
             elif ch == "$":
-                self._dollar(w)
+                self._dollar(w, double=True)
             elif ch == "`":
                 self._backtick(w)
             else:
@@ -384,7 +418,7 @@ class _Lexer:
         w.text += "`" + inner + "`"
         w.dynamic = w.started = True
 
-    def _dollar(self, w: _Word) -> None:
+    def _dollar(self, w: _Word, double: bool = False) -> None:
         s, i = self.s, self.i
         nxt = s[i + 1:i + 2]
         w.started = True
@@ -429,12 +463,17 @@ class _Lexer:
                 j += step
             raw = "".join(out)
             try:
-                w.text += raw.encode("latin-1", "backslashreplace").decode("unicode_escape")
+                w.text += _ansi_c(raw)
             except (UnicodeError, ValueError):
                 w.text += raw
                 w.dynamic = True
-            w.quoted = True
+            w.quoted = w.dollar_quote = True
             self.i = j + 1
+        elif nxt == '"' and not double:        # $".." (locale quoting): the string itself, without the $
+            self.i = i + 2
+            w.locale = w.locale or s[i + 2:i + 3] != '"'     # bash never translates an empty $""
+            w.dollar_quote = True
+            self._dquote(w)
         else:
             m = re.match(r"\$([A-Za-z_]\w*|[0-9@*#?$!-])", s[i:])
             if m:
@@ -450,7 +489,7 @@ def _literal_heredoc(toks: list) -> str | None:
     """`cat <<'EOF' ... EOF` inside $( ) is the heredoc text, not a command the gate must classify."""
     toks = [t for t in toks if t != ("op", ";")]
     if len(toks) == 2 and toks[0][0] == "w" and toks[0][1].text == "cat" and not toks[0][1].dynamic \
-            and toks[1][0] == "hd":
+            and toks[1][0] == "hd" and not toks[1][1].ambiguous:
         hd = toks[1][1]
         if hd.quoted or not re.search(r"\$|`", hd.body):
             return hd.body
@@ -511,6 +550,8 @@ _PREFIXES = {"sudo": {"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T"
              "caffeinate": {"-t", "-w"}, "timeout": {"-s", "-k", "--signal", "--kill-after"},
              "stdbuf": {"-i", "-o", "-e"}}
 _OPENERS = {"if", "then", "elif", "else", "do", "while", "until", "{", "}", "!", "fi", "done", "esac"}
+# openers that may follow a `coproc` or `function` NAME (`( list )` is split by the lexer and never a word)
+_COMPOUND = frozenset({"{", "while", "until", "if", "for", "case", "select", "[["})
 _SYSTEM_BIN = {"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/sbin", "/usr/sbin",
                "/usr/local/sbin", "/opt/local/bin"}
 _ENV_BIN = re.compile(r"(^|/)(\.?venv|env|\.tox/[^/]+|\.nox/[^/]+)/bin/[^/]+$|(^|/)node_modules/\.bin/[^/]+$")
@@ -930,6 +971,9 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         parts[0].signals.append("sudo")
         if parts[0].reversibility == "reversible":
             parts[0].reversibility = "costly"
+    for h in k.heredocs:
+        if h.ambiguous:      # dash and ash may end the body early and run the rest: read it as commands too
+            parts.append(classify_shell(h.body, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
     for op, t in k.redirs:
         if op not in _WRITE_REDIRS or (op == ">&" and re.fullmatch(r"\d+|-", t.text)):
             continue
@@ -945,6 +989,11 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         c = _make("store_write", summary=f"write to the Exo store: {hit}"[:120], target=hit, link=hit, command=cmd)
         c.signals.append("exo store")
         parts.append(c)
+    if any(w.locale for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]):
+        # The words are classified as decoded, so category, target and vetoes still see them, but a message
+        # catalog can replace them: the indirection signal asks unless opaque_exec is named.
+        for p in parts:
+            p.signals += ["indirection", "locale translation"]
     return parts
 
 
@@ -978,6 +1027,23 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
 
     if prog in _OPAQUE_PROGRAMS:
         parts = [_opaque(f"{prog}: {_OPAQUE_PROGRAMS[prog]}", cmd)]
+        if prog in ("coproc", "function"):
+            # bash: `coproc [NAME] compound_command`, `function NAME compound_command`. The name is
+            # skipped before a compound opener; before a simple command (`coproc w echo hi`) the first
+            # word is the program. Keep the original words so quotes, expansion flags and stdin survive.
+            body = words[1:]
+            if len(body) > 1 and not body[1].quoted and body[1].text in _COMPOUND:
+                body = body[1:]
+            elif prog == "function":
+                body = []                        # `function f() { ...; }`: the body is parsed as its own command
+            parts += inner_words(body)
+            # An environment dump is credentials; classify_shell looks for one only in top-level commands.
+            i = 0
+            while i < len(body) and not body[i].quoted and body[i].text in _OPENERS:
+                i += 1
+            if _env_dump(_strip_prefixes_keep_env([w.text for w in body[i:]])[0]):
+                parts.append(_make("credentials", summary="shell touching environment dump", command=cmd,
+                                   signals=["secret store"]))
         if prog == "trap" and len(argv) > 1 and depth < _DEPTH:
             parts.append(classify_shell(argv[1], inner_depth))
         return parts
@@ -1247,6 +1313,8 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     if func:
         parts.append(_opaque("defines a shell function", cmd))
     c = _combine(parts, cmd)
+    if c.category == "credentials":  # a secret beside an irreversible command keeps that command's weight
+        c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
     segs = [[w.text for w in k.words] for k in cmds if k.words]
     hit = _shell_credential_hit(cmd, segs)
     if hit and c.category != "credentials":
@@ -1256,6 +1324,10 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
     c.command = cmd
+    c._command_views = list(dict.fromkeys([
+        _policy_command_view(cmd),
+        *(view for part in parts for view in part._command_views),
+    ]))
     # Outbound text: if several gh segments post text, keep the most severe one's text.
     bodies = [h.body for k in cmds for h in k.heredocs]
     if not c.text and c.category in OUTBOUND and bodies and c.category != "web_post":
@@ -1290,14 +1362,19 @@ def classify_code(code: str) -> Classification:
     texts = [m.group(2) for m in _CODE_STRINGS.finditer(code)]
     texts += [" ".join(shlex.quote(s) for _, s in re.findall(r"(['\"])((?:(?!\1).)*)\1", m.group(1)))
               for m in _CODE_LISTS.finditer(code)]
+    views: list[str] = []
+    signals = ["indirection"]
     for s in texts[:200]:
         c = classify_shell(s, depth=_DEPTH - 1)
+        views += c._command_views                 # every literal feeds the veto view, benign or not
+        signals += [x for x in c.signals if x == "locale translation"]
         if c.category not in _BENIGN:
             parts.append(c)
     c = _combine(parts, code)
     c.tool = "execute_code"
     c.command = code
-    c.signals = list(dict.fromkeys(c.signals + ["indirection"]))
+    c.signals = list(dict.fromkeys(c.signals + signals))
+    c._command_views = list(dict.fromkeys(views))
     return c
 
 
@@ -1808,7 +1885,41 @@ def _as_list(v: Any) -> list:
     return v if isinstance(v, list) else [v]
 
 
-def _rule_matches(match: Mapping, c: Classification) -> bool:
+def _policy_command_view(command: str) -> str:
+    """Decode literal shell words without turning word contents into shell syntax.
+
+    This is an additional veto view, never an authorization view. Dynamic words stay
+    opaque. Execution strings get their own views only through classify_shell recursion.
+    """
+    tokens = _Lexer(command).run()
+    rendered = []
+    for kind, value in tokens:
+        if kind == "w":
+            if value.dynamic:
+                rendered.append("\x00\x01\x00")   # no letters or operators; a real word escapes control characters
+            elif not value.text:
+                rendered.append("''")
+            else:
+                rendered.append("".join(
+                    f"\\x{ord(ch):02x}" if ch.isspace() or ord(ch) < 32 or ch in "\\'\";&|()<>" else ch
+                    for ch in value.text
+                ))
+        elif kind in ("op", "redir"):
+            rendered.append(value)
+        elif kind == "hd":
+            rendered.append("\x00\x02\x00")   # the heredoc body, the same way
+    return " ".join(rendered)
+
+
+def _command_matches(pattern: str, c: Classification, *, veto: bool = False) -> bool:
+    regex = re.compile(pattern)
+    texts = [c.command or ""]
+    if veto:
+        texts.extend(c._command_views)
+    return any(regex.search(text) for text in texts)
+
+
+def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False) -> bool:
     for k, want in match.items():
         if k == "category" and c.category not in [str(x) for x in _as_list(want)]:
             return False
@@ -1816,7 +1927,7 @@ def _rule_matches(match: Mapping, c: Classification) -> bool:
             return False
         if k == "target" and not _glob_any(c.target, _as_list(want)):
             return False
-        if k == "command" and not any(re.search(str(p), c.command or "") for p in _as_list(want)):
+        if k == "command" and not any(_command_matches(str(p), c, veto=veto) for p in _as_list(want)):
             return False
         if k == "exposure" and c.exposure not in _as_list(want):
             return False
@@ -1834,7 +1945,7 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
     or a mapping like a rule's match. Plain prose that matches none of these is ignored."""
     for e in entries:
         if isinstance(e, Mapping):
-            if e and _rule_matches(e.get("match", e), c):
+            if e and _rule_matches(e.get("match", e), c, veto=True):
                 return str(e.get("reason") or e)
             continue
         s = str(e).strip()
@@ -1845,7 +1956,7 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
             return s
         if kind == "target" and _glob_any(c.target, [val.strip()]):
             return s
-        if kind == "command" and val.strip() and re.search(val.strip(), c.command or ""):
+        if kind == "command" and val.strip() and _command_matches(val.strip(), c, veto=True):
             return s
     return ""
 
@@ -1899,8 +2010,10 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     """Map a classification through the principal's policies. Pure.
 
     Order: matrix cell, then a category override, then the first matching rule (each may lower
-    or raise). Then only raises: reserved actions, escalations (budget, third party, listed
-    categories), posting violations and the operator floor. A deny entry wins over everything.
+    or raise). Then only raises: a deny or ask rule whose `command` regex matches the literal-word
+    view but not the text, reserved actions, escalations (budget, third party, listed categories),
+    posting violations and the operator floor. A deny entry wins over everything. A line with a
+    `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
     `context` may carry `spent_today` for the daily budget.
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
@@ -1931,6 +2044,14 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
             reason = f"{reason}; {why}"
             if rule == "matrix":
                 rule = step
+
+    # A deny or ask rule keyed on `command:` also sees the literal-word view (#136), and can only raise.
+    # A rule the command text matched was settled by the first-match pass above, whatever its place
+    # in the list, so this never changes an outcome the view did not add to.
+    for r in gates.get("rules") or []:
+        if r["decision"] in ("ask", "deny") and "command" in r["match"] \
+                and not _rule_matches(r["match"], eff) and _rule_matches(r["match"], eff, veto=True):
+            bump(r["decision"], r["reason"], "rule")
 
     if (eff.category == "opaque_exec" or "indirection" in eff.signals) and not opaque_named:
         bump("ask", "runs code the gate cannot fully see (" + (c.summary or "indirection") + ")", "opaque")
@@ -1976,8 +2097,16 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     hit = _list_matches(gates.get("deny") or [], eff)
     if hit:
         outcome, reason, rule = "deny", f"denied by policy ({hit})", "deny"
-    return Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
-                    exposure=eff.exposure, third_party=eff.third_party)
+    d = Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
+                 exposure=eff.exposure, third_party=eff.third_party)
+    if "locale translation" in c.signals and c.category != "opaque_exec":
+        # A $".." word can turn into any code (#136): decide the line as opaque_exec too, and keep the stricter.
+        rev, exp, third = CATEGORIES["opaque_exec"]
+        alt = decide(Classification(**{**asdict(c), "category": "opaque_exec", "reversibility": rev, "exposure": exp,
+                                       "third_party": third, "signals": ["indirection"]}), pol, ctx)
+        if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
+            return alt
+    return d
 
 
 def summarize(c: Classification, d: Decision, default: str = "skip") -> str:

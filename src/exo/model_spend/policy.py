@@ -15,7 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from .billing import Price, SpendDenied, _money
+from .billing import Price, SpendDenied, _money, check_tier_rates
 
 POLICY_ENV = "EXO_MODEL_SPEND_POLICY"
 MAX_BYTES = 65536
@@ -104,7 +104,7 @@ def validate_policy(raw: Any) -> dict:
             raise ValueError("protected prices and identifiers must be strings")
         for name in ("input", "output", "cache_read", "cache_write"):
             _decimal(price[name])
-        Price.parse(price)
+        check_tier_rates(Price.parse(price))
     return raw
 
 

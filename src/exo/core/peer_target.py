@@ -66,7 +66,7 @@ class EngineTarget(Target):
 
     def state(self, session: str) -> str:
         st = self.e.loop._state.get(session)
-        return "running" if st is not None and st.running else "idle"
+        return "running" if st is not None and st.accepting_steers else "idle"  # a finishing turn takes no steer (#147)
 
     def can_wake(self, session: str) -> bool:
         wake = self.e.peer_cfg.wake
