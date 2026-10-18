@@ -101,7 +101,8 @@ reply was lost; reconcile from the snapshot instead. Principal clients on the Un
 `exo.protocol.client.Client(principal=...)`, which checks the peer with the kernel first (`docs/GATE.md`); a refusal
 is `exo.peerauth.PrincipalRefused`, a `ConnectError` whose message names the reason. `GET /events` frames are raw
 UTF-8 JSON (U+0085, U+2028, U+2029 and lone surrogates escaped); the Python client skips a frame over 16 Mi characters and
-resumes after its seq.
+resumes after its seq, with or without `reconnect`, so a caller that keeps its own `since` gets the next event and
+never sees the skipped one.
 
 Who sent a command is stamped by the transport, not read from the body (D-039, `docs/GATE.md` "Who answered").
 A client of the principal that answers approvals passes a label: `Client(socket=..., principal="tui")` sends the

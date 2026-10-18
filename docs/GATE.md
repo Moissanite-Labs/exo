@@ -153,7 +153,8 @@ opens with `: exod instance=<id> heartbeat=<s>`. `approvals.list` returns
 then apply events above `seq`; a different `instance` means the core restarted and its pending asks
 are gone. The Python client ends a stream that brings no complete frame (an event or a heartbeat) for
 `idle` seconds (45 by default); partial bytes do not count. A frame over 16 Mi characters is skipped: the client
-resumes after that frame's seq, since resuming at it would replay it forever. The core writes frames
+resumes after that frame's seq, since resuming at it would replay it forever, with or without `reconnect`, so a
+caller that keeps its own `since` (the exo-bus channel) gets the next event. The core writes frames
 as raw UTF-8 (escaping U+0085, U+2028, U+2029 and lone surrogates, which line readers split on or
 cannot encode), so a frame stays near the size of the request that made it; text made of those
 escaped characters can still grow up to three times. A joined terminal window resends a command

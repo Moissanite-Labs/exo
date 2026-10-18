@@ -71,7 +71,7 @@ class Client:
                      reconnect: bool = False, backoff: float = 0.5) -> AsyncIterator[s.Event]:
         """Stream events with seq > since. With ``reconnect`` the stream resumes
         from the last seen seq after a drop, so nothing is missed or repeated. An event too large to read is
-        skipped (``last_seq`` moves past it)."""
+        skipped (``last_seq`` moves past it) and the stream reads on after it, with or without ``reconnect``."""
         self.last_seq = since
         while True:
             try:
@@ -81,7 +81,9 @@ class Client:
             except FrameTooLarge as exc:  # resuming at the same seq would replay the same frame forever: skip it
                 if exc.seq is None:
                     raise
-                self.last_seq = max(self.last_seq, exc.seq)
+                if exc.seq > self.last_seq:  # read on: a caller with its own cursor would ask for it again
+                    self.last_seq = exc.seq
+                    continue
             except (httpx.TransportError, httpx.StreamError):
                 pass
             except ClientError:  # a refusal or a 5xx while the core restarts: keep trying, never end the feed (D-045)
