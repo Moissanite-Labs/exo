@@ -80,7 +80,7 @@ mode = "lift"
 upstream = ["tools/fuzzy_match.py"]
 commit = "dce1e9b37581dd62e480a9064dc04a709c2940d3"
 reconciled = "2026-10-12"
-changes = "Strategy chain, escape-drift guards, reindent and Unicode preservation kept; metrics hook dropped; docstrings shortened."
+changes = "Strategy chain, escape-drift guards, reindent and Unicode preservation kept; metrics hook dropped; docstrings shortened. The similarity strategies (block_anchor, context_aware) refuse a pattern with fewer than two non-blank lines."
 
 [[module]]
 exo = "src/exo/core/tools/builtin/patch.py"

@@ -3,7 +3,8 @@
 
 An ordered chain of increasingly permissive strategies lets whitespace,
 indentation, escaping and Unicode drift in tool-call arguments still land on
-the intended region::
+the intended region. Exo change: the two similarity strategies need two or more
+non-blank lines, so a one-line pattern whose text differs is refused. Usage::
 
     new_content, count, strategy, error = fuzzy_find_and_replace(
         content, old_string, new_string, replace_all=False)
@@ -156,9 +157,9 @@ def _strategy_unicode_normalized(content: str, pattern: str) -> list[Span]:
 
 
 def _strategy_block_anchor(content: str, pattern: str) -> list[Span]:
-    """Anchor on first and last lines, similarity-score the middle."""
+    """Anchor on first and last lines, similarity-score the middle. Needs two non-blank lines."""
     pat_lines = _unicode_normalize(pattern).split("\n")
-    if len(pat_lines) < 2:
+    if len([p for p in pat_lines if p.strip()]) < 2:  # blank lines are no anchor for one line
         return []
     first, last, n = pat_lines[0].strip(), pat_lines[-1].strip(), len(pat_lines)
     norm_lines = _unicode_normalize(content).split("\n")
@@ -179,10 +180,10 @@ def _strategy_block_anchor(content: str, pattern: str) -> list[Span]:
 
 
 def _strategy_context_aware(content: str, pattern: str) -> list[Span]:
-    """Last resort: anchored per-line similarity, every non-blank line >= 0.80."""
+    """Last resort for two or more non-blank lines (one has no context): each non-blank line >= 0.80."""
     pat_lines, lines = pattern.split("\n"), content.split("\n")
     n = len(pat_lines)
-    if n > len(lines):
+    if n > len(lines) or len([p for p in pat_lines if p.strip()]) < 2:
         return []
 
     def sim(a: str, b: str) -> float:
