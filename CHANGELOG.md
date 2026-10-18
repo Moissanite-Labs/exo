@@ -6,6 +6,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Gate (#230, #232, D-038): follow-ups to the exec-option and environment-dump coverage of #164. These were allowed
+  and now ask: an `ssh`/`scp -o` setting whose keyword the gate cannot read (`ssh -o "$OPT" h`, `-o $OPT`, a glob, an
+  unclosed quote that the expansion may close: `-o '"'"$OPT"`) is `opaque_exec`; `git ls-remote --exec=cmd`, git's
+  hidden synonym of `--upload-pack`, is followed; an environment dump behind a `NAME+=value` or `NAME[i]=value`
+  assignment (`FOO+=1 printenv GITHUB_TOKEN`, `sudo FOO+=1 printenv X`, `env FOO[0]=1`) is `credentials`; tar takes
+  any abbreviation of `--checkpoint-action` longer than `--checkpoint` (`--checkpoint-a=exec=cmd`, `--checkpoint-ac
+  'exec=cmd'`), and those are followed as the full name was; and `mosh --ssh=cmd` (also `--ssh cmd` and `-ssh=`) in
+  any case or after `+` (`--SSH=`, `-Ssh`, `+ssh=`), as Perl's Getopt::Long reads it, is followed like `rsync -e`. Two
+  asks #164 added are allowed again, exactly as before it: ssh's `none` value (`-o ProxyCommand=none`,
+  `RemoteCommand`, `LocalCommand`, `KnownHostsCommand`, `PKCS11Provider` or `SecurityKeyProvider` set to `none`, any
+  case), which ssh_config documents as turning the setting off; and a `psql` line starting with `system` (psql has no
+  `system` command; `mysql` keeps it, and both keep `\!`). A card no longer says "runs runs", `ssh {,} host -o ...`
+  has a test, and GATE.md names the compressors the gate knows and `ssh -F` as a known limit.
 - Gate (#192, D-038): on a line that enters a folder that can hold a secret store, a relative read of a store file is
   `credentials` and asks. `cd ~/.config/gh && cat hosts.yml`, `cd ~/.kube && cat config`,
   `cd ~/.docker && cat config.json`, `cd ~/.kube && tar czf - .` and `cd ~/.config/g{h..h} && cat hosts.yml` were

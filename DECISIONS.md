@@ -856,6 +856,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   of value-taking options lists only options known to take one. Rejected: scanning every word for option
   letters (the earlier form of this change), which lost `-oProxyCommand` to a later `o` and asked on `ssh host
   curl -I URL`. Environment dumps are credentials behind runners and prefixes too (`uv run printenv X`).
+  *Amendment 2026-10-18 (issues #230, #232):* follow-ups to the above. An ssh `-o` keyword the gate cannot read (`-o
+  "$OPT"`, a glob, an unclosed quote an expansion may close) asks as opaque_exec, like any other value in a variable.
+  `git ls-remote --exec`, a hidden synonym of `--upload-pack`, is followed (ls-remote rejects `-u`, which is still
+  read: reading more than git is fail closed). An assignment before a command is any form bash takes (`NAME+=value`,
+  `NAME[i]=value`), so a dump behind one is credentials. tar's `--checkpoint-action` is read in any abbreviation
+  longer than `--checkpoint` (an option of its own, whose optional value must not swallow the next word), and `mosh
+  --ssh` is followed like `rsync -e` in any case and after `+`, as Getopt::Long reads it. Two asks the first change
+  added are dropped, and those lines classify exactly as before it: ssh's `none` value for a command or library
+  setting, which ssh_config documents as switching the setting off (CLEAR_ON_NONE, any case, the bare word only), and
+  a `psql` line starting with `system`, which is mysql's command and SQL in psql.
+  Rejected: keeping them as fail-safe asks, since they are ordinary spellings and the gate's docs never claimed them.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
