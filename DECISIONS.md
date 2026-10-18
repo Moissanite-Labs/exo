@@ -794,6 +794,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   floor keeps them at ask rather than falling to the push's own `log`. `coproc W { ...; } <<EOF` and
   `function NAME { ...; } <<EOF` are fed the same way once #181 reads their bodies; the body of `time { ...; }` is
   not read at all, so it still asks as `opaque_exec`.
+  *Amendment 2026-10-17 (issue #167):* the lexer decoded `$'..'` with Python's `unicode_escape`. Bash's short
+  escapes (`\u65`, `\x4`, `\U41`), its 8-bit octal (`\545` is `e`), `\x{..}` and its NUL cut-off differ from that,
+  so `git push $'--forc\u65' origin main` read as a plain push while bash ran a force push. `$'..'` is now decoded
+  by bash 5.2's ANSI-C rules in a UTF-8 locale (`gate._ansi_c`), checked escape by escape against bash. A `\u` or
+  `\U` value that is no character is written as bash's u32toutf8 writes it (up to six bytes that are not ASCII,
+  nothing from 0x80000000 on), so every `$'..'` word is read. Category and target vetoes see the decoded word; a
+  `command:` regex still sees the raw line until the literal-word view (#187) uses the same decoder.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
