@@ -154,7 +154,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   in /providers`) and the turn is not retried three times. Later turns in the key's cooldown keep that cause and the
   provider's text instead of "all routes failed or are cooling down". Some providers send 403 for flagged input, and
   that text says so. A local server that refuses the connection is reported as `ollama is
-  not running at 127.0.0.1:11434: start it, then test it in /providers`, not a raw `ConnectError`. A background
+  not running at 127.0.0.1:11434: start it, then test it in /providers`, not a raw `ConnectError`. That address,
+  here and in the terminal client's first-run note, is only the host and port of `base_url`. A user or password
+  in the URL never reaches the error, the session store or the note. A background
   summary that hits either error still tries again once the route reopens. The terminal
   client's first run no longer says "add a key" when the default is a keyless local server or CLI, and the
   failed-call tip says `/providers` checks keys, servers and logins. A passing provider test in `/providers` or the

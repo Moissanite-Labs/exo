@@ -14,7 +14,7 @@ from exo.core.loop import Loop
 from exo.core.models import FakeProvider, Router
 from exo.core.models.decision import DecisionError, ask_choice_result
 from exo.core.models.fake import rate_limited
-from exo.core.models.router import AUTH_TTL
+from exo.core.models.router import AUTH_TTL, server_address
 from exo.core.sessions import EventBus, SessionStore
 from exo.core.types import Message, ProviderEvent
 
@@ -194,6 +194,67 @@ def test_only_a_refused_local_connection_reads_as_stopped():
     assert ev.retryable and "ConnectError" in ev.error and "not running" not in ev.error
     ev = last("ollama", httpx.ReadTimeout("timed out"))
     assert ev.retryable and "not running" not in ev.error
+
+
+URL_WITH_LOGIN = "http://user:pw@127.0.0.1:8000/v1"
+
+
+def stopped_local(base_url):
+    """A local provider ``lm`` at ``base_url`` whose server refuses the connection."""
+    rec = Recorder(*[(0, httpx.ConnectError("All connection attempts failed"), {})] * 3)
+    return Router(roles={"main": ["lm:m"]}, providers={"lm": {"transport": "openai", "base_url": base_url,
+                                                              "local": True}},
+                  catalog={"providers": {}, "models": {}, "roles": {}}, env={}, clock=Clock(), client=rec.client())
+
+
+@pytest.mark.parametrize("base_url,shown", [
+    ("http://127.0.0.1:11434/v1", "127.0.0.1:11434"),
+    (URL_WITH_LOGIN, "127.0.0.1:8000"),
+    ("http://user:pw@[::1]:8000/v1", "[::1]:8000"),
+    ("https://user:pw@example.com/v1", "example.com"),
+    ("", "its configured address"),
+    (None, "its configured address"),
+    ("127.0.0.1:8000", "its configured address"),  # no scheme, so no host
+    ("http://user:pw@[::1/v1", "its configured address"),  # ValueError: a bad IPv6 literal
+    ("http://user:pw@127.0.0.1:99999/v1", "its configured address"),  # ValueError: no such port
+])
+def test_server_address_is_the_host_and_port_only(base_url, shown):
+    assert server_address(base_url) == shown
+
+
+@pytest.mark.parametrize("base_url,where", [(URL_WITH_LOGIN, "127.0.0.1:8000"),
+                                            ("http://user:pw@[::1]:8000/v1", "[::1]:8000"),
+                                            ("", "its configured address")])
+def test_a_stopped_server_is_named_by_host_and_port_never_the_urls_login(base_url, where):
+    """A base_url may carry user:password@. The error lands in the Error event, the model.call record and text the
+    model reads, so it shows the host and port only. An empty base_url has no address to show."""
+    ev = run(stopped_local(base_url))[-1]
+    assert ev.kind == "error" and not ev.retryable
+    assert ev.error == f"lm is not running at {where}: start it, then test it in /providers"
+    assert "user" not in ev.error and "pw" not in ev.error
+
+
+def test_a_stopped_server_keeps_the_urls_login_out_of_the_session_store(tmp_path):
+    """End to end through the turn loop: the Error event, the model.call record and the session file on disk hold
+    no part of the login. The file check uses longer names, since "user" is in every stored user message."""
+    store = SessionStore(tmp_path / "s.sqlite")
+    router = stopped_local("http://probeuser:probe-pw@127.0.0.1:8000/v1")
+    loop = Loop(store, router.provider("main"), bus=EventBus(store), retry_delay=0)
+
+    async def go():
+        info = await loop.create_session()
+        await loop.send(info.id, "say hi")
+        return info.id
+
+    events = store.events_since(0, session=asyncio.run(go()))
+    err = next(e.body for e in events if e.type == "error")
+    call = next(e.body for e in events if e.type == "model.call")
+    assert err.message == "lm is not running at 127.0.0.1:8000: start it, then test it in /providers"
+    assert call.error == err.message
+    assert "user" not in err.message and "pw" not in err.message
+    store.close()
+    files = list(tmp_path.glob("s.sqlite*"))
+    assert files and not [f for f in files if b"probeuser" in f.read_bytes() or b"probe-pw" in f.read_bytes()]
 
 
 def test_a_background_summary_is_retried_later_not_dropped():

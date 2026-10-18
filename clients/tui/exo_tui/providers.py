@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from urllib.parse import urlsplit
 
 from rich.console import Group
 from rich.text import Text
@@ -24,6 +23,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
 from exo import providers_setup as ps
+from exo.core.models.router import server_address
 from exo.protocol import schema as s
 from exo_tui.theme import DOT, chips, header_rule, rich_style
 
@@ -48,7 +48,7 @@ def setup_advice(table: list[dict[str, Any]]) -> str:
     must be started, a CLI installed or logged in."""
     r = next((r for r in table if r.get("default") and not r.get("ready")), {})
     if r.get("needs") == "server":
-        where = urlsplit(r.get("base_url") or "").netloc or "its address"
+        where = server_address(r.get("base_url"))  # host and port only: never a password in the URL
         return f"{r['provider']} is not running at {where}: start it, then test it in /providers."
     if r.get("needs") == "cli":
         fix = "log in" if r.get("status") == "not logged in" else "install it and log in"
