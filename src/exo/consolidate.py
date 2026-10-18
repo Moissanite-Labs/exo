@@ -1208,6 +1208,7 @@ def proposal_accept(store: PrincipalStore, ledger: Ledger, pid: str, *, author: 
     if p.ptype == "skill":
         return _accept_skill(store, ledger, st, p, status, author)
     path = store.nodes_dir / f"{p.node_id}.md"
+    store.refresh()  # a long-lived store (the learner's) may predate nodes written since: lint and link against disk
     before = store.lint()
     new_text, old_text = node_text_for(store, p)
     path.parent.mkdir(parents=True, exist_ok=True)

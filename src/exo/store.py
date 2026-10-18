@@ -10,8 +10,9 @@ Layout (see templates/principal-store/):
     corpus/private/     raw record, git-ignored, mode 0700
     ledger.sqlite       the event log (exo.ledger)
 
-The store is principal-agnostic. Its root is a parameter; the default for a principal id
-is `$EXO_HOME/principals/<id>`, with EXO_HOME defaulting to `~/.exo`.
+The store is principal-agnostic. Its root is a parameter; for a principal id it is the root
+recorded in config `principals.<id>`, else `$EXO_HOME/principals/<id>`, with EXO_HOME defaulting
+to `~/.exo` (`principal_root`).
 """
 from __future__ import annotations
 
@@ -52,10 +53,25 @@ def exo_home() -> Path:
     return Path(os.environ.get('EXO_HOME') or Path.home() / '.exo').expanduser()
 
 
-def principal_root(pid: str) -> Path:
+def explicit_roots(home: str | os.PathLike | None = None) -> dict[str, Path]:
+    """Store roots by principal id from `principals` in `<home>/config.json` (`exo init --root` and
+    `exo import-store --root` record them). A missing or unreadable file, or a bad entry, adds nothing."""
+    try:
+        data = json.loads((Path(home or exo_home()).expanduser() / 'config.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    roots = data.get('principals') if isinstance(data, dict) else None
+    return {pid: Path(root).expanduser() for pid, root in (roots.items() if isinstance(roots, dict) else ())
+            if isinstance(pid, str) and ID_RE.match(pid) and isinstance(root, str) and root.strip()}
+
+
+def principal_root(pid: str, home: str | os.PathLike | None = None) -> Path:
+    """The store of a principal id: its explicit root (`explicit_roots`), else `<home>/principals/<id>`.
+    `home` defaults to `$EXO_HOME`. Every reader that turns an id into a store goes through here."""
     if not ID_RE.match(pid):
         raise ValueError(f'bad principal id {pid!r}: use lowercase letters, digits, - and _')
-    return exo_home() / 'principals' / pid
+    home = Path(home).expanduser() if home else exo_home()
+    return explicit_roots(home).get(pid) or home / 'principals' / pid
 
 
 def template_dir() -> Path:
@@ -177,6 +193,7 @@ class PrincipalStore:
     def __init__(self, root: str | os.PathLike):
         self.root = Path(root).expanduser().resolve()
         self._nodes: dict[str, dict] | None = None
+        self._seen: tuple = ()  # the node files as the last reload saw them (`refresh`)
 
     def __repr__(self) -> str:
         return f'PrincipalStore({str(self.root)!r})'
@@ -220,7 +237,21 @@ class PrincipalStore:
         meta['_path'] = path.relative_to(self.root).as_posix()
         return meta
 
+    def _node_files(self) -> tuple:
+        """(path, mtime, size) of every node file: it changes when a node is added, edited or removed."""
+        seen = []
+        for d, _, files in os.walk(self.nodes_dir):
+            for f in files:
+                if f.endswith('.md'):
+                    try:
+                        st = os.stat(os.path.join(d, f))
+                    except OSError:
+                        continue
+                    seen.append((os.path.join(d, f), st.st_mtime_ns, st.st_size))
+        return tuple(sorted(seen))
+
     def reload(self) -> dict[str, dict]:
+        self._seen = self._node_files()  # before reading, so a write during the walk shows at the next refresh
         nodes: dict[str, dict] = {}
         if self.nodes_dir.is_dir():
             for d, _, files in sorted(os.walk(self.nodes_dir)):
@@ -231,6 +262,15 @@ class PrincipalStore:
                             nodes[n['id']] = n
         self._nodes = nodes
         return nodes
+
+    def refresh(self) -> bool:
+        """Reload when a node file was added, edited or removed since the last read: another process or another
+        store object (the CLI's `exo proposals accept`, the learner's) wrote it. True when it reloaded. `nodes`
+        itself stays a plain cached read, so a long-lived reader calls this once per use."""
+        if self._nodes is not None and self._node_files() == self._seen:
+            return False
+        self.reload()
+        return True
 
     @property
     def nodes(self) -> dict[str, dict]:

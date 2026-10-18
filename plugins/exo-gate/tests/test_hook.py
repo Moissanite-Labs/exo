@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import sys
 
 import pytest
@@ -260,6 +261,17 @@ def test_settings_resolution(tmp_path):
     assert s.principal_store == tmp_path / "x" and s.mode == "enforce"
     s = resolve_settings(env={"EXO_HOME": str(tmp_path)})
     assert s.principal_store is None
+
+
+def test_settings_find_a_store_made_with_root(tmp_path):
+    """`exo init <id> --root DIR` records DIR in config `principals.<id>`: the gate reads that store's policies,
+    ledger and grants, as memory and the store commands do. Not a principal id: no store, the default policies."""
+    (tmp_path / "config.json").write_text(json.dumps({"principals": {"p1": str(tmp_path / "elsewhere")}}))
+    s = resolve_settings(env={"EXO_HOME": str(tmp_path), "EXO_PRINCIPAL": "p1"})
+    assert s.principal_store == tmp_path / "elsewhere"
+    assert s.grants_path == tmp_path / "elsewhere" / "state" / "approval-grants.json"
+    s = resolve_settings(env={"EXO_HOME": str(tmp_path), "EXO_PRINCIPAL": "../p1"})
+    assert s.principal_store is None and s.grants_path == tmp_path / "state" / "gate-grants.json"
 
 
 def test_plugin_entry_point_imports(monkeypatch):
