@@ -408,6 +408,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Policy is the receiving seat's: auto for the same principal, hold otherwise, deny for a bad signature; held
   messages wait 30 minutes for an approval card. A peer message is input, never consent: attempts to approve
   are refused and shown to the principal.
+  *Amendment 2026-10-18 (PR #212):* a held message whose sender named no session, while no session is live, has an
+  approval with no thread. Both clients show that card in every thread. Allow used to close it as denied ("no
+  session here can take a message"), although the card says allow delivers it. Allow now opens a new thread of the
+  seat, titled after the sender, and delivers the message there. If that thread cannot open, the message closes as
+  not delivered and the principal gets a notice. Deny and expiry open no thread.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -754,6 +759,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Under reduced motion there is no timer: it only updates on events.
 - **Typo help:** an unknown `/comand` is not sent. The note says "did you mean /compact?" and the corrected line waits
   in the composer. With nothing close, the line goes to the core as before. The web does the same for its commands.
+  *Amendment 2026-10-18 (issue #146):* on the web the names are the page's own commands, the core's `commands.list`
+  and the terminal client's own (its `COMMANDS` table: core plugin names such as `/grants` count only when
+  `commands.list` has them, as in the TUI), and "near" is the TUI's rule (a port of `complete.closest`, for
+  lower-case names only). A `/name` from those the page does not run (`/grants`, `/help`), or a near typo of one,
+  stays in the box with a note rather than becoming a message; a line close to no name (`/tmp is full`, `/data is
+  corrupted`, `/Users is big`) is a message. Until the page has the core's names it holds every `/name` line that is
+  not its own or the terminal client's, and asks again with no limit (1 s doubling to every 30 s, and on each send,
+  which does not move the backoff on). The asking ends once the core has given its names (an older core that
+  answers `unknown_command` or `unsupported` for `commands.list` counts, with no core names) and its
+  `guidance.enabled` (an unset key, answered `not_found`, is on).
 - **Rejected:** a model call to suggest commands (cost, latency, and the rules are enough); a second ranking in each
   client (they would drift); storing history in the browser (the web client keeps none across page loads, on purpose).
 - **Not done:** file completion for bare paths (`./x`, `~/x`) outside `@`; `/findings <id>` (the core takes only
@@ -1573,6 +1588,59 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Limits:** trust on first use of the pin; SSH signatures only; commit signatures, not tags; `uv tool` installs
   cannot be verified. A key compromise needs the pin edited by hand.
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
+
+## D-075 (2026-10-13) A deny or reserved entry matches any simple command on a line
+- **Why:** the 2026-10-13 review. `classify_shell` reduces a compound line to its most severe part, and `decide`
+  checked the principal's `deny` and `reserved` lists against that one part only. With `vcs_push` in `deny`,
+  `git push origin main` alone was denied, but `git push origin main && rm -rf build` was an `ask` for the delete,
+  `git push origin main; cat ~/.ssh/id_rsa` an `ask` for the credential read, and `git push origin main && gh pr
+  comment 3 --body hi` an `ask` for the post. The card named the other action, and the denied push ran once it was
+  approved. Only `command:<regex>` entries were immune, because they see the whole line.
+- **Decision:** a classification keeps the simple commands it was built from (`parts`, nested through `bash -c`,
+  `python -c`, `eval`, `xargs` and the rest). `decide` applies the principal's scopes to each and checks `reserved`
+  and `deny` entries against the combined result and every part; a hit on any part denies (or reserves) the line.
+  Parts are checked for `deny` and `reserved` only: rules, category overrides, the opaque bump, third-party
+  escalation, posting checks and the floors still see the dominant part, which sets the card, the category and
+  everything else. A part carries the tool of the call it came in on (`tool:execute_code` names the tool, not
+  `python -c` run from bash) and the decoded views of its line (#136), so a `command` entry matches a part as it
+  matches the line (`g''it push origin main && rm -rf build`), the `ssh` hop is a part of its own whose target is
+  the bare host (no `user@`, `ssh://` or `:port`) and the destination as written, and the inner commands of an `ssh`
+  line are `internal` like the line. A
+  string literal in code is kept when any simple command in it is non-benign, whatever the order. A mapping entry in
+  `deny` or `reserved` counts only its match keys: `reason`, `name`, a note or a typo is dropped, so it widens the entry
+  and never voids it (rejecting it at load would fall back to the defaults and lose the whole list). `Decision.reserved`
+  lists the parts a reserved entry matched, once each, under the pinned policy and a pending one alike, and the exo-gate
+  hook refuses a standing grant for the line's category when one of them lies outside the grant; it compares the targets
+  as written, and only the decision's ledger view redacts URL userinfo. `ssh` options are read as getopt reads them, so
+  a value-taking letter at the end of a cluster (`-vp 22`) or `-B`/`-P`/`-I` no longer puts the option's value in the
+  host's place; such a line asks, and wherever the gate now reads another host than it used to, the line asks and
+  both readings' parts are matched. A `--` right after the `ssh` host ends the options. `mosh` options are read as mosh's
+  Perl Getopt::Long reads them in its default mode, against mosh's own option list: one or two dashes or `+`, any
+  case, a unique prefix, `=value` or the next word, options after the host, `--` ending them, and mosh's own short
+  options (`-o` takes no value, `-l` is `--local`). A word that names no single option stops mosh and the line asks.
+  The command given to `mosh --ssh`, `--client` or `--server` is read as a command and the line asks (the `--ssh` and
+  `--client` helpers run locally and keep their own exposure; `--server` runs on the remote host, and with `--local`
+  the server and the command run locally too, so nothing on the line is `internal`). Another option's value that
+  reads as `--server`, `--ssh` or `--client` (`--port '--server=...'`) is not run by mosh, but the gate read it as
+  the command before, so it still does and the line asks. Words after the host that mosh takes as options or values
+  are also read as the command and the line asks, since with `POSIXLY_CORRECT` set mosh runs them as the command;
+  the same holds where the host the gate reads changed. The
+  ledger view of a classification (`as_dict`) leaves the parts out, so approval bindings and trace rows are unchanged.
+- **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
+  `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
+  under two policies while a change is pending).
+- **Limits:** a literal inside `python -c` or `execute_code` counts only when one of its commands classifies as a
+  non-benign category (an all-`web_read` or all-`local_write` literal is dropped), and code can reach a target with
+  no literal at all. Deny → ask: where the gate cannot read the command it files the line as `opaque_exec`, so a
+  `deny` on the hidden action becomes an `ask`, for example a heredoc after a `coproc` block (the rest of `coproc` is
+  read since #140 / #181), nesting past the depth cap (#137, #141), `eval $(...)`, a command arriving on stdin
+  (`echo ... | xargs -I{} sh -c '{}'`) and the
+  wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`; the list is not closed. Deny → allow: the fallback
+  has gaps where the line is `allow` outright even under `deny`: `${...}` bodies, which the lexer does not read
+  (#143; open PR #158). Since #164 an `ssh`/`mosh` chain past the hop cap asks (#153) and command-valued options of
+  allowlisted programs are read (#154).
+- **Revisit if:** a principal wants a denied action to be allowed when it is part of a longer line. None asked;
+  the entry format says "no agent may take" the action.
 
 ## D-077 (2026-10-15) Core budget: a ratchet with headroom, functionality and robustness first
 - **Status:** Accepted 2026-10-15. The principal's ruling: "important to be lean and optimized but not at the cost of
