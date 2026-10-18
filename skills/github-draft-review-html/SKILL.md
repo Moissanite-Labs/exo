@@ -126,7 +126,7 @@ it exits non-zero. Never hand-run the gates around this sequence.
       --title "<draft title>" --owners {{github_owner}} \
       --verify-against "origin/main:<path>" --open
 
-One pass runs every gate in SOP order: prose (check-prose.py) -> visual value (advisory)
+One pass runs every gate in SOP order: prose (check-prose.py must exit 0) -> visual value (advisory)
 + mermaid fences (check-mermaid.py, only when a ```mermaid fence is present) ->
 identifier sweep -> verbatim
 fences (`--verify-against REF:PATH` or a file path, repeatable) -> oversight blockquote -> render
@@ -156,7 +156,9 @@ posting:
 - **Protean-internal drafts**: omit `--owners` so the default protean chain applies.
 - The pipeline's identifier gate already refuses profile names, agent names, absolute home paths,
   tmp paths, hostnames and emails in the body. Use `--allow-identifier <literal>` only for a value
-  the post genuinely needs.
+  the post genuinely needs. It exempts only the token equal to that literal (trailing punctuation
+  aside), never the rest of its class: allowing `/Users/<name>/demo.txt` still refuses every other
+  `/Users/` path. A refused hit names the whole token, such as the full path.
 
 ## Page spec (GitHub dark)
 
@@ -240,4 +242,5 @@ Use this only when the principal store names a shared review folder (`policies/`
 This skill ships with generic defaults. Names of the principal's own agents, accounts, hosts and
 drafts destinations live in the principal store (`policies/` and `agents/`), not here. The
 pipeline reads `EXO_DRAFTS_ROOT`, `EXO_INTERNAL_NAMES` (a file of names the identifier gate
-must refuse), `EXO_DRAFT_OWNERS` and `EXO_DRAFT_STATE`.
+must refuse, each matched as a whole name, also one that starts or ends with `.`, `~` or `@`),
+`EXO_DRAFT_OWNERS` and `EXO_DRAFT_STATE`.

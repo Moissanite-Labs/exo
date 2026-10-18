@@ -7,12 +7,13 @@
         --verify-against "<patched-file>" [--open]
 
 What it does (all gates from the github-draft-review-html SOP, in order):
-  1. prose gate            check-prose.py must report clean
+  1. prose gate            check-prose.py must exit 0 (a finding or an error blocks)
   2. visual value gate     visual-value-gate.py decides if content warrants a visual
                            (advisory only: never blocks; --skip-visual-gate opts out)
   2b. mermaid gate         check-mermaid.py runs iff a ```mermaid fence is present
                            (blocks on invalid fences)
-  3. identifier gate       no /Users paths, usernames, profile/agent names, hostnames, emails
+  3. identifier gate       no /Users paths, usernames, profile/agent names, hostnames, emails;
+                           --allow-identifier exempts one exact token, never a whole class
   4. verbatim gate         every ```python fence must appear in one --verify-against source
                            (git `REF:PATH` or a plain path), modulo uniform indentation
   5. render                render_draft_html.py into <drafts-root>/<batch>/<slug>.html
@@ -29,8 +30,9 @@ renderer default chain (role names, or $EXO_DRAFT_OWNERS).
 Principal-specific settings come from the environment, never from this file:
   EXO_DRAFTS_ROOT       where review batches are written (default ./drafts)
   EXO_INTERNAL_NAMES    file with one internal name per line (agent, seat, host, user);
-                        each becomes a word-boundary identifier pattern. Keep it in the
-                        principal store, for example policies/internal-names.txt.
+                        each matches as a whole name, even one that starts or ends with
+                        '.', '~' or '@'. Keep it in the principal store, for example
+                        policies/internal-names.txt.
 """
 from __future__ import annotations
 
@@ -66,7 +68,16 @@ def _load_internal_names() -> None:
     names = [ln.strip() for ln in Path(path).read_text(encoding="utf-8").splitlines()
              if ln.strip() and not ln.lstrip().startswith("#")]
     if names:
-        DEFAULT_IDENTS["internal-name"] = r"\b(" + "|".join(re.escape(n) for n in names) + r")\b"
+        DEFAULT_IDENTS["internal-name"] = names_pattern(names)
+
+
+def names_pattern(names: list[str]) -> str:
+    """Whole names: a word edge must not touch another word character, a non-word edge
+    ('.agents', '@bot', 'seat.') needs no boundary. Longest first, so the full name is reported."""
+    def one(n: str) -> str:
+        return ((r"(?<!\w)" if re.match(r"\w", n) else "") + re.escape(n)
+                + (r"(?!\w)" if re.search(r"\w\Z", n) else ""))
+    return "|".join(one(n) for n in sorted(names, key=len, reverse=True))
 
 
 _load_internal_names()
@@ -144,11 +155,27 @@ def verbatim_gate(text: str, sources: list[tuple[str, str | None]]) -> tuple[boo
     return ok, notes
 
 
+_TOKEN_STOP = "`\"'<>()[]{}*"
+_TOKEN_TRIM = ".,;:!?"
+
+
+def _token_at(text: str, start: int, end: int) -> str:
+    """The whole token around a match, so '/Users/' in '/Users/sam/.ssh/id' gives the path.
+    It grows to whitespace, a quote, a bracket or emphasis, minus trailing punctuation."""
+    while start > 0 and not text[start - 1].isspace() and text[start - 1] not in _TOKEN_STOP:
+        start -= 1
+    while end < len(text) and not text[end].isspace() and text[end] not in _TOKEN_STOP:
+        end += 1
+    return text[start:end].rstrip(_TOKEN_TRIM)
+
+
 def identifier_gate(text: str, allowed: list[str]) -> tuple[bool, dict[str, list[str]]]:
+    """Denylisted identifiers by class. An allowed literal exempts only a token equal to it."""
+    allow = {a.rstrip(_TOKEN_TRIM).lower() for a in allowed}
     hits = {}
     for key, pat in DEFAULT_IDENTS.items():
-        found = sorted({m if isinstance(m, str) else m[0] for m in re.findall(pat, text, re.I)})
-        found = [f for f in found if not any(a.lower() in f.lower() or f.lower() in a.lower() for a in allowed)]
+        tokens = {_token_at(text, m.start(), m.end()) for m in re.finditer(pat, text, re.I)}
+        found = sorted(t for t in tokens if t.lower() not in allow)
         if found:
             hits[key] = found
     return (not hits), hits
@@ -158,9 +185,12 @@ def prose_gate(md: Path, python: str) -> tuple[bool, str]:
     cp = SKILL_DIR.parent / "clean-writing" / "scripts" / "check-prose.py"
     if not cp.is_file():
         return True, "check-prose.py not found (skipped)"
-    p = run([python, str(cp), str(md)])
+    # "--" ends the options, so a draft named --help is checked rather than printing usage.
+    p = run([python, str(cp), "--", str(md)])
     out = (p.stdout + p.stderr).strip()
-    return ("clean" in out.lower()), out.splitlines()[0] if out else "no output"
+    # Only exit 0 is clean: 1 is findings, 3 a usage or policy error. Never read the text,
+    # because every finding line quotes the draft path and the flagged words.
+    return p.returncode == 0, out.splitlines()[0] if out else "no output"
 
 
 def visual_gate(md: Path, python: str) -> tuple[bool, str]:
