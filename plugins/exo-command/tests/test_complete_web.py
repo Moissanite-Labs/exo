@@ -14,6 +14,7 @@ from exo_command import api
 from exo_command.config import load_settings
 from exo_command.server import STATIC, WebServer
 from exo_command.service import CommandCentre
+from exo_command.source import SourceError
 
 TOKEN = "test-page-token-0123456789"
 
@@ -32,6 +33,8 @@ class Src:
         if t == "session.get":
             return {"session": {"id": body.session, "cwd": self.cwd if body.session == "s1" else ""}, "messages": []}
         if t == "config.get":
+            if isinstance(self.guidance, Exception):
+                raise self.guidance
             return {"key": body.key, "value": self.guidance}
         return {}
 
@@ -71,11 +74,30 @@ def test_commands_route_lists_what_the_composer_runs():
 def test_commands_route_names_the_core_commands_the_composer_holds():
     rows = [{"name": "context", "description": "d", "args": ""}, {"name": "grants", "description": "d", "args": ""}, {"description": "no name"}]
     assert dispatch(Src(commands=rows), "/api/complete/commands")[1]["core"] == ["context", "grants"]
-    code, d = dispatch(Src(commands=RuntimeError("older core")), "/api/complete/commands")
+    code, d = dispatch(Src(commands=ConnectionError("core restarting")), "/api/complete/commands")
     assert code == 200 and d["core"] is None and len(d["commands"]) == 8   # null: the page asks again
-    # The terminal client's own names (the table every client shares), less what the page runs: held, not sent.
-    assert {"help", "quit", "exit", "usage", "stop", "clear", "sessions", "resume", "undo", "steer"} <= set(d["client"])
+    # The terminal client's own names (its COMMANDS table), less what the page runs: held, not sent. Core plugin names
+    # (/grants, /orchestra) are not the terminal client's: unknown unless commands.list has them, as in the TUI.
+    from exo_tui.app import COMMANDS
+    assert set(d["client"]) == set(COMMANDS) - set(api.WEB_COMMANDS)
     assert not {r["name"] for r in d["commands"]} & set(d["client"])
+
+
+def test_commands_route_tells_an_older_core_from_one_that_cannot_answer_now():
+    """Only a core without commands.list answers [] and stops the page asking; a core down or failing is null (#146)."""
+    for exc, core in ((SourceError("unknown_command", "'commands.list'"), []),
+                      (SourceError("unsupported", "commands.list is not supported yet"), []),
+                      (SourceError("internal", "boom"), None), (ConnectionError("refused"), None),
+                      (RuntimeError("Exo core is not reachable"), None)):
+        code, d = dispatch(Src(commands=exc), "/api/complete/commands")
+        assert code == 200 and d["core"] == core, exc
+
+
+def test_guidance_is_unknown_while_config_get_fails_and_on_for_an_older_core():
+    # null while the core cannot say (the page asks again); an older core without the key leaves the line on
+    assert dispatch(Src(guidance=ConnectionError("down")), "/api/complete/commands")[1]["guidance"] is None
+    assert dispatch(Src(guidance=SourceError("internal", "x")), "/api/complete/commands")[1]["guidance"] is None
+    assert dispatch(Src(guidance=SourceError("unknown_command", "x")), "/api/complete/commands")[1]["guidance"] is True
 
 
 def test_guidance_config_key_turns_the_line_off():

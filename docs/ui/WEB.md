@@ -147,6 +147,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   Esc or Cancel closes it, and choosing returns focus to the box. While a change is in flight the box sends nothing.
   A failed change keeps the line in the box. A `bad_model` or `bad_request` core error is a 400, not a 502, on every
   route of `api.py`'s table (chat, tasks, schedule, feedback), so a bad model reference is the caller's mistake (#146).
+  `GET /api/chat/models` answers any page-token holder, a `--host` LAN page included, while `GET /api/providers/models`
+  is loopback-only (D-034); it lists routes, model names, which routes are configured and the spend status, never
+  a key.
 
 ## The composer (D-037)
 
@@ -158,11 +161,19 @@ secret stores left out with `gate.is_sensitive_path`, and guarded like the key r
 token). Ghost text from this page's history (right arrow takes it), up and down walk it; nothing is stored in the
 browser. A mistyped `/command` is not sent: the box shows the fix. A command the page does not run stays in the box
 with a note, as does a near typo of one: a name of the core's `commands.list` (`/grants`), or one of the terminal
-client's own from `complete.ARG_HINTS` (`/help`, `/quit`). `GET /api/complete/commands` lists them as `core` and
-`client`. Until that list has loaded every `/name` line waits in the box; a failed load is asked again with a backoff
-and on the next send. A `/word` close to no command by the TUI's rule (`/tmp is full`, `/data is corrupted`, `/Users is big`) is sent as a message. One dim guidance line above the box (a failed call,
+client's own commands (`/help`, `/quit`; a core plugin's name such as `/orchestra` counts only when `commands.list` has
+it, as in the TUI). `GET /api/complete/commands` lists them as `core` and `client`; `core` is null while the core
+cannot answer. Until the core's names have loaded every `/name` line that is not the page's or the terminal client's
+waits in the box, and the page asks again with no limit: a timer, 1 s doubling to every 30 s, and each send, which does
+not move the backoff on. So a long core restart never turns a core command into a model turn, and the names are used
+as soon as the core answers. Only an older core that answers `unknown_command` or `unsupported` for `commands.list`
+ends the asking (`core` is `[]`); a core-only name the page then cannot know goes as a message.
+A `/word` close to no command by the TUI's rule (`/tmp is full`, `/data is corrupted`, `/Users is big`) is sent as a message. One dim guidance line above the box (a failed call,
 a finished job, open findings, a slow turn, a long thread), one new line per 25 seconds at most, off when the core
-config key `guidance.enabled` is `false` (`GET /api/complete/commands` says so), no timer under reduced motion.
+config key `guidance.enabled` is `false` (each `GET /api/complete/commands` answer says so, or says it does not know
+yet, and the page asks again until it does, so a core down at page load still turns the line off once it is back),
+no timer under reduced motion. An answer redraws an open menu only when the core's names arrive, so retries do not
+move its selected row.
 The logic is `static/complete.js` (pure, tested in node against the Python engine); the drawing is `static/composer.js`.
 Screenshots: `docs/media/web-05-guidance.png`, `web-06-slash.png`, `web-07-files.png`.
 

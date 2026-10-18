@@ -19,7 +19,9 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/ui/respond                     ui.respond            {panel_id, action, value}
   GET  /api/complete/commands             the slash commands this page runs, with argument shapes and choices, the
                                            core's commands.list names and the terminal client's own (client); of
-                                           those, the names the page does not run (/grants, /help) are held, not sent
+                                           those, the names the page does not run (/grants, /help) are held, not sent;
+                                           core is null while the core cannot answer, [] from an older core without
+                                           commands.list
   GET  /api/complete/files?q=&session=     files under the session's folder for @ (D-037); the server guards it
   GET  /api/tasks                          tasks.list
   GET  /api/tasks/<task>                   command.run subagent open   the child's task row and session tail (#97)
@@ -272,31 +274,42 @@ WEB_COMMANDS = {"context": "what the next model call carries, part by part",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
                 "new": "start a new thread", "rename": "give this thread a new title",
                 "layout": "inverse puts the box on top with the newest message under it; classic is the usual order"}
+# The names of the shared table that core plugins serve through commands.list, not the terminal client: credited to
+# the core when listed, and unknown (so sent, as in the TUI) when their plugin is not loaded.
+PLUGIN_COMMANDS = {"trace", "findings", "grants", "exo", "orchestra", "peer-release", "peer-deny", "exo-command"}
 _INDEXES: Dict[tuple, cm.FileIndex] = {}
 
 
 async def _complete_commands(c, p, q, body):
     """Static: the commands the web composer runs itself. Also says whether the guidance line is on, which names the
-    core's commands.list has, and the other names of the table every client shares (``client``: /help, /quit, ...),
-    so typo help covers them and the composer holds those it does not run instead of sending them (D-037)."""
+    core's commands.list has, and the terminal client's own commands (``client``: /help, /quit, ...), so typo help
+    covers them and the composer holds those it does not run instead of sending them (D-037)."""
     rows = []
     for name, desc in WEB_COMMANDS.items():
         slot = cm.plan(name, [])
         rows.append({"name": name, "description": desc, "args": cm.ARG_HINTS.get(name, ""),
                      "choices": [{"value": v, "meta": m} for v, m in (slot.choices if slot else ())]})
-    guidance = True
+    guidance: bool | None = True
     try:
         got = await c.source.call(s.ConfigGet(key="guidance.enabled"))
         guidance = got.get("value") is not False
+    except SourceError as exc:
+        if exc.code not in ("unknown_command", "unsupported"):
+            guidance = None   # not known yet (a core down or restarting): the page asks again
     except Exception:
-        pass   # an older core: leave the line on
-    core = None   # null when commands.list fails (a core restarting, or an older core): the page asks again
+        guidance = None
+    # null when commands.list fails for now (a core down or restarting): the page asks again for as long as it takes.
+    # An older core that has no commands.list says so, and its [] ends the asking.
+    core = None
     try:
         listed = await c.source.call(s.CommandsList())
         core = [str(r["name"]) for r in listed.get("commands") or [] if isinstance(r, dict) and r.get("name")]
+    except SourceError as exc:
+        if exc.code in ("unknown_command", "unsupported"):
+            core = []
     except Exception:
         pass
-    client = [n for n in cm.ARG_HINTS if n not in WEB_COMMANDS]
+    client = [n for n in cm.ARG_HINTS if n not in WEB_COMMANDS and n not in PLUGIN_COMMANDS]
     return {"commands": rows, "guidance": guidance, "core": core, "client": client}
 
 
