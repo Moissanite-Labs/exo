@@ -183,6 +183,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   file (Command Code pattern, `research/UI.md`).
 - **Calls made by the lead:** unguarded taste auto-promotes after evidence from two separate sessions,
   shown in the brief and reversible; taste syncs between A's machines only through the signed store.
+  *Amendment 2026-10-18 (PR #219):* evidence that is all imported history (`exo ingest` rows) does not
+  auto-promote under rule 4. The principal reviews that first batch, as `docs/ARCHITECTURE.md` section 5 says.
+  Imported evidence is dated by its source time, and superseded rows (an edited ChatGPT prompt's older
+  versions, inactive Hermes rows) do not count for the rule of three.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
