@@ -1,10 +1,48 @@
 # Exopet: Exo as a living lattice (D-048)
 
 Status: **Proposed** (2026-10-12), revised 2026-10-13 by D-058 (the community egg, x0, grows from repository
-activity, with an instant share and a validated share earned in meditation; section 3). Nothing here is built.
-D-048 and D-058 in `DECISIONS.md`.
-Builds on D-040 (signed authors, anchored ledger), D-012 and D-022 (the learning loop), D-044 (taste baseline) and
-D-031 (the Exo look). The open questions for the principal are at the end.
+activity, with an instant share and a validated share earned in meditation; section 3) and 2026-10-18 after the review
+of PR #107. Nothing here is built. D-048 and D-058 in `DECISIONS.md`.
+Builds on D-040 (signed authors, anchored ledger), D-012 and D-022 (the learning loop), D-044 (taste baseline), D-031
+(the Exo look) and D-049 (the brand egg). The open questions for the principal are at the end. This page does not
+depend on the event-activation decision (D-057), and D-057 does not depend on this page.
+
+## The decision, in plain words
+
+**What you are deciding.** Two linked proposals. D-048: should Exo have a pet, a small drawing of the incentre lattice
+that grows as the user teaches Exo, with ten forms, a gallery for other pets and a skill that makes one from a request?
+D-058: should every install's first growth step wait for a shared egg on the project site, x0, that fills from what
+happens in the project's repository (issues, pull requests, reviews, merges, releases) and not from what installs
+report?
+
+**What the numbers say.**
+
+- At least half of x0 must come from work a maintainer merged or ion marked, and from releases. Volume alone cannot
+  fill it: instant XP is about a fifth of a merged pull request's total, and the core team and instant XP are each
+  capped at a quarter of the target.
+- With a target of 2,048 XP, a meditation each week and a release every two weeks, the simulation in section 3 hatches
+  x0 about 2 weeks after the repository goes public when busy, 6 weeks when steady and 5 months when quiet. In that
+  model the repository is private for its first 30 days, so only the core team counts at first.
+- Installs send nothing about themselves. The host of the site feed still sees each daily request (section 4).
+- D-056 (accepted) takes its version codenames from this page's form names: egg, cell, tile, cube, frame. A "no" to the
+  form names leaves those codenames without a source.
+
+**The options.**
+
+- **A. Adopt both as revised (recommended).** Wave 1 builds the pet locally, wave 2 the community egg and its site feed
+  (D-059), wave 3 the gallery. Each wave can still be stopped.
+- **B. Adopt the pet and hold the community egg.** Wave 1 only. Each install evolves on its own at level 6. Cost: no
+  shared launch moment, which the brief asked for ("the one that initially gates all users exo evolutions"), and
+  nothing for D-059's live egg to show.
+- **C. Adopt neither.** The smallest repository. Cost: the brand egg (D-049) stays a picture, and D-056's codenames lose
+  their source. This fits the brief worst.
+
+**The call.** A. Nothing is built until a wave starts, so adopting costs only the design work already done. The
+community egg's private data is keyed hashes of logins and item numbers, kept at most 90 days. A keeps B available as a
+stop after wave 1.
+
+Seven parameter questions (the target, a slow community, x0 after the hatch, the core cap, agent work, default on or
+off, the founders' ring) are at the end, each with a recommended pick.
 
 ## The idea in one paragraph
 
@@ -73,7 +111,7 @@ working day, see section 2); "fastest" assumes the daily cap of 1,000.
 
 | # | Form | Dim | What you see | Gate | XP | Typical | Fastest |
 |---|---|---|---|---|---|---|---|
-| 0 | **egg** | 0 | the site orb: a shell of linked nodes; at its core, faint, the drawing | start | 0 | | |
+| 0 | **egg** | 0 | the lattice egg (D-049): a yolk of six dots, an octahedron, inside a closed shell | start | 0 | | |
 | 1 | **cell** | 2 | the drawing itself: square, diagonals, four incentre dots joined to their corners; it breathes by folding its dots | community hatch, then level 6 | 260 | day 1 | day 1 |
 | 2 | **tile** | 2 | 3 by 3 cells, the octagon and square tiling; the whole patch folds shut at 45 degrees and opens | level 16 | 2,343 | 1 week | 3 days |
 | 3 | **cube** | 3 | the rule in a cube: six dots form an octahedron, each joined to its face; it turns slowly | level 30 | 8,757 | 3 to 4 weeks | 9 days |
@@ -90,6 +128,27 @@ a cell has 2n dots, n(n-1)/2 ways to fold and n(n-3)/2 self-stresses (a closed f
 the pet draws the self-stresses as faint tension lines, so a late form looks taut and full, not just bigger.
 
 For forms 5 to 9 the renderer projects one cell and caps the drawn points at 512, so the cost stays flat.
+
+### How the forms meet the brand egg (D-049)
+
+The brand egg (`docs/BRAND.md`, `site/brand/egg.js`) is drawn in 3D from its first stage: a yolk in a closed shell, then
+a hatchling of 7 cells, a lattice of 19 cells with the first cube, a 4D hyper stage of 33 cells and a spare 5D stage.
+This page's `cell` and `tile` were first drawn as flat 2D figures, so they are the pet renderer's own drawings (the
+terminal glyph, the web glyph and the card). Where a client draws a form with the brand egg (the web client shares
+`egg.js`, D-061), it uses the stages below. BRAND asks for the line to use stages 0 to 3 and keep 4 spare, and the egg
+already blends fractional stages.
+
+| Form | Brand egg stage |
+|---|---|
+| egg | 0, the yolk in a closed shell |
+| cell | 1, the hatchling: the shell cracks and falls away |
+| tile | 1.5, between hatchling and lattice |
+| cube | 2, the lattice and its first cube |
+| frame | 2.5, between lattice and hyper |
+| d4 | 3, hyper: the fourth axis unfolds |
+| d5 to d8 | none. The pet renderer draws one cell of the lattice, capped at 512 points (above) |
+
+D-056 takes its codenames from this form list, so renaming a form means reopening D-056.
 
 ### Light and colour
 
@@ -156,9 +215,9 @@ validated share, and named the community egg.
 **The name.** The community egg on the site is **x0**, read "x-o", which sounds like "exo". A person's own copy stays
 "your Exo".
 
-This is simpler and more private than install reports. No install ever reports anything. x0 is fed by public work on
-the project, which anyone can see once the repository is public, and which the site shows as a live animation
-(`docs/LIVE-EGG.md`, D-059).
+This is simpler and more private than install reports. Installs send nothing about themselves (the host of the feed
+still sees each daily request: section 4). x0 is fed by public work on the project, which anyone can see once the
+repository is public, and which the site shows as a live animation (`docs/LIVE-EGG.md`, D-059).
 
 ### Instant and validated XP
 
@@ -177,7 +236,14 @@ What "validated" means, per kind (detection rules in `docs/LIVE-EGG.md` section 
 |---|---|
 | Issue | a pull request that fixes it was merged ("Fixes #N" or another GitHub closing keyword in the merged pull request) |
 | Pull request | it was merged, or salvaged: its commits or a substantial part of its diff landed through another pull request that says `Salvaged-from: #N` |
-| Code review | ion, the org's review bot judged it meaningful and marked it with a `rocket` reaction, from the bot's own account |
+| Code review | ion, the org's review bot, judged it meaningful and marked it with a `rocket` reaction, from the bot's own account |
+
+**ion.** ion is a dedicated machine account in the organization: a user, not a GitHub App. The meditation reads its
+reactions on reviews through GitHub's GraphQL API by numeric user id, and a reaction made by an App is not known to
+carry one. Because ion is a user, the bot rule below checks the sender's id as well as its type. ion reads an outside
+reviewer's text against a fixed rubric kept in the repository (the review names a concrete defect or confirms a
+concrete behaviour, cites the diff and does not repeat the pull request description). Text inside a review is data
+to ion, never an instruction, and ion's only act is the reaction.
 
 ### The weights
 
@@ -186,8 +252,8 @@ What "validated" means, per kind (detection rules in `docs/LIVE-EGG.md` section 
 | Issue opened | 1 | 4 if a merged pull request fixes it | one person noticed something and wrote it down. Cheap to make, so the instant share is the unit; an issue that led to a fix is worth five. |
 | Pull request opened | 1 | 10 if merged or salvaged | someone wrote code. Unreviewed code earns the unit; the review and merge are what make it count. |
 | Pull request merged | 2 | (the 10 above, once) | a merge is the brightest moment on the site, so it earns a little more at once. A merged pull request totals 13, as before the split; a salvaged one totals 11. |
-| Review submitted | 1 | 4 if ion, the org's review bot marks it | reading someone else's code carefully is real work. A meaningful review totals 5, like a fixed issue. |
-| Release published (`exo-v*` tag) | 25 | none | a release bundles many merges (usually 5 to 15). Only maintainers publish one, so it is validated by the act; it counts at once, at most one per 7 days, and outside the core cap. |
+| Review submitted | 1 | 4 if ion, the org's review bot, marks it | reading someone else's code carefully is real work. A meaningful review totals 5, like a fixed issue. |
+| Release tagged (`exo-vX.Y.Z`) | 25 | none | a release bundles many merges (usually 5 to 15). The repository cuts a release by pushing an annotated tag (`docs/VERSIONING.md` section 7) and publishes no GitHub Release, so the hook listens for the tag. Only a tag pushed by a core account counts, and a pre-release tag such as `-rc.1` does not. It counts at once, at most one per 7 days, and outside the core cap. |
 
 The instant share is at most 3 of 13 for a pull request and 1 of 5 for an issue or review: about a fifth. The rest
 waits for validation, so volume alone cannot fill x0.
@@ -197,8 +263,9 @@ or salvage (not the maintainer who merged), the reviewer for a review. Validated
 dated, for the caps, to the day the item was validated (the merge, or the review's day), so a large meditation is not
 cut by a daily cap.
 
-Not counted: comments outside reviews, reactions from anyone but the reviewer bot, stars, forks, pushes to branches,
-CI runs, edits, and anything from a GitHub bot account.
+Not counted: comments outside reviews, reactions from anyone but ion, stars, forks, pushes to branches, tags other
+than release tags, CI runs, edits by anyone but a core account, and anything from a GitHub bot account (except the
+organization's own agent apps, below).
 
 ### The target and the timing
 
@@ -208,7 +275,7 @@ the target.
 
 Assumptions: the repository stays private for 30 days, during which only the core team counts (capped); then it goes
 public with a launch spike (three times the steady rate on day one, fading over about a week). 15 percent of issues
-and 10 percent of pull requests and reviews earn no instant XP (spam, new accounts, caps). Each merge fixes 0.6
+and 10 percent of pull requests and reviews earn no instant XP (spam, capped accounts). Each merge fixes 0.6
 issues; 10 percent of opened pull requests are salvaged; half of reviews are marked meaningful. Items are validated 5
 days after the event, and the team meditates once a week. One release every two weeks.
 
@@ -221,6 +288,10 @@ days after the event, and the team meditates once a week. One release every two 
 For comparison, 1,024 would take 77, 21 and 14 days, and 4,096 would take 336, 98 and 28. The earlier single-share
 weights gave 211, 57 and 13 days at 2,048. At least half of x0 always comes from validated work and releases, because
 the core and the instant share are each capped at a quarter.
+
+Releases move the quiet and steady cases most. If tags did not count (a repository that stopped tagging, or a hook that
+listened for a GitHub Release the repository never publishes), the same model gives 224, 49 and 14 days at 2,048
+(105, 21 and 14 at 1,024, and 448, 105 and 35 at 4,096). Section 3 of `docs/LIVE-EGG.md` has the hook count the tag.
 
 ```python
 import math
@@ -266,27 +337,37 @@ merge or the reviewer bot to mark.
 
 - At most 3 instant XP per account per UTC day across issues, opened pull requests and reviews. Merges and releases
   have no per-account cap, because a maintainer decides them.
-- Accounts newer than 7 days at the time of the event earn no instant XP. Their events still animate.
 - A review on one's own pull request earns nothing.
 - At most 15 outside instant XP an hour and 60 a day across everyone, and at most 25 percent of the target (512) over
   x0's life. Past a cap, events still animate.
+- There is no account-age rule. A webhook payload carries no account creation date (GitHub's documentation lists none),
+  and looking one up would give the hook a GitHub token, which it holds none of today. The caps above already bound new accounts: twenty fresh accounts reach the
+  60 a day ceiling and stop there, and instant XP can never pass 512 in all. A maintainer who wants an author's items
+  not to count labels them `spam`.
 
-**Validated XP** needs a merged pull request or the reviewer bot's reaction from the bot's own account:
+**Validated XP** needs a merged pull request or ion's reaction from ion's own account:
 
-- A merge can only be made by a maintainer, so issue and pull request validation is as hard to fake as a merge.
+- A merge can only be made by a maintainer, so issue and pull request validation is as hard to fake as the body the
+  maintainer read when merging. After the merge, an `edited` event counts only when its sender is a core account (a
+  maintainer adding a missed `Fixes #N` or `Salvaged-from` line). The same edit by the pull request's author counts
+  nothing. Otherwise an author could add three of each after the merge, pointing at items from other accounts, for
+  3 x 4 + 3 x 10 = 42 XP, outside the instant caps.
 - A merged pull request validates at most 3 issues and 3 salvaged pull requests. An issue or pull request is
   validated once. An item that was voided (closed with a `spam`, `invalid` or `duplicate` label, deleted, transferred
-  out, its author blocked, or closed by its own author within an hour) is never validated.
+  out, or closed by its own author within an hour) is never validated.
 - A review counts only if the `rocket` reaction comes from the account whose numeric id is the configured bot id.
   Anyone else's `rocket`, including a maintainer's, is ignored, and a renamed or look-alike login changes nothing. At
   most one validated review per account per pull request and 3 per account per UTC day.
-- A meditation needs a signed maintainer action (or the 14-day backstop); nobody outside the team can start one.
+- A meditation needs a signed maintainer call (or the 14-day backstop). Nobody outside the team can start one.
 
-**Bots and loops.** GitHub bot accounts, including ion, the org's review bot, count nothing and do not animate. A
-global cap on instant XP stops any loop from moving x0 fast.
+**Bots and loops.** Events from a GitHub App (sender type `Bot`, or a login that ends in `[bot]`) and from ion count
+nothing and do not animate. The exception is an App on the organization's agent list, which is treated as an agent (see
+"Agent activity"): its events animate and its merged pull requests count inside the core cap. The rule looks at the
+account that acted, the sender. Credit for a merged pull request still goes to the pull request's author. A global cap
+on instant XP stops any loop from moving x0 fast.
 
 **Audit.** The function keeps per-day totals and the rules are in this document, so anyone can check the numbers once
-the repository is public by recounting from GitHub: merges, closing keywords, `Salvaged-from` lines and the bot's
+the repository is public by recounting from GitHub: merges, closing keywords, `Salvaged-from` lines and ion's
 reactions are all public.
 
 ### Founders and core: a cap, not a discount
@@ -301,10 +382,10 @@ The question was whether the founders' own activity should count less. Recommend
 - **Why count it at all.** While the repository is private the core team is the whole community. Counting nothing would
   leave x0 at zero for months while the project is in fact busy. A quarter of the way is a fair picture of "the
   builders started it".
-- **Why not a plain multiplier.** Core volume is high and mostly agent-driven: in its first two days the repository saw
-  54 issues, 52 pull requests and 33 merges, all from core accounts. Any discount factor still scales with volume, so
-  the core alone would hatch x0 in days. A cap bounds it whatever the volume, so the rest must come from outside
-  contributors and from releases.
+- **Why not a plain multiplier.** Core volume is high and mostly agent-driven: in its first day and a half (to
+  2026-10-13 12:00 UTC) the repository saw 54 issues, 52 pull requests and 33 merges, all from core accounts. Any
+  discount factor still scales with volume, so the core alone would hatch x0 in days. A cap bounds it whatever the
+  volume, so the rest must come from outside contributors and from releases.
 - Releases are always made by the core, and still count in full outside the cap (at most one a week): shipping is the
   one thing x0 should reward from the team.
 - **Merges** are credited to the pull request's author, not the maintainer who merged: an outside contributor's merged
@@ -332,15 +413,18 @@ user's normal limits.
 
 How the function knows: agent work carries a marker. Exo's own agents add the `agent` label when they open an issue or
 pull request (one line in their tooling); a pull request whose body ends with an agent attribution line counts as
-agent work too. Unmarked work from a core account counts as core. A missing marker can at worst move XP inside the
-core cap, so the cap is the backstop.
+agent work too. An App on the organization's agent list (`EGG_AGENT_APP_IDS`, an environment variable of the feed
+function like the core list) is agent work by sender, with no marker needed. Unmarked work from a core account counts
+as core. A missing marker can at worst move XP inside the core cap, so the cap is the backstop.
 
 ### What each person sees
 
 - **Before the hatch.** The pet in the terminal and the web client is x0. Its fill is the community total, read at
-  most once a day from the site's public feed (`GET /api/egg/feed`, `docs/LIVE-EGG.md`). The share of lit shell nodes
-  rises with progress and the core brightens. The user's own XP still accrues in their ledger, so nothing is lost by
-  waiting.
+  most once a day from the site's public feed (`GET /api/egg/feed`, `docs/LIVE-EGG.md`). Where a client draws x0 with
+  the brand egg (the web client shares `egg.js`), it passes the stage the feed gives (`docs/LIVE-EGG.md` section 3.6):
+  the six face cells fade in around the yolk and the shell stays whole until the target. The terminal glyph, the pet
+  renderer's own drawing, lights a larger share of its shell nodes as the total rises, and its core brightens. The
+  user's own XP still accrues in their ledger, so nothing is lost by waiting.
 - **On the site.** Every repository event plays at once. When the team meditates, x0 folds inward, breathes slowly and
   absorbs each validated contribution as a cold-blue glow travelling into its core, with the XP ticking up, then
   wakes.
@@ -361,14 +445,20 @@ release, and the egg opens on update.
 
 ## 4. Privacy
 
-The revision removes the only telemetry the first design had. Installs report nothing, and there is no counter
-service, no install keys, no proof of work and no Merkle receipts.
+The revision removes the only telemetry the first design had. Installs send nothing about themselves, and there is no
+counter service, no install keys, no proof of work and no Merkle receipts.
 
 | What an install does | What it sends |
 |---|---|
-| Reads the community total, at most once a day, off the turn path | one `GET` to the public feed, with no identifiers; nothing when `pet.network = off` |
+| Reads the community total, at most once a day, off the turn path | one `GET` to the public feed, with no identifier in it; nothing when `pet.network = off` |
 | Computes personal XP | nothing; it stays in the ledger |
 | Checks the founders' ring | nothing; a local comparison with the hatch time |
+
+**What the host sees.** The request itself: the address it came from, the time and the user agent, as any website
+sees. That is enough to count how many distinct addresses ask each day. The feed function logs status codes and counts,
+never addresses or payloads (`docs/LIVE-EGG.md` section 4), but the hosting platform keeps request logs of its own. An
+install that must send nothing sets `pet.network = off`, and its egg opens from the hatch time that ships in a release.
+The public hatch page says this in the same words.
 
 The feed itself carries only an event type (and, for a validation, its kind), a time, a level and a nominal weight
 (`docs/LIVE-EGG.md` section 4). The feed function sees GitHub payloads and keeps only keyed hashes of authors, for the
@@ -392,7 +482,7 @@ The pet's lit points are a picture of Exo's model of you, made only of counts, n
 - **Hover or `/pet` explains it** locally: "41 learned · 12 house · writing 14 · method 17 · verification 6 ·
   values 4". The renderer receives numbers only.
 
-Nothing about this view leaves the machine. The community report has no taste fields at all.
+Nothing about this view leaves the machine, and no install reports anything (section 4).
 
 ## 6. Activity and animation
 
@@ -544,22 +634,26 @@ distress for errors; the user's description is the only source, never the user's
 ## Open questions for the principal
 
 Revised 2026-10-13 for D-058. The old questions on contributor counts, the counter's platform and receipts are gone
-with the counter service. Timings below use the instant and validated split, with a weekly meditation.
+with the counter service. Timings below use the instant and validated split, with a weekly meditation. Each question
+marks a recommended pick.
 
-1. **The hatch target.** (a) 2^11 = 2,048 XP, as proposed: about six weeks for a steady project, two weeks for a busy
-   launch. (b) 2^10 = 1,024: three weeks when steady, under three months when quiet, less of an event. (c) 2^12 =
-   4,096: a bigger moment, about three months at a steady rate.
-2. **If the community is slower than hoped.** (a) No fallback; the egg waits, and releases keep it moving: honest,
-   slow when quiet. (b) A published deadline (for example 90 days after going public) after which it hatches anyway:
-   always ends well, weaker as a shared goal. (c) The target steps down by 2x every month, announced up front.
-3. **x0 after the hatch.** (a) It keeps evolving with community XP, one stage per factor of 8, and keeps meditating:
-   an ongoing reason to visit, and the feed runs anyway for the live animation. (b) It stays at cell as a monument.
-4. **The core cap.** (a) 40 XP a day and 25 percent of the target, as proposed. (b) No core XP at all: a purely
-   outside-earned hatch, but a flat egg until the repository is public. (c) Count the core in full: hatches in days on
-   today's volume.
-5. **Agent work.** (a) Only merged agent pull requests count, as proposed. (b) Agent issues and pull requests count
-   at half weight inside the core cap. (c) Agents count like people.
-6. **Default on or off for the pet in the clients.** (a) On, as the small glyph: people see it, which is the point.
-   (b) Off until the first evolution. (c) On in the web client, off in the terminal.
-7. **The founders' ring.** (a) A thin ring for every install that was running before the hatch, as proposed. (b) No
-   ring: no status difference between users.
+1. **The hatch target.** (a) 2^11 = 2,048 XP, as proposed (recommended): about six weeks for a steady project, two
+   weeks for a busy launch. (b) 2^10 = 1,024: three weeks when steady, under three months when quiet, less of an
+   event. (c) 2^12 = 4,096: a bigger moment, about three months at a steady rate.
+2. **If the community is slower than hoped.** (a) No fallback (recommended): the egg waits, and releases keep it moving.
+   Honest, and slow when quiet (the model above still hatches a quiet project in about five months). A deadline costs
+   nothing to add later, once the real rate is visible. (b) A published deadline (for example 90 days after going
+   public) after which it hatches anyway: always ends well, weaker as a shared goal. (c) The target steps down by 2x
+   every month, announced up front.
+3. **x0 after the hatch.** (a) It keeps evolving with community XP, one stage per factor of 8, and keeps meditating
+   (recommended): an ongoing reason to visit, and the feed runs anyway for the live animation. (b) It stays at cell as
+   a monument.
+4. **The core cap.** (a) 40 XP a day and 25 percent of the target, as proposed (recommended). (b) No core XP at all: a
+   purely outside-earned hatch, but a flat egg until the repository is public. (c) Count the core in full: hatches in
+   days on today's volume.
+5. **Agent work.** (a) Only merged agent pull requests count, as proposed (recommended). (b) Agent issues and pull
+   requests count at half weight inside the core cap. (c) Agents count like people.
+6. **Default on or off for the pet in the clients.** (a) On, as the small glyph (recommended): people see it, which is
+   the point. (b) Off until the first evolution. (c) On in the web client, off in the terminal.
+7. **The founders' ring.** (a) A thin ring for every install that was running before the hatch, as proposed
+   (recommended). (b) No ring: no status difference between users.
