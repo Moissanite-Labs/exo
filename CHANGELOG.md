@@ -137,6 +137,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - A forked thread no longer resends its parent's whole transcript on every model call: the fork's copies count at
   their original's log position, so the fork opens with its parent's tail, and `/compact` shrinks a fork's tail too.
   Copies the tree cannot hold (a private thread's, or an entry the parent undid after the fork) stay in the tail.
+- A private thread no longer forgets its own start (D-028). Its entries stay out of the agent tree, but its tail was
+  still cut at the agent's frontier, so once another thread's leaves were summarized only its last 12 messages were
+  left. It now keeps a summary tree of its own, and its tail starts at that tree's last summary, so spans too small
+  to summarize stay whole. Plugin hooks never see that tree, and no other thread, agent summary or search sees it
+  either. A fork made after an undo copies only the summaries that still match its renumbered messages.
 
 ## [0.2.0] (egg) - 2026-10-13
 

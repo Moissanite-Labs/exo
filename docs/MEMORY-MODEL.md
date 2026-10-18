@@ -89,6 +89,22 @@ Each model call is built fresh, in this order:
    sat in the system message and changed every turn, which broke the cache for the whole prompt; now the
    prefix up to the previous turn stays cached.
 
+A private thread's entries never enter the agent tree, so the agent's frontier says nothing about them. A
+private thread therefore keeps a summary tree of its own over its own messages, as a subagent thread does
+(key: its session id, ranges: message numbers). Its tail starts at that tree's frontier, not the agent's, and
+the tree's view opens the tail as an unstored message headed "Earlier in this private thread". As in the
+agent view, that view ends at its last summarized node: spans too small to summarize, or a summary still
+running, stay whole in the tail. Until the first summary lands, the whole thread stays verbatim. The system
+message is the same as in the agent's other threads, so the cached prefix holds. Plugin hooks never see that
+tree: no `on_pre_compress` (and its `checkpoint`), `capture_principal` or `on_compacted`. `/context` counts
+its view in the recent tail, and `/compact` folds only the agent tree.
+
+A fork copies its parent's finished per-session summaries, but it numbers its copies 1 to n. Undo hides
+rows that are in the agent log, so their numbers stay used, and it deletes rows outside the log, such as a
+fork's copies, while later logged rows keep their numbers. A summary with such a gap at or before its end
+would cover other messages in the fork, so the fork leaves it behind and summarizes that span again from
+its own copies.
+
 Providers that key routing and prompt caching on a conversation id (opencode Go's `x-opencode-session`)
 get one id per agent, not per thread, so every window reuses the same cached prefix.
 
