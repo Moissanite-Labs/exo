@@ -560,7 +560,7 @@ export function mount(root) {
     if (changingModel) { flash("changing the model; send again when it is done"); return; }
     const command = slashInput(text);
     // Without the command names a /name line could be a command or a typo of one: kept until they load (#146).
-    if (command && !help.ready()) { flash("commands are still loading; the line is in the box, send it again in a moment"); return; }
+    if (command && !help.ready(command.name)) { flash("commands are still loading; the line is in the box, send it again in a moment"); return; }
     const typo = command && help.typo(text);
     if (typo && typo.here) {   // D-037: a mistyped command gets a suggestion, not a message to the agent
       flash("unknown command " + text.split(/\s/)[0] + ". did you mean /" + typo.guess + "? It is in the box: Enter runs it.");

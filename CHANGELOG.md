@@ -46,11 +46,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Web `/model` and `/default` (#146): the composer opens a model picker or sets the route without starting a model
   turn, and a failed change keeps the line in the box. `/model` goes through the core's principal-only `models.set`
   (`POST /api/chat/sessions/<id>/model`); `/default` saves through the loopback-only provider routes. A command the
-  page does not run, from the core's list (`/grants`) or the terminal client's own (`/help`, `/quit`), or a near typo
-  of one, stays in the box with a note; until the page has the command names, every `/name` line waits, and a failed
-  load is asked again. `/tmp is full` and other lines close to no command by the TUI's rule are still sent as messages
-  (D-037). A `bad_model` or `bad_request` core error now answers 400, not 502, on every route of the web plugin's
-  `api.py` table (chat, tasks, schedule, feedback), not only `/model`.
+  page does not run, from the core's list (`/grants`) or the terminal client's own (`/help`, `/quit`; core plugin
+  names count only when the core lists them, as in the TUI), or a near typo of one, stays in the box with a note.
+  Until the page has the core's command names, every `/name` line that is not the page's or the terminal client's
+  waits, and the names are asked again with no limit (1 s doubling to every 30 s, and on each send, which does not
+  move the backoff on), so a long core restart never leaves the page sending core-only commands as model turns. Only
+  an older core that answers `unknown_command` or `unsupported` for `commands.list` ends the asking, and the core's
+  `guidance.enabled: false` still turns the guidance line off when the core was down as the page loaded (or could not
+  read the setting yet). `/tmp is full`
+  and other lines close to no command by the TUI's rule are still sent as messages (D-037). A `bad_model` or
+  `bad_request` core error now answers 400, not 502, on every route of the web plugin's `api.py` table (chat, tasks,
+  schedule, feedback), not only `/model`.
 - Command deny and reservation regexes also match a literal-word view of the command (#136, D-038
   amendment): common literal quoting (`'rm' -rf`, `r\m`, `$'rm'`, `$"rm"`) around a program or flag
   no longer bypasses those vetoes. A `$"..."` word is read as bash reads it, so `git push $"--force"`

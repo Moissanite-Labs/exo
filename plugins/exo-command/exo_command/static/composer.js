@@ -6,7 +6,8 @@ import { suggest, completeText, ghost, closest, Guide } from "./complete.js";
 const MENU_ROWS = 8;
 
 export function attachComposer({ input, composer, getSession, reducedMotion }) {
-  let cmds = [], core = [], client = [], loaded = false, stopped = false, loadingCmds = null, retries = 0, retryTimer = 0;
+  let cmds = [], core = [], client = [], loaded = false, haveCore = false, settled = false, stopped = false, loadingCmds = null;
+  let retries = 0, retryTimer = 0;
   let sug = { mode: "", items: [], start: 0, hint: "" }, sel = 0, closedFor = null, files = [], fileQ = null, fileTimer = 0;
   let browse = -1, draft = "", ghostInfo = { text: "", ok: false }, tip = null;
   const history = [];
@@ -19,20 +20,31 @@ export function attachComposer({ input, composer, getSession, reducedMotion }) {
   input.parentNode.insertBefore(ghostEl, input);
   input.addEventListener("scroll", () => { ghostEl.scrollTop = input.scrollTop; });
 
-  // The names typo help and the hold rule need. A failed load is asked again (backing off, and on the next send), so
-  // one bad answer never leaves the page without them; until it loads, the page holds every /name line (#146).
-  function loadCommands() {
-    if (loaded || stopped || loadingCmds) return;
+  // The names typo help and the hold rule need (#146). An answer brings this page's own and the terminal client's; the
+  // core's (commands.list) are asked again until the core gives them, however long it is away: by a timer (1 s
+  // doubling to every 30 s) and on each send, which does not move the backoff on. Only an older core without
+  // commands.list answers [] and ends the asking.
+  function loadCommands(timed) {
+    if (settled || stopped || loadingCmds) return;
     clearTimeout(retryTimer);
     loadingCmds = api("GET", "/api/complete/commands").then((d) => {
-      // No core names yet (a core restarting): ask again a few times before settling for this page's own names.
-      if (d.core == null && retries < 6) throw new Error("the core's command names are not available yet");
-      cmds = d.commands || []; core = d.core || []; client = d.client || []; loaded = true;
-      guide.enabled = d.guidance !== false; pickTip(); refresh();
-    }).catch(() => { retryTimer = setTimeout(loadCommands, Math.min(30000, 1000 * 2 ** retries++)); })
-      .finally(() => { loadingCmds = null; });
+      cmds = d.commands || []; client = d.client || [];
+      // Each answer carries guidance.enabled (on while the core cannot say): the core's setting wins once it is back.
+      guide.enabled = d.guidance !== false;
+      if (!guide.enabled && tip) { tip = null; drawTip(); }
+      const first = !loaded;
+      if (!loaded) { loaded = true; pickTip(); }
+      // Redraw only when the names change, so an open menu keeps its selection across the retries.
+      if (d.core != null && !haveCore) { core = d.core; haveCore = true; refresh(); } else if (first) refresh();
+      // A core down or restarting: no names from it yet, or its guidance setting is not known yet.
+      settled = haveCore && d.guidance != null;
+      if (!settled) throw new Error("the core's command names or guidance setting are not available yet");
+    }).catch(() => {
+      retryTimer = setTimeout(() => loadCommands(true), Math.min(30000, 1000 * 2 ** retries));
+      if (timed) retries = Math.min(retries + 1, 5);
+    }).finally(() => { loadingCmds = null; });
   }
-  loadCommands();
+  loadCommands(true);
 
   function wantFiles() { return !!getSession(); }
   function atEnd() { return input.selectionStart === input.value.length && input.selectionEnd === input.value.length; }
@@ -150,8 +162,12 @@ export function attachComposer({ input, composer, getSession, reducedMotion }) {
       if (/job_output/.test(text)) state.jobDone = "";
       refresh();
     },
-    // Whether the command names have loaded; when they have not, this asks again.
-    ready() { loadCommands(); return loaded; },
+    // Whether /name can be judged: the names have loaded, or, while the core's are still missing, it is this page's
+    // or the terminal client's (any other name could be the core's, so it is held). Asks again for what is missing.
+    ready(name) {
+      loadCommands();
+      return haveCore || (loaded && (cmds.some((c) => c.name === name) || client.includes(name)));
+    },
     // A mistyped /command: the suggestion, or null when it is not a typo (so the line is a normal message).
     // Like the TUI, the names are this page's commands, the core's commands.list and the terminal client's own, and
     // only a simple lower-case name gets typo help (/Users and /v2 are text); here is false when the page does not run it.

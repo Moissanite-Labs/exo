@@ -34,9 +34,9 @@ open thread. `/default` saves through the provider routes, so it works only on a
 (D-034). A failed change keeps the line in the box. The web composer holds a `/name` it does not run but the core's
 `commands.list` has (`/grants`), or that is the terminal client's own (`/help`, `/quit`, `/usage`), or a near typo of
 one, with a note instead of starting a model turn. A near typo of a command the page runs (`/contex`) puts the
-corrected line back in the box. Until the page has loaded the command names it holds every `/name` line. Any other
-line is ordinary message text: paths such as `/etc/hosts` or `/tmp is full`, and words such as `/me waves` that are
-close to no command (D-037).
+corrected line back in the box. Until the page has the core's command names it holds every `/name` line that is not
+its own or the terminal client's, and keeps asking for them. Any other line is ordinary message text: paths such as
+`/etc/hosts` or `/tmp is full`, and words such as `/me waves` that are close to no command (D-037).
 
 ### Client commands (TUI)
 
