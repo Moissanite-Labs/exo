@@ -274,14 +274,19 @@ What the gate asks about, and why:
   trusted by name, so a test runner still runs your project's files, and some options of trusted programs that run
   a command are not read yet (`tar --to-command`, `sort --compress-program` and the like; #164 is in review).
   The gate finds programs only in the shell forms its parser reads. A command inside a parameter expansion such as
-  `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in #158). A command nested more than
-  four levels deep (`bash -c` inside `bash -c` and so on) asks, even when your policy denies it (#137).
+  `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in #158). Nor is a `$( )` inside a
+  single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the like
+  (`printf -v 'a[$(...)]'`; #179, fix in review in #189). An `ssh` or `mosh` chain more than four hops deep is read as a plain shell command and runs without
+  asking, even when your policy denies what it runs (#153, fix in review in #164). A command nested more than four
+  levels deep (`bash -c` inside `bash -c` and so on), or run behind a wrapper such as `setsid` or `flock` (#160, fix
+  in review in #196), asks, even when your policy denies it (#137).
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
   covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,
-  #125) adds it. The gate goes by the path as the command spells it, so two writes are not seen as store writes
-  yet: a relative name such as `gates.yaml` written by a tool whose working folder is `policies/`, and a write
-  through a symbolic link elsewhere that points into the store (#130, a fix for the link case is in review in #156).
+  #125) adds it. The gate resolves symbolic links in an absolute path (#130), but otherwise goes by the path as the
+  command spells it, so some writes are not seen as store writes yet: a relative name such as `gates.yaml` written
+  by a tool whose working folder is `policies/`, a glob or brace spelling, a hard link, and a store file opened on a
+  numbered file descriptor and written back through `/dev/fd/3` (#217). `docs/GATE.md` lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an

@@ -277,18 +277,22 @@ from where something came from, never from what it says about itself.
   command that hid its real work (a script, `python -c "..."`, a variable in the program's place) walked past
   it. Now the gate reads the line and finds the program in each command its parser recognizes, and the
   command runs without asking only when each one is on a list of trusted everyday programs, such as `ls`,
-  `git status` or `pytest`, and none is hidden. Anything it knows it cannot read asks, once, for that exact
+  `git status` or `pytest`, and none is hidden. What it marks as unreadable asks, once, for that exact
   command. This is an *allowlist*: a list of what is allowed, where everything else is not, the safer of the
   two ways to write such a list. The parser does not read every shell form yet: a command inside a parameter
-  expansion such as `${x:-$(...)}` is never found, so it runs without asking (#143), and past four levels
-  of nesting a denied act only asks (#137). Programs on the list are trusted by name, too, and some can run
+  expansion such as `${x:-$(...)}`, or inside a single-quoted array subscript such as `printf -v 'a[$(...)]'`, is
+  never found, so it runs without asking (#143, #179). An `ssh` or `mosh` chain more than four hops deep is
+  read as a plain shell command and runs without asking, even when a policy denies what it runs (#153). Past
+  four levels of other nesting, such as `bash -c` inside `bash -c`, or behind a wrapper such as `setsid`, a
+  denied act only asks (#137, #160). Programs on the list are trusted by name, too, and some can run
   other code: a test runner runs project files, and some options of trusted programs run a command the gate
   does not yet read. Section 15.4 names these gaps and the changes in review that narrow them.
 - **The store is like a key.** The agent could once rewrite its own policy files and grants with an ordinary
   allowed write. Now a write the gate sees going to the principal store's policies, grants, ledger or keys
-  asks you every time, like a password would. The gate goes by the path as the command spells it, though: a
-  relative name such as `gates.yaml` written from inside the policies folder, or a write through a symbolic
-  link that points into the store, is an ordinary write on main (#130, section 15.4). And a policy file that
+  asks you every time, like a password would. The gate resolves symbolic links in an absolute path (#130), but
+  it does not know the tool's working folder, so a relative name such as `gates.yaml` written from inside the
+  policies folder is an ordinary write on main. So is a store file opened on a numbered file descriptor and
+  written back through `/dev/fd/3` (#217). Section 15.4 names the rest. And a policy file that
   changes during a session can only make the gate stricter until you accept the change.
 - **Who answered is the connection.** Your window and your web page carry a secret that is new each time
   the core starts. A command the agent runs is refused even with it while it runs under the core, so it
@@ -588,7 +592,7 @@ and uses the same envelopes **[designed, not built]**.
   ordinary read and is allowed (#169, fix in review). Code the agent wrote can also read it when a trusted
   program runs that code, such as a test runner loading a `conftest.py`. The remedy is an operating-system
   sandbox for tool processes, which Exo does not have yet (section 26, #31). A check that also verifies the
-  connecting process's user and lineage is in review (#109, section 30.1). It narrows the gap, but a tool runs
+  connecting process's user and lineage is in review (#175, section 30.1). It narrows the gap, but a tool runs
   as the same user, so it does not close it.
 - **The web page.** `exo web` makes a second secret per launch, the *page token*, and puts it in the part
   of the link after `#`, which browsers never send to a server. Every request from the page carries it, and
@@ -946,7 +950,7 @@ no word in it says so, and the same goes for a heredoc fed to a shell, `python -
 alias. An early gate judged by the program name it could see, and the audit walked past it this way. Now a
 small *lexer* (a program that splits text into its pieces, as a compiler's first stage does) splits the line
 into simple commands and finds the program in each. The command is allowed only when every program it found
-is on the gate's list and none is hidden in a program's place. Anything it knows it cannot read falls into a
+is on the gate's list and none is hidden in a program's place. What it marks as unreadable falls into a
 category called `opaque_exec` and asks:
 variables or `$( )` in a program's place, script files, interpreters given text to run, `make`, `npm run`,
 `npx`, `xargs`, `find -exec`, `eval`, `source`, functions and aliases, and unknown programs. Where the gate can
@@ -959,9 +963,17 @@ The lexer does not read every shell form yet. It copies a parameter expansion, `
 the first `}` without looking inside it, so a command substitution there (`echo ${x:-$(git push --force)}`,
 or an array subscript such as `${a[$(...)]}`) is never classified, and a quoted `}` inside it can hide the
 commands after it on the line. Such a line is read as `echo` and allowed, and a deny does not hold (#143).
-A change in review (#158) reads these words as bash does and classifies every command inside them. Nesting
-is read four levels deep (`bash -c` inside `bash -c`, and so on). Past that the rest is opaque, so it asks,
-but a deny written for the deeper command only asks too (#137).
+A change in review (#158) reads these words as bash does and classifies every command inside them. A `$( )`
+inside a single-quoted array subscript given to a builtin that takes a variable name (`printf -v 'a[$(...)]'`,
+`unset`, `declare`, `typeset`, `local`, `read`, `test -v`, `wait -p`) is read as plain text too, though bash
+runs it, so it is allowed even under a deny (#179). A change in review (#189) reads those subscripts.
+
+Nesting has a depth cap. A `bash -c` inside `bash -c`, and so on, is read four levels deep. Past that the
+rest is opaque, so it asks, but a deny written for the deeper command only asks too (#137). An `ssh` or
+`mosh` chain is read four hops deep, and past that the line is read as a plain `shell` command and allowed,
+even when the policy denies what it runs (#153). A change in review (#164) makes it ask. A wrapper program
+such as `setsid`, `flock` or `watch` hides the command it runs in the same way: the line is opaque and asks,
+so a deny on the wrapped command only asks (#160). A change in review (#196) reads the wrapped command.
 
 The known gap is honest. Programs on the list are trusted by name, and some of them can run other code. A
 test runner runs project files (`pytest` runs `conftest.py`), git runs hooks and `npm install` runs package
@@ -971,20 +983,27 @@ gate on the main branch does not yet read options of trusted programs whose valu
 `rsync -e`, `man -P`, the `.shell` command of `sqlite3` and the `\!` command of `psql`, among others. A
 command hidden in one of these runs unclassified and is allowed, so a public act wrapped this way does not
 ask, and the floors below never see it. A change in review (#164) follows those options as nested commands,
-as the gate already does for `find -exec`. Reads are judged by the path text too: a read that names a key file
-is a credentials act, but one that reaches it through a wildcard or a folder walk is an ordinary read. Only a
-sandbox closes the rest.
+as the gate already does for `find -exec`, and reads an environment dump behind a runner (`uv run printenv`,
+`poetry run env`), which main reads as an ordinary read (#155). Reads are judged by the path text too: a read that names a key file
+is a credentials act, but one that reaches it through a folder walk from above (`grep -r`), or through a
+wildcard that the gate does not match to a known store (`cat run/*`), or after a `cd` into a store the gate
+matches only by sample paths (`cd ~/.config/gh && cat hosts.yml`, #192), is an ordinary read. Only a sandbox
+closes the rest.
 
 **The store is a credential.** The principal store's policy files, its standing grants, the ledger, the key
 folder, seat files and the core's sockets are on a protected list. Any write there is `store_write`: it asks
 the principal every time, no grant covers it, and a seat cannot be named to approve it. Reading stays a
-plain read, except the keys, which stay credentials. The gate matches the path as the call spells it. An
-absolute path is checked against the store's folders, a relative one only by its distinctive names
-(`policies/gates.yaml`), because the gate does not use the tool's working folder: `printf x > gates.yaml`
-run with its working folder in the policies folder is an ordinary local write. A path is not resolved
-through symbolic links either, so a write through a link elsewhere that points into the store is an
-ordinary write too (#130). A change in review (#156) resolves links, also after a `cd` into a linked
-folder. The working-folder case stays open.
+plain read, except the keys, which stay credentials. An absolute path is checked against the store's
+folders both as written and with its symbolic links resolved, and so is the folder a `cd`, `pushd` or
+`git -C` enters, so a write through a link elsewhere that points into the store asks too (#130). A relative
+path is checked only by its distinctive names (`policies/gates.yaml`), because the gate does not use the
+tool's working folder: `printf x > gates.yaml` run with its working folder in the policies folder is an
+ordinary local write. Some spellings still pass as ordinary writes: a hard link made earlier, a protected
+entry that itself links out of the store, another letter case on a case-insensitive filesystem, and a glob
+or brace spelling such as `sta*/gate-grants.json` (`docs/GATE.md` lists them). So does a store file opened
+on a numbered file descriptor and written back through it (`exec 3< state/gate-grants.json`, then
+`printf x > /dev/fd/3`, or `/proc/self/fd/3`), which is an ordinary local write (#217). No change for that
+is in review yet.
 
 **Policy changes only tighten during a session.** The gate fixes the policy it loaded at start. If a policy
 file changes while Exo runs, the change is logged with the files' hashes and each call is decided under both
@@ -1092,8 +1111,9 @@ alone.
 
 Limits and edge cases:
 
-- **Iteration cap.** At most 24 tool rounds per turn by default. After that, the loop emits a
-  `notice` and stops.
+- **Iteration cap.** At most 24 tool rounds per turn by default. A turn that reaches the cap ends with a
+  short report (done, still open, next step) from one more model call with tool use off, instead of a
+  dangling tool round (#92, #93).
 - **Retries.** A retryable model error is retried up to 3 times with exponential backoff, but only while
   nothing has been shown. Once text has streamed, retrying would show the person a different answer on top
   of the first.
@@ -1953,8 +1973,8 @@ exact text only. Standing grants are scoped, expire and are the principal's alon
 sign. Peers and other ingress sources can never approve. Shell commands with a hidden program ask, programs on
 the allowlist are trusted by name, writes the gate sees going to the principal store ask every time, and a
 policy file changed mid-session can only tighten until the principal accepts it or Exo restarts. The floors
-apply to what the gate classifies, and section 15.4 names the shell forms it does not yet read and the store
-paths it misses.
+apply to what the gate classifies, and section 15.4 names the shell forms it is known to misread and the
+store paths it is known to miss.
 
 **Identity from the connection.** Whether a caller is the principal is decided by the transport: a client
 running the core in its own process, or a connection that presents the per-launch principal credential from a
@@ -2216,29 +2236,36 @@ installed packages (#91); lazy start of `exo-memory` with specific errors (#114)
 that verify on eligible quiet turns or days of activity, with open findings listed in the trace (#115); the
 long-`HOME` socket fallback (#117); watching, opening, steering and stopping subagents from the parent (#118); the
 `/rename` built-in (D-069, #119); turns that build from ready summaries and do not wait for memory upkeep (D-068,
-#120); an opt-in real-CLI contract test for the claude-cli provider (#121); and the opt-in signed-update check
-against a pinned trust list (D-073, #122). The core budget is now a ratchet with headroom (D-077).
+#120); an opt-in real-CLI contract test for the claude-cli provider (#121); the opt-in signed-update check
+against a pinned trust list (D-073, #122); store paths checked with their symbolic links resolved, also after
+`cd`, `pushd` or `git -C` (#156, for #130); and brace sets expanded before a path is matched against the
+secret stores (#193, for #184). The core budget is now a ratchet with headroom (D-077).
 
 The items below are being built in separate branches. Some have been tried by the principal on a local test
 build. None is part of Exo yet, and none of the sections above relies on them. They are listed so the reader
 knows where the work is going, and they may change before they land.
 
-- **Unix peer authentication** (D-060, #109). A stronger version of the principal check in section 12.5. The
-  client checks that the process serving the socket is the right user before it hands over the credential,
-  and the core checks the connecting process's user as well as its parents, refusing when it cannot tell. A
-  tool runs as the same user, so this narrows the limit of section 12.5 but does not close it.
+- **Unix peer authentication** (D-060, #175, which replaces #109). A stronger version of the principal check
+  in section 12.5. The client checks that the process serving the socket is the right user before it hands
+  over the credential, and the core checks the connecting process's user as well as its parents, refusing
+  when it cannot tell. A tool runs as the same user, so this narrows the limit of section 12.5 but does not
+  close it.
 - **Protecting the settings file** (D-074, #125). `config.json` names the plugins the core loads (the gate
   among them), the gate's own settings and the models, and the signed-update trust list of section 26 sits
   beside it. Today a tool can rewrite them with an ordinary local write. The change puts both on the store's
   protected list, so a write asks the principal every time, as section 15.4 describes for the store.
 - **Reading parameter expansions** (#158, for #143). The lexer reads a `${...}` word as bash does and
   classifies every command inside it, which closes the `${...}` gap of section 15.4.
-- **Store paths through links** (#156, for #130). The gate resolves symbolic links before it matches a store
-  path, also after `cd`, `pushd` or `git -C` into a linked folder. A relative name the tool resolves against
-  its working folder stays a gap.
+- **Reading array subscripts of variable names** (#189, for #179). The gate reads a `$( )` in a quoted array
+  subscript given to `printf -v`, `read`, `declare`, `unset`, `test -v` or `wait -p` and classifies it, which
+  closes that gap of section 15.4.
 - **Reading command options of trusted programs** (#164). The gate follows options whose value is a command,
   such as `tar --to-command` or `sqlite3`'s `.shell`, as nested commands. That closes the part of the gap in
-  section 15.4 that sits in one command line. Code a trusted program runs from a file stays a gap.
+  section 15.4 that sits in one command line. Code a trusted program runs from a file stays a gap. The same
+  change makes an `ssh` or `mosh` chain past the hop cap ask instead of running (#153), and reads an
+  environment dump behind `uv run` or `poetry run` as credentials (#155).
+- **Reading commands behind wrappers** (#196, for #160). The gate reads the command that `setsid`, `flock`,
+  `watch`, `script -c` and similar wrappers run, so a deny on it holds.
 - **A permissionless mode.** A mode, switched on only by the principal, in which the gate allows what it
   would have asked about, so a long task does not stop at every unknown program. Writes to Exo's own records,
   anything touching credentials, and the operator floor (an irreversible public act that touches a third
