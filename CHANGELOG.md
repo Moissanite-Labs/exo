@@ -35,13 +35,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `credentials`. Until D-075 lands, a coproc is denied only when its inner command outranks `opaque_exec`.
   A `credentials` line keeps the highest reversibility of its parts, so `coproc env; rm -rf x` stays
   irreversible and a policy that denies irreversible actions still denies it.
-- Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
-  `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
-  family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
-- `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
-  requests from the web server only, no inline script, style attribute or eval, no framing, plus
-  `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
-  computed widths now go through the CSSOM instead of `style` attributes; nothing looks different.
 - The gate reads the array subscript in the variable names of `printf -v`, `read`, `declare`, `typeset`, `local`,
   `unset`, `test -v`/`[ -v` and `wait -p` (#179, D-038). Bash runs a `$( )` or backticks there even inside single
   quotes, so `printf -v 'a[$(gh pr comment ...)]' %s x` was allowed; it is now a `github_post`. Bash also evaluates
@@ -50,10 +43,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`a[b[0]+$(cmd)]`) is read to its end. A `\$` or `` \` `` at the subscript's top level is literal, as bash
   reads it; bash before 5.2 expands a nested subscript again, so there the gate reads the command. Past the
   nesting limit such a command is `opaque_exec`.
-- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
-  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
-  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
-  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
