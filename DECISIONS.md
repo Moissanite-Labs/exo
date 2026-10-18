@@ -1313,23 +1313,35 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Decision:** `$EXO_HOME/config.json` and `$EXO_HOME/update/` join the protected list. Any write the gate can see
   is `store_write`: it asks, no policy lowers it, no standing grant covers it, only the principal may answer, and
   observe mode enforces it. Reads stay `read`. Seen: the file tools, a redirection, a writing program with the path
-  as an argument, the home or `update/` as a destination folder (`cp x ~/.exo/`, `cp -t`, `install -t`, `tar -C`
-  when extracting, `unzip -d`, with the folder as its own word, attached to the option or named in old-style
-  `tar xCf`, and a relative `.exo` or `.exo/`), a folder named like the home copied into the home's parent
-  (`cp -r /tmp/.exo ~/` merges into it), a relative name after `cd` into the store, after `env -C` (also in a
-  cluster, `env -iC`), or with the bash tool's `cwd` there, a leading `//`, and `exo config set`/`unset`,
-  `python -m exo.config set`/`unset` and
-  `exo update --pin-trust`, which were `opaque_exec` (a category a policy, a rule or `approvals.yaml` can lower)
-  and are `store_write` now.
+  as an argument (also a download: `curl -o`, `wget -O`, `scp`, `rsync`), a store folder as a destination folder:
+  the home, `principals/` and each `principals/<id>` in it (the principal store when `EXO_PRINCIPAL_STORE` is
+  unset), `$EXO_PRINCIPAL_STORE`, or a protected folder in them (`cp x <folder>`, `cp -t`, `install -t`, `mv -t`,
+  `tar -C` when extracting, `unzip -d`, `curl --output-dir`, `wget -P`, `scp x <folder>`, with the folder as its own
+  word, attached to the option or named in old-style `tar xCf`, and a relative `.exo`, `.exo/principals` or
+  `.exo/principals/<id>` by name), a folder named like
+  the home copied into the home's parent (`cp -r /tmp/.exo ~/` merges into it), a relative name after `cd` into a
+  store folder, after `env -C` there (also in a cluster, `env -iC`), or with the bash tool's `cwd` (an
+  `exec_command` tool's `workdir`) there, also inside that line's `$( )`, `<( )`, `>( )` and backticks, a
+  relative name with `.`, `..` or doubled slashes (folded before the match), a leading `//`, and
+  `exo config set`/`unset`, `exo update --pin-trust`, `exo interview` (the principal's ledger) and
+  `exo import-store` (it activates the principal in `config.json`), also through `python -m exo.cli`,
+  `python -m exo.onboard` or `python -m exo.config`, which were `opaque_exec` (a category a policy, a rule or
+  `approvals.yaml` can lower) and are `store_write` now. Any other folder of the home (`plugins/`, `venv/`,
+  `src/`) still counts as the store for the writes made from it, as before D-074, and so does a `cd`, `env -C`,
+  `cwd` or `workdir` into the home with a variable, substitution or glob in it (`cd ~/.exo/plugins/$X`,
+  `cd ~/.exo/princ*`). Outside the home the folder a `cd` or `cwd` names is kept, so a relative name that resolves
+  into the store from there counts (`cd ~ && cp a .exo/`).
   `update/allowed_signers` is distinctive, so like `policies/gates.yaml` it matches anywhere. Only the home's own
   `config.json` counts; a project's `config.json`, one under `plugins/`, or a `config.json.bak` beside it is
-  unchanged. A symlink to either file is the job of the store-path resolution of issue #130, not of this list.
+  unchanged. A symlink to either file is the job of the store-path resolution of issues #130 and #156, not of this
+  list.
 - **Limits:** the gate matches the text of a command. A glob or brace spelling (`~/.exo/conf*.json`,
   `~/.exo/{config,x}.json`), a case variant on a case-insensitive filesystem (`Config.json` on APFS),
   `${EXO_HOME:-$HOME/.exo}` or a path built from another variable, `cp -s`/`cp -l` link trees, an archiver whose
   destination the gate does not read (`7z x -o`, `cpio -i`, `pax -r`, `bsdtar`) and a folder destination that
-  spells a custom home relatively (`cd ~ && cp x my-exo/`) pass as ordinary writes. So does an abbreviated GNU long
-  option (`tar --dir <home>`, `tar --directo=<home>`, `cp --target <home>`, `env --chd <home>`, `tar --extr`),
+  spells a custom home relatively from a folder the gate does not know (`cp x my-exo/` with no `cd` or `cwd`) pass
+  as ordinary writes. So does an abbreviated GNU long option (`tar --dir <home>`, `tar --directo=<home>`,
+  `cp --target <home>`, `env --chd <home>`, `tar --extr`),
   which getopt_long accepts as an unambiguous prefix but no long-option check in the gate reads, this rule or any
   other; and so do the archive forms where the member names decide where a file lands (`tar --one-top-level=DIR`,
   `tar -P`/`--absolute-names` with absolute or `..` members). `plugins/`, `venv/`, `src/`,
@@ -1338,7 +1350,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   to close; a sandbox is the real fix. The reverse holds too: a `.exo/config.json` in a project folder matches by
   name and asks.
 - **Rejected:** moving these settings under `policies/` (a migration for every install, for the same effect); having
-  `exo update` validate the interpreter instead (it would still run whatever `models` and `core_plugins` say).
+  `exo update` validate the interpreter instead (it would still run whatever `models` and `core_plugins` say); resolving
+  relative names against a folder of the home that is not the store, so a plugin folder's own `config.json` stays
+  ordinary (tried in review: `$OLDPWD`, `~-`, an option's attached value, a glob, a brace set, `GIT_DIR=`, `sudo -D` and
+  programs whose writes are not visible, `tar -xf` or `npm install`, reached the store while main asked; a narrower rule
+  that stays fail closed is #203).
 - **Revisit if:** a tool needs to write `config.json` as part of normal work. None does today; the core writes it in
   process.
 - **Docs:** `docs/GATE.md` "The store is credentials (D-038)", `docs/USER-GUIDE.md` §6 and §10, `CHANGELOG.md`.

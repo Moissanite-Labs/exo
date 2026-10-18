@@ -210,18 +210,34 @@ plugins the core loads (this gate among them), the plugin config, the models and
 
 Any write the gate can see is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a
 redirection, a non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`,
-`chmod`, `sqlite3`, `touch`, `ln`), a copy or extraction whose destination folder is the home,
-the principal store or a protected folder in them (`cp x ~/.exo/`, `cp -t`, `install -t`,
-`tar -C` when extracting, `unzip -d`; the folder as its own word, attached to the option, named
-in old-style `tar xCf`, or a relative `.exo` or `.exo/`), a folder named like the home copied
-into the home's parent (`cp -r /tmp/.exo ~/` merges into it), a connection to the socket
-(`nc -U`, `curl --unix-socket`, `socat`),
-`exo log append`, `exo keygen`, `exo init`, `exo config set`/`unset` (also `python -m exo.config`),
-`exo update --pin-trust`, `git -C <store>` with a writing subcommand, and any writing command
-after `cd` into the store, after `env -C <store>` (also in a cluster, `env -iC <store>`), or
-with the bash tool's `cwd` argument there.
+`chmod`, `sqlite3`, `touch`, `ln`, `curl -o`, `wget -O`, `scp`, `rsync`), a copy, extraction or
+download whose destination folder is a store folder: the home, `principals/` and each
+`principals/<id>` in it (the principal store when `EXO_PRINCIPAL_STORE` is unset),
+`$EXO_PRINCIPAL_STORE`, or a protected folder in them (`cp x ~/.exo/`, `cp x <folder>`, `cp -t`,
+`install -t`, `mv -t`, `tar -C` when extracting, `unzip -d`, `curl --output-dir`, `wget -P`,
+`scp x <folder>`; the folder as its own word, attached to the option, named in old-style `tar xCf`,
+or a relative `.exo`, `.exo/principals` or `.exo/principals/<id>` by name), a folder named like the
+home copied into the home's parent (`cp -r /tmp/.exo ~/` merges into it), a connection to the socket (`nc -U`, `curl --unix-socket`,
+`socat`), `exo log append`, `exo keygen`, `exo init`, `exo interview` (it writes the principal's
+ledger), `exo import-store` (it activates the principal in `config.json`), `exo config set`/`unset`,
+`exo update --pin-trust`, the same through `python -m exo.cli`, `python -m exo.onboard` or
+`python -m exo.config` (also `python3`, `python3.11`, `uv run python`), and `git -C <store>` (or
+`--work-tree`, `--git-dir`) with a writing subcommand.
+A relative name is matched after `.` and `..` segments and doubled slashes are folded
+(`update/./allowed_signers`, `policies/../config.json`). Folders count too: any writing command
+after `cd` into a store folder or below one, after `env -C` there (also in a cluster, `env -iC`), or
+with the bash tool's `cwd` (or an `exec_command` tool's `workdir`) argument there, and the
+`$( )`, `<( )`, `>( )` and backtick bodies on such a line. Any other folder of the home
+(`plugins/`, `venv/`, `src/`) counts the same way. From there `..`, `$OLDPWD`, `~-`, an option's
+value (`curl -o../../config.json`), a glob or a program's own writes (`make`, `tar -xf`) reach the
+store in more spellings than the gate can resolve, so every writing command there asks, as it did
+before D-074; narrowing that for plugin folders is #203. So does a `cd`, `env -C`, `cwd` or
+`workdir` into the home that the gate cannot spell out (`cd ~/.exo/plugins/$X`,
+`cd ~/.exo/princ*`). Outside the home the gate keeps the folder a `cd` or `cwd` names, so a
+relative name that resolves into the store from there counts too (`cd ~ && cp a .exo/`, or
+`cp a my-exo/` for a custom home).
 A leading `//` is the same path. `rm -rf ~/.exo` counts (an ancestor). A symlink that points at a
-store path is the job of the store-path resolution of issue #130, not of this list. A
+store path is the job of the store-path resolution of issues #130 and #156, not of this list. A
 `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. Reads of the store stay `read`, except `keys/`, which stays `credentials`.
@@ -231,7 +247,8 @@ Limits. The match is on the text of the command. A glob or brace spelling (`~/.e
 on APFS), `${EXO_HOME:-$HOME/.exo}` or a path built from another variable
 (`D=~/.exo; cp x $D/config.json`), `cp -s`/`cp -l` link trees, an archiver whose destination the
 gate does not read (`7z x -o`, `cpio -i`, `pax -r`, `bsdtar`) and a folder destination that spells a
-custom home relatively (`cd ~ && cp x my-exo/`) pass as ordinary writes. So does an abbreviated
+custom home relatively from a folder the gate does not know (`cp x my-exo/` with no `cd` or `cwd`)
+pass as ordinary writes. So does an abbreviated
 GNU long option (`tar --dir <home>`, `tar --directo=<home>`, `cp --target <home>`,
 `env --chd <home>`, `tar --extr`), which getopt_long accepts as an unambiguous prefix but no
 long-option check in the gate reads, this rule or any other; and so do the archive forms where
