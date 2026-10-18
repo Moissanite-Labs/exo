@@ -81,8 +81,8 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Eval, ask queue, brief, consolidate | `docs/TOOLS-CLI.md` | §11 "Review what Exo learned" | §9 "Work on the learning loop" (consolidate and proposals) | WP §6, §22 |
 | D-035 Typing `exo` opens Exo: bare command, installer on PATH, `exo update` | `docs/INSTALL.md` "The `exo` command", `docs/COMMANDS.md` Part 2 "Running Exo" | §1 | n/a | n/a |
 | D-036 One shared core: `exo web` finds or starts it | `docs/ui/WEB.md` "Connecting to the core", `docs/USER-GUIDE.md` §2, `docs/COMMANDS.md` | §2 | n/a | n/a |
-| D-038 Gate default ask: shell allowlist, store is credentials, policy edits only tighten (amended 2026-10-16, #136: command vetoes match the literal-word view; amended 2026-10-17, #184: store paths are matched after brace expansion; amended 2026-10-18, #224: store writes are matched after brace expansion too) | `docs/GATE.md` "Shell commands: an allowlist", "Secret-store paths", "The store is credentials", "Policy changes during a session", `docs/COMMANDS.md` | §6 | n/a | WP §7, §15.4 (programs trusted by name; exec options and test runners as the known gap, #164 in review; shell forms not yet read, #143, #153, #179, #137, #160; store spellings missed, #217), §26 |
-| D-039 Approval identity from the connection, web token on every route, one secret scrub | `docs/GATE.md` "Who answered: the connection, not the body", `docs/ui/WEB.md` "Opening the page and the page token", `docs/TOOLS.md` "Environment of bash and jobs", `docs/SEATS.md` | §2, §6, §10 | §2 | WP §7, §12.5 (with the detach limit), §15.1, §15.3, §26, glossary |
+| D-038 Gate default ask: shell allowlist, store is credentials, policy edits only tighten (amended 2026-10-16, #136: command vetoes match the literal-word view; amended 2026-10-17, #184: store paths are matched after brace expansion; amended 2026-10-18, #224: store writes are matched after brace expansion too) | `docs/GATE.md` "Shell commands: an allowlist", "Secret-store paths", "The store is credentials", "Policy changes during a session", `docs/COMMANDS.md` | §6 | n/a | WP §7, §15.4 (programs trusted by name; test runners as the known gap, exec options read since #164; shell forms not yet read, #143, #179, #188 (fix in #194); deny only asks, #137, #153, #160; store spellings missed, #217, and brace spellings seen since #228), §26 |
+| D-039 Approval identity from the connection, web token on every route, one secret scrub | `docs/GATE.md` "Who answered: the connection, not the body", `docs/ui/WEB.md` "Opening the page and the page token", `docs/TOOLS.md` "Environment of bash and jobs", `docs/SEATS.md` | §2, §6, §10 | §2 | WP §7, §12.5 (with the detach limit and the page link, #166, #177), §15.1, §15.3, §26, glossary |
 | D-037 Completion and guidance in the composer | `docs/COMMANDS.md` "Completion and guidance", `docs/UI.md`, `docs/ui/WEB.md` "The composer" | §3 "Typing help" | n/a | WP §8, §24 "Typing help" |
 | D-042 Repo hygiene, privacy and licensing | `docs/DEVELOPER-GUIDE.md` §7 "CI, lint, lockfile and the privacy deny-list", `docs/HANDOFF.md` | n/a | §7 | WP §31 (the security and correctness wave) |
 | D-040 Who wrote it: message authors, pinned keys, anchored ledger head | `docs/MEMORY-MODEL.md` "Who wrote it", `docs/LEARNING.md` "Signals in", `docs/PEERS.md` "Bus seats", `docs/CORE.md` "Pinned keys" and "Head anchor", `docs/COMMANDS.md`, `plugins/exo-bus/README.md`, `plugins/exo-memory/README.md` | §4, §7, §11 | §4 "Who wrote it", §9 "Work on the learning loop" | WP §7, §12.7, §20.1, §26 |
@@ -110,7 +110,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-061 Web sub-pages to the site v2 standard: page heads, designed empty states, status in form, 400px layout | `docs/ui/WEB.md` "Sub-pages (D-061)", `scripts/shots_web_tabs.py` | §2 (one line: the sub-pages exist) | n/a | WP §24 "The web page's other pages" |
 | Issue #48 long `HOME` no longer stops the core: the peer socket falls back to a short private folder | `docs/PEERS.md` "How it works" | n/a (no user commands changed) | n/a | n/a |
 | #100 Findings verify on eligible quiet turns or days of activity (D-025); trace lists open findings | `docs/TRACE.md` "Findings", `CHANGELOG.md` | n/a (no user commands changed) | n/a | WP §9, §23 |
-| #92 Round-cap wrap-up: one more call with tool use off (`tool_choice` none, same tools) at the tool-round cap, stored as `meta.wrap_up`, `stop_reason` stays `max_iterations`, `Loop(wrap_up=False)` opts out; scheduled runs carry the report | `docs/CORE-V2-INTERFACES.md` "Round cap", `docs/SCHEDULE.md` "Rules of the run", `docs/MODEL-SPEND.md`, `CHANGELOG.md` | n/a (no user commands changed) | n/a | WP §16 stale ("Iteration cap" says the loop emits a notice and stops; batched per wave) |
+| #92 Round-cap wrap-up: one more call with tool use off (`tool_choice` none, same tools) at the tool-round cap, stored as `meta.wrap_up`, `stop_reason` stays `max_iterations`, `Loop(wrap_up=False)` opts out; scheduled runs carry the report | `docs/CORE-V2-INTERFACES.md` "Round cap", `docs/SCHEDULE.md` "Rules of the run", `docs/MODEL-SPEND.md`, `CHANGELOG.md` | n/a (no user commands changed) | n/a | WP §16 |
 | D-069 Session rename is a built-in `command.run`, principal only, announced as `session.updated` | `docs/COMMANDS.md`, `docs/ui/WEB.md`, `DECISIONS.md` D-069 | §2, §3 (`/rename`, double-click on the web) | §2 "Extend through `command.run` built-ins" (worked example) | WP §12.2, §24 "Threads you can find again" |
 | D-067 Engine split step 4 (core cap 15,000, since replaced by D-077): dead code and duplicates deleted, `ApprovalDesk`, peer transport to `exo.peers`, scheduler to `exo.scheduler`, both attached by `exo.compose` | `docs/ENGINE-SPLIT.md` "Progress" and "Budget policy", `docs/CORE.md`, `docs/PEERS.md`, `docs/SCHEDULE.md`, `CHANGELOG.md` | n/a (no user commands changed) | §1 "The engine and what is attached to it", §9 "Schedule a job" | WP §11 "The engine split" and the layout table, §30 |
 | D-068 Turns build from ready summaries and do not wait for memory upkeep; a wait of at most 5 seconds only when the view overflows its budget | `docs/MEMORY-MODEL.md` "A turn does not wait for memory upkeep", `src/exo/turn_settle.py`, `DECISIONS.md` D-068 | n/a (no user commands changed) | n/a | WP §5, §17.3, §28 step 4, figure 6 |
@@ -119,7 +119,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | #87 Principal model-spend admission: daily and monthly ceilings, reservation before a call, settlement from usage, opt-in | `docs/MODEL-SPEND.md` | n/a (opt-in; set up from the technical doc) | n/a | WP §13.5 "Spend ceilings" |
 | #128 Model spend refuses a pin below a route's audited long-prompt tier in all four token classes (`NATIVE_TIERS`, `admit_native`) | `docs/MODEL-SPEND.md` (pricing contract and adapter paragraphs), `CHANGELOG.md` | n/a (no user commands changed) | n/a | n/a |
 | #46 Engine split, first pass: diagnostics and composition leave the core (`exo.compose:create`, `src/exo/diagnostics.py`) | `docs/ENGINE-SPLIT.md` "Progress", `docs/COMMANDS.md` | n/a (no behaviour change) | §1 "The compose and diagnostics split" | WP §11 "The engine split" |
-| Core line budget and protocol cap (a ratchet with headroom, D-077: floor 14,813 plus 1,000; 30 commands, 29 of 30 event slots) | `docs/ENGINE-SPLIT.md` "Budget policy", `src/exo/protocol/schema.py` | n/a | §1 "The core budget", §7 "The core line budget", §2 | WP §11, §12.2, §27 |
+| Core line budget and protocol cap (a ratchet with headroom, D-077: floor 14,813 plus 1,000; 30 commands, all 29 event slots) | `docs/ENGINE-SPLIT.md` "Budget policy", `src/exo/protocol/schema.py` | n/a | §1 "The core budget", §7 "The core line budget", §2 | WP §11, §12.2, §27 |
 | #70, #91 Required tool executor mode: one dispatch path, gate evidence before action, trusted plugin inventory; #91 binds the request before hooks, isolates hook arguments, turns off plugins from installed packages and rejects a gate that fails to register or sits outside the inventory | `docs/EXECUTORS.md` | §6 (executor denial and audit) | §3 (executor interface) | WP §15.6 |
 | #80 Ledger authority: protected append service, recoverable projections, independent verifier | `docs/LEDGER-AUTHORITY.md` | n/a (no user commands changed) | n/a (OS integration; the contract is in the technical doc) | WP §20.2 |
 | The docs rule and this map | `docs/DOCS-MAP.md`, `tests/docs/test_docs_map.py` | n/a | "The docs rule" | n/a |
@@ -137,20 +137,21 @@ keep their version 0.2 numbers, and the new parts are subsections (15.6, 20.1, 2
 
 - **Not covered:** none of the decisions on main that need whitepaper coverage. Decisions with nothing for the
   paper to say (for example the site, brand and test-hygiene decisions D-047, D-049 and D-053) are `n/a` above.
-- **Stated as today's limits, with the open change named:** the shell allowlist trusts programs by name, and exec
-  options of trusted programs are not read (#164, WP §15.4); `config.json` is an ordinary local write (D-074, #125,
+- **Stated as today's limits, with the open change named:** the shell allowlist trusts programs by name, so code a
+  trusted program runs from a file is not read (WP §15.4); `config.json` is an ordinary local write (D-074, #125,
   WP §7, §26); the principal credential check passes a same-user process that detaches (D-060, #175, WP §12.5);
   a wildcard or folder read of the principal credential is an ordinary read (#169, #185, WP §12.5, §15.4); a
-  command inside `${...}` or a single-quoted array subscript of a variable name is not read (#143, #158; #179, #189); an
-  `ssh` or `mosh` chain past four hops is allowed under a deny (#153, #164); a deny past the `bash -c` depth cap or
-  behind a wrapper only asks (#137, #160, #196); a store write by a relative name, a glob, brace or hard-link
-  spelling (docs/GATE.md, #224), or through `/dev/fd/N` (#217, no change open yet) is an ordinary write (all WP
-  §7, §15.4).
+  command inside `${...}`, a single-quoted array subscript of a variable name, or a quoted compound, `-i` or `-n`
+  value given to `declare` is not read (#143, #158; #179, #189; #188, #194); a deny past the `bash -c` depth cap or
+  the `ssh` hop cap, or behind a wrapper, only asks (#137, #153, #160, #196); a store write by a relative name, a
+  glob or hard-link spelling (docs/GATE.md), or through `/dev/fd/N` (#217, no change open yet) is an ordinary write
+  (all WP §7, §15.4); a post body from a file, stdin or a command is not swept (#208) and a harmlessly named link to
+  a key file is a plain read (#209, WP §15.4); the page link is readable in browser
+  history and the launcher's argv (#166, #177, WP §7, §12.5).
 - **Covered as in progress, not on main:** Unix peer authentication (D-060, #175), protecting `config.json`
-  (D-074, #125), reading `${...}` words (#158), reading exec options and asking past the ssh hop cap (#164),
-  reading array subscripts of variable names (#189), reading commands behind wrappers (#196), the permissionless
-  mode (keeping the operator floor, #96), `/rounds`, the choice card, the exosphere, house taste waves 2 and 3, and
-  event activation (WP §30.1).
+  (D-074, #125), reading `${...}` words (#158), reading array subscripts of variable names (#189), reading
+  commands behind wrappers (#196), the permissionless mode (keeping the operator floor, #96), `/rounds`, the choice
+  card, the exosphere, house taste waves 2 and 3, and event activation (WP §30.1).
 - **Covered as designed, not built:** D-011 (store version 2, WP §19), the staged retrieval pipeline (WP §21),
   the unbuilt parts of D-015 (calibration, `decision` ledger entries, exo-decide, WP §14), and the house taste
   adaptation (WP §22.7).

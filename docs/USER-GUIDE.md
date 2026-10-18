@@ -205,11 +205,12 @@ You can watch and control them:
 - On the web page, the Tasks cards have Open, Steer and Stop buttons.
 - A subagent that has finished, failed or been cancelled is locked: steering or stopping it gives a clear error and
   changes nothing.
-- The agent's receipt for the task records what you did: "steered by principal" or "stopped by parent".
+- The agent's receipt for the task records what you did: "steered by principal" or "stopped by principal".
 
-Through these commands, only you, or the agent that started the subagent, can steer or stop it. Other sessions
-and peers get a refusal (D-070). A subagent is still a session, though, so a program on your machine that sends to
-or stops its session directly can reach it. Such a note is recorded as that program's, never as yours.
+Through these commands, only you can steer or stop a subagent. The rules also allow the agent that started it,
+but nothing on main gives that agent the path yet. Other sessions and peers get a refusal (D-070). A subagent is
+still a session, though, so a program on your machine that sends to or stops its session directly can reach it.
+Such a note is recorded as that program's, never as yours.
 
 ### Scheduled jobs
 
@@ -261,32 +262,37 @@ What the gate asks about, and why:
 - **Credentials always ask.** Anything the gate sees reading or filling a password, token or key asks every time.
   An "always" answer is never stored for credentials. The gate judges a read by the path it names, so on main a
   wildcard or a folder walk of the folder that holds Exo's own connection secret (`run/`) is not yet seen as a
-  credentials read (#169, fix in review).
+  credentials read (#169, fix in review). Nor is a harmlessly named symbolic link to a key file, read by its own
+  name (#209).
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another.
 - **Posts to public places are swept for internal names**, such as seat names, home paths and model ids. A hit holds
-  the post and lists what it found.
+  the post and lists what it found. The sweep and the exact-text check see only text in the command itself: a body
+  that comes from standard input, a command or a file the gate cannot load is not swept, and an "always" for that
+  post can cover a later body (#208).
 - **Code the gate cannot see into asks (D-038).** A script file, `python -c`, `node -e`, a heredoc fed to a shell,
   `make`, `npm run` or `npm test`, `npx`, `xargs`, `find -exec`, a variable or `$( )` in the program's place, a shell
   function, `source`, or a program the gate does not know: each asks once, for that exact command. Plain work still
   runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like. These are
-  trusted by name, so a test runner still runs your project's files, and some options of trusted programs that run
-  a command are not read yet (`tar --to-command`, `sort --compress-program` and the like; #164 is in review).
-  The gate finds programs only in the shell forms its parser reads. A command inside a parameter expansion such as
-  `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in #158). Nor is a `$( )` inside a
-  single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the like
-  (`printf -v 'a[$(...)]'`; #179, fix in review in #189). An `ssh` or `mosh` chain more than four hops deep is read as a plain shell command and runs without
-  asking, even when your policy denies what it runs (#153, fix in review in #164). A command nested more than four
-  levels deep (`bash -c` inside `bash -c` and so on), or run behind a wrapper such as `setsid` or `flock` (#160, fix
-  in review in #196), asks, even when your policy denies it (#137).
+  trusted by name, so a test runner still runs your project's files. Options of trusted programs that run a
+  command (`tar --to-command`, `rsync -e`, `ssh -o ProxyCommand` and the like) are read as the command they run
+  (#164). The gate finds programs only in the shell forms its parser reads. A command inside a parameter expansion
+  such as `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in #158). Nor is a `$( )`
+  inside a single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the like
+  (`printf -v 'a[$(...)]'`; #179, fix in review in #189), or in a quoted compound, `-i` or `-n` value given to
+  `declare`, `typeset` or `local` (`declare -a 'b=($(...))'`; #188, fix in review in #194). A command nested more
+  than four levels deep (`bash -c` inside `bash -c` and so on), an `ssh` or `mosh` chain more than four hops deep
+  (#153), or a command run behind a wrapper such as `setsid` or `flock` (#160, fix in review in #196), asks, even
+  when your policy denies it (#137).
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
   covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,
   #125) adds it. The gate resolves symbolic links in an absolute path (#130), but otherwise goes by the path as the
   command spells it, so some writes are not seen as store writes yet: a relative name such as `gates.yaml` written
-  by a tool whose working folder is `policies/`, a glob or brace spelling, a hard link, and a store file opened on a
-  numbered file descriptor and written back through `/dev/fd/3` (#217). `docs/GATE.md` lists the rest.
+  by a tool whose working folder is `policies/`, a glob spelling, a hard link, and a store file opened on a numbered
+  file descriptor and written back through `/dev/fd/3` (#217). A brace spelling (`polic{i..i}es`) is seen (#224).
+  `docs/GATE.md` lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
@@ -295,8 +301,11 @@ What the gate asks about, and why:
 Who may approve: you can always, from the terminal window or the web page. A policy file can let named seats or
 roles approve some kinds of act, and they must sign. A peer never can. A message from a peer that tries to approve
 something is refused and shown to you. The agent cannot answer its own approvals: a command it runs that talks to
-Exo is not you, whatever it claims, and only you can answer "always". The check has one limit: a program running as you
-that obtains your window's secret and detaches from Exo can pass (`docs/GATE.md` "Who answered").
+Exo is not you, whatever it claims, and only you can answer "always". The check has limits. A program running as
+you that obtains your window's secret and detaches from Exo can pass (`docs/GATE.md` "Who answered"). The web
+page's link carries its own secret, so a program that reads the link can answer from the page too: the link stays
+in your browser's history, and while `exo web` opens the browser it is on the launcher's command line, which other
+programs on the machine can read (#166, fix in review in #177).
 
 "Always" answers become standing grants. They expire (7 days for outward acts, 30 days for others) and an outward
 grant covers one exact text. `/grants` lists them. `/grants revoke <id>` removes one.

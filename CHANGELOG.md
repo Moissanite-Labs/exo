@@ -43,19 +43,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Whitepaper v0.3 (draft, tagged `whitepaper-v0.3` when published), covering main up to D-077: the security wave
   (D-038 to D-040) with its limits stated (allowlisted programs are trusted by name, the principal credential check
   passes a same-user process that detaches, a wildcard or folder read of the principal credential is an ordinary read
-  (#169), `config.json` is an ordinary write until D-074, a command inside `${...}` or inside a single-quoted array subscript
-  given to a builtin that takes a variable name is not classified (#143, #179), an `ssh` or `mosh` chain past four
-  hops is allowed even under a deny (#153), a deny past four `bash -c` nesting levels or behind a wrapper such as
-  `setsid` only asks (#137, #160), a store write by a relative name from the tool's working folder, by a glob, brace
-  or hard-link spelling (docs/GATE.md, #224), or back through `/dev/fd/N` (#217) is an ordinary write, and a received peer message is
+  (#169), `config.json` is an ordinary write until D-074, a command inside `${...}`, inside a single-quoted array
+  subscript given to a builtin that takes a variable name, or in a quoted compound, `-i` or `-n` value given to
+  `declare` is not classified (#143, #179, #188), a deny past four `bash -c` nesting levels or `ssh` hops, or behind
+  a wrapper such as `setsid`, only asks (#137, #153, #160), a store write by a relative name from the tool's working
+  folder, by a glob or hard-link spelling (docs/GATE.md), or back through `/dev/fd/N` (#217) is an ordinary write, a
+  post body the gate cannot see is not swept (#208), a harmlessly named link to a key file is a plain read (#209),
+  the page link can be read from browser history and the launcher's argv (#166), and a received peer message is
   checked against the key in a presence file any same-user program can write (#132)), principal authority (D-052 to
   D-054), required executor mode (#70, #91), ledger authority (#80) and the opt-in witness transport (#88),
   model-spend ceilings (#87), signed updates (D-073), the
   composer, keys and layouts (D-037, D-043, D-045, D-046), the house taste wave 1 (D-044), the engine split and the
   core budget ratchet (#46, D-067, D-077), turns that do not wait for memory upkeep (D-068), versioning (D-056), the
   web sub-pages (D-061), subagent controls and `/rename` (D-069, D-070), and an "In progress" section that names the
-  open changes and issues (#96, #125, #158, #164, #169, #175, #189, #196). The user guide, developer guide, command
-  reference and docs map are brought up to date with main, and the docs map has one coverage table.
+  open changes and issues (#96, #125, #158, #169, #175, #189, #196), and names what #164, #186, #201 and #228 changed on
+  main. The user guide, developer guide, command reference and docs map are brought up to date with main, and the
+  docs map has one coverage table.
   `scripts/build_whitepaper.py` takes the version and the month from the paper's header line only, and stops with a
   message when that line is missing or reworded.
 - Web chat: a completed reply renders as Markdown, GFM pipe tables included (#149, #152). Streaming stays plain
