@@ -5,6 +5,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Fixed
+- Skill gates fail closed. The draft pipeline's prose gate passes only when `check-prose.py` exits 0. Before, it
+  passed whenever the output held the word "clean", so a draft named `cleanup.md` passed with findings.
+  `--allow-identifier` exempts only the token it names: allowing `localhost:8080` no longer hides
+  `localhost:9999/secret`, and a refused hit names the whole token. Internal names that start or end with `.`, `~`
+  or `@` now match, in `check-prose.py` and in the draft pipeline.
+- SYM-2P validators (`exo.protocols.sym2p` and the `sym-protocol` skill's `sym-validate.py`) reject an id, ref, hash
+  or timestamp with a trailing newline. The grammar patterns ended in `$`, which also matches before a final
+  newline, so `"builder\n"` passed as an ID and slipped past the `(f, id)` duplicate check.
+
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.

@@ -206,7 +206,8 @@ python3 scripts/check-prose.py --policy <prose.json> <file>
 Policy lookup order: `--policy`, then `$EXO_PROSE_POLICY`, then `<store>/policies/prose.json`
 where `<store>` is `$EXO_PRINCIPAL_STORE` or `$EXO_HOME/principals/$EXO_PRINCIPAL`. Internal names
 come from `--names`, `$EXO_INTERNAL_NAMES`, or `<store>/policies/internal-names.txt` (one per
-line). No store means generic defaults. Policy keys (all optional):
+line). Each matches as a whole name, also one that starts or ends with `.`, `~` or `@` (`.agents`,
+`@bot`). No store means generic defaults. Policy keys (all optional):
 
 ```json
 {"banned_phrases": ["regex", "..."], "internal_names": ["name"], "identifier_patterns": ["regex"],
