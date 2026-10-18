@@ -77,20 +77,28 @@ def _drain(proc: subprocess.Popen, out: _Capped, emit: Callable[[str], None] | N
 
 
 def _safe_cut(raw: str, vals: list[str]) -> int:
-    """Where ``raw`` may split so the stream equals whole-output redaction: before a tail that could start a key,
-    and not inside a key that redaction takes (longest first, skipping one inside a key already taken). This covers
-    a key inside another and a key whose end starts another. Three keys chained by partial overlap can still differ."""
-    cut, taken = len(raw) - _key_start(raw, vals), bytearray(len(raw))
+    """Where ``raw`` may split so the stream equals whole-output redaction, whatever output follows.
+
+    Redaction takes the values in ``vals`` order, and each value's matches from the left, skipping text already
+    taken. A match that ends before a point is taken the same way whatever follows that point. So the cut starts
+    before a tail that could start a key. Then, value by value, it moves back to the start of the first match that
+    could cross it, skipping matches that overlap one taken before the cut. Later output can then add or drop only
+    matches that start at or after the cut, so no part of a key that whole-output redaction hides goes out. Each
+    value moves the cut at most once, so the held text stays under twice the length of all values together. One
+    limit: a value that holds ``[`` or ``]`` can match across a ``[redacted]`` marker in the whole output, and there
+    the stream can differ."""
+    cut, taken = len(raw) - _key_start(raw, vals), bytearray(len(raw))  # taken: by matches that end before the cut
     for v in vals:
-        i = raw.find(v)
+        n, i = len(v), raw.find(v)
         while i >= 0:
-            if 1 in taken[i:i + len(v)]:
+            if 1 in taken[i:i + n]:
                 i = raw.find(v, i + 1)
-                continue
-            taken[i:i + len(v)] = b"\x01" * len(v)
-            if i < cut < i + len(v):
-                cut = i
-            i = raw.find(v, i + len(v))
+            elif i + n <= cut:
+                taken[i:i + n] = b"\x01" * n
+                i = raw.find(v, i + n)
+            else:
+                cut = min(cut, i)
+                break
     return cut
 
 

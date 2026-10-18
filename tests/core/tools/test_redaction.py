@@ -1,5 +1,6 @@
 """Tool results never carry key values the core knows (env, keys file, values it looked up)."""
 import asyncio
+import random
 
 import pytest
 
@@ -108,3 +109,45 @@ def test_stream_equals_whole_output_redaction_at_every_read_edge(monkeypatch, ou
         _drain(_Proc([data[:k], data[k:]]), _Capped(10_000), seen.append)
         assert "".join(seen) == whole, k
         assert not any(SECRET[:8] in c for c in seen), k
+
+
+def test_a_three_key_overlap_chain_does_not_reach_the_stream(monkeypatch):
+    """A key seen in the first read is later taken apart by a longer key, and a third key overlaps it. Every read
+    edge gives whole-output redaction, so no part of the third key goes out."""
+    from exo.core.tools.builtin.shell import _Capped, _drain
+    for name, value in {"A_TOKEN": "bbaaaabbba", "B_TOKEN": "abaabbbaa", "C_TOKEN": "baaabaab"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("EXO_KEYS_FILE", "/nonexistent")
+    output = "baaabaabbbaaaabbba"
+    assert keys.redact_secrets(output) == "[redacted][redacted]"
+    data = output.encode()
+    for k in range(1, len(data)):
+        seen = []
+        _drain(_Proc([data[:k], data[k:]]), _Capped(10_000), seen.append)
+        assert "".join(seen) == "[redacted][redacted]", k
+
+
+@pytest.mark.parametrize("alphabet", ["ab", "abc", "acde"])  # with "acde" a key can match inside "[redacted]"
+def test_stream_equals_whole_output_redaction_for_random_keys(monkeypatch, alphabet):
+    """A differential check: short random keys over a small alphabet nest, overlap and chain far more often than
+    real ones. Each output, built from key pieces, is read in two parts at every byte and one byte at a time, and
+    the stream must equal redacting the whole output. The held text stays under twice the keys' total length."""
+    from exo.core.tools.builtin.shell import _Capped, _drain, _safe_cut
+    rnd, vals = random.Random(f"stream-{alphabet}"), []
+    monkeypatch.setattr(keys, "known_secret_values", lambda: vals)
+    for _ in range(1000):
+        keyset = {"".join(rnd.choices(alphabet, k=rnd.randint(2, 7))) for _ in range(rnd.randint(1, 4))}
+        vals[:] = sorted(keyset, key=len, reverse=True)  # the order known_secret_values gives
+        parts = []
+        while sum(map(len, parts)) < 24:
+            v = rnd.choice(vals)
+            a = rnd.randint(0, len(v))
+            parts.append(rnd.choice([v, v[a:], v[:a], rnd.choice(alphabet)]))
+        output = "".join(parts)[:rnd.randint(2, 24)]
+        whole, data = keys.redact_secrets(output, vals), output.encode()
+        for reads in [[data[:k], data[k:]] for k in range(1, len(data))] + [[bytes([b]) for b in data]]:
+            seen = []
+            _drain(_Proc(reads), _Capped(10_000), seen.append)
+            assert "".join(seen) == whole, (vals, output, reads)
+        for k in range(1, len(output) + 1):
+            assert k - _safe_cut(output[:k], vals) < 2 * sum(map(len, vals)), (vals, output[:k])

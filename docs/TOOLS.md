@@ -74,10 +74,11 @@ them live and sessions.sqlite keeps them. The output is read as one UTF-8 stream
 reads stays whole in the stream and in the result. Invalid bytes, and a sequence cut off by the end of the output,
 become U+FFFD. Known key values are cut out of the stream as `[redacted]`, even when a key is split between two
 reads. The end of a read that could be the start of a key waits for the next read or for the end of the command.
-Other output is not held back. The stream is not cut inside a key that redaction would take, so it matches redacting
-the whole output, also when one key holds another (a URL with a password in it) or one key's end starts another. Three
-keys that chain by partial overlap can still differ from it in the stream. The result is redacted as a whole when the
-call returns.
+Other output is not held back. The stream is cut only where no key that redaction could take crosses the cut,
+whatever output follows. So it matches redacting the whole output, also when one key holds another (a URL with a
+password in it) or keys overlap in a chain. The held text stays under twice the length of all key values together.
+A key value that holds `[` or `]` is the one exception. Redacting the whole output can match it across its own
+`[redacted]` marker, and there the stream can differ. The result is redacted as a whole when the call returns.
 
 ## Execution brokers (D-020)
 
