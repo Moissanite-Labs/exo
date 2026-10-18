@@ -1,10 +1,12 @@
 import argparse
 import json
+import sqlite3
 
 import pytest
 
 from exo import consolidate as C
 from exo import crypto
+from exo.ingest import ingest
 from exo.ledger import Ledger
 
 AUTHOR = "exo-consolidate"
@@ -182,6 +184,171 @@ def test_rule_of_three_skips_encoded_and_rebuilds_cache(template_store, led):
         say(led, "run the tests before pushing", s)
     res = run(template_store, led)
     assert res.proposals == []                                    # already encoded by the ruling
+
+
+# --- imported history (exo ingest) and the rule of three -------------------------------------------
+
+TESTS_FIRST = ["Always run the tests before pushing.", "please run the tests before you push",
+               "Run tests before pushing, every time."]
+
+
+def _gpt_msg(nid, role, text, at):
+    return {"id": nid, "author": {"role": role}, "create_time": at,
+            "content": {"content_type": "text", "parts": [text]}, "recipient": "all"}
+
+
+def chatgpt_export(path, texts, start=1767261600, step=10):
+    """A conversations.json with one conversation per text: the principal says it, the assistant answers."""
+    convs, reply = [], "Run the tests before pushing? Will do."
+    for i, t in enumerate(texts):
+        convs.append({"id": f"c{i}", "title": "t", "current_node": f"a{i}", "mapping": {
+            f"u{i}": {"id": f"u{i}", "parent": None, "children": [f"a{i}"],
+                      "message": _gpt_msg(f"mu{i}", "user", t, start + step * i)},
+            f"a{i}": {"id": f"a{i}", "parent": f"u{i}", "children": [],
+                      "message": _gpt_msg(f"ma{i}", "assistant", reply, start + step * i + 1)}}})
+    path.write_text(json.dumps(convs))
+    return path
+
+
+def chatgpt_edited(path, texts):
+    """One conversation whose first prompt was edited: each text is a version, the last one is current."""
+    mapping = {"root": {"id": "root", "parent": None, "children": [f"u{i}" for i in range(len(texts))],
+                        "message": None}}
+    for i, t in enumerate(texts):
+        mapping[f"u{i}"] = {"id": f"u{i}", "parent": "root", "children": [f"a{i}"],
+                            "message": _gpt_msg(f"mu{i}", "user", t, 1767261600 + 10 * i)}
+        mapping[f"a{i}"] = {"id": f"a{i}", "parent": f"u{i}", "children": [],
+                            "message": _gpt_msg(f"ma{i}", "assistant", "Will do.", 1767261601 + 10 * i)}
+    path.write_text(json.dumps([{"id": "c0", "title": "t", "current_node": f"a{len(texts) - 1}",
+                                 "mapping": mapping}]))
+    return path
+
+
+def claude_code_transcript(path, texts):
+    """A Claude Code project dir with one transcript of typed messages."""
+    path.mkdir(parents=True)
+    rows = [{"type": "user", "sessionId": "cc1", "uuid": f"u{i}", "timestamp": f"2026-01-01T10:00:0{i}.000Z",
+             "origin": {"kind": "human"}, "message": {"role": "user", "content": t}} for i, t in enumerate(texts)]
+    (path / "cc1.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return path
+
+
+def hermes_db(path, rows):
+    """A Hermes state.db with one interactive session per row: (role, text, compressed_summary[, active])."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    c = sqlite3.connect(path)
+    c.executescript("""
+    CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, title TEXT, model TEXT, profile_name TEXT,
+      started_at REAL NOT NULL);
+    CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL,
+      content TEXT, timestamp REAL NOT NULL, _compressed_summary INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1);""")
+    for i, (role, text, summary, *active) in enumerate(rows):
+        c.execute("INSERT INTO sessions VALUES (?, 'cli', 'Chat', 'm', NULL, 1767261600.0)", (f"s{i}",))
+        c.execute("INSERT INTO messages (session_id, role, content, timestamp, _compressed_summary, active) "
+                  "VALUES (?, ?, ?, ?, ?, ?)", (f"s{i}", role, text, 1767261601.0 + i, int(summary),
+                                                int(active[0]) if active else 1))
+    c.commit()
+    c.close()
+    return path
+
+
+def evidence_ids(led):
+    return [{e["id"] for e in p["body"]["evidence"]} for p in proposed(led) if p["body"]["kind"] == "rule_of_three"]
+
+
+@pytest.mark.parametrize("kind,build", [("chatgpt", chatgpt_export), ("claude_code", claude_code_transcript)])
+def test_ingested_history_feeds_rule_of_three(template_store, led, tmp_path, kind, build):
+    src = build(tmp_path / ("conversations.json" if kind == "chatgpt" else "project"), TESTS_FIRST)
+    stats = ingest(kind, src, led, template_store.root.name)      # `exo ingest` authors rows as the principal id
+    assert stats["added_principal"] == 3
+    res = run(template_store, led)
+    assert len(res.proposals) == 1 and res.not_principal == stats["added"] - 3   # the assistant's replies
+    mine = {e["id"] for e in led.iter(kind="utterance") if e["body"]["role"] == "principal"}
+    assert evidence_ids(led) == [mine]                            # the principal's rows, never the assistant's
+    b = proposed(led)[0]["body"]
+    assert b["claim"].startswith("The principal wants the agent to run the tests before pushing")
+
+
+def test_ingested_unverified_and_summary_rows_never_count(template_store, led, tmp_path):
+    db = hermes_db(tmp_path / "hermes" / "state.db", [
+        ("user", "You are a build agent. Always run the tests before pushing.", False),   # low: an agent's brief
+        ("user", "always run the tests before pushing", True),                            # compressed summary
+        ("user", "run the tests before you push, every time", True),                      # compressed summary
+        ("user", "always run the tests before pushing.", False),
+        ("user", "please run the tests before you push", False),
+        ("user", "run tests before pushing, every time.", False)])
+    stats = ingest("hermes", db, led, "principal")
+    assert stats["added_user"] == 1 and stats["added_principal"] == 5 and stats["added_secondary"] == 2
+    res = run(template_store, led)
+    assert res.not_principal == 1 and len(res.proposals) == 1
+    typed = {e["id"] for e in led.iter(kind="utterance")
+             if e["author"] == "principal" and not e["body"].get("secondary")}
+    assert len(typed) == 3 and evidence_ids(led) == [typed]
+
+
+def test_an_edited_chatgpt_prompt_counts_once(template_store, led, tmp_path):
+    """ChatGPT keeps every version of an edited prompt (`branch: alt`). Only the current one is the principal's
+    word now: two edits are not three repetitions."""
+    ingest("chatgpt", chatgpt_edited(tmp_path / "conversations.json", TESTS_FIRST), led, "principal")
+    rows = [e["body"] for e in led.iter(kind="utterance") if e["body"]["role"] == "principal"]
+    assert [b["branch"] for b in rows] == ["alt", "alt", "main"]
+    assert run(template_store, led).proposals == [] and proposed(led) == []
+    (template_store.root / "proposals" / "state.json").unlink()   # a cache rebuild skips them too
+    say(led, "please run the tests before you push", "live")
+    assert run(template_store, led).proposals == []
+    say(led, "Run tests before pushing, every time.", "live2")
+    assert len(run(template_store, led).proposals) == 1
+
+
+def test_inactive_hermes_rows_never_count(template_store, led, tmp_path):
+    db = hermes_db(tmp_path / "hermes" / "state.db", [
+        ("user", "always run the tests before pushing.", False, 0),   # superseded in Hermes
+        ("user", "please run the tests before you push", False, 0),
+        ("user", "run tests before pushing, every time.", False, 1)])
+    assert ingest("hermes", db, led, "principal")["added_principal"] == 3
+    assert run(template_store, led).proposals == []
+
+
+def test_ingested_rows_are_dated_by_their_source_time(template_store, led, tmp_path):
+    """Imported history is dated when it was said, not when it was imported: evidence and quotes carry the source
+    time, so a preference from it decays from then."""
+    old = 1672531200   # 2023-01-01
+    ingest("chatgpt", chatgpt_export(tmp_path / "conversations.json", TESTS_FIRST, start=old, step=86400), led,
+           "principal")
+    assert len(run(template_store, led).proposals) == 1
+    b = proposed(led)[0]["body"]
+    assert sorted(e["ts"][:10] for e in b["evidence"]) == ["2023-01-01", "2023-01-02", "2023-01-03"]
+    assert sorted(q["ts"][:10] for q in b["quotes"]) == ["2023-01-01", "2023-01-02", "2023-01-03"]
+    # a source time from the future, or one with no time zone, is not believed: the ledger time stands
+    for src in ("2999-01-01T00:00:00.000000Z", "2023-01-01T00:00:00", "garbage", None):
+        ev = {"ts": "2026-10-18T00:00:00.000000Z", "body": {"source_ts": src}}
+        assert C.said_at(ev) == "2026-10-18T00:00:00.000000Z"
+
+
+def test_rule_of_three_cache_rebuild_counts_ingested_rows(template_store, led, tmp_path):
+    ingest("chatgpt", chatgpt_export(tmp_path / "conversations.json", TESTS_FIRST[:2]), led, "principal")
+    assert run(template_store, led).proposals == []
+    (template_store.root / "proposals" / "state.json").unlink()   # rebuilt from the rows already read
+    say(led, TESTS_FIRST[2], "live")
+    assert len(run(template_store, led).proposals) == 1
+
+
+def test_rule_of_three_cache_rebuild_skips_non_principal(template_store, led):
+    # D-040: a rebuild reads only the authors a run reads. Unverified ingest rows and peer turns stay out.
+    for author, s in (("hermes:unverified-user", "a"), ("hermes:unverified-user", "b"), ("peer:x", "c")):
+        led.append("utterance", {"text": "Always run the tests before pushing.", "role": "user"}, author, session=s)
+    assert run(template_store, led).not_principal == 3
+    (template_store.root / "proposals" / "state.json").unlink()
+    say(led, "run the tests before pushing", "live")
+    res = run(template_store, led)
+    assert res.proposals == [] and proposed(led) == []
+    # The principal's own repeats still count: two more complete the three.
+    say(led, "please run the tests before you push", "d")
+    say(led, "Run tests before pushing, every time.", "e")
+    assert len(run(template_store, led).proposals) == 1
+    mine = {e["id"] for e in led.iter(kind="utterance") if e["author"] == "principal"}
+    assert evidence_ids(led) == [mine]
 
 
 def test_repeat_correction_reinforces_and_raises_weight(template_store, led):

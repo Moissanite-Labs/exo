@@ -107,7 +107,7 @@ Set them as `EXO_COMMAND_<KEY>` environment variables or pass them to `load_sett
 | `socket` | `$EXO_HOME/run/exod.sock` | Core socket. |
 | `url`, `token`, `token_file` | none | Core on TCP. The token falls back to `$EXO_TOKEN`, then `$EXO_HOME/run/exod.token`. |
 | `host`, `port` | `127.0.0.1`, `7342` | Where the web client listens. |
-| `principal_store` | `$EXO_PRINCIPAL_STORE`, else `$EXO_HOME/principals/$EXO_PRINCIPAL` | Principal store root. No guess when unset. |
+| `principal_store` | `$EXO_PRINCIPAL_STORE`, else the store of `$EXO_PRINCIPAL`: config `principals.<id>`, else `$EXO_HOME/principals/<id>` | Principal store root. No guess when unset. |
 | `decisions_queue` | `queues/decisions.jsonl` | Relative paths resolve inside the store. |
 | `live_window_seconds` | 900 | A session is live if it moved in this window. |
 | `past_window_hours` | 24 | Finished subagent sessions shown under Past. |
