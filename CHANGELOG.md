@@ -17,9 +17,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `tmux new-session -d 'sleep 3;' new-window 'git push origin main'` is `vcs_push` too. The wrapper keeps the
   `indirection` floor, so a line that asked still asks; `chroot`, `nsenter`, `unshare` and `systemd-run` add a
   signal like `sudo`. A command the gate cannot read (`setsid $CMD`, `tmux send-keys`, `parallel` reading its
-  input) stays `opaque_exec`. A deny on `opaque_exec` itself (`deny:`, a category line or a rule) now asks for such a line instead of denying it;
-  naming `opaque_exec` at `ask` or `deny` no longer turns off the indirection floor (#178), so none of these
-  lines logs.
+  input) stays `opaque_exec`. A deny on `opaque_exec` itself (`deny:`, a category line or a rule) now asks for
+  such a line instead of denying it; naming `opaque_exec` at `ask` or `deny` no longer turns off the indirection
+  floor (#178), so none of these lines logs.
 - Absolute symlink aliases into protected Exo stores retain the principal-only write approval floor (#130),
   including missing leaves, deletion of store ancestors, and `cd`, `pushd` or `git -C` into an alias of the store.
   A path the gate cannot resolve (a NUL byte) keeps its lexical check instead of raising. `cp -s`, `cp -l` and a

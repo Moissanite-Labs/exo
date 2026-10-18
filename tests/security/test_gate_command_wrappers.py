@@ -208,7 +208,7 @@ def test_interpreter_behind_taskset_keeps_what_main_gives_it():
     "tmux new-session -d -s x \\; send-keys 'git push origin main' Enter",
     # An argument ending in an escaped `\;` (as tmux sees it) does not end the command: new-session runs `ls;`.
     "tmux new-session -d 'ls\\;' new-window 'git push origin main'",
-    "tmux new-session -d ls\\\\; new-window 'git push origin main'",
+    "tmux new-session -d ls\\\\\\; new-window 'git push origin main'",
     "screen -S x -X stuff 'git push origin main'",
     "screen -r x",
     "parallel",
