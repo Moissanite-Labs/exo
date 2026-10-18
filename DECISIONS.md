@@ -1364,19 +1364,25 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   unset), `$EXO_PRINCIPAL_STORE`, or a protected folder in them (`cp x <folder>`, `cp -t`, `install -t`, `mv -t`,
   `tar -C` when extracting, `unzip -d`, `curl --output-dir`, `wget -P`, `scp x <folder>`, with the folder as its own
   word, attached to the option or named in old-style `tar xCf`, and a relative `.exo`, `.exo/principals` or
-  `.exo/principals/<id>` by name), a folder named like
-  the home copied into the home's parent (`cp -r /tmp/.exo ~/` merges into it), a relative name after `cd` into a
-  store folder, after `env -C` there (also in a cluster, `env -iC`), or with the bash tool's `cwd` (an
-  `exec_command` tool's `workdir`) there, also inside that line's `$( )`, `<( )`, `>( )` and backticks, a
-  relative name with `.`, `..` or doubled slashes (folded before the match), a leading `//`, and
+  `.exo/principals/<id>` by name; a repeated option counts every value, as curl and wget take the last and each
+  `tar -C` applies to the members after it), a folder named like the home copied into the home's parent
+  (`cp -r /tmp/.exo ~/` merges into it), a relative name after `cd` into a store folder, after `env -C` there
+  (also in a cluster, `env -iC`), or with the bash tool's `cwd` (an `exec_command` tool's `workdir`) there, also
+  inside that line's `$( )`, `<( )`, `>( )` and backticks, a relative name with `.`, `..` or doubled slashes
+  (folded before the match), a leading `//`, and
   `exo config set`/`unset`, `exo update --pin-trust`, `exo interview` (the principal's ledger) and
   `exo import-store` (it activates the principal in `config.json`), also through `python -m exo.cli`,
   `python -m exo.onboard` or `python -m exo.config`, which were `opaque_exec` (a category a policy, a rule or
   `approvals.yaml` can lower) and are `store_write` now. Any other folder of the home (`plugins/`, `venv/`,
   `src/`) still counts as the store for the writes made from it, as before D-074, and so does a `cd`, `env -C`,
   `cwd` or `workdir` into the home with a variable, substitution or glob in it (`cd ~/.exo/plugins/$X`,
-  `cd ~/.exo/princ*`). Outside the home the folder a `cd` or `cwd` names is kept, so a relative name that resolves
-  into the store from there counts (`cd ~ && cp a .exo/`).
+  `cd ~/.exo/princ*`). git's own folder options follow the same rule: `-C`, `--work-tree` and `--git-dir` before
+  the subcommand, and `GIT_DIR=` or `GIT_WORK_TREE=` before `git`. Each `-C` moves on from the one before, as `cd`
+  does, and git's other folders and file names resolve from the last (`git -C ~ -C my-exo/plugins/foo pull`,
+  `git -C ~ checkout -- my-exo/config.json`); a `-C` after the subcommand (`git commit -C HEAD`) is not a folder,
+  a writing git line with more than 64 `-C` asks rather than follow them all, and `git diff --output` writes a
+  file. Outside the home the folder a `cd` or `cwd` names is kept, so a relative name that resolves into the store
+  from there counts (`cd ~ && cp a .exo/`).
   `update/allowed_signers` is distinctive, so like `policies/gates.yaml` it matches anywhere. Only the home's own
   `config.json` counts; a project's `config.json`, one under `plugins/`, or a `config.json.bak` beside it is
   unchanged. A symlink to either file is the job of the store-path resolution of issues #130 and #156, not of this

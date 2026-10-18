@@ -728,15 +728,20 @@ def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection
     return c
 
 
-def _classify_git(argv: list[str], cmd: str) -> Classification:
-    i, config = 1, []
+def _git_opts(argv: list[str]) -> tuple[list[tuple[str, str]], int]:
+    """git's own options, before the subcommand, each with the value it takes (or ''), and where the subcommand
+    starts. A `-C` after the subcommand (`commit -C HEAD`) is that subcommand's own option."""
+    i, out = 1, []
     while i < len(argv) and argv[i].startswith("-"):
-        if argv[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"):
-            if argv[i] in ("-c", "--config-env") and i + 1 < len(argv):
-                config.append(argv[i + 1])
-            i += 2
-            continue
-        i += 1
+        takes = argv[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env")
+        out.append((argv[i], argv[i + 1] if takes and i + 1 < len(argv) else ""))
+        i += 2 if takes else 1
+    return out, i
+
+
+def _classify_git(argv: list[str], cmd: str) -> Classification:
+    opts, i = _git_opts(argv)
+    config = [v for o, v in opts if o in ("-c", "--config-env")]
     for kv in config:
         k, _, v = kv.partition("=")
         if _GIT_EXEC_KEY.match(k) or v.startswith("!"):
@@ -769,6 +774,8 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
         return _make("history_rewrite", summary=f"git stash {rest[0]}", command=cmd)
     if sub == "tag" and _has(rest, "-d"):
         return _make("history_rewrite", summary="delete a tag", command=cmd)
+    if any(a == "--output" or a.startswith("--output=") for a in rest):
+        return _make("local_write", summary=f"git {sub} --output writes a file", command=cmd)   # diff, log, show
     if sub in ("status", "log", "diff", "show", "fetch", "branch", "remote", "rev-parse", "blame", "ls-files",
                "grep", "describe", "shortlog", "reflog", "rev-list", "cat-file", "ls-remote", "ls-tree", "version",
                "help", "merge-base", "name-rev", "check-ignore", "count-objects"):
@@ -1289,6 +1296,20 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
         p.category == "delete" for p in parts)
+    sub = 0                                     # git's own options end here; a later `-C` is the subcommand's
+    if prog == "git":                           # each `-C` moves on from the one before, as `cd` does, and git's
+        g = {"cwd": known[0]} if known else {}  # folders and operands resolve from the last: `git -C ~ -C my-exo`
+        gopts, sub = _git_opts([w.text for w in words])
+        hops = [v for o, v in gopts if o == "-C"]
+        if len(hops) > 64:                      # no real line has this many; following them all, with every word
+            return "more git -C folders than the gate follows"     # resolved against each, is quadratic
+        for v in hops:
+            _chdir(g, v)
+            if len(g.get("cwd", "")) > 4096:    # deeper than PATH_MAX
+                return "a git -C folder too deep to follow"
+        if g.get("store_cwd"):
+            return "a folder of the Exo home (git -C)"
+        known += [g["cwd"]] if g.get("cwd") and g["cwd"] not in known else []
     for i, w in enumerate(words):
         pieces = [w.text] + re.split(r"[:=,]", w.text)
         if prog in ("curl", "wget"):
@@ -1300,8 +1321,14 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
             m = re.fullmatch(r"--(work-tree|git-dir)=(.+)", w.text)
             repo = m.group(2) if m else words[i + 1].text if w.text in ("-C", "--work-tree", "--git-dir") and \
                 i + 1 < len(words) else ""
-            if repo and near(repo, _in_store_dir):
-                return repo                     # git checkout, reset, merge or commit inside the store
+            if repo and near(repo, _in_home_dir if i < sub else _in_store_dir):
+                return repo                     # checkout, pull, merge or stash pop in a folder of the home
+    if prog == "git":                           # `GIT_DIR=DIR git`, `env GIT_WORK_TREE=DIR git`: the same folders
+        at = next((j for j, w in enumerate(k.words) if w is words[0]), 0)
+        for w in k.words[:at]:
+            m = re.fullmatch(r"GIT_(?:DIR|WORK_TREE)=(.+)", w.text, re.S)
+            if m and near(m.group(1), _in_home_dir):
+                return m.group(1)
     argv = [w.text for w in words]
     for d in _landings(prog, argv, _dir_target(prog, argv, known)):  # `cp x ~/.exo/`, `tar -C ~/.exo`, `cp -r /tmp/.exo ~/`
         if near(d, _is_store_dir):
@@ -1316,51 +1343,64 @@ _DIR_OPTS = {"cp": ("-t", "--target-directory"), "install": ("-t", "--target-dir
              "wget": ("-P", "--directory-prefix"), "scp": ()}
 
 
-def _dir_target(prog: str, argv: list[str], bases: Iterable[str] = ()) -> str:
-    """The folder a copying or extracting program writes into, or ''. `cp -t DIR`, `install --target-directory=DIR`,
+def _dir_target(prog: str, argv: list[str], bases: Iterable[str] = ()) -> list[str]:
+    """The folders a copying or extracting program writes into. `cp -t DIR`, `install --target-directory=DIR`,
     `tar -C DIR` (extracting; creating or listing reads there), `unzip -d DIR`, `curl --output-dir DIR`,
     `wget -P DIR`, or a `cp`/`install`/`scp`/`mv` destination that is a folder (a trailing slash, `.` or `..`, one
     that exists, a store folder, or a relative `.exo` or `.exo/principals/<id>` by name). What lands there is
     `DIR/<name of each source>`, so the folder decides (see `_landings`). A short option may end a cluster or
-    carry the folder: `-rt DIR`, `-tDIR`, `-xC DIR`."""
+    carry the folder: `-rt DIR`, `-tDIR`, `-xC DIR`. A repeated option gives every value: curl and wget take the
+    last, tar's `-C` applies to the members after it."""
     opts = _DIR_OPTS.get(prog)
     if opts is None:
-        return ""
+        return []
+    out: list[str] = []
     if prog == "tar":
         old = argv[1] if argv[1:] and not argv[1].startswith("-") else ""      # old style: `tar xCf DIR FILE`
         if "x" not in old and not any(a in ("--extract", "--get") or re.match(r"-[a-zA-Z]*x", a) for a in argv[1:]):
-            return ""
+            return []
         if "C" in old:
             takers = [ch for ch in old if ch in "CfT"]                      # each takes the next operand, in order
-            return argv[2 + takers.index("C")] if 2 + takers.index("C") < len(argv) else ""
+            out += argv[2 + takers.index("C"):3 + takers.index("C")]
     for i, a in enumerate(argv[1:], 1):
         nxt = argv[i + 1] if i + 1 < len(argv) else ""
         for o in opts:
-            if a == o:
-                return nxt
-            if a.startswith(o + "="):
-                return a.split("=", 1)[1]
             m = len(o) == 2 and re.fullmatch(rf"-[a-zA-Z]*?{o[1]}(.*)", a)   # the first such letter ends the cluster
-            if m:
-                return m.group(1) or nxt
-    if prog in ("cp", "install", "scp", "mv"):
-        operands = [a for a in argv[1:] if not a.startswith("-")]
-        dest = operands[-1] if len(operands) > 1 else ""
-        p = _expand_text(dest)
-        if dest.endswith("/") or os.path.basename(p) in (".", "..") or os.path.isdir(p) or _is_store_dir(p) or \
-                any(os.path.isdir(q) or _is_store_dir(q) for q in _at_bases(dest, bases)):
-            return dest                  # a relative `.exo` is the home by name; isdir(p) asks the gate's own cwd,
-    return ""                            # so a relative name is also looked up in the folder the line moved into
+            if a == o:
+                out.append(nxt)
+            elif a.startswith(o + "="):
+                out.append(a.split("=", 1)[1])
+            elif m:
+                out.append(m.group(1) or nxt)
+    operands = [a for a in argv[1:] if not a.startswith("-")]
+    if out or prog not in ("cp", "install", "scp", "mv") or len(operands) < 2:
+        return [d for d in out if d]
+    dest = operands[-1]
+    p = _expand_text(dest)
+    if dest.endswith("/") or os.path.basename(p) in (".", "..") or os.path.isdir(p) or _is_store_dir(p) or \
+            any(os.path.isdir(q) or _is_store_dir(q) for q in _at_bases(dest, bases)):
+        return [dest]                    # a relative `.exo` is the home by name; isdir(p) asks the gate's own cwd,
+    return []                            # so a relative name is also looked up in the folder the line moved into
 
 
-def _landings(prog: str, argv: list[str], dest: str) -> list[str]:
-    """The folders a copy into ``dest`` writes: ``dest`` itself and, for `cp`/`install`/`scp`/`mv`, `dest/<name of each
-    source>`: `cp -r /tmp/.exo ~/` merges into the home and overwrites `config.json` without naming either."""
-    if not dest:
-        return []
-    names = [os.path.basename(a.rstrip("/")) for a in argv[1:] if not a.startswith("-") and a != dest] \
-        if prog in ("cp", "install", "scp", "mv") else []
-    return [dest] + [os.path.join(dest, n) for n in names if n]
+def _landings(prog: str, argv: list[str], dests: list[str]) -> list[str]:
+    """The folders a copy into each of ``dests`` writes: the folder itself and, for `cp`/`install`/`scp`/`mv`,
+    `dest/<name of each source>`: `cp -r /tmp/.exo ~/` merges into the home and overwrites `config.json` without
+    naming either. cp, install and mv refuse a second `-t`, so another one is a source after `--` (`-t ~/ -- -tx`)
+    or another option's value (`-S -tx`): the sources are paired with the first and the last folder, and every other
+    one is checked alone, so a line of many `-t` stays linear."""
+    dests = list(dict.fromkeys(dests))
+    if not dests or prog not in ("cp", "install", "scp", "mv"):
+        return dests
+    ends = list(dict.fromkeys((dests[0], dests[-1])))
+    ops, after = [], False                          # every operand, `--` and what follows it included: a word
+    for a in argv[1:]:                              # spelled like a destination may still be a source
+        if after or not a.startswith("-"):
+            ops.append(a)
+        elif a == "--":
+            after = True
+    names = dict.fromkeys(os.path.basename(a.rstrip("/")) for a in ops)
+    return dests + [os.path.join(d, n) for d in ends for n in names if n]
 
 
 def _combine(parts: list[Classification], cmd: str) -> Classification:
@@ -1696,6 +1736,15 @@ def _chdir(ctx: dict, dest: str | None) -> None:
     ctx["cwd"] = p = "/" + os.path.normpath(p).lstrip("/")
     if _in_store_dir(p) or _under_home(p):
         ctx["store_cwd"] = True
+
+
+def _in_home_dir(path: str) -> bool:
+    """``path`` is a folder `_chdir` counts as the store: the home, any folder of it, one in it the gate cannot
+    spell out (`git -C ~/.exo/plugins/$X`), or the store itself (`_in_store_dir`). A program working there reaches
+    the store by `..`, as after `cd`."""
+    ctx: dict = {}
+    _chdir(ctx, path)
+    return bool(ctx.get("store_cwd")) or _in_store_dir(path)
 
 
 _PWD_WORD = re.compile(r"^(\$\{?PWD\}?|~\+|\$\(\s*pwd\s*\)|`\s*pwd\s*`)(?=/|$)")

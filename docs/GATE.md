@@ -269,13 +269,15 @@ download whose destination folder is a store folder: the home, `principals/` and
 `$EXO_PRINCIPAL_STORE`, or a protected folder in them (`cp x ~/.exo/`, `cp x <folder>`, `cp -t`,
 `install -t`, `mv -t`, `tar -C` when extracting, `unzip -d`, `curl --output-dir`, `wget -P`,
 `scp x <folder>`; the folder as its own word, attached to the option, named in old-style `tar xCf`,
-or a relative `.exo`, `.exo/principals` or `.exo/principals/<id>` by name), a folder named like the
-home copied into the home's parent (`cp -r /tmp/.exo ~/` merges into it), a connection to the socket (`nc -U`, `curl --unix-socket`,
-`socat`), `exo log append`, `exo keygen`, `exo init`, `exo interview` (it writes the principal's
+or a relative `.exo`, `.exo/principals` or `.exo/principals/<id>` by name; a repeated option counts
+every value, as curl and wget take the last and each `tar -C` applies to the members after it), a
+folder named like the home copied into the home's parent (`cp -r /tmp/.exo ~/` merges into it), a
+connection to the socket (`nc -U`, `curl --unix-socket`, `socat`), `exo log append`, `exo keygen`,
+`exo init`, `exo interview` (it writes the principal's
 ledger), `exo import-store` (it activates the principal in `config.json`), `exo config set`/`unset`,
 `exo update --pin-trust`, the same through `python -m exo.cli`, `python -m exo.onboard` or
 `python -m exo.config` (also `python3`, `python3.11`, `uv run python`), and `git -C <store>` (or
-`--work-tree`, `--git-dir`) with a writing subcommand.
+`--work-tree`, `--git-dir`) with a writing subcommand (`git diff --output` writes a file too).
 A relative name is matched after `.` and `..` segments and doubled slashes are folded
 (`update/./allowed_signers`, `policies/../config.json`). Folders count too: any writing command
 after `cd` into a store folder or below one, after `env -C` there (also in a cluster, `env -iC`), or
@@ -286,9 +288,15 @@ value (`curl -o../../config.json`), a glob or a program's own writes (`make`, `t
 store in more spellings than the gate can resolve, so every writing command there asks, as it did
 before D-074; narrowing that for plugin folders is #203. So does a `cd`, `env -C`, `cwd` or
 `workdir` into the home that the gate cannot spell out (`cd ~/.exo/plugins/$X`,
-`cd ~/.exo/princ*`). Outside the home the gate keeps the folder a `cd` or `cwd` names, so a
-relative name that resolves into the store from there counts too (`cd ~ && cp a .exo/`, or
-`cp a my-exo/` for a custom home).
+`cd ~/.exo/princ*`). git's own folder options follow the same rule: `-C`, `--work-tree` and
+`--git-dir` before the subcommand, and `GIT_DIR=` or `GIT_WORK_TREE=` before `git`
+(`git -C ~/.exo/plugins/foo checkout -- ../../config.json`, `git -C ~/.exo/plugins/$X pull`). Each
+`-C` moves on from the one before, as `cd` does, and git's other folders and file names resolve
+from the last (`git -C ~ -C my-exo/plugins/foo pull` or `git -C ~ checkout -- my-exo/config.json`
+for a custom home); a `-C` after the subcommand (`git commit -C HEAD`) is not a folder, and a
+writing git line with more than 64 `-C` asks rather than follow them all. Outside the home the gate
+keeps the folder a `cd` or `cwd` names, so a relative name that resolves into the store from there
+counts too (`cd ~ && cp a .exo/`, or `cp a my-exo/` for a custom home).
 A leading `//` is the same path. `rm -rf ~/.exo` counts (an ancestor). A symlink that points at a
 store path is the job of the store-path resolution of issues #130 and #156, not of this list. A
 `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
