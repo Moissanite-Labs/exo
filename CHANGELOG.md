@@ -245,11 +245,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (docs/TOOLS.md).
 - Streamed `bash` output no longer leaks a known key split between two reads. The output went out per 64 KiB read
   and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
-  halves. A read now holds back an ending that could start a key until the next read. The stream is cut only where
-  no key that redaction could take crosses the cut, so it matches redacting the whole output, also when keys nest
-  or overlap in a chain. A key value that holds `[` or `]` can still differ, since redacting the whole output can
-  match it across its own `[redacted]` marker. The stream and the result also decode a character split between
-  reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
+  halves. A read now holds back an ending that could start a key until the next read. Key redaction now finds every
+  key in the text itself and puts the `[redacted]` markers in after, so a key no longer matches across a marker.
+  Output changes only for a key value that holds `[` or `]` or is part of the word "redacted". The stream is cut
+  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output
+  for any set of known key values, also when keys nest, overlap in a chain or hold `[` or `]`. The stream and the
+  result also decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md
+  "Streamed output".
 - Gate (#224, D-038): brace sets are expanded as bash does before a write is matched against the Exo store, as
   #184 does for secret-store reads. `echo x > ~/.exo/polic{i..i}es/default.yaml`,
   `cp x ~/.exo/{state,zz}/approval-grants.json`, `dd of=~/.exo/polic{i,x}es/default.yaml` and a `write_file` to

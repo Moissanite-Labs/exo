@@ -127,27 +127,115 @@ def test_a_three_key_overlap_chain_does_not_reach_the_stream(monkeypatch):
         assert "".join(seen) == "[redacted][redacted]", k
 
 
-@pytest.mark.parametrize("alphabet", ["ab", "abc", "acde"])  # with "acde" a key can match inside "[redacted]"
+def _random_case(rnd, alphabet):
+    """A few short random keys, longest first, and an output built from key pieces and marker pieces."""
+    keyset = {"".join(rnd.choices(alphabet, k=rnd.randint(2, 7))) for _ in range(rnd.randint(1, 4))}
+    vals = sorted(keyset, key=len, reverse=True)  # the order known_secret_values gives
+    parts = []
+    while sum(map(len, parts)) < 24:
+        v, a, b = rnd.choice(vals), rnd.randint(0, 10), rnd.randint(0, 10)
+        parts.append(rnd.choice([v, v[a % (len(v) + 1):], v[:a % (len(v) + 1)], rnd.choice(alphabet),
+                                 keys.REDACTED[min(a, b):max(a, b)]]))
+    return vals, "".join(parts)[:rnd.randint(2, 24)]
+
+
+# "[]acdert" and "ted]x" are the letters of the marker, so keys can match inside a marker or across one.
+ALPHABETS = ["ab", "abc", "acde", "ab]", "a[b", "ab[]", "ted]x", "[rex", "[]acdert"]
+
+
+@pytest.mark.parametrize("alphabet", ALPHABETS)
 def test_stream_equals_whole_output_redaction_for_random_keys(monkeypatch, alphabet):
     """A differential check: short random keys over a small alphabet nest, overlap and chain far more often than
-    real ones. Each output, built from key pieces, is read in two parts at every byte and one byte at a time, and
-    the stream must equal redacting the whole output. The held text stays under twice the keys' total length."""
+    real ones, and keys over the marker's letters meet "[redacted]" in the output. Each output is read in two parts
+    at every byte, one byte at a time and in a few random splits. The stream must equal redacting the whole output,
+    and each piece must come back unchanged from the engine's second pass, which keeps the markers. The held text
+    stays under twice the keys' total length."""
     from exo.core.tools.builtin.shell import _Capped, _drain, _safe_cut
     rnd, vals = random.Random(f"stream-{alphabet}"), []
     monkeypatch.setattr(keys, "known_secret_values", lambda: vals)
-    for _ in range(1000):
-        keyset = {"".join(rnd.choices(alphabet, k=rnd.randint(2, 7))) for _ in range(rnd.randint(1, 4))}
-        vals[:] = sorted(keyset, key=len, reverse=True)  # the order known_secret_values gives
-        parts = []
-        while sum(map(len, parts)) < 24:
-            v = rnd.choice(vals)
-            a = rnd.randint(0, len(v))
-            parts.append(rnd.choice([v, v[a:], v[:a], rnd.choice(alphabet)]))
-        output = "".join(parts)[:rnd.randint(2, 24)]
+    for _ in range(600):
+        vals[:], output = _random_case(rnd, alphabet)
         whole, data = keys.redact_secrets(output, vals), output.encode()
-        for reads in [[data[:k], data[k:]] for k in range(1, len(data))] + [[bytes([b]) for b in data]]:
+        splits = [[data[:k], data[k:]] for k in range(1, len(data))] + [[bytes([b]) for b in data]]
+        for _ in range(4):
+            edges = sorted(rnd.sample(range(1, len(data)), min(len(data) - 1, rnd.randint(2, 4))))
+            splits.append([data[a:b] for a, b in zip([0, *edges], [*edges, len(data)])])
+        for reads in splits:
             seen = []
             _drain(_Proc(reads), _Capped(10_000), seen.append)
             assert "".join(seen) == whole, (vals, output, reads)
+            assert all(keys.redact_secrets(c, vals, keep_markers=True) == c for c in seen), (vals, output, seen)
         for k in range(1, len(output) + 1):
             assert k - _safe_cut(output[:k], vals) < 2 * sum(map(len, vals)), (vals, output[:k])
+
+
+def test_a_bracket_key_does_not_let_another_key_reach_the_stream(monkeypatch):
+    """The review's repro. The first key ends in "]" and the second starts with it. Redacting the whole output
+    matched the second key across the first key's marker, while the stream cut only for matches in the output
+    itself. So the third key went out in two pieces that join to the whole key. Both now match in the output."""
+    from exo.core.tools.builtin.shell import _Capped, _drain
+    env = {"A_PASSWORD": "admin-pass]", "B_TOKEN": "]abcsk-900", "C_API_KEY": "sk-9000-s"}
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("EXO_KEYS_FILE", "/nonexistent")
+    reads = [b"admin-pass]abcsk-9000-sk-9000-s", b"\nmore\n"]
+    whole = keys.redact_secrets(b"".join(reads).decode())
+    assert whole == "[redacted]abc[redacted]k-9000-s\nmore\n"
+    seen = []
+    _drain(_Proc(reads), _Capped(10_000), seen.append)
+    assert "".join(seen) == whole and not any(v in c for v in env.values() for c in seen)
+    data = b"".join(reads)
+    for k in range(1, len(data)):
+        seen = []
+        _drain(_Proc([data[:k], data[k:]]), _Capped(10_000), seen.append)
+        assert "".join(seen) == whole, k
+
+
+def _old_redact(text, values, marker="[redacted]"):
+    """redact_secrets before matches moved to the output itself: one value after another over the text so far."""
+    for v in values:
+        if v in text:
+            text = text.replace(v, marker)
+    return text
+
+
+@pytest.mark.parametrize("alphabet", ["ab", "abc", "acde", "redact", "xyz", *ALPHABETS[3:]])
+def test_redaction_is_the_old_replace_with_a_marker_no_key_can_match(alphabet):
+    """Redaction gives what the old value-by-value replace gives with a marker no key can match, for any keys. So
+    where no key can match inside or across a "[redacted]" marker, its output is the same as before. A key without
+    "[" or "]" can only do that by being part of the word "redacted"."""
+    rnd, same = random.Random(f"old-{alphabet}"), 0
+    for _ in range(3000):
+        vals, text = _random_case(rnd, alphabet)
+        new = keys.redact_secrets(text, vals)
+        assert new == _old_redact(text, vals, "\0").replace("\0", keys.REDACTED), (vals, text)
+        if not any("[" in v or "]" in v or v in "redacted" for v in vals):
+            assert new == _old_redact(text, vals), (vals, text)
+            same += 1
+    assert same >= 50  # every alphabet gives cases where the old output must come back
+
+
+def test_tool_output_events_equal_the_redacted_result(monkeypatch, tmp_path):
+    """The engine redacts each piece once more on its way to clients. That pass keeps the markers already in the
+    piece, so a key that holds "]" does not match across one there, and the events still equal the result."""
+    from exo.core.engine import CoreEngine
+    from exo.protocol import schema as s
+    monkeypatch.setenv("FIRST_TOKEN", "pass-word-1")
+    monkeypatch.setenv("SECOND_TOKEN", "d]tail-9999")
+    monkeypatch.setenv("EXO_KEYS_FILE", "/nonexistent")
+    eng = CoreEngine(tmp_path / "home", {"fake": {"rules": []}, "roles": {"main": ["fake:x"]}}, cwd=str(tmp_path),
+                     env={})
+    eng.plugins.hooks.register("pre_tool_call", lambda **kw: None, "test-allow")
+
+    async def go():
+        try:
+            r = await eng.run_tool(ToolCall("c1", "bash", {"command": "printf 'pass-word-1tail-9999 end'"}), {})
+            await asyncio.sleep(0.1)  # the last piece is published on the loop
+            return r
+        finally:
+            await asyncio.wait_for(eng.close(), 5)
+
+    r = asyncio.run(go())
+    pieces = [e.body.text for e in eng.hub.since(0) if isinstance(e.body, s.ToolOutput)]
+    assert r.text() == "[redacted]tail-9999 end\n[exit 0]"
+    assert "".join(pieces) == "[redacted]tail-9999 end"
