@@ -30,6 +30,10 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 - known credential/configuration names such as `MYSQL_PWD`, `DB_PASS`, `STRIPE_SK`, `TWILIO_AUTH`,
   `NPM_CONFIG__AUTH`, `DOCKER_AUTH_CONFIG`, `KUBECONFIG`, and PostgreSQL credential/key file fields;
 - recognized token/private-key value formats, and URL/URI/proxy fields with userinfo or credential query/fragment fields;
+- git's environment config (values can carry credentials, e.g. `http.extraHeader`): `GIT_CONFIG_PARAMETERS`, and
+  `GIT_CONFIG_COUNT` with its `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` as one unit, kept whole only by
+  `env_allow = ["GIT_CONFIG_COUNT"]` and dropped whole if any member is denied or has a value in a recognized
+  token format; a bearer header is not one, so allow the count only for values tools may see (#159);
 - anything the seat lists in `[tools] env_deny` (exact names or patterns like `COMPANY_*`).
 
 A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_deny` wins over `env_allow`.

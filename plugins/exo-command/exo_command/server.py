@@ -44,6 +44,12 @@ from .source import SourceError, core_message
 STATIC = Path(__file__).resolve().parent / "static"
 MAX_BODY = 64 * 1024
 HEARTBEAT = 15.0
+# One policy for every response (#162): script, style, images and requests from this server only. No inline script,
+# style attribute or eval, no plugins, no <base>, no native form posts (every form is handled in script), no framing.
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
+       "object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+SECURITY_HEADERS = ("Content-Security-Policy: {}\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
+                    .format(CSP))
 REASONS = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed",
            501: "Not Implemented", 502: "Bad Gateway"}
 DECISIONS = ("allow", "deny", "allow_always")
@@ -280,7 +286,7 @@ class WebServer:
     async def _events(self, writer, since: int, session: Optional[str]) -> None:
         """Every protocol event after ``since`` as ``id: seq`` + ``data: <event json>``, then live ones."""
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
-                     b"Connection: close\r\n\r\n: exo-command events\n\n")
+                     + SECURITY_HEADERS.encode() + b"Connection: close\r\n\r\n: exo-command events\n\n")
         q = self.centre.subscribe_events()
         try:
             events, gap = await self.centre.replay_events(since, session)
@@ -334,7 +340,7 @@ class WebServer:
 
     async def _send(self, writer, status: int, body: bytes, ctype: str) -> None:
         head = ("HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n"
-                "Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n").format(status, REASONS.get(status, ""), ctype, len(body))
+                "{}Connection: close\r\n\r\n").format(status, REASONS.get(status, ""), ctype, len(body), SECURITY_HEADERS)
         writer.write(head.encode() + body)
         await writer.drain()
 
@@ -349,7 +355,7 @@ class WebServer:
 
     async def _sse(self, writer) -> None:
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n"
-                     b"Connection: close\r\n\r\n: exo-command\n\n")
+                     + SECURITY_HEADERS.encode() + b"Connection: close\r\n\r\n: exo-command\n\n")
         q = self.centre.subscribe()
         try:
             writer.write("data: {}\n\n".format(json.dumps({"seq": self.centre.state.seq})).encode())
