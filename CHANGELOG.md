@@ -112,11 +112,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - History brought in with `exo ingest` now feeds the rule of three in `exo consolidate`. Ingest writes your own
   messages with role `principal`, and consolidation read only role `user`, so an import never drafted a belief. Rows
   read before this fix are not in the cluster cache: delete `<store>/proposals/state.json` and the next run rebuilds
-  it from them.
-- Rebuilding that cache (`proposals/state.json` missing or stale) counts only your own utterances (D-040). Before, a
-  rebuild also counted Hermes briefs of doubtful authorship (`hermes:unverified-user`) and peer, bus and job turns,
-  so one matching sentence from you could complete a rule-of-three proposal, which promotion rule 4 could then apply
-  with no review. Summaries from an import (`secondary`) do not count either.
+  it from them. Superseded text does not count: the older versions of an edited ChatGPT prompt, and Hermes rows
+  marked inactive. Imported evidence carries the time you said it, not the time of the import. Promotion rule 4
+  never applies a lesson whose evidence is all imported: you review that first batch. Only the nightly climb can
+  add such a lesson, and only when the eval shows it helps.
 - The nightly climb follows rule 5 and D-054. It no longer adds a gated lesson (a type in `eval_gate_for` or a
   domain in `high_impact_domains`) or one with a critic objection: rule 5 alone promotes those, with its critic,
   weight, session and held-out checks. A climb candidate with no held-out case in its domains fails the gate
@@ -125,20 +124,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   asked by the principal's own message. The agent's `exo_should_have_been` reports and peer messages no longer
   become gold answers for the climb, the rule 5 gate or the regression check.
 - A lesson's own evidence is no longer its proof: the rule 5 gate and the climb ignore the replay or preference pair
-  built from the verdict the lesson cites. A skill whose only held-out case was its own evidence now fails the gate.
+  built from the verdict the lesson cites. This holds when the climb adds a lesson and when it drops one. A skill
+  whose only held-out case was its own evidence now fails the gate.
 - The climb's cached incumbent scores are scored again when the eval cases' contents, the checks, the rubric, the
   judge samples or the main or eval route models change. Before, only the config and the case ids were checked,
   so a lesson that changed nothing could be kept against stale scores.
-- `exo taste export-house` no longer ships the principal's own name, organisation or email domain. Onboarding
-  writes them into the body of `person/identity` and the `PRINCIPAL.md` heading, and the deny list read neither. Now
-  the heading name (also when half filled in) and every email domain fail the export, and the words of the
-  onboarding name and role answers hold an item for review, read from the ledger too when the node withholds an
-  answer with a phone number. A generic word in an answer ("team") only holds, a value item too, and never fails
-  the built-in house soul. While the heading is still the template's, the name answer gives the name written as
-  one word (`quillvarden`, held) and the initial plus surname (`qvarden`). These terms also match when joined to
-  another word by `-` or `_` or to digits, as in a handle or a repo name. The initial plus surname fails only as a
-  handle (`@alee`, `alee42`), and an email domain matches only as written, so `me.com` does not fail "Show me
-  commands".
 - The judge score parser no longer misreads plain judge replies. "0.9 - nothing wrong with it" and "On a scale of
   0 to 1, 0.8" scored 0, and "Not correct." scored 1. A named scale is now only a label, "nothing wrong" does not
   count as wrong, and "not correct" does. A number that opens the reply is the score.
@@ -146,9 +136,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   in config `principals.<id>`, but nothing read it: the store commands said "no principal store", exo-memory and
   learning were off, `exo memory verify` said "nothing to verify" while the store's ledger went unchecked, the
   command center's decisions panel showed an empty queue, and check-prose skipped the store's internal names. Every
-  reader now maps an id to its store through `exo.store.principal_root`. The gate protects that store's policies,
-  state, keys and ledger, and reads its policies. If you followed the old hint and made a second store under
-  `$EXO_HOME/principals/<id>`, `exo config unset principals.<id>` goes back to that one.
+  reader now maps an id to its store through `exo.store.principal_root`. If you followed the old hint and made a
+  second store under `$EXO_HOME/principals/<id>`, `exo config unset principals.<id>` goes back to that one.
 - Recall sees beliefs accepted after the first turn. exo-memory read the belief nodes once per process, so a lesson
   that `exo proposals accept` or learning's own promotion wrote never reached recall until a restart, a reverted one
   kept showing, and an edited node showed its old text. It now reloads when a node file was added, changed or removed
@@ -169,6 +158,25 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- Rebuilding the rule-of-three cache (`proposals/state.json` missing or stale) counts only your own utterances
+  (D-040). Before, a rebuild also counted Hermes briefs of doubtful authorship (`hermes:unverified-user`) and peer,
+  bus and job turns, so one matching sentence from you could complete a rule-of-three proposal, which promotion
+  rule 4 could then apply with no review. Summaries from an import (`secondary`) do not count either.
+- `exo taste export-house` no longer ships the principal's own name, organisation or email domain. Onboarding
+  writes them into the body of `person/identity` and the `PRINCIPAL.md` heading, and the deny list read neither. Now
+  the heading name (also when half filled in) and the domain of every email address fail the export. The words of
+  the onboarding name and role answers hold an item for review, read from the ledger too when the node withholds an
+  answer with a phone number. So do the labels of an email domain (`acme` of `mail.acme.io`): its parent domain
+  `acme.io` holds but does not fail. A generic word in an answer ("team") only holds, a value item too, and never
+  fails the built-in house soul. While the heading is still the template's, the name answer
+  gives the name written as one word (`quillvarden`, held) and the initial plus surname (`qvarden`). These terms
+  also match when joined to another word by `-` or `_` or to digits, as in a handle or a repo name. The initial
+  plus surname fails only as a handle (`@alee`, `alee42`), and an email domain matches only as written, so `me.com`
+  does not fail "Show me commands".
+- The gate protects a store made with `--root` (config `principals.<id>`) as it protects the stores in the home: its
+  policies, state, keys and ledger. It also reads that store's policies. A recorded root that names an unknown user
+  (`~nosuchuser/x`), holds a NUL byte or is relative is skipped, and the id falls back to
+  `$EXO_HOME/principals/<id>`. Such a root no longer stops the gate and every store reader with an error.
 
 ## [0.2.0] (egg) - 2026-10-13
 

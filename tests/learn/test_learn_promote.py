@@ -4,11 +4,12 @@ import re
 import pytest
 
 from exo import eval as E
-from exo.consolidate import load_state, proposal_accept, proposals_list
+from exo.consolidate import consolidate_run, load_state, proposal_accept, proposals_list
+from exo.ingest import ingest
 from exo.learn import export_taste, learned_since, revert
 from exo.learn.promote import accepted_rules, apply_policy
 
-from helpers import correction, propose, ruling, scripted_model, write_qa
+from helpers import chatgpt_export, correction, propose, ruling, scripted_model, write_qa
 
 
 def status(lr, pid):
@@ -183,6 +184,31 @@ def test_rule4_needs_two_sessions_and_no_objection(learner):
     res2 = propose(rt, evidence=ev2, wants="tables", avoid="bullets", critic_note="looks like a one-off")
     d2 = next(d for d in apply_policy(learner) if d.id == res2["id"])
     assert d2.action == "wait" and status(learner, res2["id"]) == "proposed"
+
+
+TABLES = ["Answer with a table, not bullet points.", "please answer with a table, not bullet points",
+          "Answer with a table rather than bullet points, every time."]
+
+
+def test_rule4_imported_history_alone_waits_for_review(learner, tmp_path):
+    """The first import is a batch the principal reviews: repeats found only in `exo ingest` history, here from
+    2023, never auto-promote. Before, they were applied on the next policy run with no review."""
+    rt = learner.runtime
+    ingest("chatgpt", chatgpt_export(tmp_path / "conversations.json", TABLES), rt.ledger, "principal")
+    (pid,) = consolidate_run(rt.store, rt.ledger, author="exo-learn").proposals
+    (d,) = apply_policy(learner)
+    assert (d.id, d.action, d.rule) == (pid, "wait", 4) and "imported" in d.reason
+    assert status(learner, pid) == "proposed" and learned_since(learner.engine) == []
+
+
+def test_rule4_imported_history_with_a_live_repeat_auto_promotes(learner, tmp_path):
+    rt = learner.runtime
+    ingest("chatgpt", chatgpt_export(tmp_path / "conversations.json", TABLES[:2]), rt.ledger, "principal")
+    rt.ledger.append("utterance", {"text": TABLES[2], "role": "user"}, "principal", session="live")
+    (pid,) = consolidate_run(rt.store, rt.ledger, author="exo-learn").proposals
+    (d,) = apply_policy(learner)
+    assert (d.id, d.action, d.rule) == (pid, "auto_promoted", 4)
+    assert status(learner, pid) == "accepted"
 
 
 def test_rule5_skill_patch_needs_the_gate(learner):

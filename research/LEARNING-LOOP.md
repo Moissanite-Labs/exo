@@ -334,6 +334,7 @@ before the direct-ruling shortcut (1), then ordinary evidence (4) and waiting (6
    one is guarded; then a numbered question. Never overwrite silently.
 4. **Taste or fact, not guarded, weight high, at least 2 independent evidence events from different
    sessions, and no critic objection:** auto-promote, logged and shown in the next brief as "learned".
+   Evidence that is all imported history does not qualify. The principal reviews the first import.
 5. **Skill patch:** promote only if the eval gate passes (Section 6). Skills change behavior most, so
    they carry the strictest gate, even with principal evidence. Configured high-impact domains and
    gated proposal types also require the gate. Non-skill lessons need high weight and two sessions.

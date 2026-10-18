@@ -272,6 +272,11 @@ def test_settings_find_a_store_made_with_root(tmp_path):
     assert s.grants_path == tmp_path / "elsewhere" / "state" / "approval-grants.json"
     s = resolve_settings(env={"EXO_HOME": str(tmp_path), "EXO_PRINCIPAL": "../p1"})
     assert s.principal_store is None and s.grants_path == tmp_path / "state" / "gate-grants.json"
+    # a recorded root that cannot be a store (unknown user, relative) is skipped: the default store, no crash
+    (tmp_path / "config.json").write_text(json.dumps({"principals": {"p1": "~nosuchuser-exo-test/x", "p2": "rel/x"}}))
+    for pid in ("p1", "p2"):
+        s = resolve_settings(env={"EXO_HOME": str(tmp_path), "EXO_PRINCIPAL": pid})
+        assert s.principal_store == tmp_path / "principals" / pid
 
 
 def test_plugin_entry_point_imports(monkeypatch):

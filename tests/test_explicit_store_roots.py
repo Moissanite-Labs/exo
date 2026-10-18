@@ -42,6 +42,22 @@ def test_principal_root_prefers_the_recorded_root(home, tmp_path):
         assert principal_root("pat") == home / "principals" / "pat"
 
 
+@pytest.mark.parametrize("bad", ["~nosuchuser-exo-test/x", "/srv/a\0b", "rel/x"], ids=["no-such-user", "nul", "relative"])
+def test_a_bad_recorded_root_names_no_store(home, tmp_path, bad):
+    """A recorded root that names an unknown user, holds a NUL byte or is relative is skipped. Before, `~nosuchuser`
+    raised RuntimeError in the gate and in every store reader, also for other ids, and a relative root was read
+    against whatever the working directory was."""
+    from exo import gate
+    from exo.store import explicit_roots
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps({"principals": {"ada": bad, "pat": str(tmp_path / "x")}}))
+    assert explicit_roots() == {"pat": tmp_path / "x"}
+    assert principal_root("ada") == home / "principals" / "ada"
+    assert PrincipalStore.for_principal("bob").root == (home / "principals" / "bob").resolve()
+    assert gate.classify(("write_file", {"path": "/srv/a.txt"})).category == "local_write"
+    assert gate.classify(("write_file", {"path": str(tmp_path / "x" / "policies" / "g.yaml")})).category == "store_write"
+
+
 def test_store_commands_use_a_store_made_with_root(home, tmp_path, capsys):
     root = tmp_path / "elsewhere" / "ada"
     assert main(["init", "ada", "--root", str(root)]) == 0
