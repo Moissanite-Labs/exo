@@ -163,6 +163,19 @@ def test_a_private_threads_subagent_opens_from_that_thread_and_its_forks_only():
     assert opens("f-kid", f.id) and not opens("f-kid", t.id)
 
 
+def test_two_subagents_with_one_role_and_one_timestamp_open_the_later_one():
+    """Two children made in the same millisecond tie on `created`. The newest match is the one made later."""
+    from exo.core.agentlog import AgentLogView
+
+    st = SessionStore()
+    t = st.create_session(agent="razi")
+    for text in ("first child", "second child"):
+        kid = st.create_session(agent="razi", kind="subagent", parent=t.id, title="researcher: look it up")
+        st.append_message(kid.id, Message.assistant(text))
+    st._q("UPDATE sessions SET created='2026-10-18T20:00:00.000Z' WHERE kind='subagent'")
+    assert "second child" in AgentLogView(st, "razi").subagent("researcher", caller=t.id)
+
+
 def test_agent_search_gives_positions():
     st = SessionStore()
     a = st.create_session(agent="razi")
