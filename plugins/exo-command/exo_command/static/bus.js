@@ -12,6 +12,8 @@ const stateListeners = new Set();
 export function on(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 export function onState(fn) { stateListeners.add(fn); fn(state); return () => stateListeners.delete(fn); }
 export function openPanels() { return panels.slice(); }
+// The user dismissed it: the server has dropped it (ui.respond) and the core sends no ui.panel close for that.
+export function forget(panelId) { panels = panels.filter((p) => p.panel_id !== panelId); }
 export function lastSeq() { return state.seq; }
 
 function setState(patch) { state = { ...state, ...patch }; stateListeners.forEach((f) => f(state)); }

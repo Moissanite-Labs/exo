@@ -6,8 +6,9 @@ import { api, stream, pageHead, readout, pill } from "./dom.js";
 export function mount(app) {
   "use strict";
   // It reads /api/snapshot and re-reads it whenever /api/stream says the core published something.
-  // The only write is answering an approval (POST /api/approvals/<id>).
-  var snap = null, err = null, view = "all", timer = null;
+  // The only write is answering an approval (POST /api/approvals/<id>). Allow always is a standing grant, so it takes a
+  // separate Confirm always click, as on the Chat card; `confirming` names the one request asking it.
+  var snap = null, err = null, view = "all", timer = null, confirming = null;
   var page = h("div", { class: "xc-pg xc-cmd" });
   app.replaceChildren(page);
 
@@ -60,7 +61,7 @@ export function mount(app) {
     var LED = { red: "alert", amber: "warn", green: "ok" };
     return h("div", { class: "xc-kpis" }, items.map(function (it) {
       return h("button", { class: "xc-kpi" + (it[4] ? " xc-k-" + it[4] : "") + (view === it[0] ? " on" : ""), "aria-pressed": view === it[0] ? "true" : "false",
-        onclick: function () { view = it[0]; render(); } },
+        onclick: function () { view = it[0]; confirming = null; render(); } },
         h("span", { class: "xc-kpi-label" }, h("span", { class: "xc-led", "data-s": LED[it[4]] || "off", "aria-hidden": "true" }), it[1]),
         h("span", { class: "xc-kpi-value" }, it[2]), h("span", { class: "xc-kpi-sub" }, it[3]));
     }));
@@ -71,15 +72,25 @@ export function mount(app) {
       .then(function () { load(); })
       .catch(function (e) { err = e.message || String(e); render(); });
   }
+  function choices(a) {
+    if (confirming === a.request_id) return [
+      h("span", { role: "status", "aria-live": "polite" }, "Allow always? This saves a standing grant."),
+      // e.detail > 1: the second click of a double click on "allow always" is not a confirmation
+      h("button", { class: "xc-btn", onclick: function (e) { if (e.detail > 1 || confirming !== a.request_id) return; confirming = null; respond(a.request_id, "allow_always"); } }, "Confirm always"),
+      h("button", { class: "xc-btn", onclick: function () { confirming = null; render(); } }, "Cancel")];
+    return (a.options || ["allow", "deny"]).map(function (o) {
+      return h("button", { class: "xc-btn" + (o === "deny" ? " xc-danger" : ""),
+        onclick: o === "allow_always" ? function () { confirming = a.request_id; render(); } : function () { confirming = null; respond(a.request_id, o); } }, o.replace("_", " "));
+    });
+  }
   function approvals(d) {
+    if (confirming && !d.pending.some(function (a) { return a.request_id === confirming; })) confirming = null;   // closed elsewhere
     var body = d.pending.length ? h("div", { class: "xc-stack" }, d.pending.map(function (a) {
       return h("article", { class: "xc-card xc-dec xc-p-high" },
         h("div", { class: "xc-card-top" }, h("h3", null, a.summary), h("div", { class: "xc-tags" }, pill(a.risk + " risk", a.risk === "high" ? "alert" : "warn"))),
-        a.call ? h("div", { class: "xc-tool" }, h("span", null, "tool"), " ", a.call.name + " " + short(JSON.stringify(a.call.arguments || {}), 160)) : null,
-        h("div", { class: "xc-foot" }, h("span", null, "asked " + ago(a.requested_at)), a.session_title ? h("span", null, a.session_title) : null,
-          (a.options || ["allow", "deny"]).map(function (o) {
-            return h("button", { class: "xc-btn" + (o === "deny" ? " xc-danger" : ""), onclick: function () { respond(a.request_id, o); } }, o.replace("_", " "));
-          })));
+        a.call ? h("div", { class: "xc-tool" }, h("span", null, "tool"), " ", a.call.name) : null,
+        a.call ? h("pre", { class: "xc-pre-body xc-args" }, JSON.stringify(a.call.arguments || {}, null, 2)) : null,   // the whole call, never cut or boxed: a redraw resets a scroll box
+        h("div", { class: "xc-foot" }, h("span", null, "asked " + ago(a.requested_at)), a.session_title ? h("span", null, a.session_title) : null, choices(a)));
     })) : empty("No approvals waiting.", "When an agent asks before it acts, the request shows here and in Chat.");
     return panel("approvals", "Approvals", "answered here or in any other client", body, d.ok === false ? d.error : null);
   }
@@ -182,10 +193,10 @@ export function mount(app) {
       aside: h("div", { class: "xc-phead-read" }, readout([
         ["Core", snap ? (snap.connected ? "connected" : "not reachable") : "reading", snap ? (snap.connected ? "ok" : "fail") : "queue"],
         ["Seq", snap ? String(snap.seq) : "-"]]),
-        h("button", { class: "xc-btn", onclick: function () { load(true); } }, "Refresh")) });
+        h("button", { class: "xc-btn", onclick: function () { confirming = null; load(true); } }, "Refresh")) });
     var seg = h("div", { class: "xc-seg", role: "tablist", "aria-label": "Sections" }, VIEWS.map(function (v) {
       return h("button", { class: view === v[0] ? "on" : "", role: "tab", "aria-selected": view === v[0] ? "true" : "false",
-        onclick: function () { view = v[0]; render(); } }, v[1]);
+        onclick: function () { view = v[0]; confirming = null; render(); } }, v[1]);
     }));
     var body = snap ? h("div", { class: "xc-body" + (view === "all" ? " xc-all" : "") },
       Object.keys(PANELS).filter(function (k) { return view === "all" || view === k; }).map(function (k) { return PANELS[k](snap[k]); })) : null;
