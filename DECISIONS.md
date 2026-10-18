@@ -711,6 +711,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   tools and approvals stay tied to its window). Web with `--socket`/`--url` never starts anything. Page errors are
   sentences (`core_message`), not exception text. No protocol change.
 - **Not done:** `--in-process` flag (the client already falls back in process); Windows.
+- **Later (#145, #148):** the core is started through a `python -P` helper that calls `setsid`, forks and exits, so
+  the core is reparented to init (or the nearest subreaper) and is not a child of the client, unless the client
+  is itself PID 1 or a subreaper. This is hardening: `principal.stamp` refuses
+  a peer that descends from the core, and the client that starts the core is its parent, so the old ancestry could
+  not refuse that client. The handshake is bounded, reads the pid from the helper's last output line, and a core
+  that dies while starting is reported at once (`waitpid` when this process adopted it, else a zombie or missing
+  pid), with no made-up exit code.
 
 ## D-037 (2026-10-12) Completion and guidance in the composer
 - **Why:** the principal asked for command autofill, suggestion and guidance, "a better version of what Hermes CLI
