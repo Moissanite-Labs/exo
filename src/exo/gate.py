@@ -1189,9 +1189,13 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # The gate used to read this option's value as the host. The parts are read as above, and the line
             # asks, so a line that used to ask on a host it misread is not allowed now.
             c = _combine([_opaque(f"{prog} {moved}: the host follows the option's value", cmd), c], cmd)
+        local = []
         for name, val in runs:                # mosh --ssh, --client, --server: a command it runs; it asks
             run = classify_shell(val, inner_depth) if val and depth < _DEPTH else _make("shell", command=cmd)
-            c = _combine([_opaque(f"mosh {name}: runs a command", cmd), run, c], cmd)
+            if name == "--server":            # the server helper runs on the remote host, like the inner command
+                c = _combine([_opaque(f"mosh {name}: runs a command", cmd), run, c], cmd)
+            else:                             # the ssh and client helpers run here
+                local.append(_combine([_opaque(f"mosh {name}: runs a command", cmd), run], cmd))
         # The hop is a part too, so a `target:<host>` entry matches when the inner command has its own target:
         # the bare host, and the destination as written when it carries a user, a scheme or a port.
         c.parts += [_make("shell", summary=f"ssh {dest}", target=t, command=cmd, signals=["remote host"])
@@ -1199,6 +1203,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         for p in _each_part(c):               # every part runs on the remote host (D-075)
             if EXPOSURE.index(p.exposure) < 1:
                 p.exposure = "internal"
+        if local:                             # local helpers keep their own exposure
+            c = _combine(local + [c], cmd)
         c.target = c.target or dest
         c.signals.append("remote host")
         return [c]
