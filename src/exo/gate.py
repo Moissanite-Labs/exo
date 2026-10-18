@@ -1344,8 +1344,12 @@ def _store_hints() -> tuple[set, dict, set]:
 
 
 def _brace_glob(text: str) -> str:
-    """A brace set (`{config,x}`, `config{,.bak}`) as a glob that matches at least what it names."""
-    return re.sub(r"\{.*\}", "*", text, flags=re.S) if re.search(r"\{[^{}]*(,|\.\.)", text) else text
+    """A brace set (`{config,x}`, `config{,.bak}`) as a glob that matches at least what it names: the first `{` to the
+    last `}` is `*` (two string searches, not a regex that rescans the rest of the word from each `{`)."""
+    if not re.search(r"\{[^{}]*(,|\.\.)", text):
+        return text
+    i, j = text.find("{"), text.rfind("}")
+    return text[:i] + "*" + text[j + 1:] if j > i else text
 
 
 def _brace_alts(text: str) -> list:
@@ -1504,9 +1508,10 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
                 elif m < len(rest):
                     targets.append(rest[m])
                     skip.add(i + 1 + m)
-        elif prog in ("jq", "yq", "gojq", "jaq"):    # the filter (`jq .`) is not a path
+        elif prog in ("jq", "yq", "gojq", "jaq"):    # the filter (`jq .`) is not a path, unless it is read from a file
             first = next((f for f, a in enumerate(rest) if not a.startswith("-")), None)
-            if first is not None:
+            from_file = any(a == "--from-file" or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a) for a in rest)
+            if first is not None and not from_file:
                 skip.add(i + 1 + first)
         elif prog in _SHELLS:
             for j, a in enumerate(rest):

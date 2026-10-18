@@ -788,11 +788,12 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a relative name, also through `..` or after `cd ..`, into a plain store folder below another target (a dot parent by
   its name, a plain one by its path; a folder entered this way is a parent in turn). On such a line a relative name in
   its words, redirections, uploads and `$( )`, `<( )` or `bash -c` bodies (not the targets' own words, the program and
-  the words before it except assignments, a `git` subcommand, a jq filter, or prose with a space and no unquoted brace
-  set) counts when its file name is a store file name (a glob, read with bash's bracket and leading-dot rules: when it
-  could match one) or it goes into a store folder; the folder itself (`.`) counts when a target is a store folder, and
-  any relative name when a target is itself a store, a glob target included. A name that goes into a plain store folder from its
-  parent counts on any line when it names a store. Chosen over following the folder per command or per line, which
+  the words before it except assignments, a `git` subcommand, a jq filter (not `-f`), or prose with a space and no
+  unquoted brace set) counts when its file name is a store file name (a glob, read with bash's bracket and leading-dot
+  rules: when it could match one) or it goes into a store folder; the folder itself (`.`) counts when a target is a
+  store folder, and any relative name when a target is itself a store, a glob target included. A name that goes into a
+  plain store folder from its parent counts on any line when it names a store. Chosen over following the folder per
+  command or per line, which
   review showed misses shell semantics (`||`, `!`, `time`, a `cd` in `$( )`), grows exponentially on scripts that walk
   folders and needed caps that failed open or asked on ordinary scripts. This model is linear, and where it bounds
   work (16 brace words, 64 `cd ..` levels or glob candidates, many `[`) it fails closed. The cost, failing closed:
