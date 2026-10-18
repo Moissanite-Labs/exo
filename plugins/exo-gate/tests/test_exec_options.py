@@ -143,6 +143,11 @@ EXEC_OPTIONS = [
     (f"sort --compress='{RM}' big.txt", "delete"),
     (f"man --pag='{RM}' ls", "delete"),
     (f"man --pag '{RM}' ls", "delete"),
+    # one letter is enough when it is unique among the program's long options, as getopt_long takes it
+    (f"psql --o='|{RM}' -c 'select 1'", "delete"),
+    (f"psql --o '|{RM}' -c 'select 1'", "delete"),
+    (f"split --f='{RM}' big.txt", "delete"),
+    (f"git ls-remote --u='{RM}' /tmp/r", "delete"),
     # the value attached inside a short-option cluster
     (f"tar -xI'{RM}' -f a.tar", "delete"),
     (f"rsync -avze'{RM}' a h:b", "delete"),
@@ -159,6 +164,68 @@ EXEC_OPTIONS = [
     # ssh settings that run a command
     (f"ssh -o RemoteCommand='{RM}' h", "delete"),
     (f"ssh -o KnownHostsCommand='{RM}' h", "delete"),
+    # the setting attached to -o, read as getopt reads it (the first value letter ends the cluster)
+    (f"ssh -oProxyCommand='{RM}' h", "delete"),
+    (f"ssh -oLocalCommand='{RM}' -oPermitLocalCommand=yes h", "delete"),
+    (f"ssh -4oProxyCommand='{RM}' h", "delete"),
+    (f"scp -oProxyCommand='{RM}' a h:b", "delete"),
+    (f"sftp -oProxyCommand='{RM}' h", "delete"),
+    (f"rsync -e 'ssh -oProxyCommand=\"{RM}\"' a h:b", "delete"),
+    (f"rsync -e \"ssh -o 'ProxyCommand {RM}'\" a h:b", "delete"),
+    (f"GIT_SSH_COMMAND=\"ssh -oProxyCommand='{RM}'\" git fetch origin", "delete"),
+    (f"ssh h -o 'ProxyCommand {RM}'", "delete"),
+    # a word that may expand to nothing or to options leaves ssh's destination uncounted, so every word is read
+    (f"ssh $A host -o 'ProxyCommand {RM}' ls", "delete"),
+    (f"ssh $A host -o 'ProxyCommand {RM}' -- ls", "delete"),
+    (f"ssh \"$@\" srv1 -o 'LocalCommand={RM}' uptime", "delete"),
+    (f"ssh h* -o 'ProxyCommand {RM}' ls", "delete"),
+    # ssh settings spelled as ssh's config reader takes them
+    (f"ssh -o '  ProxyCommand {RM}' h", "delete"),
+    (f"ssh -o $'\\tProxyCommand {RM}' h", "delete"),
+    (f"ssh -o '\"ProxyCommand\" {RM}' h", "delete"),
+    (f"ssh -o 'Proxy\"Command\" {RM}' h", "delete"),
+    (f"ssh -o 'proxycommand={RM}' h", "delete"),
+    (f"ssh -o 'ProxyCommand = {RM}' h", "delete"),
+    (f"ssh -o 'ProxyCommand ={RM}' h", "delete"),
+    (f"ssh -o 'LocalCommand = {RM}' -o PermitLocalCommand=yes h", "delete"),
+    # sqlite3 dot-commands that take `|command` after options, and .read from a command
+    (f"sqlite3 x.db \".read '|{RM}'\"", "delete"),
+    (f"sqlite3 x.db \".import --csv '|{RM}' t\"", "delete"),
+    (f"sqlite3 x.db \".import --skip 1 |{RM}\"", "delete"),
+    (f"sqlite3 x.db \".once --bom '|{RM}'\"", "delete"),
+    (f"sqlite3 x.db <<EOF\n.read '|{RM}'\nEOF", "delete"),
+    # psql output commands: -o, --output, \g (options), the long names, quoted pipes, backquotes
+    (f"psql -o '|{RM}' -c 'select 1'", "delete"),
+    (f"psql -Ao'|{RM}' -c 'select 1'", "delete"),
+    (f"psql --output='|{RM}' -c 'select 1'", "delete"),
+    (f"psql --output '|{RM}' -c 'select 1'", "delete"),
+    (f"psql -o $'|true\\n{RM}' -c 'select 1'", "delete"),
+    (f"psql -c 'select 1 \\g (format=csv) |{RM}'", "delete"),
+    (f"psql -c 'select 1 \\gx (expanded) |{RM}'", "delete"),
+    (f"psql -c \"\\o '|{RM}'\"", "delete"),
+    (f"psql -c '\\out |{RM}'", "delete"),
+    (f"psql -c '\\write |{RM}'", "delete"),
+    (f"psql -c '\\set x `{RM}`'", "delete"),
+    (f"psql <<'EOF'\n\\echo `{RM}`\nEOF", "delete"),
+    # git submodule's own options before foreach
+    (f"git submodule -q foreach '{RM}'", "delete"),
+    (f"git submodule --quiet foreach '{RM}'", "delete"),
+    (f"git submodule --quiet foreach --recursive '{RM}'", "delete"),
+    # less reads +cmd as keystrokes: `!` runs a shell after any of them; macOS more is less
+    (f"less +G'!{RM}' f", "delete"),
+    (f"less +5'!{RM}' f", "delete"),
+    (f"less +:n'!{RM}' f", "delete"),
+    (f"less ++'!{RM}' f", "delete"),
+    (f"less +$'/x\\n!{RM}' f", "delete"),
+    (f"more +'!{RM}' f", "delete"),
+    (f"more +G'!{RM}' f", "delete"),
+    # tar's old-style options, tar --set-mtime-command, scp/sftp -D and sftp -S
+    (f"tar xIf '{RM}' a.tar", "delete"),
+    (f"tar cfI a.tar '{RM}' .", "delete"),
+    (f"tar -xf a.tar --set-mtime-command='{RM}'", "delete"),
+    (f"scp -D '{RM}' a b", "delete"),
+    (f"sftp -S '{RM}' h", "delete"),
+    (f"sftp -D '{RM}' h", "delete"),
 ]
 
 
@@ -187,6 +254,17 @@ EXEC_OPAQUE = [
     "psql -c \"copy t to program E'cat f'\"",
     "ssh -o PKCS11Provider=./lib.so h",
     "ssh -I ./lib.so h",
+    "ssh \"$@\" h -I ./lib.so",
+    "ssh $A host -I /tmp/x.so",
+    "ssh -oPKCS11Provider=./lib.so h",
+    "ssh -o 'SecurityKeyProvider = ./lib.so' h",
+    # what the command prints is read as SQL and dot-commands; a script named with a double dash
+    "sqlite3 x.db \".read '|cat setup.sql'\"",
+    "sqlite3 --init setup.sql x.db",
+    # less with no command after `!`, `!!` (the last command) and `|` after other keystrokes
+    "less +'!' f",
+    "less +'!!' f",
+    "less +G'|.cat' f",
 ]
 
 
@@ -216,6 +294,13 @@ def test_long_stdin_text_is_read_in_linear_time(prog):
     assert time.perf_counter() - start < 2.0
     if prog == "sqlite3":
         assert c.category == "delete"
+
+
+def test_less_keystrokes_are_read_in_linear_time():
+    start = time.perf_counter()
+    c = classify(sh("less $'+" + "/" * 50000 + "\\x01' f"))
+    assert time.perf_counter() - start < 2.0
+    assert decide(c).outcome == "allow", c
 
 
 # Everyday uses of the same options stay allow: the value is a known program.
@@ -261,6 +346,21 @@ EXEC_EVERYDAY = [
     "git fetch -u origin",
     "git submodule update --init",
     "git bisect good",
+    # a less search pattern holds `!` and `|` as text; other initial commands
+    "less +/foo!bar f",
+    "less +'/a|b' f",
+    "less +F f",
+    "less +G f",
+    "less +42 f",
+    "more +10 f",
+    "more +/x f",
+    "git submodule -q foreach git status",
+    "tar xzf a.tar.gz",
+    "tar cf a.tar dir",
+    "psql -c 'select 1' -o out.txt",
+    "psql -c 'select 1 \\g out.csv'",
+    "psql -c 'select 1 \\gx'",
+    "sqlite3 x.db '.import --csv --skip 1 data.csv t'",
 ]
 
 
@@ -269,6 +369,34 @@ def test_everyday_exec_option_uses_stay_allow(cmd):
     c = classify(sh(cmd))
     assert decide(c).outcome == "allow", c
     assert decide(c, load_policies(TEMPLATE)).outcome == "allow", c
+
+
+# The option reader stops where the program does: at ssh's remote command, and at a value of another option. So
+# the remote command's own options and a value that happens to hold an option letter are not read as options.
+ORDINARY = [
+    ("ssh host curl -I https://example.com", "web_read"),
+    ("ssh host grep -I -r needle /srv", "read"),
+    ("ssh host tar -I zstd -tf a.tar.zst", "shell"),
+    ("ssh host less +G f", "read"),
+    ("ssh -oServerAliveInterval=60 host ls", "read"),
+    ("ssh -oCheckHostIP=no host ls", "read"),
+    ("ssh -oIPQoS=throughput host ls", "read"),
+    ("ssh -o ServerAliveInterval=60 host ls", "read"),
+    ("scp -oServerAliveInterval=60 a.txt host:/tmp/", "shell"),
+    ("scp -oStrictHostKeyChecking=no a.txt host:/tmp/", "shell"),
+    ("rsync -avz -e 'ssh -oServerAliveInterval=60' src/ host:dst/", "shell"),
+    ("tar -xvfImages.tar", "shell"),
+    ("tar -cf a.tar --exclude -I .", "shell"),
+    ("rsync -av --exclude -e src/ dst/", "shell"),
+    ("git rebase -s ours -X theirs main", "local_write"),
+]
+
+
+@pytest.mark.parametrize("cmd,category", ORDINARY)
+def test_ordinary_lines_keep_their_classification(cmd, category):
+    c = classify(sh(cmd))
+    assert c.category == category, c
+    assert decide(c).outcome == "allow", c
 
 
 # --- #155: environment dumps behind runners and prefixes ---------------------------------------

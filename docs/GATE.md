@@ -236,24 +236,41 @@ A command is `allow` only when every program in it is known and nothing is hidde
   classified by what runs at the end.
 - Options of trusted programs whose value is a command are followed as a nested command, like
   `find -exec` (#154): `tar --to-command`, `-I`, `--use-compress-program`, `--rsh-command`,
-  `--rmt-command`, `--checkpoint-action=exec=`; `split --filter`; `sort --compress-program`;
-  `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp -S`; `ssh`/`scp -o
-  ProxyCommand`, `LocalCommand`, `RemoteCommand` (with the `remote host` exposure) and
-  `KnownHostsCommand`; `git rebase -x`/`--exec`, `git bisect run`, `git submodule foreach`,
-  `--upload-pack` (`clone`, `fetch`, `pull`, `ls-remote`), `git push --receive-pack`/`--exec`,
-  `git archive --exec`; `rg --pre`; `zip -TT`; `less +!cmd`; the `.shell`, `.system`, `.once |`,
-  `.output |` and `.import '|'` dot-commands of `sqlite3` and `duckdb` (as an argument, via
-  `-cmd`, or on stdin); `\!`, `\o |`, `\g |` and `\w |` anywhere on a `psql` line, `\!` and
-  `system` in `mysql`; and a command set in `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PAGER`,
-  `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`,
-  `RSYNC_RSH`, `PAGER`, `MANPAGER`, `EDITOR`, `VISUAL`, `LESSOPEN` or `LESSCLOSE` before the
-  program (also through `env`; `export NAME=value` counts when the value is a known hazard). The
-  option is recognised as `getopt` reads it: an unambiguous abbreviation of the long name
-  (`--to-com=`), the value attached to the short letter, also inside a cluster (`-xIcmd`), or the
-  next word. A known program in the value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
+  `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
+  --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp` and
+  `sftp -S`, `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`, `LocalCommand`, `RemoteCommand` (with the
+  `remote host` exposure) and `KnownHostsCommand`; `git rebase -x`/`--exec`, `git bisect run`,
+  `git submodule foreach` (also after `-q`, `--quiet`), `--upload-pack` (`clone`, `fetch`,
+  `pull`, `ls-remote`), `git push --receive-pack`/`--exec`, `git archive --exec`; `rg --pre`;
+  `zip -TT`; `less +cmd` and `more +cmd` with a `!` (macOS `more` is `less`); the `.shell` and
+  `.system` dot-commands of `sqlite3` and `duckdb`, and `.once`, `.output`, `.import` and `.read`
+  with an argument starting with `|`, also after options (as an argument, via `-cmd`, or on
+  stdin); `psql -o '|cmd'`/`--output`, and `\!`, backquotes in a meta-command's arguments, and a
+  `|command` after `\o`, `\out`, `\g`, `\gx` (also after `(options)`), `\w` or `\write`, quoted
+  or not, anywhere on a `psql` line; `\!` and `system` in `mysql`; and a command set in
+  `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PAGER`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`,
+  `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `RSYNC_RSH`, `PAGER`, `MANPAGER`, `EDITOR`,
+  `VISUAL`, `LESSOPEN` or `LESSCLOSE` before the program (also through `env`; `export NAME=value`
+  counts when the value is a known hazard).
+- Options are read as the program's `getopt` reads them: an unambiguous abbreviation of the long
+  name, one letter or more (`--to-com=`, `psql --o`), or the value attached to the short letter or in the next word. In a
+  cluster the first letter that takes a value ends the word (`-xIcmd`, `-oProxyCommand=cmd`,
+  `-avze ssh`), and the gate knows which letters and long options take a value for `ssh`,
+  `scp`, `sftp`, `tar` (also its old style, `tar xIf cmd a.tar`), `rsync`, `man`, `rg`, `psql`
+  and the `git` subcommands, so a value is not read as options (`ssh -oServerAliveInterval=60`
+  is not `-I`). A letter it does not know only makes it read more words. Options end at `--`;
+  `ssh` reads them before and after its destination and stops at the remote command, so `ssh
+  host curl -I URL` is the `curl` line; when a word before that may expand to no word or several
+  (`$A`, `"$@"`, a glob), the destination cannot be counted and every word is read. An `ssh -o` setting is split as ssh's config reader
+  splits it: leading whitespace, a quoted keyword, any case, and `Keyword value`,
+  `Keyword=value` or `Keyword = value`. `less` reads `+cmd` as keystrokes: `!` runs a shell
+  command after any of them (`+G!cmd`, `+:n!cmd`), while a search (`+/pattern`) takes the rest
+  as its pattern unless a newline or another control key ends it.
+- A known program in an option's value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
   `allow`; a program the gate does not know asks, as it would on its own. A value the gate cannot
-  read is `opaque_exec`: a variable, a script file (`tar --info-script`, `sqlite3 -init`,
-  `.read`, `.load`), `.once`/`.output FILE`, `psql ... PROGRAM`, `TAR_OPTIONS`, and a library
+  read is `opaque_exec`: a variable, a script file (`tar --info-script`, `sqlite3 -init` or
+  `--init`, `.read`, `.load`), `.once`/`.output FILE`, `.read '|cmd'` (what the command prints is
+  run), `less +!` with no command or `+!!`, `psql ... PROGRAM`, `TAR_OPTIONS`, and a library
   `ssh` loads (`-I`, `-o PKCS11Provider`, `-o SecurityKeyProvider`). `sed` scripts with `e` or
   `s///e` and `awk` programs calling `system()` were already opaque. An argument that merely
   looks like an assignment (`grep EDITOR=vim`) and a data load (`sqlite3 '.import f.csv t'`) are
