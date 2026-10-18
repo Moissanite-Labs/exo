@@ -777,12 +777,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   along a sample below home by its name, a plain one only below its parent, such as `.config/gh`, `.exo/keys` or
   `/proc`, so a checkout called `exo` is not one) and the store file names. A line enters a store folder when any
   `cd`, `pushd`, `git -C`, `env -C`, `sudo -D` or `tar -C` target in it, wherever it stands and however it is spelt,
-  has a store folder among its parts (`..` resolved as bash's `cd` does, a brace set as its words), or goes by a
-  relative name, also through `..` or after `cd ..`, into a plain store folder below another target (a dot parent by
+  has a store folder among its parts (`..` resolved as bash's `cd` does, a brace set or range as its words), or goes by
+  a relative name, also through `..` or after `cd ..`, into a plain store folder below another target (a dot parent by
   its name, a plain one by its path; a folder entered this way is a parent in turn). On such a line a relative name in
   its words, redirections, uploads and `$( )`, `<( )` or `bash -c` bodies (not the targets' own words, the program and
-  the words before it, a `git` subcommand, a jq filter, or prose with a space and no unquoted brace set) counts when
-  its file name is a store file name (a glob, read with bash's bracket and leading-dot rules: when it could match one)
+  the words before it except assignments, a `git` subcommand, a jq filter, or prose with a space and no unquoted brace
+  set) counts when its file name is a store file name (a glob, read with bash's bracket and leading-dot rules: when it
+  could match one)
   or it goes into a store folder; the folder itself (`.`) counts when a target is a store folder, and any relative
   name when a target is itself a store, a glob target included. A name that goes into a plain store folder from its
   parent counts on any line when it names a store. Chosen over following the folder per command or per line, which

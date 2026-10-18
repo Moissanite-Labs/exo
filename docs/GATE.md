@@ -223,7 +223,8 @@ whole line in one pass:
   runs), however the command is spelt (`c\d`, `"cd"`, `$'\x63d'`) and with the option attached,
   in a cluster, old-style or cut to a unique prefix (`env -C~/.kube`, `sudo -iD ~/.kube`,
   `tar czfC - ~/.kube`, `env --c=~/.kube`, `tar --dir ~/.kube`). A brace set is the words it
-  spells (`~/.{ssh,x}`), up to 16 in a word of up to 4096 characters, and one glob past that.
+  spells (`~/.{ssh,x}`, a range `{1..3}` or `{a..c}`), up to 16 in a word of up to 4096
+  characters, and one glob past that or for a stepped range (`{1..9..2}`).
 - A line enters a store folder when a target has one among its parts (`~user/` and folders
   outside home count by their parts: `/proc/self`, `/srv/app/.kube`), or goes by a relative name
   into a plain one below another target: `cd ~/.config && cd ./gcloud`, `cd / && cd proc/self`,
@@ -250,9 +251,10 @@ whole line in one pass:
 - Names are read from the words and their pieces (`--kubeconfig=config`, `-d@config`,
   `f:=@config`), redirection targets and the bodies of `$( )`, `<( )` and the text a shell runs
   (`bash -c`, a heredoc fed to `bash`). They are not read from the program, the words before it
-  (`sudo -u root`), the targets' own words (`mkdir -p .kube && cd .kube && ls` keeps its class),
-  a `git` subcommand, a jq filter (`jq .`), other heredoc text or a word with a space in it (a
-  commit message, an `echo`, `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
+  (`sudo -u root`) except assignments (`KUBECONFIG=config kubectl` counts), the targets' own words
+  (`mkdir -p .kube && cd .kube && ls` keeps its class), a `git` subcommand, a jq filter (`jq .`),
+  other heredoc text or a word with a space in it (a commit message, an `echo`,
+  `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
 
 A line that enters no store folder, and names none, is classified as before. The work is linear
 in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64

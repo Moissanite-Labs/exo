@@ -1312,21 +1312,29 @@ def _brace_glob(text: str) -> str:
 
 
 def _brace_alts(text: str) -> list:
-    """The words a brace set spells (`~/.{ssh,x}`: ~/.ssh and ~/.x), up to 16, in a word of up to 4096 characters;
-    past that, one glob (_brace_glob). A range (`{a..c}`) stays for _brace_glob."""
+    """The words a brace set spells (`~/.{ssh,x}`: ~/.ssh and ~/.x; a range `{1..3}` or `{a..c}` too), up to 16, in a
+    word of up to 4096 characters; past that, or for a stepped range (`{1..9..2}`), one glob (_brace_glob)."""
     if len(text) > 4096:
         return [_brace_glob(text)]
     out, todo = [], [text]
     while todo:
         t = todo.pop()
         m = re.search(r"\{([^{},]*(?:,[^{},]*)+)\}", t)     # an innermost set with a comma
-        if not m:
+        r = None if m else re.search(r"\{(-?\d{1,6})\.\.(-?\d{1,6})\}|\{([A-Za-z])\.\.([A-Za-z])\}", t)
+        if m:
+            alts, hit = m.group(1).split(","), m
+        elif r:                                         # a range: {1..3} is 1 2 3, {a..c} is a b c
+            a, b = (int(r.group(1)), int(r.group(2))) if r.group(1) else (ord(r.group(3)), ord(r.group(4)))
+            if abs(b - a) >= 16:
+                return [_brace_glob(text)]
+            step = 1 if b >= a else -1
+            alts, hit = [str(x) if r.group(1) else chr(x) for x in range(a, b + step, step)], r
+        else:
             out.append(t)
             continue
-        alts = m.group(1).split(",")
         if len(out) + len(todo) + len(alts) > 16:
             return [_brace_glob(text)]
-        todo += [t[:m.start()] + x + t[m.end():] for x in alts]
+        todo += [t[:hit.start()] + x + t[hit.end():] for x in alts]
     return out
 
 
@@ -1480,6 +1488,9 @@ def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
         pieces += [(w.text, w.brace) for w in words if w.brace or not re.search(r"\s", w.text)]
 
 
+_ANY = object()                                     # any path, in _cd_store_read's index of levels up
+
+
 def _cd_store_read(cmds: list, subs: list) -> str:
     """D-038 (#192): a line that enters a folder that can hold a secret store may read it by a relative name. It
     enters one when a working-folder target anywhere in it ($( ), <( ) and a shell's text included) has a store
@@ -1494,12 +1505,12 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     bodies: list = []
     _cd_walk(cmds, targets, pieces, bodies)
     queue = [(s, 0) for s in subs] + [(b, 1) for b in bodies]
-    seen: set = set()
-    while queue:                # each $( ), <( ) and shell text once, nested ones too (subs may list them already)
-        text, n = queue.pop()
-        if text in seen:
+    seen: dict = {}             # text -> the shallowest depth it was read at
+    while queue:                # each $( ), <( ) and shell text once per depth at most, nested ones too
+        text, n = queue.pop()   # (subs may list them already); a text first met at the depth cap is read again
+        if seen.get(text, _DEPTH + 1) <= n:     # when it comes up shallower, so its own bodies are not lost
             continue
-        seen.add(text)
+        seen[text] = n
         c2, s2 = _parse(text)[:2]
         more: list = []
         _cd_walk(c2, targets, pieces, more)
@@ -1547,6 +1558,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     # deeper than any sample store folder's parent keeps only its name, which is all a dot parent needs.
     parents = {a for a, _ in pairs}
     anc: dict = {}
+    top: dict = {}                                  # (name, its path or _ANY) -> the most levels up it is at
     lo: dict = {}                                   # the fewest levels up at which / is
 
     def index(parts: list) -> None:
@@ -1555,6 +1567,8 @@ def _cd_store_read(cmds: list, subs: list) -> str:
         for n, (name, path) in enumerate(reversed(chain)):
             if name in parents:
                 anc.setdefault(name, {}).setdefault(n, set()).add(path)
+                for key in ((name, path), (name, _ANY)):
+                    top[key] = max(top.get(key, -1), n)
                 if name == "":
                     lo[""] = min(lo.get("", n), n)
 
@@ -1574,8 +1588,9 @@ def _cd_store_read(cmds: list, subs: list) -> str:
         levels = anc.get(a, {})
         if a == "" and lo.get("", n + max(ups) + 1) <= n + max(ups):
             return True
-        cands = [n + u for u in ups] if len(ups) <= 64 else [m for m in levels if m >= n]
-        return any(m in levels and (need is None or need in levels[m]) for m in cands)
+        if len(ups) > 64:                           # any number of levels up: is it there n or more levels up?
+            return top.get((a, _ANY if need is None else need), -1) >= n
+        return any(m in levels and (need is None or need in levels[m]) for m in (n + u for u in ups))
 
     matched: dict = {}                              # a glob -> the plain store folder names it could match
 
