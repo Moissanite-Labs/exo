@@ -1264,7 +1264,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   pid that still names that process and started before the accept (a pid reused after the accept fails), and a parent chain that reads
   cleanly to pid 1 without the core; an unreadable chain is the tool tree. `descends_from` fails closed
   accordingly; there is one walker. A credential taken as local is logged once per process with the reason, and
-  that connection's refusals name it. Other platforms: no principal over the socket.
+  that connection's refusals name it (`/rename` and the subagent verbs too); a log line that cannot be written
+  does not change the answer. Other platforms: no principal over the socket.
 - **Unchanged (D-039, D-052):** the principal comes from the connection; in-process clients are the principal by
   construction; stdio and TCP are local; only a principal caller acts as the principal. No command or event added.
 - **Snapshot and liveness (handoff items 2 and 3, the parts that ride on this):** `hello` reports `instance` and
@@ -1278,7 +1279,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   whose connection never opened. It says the change may not have been delivered, keeps the typed text and
   re-reads `approvals.list` to put back a card the core still holds. The client reads on after a skipped frame
   without `reconnect` too, so a caller that keeps its own `since` (the exo-bus channel, the web source) gets the
-  next event instead of asking for the skipped one again; a skipped frame that comes again ends such a stream.
+  next event. Until a later event arrives, each new stream it opens (after a restart or a dropped connection)
+  still asks for the skipped frame and skips it again: one re-read per reconnect, not a stall. A skipped frame
+  that comes again ends such a stream.
 - **Scope against the handoff:** no ruling conflicted. D-039's file name and gate credential class are kept, so the
   launch record replaces the token file's contents rather than adding a file. The OS surface lives in another
   repository and migrates there. Clients expose the stream `instance` but the terminal and web views do not yet
@@ -1295,7 +1298,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   exo` pass. The core logs it and the refusal says so. A client in another PID namespace than the core is refused
   (the kernel names pid 0), and a core that cannot read its own process entry warns and serves no principal. A pid
   reused between connect and accept is not detected (that window is the accept latency; Linux `SO_PEERPIDFD` would
-  pin the process).
+  pin the process). The browser-to-web hop (the `exo web` page to its own server, over TCP) is not peer-checked;
+  the page token protects it and, once #177 lands, the one-time launch code (D-039, #166).
 - **Validation:** `tests/security/test_unix_peer_auth.py`: a replaced socket gets zero bytes; stale, symlinked,
   shared, old-format and missing records refuse before any byte; an unsupported platform fails closed both ways; a
   mismatched kernel uid is local; a tool child through the real client, and the orphan of one that exited, are
@@ -1306,10 +1310,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `SharedClient.events` (an emoji message is delivered, a NEL one is skipped); a frame too large is skipped by
   seq; line separators and lone surrogates round-trip; a uid above 2^31; pid 0; a pid that names another process
   by stamp time; the parent walk with a clean, unreadable and descendant chain; the demotion reason in the log and
-  the refusal; a core without its own start identity; the record in place before the socket accepts; the refusal
-  type. `tests/clients/tui/test_lost_reply.py` and the web's `test_refused_principal_names_the_reason_and_the_restart`.
-  A skipped frame that comes again ends the stream (`test_unix_peer_auth_edges.py`), and the exo-bus channel's
-  event loop reads past one (`plugins/exo-bus/tests/test_bus_plugin.py`).
+  the refusal, also from `/rename` and the subagent verbs and with stderr closed or broken; a core without its own
+  start identity; the record in place before the socket accepts and revoked when the listen fails; a frame too
+  large with no `id:` ends the stream; the refusal type. `tests/clients/tui/test_lost_reply.py` (a lost turn,
+  approval answer, `question.answer` or unsteer) and the web's
+  `test_refused_principal_names_the_reason_and_the_restart`. A skipped frame that comes again ends the stream
+  (`test_unix_peer_auth_edges.py`), and the exo-bus channel's event loop reads past one
+  (`plugins/exo-bus/tests/test_bus_plugin.py`).
 - **Docs:** `docs/GATE.md` "Unix peer authentication", `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-061 (2026-10-13) Web sub-pages to the site v2 standard

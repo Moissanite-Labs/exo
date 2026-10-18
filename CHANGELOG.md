@@ -119,7 +119,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
-- Unix peer authentication (#109, D-060): principal clients ask the kernel who serves the socket before the
+- Unix peer authentication (#175, D-060): principal clients ask the kernel who serves the socket before the
   credential moves, and the core asks who connected before it stamps the principal. The credential file
   (`run/<socket>.principal.key`) is now a JSON launch record, so restart the core and every running `exo`, `exo web`
   and `exo chat` after updating: a new client refuses an old core (the page says to run `exo stop`), and an old
@@ -129,7 +129,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   instead of stalling the stream, also for a caller that keeps its own cursor (the exo-bus channel, so bus replies
   after it still go out). A joined terminal window never resends a turn or approval answer whose reply was
   lost; it says so and keeps the text. Under `hidepid` or `ProtectProc` clients are local, with the reason logged and
-  named in refusals.
+  named in refusals (`/rename` and the subagent verbs included, even when the core's stderr is closed).
 - `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
   requests from the web server only, no inline script, style attribute or eval, no framing, plus
   `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
