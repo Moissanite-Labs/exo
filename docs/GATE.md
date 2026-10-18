@@ -103,6 +103,38 @@ both reads the file without the gate seeing it and detaches from the core's proc
 still pass. The full fix is an OS sandbox for tools; until then the gate and the process-tree
 check are the guard.
 
+## Secret-store paths
+
+A path names a secret store (`credentials`, always asks) when it matches the store list in `exo.gate`
+(`~/.ssh`, `~/.aws`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `.env`, `*.key`,
+token files, Exo's `keys/`...), or when it is a glob that could match one of the sample store paths. This holds
+for shell words, redirection targets, `bash -c` and `$( )` text, string literals in code, and the path arguments
+of file tools. Brace sets are expanded as bash does before matching (issue #184). In a shell word the gate
+expands the source text, quotes kept, and then removes the quotes from each word, so only unquoted braces
+expand: `'{a,b}'`, `"{a,b}"` and `\{a,b\}` stay literal, while in `''{},.env}` the `{` follows a quote, is not
+at the start of the word, and opens a group. A `$"..."` is also read as the plain `"..."` bash gives it without
+a message catalog, so `cat $""{.env,x}` asks. A path argument of a file tool has no quoting and is expanded as
+written. The scan follows bash's: a group ends at the first top-level `}` after a comma or `..`, so `{},hosts}`
+is one group; a `{x..y[..n]}` sequence expands to its members, padded as bash pads them (a leading zero on
+either bound pads every member to the longer bound, so `{007..1000..993}` is `0007 1000`); nested groups expand
+too; `${...}`, `$(...)` and groups with neither a comma nor a sequence stay literal. The word as written and
+every word it expands to are checked, and a hit on any counts, so `cat ~/.config/gh/{hosts,x}.yml`,
+`cat ~/.docker/{*,}` and `cat ~/{},.netrc}` ask.
+
+The work is bounded. A word that would expand to more than 1,024 words (or past a million characters in all),
+nests groups more than 32 deep, or has a sequence bound longer than 18 digits counts as a store path (asks)
+rather than being matched in part. So does a zero-padded sequence with a bound past a 32-bit int: bash prints
+its members as C ints, so they wrap (`{04294967296..04294967296}` is `00000000000`). One tool call expands at
+most 4,096 words in all, across its words, redirections, nested commands and code literals (a glob word counts
+four times, and a long word once more per 64 characters); past that, each further word with a brace set counts
+as a store path too. The trade-off: this fails closed, so an ordinary line past a limit, such as
+`echo {1..2000}` or `for i in {1..2000}`, is `credentials` and asks every time with no grant. A string literal
+in code is read as a shell command, so compact JSON with 11 or more objects in one literal
+(`'[{"a":1,"b":2},...]'`) goes past the cap the same way.
+Known limit: the folder a `cd` enters is tracked for stores matched by name (`cd ~/.aws && cat credentials`
+asks), not for stores matched only by sample paths (`cd ~/.config/gh && cat hosts.yml`; #192).
+Tests: `tests/security/test_gate_brace_sets.py`.
+
 ## Muse CLI credentials
 
 `muse login`, `muse auth` and `muse logout` are `credentials` acts, like `vercel login`: they always ask and never
@@ -261,6 +293,27 @@ Distinctive names match anywhere, so a relative `policies/gates.yaml` or
 plugins the core loads (this gate among them), the plugin config, the models and the interpreter
 `exo update` runs; `update/` holds the pinned trust list for signed updates (D-073, D-074).
 
+Absolute paths are checked in both their lexical form and their resolved symlink form, including
+missing final components, and so is the folder of `cd`, `pushd`, `env -C`, `git -C` and the tool's
+`cwd`. This catches file and directory aliases into protected stores, aliases used to delete a store
+or its ancestors, a `cd` into an alias of the store, and `//` or `/proc/self/root` spellings.
+Resolution preserves `symlink/..` filesystem order; lexical protection still applies when a
+protected path links outside the store. A path that cannot be resolved (a NUL byte) keeps its
+lexical check, so the floor never depends on resolution working. `cp -s` and `cp -l` count as writes
+to whatever they alias, and a relative `ln -s` target is read against the link's folder in the
+two-operand form (`ln -s TARGET LINK`). A relative path is matched by its distinctive names, and
+against the folder a `cd`, `env -C` or the tool's `cwd` names when the gate knows it (below).
+
+Known limits. These are classification checks, not a filesystem sandbox: a symlink can change
+between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
+without a link to resolve, so only distinctive names catch a write through it. Only the store roots
+are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
+write to the outside spelling is a local write. Name and prefix checks are case-sensitive, so a
+case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob or brace spelling
+(`sta*/gate-grants.json`, `{state,x}/...`) is expanded by the shell, not seen here. A link planted
+and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
+followed.
+
 Any write the gate can see is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a
 redirection, a non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`,
 `chmod`, `sqlite3`, `touch`, `ln`, `curl -o`, `wget -O`, `scp`, `rsync`), a copy, extraction or
@@ -297,8 +350,7 @@ for a custom home); a `-C` after the subcommand (`git commit -C HEAD`) is not a 
 writing git line with more than 64 `-C` asks rather than follow them all. Outside the home the gate
 keeps the folder a `cd` or `cwd` names, so a relative name that resolves into the store from there
 counts too (`cd ~ && cp a .exo/`, or `cp a my-exo/` for a custom home).
-A leading `//` is the same path. `rm -rf ~/.exo` counts (an ancestor). A symlink that points at a
-store path is the job of the store-path resolution of issues #130 and #156, not of this list. A
+A leading `//` is the same path. `rm -rf ~/.exo` counts (an ancestor). A
 `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
 observe mode too. Reads of the store stay `read`, except `keys/`, which stays `credentials`.
@@ -306,7 +358,7 @@ observe mode too. Reads of the store stay `read`, except `keys/`, which stays `c
 Limits. The match is on the text of the command. A glob or brace spelling (`~/.exo/conf*.json`,
 `~/.exo/{config,x}.json`), a case variant on a case-insensitive filesystem (`~/.exo/Config.json`
 on APFS), `${EXO_HOME:-$HOME/.exo}` or a path built from another variable
-(`D=~/.exo; cp x $D/config.json`), `cp -s`/`cp -l` link trees, an archiver whose destination the
+(`D=~/.exo; cp x $D/config.json`), an archiver whose destination the
 gate does not read (`7z x -o`, `cpio -i`, `pax -r`, `bsdtar`) and a folder destination that spells a
 custom home relatively from a folder the gate does not know (`cp x my-exo/` with no `cd` or `cwd`)
 pass as ordinary writes. So does an abbreviated

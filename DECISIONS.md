@@ -761,6 +761,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   stricter; the `indirection` signal makes `decide` ask even if the inner part only logs. An "always" on opaque code
   covers that exact command only. The principal can lower `opaque_exec` only by naming it in a category line or rule.
   The old program and prefix cases are gone; one classifier serves the core and the `exo-gate` plugin.
+  *Amendment 2026-10-17 (issue #184):* a path word is matched against the secret stores after bash brace
+  expansion, scanned as bash scans it: a shell word from its source text, so only unquoted braces expand. The word
+  and every word its comma groups and `{x..y}` sequences make are checked, and a hit on any counts; past 1,024
+  words or 32 levels of nesting, or past 4,096 expanded words in one tool call, the word counts as a store path
+  (fails closed, no grant). `cat ~/.config/gh/{hosts,x}.yml` was an allowed read.
 - **Decision, store:** `policies/`, `state/`, `ledger.sqlite*`, `keys/`, seat files and the sockets under `$EXO_HOME`
   or the principal store are on a protected list. Any write is `store_write`: a floor like credentials, no standing
   grant, principal-only (`approvals.yaml` cannot add seats), enforced in observe mode. Reads stay `read`; `keys/`
