@@ -27,6 +27,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- A second `exo serve --seat NAME` beside a running exod no longer takes over its socket and `run/exod.pid`. It
+  deleted the live core's `run/exod.sock`, bound its own and wrote its pid, so `exo stop` stopped the second core
+  and left the first running with the agent's writer lock and no way to reach it. `exo serve` now refuses a socket
+  that another core answers on, exits 1 and names `--socket`, and a core removes `run/exod.pid` on exit only if
+  the file still holds its own pid.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

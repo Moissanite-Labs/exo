@@ -122,6 +122,9 @@ class HttpServer:
         if len(os.fsencode(str(path))) >= 104:  # macOS limit is 104 bytes, Linux 108; stay under both
             raise ValueError(f"socket path too long ({len(os.fsencode(str(path)))} bytes, max 103): {path}. "
                              "Use a shorter EXO_HOME.")
+        from exo.ensure_core import probe  # never take a live server's socket; only a stale file is replaced
+        if probe(path) == "alive":
+            raise ValueError(f"another server is listening on {path}; stop it, or give this one its own --socket")
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if path.exists():
             path.unlink()
