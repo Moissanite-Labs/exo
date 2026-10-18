@@ -604,6 +604,7 @@ tput clear command help ulimit umask read jobs compgen
 """.split())
 SHELL_PROGRAMS = frozenset("""
 mkdir touch cp mv ln tee sort uniq tree xxd base64 tar zip unzip gzip gunzip bzip2 bunzip2 xz unxz zstd unzstd
+pigz unpigz pbzip2 lbzip2 lz4 lzop lzip lzma unlzma zstdmt brotli
 truncate install patch split csplit iconv dos2unix pytest py.test ruff black isort mypy pyright flake8
 pylint coverage tsc eslint prettier biome jest vitest mocha rustc rustfmt gcc g++ cc clang clang++ javac
 shellcheck shfmt yamllint codespell actionlint security sqlite3 psql mysql duckdb rsync scp ping dig
@@ -673,6 +674,71 @@ _OPAQUE_PROGRAMS = {"source": "reads and runs a shell file", ".": "reads and run
                     "pre-commit": "runs project-defined hooks", "open": "opens a file or app with its handler",
                     "case": "a case statement", "coproc": "a coprocess", "select": "a select loop",
                     "script": "runs a command under a recorder"}
+# Allowlisted programs with an option whose value is a command line the program runs (#154). The value is
+# classified as a nested command, like the command after `find -exec`. Long options match any prefix, one letter
+# or more, as getopt_long and git do (`--to-com=`, `psql --o`). Short options are read as getopt reads them (see
+# _option_values): the value is the rest of the word or the next word (`-Izstd`, `-xIzstd`, `-avze ssh`).
+_EXEC_OPTS = {
+    "tar": ("--to-command", "-I", "--use-compress-program", "--rsh-command", "--rmt-command", "--set-mtime-command"),
+    "split": ("--filter",), "sort": ("--compress-program",), "man": ("-P", "--pager"),
+    "rsync": ("-e", "--rsh", "--rsync-path"), "scp": ("-S", "-D"), "sftp": ("-S", "-D"), "rg": ("--pre",),
+    "zip": ("-TT", "--unzip-command"),
+}
+# git subcommand -> options whose value git runs (locally, or on the remote for a local-path remote).
+_GIT_EXEC_OPTS = {"rebase": ("-x", "--exec"), "push": ("--receive-pack", "--exec"), "archive": ("--exec",),
+                  "fetch": ("--upload-pack",), "clone": ("--upload-pack", "-u"), "pull": ("--upload-pack",),
+                  "ls-remote": ("--upload-pack", "-u")}
+# Options whose value is a script file or option text the gate cannot read: opaque.
+_EXEC_FILE_OPTS = {"tar": ("-F", "--info-script", "--new-volume-script"), "sqlite3": ("-init",), "duckdb": ("-init",)}
+# The short options that take a value (the letters before `:` in the program's getopt string) and long options
+# that take one, so the option reader skips a value instead of reading it as options: `ssh -oServerAliveInterval=60`
+# is `-o`, not `-I`. A letter or name missing here makes the reader look at more words, except for ssh, whose
+# options stop at the remote command: its letters are ssh's getopt string, all of them.
+_SSH_VALUE_OPTS = "BbcDEeFIiJLlmOoPpQRSWw"
+_VALUE_OPTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "ssh": (_SSH_VALUE_OPTS, ()), "scp": ("cDFiJlMoPSX", ()), "sftp": ("BbcDFiJloPRSsX", ()),
+    "tar": ("bCfFgHIKLNTVX", ("--file", "--directory", "--exclude", "--exclude-from", "--files-from", "--transform",
+                              "--owner", "--group", "--mode", "--mtime", "--newer", "--format", "--suffix")),
+    "rsync": ("BefMT@", ("--exclude", "--include", "--exclude-from", "--include-from", "--files-from", "--filter",
+                         "--temp-dir", "--compare-dest", "--copy-dest", "--link-dest", "--partial-dir", "--backup-dir",
+                         "--chmod", "--chown", "--timeout", "--port", "--password-file", "--log-file", "--out-format",
+                         "--bwlimit", "--max-size", "--min-size", "--remote-option")),
+    "man": ("CELMPRSemprs", ()),
+    "rg": ("ABCdEefgjMmrTt", ("--regexp", "--file", "--glob", "--iglob", "--type", "--type-not", "--max-count",
+                              "--max-depth", "--replace", "--context", "--after-context", "--before-context")),
+    "psql": ("cdFfhLoPpRTUv", ("--command", "--dbname", "--file", "--host", "--port", "--username", "--set",
+                               "--variable", "--log-file", "--output", "--pset", "--field-separator")),
+}
+_GIT_VALUE_OPTS = {"rebase": "CsXx", "push": "o", "archive": "o", "fetch": "jo", "clone": "bcjou", "pull": "josX",
+                   "ls-remote": "ou"}
+# ssh/scp/sftp -o settings that run a command (RemoteCommand on the remote host) or load a library, by the
+# lower-case keyword ssh matches (see _ssh_setting).
+_SSH_EXEC_SETTINGS = {k.lower(): k for k in ("ProxyCommand", "LocalCommand", "RemoteCommand", "KnownHostsCommand")}
+_SSH_LIB_SETTINGS = {k.lower(): k for k in ("PKCS11Provider", "SecurityKeyProvider")}
+_EXEC_ENV = frozenset("""
+GIT_SSH_COMMAND GIT_SSH GIT_PAGER GIT_EDITOR GIT_SEQUENCE_EDITOR GIT_EXTERNAL_DIFF GIT_ASKPASS SSH_ASKPASS
+RSYNC_RSH PAGER MANPAGER EDITOR VISUAL LESSOPEN LESSCLOSE
+""".split())
+_EXEC_ENV_OPAQUE = frozenset(["TAR_OPTIONS"])
+# sqlite3/duckdb dot-commands (any unambiguous prefix works, so match prefixes): .shell and .system run a
+# command, .once/.output/.import/.read run one when an argument starts with `|` (after options too:
+# `.import --csv '|cmd' t`), .once/.output/.read/.load otherwise use a file or library the gate does not see
+# (.import FILE is a plain data load). psql runs `\!`, and `\o`, `\out`, `\g`, `\gx`, `\w`, `\write` with a
+# `|command` (also quoted, or after `\g (options)`), wherever they appear on a line; mysql runs `system` at the
+# start of one. Line starts are matched with `[ \t]*`, not `\s*`, so a long heredoc stays linear.
+_DOT_RUN, _DOT_PIPE = ("shell", "system"), ("once", "output", "import", "read")
+_DOT_FILE = ("once", "output", "read", "load")
+_DOT_COMMAND = re.compile(r"^[ \t]*\.([a-z]+)[ \t]*([^\n]*)", re.M)
+_DOT_PIPE_ARG = re.compile(r"""(?:^|[ \t])(?:(['"])\|(.*?)\1|\|(.*))""", re.S)
+_SQL_SHELL = re.compile(r"(?:^[ \t]*system[ \t]+|\\![ \t]*)([^\n]*)", re.M | re.I)
+# The pipe after `\o`, `\g (options)`... is found in one pass over these tokens, so many on one line stay linear.
+_SQL_PIPE = re.compile(r"\\(?:o|out|w|write|gx?)(?![a-z])|[|\n]", re.I)
+# psql runs backquoted text in a meta-command's arguments (`\set x `cmd``, `\echo `cmd``)
+_PSQL_META = re.compile(r"\\[a-z][^\n]*", re.I)
+_SQL_PROGRAM = re.compile(r"\bprogram\s+(?:E?'|\$\w*\$)", re.I)
+# database shells -> the options whose value is command text (dot-commands or SQL)
+_SQL_COMMAND_OPTS = {"sqlite3": ("-cmd",), "duckdb": ("-cmd",), "psql": ("-c", "--command"),
+                     "mysql": ("-e", "--execute")}
 _GIT_SUBS = frozenset("""
 add commit checkout switch branch merge rebase stash tag fetch pull push status log diff show reset restore
 clean rm mv init clone remote config rev-parse blame ls-files grep cherry-pick revert worktree submodule
@@ -736,15 +802,22 @@ def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection
     return c
 
 
-def _classify_git(argv: list[str], cmd: str) -> Classification:
-    i, config = 1, []
+def _git_subcommand(argv: list[str], config: list[str] | None = None) -> int:
+    """Index of the git subcommand after the global options; `-c`/`--config-env` values go to `config`."""
+    i = 1
     while i < len(argv) and argv[i].startswith("-"):
         if argv[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"):
-            if argv[i] in ("-c", "--config-env") and i + 1 < len(argv):
+            if argv[i] in ("-c", "--config-env") and i + 1 < len(argv) and config is not None:
                 config.append(argv[i + 1])
             i += 2
             continue
         i += 1
+    return i
+
+
+def _classify_git(argv: list[str], cmd: str) -> Classification:
+    config: list[str] = []
+    i = _git_subcommand(argv, config)
     for kv in config:
         k, _, v = kv.partition("=")
         if _GIT_EXEC_KEY.match(k) or v.startswith("!"):
@@ -965,6 +1038,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         words = words[1:]
     if words and not words[0].quoted and words[0].text == "for":
         words = []                                   # a for header lists words, not programs
+    before = words
     words, sudo, split = _strip_prefix_words(words)
     parts: list[Classification] = []
     if split is not None:
@@ -973,6 +1047,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(classify_shell(split, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
+        parts += _exec_options(before, words, k, cmd, depth, ctx, piped)
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
     if sudo:
@@ -1131,14 +1206,21 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         rest, i = argv[1:], 0
         while i < len(rest) and rest[i].startswith("-"):
             i += 2 if rest[i] in ("-i", "-p", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-W", "-b", "-c", "-E", "-m",
-                                  "-O", "-Q", "-S", "-w", "-e") else 1
+                                  "-O", "-Q", "-S", "-w", "-e", "-I") else 1
         host = rest[i] if i < len(rest) else ""
         inner = " ".join(rest[i + 1:])
-        c = (classify_shell(inner, inner_depth) if inner and depth < _DEPTH
-             else _make("shell", summary=f"ssh {host}", command=cmd))
+        if inner and depth >= _DEPTH:
+            # A chain past the cap is not read, so it asks (#153). The hops that were read keep the
+            # first host as target, so a `target:` deny on it still matches.
+            c = _opaque("ssh chain nested too deep to read", cmd, target=host)
+            c.signals.append("unread hops")
+        elif inner:
+            c = classify_shell(inner, inner_depth)
+        else:
+            c = _make("shell", summary=f"ssh {host}", command=cmd)
         if EXPOSURE.index(c.exposure) < 1:
             c.exposure = "internal"
-        c.target = c.target or host
+        c.target = host if "unread hops" in c.signals else (c.target or host)
         c.signals.append("remote host")
         return [c]
     if prog in ("vercel", "netlify"):
@@ -1207,6 +1289,240 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog in SHELL_PROGRAMS:
         return [_make("shell", summary=" ".join(argv[:3])[:80], command=cmd)]
     return [_opaque(f"runs {prog}, a program the gate does not know", cmd, signal="unknown program")]
+
+
+def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "", longs: tuple = (),
+                   operands: int | None = None, exact: bool = False, wild: frozenset = frozenset()) -> list[str]:
+    """The values given to the options `names` in argv[start:], read as getopt reads them (#154). In a short
+    option cluster the first letter that takes a value (one of `names`, or a letter in `takes`) ends the word:
+    its value is the rest of the word or the next word (`-xIzstd`, `-avze ssh`, `-oProxyCommand=cmd`). A long
+    option takes `=value`, or the next word when it is in `longs`, is one of `names` or abbreviates one
+    (`--to-com cmd`, unless `exact`). A name of more than one letter after one dash (`-TT`, `-cmd`) is a whole
+    word. Options end at `--`, and with `operands` at the operand after that many: ssh reads options before and
+    after its destination, and the remote command follows. An operand at an index in `wild` may expand to no
+    word or several (`$A`, `"$@"`, a glob), so the operands cannot be counted and every word is read."""
+    shorts = "".join(n[1] for n in names if len(n) == 2)
+    whole = [n for n in names if len(n) > 2 and not n.startswith("--")]
+    long_names = [n for n in names if n.startswith("--")]
+    out: list[str] = []
+    i, seen = start, 0
+    while i < len(argv):
+        a = argv[i]
+        i += 1
+        key, eq, val = a.partition("=")
+        if a == "--":
+            break
+        if key in whole:
+            if eq or i < len(argv):
+                out.append(val if eq else argv[i])
+                i += 0 if eq else 1
+        elif a.startswith("--"):
+            hit = any(n == key or (not exact and len(key) >= 3 and n.startswith(key)) for n in long_names)
+            if eq and hit:
+                out.append(val)
+            elif not eq and (hit or key in longs) and i < len(argv):
+                if hit:
+                    out.append(argv[i])
+                i += 1
+        elif a == "-" or not a.startswith("-"):
+            if i - 1 in wild:
+                operands = None
+            if operands is not None:
+                if seen >= operands:
+                    break
+                seen += 1
+        else:
+            for j, ch in enumerate(a[1:], 2):
+                if ch in shorts or ch in takes:
+                    value = a[j:]
+                    if not value and i < len(argv):
+                        value, i = argv[i], i + 1
+                    if ch in shorts:
+                        out.append(value)
+                    break
+    return out
+
+
+def _ssh_setting(text: str) -> tuple[str, str]:
+    """An ssh `-o` setting split as ssh's readconf splits it: (keyword in lower case, the command value). Leading
+    whitespace is skipped; the keyword may be quoted and ends at whitespace, a quote or `=`; a command value is
+    the rest of the line after whitespace and `=` (`ProxyCommand = cmd`, `"ProxyCommand" cmd`, `proxycommand=cmd`)."""
+    s = text.lstrip(" \t\r\n=")
+    m = re.search(r"[ \t\r\n\"=]", s)
+    if not m:
+        return s.lower(), ""
+    j = m.start()
+    if s[j] == '"':                                  # the quote is dropped and the keyword runs to the next one
+        s = s[:j] + s[j + 1:]
+        k = s.find('"', j)
+        if k < 0:
+            return "", ""                            # ssh rejects an unclosed quote
+        key, rest = s[:k], s[k + 1:]
+    else:
+        key, rest = s[:j], s[j:]
+    return key.lower(), rest.lstrip(" \t\r\n=")
+
+
+def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
+                  piped: str | None) -> list[Classification]:
+    """Commands a trusted program is told to run (#154): an exec option (`tar --to-command`, `rsync -e`,
+    `man -P`, `git rebase -x`...), an ssh `-o ProxyCommand`, a sqlite3/psql shell command, or an environment variable
+    such as GIT_SSH_COMMAND set before the program. Each is classified as a nested command; a value the
+    gate cannot read (a script file, `.output FILE`) is opaque."""
+    if not words or words[0].dynamic:
+        return []
+    prog, argv = words[0].text.rsplit("/", 1)[-1], [w.text for w in words]
+    parts: list[Classification] = []
+
+    def nested(text: str, what: str) -> Classification | None:
+        text = text.strip()
+        if not text:
+            return None
+        if depth >= _DEPTH:
+            c = _opaque("nested too deep to read", cmd)
+        else:
+            c = classify_shell(text, depth + 1)
+            c.summary = f"{what} runs {c.summary}"[:120]
+        parts.append(c)
+        return c
+
+    takes, longs = _VALUE_OPTS.get(prog, ("", ()))
+    if prog in ("sqlite3", "duckdb"):                # `--cmd` is `-cmd`
+        argv = [a[1:] if a.startswith("--") and len(a) > 2 else a for a in argv]
+    if prog == "tar" and argv[1:2] and argv[1][:1] not in ("", "-"):
+        # old style (`tar xIf zstd a.tar`): each letter is an option, and each one that takes a value takes
+        # the next word in turn
+        opts, vals = [], argv[2:]
+        for ch in argv[1]:
+            opts.append("-" + ch)
+            if ch in takes and vals:
+                opts.append(vals.pop(0))
+        argv = [argv[0], *opts, *vals]
+
+    # words that may expand to no word or several: ssh's destination and remote command cannot be counted past one
+    wild = frozenset(i for i, w in enumerate(words) if w.dynamic or (not w.quoted and (
+        w.glob or re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
+
+    def values(names: tuple, exact: bool = False, start: int = 1, sub_takes: str | None = None) -> list[str]:
+        return _option_values(argv, names, start, takes if sub_takes is None else sub_takes, longs,
+                              1 if prog == "ssh" else None, exact, wild)
+
+    # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env; a partly quoted one is
+    # left in `words`) and export's arguments, never an argument that merely looks like one (`grep EDITOR=x`)
+    n = len(before) - len(words)
+    while n < len(before) and _ASSIGN.fullmatch(before[n].text):
+        n += 1
+    env_words = [w.text for w in before[:n] if _ASSIGN.fullmatch(w.text)]
+    exported = [a for a in argv[1:] if _ASSIGN.fullmatch(a)] if prog in ("export", "declare", "typeset") else []
+    for a in env_words + exported:
+        name, _, value = a.partition("=")
+        if name in _EXEC_ENV:
+            c = nested(value.lstrip("|"), name)
+            if c is not None and a in exported and c.category == "opaque_exec":
+                parts.pop()                              # export runs nothing; an unknown value is not a hit
+        elif name in _EXEC_ENV_OPAQUE:
+            parts.append(_opaque(f"{name} sets options the gate does not read", cmd))
+    for v in values(_EXEC_OPTS.get(prog, ())):
+        nested(v, f"{prog} option")
+    for v in values(_EXEC_FILE_OPTS.get(prog, ())):
+        parts.append(_opaque(f"{prog} runs the script {v}"[:120], cmd))
+    if prog == "tar":
+        for v in values(("--checkpoint-action",), exact=True):
+            if v.startswith("exec="):
+                nested(v[5:], "tar --checkpoint-action")
+    if prog == "git":
+        i = _git_subcommand(argv)
+        sub, rest = (argv[i] if i < len(argv) else ""), argv[i + 1:]
+        for v in values(_GIT_EXEC_OPTS.get(sub, ()), start=i + 1, sub_takes=_GIT_VALUE_OPTS.get(sub, "")):
+            nested(v, f"git {sub} option")
+        if sub == "bisect" and rest[:1] == ["run"] and len(rest) > 1 and depth < _DEPTH:
+            parts.append(_opaque("git bisect run runs a command per step", cmd))
+            parts += _classify_simple(_Cmd(words=words[i + 2:], heredocs=k.heredocs, herestrings=k.herestrings),
+                                      cmd, depth + 1, ctx, piped)
+        if sub == "submodule":
+            j = 0
+            while j < len(rest) and rest[j].startswith("-") and rest[j] != "--":
+                j += 1                               # `git submodule -q foreach`, `--quiet`, `--cached`
+            if rest[j:j + 1] == ["foreach"]:
+                run = rest[j + 1:]
+                while run and run[0].startswith("-"):
+                    run = run[1:]                    # `foreach --recursive -q`
+                nested(" ".join(run), "git submodule foreach")
+    if prog in ("ssh", "scp", "sftp"):
+        for v in values(("-o",)):
+            key, value = _ssh_setting(v)
+            if key in _SSH_EXEC_SETTINGS:
+                c = nested(value, f"ssh {_SSH_EXEC_SETTINGS[key]}")
+                if c is not None and key == "remotecommand":
+                    if EXPOSURE.index(c.exposure) < 1:
+                        c.exposure = "internal"
+                    c.signals.append("remote host")
+            elif key in _SSH_LIB_SETTINGS and value.strip().lower() != "internal":
+                parts.append(_opaque(f"ssh {_SSH_LIB_SETTINGS[key]} loads a library", cmd))
+    if prog == "ssh":
+        for v in values(("-I",)):
+            parts.append(_opaque(f"ssh -I loads the library {v}"[:120], cmd))
+    if prog in ("less", "more"):                     # macOS more is less
+        for a in argv[1:]:
+            if not a.startswith("+"):
+                continue
+            # The initial command is read as keystrokes (`++cmd` for every file): `!` runs a shell command after
+            # any of them (`+G!cmd`, `+:n!cmd`), `|` pipes to one, and a search (`/`, `?`, `&`) takes the rest as
+            # its pattern unless a control key such as a newline or backspace ends it first.
+            keys = a[2:] if a.startswith("++") else a[1:]
+            last = max((j for j, ch in enumerate(keys) if ch < " " or ch == "\x7f"), default=-1)
+            for j, ch in enumerate(keys):
+                if ch in "/?&" and j > last:
+                    break
+                if ch == "!":
+                    if keys[j + 1:j + 2] == "!" or nested(keys[j + 1:], f"{prog} +!") is None:
+                        parts.append(_opaque(f"{prog} +! starts a shell", cmd))
+                    break
+                if ch == "|":
+                    parts.append(_opaque(f"{prog} +| pipes to a command", cmd))
+                    break
+    if prog in _SQL_COMMAND_OPTS:
+        texts = [a for a in argv[1:] if not a.startswith("-")] + values(_SQL_COMMAND_OPTS[prog])
+        texts += _stdin_texts(k, piped)
+        if prog == "psql":                           # `-o '|cmd'` pipes the output to the whole value, as `\o |cmd`
+            for v in values(("-o", "--output")):
+                if v.lstrip().startswith("|"):
+                    nested(v.lstrip()[1:], "psql -o")
+        for text in texts:
+            if prog in ("sqlite3", "duckdb"):
+                for m in _DOT_COMMAND.finditer(text):
+                    name, arg = m.group(1), m.group(2).strip()
+                    pipe = _DOT_PIPE_ARG.search(arg)
+                    if any(n.startswith(name) for n in _DOT_RUN):
+                        nested(arg, f"{prog} .{name}")
+                    elif pipe and any(n.startswith(name) for n in _DOT_PIPE):
+                        nested(pipe.group(2) or pipe.group(3) or "", f"{prog} .{name}")
+                        if "read".startswith(name):
+                            parts.append(_opaque(f"{prog} .{name} runs what the command prints", cmd))
+                    elif arg and not pipe and any(n.startswith(name) for n in _DOT_FILE):
+                        parts.append(_opaque(f"{prog} .{name} reads or writes a file the gate does not see", cmd))
+            else:
+                for m in _SQL_SHELL.finditer(text):
+                    nested(m.group(1), f"{prog} shell command")
+                pending, skip = False, 0             # a `|` after an output command on its line, as in `\o '|cmd'`
+                for m in _SQL_PIPE.finditer(text):
+                    if m.start() < skip:
+                        continue
+                    if m.group() != "|":
+                        pending = m.group() != "\n"
+                    elif pending:
+                        end = text.find("\n", m.end())
+                        end = len(text) if end < 0 else end
+                        run, quote = text[m.end():end].strip(), text[m.start() - 1]
+                        nested(run[:-1] if quote in "'\"" and run.endswith(quote) else run, f"{prog} shell command")
+                        pending, skip = False, end
+                if prog == "psql":
+                    for m in _PSQL_META.finditer(text):
+                        for run in re.findall(r"`([^`\n]*)`", m.group(0)):
+                            nested(run, "psql backquote")
+                if _SQL_PROGRAM.search(text):
+                    parts.append(_opaque(f"{prog} runs a program on the database server", cmd))
+    return parts
 
 
 def _classify_interpreter(prog: str, argv: list[str], k: _Cmd, cmd: str, depth: int, ctx: dict,
@@ -1950,9 +2266,38 @@ def _dequote(word: str) -> list[str]:
 
 
 def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
-    """Like _strip_prefixes but `env` itself is kept so a bare `env` can be seen as a dump."""
-    while argv and (re.fullmatch(r"[A-Za-z_]\w*=.*", argv[0]) or argv[0].rsplit("/", 1)[-1] in ("sudo", "doas", "command", "builtin", "exec", "nohup", "time")):
-        argv = argv[1:]
+    """The simple command behind its assignments, prefixes (sudo, nice, timeout, env with a command...),
+    `coproc`, compound openers (then, do...) and run wrappers (uv run, poetry run...), so the environment-dump
+    check sees `uv run printenv X` as `printenv X` (#155). A bare `env` (or `env` with assignments only) is kept: it is the dump."""
+    assign = re.compile(r"[A-Za-z_]\w*=.*")
+    while argv:
+        base = argv[0].rsplit("/", 1)[-1]
+        if assign.fullmatch(argv[0]) or base in _OPENERS or base in ("coproc", "("):
+            argv = argv[1:]
+        elif base in _PREFIXES and not (base == "command" and argv[1:2] and argv[1] in ("-v", "-V")):
+            rest, takes = argv[1:], _PREFIXES[base]
+            while rest and rest[0].startswith("-") and rest[0] != "-":
+                f, rest = rest[0], rest[1:]
+                if base == "env" and f.startswith(("-S", "--split-string")):
+                    return argv, False                   # env -S text is classified on its own
+                if f in takes and rest:
+                    rest = rest[1:]
+            if base == "timeout" and rest and re.fullmatch(r"[\d.]+[smhd]?", rest[0]):
+                rest = rest[1:]
+            if base == "env" and all(assign.fullmatch(a) for a in rest):
+                break
+            argv = rest
+        elif (base, argv[1] if len(argv) > 1 else "") in _RUN_WRAPPERS:
+            rest = argv[2:]
+            while rest and rest[0].startswith("-"):
+                f, rest = rest[0], rest[1:]
+                if f == "--":
+                    break
+                if f in _WRAPPER_VALUE_OPTS and rest:
+                    rest = rest[1:]
+            argv = rest
+        else:
+            break
     return argv, False
 
 
