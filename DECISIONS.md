@@ -717,7 +717,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a peer that descends from the core, and the client that starts the core is its parent, so the old ancestry could
   not refuse that client. The handshake is bounded, reads the pid from the helper's last output line, and a core
   that dies while starting is reported at once (`waitpid` when this process adopted it, else a zombie or missing
-  pid), with no made-up exit code.
+  pid), with no made-up exit code. A client that adopted its cores reaps any that exited later at its next start.
 
 ## D-037 (2026-10-12) Completion and guidance in the composer
 - **Why:** the principal asked for command autofill, suggestion and guidance, "a better version of what Hermes CLI
@@ -761,6 +761,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   stricter; the `indirection` signal makes `decide` ask even if the inner part only logs. An "always" on opaque code
   covers that exact command only. The principal can lower `opaque_exec` only by naming it in a category line or rule.
   The old program and prefix cases are gone; one classifier serves the core and the `exo-gate` plugin.
+  *Amendment 2026-10-17 (issue #184):* a path word is matched against the secret stores after bash brace
+  expansion, scanned as bash scans it: a shell word from its source text, so only unquoted braces expand. The word
+  and every word its comma groups and `{x..y}` sequences make are checked, and a hit on any counts; past 1,024
+  words or 32 levels of nesting, or past 4,096 expanded words in one tool call, the word counts as a store path
+  (fails closed, no grant). `cat ~/.config/gh/{hosts,x}.yml` was an allowed read.
 - **Decision, store:** `policies/`, `state/`, `ledger.sqlite*`, `keys/`, seat files and the sockets under `$EXO_HOME`
   or the principal store are on a protected list. Any write is `store_write`: a floor like credentials, no standing
   grant, principal-only (`approvals.yaml` cannot add seats), enforced in observe mode. Reads stay `read`; `keys/`
@@ -804,6 +809,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   command's output (or a variable's value) as arithmetic too, any expansion or quoting there also asks through the
   `indirection` signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
   without expansion and plain names keep their class; a bare name such as `a[i]` is a known limit (GATE.md).
+  The scan finds the `]` that ends the subscript as bash does: a nested `[ ]` counts, and a `\` outside single
+  quotes hides the next character, so `a[\$(cmd)]` reads no command, as bash runs none. In a nested subscript
+  bash before 5.2 runs a `\$( )` again, so the gate reads it there. Past the depth cap a command there is
+  `opaque_exec`, as an unquoted `$( )` is.
   *Amendment 2026-10-17 (issue #188):* `declare`, `typeset`, `local`, `readonly` and `export` evaluate the value of
   a `NAME=VALUE` operand again: with `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted
   (the gate reads it with or without them, which is only stricter), and for the first three a `-i` value is
