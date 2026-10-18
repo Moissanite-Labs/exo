@@ -3,6 +3,10 @@
 A seat is one named configuration of an Exo agent: who it serves, which models, which tools, which
 skills, which MCP servers, which plugins and channels. Run one with `exo serve --seat <name>`
 (sets `EXO_SEAT`; the engine factory reads it). `seat.list` shows the files and the active seat.
+A second seat beside a running `exo serve` needs its own `--socket`, for example
+`exo serve --seat scout --socket $EXO_HOME/run/scout.sock`, and its clients pass the same `--socket`. `exo serve`
+refuses a socket that another core answers on and exits 1 without loading the seat. Only the core on
+`run/exod.sock` writes `run/exod.pid`, so `exo stop` stops that core and never a seat on its own socket.
 
 This is the one seat format. The role templates in `plugins/exo-orchestra/seats/*/seat.toml` are written in
 it (see `plugins/exo-orchestra/SEATS.md`), and `/orchestra check <file>` validates a file against it.

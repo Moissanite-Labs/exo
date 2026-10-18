@@ -148,6 +148,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Scheduled jobs when clocks go back: a cron job added, resumed or overdue in the repeated hour's second pass got
   a next run in the hour's first pass, up to an hour in the past, so the timer ran it again each time a run ended
   until that hour was over. The next run is now always later than now (`docs/SCHEDULE.md`, "Clock changes").
+- A second `exo serve --seat NAME` beside a running exod no longer takes over its socket and `run/exod.pid`. It
+  deleted the live core's `run/exod.sock`, bound its own and wrote its pid, so `exo stop` stopped the second core
+  and left the first running with the agent's writer lock and no way to reach it. `exo serve` now refuses a socket
+  that another core answers on, exits 1 and names `--socket`, and a core removes `run/exod.pid` on exit only if
+  the file still holds its own pid.
 
 ## [0.2.0] (egg) - 2026-10-13
 
