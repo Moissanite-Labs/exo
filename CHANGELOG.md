@@ -32,6 +32,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   requests from the web server only, no inline script, style attribute or eval, no framing, plus
   `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
   computed widths now go through the CSSOM instead of `style` attributes; nothing looks different.
+- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
+  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
+  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
+  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
 
 ## [0.2.0] (egg) - 2026-10-13
 
