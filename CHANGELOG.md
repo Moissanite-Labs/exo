@@ -13,15 +13,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `credentials`. Until D-075 lands, a coproc is denied only when its inner command outranks `opaque_exec`.
   A `credentials` line keeps the highest reversibility of its parts, so `coproc env; rm -rf x` stays
   irreversible and a policy that denies irreversible actions still denies it.
-### Fixed
-- Skill gates fail closed. The draft pipeline's prose gate passes only when `check-prose.py` exits 0. Before, it
-  passed whenever the output held the word "clean", so a draft named `cleanup.md` passed with findings.
-  `--allow-identifier` exempts only the token it names: allowing `localhost:8080` no longer hides
-  `localhost:9999/secret`, and a refused hit names the whole token. Internal names that start or end with `.`, `~`
-  or `@` now match, in `check-prose.py` and in the draft pipeline.
-- SYM-2P validators (`exo.protocols.sym2p` and the `sym-protocol` skill's `sym-validate.py`) reject an id, ref, hash
-  or timestamp with a trailing newline. The grammar patterns ended in `$`, which also matches before a final
-  newline, so `"builder\n"` passed as an ID and slipped past the `(f, id)` duplicate check.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
@@ -118,6 +109,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
   with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
+- SYM-2P validators (`exo.protocols.sym2p` and the `sym-protocol` skill's `sym-validate.py`) reject an id, ref, hash
+  or timestamp with a trailing newline. The grammar patterns ended in `$`, which also matches before a final
+  newline, so `"builder\n"` passed as an ID and slipped past the `(f, id)` duplicate check.
+- `edit_file` and `apply_patch` no longer rewrite a single line whose text differs from `old_string` (or the hunk's
+  `-` line) beyond whitespace, escaping or Unicode. A stale `TIMEOUT = 30` used to replace the file's newer
+  `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
+  closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
 
 ### Security
 - Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
@@ -133,6 +131,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- Skill gates fail closed. The draft pipeline's prose gate passes only when `check-prose.py` exits 0. Before, it
+  passed whenever the output held the word "clean", so a draft named `cleanup.md` passed with findings.
+  `--allow-identifier` exempts only the token it names: allowing `localhost:8080` no longer hides
+  `localhost:9999/secret`, and a refused hit names the whole token. Internal names that start or end with `.`, `~`
+  or `@` now match, in `check-prose.py` and in the draft pipeline.
 - File tools: a write no longer follows a link planted at its temp name (`.<name>.exo-tmp`), which sent the
   bytes, and the file's mode, to wherever the link pointed while the gate had classified only the named path. A
   write to a symlinked file is refused with the link's target named, instead of replacing the link with a regular
@@ -144,10 +147,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
   halves. A read now holds back an ending that could start a key until the next read. The stream and the result also
   decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
-- `edit_file` and `apply_patch` no longer rewrite a single line whose text differs from `old_string` (or the hunk's
-  `-` line) beyond whitespace, escaping or Unicode. A stale `TIMEOUT = 30` used to replace the file's newer
-  `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
-  closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
 
 ## [0.2.0] (egg) - 2026-10-13
 
