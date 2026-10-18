@@ -136,10 +136,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - The signed ledger's head anchor (D-040) is now written after the append's COMMIT, so a writer killed in between
   leaves it one event behind, never ahead. Before, a kill at that moment made the ledger report "events were
-  removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match,
-  which used to hide a real truncation. `exo log anchor --force` repairs a store an older version left stuck.
-  When the anchor beside the ledger cannot be written, the next append refuses instead of going on with the
-  anchors frozen, and `exo log verify` reports `anchored_seq`. An append costs what it did before.
+  removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match, which
+  used to hide a real truncation. `exo log anchor --force` repairs a store an older version left stuck. When the
+  anchor beside the ledger cannot be written, or no anchor is at the head and none can be written, the next append
+  refuses instead of going on with the anchors frozen. The refusal says to restore write access, and
+  `exo log anchor` reports an anchor it cannot write in one line instead of a traceback. `exo log verify` reports
+  `anchored_seq`. An append costs what it did before. A ledger file swapped for a symlink to a truncated copy no
+  longer verifies clean: the anchor under `keys/heads/` keeps its name, and a symlinked ledger fails verify and is
+  refused by append and `exo log anchor`. An anchor that is a symlink is unreadable, and a symlink planted at an
+  anchor's temporary name no longer redirects the write to another file.
 - `exo import-store` of a store Exo made no longer fails partway and leaves a half-copied store. The ledger's
   `.head` anchor is skipped with the ledger, and a stale anchor a deleted store left for the destination is dropped.
 - `exo memory verify` fails a store whose `ledger.sqlite` was deleted while a head anchor remains. It used to print
@@ -283,7 +288,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   from the pin count now. A `config.json` that exists but cannot be read no longer turns `update.require_signed`
   off: `exo update` refuses until it is fixed, and `--dry-run` says whether the check is on. `exo update
   --pin-trust REV` no longer adopts any commit's list: once a pin exists, the commit that set the list must verify
-  against it (`docs/INSTALL.md`). A signed commit whose message is not UTF-8 is no longer refused.
+  against it (`docs/INSTALL.md`). A signed commit whose message is not UTF-8 is no longer refused. A trust list
+  that is not UTF-8 is refused before anything is written, and no `allowed_signers.tmp` is left behind.
 - Rebuilding the rule-of-three cache (`proposals/state.json` missing or stale) counts only your own utterances
   (D-040). Before, a rebuild also counted Hermes briefs of doubtful authorship (`hermes:unverified-user`) and peer,
   bus and job turns, so one matching sentence from you could complete a rule-of-three proposal, which promotion

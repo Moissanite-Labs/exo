@@ -174,8 +174,8 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo graph` | Writes `graph/graph.json` (store). | none | `cmd_graph` |
 | `exo index` | Refreshes the node table in `INDEX.md` (store). | none | `cmd_index` |
 | `exo log append <kind>` | Appends a signed event to the ledger (store). `<kind>` is one of the ledger kinds in `docs/CORE.md`. | `--author NAME` (required). `--key PATH` (default `$EXO_HOME/keys/<author>.key`). `--text T` or `--body JSON`, else stdin. `--session S`. `--ref ID` (repeatable). | `cmd_log` |
-| `exo log verify` | Checks every id, link, chain hash and signature, each key against the key registry, the head anchors and the append-only triggers (D-040). Prints JSON. Exit code 1 if broken (store). | none | `cmd_log` |
-| `exo log anchor` | Writes the current head to the ledger's anchor files, for a store made before D-040. The next append does it too. Refuses to replace an anchor that does not match the ledger, since events may have been removed. Exit code 1 then. | `--force` replaces it and prints what it replaced: for a store an older Exo left with its anchor ahead after a crash, not for a truncation (`docs/CORE.md` "Head anchor") | `cmd_log` |
+| `exo log verify` | Checks every id, link, chain hash and signature, each key against the key registry, the head anchors and the append-only triggers (D-040). A ledger file that is a symlink fails. Prints JSON, with `anchored_seq`, the lowest seq an anchor holds. Exit code 1 if broken (store). | none | `cmd_log` |
+| `exo log anchor` | Writes the current head to the ledger's anchor files, for a store made before D-040. The next append does it too. Refuses to replace an anchor that does not match the ledger, since events may have been removed. Exit code 1 then, and when the anchor beside the ledger cannot be written. | `--force` replaces it and prints what it replaced: for a store an older Exo left with its anchor ahead after a crash, not for a truncation (`docs/CORE.md` "Head anchor") | `cmd_log` |
 | `exo log tail` | Prints the last events (store). | `-n N` (default 10), `--kind K` | `cmd_log` |
 | `exo keygen <name>` | Creates an Ed25519 key, mode 0600. Refuses to overwrite. A key made in `$EXO_HOME/keys` is pinned in the key registry. | `--out PATH` (default `$EXO_HOME/keys/<name>.key`) | `cmd_keygen` |
 | `exo keys [list]` | The key registry (D-040): pinned signing keys, bus seats, principal ids. | `--json` | `cmd_keys` |
@@ -240,7 +240,7 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo findings add <title>` | Files a finding by hand. | `--severity bug\|papercut` (default `papercut`), `--signature S`, `--detail TEXT` | same |
 | `exo findings fix <id>` | Marks a finding fixed. Later turns re-measure it. | `--in SHA` (required) | same |
 | `exo findings export` | A digest for the developer session. | `--md` | same |
-| `exo memory [verify]` | Checks the hash chain of each agent's one log, and each principal store's ledger against the pinned keys, its head anchors and its triggers (D-040). A store whose ledger file is gone while an anchor says it held events fails too. Exit code 1 if broken. | `--agent NAME` (default: all), `--principal ID` or `--root DIR` (default: every store in the home), `--json` | `cmd_memory` in `src/exo/memory_cmd.py` |
+| `exo memory [verify]` | Checks the hash chain of each agent's one log, and each principal store's ledger against the pinned keys, its head anchors and its triggers (D-040). A store whose ledger file is gone while an anchor says it held events fails too, and so does one whose ledger file is a symlink. Exit code 1 if broken. | `--agent NAME` (default: all), `--principal ID` or `--root DIR` (default: every store in the home), `--json` | `cmd_memory` in `src/exo/memory_cmd.py` |
 | `exo memory threads` | Lists each agent's threads. | `--agent NAME`, `--json` | same |
 
 ### Tracking upstream and reading wire packets

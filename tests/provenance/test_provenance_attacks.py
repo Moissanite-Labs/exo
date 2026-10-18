@@ -236,6 +236,36 @@ def test_exo_log_anchor_does_not_cover_a_truncation_unless_forced(tmp_path, caps
     assert main(["log", "verify", "--principal", "pat"]) == 0
 
 
+def test_exo_log_anchor_reports_an_anchor_it_cannot_write_in_one_line(tmp_path, capsys, monkeypatch):
+    """The "cannot be written" refusal points at write access, and `exo log anchor` says the same in one line with
+    exit code 1, not a PermissionError traceback (#221 delta review)."""
+    from exo import ledger as ledger_mod
+    from exo.cli import main
+    store = _store(tmp_path)
+    _three(store)
+
+    def broken(path, data):
+        raise PermissionError(13, "read-only", str(path))
+    monkeypatch.setattr(ledger_mod, "_atomic_write", broken)
+    for force in ([], ["--force"]):
+        assert main(["log", "anchor", "--principal", "pat", *force]) == 1
+        err = capsys.readouterr().err.strip()
+        assert "cannot be written" in err and "Restore write access" in err and len(err.splitlines()) == 1
+
+
+def test_a_ledger_swapped_for_a_symlink_fails_memory_verify(tmp_path, capsys):
+    import shutil
+    from exo.cli import main
+    store = _store(tmp_path)
+    _three(store)
+    alt = store.root / "ledger.alt"
+    shutil.copy(store.ledger_path, alt)
+    store.ledger_path.unlink()
+    store.ledger_path.symlink_to(alt)
+    assert main(["memory", "verify", "--principal", "pat"]) == 1
+    assert "symbolic link" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("left", ["both anchors", "home anchor", "unreadable home anchor"])
 def test_deleting_the_ledger_fails_memory_verify(tmp_path, capsys, left):
     from exo.cli import main

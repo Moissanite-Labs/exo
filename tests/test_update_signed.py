@@ -97,6 +97,22 @@ def test_signed_target_with_a_latin1_message_accepted(world):
     assert update_verify.verify_target(world["local"]) == sh(world["origin"], GIT, "rev-parse", "HEAD").stdout.strip()
 
 
+def test_pin_trust_rotation_through_a_commit_with_a_latin1_message(world):
+    """The rotation check reads the commit that set the list the same way: a pinned key's signature counts, whatever
+    the message's encoding (#221 delta review)."""
+    pin(world)
+    o, both = world["origin"], world["good_line"] + world["other_line"]
+    (o / TRUST).write_text(both)
+    msg = o.parent / "msg.txt"
+    msg.write_bytes("rotation caf\xe9\n".encode("latin-1"))
+    sh(o, GIT, "add", "-A")
+    r = sh(o, GIT, *_cfg(world["good"]), "-c", "i18n.commitEncoding=ISO-8859-1", "commit", "-q", "-S", "-F", str(msg))
+    assert r.returncode == 0, r.stderr
+    sh(world["local"], GIT, "fetch", "-q")
+    assert update_verify.pin_trust(world["local"], "@{u}") == 0
+    assert update_verify.pin_file().read_text() == both
+
+
 def test_unsigned_target_refused(world):
     pin(world)
     commit(world["origin"], "next", None, {"a.txt": "2"})
@@ -312,6 +328,19 @@ def test_pin_trust_rotation_verifies_the_commit_that_set_the_list(tmp_path, caps
     git = FakeGit(verify_rc=0)
     assert update_verify.pin_trust(tmp_path, "@{u}", read=git) == 0
     assert pin.read_text() == git.trust and git.verified() == [SETTER]
+
+
+@pytest.mark.parametrize("pinned", [False, True])
+def test_pin_trust_refuses_a_list_that_is_not_utf8(tmp_path, capsys, pinned):
+    """git's output keeps bytes that are not UTF-8 as surrogates. Such a list is refused before anything is written,
+    so no `allowed_signers.tmp` is left behind and the pin stays as it was."""
+    before = write_pin() if pinned else None
+    git = FakeGit(trust="t@example.com ssh-ed25519 B\udce9\n")
+    assert update_verify.pin_trust(tmp_path, "@{u}", read=git) == 1
+    assert "not UTF-8" in capsys.readouterr().err
+    p = update_verify.pin_file()
+    assert (p.read_text() if pinned else p.exists()) == ("t@example.com ssh-ed25519 AAAA\n" if before else False)
+    assert not p.with_name(p.name + ".tmp").exists()
 
 
 def test_pin_trust_refuses_an_option_as_revision(tmp_path):

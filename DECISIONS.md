@@ -969,13 +969,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   registry, the anchors and `ledger.sqlite.head` belong on its sensitive-path list.
 - *Amendment 2026-10-18 (fix sweep, #221):* the anchors are written after the append's COMMIT, from the committed
   head, so a writer killed in between leaves them one event behind, never ahead. That lag of one event is accepted.
-  When the anchor beside the ledger cannot be written, the copy under `keys/heads/` still is, and the next append
-  tries again before it writes and refuses if it still fails: appends never go on with both anchors frozen.
-  `verify` reports `anchored_seq`. `exo log anchor` refuses to replace an anchor that does not match.
-  `--force` does, for a store an older Exo left one event ahead. `exo import-store` skips `.head` with the ledger
-  and drops a stale anchor a deleted store left for the destination. Not covered: a store folder deleted whole.
-  `exo memory verify` lists only the stores that exist, so the deleted store's `keys/heads/` anchor is read only
-  with `--principal <id>`.
+  The copy under `keys/heads/` is written even when the anchor beside the ledger fails. Before it writes, an append
+  catches the anchors up when the one beside the ledger trails the head or no anchor is at the head. It refuses
+  ("cannot be written") when the one beside the ledger trails and cannot be written, or when no anchor is at the head
+  and none can be written. So appends never go on more than one event past every anchor. The refusal says to restore
+  write access. `verify` reports `anchored_seq`. The `keys/heads/` anchor is named after the ledger's path with its
+  folder resolved but not the file, so a ledger file swapped for a symlink keeps its anchor. A ledger file that is a
+  symlink fails verify, and append and `exo log anchor` refuse it. An anchor is read only as a regular file, and it
+  is written through a fresh temporary file (`mkstemp`) that a symlink planted in the folder cannot redirect.
+  `exo log anchor` refuses to replace an anchor that does not match. `--force` does, for a store an older Exo left
+  one event ahead. `exo import-store` skips `.head` with the ledger and drops a stale anchor a deleted store left for
+  the destination. Not covered: a store folder deleted whole. `exo memory verify` lists only the stores that exist,
+  so the deleted store's `keys/heads/` anchor is read only with `--principal <id>`.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.

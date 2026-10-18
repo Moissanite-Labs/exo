@@ -83,10 +83,11 @@ list arrives in a commit signed by a key you already pinned. Fetch, review `git 
 and run `exo update --pin-trust @{u}`. Until then, updates signed only by the new key are refused. Once a pin
 exists, `--pin-trust REV` finds the commit that last changed the list in REV's first-parent history (the merge,
 if the list came in through one) and takes the list only if that commit verifies against the current pin.
-Otherwise it refuses and the pin stays as it was. Pinning the list you already have always works. If a pinned
-key is lost or compromised, edit `$EXO_HOME/update/allowed_signers` by hand. That is the only override. The
-check cannot tell an old list from a new one: a list that a pinned key signed earlier can be pinned again, so
-read what `--pin-trust` prints. Tag signatures are not consulted: the tip commit must be signed.
+Otherwise it refuses and the pin stays as it was. A list that is not UTF-8 is refused too. Pinning the list you
+already have always works. If a pinned key is lost or compromised, edit `$EXO_HOME/update/allowed_signers` by
+hand. That is the only override. The check cannot tell an old list from a new one: a list that a pinned key
+signed earlier can be pinned again, so read what `--pin-trust` prints. Tag signatures are not consulted: the tip
+commit must be signed.
 
 ## What it does
 
