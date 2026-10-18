@@ -50,7 +50,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and unclosed top-level quotes ask under the default gate policy; the 32-level scan limit skips only the
   over-deep word (bare brackets inside it read as the literal text they are) and still classifies the commands
   after it, and a command nested deeper than the classification depth keeps its category, so a category deny on
-  it still holds (`docs/GATE.md` "Shell parameter expansion").
+  it still holds (`docs/GATE.md` "Shell parameter expansion"). A scan inside a quoted span of a `${...}` word stops at
+  the closing quote, arithmetic matching skips quoted and escaped parentheses and reads an unclosed `$((` as an
+  unclosed `$(`, and a heredoc left open inside `$( )` or `<( )` makes the line ask instead of taking the following
+  lines as its body, so none of them can hide a command that follows on the line. `${@@P}`, `${*@P}`, `${!@}` and
+  `${!*}` ask like `${name@P}` and `${!name}`. The modelled bash is 5.2 and 5.3; macOS's bash 3.2 pairs some quotes
+  differently (#158, D-038 amendment).
 - `$'` inside double quotes is no longer read as ANSI-C quoting, so `echo "$'" ; rm -rf ./work # '"` is classified
   as the delete it is instead of one `echo` argument (#144).
 - Command deny and reservation regexes also match a literal-word view of the command (#136, D-038

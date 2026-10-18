@@ -17,14 +17,23 @@ so a category deny on `git push` reaches `echo ${X:-$(git push origin main)}`. B
 follows bash in its default (non-POSIX) mode, which is how exo runs commands (`bash -c`): inside
 `"${...}"` a single quote pairs with the next one for every operator, so a `}` or `"` between them
 cannot end the word early and hide a following command. `$( )` and backticks inside those single
-quotes are still scanned, because bash expands them in `:-` and `:+` words. A single-quoted
-expansion word outside double quotes stays literal, as does `\$(`. `$((` is arithmetic only when
-bash reads it as arithmetic (the first group's `)` is followed by another); `$((cmd) )` and
-`$((a);(b))` are command substitutions and are classified as such. `$'` directly inside double
+quotes are still scanned, because bash expands them in `:-` and `:+` words, but only up to the
+closing quote: an expansion opened inside the span and still open there makes the line opaque, and
+cannot take the commands after the quote (`echo "${x#'${y'}" ; cmd ; echo "'}"` still reaches
+`cmd`). A single-quoted expansion word outside double quotes stays literal, as does `\$(`. `$((`
+is arithmetic only when bash reads it as arithmetic (the first group's `)` is followed by
+another); `$((cmd) )` and `$((a);(b))` are command substitutions and are classified as such.
+Quoted and escaped parentheses are text, not structure, when the group is matched, and a `$((`
+whose group never closes is read as an unclosed `$(`: the commands after it are classified and the
+line asks. `$'` directly inside double
 quotes is a literal `$` and a quote, not ANSI-C quoting (`echo "$'" ; rm -rf ./work # '"` is a
 delete). Inside a `${...}` word, `$'..'` ends where bash's parser ends it, with `\'` escaped, so
 `"${x#$'\''}" ; cmd` still reaches `cmd`; under double quotes the `$( )` and backticks inside it are
-scanned too, since bash expands them in `:-` words.
+scanned too, since bash expands them in `:-` words. A heredoc opened inside `$( )` or `<( )`
+belongs to that substitution, as in bash's parser, so a newline inside the substitution does not
+read the outer line's heredoc. When the substitution ends with its heredoc still unread, bash 5.2
+warns and reads the body from the lines after the outer line; the gate instead marks the line
+opaque and classifies those lines as commands.
 
 Scanning has a 32-level expansion nesting limit, separate from the classification depth. A word
 nested deeper than that is skipped unread with a flat match of `${ }`, `$( )`, `<( )` and `(( ))`
@@ -43,7 +52,8 @@ stays linear in the input. The classifier does not evaluate variables or choose 
 branch runs; it checks every executable branch it can read.
 
 Known limits. `${name@P}` (prompt expansion) and the indirection `${!name}` run code held in the
-variable's value, so they ask; the listing forms `${!prefix*}`, `${!prefix@}`, `${!arr[@]}` and
+variable's value, so they ask, as do `${@@P}` and `${*@P}` (each positional parameter is prompt
+expanded) and `${!@}` and `${!*}` (their value is used as a variable name, and `a[$(cmd)]` runs); the listing forms `${!prefix*}`, `${!prefix@}`, `${!arr[@]}` and
 `${!arr[*]}` do not. Arithmetic on a bare name (`$((x))`, `${s:x}`) also evaluates the value and is
 not flagged: a value assigned from a visible `$( )` on the same line is classified where it is
 assigned, one set earlier or read from a file is not. When bash is absent exo falls back to
@@ -51,7 +61,9 @@ assigned, one set earlier or read from a file is not. When bash is absent exo fa
 `:+`, and has no `$'..'`. The gate reads the line as bash does. A line the two shells split
 differently leaves a quote or brace unclosed under one of the readings and asks when bash's
 reading is the unclosed one (`echo "${x:-'}"; rm -rf ./work; echo '}"'`); a line that both shells
-close, but at different places, is classified as bash runs it.
+close, but at different places, is classified as bash runs it. The pairing modelled is that of
+bash 5.2 and 5.3. The bash 3.2 that macOS ships pairs some quotes inside `"${...}"` differently,
+and the gate does not model that reading.
 
 ## Required executor audit
 

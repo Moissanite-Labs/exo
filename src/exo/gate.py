@@ -208,6 +208,8 @@ _CTRL_OPS = (";;&", ";;", ";&", "&&", "||", "|&", "|", "&", ";", "(", ")")
 _ASSIGN = re.compile(r"[A-Za-z_]\w*(\[[^\]]*\])?\+?=.*", re.S)
 _ANSI_C = re.compile(rb"\\(?:([abeEfnrtv\\'\"?])|([0-7]{1,3})|x\{([0-9A-Fa-f]*)\}?|x([0-9A-Fa-f]{1,2})"
                      rb"|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c(\\\\?|.))", re.S)
+_GROUP_CH = re.compile(r"[\\'\"()]")
+_QUOTE_END = {"'": re.compile(r"[^']*'"), '"': re.compile(r'[^"\\]*(?:\\.[^"\\]*)*"', re.S)}
 
 
 def _ansi_c(raw: str) -> str:
@@ -434,6 +436,17 @@ class _Lexer:
         w.dynamic = w.started = True
         return True
 
+    def _nested(self) -> list:
+        """Lex a $( ) or <( ) body up to its ). It keeps its own pending heredocs, as bash's parser does: a
+        heredoc it leaves unread is opaque and never takes the outer line's following commands as its body."""
+        outer, self.pending = self.pending, []
+        self.scan_depth += 1
+        toks = self.run(closer=True)
+        self.scan_depth -= 1
+        self.opaque |= bool(self.pending)
+        self.pending = outer
+        return toks
+
     def _procsub(self, w: _Word) -> None:
         """<( ) and >( ): the inner line is a command source of this level."""
         s = self.s
@@ -441,9 +454,7 @@ class _Lexer:
             return
         self.i += 2
         start, mark = self.i, len(self.subs)
-        self.scan_depth += 1
-        self.run(closer=True)
-        self.scan_depth -= 1
+        self._nested()
         del self.subs[mark:]
         self.subs.append(s[start:max(start, self.i - 1)])
         w.text += "<(..)"
@@ -453,29 +464,15 @@ class _Lexer:
         """Scan an expansion word without treating its punctuation as shell operators."""
         s = self.s
         self.i += 2
-        if re.match(r"!\w+(?![\w*@]|\[[*@]\])|\w+(\[[^\]]*\])?@P\b", s[self.i:]):
-            self.opaque = True  # ${!name} and ${name@P} run code held in the variable's value
+        if re.match(r"!(\w+|[@*])(?![\w*@]|\[[*@]\])|(\w+(\[[^\]]*\])?|[@*])@P\b", s[self.i:]):
+            self.opaque = True  # ${!name}, ${!@} and ${name@P} run code held in a value
         quote = ""
         while self.i < len(s):
             ch = s[self.i]
-            if ch == "\\" and quote != "'":
+            if ch == "\\":
                 self.i += 2
-            elif quote in ("'", "$'"):
-                if ch == "'":
-                    quote = ""
-                    self.i += 1
-                elif double and ch == "$":     # bash still expands :- and :+ words here
-                    self._dollar(_Word(), double=True)
-                elif double and ch == "`":
-                    self._backtick(_Word())
-                else:
-                    self.i += 1
-            elif ch == "'" and not quote:      # bash matches braces past '...' even inside "..."
-                quote = "'"
-                self.i += 1
-            elif ch == "$" and s[self.i + 1:self.i + 2] == "'" and not quote:
-                quote = "$'"                   # $'..' ends where bash's parser ends it: \' is escaped
-                self.i += 2
+            elif (ch == "'" or s.startswith("$'", self.i)) and not quote:
+                self._span(double)             # bash matches braces past '...' even inside "..."
             elif ch in "<>" and s[self.i + 1:self.i + 2] == "(" and not double and not quote:
                 self._procsub(_Word())
             elif ch == '"':
@@ -492,19 +489,37 @@ class _Lexer:
                 self.i += 1
         self.opaque = True  # Unclosed expansion or quote cannot be a read allow.
 
+    def _span(self, double: bool) -> None:
+        """A '..' or $'..' span of a ${ } word. It ends where bash's parser ends it ($'..' keeps \\' escaped);
+        under double quotes bash still expands :- and :+ words, so its $( ) and backticks are scanned, but
+        only within the span: a nested scan never runs past the closing quote into the commands after it."""
+        s, start = self.s, self.i + (2 if self.s[self.i] == "$" else 1)
+        if start > self.i + 1:
+            j = start
+            while j < len(s) and s[j] != "'":
+                j += 2 if s[j] == "\\" else 1
+        else:
+            j = s.find("'", start) % (len(s) + 1)     # len(s) when the span never closes
+        if j >= len(s):
+            self.opaque = True
+        body = s[start:j]
+        if double and ("$" in body or "`" in body):
+            sub = _Lexer(body)
+            sub.scan_depth = self.scan_depth
+            sub._dquote(_Word(), until_end=True)
+            self.subs += sub.subs
+            self.opaque |= sub.opaque
+        self.i = j + 1
+
     def _dollar(self, w: _Word, double: bool = False) -> None:
         s, i = self.s, self.i
         nxt = s[i + 1:i + 2]
         w.started = True
         if nxt in ("(", "{") and self._too_deep(w):
             return
-        if s.startswith("$((", i) and _arith_closes(s, i + 2):
-            depth, j = 0, i + 1
-            while j < len(s):
-                depth += {"(": 1, ")": -1}.get(s[j], 0)
-                j += 1
-                if depth == 0:
-                    break
+        end = _group_end(s, i + 2) if s.startswith("$((", i) else -1
+        if end >= 0 and s[end:end + 1] == ")":  # arithmetic; an unclosed $(( is read as an unclosed $(
+            j = end + 1
             body = s[i:j]
             if "$(" in body[3:] or "`" in body:
                 sub = _Lexer(body[3:-2])
@@ -519,9 +534,7 @@ class _Lexer:
             self.i = i + 2
             start = self.i
             mark = len(self.subs)
-            self.scan_depth += 1
-            toks = self.run(closer=True)
-            self.scan_depth -= 1
+            toks = self._nested()
             del self.subs[mark:]  # The outer source owns its nested substitutions.
             inner = s[start:max(start, self.i - 1)]
             lit = _literal_heredoc(toks)
@@ -567,15 +580,24 @@ class _Lexer:
                 self.i = i + 1
 
 
-def _arith_closes(s: str, k: int) -> bool:
-    """Bash reads $(( as arithmetic only when the group opened at k is followed by a second )."""
+def _group_end(s: str, k: int) -> int:
+    """Index after the ) that closes the group opened at k, or -1 when it never closes. Quoted and escaped
+    parentheses are text, not structure. Bash reads $(( as arithmetic only when that ) is followed by a second."""
     depth = 0
-    while k < len(s):
-        depth += {"(": 1, ")": -1}.get(s[k], 0)
-        k += 1
-        if depth == 0:
-            return s[k:k + 1] == ")"
-    return True
+    while m := _GROUP_CH.search(s, k):
+        ch, k = m.group(), m.end()
+        if ch == "\\":
+            k += 1
+        elif ch in "'\"":
+            q = _QUOTE_END[ch].match(s, k)
+            if not q:
+                return -1
+            k = q.end()
+        else:
+            depth += 1 if ch == "(" else -1
+            if depth == 0:
+                return k
+    return -1
 
 
 def _skip_expansion(s: str, i: int) -> int:
