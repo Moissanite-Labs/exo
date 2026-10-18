@@ -783,6 +783,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   written. A hit on any expanded word counts, and a word past the brace limits counts as the store. The store
   checks have their own 4,096-word budget per tool call. `echo x > ~/.exo/polic{i..i}es/default.yaml` was an
   allowed local write.
+  *Amendment 2026-10-18 (issue #169):* the run folder is a secret store (D-039 limits, `docs/GATE.md` "Who
+  answered"), and a secret wins over the store rule, as for `keys/`. So a write, delete, move or replacement that
+  touches the folder itself or a credential file in it is `credentials`, not `store_write`: `rm -rf ~/.exo/run`,
+  `rm ~/.exo/run/*`, and moving or replacing the folder that holds the core sockets (`mv ~/.exo/run x`,
+  `ln -sfn /tmp/x ~/.exo/run`, `cp -rT /tmp/x ~/.exo/run`, `mkdir -p ~/.exo/run`, `chmod 777 ~/.exo/run`). It
+  still always asks and is never granted, but it is no longer principal-only: a seat that `approvals.yaml`
+  delegates `credentials` to, or lists in `default:` with no `credentials:` line, may answer it, and
+  `deny: [store_write]` no longer matches it. Job output in `run/jobs/` and a socket or pid file named alone stay
+  `store_write`. Chosen because one class per call keeps the read and write rules of a secret store the same;
+  keeping the store part principal-only through `_combine` is a follow-up.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -943,9 +953,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
   today).
 - **Limits:** a tool process is the same OS user. Code that reads the credential file without the gate seeing it
-  (the gate classes a plain read as `credentials`, always ask; indirection is the gate branch's work) and also
-  detaches from the core's process tree could still pass. The real fix is an OS sandbox for tool subprocesses.
-  The page link sits in browser history and, briefly, in the browser launcher's argv. The env scrub is a
+  (the gate classes a read of the file, of its run folder or of a wildcard there as `credentials`, always ask,
+  #169; indirection is the gate branch's work) and also detaches from the core's process tree could still pass.
+  The real fix is an OS sandbox for tool subprocesses. The page link sits in browser history and, briefly, in the
+  browser launcher's argv. The env scrub is a
   heuristic.
 - **Not changed:** the TUI approval card's focus behaviour (another branch is editing the TUI); noted for later.
   The echo engine (a test double) still accepts any answer.
