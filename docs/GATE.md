@@ -80,10 +80,11 @@ The core never takes the answerer from the `approval.respond` body. The transpor
 
 - **principal**: the terminal client's own in-process core, the web client, or a socket client
   that sends the core's per-launch principal credential in the `X-Exo-Principal` header. The
-  credential is a random token the core writes beside its socket when it starts
+  credential is a random token in a launch record the core writes beside its socket when it starts
   (`$EXO_HOME/run/exod.principal.key` or `run/agent-<seat>.principal.key`, mode 0600) and deletes
   when it stops. A credential sent from a process that is a child, grandchild and so on of the
-  core (a bash tool call or a background job) does not count.
+  core (a bash tool call or a background job) does not count, and neither does one from another
+  user or from a process the kernel cannot name (see "Unix peer authentication" below).
 - **local**: everything else on the socket (a tool subprocess, a channel, another daemon), and
   every stdio or TCP connection.
 
@@ -92,6 +93,75 @@ A principal connection answers as the principal; `client` is only a label (`prin
 empty `client`, `principal`, `exo-tui` or any other name from a local connection is refused as
 `forbidden`, so a tool that speaks the protocol cannot answer its own approval. The answerer shows
 in `approval.resolved` as `by`.
+
+### Unix peer authentication (D-060)
+
+Both ends of a principal connection on the Unix socket ask the kernel who is on the other end of that
+one connection before the credential moves. Code: `src/exo/principal.py` and `src/exo/peerauth.py`.
+
+| Platform | Peer user | Peer process | Process start and parent |
+|---|---|---|---|
+| Linux | `SO_PEERCRED` | `SO_PEERCRED` | `/proc/<pid>/stat` (start ticks, with the boot id) |
+| macOS | `LOCAL_PEERCRED` (the uid `getpeereid` reports) | `LOCAL_PEERPID` | `proc_pidinfo(PROC_PIDTBSDINFO)` |
+| anything else | none | none | none: principal mode is refused |
+
+The launch record is one JSON object: `v`, `token`, `pid`, `uid`, `start` (the core's process start
+identity) and `instance` (the launch id `hello` also reports). It is written atomically, before the
+socket accepts, so a client never reads a missing record or a crashed core's. A core that cannot read its
+own process entry warns in its log and writes an empty `start`, which clients refuse with that reason.
+
+**The client, before sending.** A principal client (`exo`, a joined window, `exo chat`, the web)
+connects, then checks that connection: the kernel's peer uid is this user, its pid is the record's
+pid, and that process's start identity equals the record's. The record is read through one
+descriptor with `O_NOFOLLOW`; it must be a regular file with one link, owned by this user, with no
+group or other access, at most 4 KiB, and a v1 record. Only then does the token from that record go
+on that same connection, and only on `POST /command`. Any failure is a connection error
+(`PrincipalRefused`, a `ConnectError`) that names the reason, with no byte written: a replaced socket, a
+stale record (a dead core, or a reused pid), a symlink, a shared file, a record from a core that predates
+D-060, a core in another PID namespace (the kernel names pid 0), or a platform with no peer call. The web
+page shows that reason with a restart hint (`exo stop`, then reopen the page) instead of "not reachable".
+There is no fallback to a credential-less or unchecked principal mode.
+
+**The core, before accepting.** The core takes the kernel's peer pid and uid, and that pid's process
+start identity, when it accepts the connection, before reading a byte (one request per connection, so
+this is per request too). The caller is the principal only when the token matches, the uid is this
+user, that pid still names the same process (the start identity taken at accept, and a start before
+the accept, so a pid reused after the accept fails), and its whole parent chain reads cleanly up to pid 1 without
+passing the core. A chain that cannot be read is treated as the core's own tool tree. The tree check
+runs when the request is read. The dead-peer check, not the parent walk, closes one detach route on
+Linux: a tool child that connects, then exits and leaves the connection to an orphan, is local,
+because the kernel's peer pid then names a dead process. On macOS `LOCAL_PEERPID` reports the last
+process to use the socket, so an orphan that writes before the core's accept is the process named; the
+claim holds reliably on Linux only. When a request with the right token is taken as local, the core
+says why once per process in its log (`exod: the principal credential from pid N is taken as local:
+...`), and that connection's refusals (approvals, principal-only commands) name the reason.
+
+**Limits.** Same-user code running outside the core's tree is trusted: it can read the record, as it
+could read the old token file. A tool child whose parent exits before it sends its request is not
+caught by this check (issue #31); an OS sandbox for tools is still the fix (D-038, D-039). Under
+`hidepid` or systemd `ProtectProc` (or `ProcSubset=pid`), root-owned ancestors such as `sshd`, `login`,
+`su` or `sudo` cannot be read, so every principal client started below them is local; the refusal and
+the core's log say so. This fails closed on purpose: stopping the walk at the first unreadable
+ancestor would let `tool -> sudo -u $USER exo` pass. A client in another PID namespace than the core
+is refused too. An old client against a new core sends the whole record as its token and is local
+without a message; restart `exo`, `exo web` and `exo chat` after an update.
+
+**Snapshot and liveness contract.** `hello` returns `instance` (this launch) and `heartbeat` (seconds
+between `: ping` comments on `GET /events`; the capability list has `heartbeat`). The event stream
+opens with `: exod instance=<id> heartbeat=<s>`. `approvals.list` returns
+`{approvals, cursor: {instance, seq}}`, copied in one await-free step: replace pending cards with it,
+then apply events above `seq`; a different `instance` means the core restarted and its pending asks
+are gone. The Python client ends a stream that brings no complete frame (an event or a heartbeat) for
+`idle` seconds (45 by default); partial bytes do not count. A frame over 16 Mi characters is skipped: the client
+resumes after that frame's seq, since resuming at it would replay it forever, with or without `reconnect`, so a
+caller that keeps its own `since` (the exo-bus channel) gets the next event. The core writes frames
+as raw UTF-8 (escaping U+0085, U+2028, U+2029 and lone surrogates, which line readers split on or
+cannot encode), so a frame stays near the size of the request that made it; text made of those
+escaped characters can still grow up to three times. A joined terminal window resends a command
+after a lost connection only when nothing was sent (the connect failed) or the command is a read; a
+lost reply to a turn or an approval answer is never repeated. The window says it may not have been
+delivered, puts the typed text back in an empty composer, and re-reads `approvals.list` to put back a
+card the core still holds.
 
 A seat may approve one exact text with `allow`. Only a principal connection can answer
 `allow_always`; anything else is refused.
@@ -261,6 +331,24 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- Bash evaluates an array subscript in a variable name as arithmetic, and that runs a `$( )` or
+  backticks in it, even inside single quotes. So the name arguments of `printf -v`, `read` (and
+  `read -a`), `declare`, `typeset`, `local`, `unset`, `test -v` and `[ -v`, and `wait -p` are read
+  for a subscript (#179). Each command in it is classified like a `$( )`, so
+  `printf -v 'a[$(gh pr comment 3 --body hi)]' %s x` is a `github_post`. Its output is evaluated
+  as well, so any expansion or quoting in the subscript (`$(cat f)`, `$i`, `${x}`, `$(( ))`, `"k"`)
+  also adds the `indirection` signal and asks: a value such as `b[$(cmd)]` runs cmd. It is a
+  signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
+  without expansion (`a[0]`; for a bare name such as `a[i]` see the known limit below) and the
+  other arguments (printf's format, read's prompt) change nothing. The subscript runs to the `]`
+  that ends it as bash finds it: a nested `[ ]` (`a[b[0]+$(cmd)]`), a quoted `]` or a `\]` does
+  not end it. At the subscript's top level a `\$` or `` \` `` is literal, as in bash
+  (`a[\$(cmd)]` runs no command); bash before 5.2 expands a nested subscript (`a[b[\$(cmd)]]`)
+  again and runs it, so the gate reads it there. Past the nesting limit a command there is
+  `opaque_exec`, as an unquoted `$( )` is. A command read
+  from the subscript is a part of the line like any `$( )`, so it can outrank the line's own
+  category: `printf -v 'a[$(git push origin main)]' %s x > /tmp/f` is a `vcs_push` and asks, and
+  until D-075 and #191 land a deny on `local_write` no longer applies to it.
 - Nesting is read four levels deep. Past that the text is `opaque_exec` and asks. An `ssh` or
   `mosh` chain with more hops than that is not read either: the hops that were read keep the
   `remote host` exposure and the first host as target (so a `target:` deny on it still
@@ -310,9 +398,45 @@ A command is `allow` only when every program in it is known and nothing is hidde
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
   `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
-  or `hatch run`, or inside an `if`, `for` or `while` body, classify as `credentials` just as the
-  bare command does. A runner followed by ordinary work (`uv run pytest -q`) is unchanged.
-  `uvx`, `pipx run` and `npx` stay `opaque_exec`.
+  or `hatch run`, inside an `if`, `for` or `while` body, or behind a wrapper below (`setsid env`,
+  `taskset 1 printenv GITHUB_TOKEN`), classify as `credentials` just as the bare command does. A
+  runner followed by ordinary work (`uv run pytest -q`) is unchanged. `uvx`, `pipx run` and `npx`
+  stay `opaque_exec`.
+- Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
+  `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
+  `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and
+  `watch -x` run the argv after their options and fixed operands (the lock file of `flock`,
+  the new root of `chroot`, the mask of `taskset`, the priority of `chrt`). A wrapper's options
+  are read as `getopt` reads them: a value attached, inside a cluster (`-nw5`) or in the next
+  word, `--opt=value`, `--`, and, for these wrappers only, a long option shortened to four
+  letters or more (`--time` for `--timeout`; a shorter one, `flock --tim 5`, is not read and the
+  line asks, unlike the one-letter rule for the trusted programs above). The
+  command-string forms are read like `bash -c`: `flock FILE -c CMD`,
+  `script -c CMD` (`--command`), `watch CMD...` (the words joined, run through `sh -c`), the
+  shell-command of `tmux new-session`, `new-window`, `split-window` (also by its default aliases
+  `splitp` and `split-pane`), `respawn-pane`, `respawn-window` and `run-shell` in each command of
+  a tmux command list and of `tmux -c` (the list is split as tmux splits it: an argument ending in
+  `;`, such as `';'` or `'sleep 3;'`, ends a command and loses the `;`, one ending in `\;` does
+  not), the argv of `screen [-dm] [-S name]` and `screen -X screen`, and the template of
+  `parallel CMD ::: args` with each argument appended or put where `{}` stands (on the line itself, up to 16 distinct arguments and four times that
+  command's own length, each text sized before it is built; a nested `parallel` template is read
+  alone, so the work stays linear in the line).
+  The wrapper itself stays an `opaque_exec` part with `indirection`, so
+  the line asks as before. Until D-075 lands, a wrapped line is denied only when its inner
+  command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`: `setsid git push`); a
+  category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`:
+  `setsid systemctl enable foo`, `setsid curl URL`) still asks. `chroot`, `nsenter`,
+  `unshare` and `systemd-run` run the command with other privileges, namespaces or as a
+  system unit: like `sudo`, the line carries a signal named after the wrapper and a reversible
+  part counts as costly. What the gate cannot read stays `opaque_exec`: a program from a
+  variable, `tmux send-keys`, a `screen -X` command other than `screen`, `parallel` with no
+  template (commands from its input or `:::`), a wrapper with no command (an interactive shell,
+  `flock 9`), and options the tables do not know. As with `bash -c`, a wrapped command that
+  outranks `opaque_exec` (`setsid git push`) takes the line's category, so a deny on
+  `opaque_exec` itself no longer reaches it: under `deny: [opaque_exec]`, `categories:
+  {opaque_exec: deny}` or a rule on `opaque_exec` with decision `deny` the line asks (the
+  `indirection` floor below), where it was denied before. D-075 makes such a deny apply to
+  every part.
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
@@ -414,6 +538,27 @@ folder from more than one level above its parent (`cd / && cd srv/exo-home/keys`
 `${PWD...}` forms; the text `eval` runs (it asks as `opaque_exec`); `cd -` and `OLDPWD`,
 `CDPATH`, `HOME` set on the line and `shopt -s dotglob`; and a store reached through a folder
 link whose name does not say so.
+
+Known limit. The gate does not model a variable's value. Bash evaluates a bare name in an
+arithmetic context as arithmetic too (`a[i]`, `$(( x ))`, `declare -i`), so a value such as
+`b[$(cmd)]` set earlier runs cmd there. Only an expansion written in the name argument of the
+builtins above asks; one in an assignment word (`a[$i]=v`) or an arithmetic expression
+(`$(( a[$i] ))`) does not. The gate cannot tell an associative array from an indexed one, so a
+subscript of an associative array asks too, although bash does not evaluate it as arithmetic.
+A quoted value that declare, typeset or local reads as an array or arithmetic value
+(`declare -a 'b=($(cmd))'`, `declare -i x='a[$(cmd)]'`, `declare -n`) runs cmd too and is not
+read yet (#188).
+Known limit (#160). Some wrapper forms are not read and ask as `opaque_exec`, as they did before:
+BSD and macOS `script -q FILE CMD`, `screen -R` and `-RR` (they start the command when no session
+is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot`, `strace`,
+`prlimit`, `systemd-nspawn`, `ip netns exec`, tmux's `if-shell`, `pipe-pane` and `display-popup`,
+a tmux command name cut short (`new-w`) and an alias set in a tmux config file. Two are read but
+not fully: `systemd-run --on-calendar` (and its other timer options) is read as running its
+command, not as `schedule`, and `parallel -S` carries no remote-host signal. Both still ask.
+Under a non-default `deny: [opaque_exec]`, a wrapped line whose inner command outranks
+`opaque_exec` (a wrapped env dump is `credentials`, a wrapped push is `vcs_push`) is decided by
+that inner category and asks instead of being denied, until D-075 (#126) makes a `deny:` entry
+match any part of the line.
 
 ## The store is credentials (D-038)
 

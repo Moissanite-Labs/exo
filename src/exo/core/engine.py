@@ -556,7 +556,8 @@ class CoreRuntime:
         return {"sessions": rows}
 
     async def _approvals_list(self, b: s.ApprovalsList) -> dict[str, Any]:
-        return {"approvals": self.approvals.listing(b.session)}
+        return {"approvals": self.approvals.listing(b.session),  # one await-free copy (D-060)
+                "cursor": {"instance": self.hub.instance, "seq": self.hub.seq}}
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
         info, queued = self._info(b.session), [m.id for m in self.loop.state(b.session).steer]  # chips a client still draws
