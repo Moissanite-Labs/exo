@@ -1,0 +1,38 @@
+diff --git a/tests/core/test_agent_context.py b/tests/core/test_agent_context.py
+index 13557d0..aebb7cc 100644
+--- a/tests/core/test_agent_context.py
++++ b/tests/core/test_agent_context.py
+@@ -125,7 +125,8 @@ def test_the_tree_and_its_hooks_never_carry_a_private_thread():
+     a, p = run(go())
+     assert {h[0] for h in hooked} == {"pre", "capture", "compacted"}
+     assert {h[1] for h in hooked} == {a.id}
+-    assert not any("zebracorn" in h[2] for h in hooked) and not any("zebracorn" in t for t in summ.prompts)
++    assert not any("zebracorn" in h[2] for h in hooked)
++    assert not any("zebracorn" in t for t, k in zip(summ.prompts, summ.keys) if k == AgentContext.key("razi"))
+ 
+ 
+ def test_system_message_is_shared_by_threads_and_holds_the_agent_tree():
+@@ -610,8 +611,9 @@ def test_compact_shrinks_a_forks_tail():
+ 
+ def test_a_fork_keeps_the_copies_the_tree_cannot_hold():
+     """A copy counts at its original's log position only while the tree can hold that original: a private thread's
+-    entries never enter it, nor does an entry the parent undid after the fork. The fork's tail keeps those copies."""
+-    store, ctx, prov, loop, _ = setup()
++    entries never enter it, nor does an entry the parent undid after the fork. The fork's tail keeps those copies, or
++    for a private thread its own private tree does."""
++    store, ctx, prov, loop, summ = setup()
+ 
+     async def go():
+         a = await loop.create_session(agent="razi", title="public")
+@@ -634,5 +636,10 @@ def test_a_fork_keeps_the_copies_the_tree_cannot_hold():
+         return a_call, prov.calls[-1]
+     a_call, p_call = run(go())
+     a_text, p_text = ("\n".join(m.text() for m in call) for call in (a_call, p_call))
+-    assert "4417" in p_text and "private chat 0" in p_text
++
++    def shown(text):  # verbatim in the call, or in a private-tree summary the call carries (never the agent tree)
++        return text in p_text or any(re.search(rf"\bS{i + 1}\b", p_text) for i, (t, k) in
++                                     enumerate(zip(summ.prompts, summ.keys)) if text in t and k != "agent:razi")
++    assert shown("4417") and shown("private chat 0")
++    assert not any("4417" in t for t, k in zip(summ.prompts, summ.keys) if k == "agent:razi")
+     assert "5521" in a_text and "early turn 0" not in a_text  # the tree holds the copies before it
