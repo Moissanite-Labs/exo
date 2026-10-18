@@ -39,7 +39,8 @@ the middle dot as separator come straight from the site.
 
 ## What is on screen
 
-1. Brand bar: `E X O`, agent, thread, and `LIVE` with a pulsing dot while a turn runs (`IDLE` otherwise).
+1. Brand bar: `E X O`, agent, thread, and `LIVE` with a pulsing dot while a turn runs (`IDLE` otherwise). It shows
+   the open thread's turn: after a switch it shows the new thread's state.
 2. Transcript: `›` and your text for a prompt (`steer ›` when sent mid-turn); agent text in fg-2 as Markdown;
    one line per tool with state glyph, name, short args, line count and elapsed time (ctrl+o expands); system
    lines dim; tips as `tip · ...` in dim italic; `memory · log 1-16 folded · 1781 → 153 tok` as a cold line.
@@ -68,6 +69,27 @@ the middle dot as separator come straight from the site.
 Where the numbers come from, all from events the core already sends: `model.call` (`requested`, `route`,
 `usage.cache_read_tokens`), `usage.updated` (context tokens, session cost), `memory.summarized`,
 `peer.message`, `taste.updated`, `tool.completed` (`duration_ms`), and the findings count the client polls.
+
+Switching threads (`/new`, `/sessions`, `/resume`, `/fork`, `/open`): the old thread's events stop reaching the
+window, so it drops that thread's turn state (`LIVE`, the activity line, steer mode, a queued steer, an open
+question), its approval card and its numbers. `MEM` and `CACHE` are empty until the new thread's next model call.
+`COST` is kept per thread. The core's total for a thread counts all of it, so a thread the window showed before gets
+back what the window saw of it, and the `+` for an unpriced call stays on its next total (D-032). A thread the
+window never showed reads `–` until its next model call, and its `+` is a lower bound, as in a fresh window. So is
+the `+` for an unpriced call made there while another thread was open. The thread that opens gets its state from the
+core. `session.resume` and `session.get` report `status`: `live` while a turn runs, so the bar says `LIVE` and
+ctrl+c stops it. `approvals.list` gives back the card of a request still waiting there (D-045). The same check runs
+when the window starts with `--session` or `--resume`, and after the core refuses an answer. A finished subagent's
+roll-up is a `usage.updated` with no `model.call` before it. It adds to `COST`, adds the `+` when the child's calls
+had no price, and leaves `MEM`, `CACHE` and `MODEL` alone.
+
+The event feed starts once `hello` answers, whatever the rest of the boot does. When a later step fails, the window
+says `cannot start: ...` and still streams, so `/new` and a message work and their replies and approval cards show.
+A `--session ID` the core does not know (a typo, a deleted thread) opens a new thread with the note
+`no thread ID; started a new one`. One event the window cannot read does not end the feed. A value it does not
+know, such as a newer core's panel kind, is kept, and the panel shows its text fallback. An event that still fails
+to decode is skipped and logged under `exo.protocol.client`. If the feed itself dies, the window says
+`event feed stopped: ...` and tells the harness (D-025). `/restart` reopens the thread.
 
 ## The /providers panel
 

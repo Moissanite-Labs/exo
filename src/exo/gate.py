@@ -22,15 +22,19 @@ under `policies/`. Stdlib only; the YAML reader is a small subset parser (see `p
 """
 from __future__ import annotations
 
+import bisect
+import contextvars
 import fnmatch
+import functools
 import hashlib
+import itertools
 import json
 import os
 import re
 import shlex
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, TypeVar, cast
 from urllib.parse import urlparse
 
 REVERSIBILITY = ("reversible", "costly", "irreversible")
@@ -243,7 +247,9 @@ class _Word:
     dynamic: bool = False      # holds $var, ${..}, $(..) or `..` outside single quotes
     quoted: bool = False
     glob: bool = False         # an unquoted * or ?, or a [ or { after the first character
+    brace: bool = False        # an unquoted {
     started: bool = False
+    raw: str = ""              # the source text of the word, quotes kept
     locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
 
@@ -278,10 +284,12 @@ class _Lexer:
     def run(self, closer: bool = False) -> list:
         s, toks = self.s, []
         state = {"w": _Word(), "delim": None}
-        depth = 0
+        depth, start = 0, -1              # start: where the current word's source text begins
 
         def flush():
+            nonlocal start
             w = state["w"]
+            w.raw, start = s[start:self.i], -1
             if w.started:
                 if state["delim"] is not None:
                     hd = _Heredoc(w.text, state["delim"], w.quoted, w.dollar_quote)
@@ -294,6 +302,8 @@ class _Lexer:
 
         while self.i < len(s):
             w = state["w"]
+            if start < 0:
+                start = self.i
             ch, nxt = s[self.i], s[self.i + 1:self.i + 2]
             if ch in " \t\r":
                 flush()
@@ -333,7 +343,7 @@ class _Lexer:
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 if w.started and w.text.isdigit() and not w.quoted:
-                    state["w"] = _Word()       # an fd number belongs to the operator
+                    state["w"], start = _Word(), -1    # an fd number belongs to the operator
                 else:
                     flush()
                 op = next(o for o in _REDIR_OPS if s.startswith(o, self.i))
@@ -354,6 +364,8 @@ class _Lexer:
             else:
                 if ch in "*?" or (ch in "[{" and w.started):
                     w.glob = True
+                if ch == "{" and isinstance(w, _Word):
+                    w.brace = True
                 w.text += ch
                 w.started = True
                 self.i += 1
@@ -596,6 +608,7 @@ tput clear command help ulimit umask read jobs compgen
 """.split())
 SHELL_PROGRAMS = frozenset("""
 mkdir touch cp mv ln tee sort uniq tree xxd base64 tar zip unzip gzip gunzip bzip2 bunzip2 xz unxz zstd unzstd
+pigz unpigz pbzip2 lbzip2 lz4 lzop lzip lzma unlzma zstdmt brotli
 truncate install patch split csplit iconv dos2unix pytest py.test ruff black isort mypy pyright flake8
 pylint coverage tsc eslint prettier biome jest vitest mocha rustc rustfmt gcc g++ cc clang clang++ javac
 shellcheck shfmt yamllint codespell actionlint security sqlite3 psql mysql duckdb rsync scp ping dig
@@ -665,6 +678,71 @@ _OPAQUE_PROGRAMS = {"source": "reads and runs a shell file", ".": "reads and run
                     "pre-commit": "runs project-defined hooks", "open": "opens a file or app with its handler",
                     "case": "a case statement", "coproc": "a coprocess", "select": "a select loop",
                     "script": "runs a command under a recorder"}
+# Allowlisted programs with an option whose value is a command line the program runs (#154). The value is
+# classified as a nested command, like the command after `find -exec`. Long options match any prefix, one letter
+# or more, as getopt_long and git do (`--to-com=`, `psql --o`). Short options are read as getopt reads them (see
+# _option_values): the value is the rest of the word or the next word (`-Izstd`, `-xIzstd`, `-avze ssh`).
+_EXEC_OPTS = {
+    "tar": ("--to-command", "-I", "--use-compress-program", "--rsh-command", "--rmt-command", "--set-mtime-command"),
+    "split": ("--filter",), "sort": ("--compress-program",), "man": ("-P", "--pager"),
+    "rsync": ("-e", "--rsh", "--rsync-path"), "scp": ("-S", "-D"), "sftp": ("-S", "-D"), "rg": ("--pre",),
+    "zip": ("-TT", "--unzip-command"),
+}
+# git subcommand -> options whose value git runs (locally, or on the remote for a local-path remote).
+_GIT_EXEC_OPTS = {"rebase": ("-x", "--exec"), "push": ("--receive-pack", "--exec"), "archive": ("--exec",),
+                  "fetch": ("--upload-pack",), "clone": ("--upload-pack", "-u"), "pull": ("--upload-pack",),
+                  "ls-remote": ("--upload-pack", "-u")}
+# Options whose value is a script file or option text the gate cannot read: opaque.
+_EXEC_FILE_OPTS = {"tar": ("-F", "--info-script", "--new-volume-script"), "sqlite3": ("-init",), "duckdb": ("-init",)}
+# The short options that take a value (the letters before `:` in the program's getopt string) and long options
+# that take one, so the option reader skips a value instead of reading it as options: `ssh -oServerAliveInterval=60`
+# is `-o`, not `-I`. A letter or name missing here makes the reader look at more words, except for ssh, whose
+# options stop at the remote command: its letters are ssh's getopt string, all of them.
+_SSH_VALUE_OPTS = "BbcDEeFIiJLlmOoPpQRSWw"
+_VALUE_OPTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "ssh": (_SSH_VALUE_OPTS, ()), "scp": ("cDFiJlMoPSX", ()), "sftp": ("BbcDFiJloPRSsX", ()),
+    "tar": ("bCfFgHIKLNTVX", ("--file", "--directory", "--exclude", "--exclude-from", "--files-from", "--transform",
+                              "--owner", "--group", "--mode", "--mtime", "--newer", "--format", "--suffix")),
+    "rsync": ("BefMT@", ("--exclude", "--include", "--exclude-from", "--include-from", "--files-from", "--filter",
+                         "--temp-dir", "--compare-dest", "--copy-dest", "--link-dest", "--partial-dir", "--backup-dir",
+                         "--chmod", "--chown", "--timeout", "--port", "--password-file", "--log-file", "--out-format",
+                         "--bwlimit", "--max-size", "--min-size", "--remote-option")),
+    "man": ("CELMPRSemprs", ()),
+    "rg": ("ABCdEefgjMmrTt", ("--regexp", "--file", "--glob", "--iglob", "--type", "--type-not", "--max-count",
+                              "--max-depth", "--replace", "--context", "--after-context", "--before-context")),
+    "psql": ("cdFfhLoPpRTUv", ("--command", "--dbname", "--file", "--host", "--port", "--username", "--set",
+                               "--variable", "--log-file", "--output", "--pset", "--field-separator")),
+}
+_GIT_VALUE_OPTS = {"rebase": "CsXx", "push": "o", "archive": "o", "fetch": "jo", "clone": "bcjou", "pull": "josX",
+                   "ls-remote": "ou"}
+# ssh/scp/sftp -o settings that run a command (RemoteCommand on the remote host) or load a library, by the
+# lower-case keyword ssh matches (see _ssh_setting).
+_SSH_EXEC_SETTINGS = {k.lower(): k for k in ("ProxyCommand", "LocalCommand", "RemoteCommand", "KnownHostsCommand")}
+_SSH_LIB_SETTINGS = {k.lower(): k for k in ("PKCS11Provider", "SecurityKeyProvider")}
+_EXEC_ENV = frozenset("""
+GIT_SSH_COMMAND GIT_SSH GIT_PAGER GIT_EDITOR GIT_SEQUENCE_EDITOR GIT_EXTERNAL_DIFF GIT_ASKPASS SSH_ASKPASS
+RSYNC_RSH PAGER MANPAGER EDITOR VISUAL LESSOPEN LESSCLOSE
+""".split())
+_EXEC_ENV_OPAQUE = frozenset(["TAR_OPTIONS"])
+# sqlite3/duckdb dot-commands (any unambiguous prefix works, so match prefixes): .shell and .system run a
+# command, .once/.output/.import/.read run one when an argument starts with `|` (after options too:
+# `.import --csv '|cmd' t`), .once/.output/.read/.load otherwise use a file or library the gate does not see
+# (.import FILE is a plain data load). psql runs `\!`, and `\o`, `\out`, `\g`, `\gx`, `\w`, `\write` with a
+# `|command` (also quoted, or after `\g (options)`), wherever they appear on a line; mysql runs `system` at the
+# start of one. Line starts are matched with `[ \t]*`, not `\s*`, so a long heredoc stays linear.
+_DOT_RUN, _DOT_PIPE = ("shell", "system"), ("once", "output", "import", "read")
+_DOT_FILE = ("once", "output", "read", "load")
+_DOT_COMMAND = re.compile(r"^[ \t]*\.([a-z]+)[ \t]*([^\n]*)", re.M)
+_DOT_PIPE_ARG = re.compile(r"""(?:^|[ \t])(?:(['"])\|(.*?)\1|\|(.*))""", re.S)
+_SQL_SHELL = re.compile(r"(?:^[ \t]*system[ \t]+|\\![ \t]*)([^\n]*)", re.M | re.I)
+# The pipe after `\o`, `\g (options)`... is found in one pass over these tokens, so many on one line stay linear.
+_SQL_PIPE = re.compile(r"\\(?:o|out|w|write|gx?)(?![a-z])|[|\n]", re.I)
+# psql runs backquoted text in a meta-command's arguments (`\set x `cmd``, `\echo `cmd``)
+_PSQL_META = re.compile(r"\\[a-z][^\n]*", re.I)
+_SQL_PROGRAM = re.compile(r"\bprogram\s+(?:E?'|\$\w*\$)", re.I)
+# database shells -> the options whose value is command text (dot-commands or SQL)
+_SQL_COMMAND_OPTS = {"sqlite3": ("-cmd",), "duckdb": ("-cmd",), "psql": ("-c", "--command"),
+                     "mysql": ("-e", "--execute")}
 _GIT_SUBS = frozenset("""
 add commit checkout switch branch merge rebase stash tag fetch pull push status log diff show reset restore
 clean rm mv init clone remote config rev-parse blame ls-files grep cherry-pick revert worktree submodule
@@ -728,15 +806,22 @@ def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection
     return c
 
 
-def _classify_git(argv: list[str], cmd: str) -> Classification:
-    i, config = 1, []
+def _git_subcommand(argv: list[str], config: list[str] | None = None) -> int:
+    """Index of the git subcommand after the global options; `-c`/`--config-env` values go to `config`."""
+    i = 1
     while i < len(argv) and argv[i].startswith("-"):
         if argv[i] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"):
-            if argv[i] in ("-c", "--config-env") and i + 1 < len(argv):
+            if argv[i] in ("-c", "--config-env") and i + 1 < len(argv) and config is not None:
                 config.append(argv[i + 1])
             i += 2
             continue
         i += 1
+    return i
+
+
+def _classify_git(argv: list[str], cmd: str) -> Classification:
+    config: list[str] = []
+    i = _git_subcommand(argv, config)
     for kv in config:
         k, _, v = kv.partition("=")
         if _GIT_EXEC_KEY.match(k) or v.startswith("!"):
@@ -957,6 +1042,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
         words = words[1:]
     if words and not words[0].quoted and words[0].text == "for":
         words = []                                   # a for header lists words, not programs
+    before = words
     words, sudo, split = _strip_prefix_words(words)
     parts: list[Classification] = []
     if split is not None:
@@ -965,6 +1051,7 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(classify_shell(split, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
+        parts += _exec_options(before, words, k, cmd, depth, ctx, piped)
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
     if sudo:
@@ -1094,8 +1181,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             i += 1
         return parts
     if prog in ("cd", "pushd"):
-        dest = next((a for a in argv[1:] if not a.startswith("-")), "")
-        if dest and _in_store_dir(dest):
+        target = next((w for w in words[1:] if not w.text.startswith("-")), None)
+        dest = target.text if target else ""
+        if target and _in_store_dir_words(_shell_words(target, ctx.setdefault("store_braces", {}), "dir")):
             ctx["store_cwd"] = True
         return [_make("read", summary=f"{prog} {dest}".strip(), command=cmd)]
     if prog == "awk" or prog in ("gawk", "nawk", "mawk"):
@@ -1122,14 +1210,21 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         rest, i = argv[1:], 0
         while i < len(rest) and rest[i].startswith("-"):
             i += 2 if rest[i] in ("-i", "-p", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-W", "-b", "-c", "-E", "-m",
-                                  "-O", "-Q", "-S", "-w", "-e") else 1
+                                  "-O", "-Q", "-S", "-w", "-e", "-I") else 1
         host = rest[i] if i < len(rest) else ""
         inner = " ".join(rest[i + 1:])
-        c = (classify_shell(inner, inner_depth) if inner and depth < _DEPTH
-             else _make("shell", summary=f"ssh {host}", command=cmd))
+        if inner and depth >= _DEPTH:
+            # A chain past the cap is not read, so it asks (#153). The hops that were read keep the
+            # first host as target, so a `target:` deny on it still matches.
+            c = _opaque("ssh chain nested too deep to read", cmd, target=host)
+            c.signals.append("unread hops")
+        elif inner:
+            c = classify_shell(inner, inner_depth)
+        else:
+            c = _make("shell", summary=f"ssh {host}", command=cmd)
         if EXPOSURE.index(c.exposure) < 1:
             c.exposure = "internal"
-        c.target = c.target or host
+        c.target = host if "unread hops" in c.signals else (c.target or host)
         c.signals.append("remote host")
         return [c]
     if prog in ("vercel", "netlify"):
@@ -1200,6 +1295,240 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     return [_opaque(f"runs {prog}, a program the gate does not know", cmd, signal="unknown program")]
 
 
+def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "", longs: tuple = (),
+                   operands: int | None = None, exact: bool = False, wild: frozenset = frozenset()) -> list[str]:
+    """The values given to the options `names` in argv[start:], read as getopt reads them (#154). In a short
+    option cluster the first letter that takes a value (one of `names`, or a letter in `takes`) ends the word:
+    its value is the rest of the word or the next word (`-xIzstd`, `-avze ssh`, `-oProxyCommand=cmd`). A long
+    option takes `=value`, or the next word when it is in `longs`, is one of `names` or abbreviates one
+    (`--to-com cmd`, unless `exact`). A name of more than one letter after one dash (`-TT`, `-cmd`) is a whole
+    word. Options end at `--`, and with `operands` at the operand after that many: ssh reads options before and
+    after its destination, and the remote command follows. An operand at an index in `wild` may expand to no
+    word or several (`$A`, `"$@"`, a glob), so the operands cannot be counted and every word is read."""
+    shorts = "".join(n[1] for n in names if len(n) == 2)
+    whole = [n for n in names if len(n) > 2 and not n.startswith("--")]
+    long_names = [n for n in names if n.startswith("--")]
+    out: list[str] = []
+    i, seen = start, 0
+    while i < len(argv):
+        a = argv[i]
+        i += 1
+        key, eq, val = a.partition("=")
+        if a == "--":
+            break
+        if key in whole:
+            if eq or i < len(argv):
+                out.append(val if eq else argv[i])
+                i += 0 if eq else 1
+        elif a.startswith("--"):
+            hit = any(n == key or (not exact and len(key) >= 3 and n.startswith(key)) for n in long_names)
+            if eq and hit:
+                out.append(val)
+            elif not eq and (hit or key in longs) and i < len(argv):
+                if hit:
+                    out.append(argv[i])
+                i += 1
+        elif a == "-" or not a.startswith("-"):
+            if i - 1 in wild:
+                operands = None
+            if operands is not None:
+                if seen >= operands:
+                    break
+                seen += 1
+        else:
+            for j, ch in enumerate(a[1:], 2):
+                if ch in shorts or ch in takes:
+                    value = a[j:]
+                    if not value and i < len(argv):
+                        value, i = argv[i], i + 1
+                    if ch in shorts:
+                        out.append(value)
+                    break
+    return out
+
+
+def _ssh_setting(text: str) -> tuple[str, str]:
+    """An ssh `-o` setting split as ssh's readconf splits it: (keyword in lower case, the command value). Leading
+    whitespace is skipped; the keyword may be quoted and ends at whitespace, a quote or `=`; a command value is
+    the rest of the line after whitespace and `=` (`ProxyCommand = cmd`, `"ProxyCommand" cmd`, `proxycommand=cmd`)."""
+    s = text.lstrip(" \t\r\n=")
+    m = re.search(r"[ \t\r\n\"=]", s)
+    if not m:
+        return s.lower(), ""
+    j = m.start()
+    if s[j] == '"':                                  # the quote is dropped and the keyword runs to the next one
+        s = s[:j] + s[j + 1:]
+        k = s.find('"', j)
+        if k < 0:
+            return "", ""                            # ssh rejects an unclosed quote
+        key, rest = s[:k], s[k + 1:]
+    else:
+        key, rest = s[:j], s[j:]
+    return key.lower(), rest.lstrip(" \t\r\n=")
+
+
+def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
+                  piped: str | None) -> list[Classification]:
+    """Commands a trusted program is told to run (#154): an exec option (`tar --to-command`, `rsync -e`,
+    `man -P`, `git rebase -x`...), an ssh `-o ProxyCommand`, a sqlite3/psql shell command, or an environment variable
+    such as GIT_SSH_COMMAND set before the program. Each is classified as a nested command; a value the
+    gate cannot read (a script file, `.output FILE`) is opaque."""
+    if not words or words[0].dynamic:
+        return []
+    prog, argv = words[0].text.rsplit("/", 1)[-1], [w.text for w in words]
+    parts: list[Classification] = []
+
+    def nested(text: str, what: str) -> Classification | None:
+        text = text.strip()
+        if not text:
+            return None
+        if depth >= _DEPTH:
+            c = _opaque("nested too deep to read", cmd)
+        else:
+            c = classify_shell(text, depth + 1)
+            c.summary = f"{what} runs {c.summary}"[:120]
+        parts.append(c)
+        return c
+
+    takes, longs = _VALUE_OPTS.get(prog, ("", ()))
+    if prog in ("sqlite3", "duckdb"):                # `--cmd` is `-cmd`
+        argv = [a[1:] if a.startswith("--") and len(a) > 2 else a for a in argv]
+    if prog == "tar" and argv[1:2] and argv[1][:1] not in ("", "-"):
+        # old style (`tar xIf zstd a.tar`): each letter is an option, and each one that takes a value takes
+        # the next word in turn
+        opts, vals = [], argv[2:]
+        for ch in argv[1]:
+            opts.append("-" + ch)
+            if ch in takes and vals:
+                opts.append(vals.pop(0))
+        argv = [argv[0], *opts, *vals]
+
+    # words that may expand to no word or several: ssh's destination and remote command cannot be counted past one
+    wild = frozenset(i for i, w in enumerate(words) if w.dynamic or (not w.quoted and (
+        w.glob or re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
+
+    def values(names: tuple, exact: bool = False, start: int = 1, sub_takes: str | None = None) -> list[str]:
+        return _option_values(argv, names, start, takes if sub_takes is None else sub_takes, longs,
+                              1 if prog == "ssh" else None, exact, wild)
+
+    # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env; a partly quoted one is
+    # left in `words`) and export's arguments, never an argument that merely looks like one (`grep EDITOR=x`)
+    n = len(before) - len(words)
+    while n < len(before) and _ASSIGN.fullmatch(before[n].text):
+        n += 1
+    env_words = [w.text for w in before[:n] if _ASSIGN.fullmatch(w.text)]
+    exported = [a for a in argv[1:] if _ASSIGN.fullmatch(a)] if prog in ("export", "declare", "typeset") else []
+    for a in env_words + exported:
+        name, _, value = a.partition("=")
+        if name in _EXEC_ENV:
+            c = nested(value.lstrip("|"), name)
+            if c is not None and a in exported and c.category == "opaque_exec":
+                parts.pop()                              # export runs nothing; an unknown value is not a hit
+        elif name in _EXEC_ENV_OPAQUE:
+            parts.append(_opaque(f"{name} sets options the gate does not read", cmd))
+    for v in values(_EXEC_OPTS.get(prog, ())):
+        nested(v, f"{prog} option")
+    for v in values(_EXEC_FILE_OPTS.get(prog, ())):
+        parts.append(_opaque(f"{prog} runs the script {v}"[:120], cmd))
+    if prog == "tar":
+        for v in values(("--checkpoint-action",), exact=True):
+            if v.startswith("exec="):
+                nested(v[5:], "tar --checkpoint-action")
+    if prog == "git":
+        i = _git_subcommand(argv)
+        sub, rest = (argv[i] if i < len(argv) else ""), argv[i + 1:]
+        for v in values(_GIT_EXEC_OPTS.get(sub, ()), start=i + 1, sub_takes=_GIT_VALUE_OPTS.get(sub, "")):
+            nested(v, f"git {sub} option")
+        if sub == "bisect" and rest[:1] == ["run"] and len(rest) > 1 and depth < _DEPTH:
+            parts.append(_opaque("git bisect run runs a command per step", cmd))
+            parts += _classify_simple(_Cmd(words=words[i + 2:], heredocs=k.heredocs, herestrings=k.herestrings),
+                                      cmd, depth + 1, ctx, piped)
+        if sub == "submodule":
+            j = 0
+            while j < len(rest) and rest[j].startswith("-") and rest[j] != "--":
+                j += 1                               # `git submodule -q foreach`, `--quiet`, `--cached`
+            if rest[j:j + 1] == ["foreach"]:
+                run = rest[j + 1:]
+                while run and run[0].startswith("-"):
+                    run = run[1:]                    # `foreach --recursive -q`
+                nested(" ".join(run), "git submodule foreach")
+    if prog in ("ssh", "scp", "sftp"):
+        for v in values(("-o",)):
+            key, value = _ssh_setting(v)
+            if key in _SSH_EXEC_SETTINGS:
+                c = nested(value, f"ssh {_SSH_EXEC_SETTINGS[key]}")
+                if c is not None and key == "remotecommand":
+                    if EXPOSURE.index(c.exposure) < 1:
+                        c.exposure = "internal"
+                    c.signals.append("remote host")
+            elif key in _SSH_LIB_SETTINGS and value.strip().lower() != "internal":
+                parts.append(_opaque(f"ssh {_SSH_LIB_SETTINGS[key]} loads a library", cmd))
+    if prog == "ssh":
+        for v in values(("-I",)):
+            parts.append(_opaque(f"ssh -I loads the library {v}"[:120], cmd))
+    if prog in ("less", "more"):                     # macOS more is less
+        for a in argv[1:]:
+            if not a.startswith("+"):
+                continue
+            # The initial command is read as keystrokes (`++cmd` for every file): `!` runs a shell command after
+            # any of them (`+G!cmd`, `+:n!cmd`), `|` pipes to one, and a search (`/`, `?`, `&`) takes the rest as
+            # its pattern unless a control key such as a newline or backspace ends it first.
+            keys = a[2:] if a.startswith("++") else a[1:]
+            last = max((j for j, ch in enumerate(keys) if ch < " " or ch == "\x7f"), default=-1)
+            for j, ch in enumerate(keys):
+                if ch in "/?&" and j > last:
+                    break
+                if ch == "!":
+                    if keys[j + 1:j + 2] == "!" or nested(keys[j + 1:], f"{prog} +!") is None:
+                        parts.append(_opaque(f"{prog} +! starts a shell", cmd))
+                    break
+                if ch == "|":
+                    parts.append(_opaque(f"{prog} +| pipes to a command", cmd))
+                    break
+    if prog in _SQL_COMMAND_OPTS:
+        texts = [a for a in argv[1:] if not a.startswith("-")] + values(_SQL_COMMAND_OPTS[prog])
+        texts += _stdin_texts(k, piped)
+        if prog == "psql":                           # `-o '|cmd'` pipes the output to the whole value, as `\o |cmd`
+            for v in values(("-o", "--output")):
+                if v.lstrip().startswith("|"):
+                    nested(v.lstrip()[1:], "psql -o")
+        for text in texts:
+            if prog in ("sqlite3", "duckdb"):
+                for m in _DOT_COMMAND.finditer(text):
+                    name, arg = m.group(1), m.group(2).strip()
+                    pipe = _DOT_PIPE_ARG.search(arg)
+                    if any(n.startswith(name) for n in _DOT_RUN):
+                        nested(arg, f"{prog} .{name}")
+                    elif pipe and any(n.startswith(name) for n in _DOT_PIPE):
+                        nested(pipe.group(2) or pipe.group(3) or "", f"{prog} .{name}")
+                        if "read".startswith(name):
+                            parts.append(_opaque(f"{prog} .{name} runs what the command prints", cmd))
+                    elif arg and not pipe and any(n.startswith(name) for n in _DOT_FILE):
+                        parts.append(_opaque(f"{prog} .{name} reads or writes a file the gate does not see", cmd))
+            else:
+                for m in _SQL_SHELL.finditer(text):
+                    nested(m.group(1), f"{prog} shell command")
+                pending, skip = False, 0             # a `|` after an output command on its line, as in `\o '|cmd'`
+                for m in _SQL_PIPE.finditer(text):
+                    if m.start() < skip:
+                        continue
+                    if m.group() != "|":
+                        pending = m.group() != "\n"
+                    elif pending:
+                        end = text.find("\n", m.end())
+                        end = len(text) if end < 0 else end
+                        run, quote = text[m.end():end].strip(), text[m.start() - 1]
+                        nested(run[:-1] if quote in "'\"" and run.endswith(quote) else run, f"{prog} shell command")
+                        pending, skip = False, end
+                if prog == "psql":
+                    for m in _PSQL_META.finditer(text):
+                        for run in re.findall(r"`([^`\n]*)`", m.group(0)):
+                            nested(run, "psql backquote")
+                if _SQL_PROGRAM.search(text):
+                    parts.append(_opaque(f"{prog} runs a program on the database server", cmd))
+    return parts
+
+
 def _classify_interpreter(prog: str, argv: list[str], k: _Cmd, cmd: str, depth: int, ctx: dict,
                           piped: str | None) -> list[Classification]:
     args = argv[1:]
@@ -1253,22 +1582,60 @@ def _classify_exo(argv: list[str], cmd: str) -> Classification:
     return _opaque(f"exo {sub} starts, stops or changes Exo itself", cmd)
 
 
+# A store check on a spelling makes the checks it covers redundant: a word checked with its ancestors and pieces
+# ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check ("target").
+_COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"}}
+
+
+def _shell_words(w: _Word, seen: dict, check: str) -> list[str] | None:
+    """The words bash makes of shell word ``w`` for a store check (#224): its text, plus its source spelling
+    brace-expanded and then dequoted, as _shell_credential_hit reads it. A word the gate built (an `ln` target) has
+    no source spelling and keeps its text. ``seen`` keeps each spelling's words for the line, so a spelling is
+    expanded and charged once; [] when a check covering ``check`` already ran on it. None past the cap."""
+    src = w.raw.replace("\\\n", "")
+    if "{" not in src:
+        return [w.text]
+    if src not in seen:
+        words = _brace_words(src, pool=1)
+        seen[src] = (None if words is None else list(dict.fromkeys([w.text] + [d for e in words[1:] for d in _dequote(e)])),
+                     set())
+    words, done = seen[src]
+    if done & _COVERS[check]:
+        return []
+    done.add(check)
+    return words
+
+
+def _in_store_dir_words(words: list[str] | None) -> bool:
+    """_in_store_dir for any of a word's _shell_words; past the cap counts."""
+    return words is None or any(_in_store_dir(x) for x in words)
+
+
 def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -> str:
     """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
+    seen = ctx.setdefault("store_braces", {})
     for op, t in k.redirs:
-        if op in _WRITE_REDIRS and is_store_path(t.text):
-            return t.text
+        if op in _WRITE_REDIRS:
+            targets = _shell_words(t, seen, "target")
+            if targets is None or any(_store_word(x) for x in targets):
+                return t.text
     if all(p.category == "read" for p in parts):
         return ""
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
+    argv = [w.text for w in words]
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
-        p.category == "delete" for p in parts)
+        p.category == "delete" for p in parts) or (prog == "cp" and _has(argv, "-s", "-l", "--symbolic-link", "--link"))
+    if prog == "ln" and len(argv) > 2 and not argv[-2].startswith(("-", "/")) and _expand_text(argv[-1]).startswith("/"):
+        words = words + [_Word(os.path.join(os.path.dirname(_expand_text(argv[-1])), argv[-2]))]  # relative link target
     for i, w in enumerate(words):
-        for piece in dict.fromkeys([w.text] + re.split(r"[:=,]", w.text)):
-            if piece and is_store_path(piece, ancestors=wide):
+        expanded = _shell_words(w, seen, "wide" if wide else "narrow")   # braces first: `of=x{a,b}` is `of=xa of=xb`
+        if expanded is None:
+            return w.text
+        for piece in dict.fromkeys(p for e in expanded for p in [e] + re.split(r"[:=,]", e)):
+            if piece and _store_word(piece, ancestors=wide):
                 return piece
         if prog == "git" and w.text in ("-C", "--work-tree", "--git-dir") and i + 1 < len(words) and \
-                _in_store_dir(words[i + 1].text):
+                _in_store_dir_words(_shell_words(words[i + 1], seen, "dir")):
             return words[i + 1].text            # git checkout, reset or commit inside the store
     if ctx.get("store_cwd"):
         return "a path inside the store (after cd)"
@@ -1298,6 +1665,429 @@ def _piped_text(k: _Cmd) -> str | None:
     return None
 
 
+# Store folders and files that _SENSITIVE_PATH names and _SENSITIVE_SAMPLES does not show (/proc/<pid>/environ).
+_STORE_FOLDERS = ("/proc", ".config/gcloud", ".config/muse", ".config/netlify", ".vercel")
+_STORE_FILES = ("environ",)
+_CHDIR_OPTS = {"env": ("-C", "--chdir"), "sudo": ("-D", "--chdir")}
+_GLOBBY = re.compile(r"[*?\[]")
+# The current folder at the start of a path: ~+, ~0, ~-0 (the folder stack), $PWD, ${PWD}, ${PWD:-x} and the like,
+# $(pwd), `pwd`; and its parents, ${PWD%/*} and ${PWD%/*/*}.
+_HERE = re.compile(r"^(~\+\d*|~-?\d+|\$PWD|\$\{PWD(?::?[-=?][^}]*)?\}|\$\{PWD%(?:/\*)+\}|\$\(pwd(?: -[LP])?\)|"
+                   r"`pwd(?: -[LP])?`)(?=/|$)")
+
+
+def _store_hints() -> tuple[set, dict, set]:
+    """(store folder names, {(parent, folder): its sample path}, store file names) from the sample store paths. A
+    dot folder (`.kube`) or `Netlify` is a store folder by its name; a plain one only below its parent (`.config/gh`,
+    `.config/exo`, `.exo/keys`, `/proc`), so a checkout called exo or gh is not. Folders below home count from home
+    ("~") down, one outside home (EXO_HOME, its keys) by its last part. HOME and EXO_HOME apply per call."""
+    home = os.path.normpath(_home())
+    root = home.rstrip("/") + "/"                   # HOME=/ too
+    singles, pairs, names = {"Netlify"}, {}, set(_STORE_FILES)
+    keys, keys_file, claude = _dynamic_secret_paths()
+    files = [os.path.join(home, s) for s in _SENSITIVE_SAMPLES] + [os.path.join(keys, "seat.key"), keys_file,
+                                                                    claude + "/"]
+    folders = [os.path.join(home, d) for d in _STORE_FOLDERS] + [os.path.dirname(keys)]     # and EXO_HOME
+    for folder, name in [x.rpartition("/")[::2] for x in files] + [(d, "") for d in folders]:
+        folder = os.path.normpath(folder)
+        if folder == home or folder.startswith(root):
+            parts, start = ["~"] + folder[len(root):].split("/"), 1
+        elif root.startswith(folder + "/"):
+            parts, start = [], 0
+        else:
+            parts = folder.split("/")
+            start = max(1, len(parts) - 1)
+        for k in range(start, len(parts)):
+            if parts[k].startswith("."):
+                singles.add(parts[k])
+            elif parts[k]:
+                pairs[parts[k - 1], parts[k]] = "/".join(parts[:k + 1])
+        names.add(name)
+    return singles, pairs, names - {""}
+
+
+def _brace_glob(text: str) -> str:
+    """A brace set (`{config,x}`, `config{,.bak}`) as a glob that matches at least what it names: the first `{` to the
+    last `}` is `*` (two string searches, not a regex that rescans the rest of the word from each `{`)."""
+    if not re.search(r"\{[^{}]*(,|\.\.)", text):
+        return text
+    i, j = text.find("{"), text.rfind("}")
+    return text[:i] + "*" + text[j + 1:] if j > i else text
+
+
+def _brace_alts(text: str) -> list:
+    """The words a brace set spells (`~/.{ssh,x}`: ~/.ssh and ~/.x; a range `{1..3}` or `{a..c}` too), up to 16, in a
+    word of up to 4096 characters; past that, or for a stepped range (`{1..9..2}`), one glob (_brace_glob)."""
+    if len(text) > 4096:
+        return [_brace_glob(text)]
+    out, todo = [], [text]
+    while todo:
+        t = todo.pop()
+        m = re.search(r"\{([^{},]*(?:,[^{},]*)+)\}", t)     # an innermost set with a comma
+        r = None if m else re.search(r"\{(-?\d{1,6})\.\.(-?\d{1,6})\}|\{([A-Za-z])\.\.([A-Za-z])\}", t)
+        if m:
+            alts, hit = m.group(1).split(","), m
+        elif r:                                         # a range: {1..3} is 1 2 3, {a..c} is a b c
+            a, b = (int(r.group(1)), int(r.group(2))) if r.group(1) else (ord(r.group(3)), ord(r.group(4)))
+            if abs(b - a) >= 16:
+                return [_brace_glob(text)]
+            step = 1 if b >= a else -1
+            # a bound with a leading zero pads every word to the wider bound, as bash does: {007..10} is 007 ... 010
+            pad = max(map(len, r.group(1, 2))) if r.group(1) and any(re.match(r"-?0\d", n) for n in r.group(1, 2)) else 0
+            alts, hit = [f"{x:0{pad}d}" if r.group(1) else chr(x) for x in range(a, b + step, step)], r
+        else:
+            out.append(t)
+            continue
+        if len(out) + len(todo) + len(alts) > 16:
+            return [_brace_glob(text)]
+        todo += [t[:hit.start()] + x + t[hit.end():] for x in alts]
+    return out
+
+
+_POSIX_CLASSES = {"alpha": "a-zA-Z", "upper": "A-Z", "lower": "a-z", "digit": "0-9", "alnum": "a-zA-Z0-9",
+                  "xdigit": "0-9A-Fa-f", "word": "a-zA-Z0-9_", "space": " \t\n\r\x0b\x0c", "blank": " \t",
+                  "punct": ":-@!-/[-`{-~", "print": " -~", "graph": "\"-~!", "cntrl": "\x00-\x1f\x7f"}
+_NESTED_CLASS = re.compile(r"\[[!^]?\]?[^\][]*\[[:=.]")
+
+
+def _fn_glob(glob: str) -> str | None:
+    """A bash glob as an fnmatch pattern, or None when it could match anything (a long run of `[`, on which fnmatch
+    is quadratic, or an unknown class). `[^x]` is `[!x]`; a `]` first in a set is a member; a class inside a set
+    (`[[:alpha:]]`, `[[=e=]]`) is spelt out; a `[` that opens no set is a literal `[`."""
+    if glob.count("[") > 32:
+        return None
+    out, i, n = [], 0, len(glob)
+    while i < n:
+        if glob[i] != "[":
+            out.append(glob[i])
+            i += 1
+            continue
+        j = i + 1
+        neg = j < n and glob[j] in "!^"
+        j += neg
+        body = []
+        if j < n and glob[j] == "]":
+            body.append("]")
+            j += 1
+        closed = False
+        while j < n:
+            if glob[j] == "]":
+                closed = True
+                break
+            if glob[j] == "[" and glob[j + 1:j + 2] in (":", "=", "."):
+                kind = glob[j + 1]
+                end = glob.find(kind + "]", j + 2)
+                if end >= 0:
+                    name = glob[j + 2:end]
+                    if kind == ":" and name not in _POSIX_CLASSES or kind != ":" and len(name) != 1:
+                        return None
+                    body.append(_POSIX_CLASSES[name] if kind == ":" else name)
+                    j = end + 2
+                    continue
+            body.append(glob[j])
+            j += 1
+        if not closed:
+            out.append("[[]")
+            i += 1
+            continue
+        out.append("[" + ("!" if neg else "") + "".join(body) + "]")
+        i = j + 1
+    return "".join(out)
+
+
+def _glob_names(glob: str, names) -> list:
+    """The ``names`` a bash glob could match (see _fn_glob); all of them when it could match anything."""
+    pat = _fn_glob(glob)
+    return list(names) if pat is None else fnmatch.filter(names, pat)
+
+
+def _could_name(glob: str, hints: set) -> bool:
+    """A glob that could match one of ``hints``: its literal parts are tried as substrings first, which is cheap."""
+    pat = _fn_glob(glob)
+    if pat is None:
+        return True
+    lits, blob = [x for x in re.split(r"[*?]|\[!?\]?[^\]]*\]", pat) if x], "/".join(hints)
+    return all(t in blob for t in lits) and any(all(t in h for t in lits) for h in hints) \
+        and bool(fnmatch.filter(hints, pat))
+
+
+def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
+    """From simple commands: the working-folder targets (cd, pushd, git -C, env -C, sudo -D, tar -C, also after
+    time, command, builtin, ! or an assignment), the words that may name a path (all but the program and the
+    targets, and redirection targets; with whether bash expands a brace set in them) and the text a shell runs
+    (`bash -c`, a heredoc fed to a shell)."""
+    for k in cmds:
+        ws = [w.text for w in k.words]
+        i = 0
+        skip: set = set()                           # the targets' own words: entering a folder reads nothing
+        while i < len(ws) and (ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) or ws[i].rsplit("/", 1)[-1] in _PREFIXES):
+            base = "" if ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) else ws[i].rsplit("/", 1)[-1]
+            i += 1
+            while base in _PREFIXES and i < len(ws) and ws[i].startswith("-") and ws[i] != "-":
+                word, i = ws[i], i + 1
+                opt, eq, val = word.partition("=")
+                if len(opt) >= (3 if base == "env" else 5) and "--chdir".startswith(opt):
+                    opt = "--chdir"                 # getopt takes a unique prefix: env --c=dir, sudo --chd=dir
+                c = next((j for j in range(1, len(word)) if "-" + word[j] in _PREFIXES[base]), 0)
+                if word[1:2] != "-" and len(word) > 2 and c:        # a short cluster or value: -iC dir, -Cdir
+                    opt, eq, val = "-" + word[c], word[c + 1:], word[c + 1:]
+                if not eq and (opt in _PREFIXES[base] or opt in _CHDIR_OPTS.get(base, ())) and i < len(ws):
+                    val, i = ws[i], i + 1
+                if opt in _CHDIR_OPTS.get(base, ()):
+                    targets += [val, val[1:]] if val.startswith("=") else [val]     # -C=dir: getopt's "=dir"
+                    skip.add(i - 1)
+            if base == "timeout" and i < len(ws) and re.fullmatch(r"[\d.]+[smhd]?", ws[i]):
+                i += 1
+        prog, rest = (ws[i].rsplit("/", 1)[-1], ws[i + 1:]) if i < len(ws) else ("", [])
+        if prog in ("cd", "pushd"):
+            j = next((j for j, a in enumerate(rest) if not re.fullmatch(r"-[LPen@]*|--", a)), len(rest))
+            targets += rest[j:j + 1]
+            skip.add(i + 1 + j)
+        elif prog == "git":
+            j = 0
+            while j < len(rest) and rest[j].startswith("-"):
+                if rest[j] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"):
+                    if rest[j] == "-C" and j + 1 < len(rest):
+                        targets.append(rest[j + 1])
+                        skip.add(i + 2 + j)
+                    j += 1
+                j += 1
+            skip.add(i + 1 + j)                     # the subcommand (`git config`) is not a path
+        elif prog == "tar":                         # tar -C dir: the names after it are in dir
+            j = 0
+            while j < len(rest):
+                a, j = rest[j], j + 1
+                opt, eq, val = a.partition("=")
+                if len(opt) >= 5 and "--directory".startswith(opt):        # --directory dir, --dir=dir
+                    m = None if eq else j
+                elif re.fullmatch(r"-C.+", a):                              # -Cdir
+                    val, m = a[2:], None
+                elif re.fullmatch(r"-[A-Za-z]*C", a) or j == 1 and re.fullmatch(r"[A-Za-z]*C[A-Za-z]*", a):
+                    # -C dir, -xC dir, -cfC x.tar dir, old-style czfC x.tar dir: the values follow in letter order
+                    m = j + sum(c in "fbgFHIKLNTVX" for c in a[:a.index("C")])
+                else:
+                    continue
+                if m is None:
+                    targets.append(val)
+                    skip.add(i + j)
+                elif m < len(rest):
+                    targets.append(rest[m])
+                    skip.add(i + 1 + m)
+        elif prog in ("jq", "yq", "gojq", "jaq"):    # the filter (`jq .`) is not a path, unless it is read from a file
+            first = next((f for f, a in enumerate(rest) if not a.startswith("-")), None)
+            from_file = any(a == "--from-file" or a.startswith("--from-file=") or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a)
+                            for a in rest)
+            if first is not None and not from_file:
+                skip.add(i + 1 + first)
+        elif prog in _SHELLS:
+            for j, a in enumerate(rest):
+                if a == "-c" or (re.fullmatch(r"-[a-zA-Z]+", a) and "c" in a):
+                    bodies += rest[j + 1:j + 2]
+                    break
+                if not a.startswith(("-", "+")):
+                    break
+            else:
+                bodies += [h.body for h in k.heredocs] + [w.text for w in k.herestrings]
+        # not the program, the targets, or the words before the program but assignments (`! time sudo -u root`)
+        words = [w for j, w in enumerate(k.words) if j not in skip and (j > i or _ASSIGN.fullmatch(w.text))] + \
+            [t for _, t in k.redirs]
+        # (text, has an unquoted {); a word with a space is prose (a commit message, an echo, awk's '{print $1}'),
+        # not a path, unless bash expands a brace set in it ({config,"a b"})
+        pieces += [(w.text, w.brace) for w in words if w.brace or not re.search(r"\s", w.text)]
+
+
+_ANY = object()                                     # any path, in _cd_store_read's index of levels up
+
+
+def _cd_store_read(cmds: list, subs: list) -> str:
+    """D-038 (#192): a line that enters a folder that can hold a secret store may read it by a relative name. It
+    enters one when a working-folder target anywhere in it ($( ), <( ) and a shell's text included) has a store
+    folder among its parts (~/.kube, ~/.config/nvim, /proc/self; see _store_hints), or goes by a relative name into
+    a plain store folder below another target (`cd ~/.config && cd ./gh`, `cd / && cd proc`). Then a relative name
+    counts when its file name is a store file's (a glob or brace set: when it could match one) or it goes into a
+    store folder (`gh/x` after ~/.config, `../.docker/x`); any relative name counts when the target is itself a
+    store. The targets' own words are not names. The name, or ''. One pass over the words; neither the order nor
+    the success of the commands is followed, so this fails closed."""
+    targets: list = []
+    pieces: list = []
+    bodies: list = []
+    _cd_walk(cmds, targets, pieces, bodies)
+    queue = [(s, 0) for s in subs] + [(b, 1) for b in bodies]
+    seen: dict = {}             # text -> the shallowest depth it was read at
+    while queue:                # each $( ), <( ) and shell text once per depth at most, nested ones too
+        text, n = queue.pop()   # (subs may list them already); a text first met at the depth cap is read again
+        if seen.get(text, _DEPTH + 1) <= n:     # when it comes up shallower, so its own bodies are not lost
+            continue
+        seen[text] = n
+        c2, s2 = _parse(text)[:2]
+        more: list = []
+        _cd_walk(c2, targets, pieces, more)
+        if n < _DEPTH:
+            queue += [(s, n + 1) for s in s2] + [(b, n + 1) for b in more]
+    if not targets:
+        return ""
+    singles, pairs, names = _store_hints()
+    home = os.path.normpath(_home())
+    root = home.rstrip("/") + "/"
+    hp = home.rstrip("/").split("/")                # "/home/u": ["", "home", "u"]
+    kin: dict = {}                                  # plain store folder name -> [(its parent, its sample path)]
+    for (a, b), path in pairs.items():
+        kin.setdefault(b, []).append((a, path))
+    deep = max(len(p.split("/")) for p in pairs.values())       # the parts of the deepest sample store folder
+
+    def here(t: str) -> str:                        # the current folder as `.`, ${PWD%/*/*} as `../..`
+        return _HERE.sub(lambda m: "/".join([".."] * m.group(0).count("/*")) if "%" in m.group(0) else ".", t)
+
+    def folders(t: str) -> tuple:
+        t = here(t)
+        if re.match(r"~[\w.-]+(/|$)", t):          # ~root/..: that home, before .. is resolved
+            t = os.path.expanduser(t)
+        p = _expand_text(t)
+        p = os.path.normpath(p) if p else p         # bash's logical cd: /tmp/../proc is /proc, ./gh is gh
+        p = "~" if p == home else "~/" + p[len(root):] if p.startswith(root) else p
+        parts = _brace_glob(p).split("/")
+        parts[0] = "~" if parts[0].startswith("~") else parts[0]        # ~user/.kube: its folders
+        return p, [s for j, s in enumerate(parts) if s not in ("", ".") or j == 0 and s == ""] or ["."]
+
+    def could_be(s: str, prev) -> set:
+        """The store folder names a glob part could be below the part ``prev``, as bash matches: a dot name only
+        when the glob spells the dot, a folder that is a store by its name anywhere (Netlify) only when the glob
+        has a character of its own, and a plain store folder only below its parent."""
+        own = bool(re.sub(r"[*?]|\[[^\]]*\]?", "", s))
+        return {x for x in singles if (x[:1] == ".") == (s[:1] == ".") and (x[:1] == "." or own)} | \
+            {b for a, b in pairs if a == prev and (b[:1] == ".") == (s[:1] == ".")}
+
+    def last_store_folder(parts: list) -> int:
+        return max((k for k, s in enumerate(parts) if s in singles or k and (parts[k - 1], s) in pairs or
+                    _GLOBBY.search(s) and _could_name(s, could_be(s, parts[k - 1] if k else None))), default=-1)
+
+    # A plain store folder's parent above each target: name -> {levels up: its paths}. A target below home also
+    # has home's own folders above it; a relative one only its own parts (what it is below is not known). A path
+    # deeper than any sample store folder's parent keeps only its name, which is all a dot parent needs.
+    parents = {a for a, _ in pairs}
+    anc: dict = {}
+    top: dict = {}                                  # (name, its path or _ANY) -> the most levels up it is at
+    lo: dict = {}                                   # the fewest levels up at which / is
+
+    def index(parts: list) -> None:
+        up = [(hp[m], "/".join(hp[:m + 1])) for m in range(len(hp) - 1)] if parts[0] == "~" else []
+        chain = up + [(s, "/".join(parts[:j + 1]) if j < deep else None) for j, s in enumerate(parts) if s != ".."]
+        for n, (name, path) in enumerate(reversed(chain)):
+            if name in parents:
+                anc.setdefault(name, {}).setdefault(n, set()).add(path)
+                for key in ((name, path), (name, _ANY)):
+                    top[key] = max(top.get(key, -1), n)
+                if name == "":
+                    lo[""] = min(lo.get("", n), n)
+
+    split = [(p, parts, last_store_folder(parts)) for t in dict.fromkeys(targets) for alt in _brace_alts(t)
+             for p, parts in [folders(alt)]]
+    for _, parts, _ in split:
+        index(parts)
+    # `cd ..`, `cd ../..`, `cd .. && cd ..`: every number of levels up to all of them together (order is not
+    # followed); past 64, any number
+    total = sum(len(parts) for t in targets if ".." in here(t) for alt in _brace_alts(t) for _, parts in [folders(alt)]
+                if set(parts) == {".."})
+    ups = set(range(min(total, 65) + 1))
+
+    def reach(n: int, a: str, need) -> bool:
+        """A folder named ``a`` (at path ``need`` for a plain parent) n levels above a target, or above a `cd ..`
+        after one. `..` stops at /."""
+        levels = anc.get(a, {})
+        if a == "" and lo.get("", n + max(ups) + 1) <= n + max(ups):
+            return True
+        if len(ups) > 64:                           # any number of levels up: is it there n or more levels up?
+            return top.get((a, _ANY if need is None else need), -1) >= n
+        return any(m in levels and (need is None or need in levels[m]) for m in (n + u for u in ups))
+
+    matched: dict = {}                              # a glob -> the plain store folder names it could match
+
+    def into(parts: list, globs: bool = True) -> list:
+        """A relative path into a plain store folder below another target (`cd ~/.config && cd ./gh`, `cd / && cd
+        proc/self`, `cd ~/.config/nvim && cd ../gcloud`): [(that store folder's sample path, the rest)]. The other
+        target names a dot parent by its name (any .config) and a plain one by its path (/, EXO_HOME)."""
+        n = next((j for j, s in enumerate(parts) if s != ".."), len(parts))
+        if n == len(parts) or parts[0] in ("", "~"):
+            return []
+        first = parts[n]
+        if globs and _GLOBBY.search(first) and first not in matched:
+            matched[first] = _glob_names(first, kin) if _could_name(first, set(kin)) else []
+        hits = matched[first] if globs and _GLOBBY.search(first) else [first] if first in kin else []
+        return [(path, parts[n + 1:]) for b in hits for a, path in kin[b]
+                if reach(n, a, None if a in singles else path.rpartition("/")[0])]
+
+    # A relative target into a plain store folder enters it, at that folder's sample path. Its own folders then
+    # count as parents too (`cd /srv && cd exo-home && cd keys` with EXO_HOME=/srv/exo-home); a chain is as deep
+    # as the sample paths, so this ends.
+    after: dict = {}
+    new = {"/".join([path, *rest]): None for _, parts, _ in split for path, rest in into(parts)}
+    while new.keys() - after.keys():
+        fresh = new.keys() - after.keys()
+        after.update(new)
+        for full in fresh:
+            index(full.split("/"))
+        new = {"/".join([path, *rest]): None for _, parts, _ in split for path, rest in into(parts)}
+    split += [(full, full.split("/"), last_store_folder(full.split("/"))) for full in after]
+    entered = [(p, parts, k) for p, parts, k in split if k >= 0]
+    stored: dict = {}
+
+    def is_store(folder: str) -> bool:
+        """Is the folder a store? A glob in it (`~/.s?h`) is tried as each store folder name it could be
+        (could_be). Past 64 such paths, it counts as one."""
+        if folder not in stored:
+            parts = folder.split("/")
+            opts = [_glob_names(s, could_be(s, parts[j - 1] if j else None)) if _GLOBBY.search(s) else [s]
+                    for j, s in enumerate(parts)]
+            count = 1
+            for o in opts:
+                count = min(count * len(o), 65)
+            paths = ["/".join(x) for x in itertools.product(*opts)] if count <= 64 else []
+            stored[folder] = count > 64 or any(_SENSITIVE_PATH.search(x) or is_sensitive_path(x) for x in paths)
+        return stored[folder]
+
+    def candidates():
+        """The relative names on the line: (name, its parts, whether it is a glob); no parts is the folder itself
+        (`.`, `$PWD`). A quoted glob counts too, for the tools that match it themselves (`find -name 'conf*'`)."""
+        for word, brace in dict.fromkeys(pieces):
+            for text in [here(_brace_glob(x)) for x in _brace_alts(word)] if brace else [here(word)]:
+                # --kubeconfig=config, -d@config, f:=@config; a glob class (e[[:alpha:]]viron) stays whole
+                whole = text.count("[") > 32 or _NESTED_CLASS.search(text)
+                for q in re.split(r"[=@:,]", text) + ([text] if whole else []):
+                    q = here(q)
+                    q = _expand_text(q) if q[:1] in ("$", "~") else q
+                    if not q or q.startswith(("/", "-")) or q.startswith("~") and q[1:2] not in ("+", "-"):
+                        continue
+                    q = os.path.normpath(q) if "/.." in "/" + q else q         # lua/../../gcloud is ../gcloud
+                    yield q, [s for s in q.split("/") if s not in ("", ".")], bool(_GLOBBY.search(q))
+
+    if not entered:
+        # A name can still go into a plain store folder below a target: it counts when it names a store file or
+        # goes into a store (`cd /srv && tar cf - exo-home/keys` with EXO_HOME=/srv/exo-home).
+        for q, parts, globbed in candidates():
+            for path, rest in into(parts, globbed) if parts else []:
+                fp = f"{path}/{'/'.join(rest)}".rstrip("/").split("/")
+                if parts[-1] in names or is_store("/".join(fp[:last_store_folder(fp) + 1])):
+                    return q
+        return ""
+    nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
+    # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
+    roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in entered)
+    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in entered) or any(map(is_store, roots))
+    hints = names | singles | nxt
+    held = any(k == len(parts) - 1 for _, parts, k in entered)     # a target is itself a store folder (~/.kube)
+    for q, parts, globbed in candidates():
+        if every or not parts and held:             # `tar czf - .` in a store, or in a store folder
+            return q
+        if not parts:
+            continue
+        inner = parts[:-1]              # a store folder counts when the name goes into it (`mkdir .kube` reads none)
+        if parts[-1] in names or not singles.isdisjoint(inner) or into(parts, globbed) or \
+                not pairs.keys().isdisjoint(zip(inner, inner[1:])) or globbed and any(
+                    _could_name(s, hints) for s in parts if _GLOBBY.search(s)):
+            return q
+    return ""
+
+
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part."""
     cmds, subs, func = _parse(cmd or "")
@@ -1316,12 +2106,20 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     if c.category == "credentials":  # a secret beside an irreversible command keeps that command's weight
         c.reversibility = max([c.reversibility] + [p.reversibility for p in parts], key=REVERSIBILITY.index)
     segs = [[w.text for w in k.words] for k in cmds if k.words]
-    hit = _shell_credential_hit(cmd, segs)
+    hit = _shell_credential_hit(cmd, segs, [w.raw for k in cmds for w in k.words + [t for _, t in k.redirs]])
     if hit and c.category != "credentials":
         rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
         signals = c.signals
         c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
+        c.signals = signals + ["secret store"]
+    # D-038: a relative read on a line that enters a store folder may read the store; store_write stays.
+    found = _cd_store_read(cmds, subs) if c.category not in ("credentials", "store_write") else ""
+    if found:
+        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
+        signals = c.signals
+        c = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
+                  reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
     c.command = cmd
     c._command_views = list(dict.fromkeys([
@@ -1455,22 +2253,220 @@ def _dynamic_secret_paths() -> list[str]:
     return paths
 
 
+_BRACE_CAP = 1024
+_BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_cost), once for the secret-store checks
+                       # and once for the Exo-store checks (#224)
+_BRACE_SEQ = re.compile(r"([-+]?\d+)\.\.([-+]?\d+)(?:\.\.([-+]?\d+))?|([A-Za-z])\.\.([A-Za-z])(?:\.\.([-+]?\d+))?")
+_brace_left: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_brace_left", default=None)
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+class _BraceLimit(Exception):
+    pass
+
+
+def _brace_cost(word: str) -> int:
+    """What one expanded word takes from the budget: one, once more per 64 characters, four times for a glob."""
+    return (1 + len(word) // 64) * (4 if re.search(r"[*?\[]", word) else 1)
+
+
+def _brace_budget(fn: _F) -> _F:
+    """Give ``fn`` one _BRACE_BUDGET shared by every word it brace-expands, nested calls included."""
+    @functools.wraps(fn)
+    def run(*a: Any, **kw: Any) -> Any:
+        if _brace_left.get() is not None:
+            return fn(*a, **kw)
+        token = _brace_left.set([_BRACE_BUDGET, _BRACE_BUDGET])
+        try:
+            return fn(*a, **kw)
+        finally:
+            _brace_left.reset(token)
+    return cast(_F, run)
+
+
+def _brace_seq(s: str) -> list[str] | None:
+    """The members of a {x..y[..n]} sequence (``s`` is the text inside the braces), or None."""
+    m = _BRACE_SEQ.fullmatch(s)
+    if not m:
+        return None
+    if any(len(t) > 18 for t in m.group(1, 2, 3, 6) if t):
+        raise _BraceLimit
+    x, y = (int(m[1]), int(m[2])) if m[1] else (ord(m[4]), ord(m[5]))
+    step = abs(int(m[3] or m[6] or 1)) or 1
+    if abs(y - x) // step >= _BRACE_CAP:
+        raise _BraceLimit
+    vals = range(x, y + 1, step) if x <= y else range(x, y - 1, -step)
+    if not m[1]:
+        return [chr(v) for v in vals]
+    # a leading zero on either bound pads every member to the longer bound, as bash does: {007..1000..993}
+    width = max(len(m[1]), len(m[2])) if any(re.match(r"-?0\d", t) for t in m.group(1, 2)) else 0
+    if width and not -2**31 <= min(x, y) <= max(x, y) < 2**31:
+        raise _BraceLimit    # bash prints a padded member as a C int, so it wraps past int32
+    return [f"{v:0{width}d}" for v in vals]
+
+
+def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
+    """``tok`` and the words bash brace expansion makes of it, read as bash's brace_gobbler does: a group
+    ends at the first top-level `}` after a comma or `..`; quoted or escaped braces, ${...} and $(...) do
+    not expand; a group without a comma is a {x..y[..n]} sequence or literal. None past _BRACE_CAP words (fewer
+    for a long word: a million characters in all), past what is left of the call's _BRACE_BUDGET, or past 32
+    levels of nesting: callers count that as a hit. ``pool`` 1 charges the Exo-store checks' budget."""
+    if "{" not in tok:
+        return [tok]
+    left = _brace_left.get()
+    cap = max(1, min(_BRACE_CAP, (1 << 20) // len(tok), _BRACE_CAP if left is None else left[pool] // _brace_cost(tok)))
+    ev: list[tuple[int, str]] = []   # unquoted { } , and `..`; `$` is the brace of ${
+    i, quoted = 0, ""
+    while i < len(tok):
+        c = tok[i]
+        if c == "\\" and quoted != "'":
+            i += 1
+        elif c == "$" and tok.startswith("{", i + 1) and quoted != "'":
+            if not quoted:
+                ev.append((i + 1, "$"))
+            i += 1
+        elif quoted:
+            quoted = "" if c == quoted else quoted
+        elif c in "'\"`":
+            quoted = c
+        elif c in "$<>" and tok.startswith("(", i + 1):
+            depth, i = 0, i + 1
+            while i < len(tok):
+                if tok[i] == "\\":
+                    i += 1
+                elif tok[i] in "'\"":
+                    j = tok.find(tok[i], i + 1)
+                    i = len(tok) if j < 0 else j
+                else:
+                    depth += {"(": 1, ")": -1}.get(tok[i], 0)
+                    if not depth:
+                        break
+                i += 1
+        elif c in "{},":
+            ev.append((i, c))
+        elif c == "." and tok.startswith(".", i + 1) and not tok.startswith("}", i + 2):
+            ev.append((i, "."))
+        i += 1
+    # Where each { closes: a group's level is the brace depth since it opened, never below zero; it closes
+    # at a `}` met at level 0 once a comma or `..` was met at level 0. Groups at level 0 share a bucket.
+    match: dict[int, int] = {}
+    buckets: list[list] = []          # [depth, still open with no comma yet, will close at the next `}`]
+    depth = 0
+    for q, k in ev:
+        top = buckets[-1] if buckets and buckets[-1][0] == depth else None
+        if k in "{$":
+            depth += 1
+            if k == "{":
+                buckets.append([depth, [q], []])
+        elif k in ",.":
+            if top:
+                top[2] += top[1]
+                top[1] = []
+        else:
+            depth -= 1
+            if top:
+                match.update((f, q) for f in top[2])
+                top[0], top[2] = depth, []
+                if not top[1]:
+                    buckets.pop()
+                elif len(buckets) > 1 and buckets[-2][0] == depth:
+                    lo = buckets[-2]
+                    big, small = (lo[1], top[1]) if len(lo[1]) >= len(top[1]) else (top[1], lo[1])
+                    big += small
+                    lo[1] = big
+                    buckets.pop()
+    pos = [q for q, _ in ev]
+
+    def expand(a: int, b: int, level: int) -> list[str]:     # the words of tok[a:b]
+        if level > 32:
+            raise _BraceLimit
+        out, cur = [""], a
+        while True:
+            n, k, p = 0, bisect.bisect_left(pos, cur), -1
+            while k < len(ev) and ev[k][0] < b:
+                q, kind = ev[k]
+                k += 1
+                if kind == "{" and not n:
+                    lone = (q == cur or tok[q - 1] in " \t\n") and (q + 1 >= b or tok[q + 1] in " \t\n}")
+                    if not lone and match.get(q, b) < b:
+                        p = q
+                        break
+                elif kind in "{$":
+                    n += 1
+                elif kind == "}" and n:
+                    n -= 1
+            if p < 0:
+                return [o + tok[cur:b] for o in out]
+            m = match[p]
+            if "," in re.sub(r"\\.", "", tok[p + 1:m], flags=re.S):
+                alts, start, n = [], p + 1, 0
+                for q, kind in ev[k:bisect.bisect_left(pos, m)] + [(m, ",")]:
+                    if kind in "{$":
+                        n += 1
+                    elif kind == "}" and n:
+                        n -= 1
+                    elif kind == "," and not n:
+                        alts += expand(start, q, level + 1)
+                        start = q + 1
+                        if len(alts) > cap:
+                            raise _BraceLimit
+            else:
+                alts = _brace_seq(tok[p + 1:m]) or [tok[p:m + 1]]
+            if len(out) * len(alts) > cap:
+                raise _BraceLimit
+            out = [o + tok[cur:p] + x for o in out for x in alts]
+            cur = m + 1
+
+    try:
+        words = expand(0, len(tok), 0)
+    except _BraceLimit:
+        return None
+    if left is not None and len(words) > 1:
+        left[pool] -= sum(map(_brace_cost, words))
+    return list(dict.fromkeys([tok] + words))
+
+
+def _expand_words(words: list[str]) -> list[str]:
+    """_expand_text of each word, in one pass when no word holds a newline."""
+    if not any("~" in w or "$" in w for w in words):
+        return words
+    out = [] if any("\n" in w for w in words) else _expand_text("\n".join(words)).split("\n")
+    return out if len(out) == len(words) else [_expand_text(w) for w in words]
+
+
+def _real(path: str, memo: dict[str, str]) -> str:
+    """os.path.realpath of a normalized absolute path; ``memo`` shares the parent folders' lookups."""
+    if path not in memo:
+        d, base = os.path.split(path)
+        if base and d.count("/") >= 64 and d not in memo:
+            memo[d] = os.path.realpath(d)      # a deep folder is looked up whole, once
+        memo[path] = (path if not base else os.path.realpath(path) if os.path.islink(path)
+                      else os.path.join(_real(d, memo), base))
+    return memo[path]
+
+
 def is_sensitive_path(path: str) -> bool:
     """True when ``path`` names one of the secret stores (ssh, cloud and netrc credentials, Exo's key
-    stores, signing keys, token and client-secret files, .env files). Never reads the file."""
-    path = _expand_text(str(path or "")).strip()
-    if not path:
-        return False
-    if path.endswith(".pub"):
-        return False  # public keys are meant to be shared
-    if _SENSITIVE_PATH.search(path.replace("\\", "/")):
+    stores, signing keys, token and client-secret files, .env files). Never reads the file. A brace set
+    counts when the path or any word bash expands it to names a store, or when it expands past the cap."""
+    words = _brace_words(str(path or ""))
+    return words is None or _sensitive_words(words)
+
+
+def _sensitive_words(words: list[str]) -> bool:
+    """is_sensitive_path for any of ``words``, which are already brace-expanded."""
+    words = [w.strip() for w in _expand_words(words)]
+    words = [w for w in words if w and not w.endswith(".pub")]   # public keys are meant to be shared
+    if any(_SENSITIVE_PATH.search(w.replace("\\", "/")) for w in words):
         return True
-    try:
-        cands = {os.path.abspath(path), os.path.realpath(path)}
-    except (OSError, ValueError):
-        cands = {path}
-    for root in _dynamic_secret_paths():
-        roots = {os.path.abspath(root), os.path.realpath(root)}
+    roots = {r for root in _dynamic_secret_paths() for r in (os.path.abspath(root), os.path.realpath(root))}
+    memo: dict[str, str] = {}
+    for w in words:
+        try:
+            a = os.path.abspath(w)
+            cands = {a, os.path.realpath(w) if ".." in w.split(os.sep) or a.startswith("//") else _real(a, memo)}
+        except (OSError, ValueError):
+            cands = {w}
         if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots):
             return True
     return False
@@ -1478,22 +2474,43 @@ def is_sensitive_path(path: str) -> bool:
 
 def _glob_hits_secret(tok: str) -> bool:
     """A shell glob that could expand to a secret store. Bare `*` or `*.json` do not count; the last
-    component needs three literal characters, or the directory must itself be a secret store."""
-    tok = _expand_text(tok)
-    if not re.search(r"[*?\[]", tok):
+    component needs three literal characters, or the directory must itself be a secret store. Brace sets
+    are expanded first, as bash does; a hit on the word or on any word it expands to counts."""
+    words = _brace_words(tok)
+    return words is None or _glob_words(words)
+
+
+def _glob_words(words: list[str]) -> bool:
+    """_glob_hits_secret for any of ``words``, which are already brace-expanded."""
+    words = [w for w in _expand_words(words) if re.search(r"[*?\[]", w)]
+    if not words:
         return False
-    d, _, base = tok.rpartition("/")
-    stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     home = _home()
     samples = [os.path.join(home, x) for x in _SENSITIVE_SAMPLES] + [os.path.join(_exo_home(), "keys", "seat.key"),
                                                                        _dynamic_secret_paths()[1]]
+    return any(_glob_word(w, home, samples) for w in words)
+
+
+def _glob_word(tok: str, home: str, samples: list[str]) -> bool:
+    d, _, base = tok.rpartition("/")
+    stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
     in_store_dir = bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
     if len(stem) < 3 and not in_store_dir:
         return False
-    pats = [tok] if tok.startswith("/") else [tok, "*/" + tok]
-    samples += list(_SENSITIVE_SAMPLES)
-    return any(fnmatch.fnmatch(x, pat) for x in samples for pat in pats)
+    head, tail = re.split(r"[*?\[]", tok, maxsplit=1)[0], re.split(r"[*?\[\]]", tok)[-1]   # literal: narrow first
+    xs = [x for x in samples + list(_SENSITIVE_SAMPLES)
+          if x.endswith(tail) and (x.startswith(head) if tok.startswith("/") else head in x)]
+    if not xs:
+        return False
+    rx = _glob_rx(tok)
+    return any(rx.match(x) for x in xs)
+
+
+@functools.lru_cache(maxsize=4096)
+def _glob_rx(tok: str) -> re.Pattern[str]:
+    """fnmatch's pattern for ``tok``, also matching after any `/` when ``tok`` is relative."""
+    return re.compile(("" if tok.startswith("/") else r"(?s:.*/)?") + fnmatch.translate(tok))
 
 
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files and
@@ -1512,9 +2529,9 @@ _STORE_PROTECTED = ("policies", "state", "keys")
 
 def _store_roots() -> list[tuple[str, tuple, bool]]:
     """(root, protected top-level names, has principals/<name>/ stores below it)."""
-    roots = [(os.path.normpath(_exo_home()), _HOME_PROTECTED, True)]
+    roots = [(_exo_home(), _HOME_PROTECTED, True)]
     if os.environ.get("EXO_PRINCIPAL_STORE"):
-        roots.append((os.path.normpath(os.path.expanduser(os.environ["EXO_PRINCIPAL_STORE"])), _STORE_PROTECTED,
+        roots.append((os.path.expanduser(os.environ["EXO_PRINCIPAL_STORE"]), _STORE_PROTECTED,
                       False))
     return roots
 
@@ -1523,30 +2540,52 @@ def _protected_rel(parts: list[str], names: tuple) -> bool:
     return bool(parts) and (parts[0] in names or parts[0].startswith(("ledger.sqlite", "schedule.sqlite")))
 
 
+def _path_forms(p: str) -> set[str]:
+    """The lexical and the resolved spelling of an absolute path. A path that cannot be resolved (NUL byte,
+    symlink loop) keeps its lexical form, so a resolution failure never weakens a check."""
+    forms = {re.sub(r"^//", "/", os.path.normpath(p))}  # normpath keeps a leading `//`
+    try:
+        forms.add(os.path.realpath(p))
+    except (OSError, ValueError, RecursionError):
+        pass
+    return forms
+
+
 def is_store_path(path: str, ancestors: bool = False) -> bool:
-    """True when ``path`` is (or, with ``ancestors``, contains) a protected part of the Exo store."""
-    p = _expand_text(str(path or "")).strip().replace("\\", "/")
+    """True when ``path`` is (or, with ``ancestors``, contains) a protected part of the Exo store. A brace set
+    counts when the path or any word bash expands it to is in the store, or when it expands past the cap (#224)."""
+    words = _brace_words(str(path or ""), pool=1)
+    return words is None or any(_store_word(w, ancestors) for w in words)
+
+
+def _store_word(path: str, ancestors: bool = False) -> bool:
+    """is_store_path for one word whose braces are already expanded."""
+    p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
     if _STORE_NAMES.search(p):
         return True
     if not p.startswith("/"):
         return False                     # relative: names only; the tool's working folder is not known here
-    p = os.path.normpath(p)
-    for root, names, principals in _store_roots():
-        for r in {root, os.path.realpath(root)}:
-            if ancestors and (r == p or r.startswith(p.rstrip("/") + "/")):
-                return True
-            if not p.startswith(r + "/"):
-                continue
-            parts = p[len(r) + 1:].split("/")
-            if _protected_rel(parts, names):
-                return True
-            if principals and parts[0] == "principals":
-                if len(parts) <= 2 and ancestors:
+    # Resolve the original spelling: normpath first would erase symlink/.. traversal.
+    # Keep the lexical candidate too, including protected paths that link out of the store.
+    for candidate in _path_forms(p):
+        if _STORE_NAMES.search(candidate):
+            return True
+        for root, names, principals in _store_roots():
+            for r in _path_forms(root):
+                if ancestors and (r == candidate or r.startswith(candidate.rstrip("/") + "/")):
                     return True
-                if _protected_rel(parts[2:], _STORE_PROTECTED):
+                if not candidate.startswith(r.rstrip("/") + "/"):
+                    continue
+                parts = candidate[len(r.rstrip("/")) + 1:].split("/")
+                if _protected_rel(parts, names):
                     return True
+                if principals and parts[0] == "principals":
+                    if len(parts) <= 2 and ancestors:
+                        return True
+                    if _protected_rel(parts[2:], _STORE_PROTECTED):
+                        return True
     return False
 
 
@@ -1555,8 +2594,8 @@ def _in_store_dir(path: str) -> bool:
     p = _expand_text(path).strip()
     if not p.startswith("/"):
         return bool(re.search(r"(^|/)\.exo(/|$)", p))
-    p = os.path.normpath(p)
-    return any(p == r or p.startswith(r + "/") for r, _, _ in _store_roots())
+    return any(c == r or c.startswith(r.rstrip("/") + "/")
+               for c in _path_forms(p) for root, _, _ in _store_roots() for r in _path_forms(root))
 
 
 _PATCH_PATHS = re.compile(r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$|^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$",
@@ -1571,13 +2610,16 @@ _PATH_ARG_KEYS = ("path", "file_path", "file", "filename", "paths", "files", "di
                   "src", "dest", "destination")
 
 
+@_brace_budget
 def args_sensitive(args: Mapping) -> str:
     """The first path-like tool argument that names a secret store, or ''."""
     for k in _PATH_ARG_KEYS:
         v = args.get(k)
         for item in (v if isinstance(v, (list, tuple)) else [v]):
-            if isinstance(item, str) and item and (is_sensitive_path(item) or _glob_hits_secret(item)):
-                return item
+            if isinstance(item, str) and item:
+                words = _brace_words(item)         # expanded once for both checks
+                if words is None or _sensitive_words(words) or _glob_words(words):
+                    return item
     return ""
 
 
@@ -1609,9 +2651,10 @@ def _env_dump(argv: list[str]) -> bool:
     return False
 
 
-def _shell_credential_hit(cmd: str, segs: list[list[str]]) -> str:
-    """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a
-    redirection or a quoted `bash -c` string), the Keychain, or a bare environment dump. '' if nothing."""
+def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | None = None) -> str:
+    """What in a shell command touches a secret store: a path (also through ~, $HOME, a glob, a brace set
+    in the source text ``raws`` of a word or redirection target, or a quoted `bash -c` string), the Keychain,
+    or a bare environment dump. '' if nothing."""
     text = _expand_text(cmd)
     if _KEYCHAIN.search(text):
         return "keychain access"
@@ -1630,15 +2673,67 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]]) -> str:
             return "keychain access"
     for p in pieces:
         p = re.sub(r"^[\w-]+=", "", p) if "=" in p and not p.startswith("=") else p
-        if p and (is_sensitive_path(p) or _glob_hits_secret(p)):
+        if p and (_sensitive_words([p]) or _glob_words([p])):
             return p
+    groups: dict[str, list[str]] = {}         # bash expands only unquoted braces: expand, then dequote
+    for raw in dict.fromkeys(raws or []):
+        words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
+        if words is None:
+            return raw
+        if len(words) > 1 or '$"' in raw:
+            groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for w in words[1:] or words
+                           for d in _dequote(w)]
+    words = [w for ws in groups.values() for w in ws]
+    if words and (_sensitive_words(words) or _glob_words(words)):
+        return next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
     return ""
 
 
+def _dequote(word: str) -> list[str]:
+    """The words the lexer reads from one brace-expanded source word, quotes removed. A `$"..."` is also read
+    as the plain "..." bash gives it without a message catalog."""
+    if not re.search(r"[\\'\"$`<>#]", word):
+        return [word]
+    out: list[str] = []
+    for src in dict.fromkeys((word, word.replace('$"', '"'))):
+        toks = _Lexer("\\" + src if src.startswith("#") else src).run()
+        out += [w.text for kind, w in toks if kind == "w"]
+    return out
+
+
 def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
-    """Like _strip_prefixes but `env` itself is kept so a bare `env` can be seen as a dump."""
-    while argv and (re.fullmatch(r"[A-Za-z_]\w*=.*", argv[0]) or argv[0].rsplit("/", 1)[-1] in ("sudo", "doas", "command", "builtin", "exec", "nohup", "time")):
-        argv = argv[1:]
+    """The simple command behind its assignments, prefixes (sudo, nice, timeout, env with a command...),
+    `coproc`, compound openers (then, do...) and run wrappers (uv run, poetry run...), so the environment-dump
+    check sees `uv run printenv X` as `printenv X` (#155). A bare `env` (or `env` with assignments only) is kept: it is the dump."""
+    assign = re.compile(r"[A-Za-z_]\w*=.*")
+    while argv:
+        base = argv[0].rsplit("/", 1)[-1]
+        if assign.fullmatch(argv[0]) or base in _OPENERS or base in ("coproc", "("):
+            argv = argv[1:]
+        elif base in _PREFIXES and not (base == "command" and argv[1:2] and argv[1] in ("-v", "-V")):
+            rest, takes = argv[1:], _PREFIXES[base]
+            while rest and rest[0].startswith("-") and rest[0] != "-":
+                f, rest = rest[0], rest[1:]
+                if base == "env" and f.startswith(("-S", "--split-string")):
+                    return argv, False                   # env -S text is classified on its own
+                if f in takes and rest:
+                    rest = rest[1:]
+            if base == "timeout" and rest and re.fullmatch(r"[\d.]+[smhd]?", rest[0]):
+                rest = rest[1:]
+            if base == "env" and all(assign.fullmatch(a) for a in rest):
+                break
+            argv = rest
+        elif (base, argv[1] if len(argv) > 1 else "") in _RUN_WRAPPERS:
+            rest = argv[2:]
+            while rest and rest[0].startswith("-"):
+                f, rest = rest[0], rest[1:]
+                if f == "--":
+                    break
+                if f in _WRAPPER_VALUE_OPTS and rest:
+                    rest = rest[1:]
+            argv = rest
+        else:
+            break
     return argv, False
 
 
@@ -1706,6 +2801,7 @@ def _args_of(action: Any) -> tuple[str, dict]:
     return str(tool), dict(args or {})
 
 
+@_brace_budget
 def classify(action: Any) -> Classification:
     """Classify one tool call from its name and arguments. Pure; never raises on odd args."""
     tool, args = _args_of(action)
@@ -2025,14 +3121,17 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     outcome = gates["matrix"][eff.reversibility][eff.exposure]
     reason, rule = f"{eff.reversibility} and {eff.exposure}", "matrix"
-    # D-038: the principal may lower opaque code only by naming it (a category line or a rule on opaque_exec).
-    opaque_named = "opaque_exec" in gates.get("categories", {})
+    # D-038: the principal may lower opaque code only by naming it below ask (a category line or a rule on
+    # opaque_exec). Naming it at ask or deny keeps the indirection floor (#178).
+    below_ask = ("allow", "log")
+    opaque_named = gates.get("categories", {}).get("opaque_exec") in below_ask
     if eff.category in gates.get("categories", {}):
         outcome, reason, rule = gates["categories"][eff.category], f"category {eff.category}", "category"
     for r in gates.get("rules") or []:
         if _rule_matches(r["match"], eff):
             outcome, reason, rule = r["decision"], r["reason"], "rule"
-            opaque_named = opaque_named or "opaque_exec" in [str(x) for x in _as_list(r["match"].get("category", []))]
+            opaque_named = opaque_named or (r["decision"] in below_ask and "opaque_exec" in
+                                            [str(x) for x in _as_list(r["match"].get("category", []))])
             break
 
     def bump(level: str, why: str, step: str):

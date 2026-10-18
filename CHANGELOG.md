@@ -6,6 +6,28 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Gate (#192, D-038): on a line that enters a folder that can hold a secret store, a relative read of a store file is
+  `credentials` and asks. `cd ~/.config/gh && cat hosts.yml`, `cd ~/.kube && cat config`,
+  `cd ~/.docker && cat config.json`, `cd ~/.kube && tar czf - .` and `cd ~/.config/g{h..h} && cat hosts.yml` were
+  allowed reads. A line enters a store folder when a `cd`, `pushd`, `git -C`, `env -C`, `sudo -D` or `tar -C` target
+  anywhere in it (after `||` or `time`, in `$( )` or `<( )`, spelt `c\d` or `"cd"`, or attached as in `env -C~/.kube`)
+  has a store folder among its parts, or goes by a relative name into one below another target
+  (`cd ~/.config && cd ./gcloud`, `cd / && cd proc`, `cd ~/.config/nvim && cd ../gcloud`): a dot folder from the
+  sample stores (`.kube`, `.config`), or a plain one below its parent (`.config/gh`, `/proc`), so a checkout called
+  `exo` or `gh` is not one. Then a relative name counts when its file name is a store file name (`config`,
+  `hosts.yml`, `environ`, or a glob that could match one, read with bash's bracket and leading-dot rules) or it goes
+  into a store folder (`gh/hosts.yml`, `../keys/x`), and `.` counts in a store folder. A name that goes into a plain
+  store folder from its parent counts on any line when it names a store (`cd /srv && tar cf - exo-home/keys` with
+  `EXO_HOME=/srv/exo-home`). The target's own word is not a read, and quoted code (`awk '{print $1, $2}'`,
+  `tr '[:upper:]'`) is not a store name. The folder is not followed from command to command, so this fails closed:
+  `cd ~/.kube && cd ~/project && cat config` and `cd ~/.config/nvim && npm config get prefix` ask too. Lines that
+  enter no store folder and name none are unchanged, and the check is linear in the line. A `store_write` line stays
+  `store_write`.
+- Absolute symlink aliases into protected Exo stores retain the principal-only write approval floor (#130),
+  including missing leaves, deletion of store ancestors, and `cd`, `pushd` or `git -C` into an alias of the store.
+  A path the gate cannot resolve (a NUL byte) keeps its lexical check instead of raising. `cp -s`, `cp -l` and a
+  relative `ln -s` target that alias the store ask too. `docs/GATE.md` lists what stays open (hardlinks, protected
+  entries that link out of the store, case-insensitive filesystems, glob and brace spellings).
 - Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
   retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
   `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
@@ -78,10 +100,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   findings by default and counts the rest.
 - A core that `exo web` (or any client) starts is no longer that client's child (refs #145, D-036): a short helper
   starts a new session, forks the core and exits, so init (or the nearest subreaper) adopts the core. Process
-  ancestry changed; the principal and tool checks did not. The helper and the core run with `python -P`, so a
-  `pathlib.py` in the current folder no longer runs; an `EXO_ENGINE` module must now be installed or on `PYTHONPATH`,
-  not just in the folder the client started from; startup output from `sitecustomize` no longer breaks the start; and a core that dies while
-  starting is reported at once, with its real exit code when known and never a made-up one.
+  ancestry changed; the principal and tool checks did not. `exo stop` from another terminal now stops a core whose
+  `exo web` is still running (before, the core stayed that client's zombie and `exo stop` waited it out). The helper
+  and the core run with `python -P`, so a `pathlib.py` in the current folder no longer runs; an `EXO_ENGINE` module
+  must now be installed or on `PYTHONPATH`, not just in the folder the client started from. A core that dies while
+  starting is still reported at once, but the message gives its exit code only when the client is PID 1 or a
+  subreaper (the log tail still gives the reason). Such a client adopts the cores it starts and reaps one that exits
+  later at its next start, so restarts leave no zombies.
 
 ### Fixed
 - Esc on a `claude-cli` turn is no longer lost when it lands just as the CLI prints a line (#163). On Python 3.11
@@ -152,13 +177,84 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   that this call skips them (D-081), not that credentials are missing (`docs/GATE.md`, `docs/PROVIDERS.md`).
 - Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`) classify as reads in the gate, so a new
   user's first screen is no longer an approval card for loading the intro skill (`docs/GATE.md`).
+- Terminal event feed: a boot that failed after `hello` left the window without its feed, so `/new` and a message
+  worked but no reply or approval card ever showed. The feed now starts whatever the boot does, and a `--session`
+  id the core does not know opens a new thread and says so. One event the window cannot read no longer ends the
+  feed either. Under `strict=False` a Literal value the client does not know (such as a newer core's `ui.panel`
+  kind) is kept, `Client.events` skips and logs an event that still fails to decode, and a feed that dies says so.
+- The web Chat view draws a peer, bus or job message as a card with its real author, never as a line the user
+  typed: on reload and thread switch too, and the live `peer.message` and its stored message are one card. An
+  approval with no thread (a held peer message that no live session could take) shows in every thread, as in the
+  terminal client, and allow now delivers it into a new thread instead of closing it as denied. A panel you dismiss
+  stays closed after the next panel event, a tab switch or a reconnect.
+- The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
+  the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
+  the card shows every argument of the call.
+- `exo web` folded the core's replayed events into its state a second time after the core's stream dropped: message,
+  tool call and task counts doubled, and a session stayed `waiting` after its approval was answered. Each event now
+  counts once, and a core whose log is behind the page (a new `EXO_HOME`) starts the page over.
+- A web chat reader that fell 1000 events behind lost one event for good. Its stream now ends with nothing lost, and
+  the reconnect replays every event it had not received.
+- Terminal thread switching (D-045, D-032): opening a thread (`/resume`, `/sessions`, `/fork`, `/open`,
+  `--session`, `--resume`) shows the approval it still waits on, from `approvals.list`, and `LIVE` when a turn runs
+  there, so ctrl+c stops it. `session.get` and `session.resume` now carry `status`, as `session.list` does. Before,
+  such a request had no card and the turn waited for good. Leaving a thread drops its turn state, card, queued
+  steer and numbers: the new thread no longer shows `LIVE`, `running tool` or steer mode once the old turn ends,
+  and `COST` no longer shows the other thread's dollars. A thread opened again keeps its `COST` and the `+` for an
+  unpriced call. An answer the core refuses brings its card back. A
+  finished subagent whose calls had no price adds the `+` to `COST`, and its roll-up no longer moves `MEM`.
+- `exo update` no longer widens a `--plugins` install to every plugin. The installer records the list in
+  `config.json` (`plugin_selection`) and a re-run without `--plugins`, such as the one `exo update` makes, keeps it.
+  A list also removes the plugins an earlier run installed in `$EXO_HOME/plugins` and the list leaves out, since the
+  core loads every folder there. `--plugins all` goes back to every plugin. The re-run also refreshes the plugin copies
+  in the Hermes home an earlier `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME` run used (one inside `~/.hermes`
+  still needs `--hermes-home`). An install from before this change has no list on record, so its first update installs
+  every plugin: after it, re-run `install.sh --no-pip --plugins LIST` once to go back to yours.
+- `scripts/deploy-site.sh` no longer tags and pushes a version after a failed deploy, which burned the version and
+  exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
+  refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
+  changes under `site/`.
 
 ### Security
+- An `ssh` or `mosh` chain with more hops than the gate reads (four) is `opaque_exec` and asks, keeping the
+  `remote host` exposure and the first host as target; it used to pass as plain `shell` (#153, D-038).
+- Options of trusted programs that run a command are followed as nested commands: `tar --to-command`, `-I`,
+  `--use-compress-program`, `--rsh-command`, `--rmt-command`, `--set-mtime-command`,
+  `--checkpoint-action=exec=`; `split --filter`; `sort --compress-program`; `man -P`/`--pager`; `rsync
+  -e`/`--rsh`/`--rsync-path`; `scp -S`/`-D`, `sftp -S`/`-D`; `ssh`/`scp`/`sftp -o
+  ProxyCommand`/`LocalCommand`/`RemoteCommand`/`KnownHostsCommand`, spelled as ssh's config reader takes them
+  (`-oProxyCommand=cmd`, `'ProxyCommand = cmd'`, a quoted or indented keyword, any case); `git rebase -x`, `git
+  bisect run`, `git submodule [-q] foreach`, `--upload-pack`, `--receive-pack`; `rg --pre`; `zip -TT`; a `!`
+  anywhere in the keystrokes of `less +cmd` or macOS `more +cmd` (`+G!cmd`); the `sqlite3`/`duckdb` `.shell`
+  and `.system` dot-commands and `.once`, `.output`, `.import`, `.read` with a `|command` (after options too);
+  `psql -o`/`--output '|cmd'`, `\!`, `\o`, `\out`, `\g`, `\gx` (with options), `\w`, `\write` with a pipe,
+  and backquotes in meta-commands, anywhere on a line, and `mysql system`; and `GIT_SSH_COMMAND`, `RSYNC_RSH`,
+  `PAGER` and the other command-valued variables set before the program. Options are read as each program's
+  `getopt` reads them: abbreviated long options (`--to-com=`, `psql --o`), values attached inside a short-option cluster
+  (`-xIcmd`), tar's old style (`tar xIf cmd`), and the program's own value-taking options, so a value or ssh's
+  remote command is not read as an option (`ssh host curl -I URL`, `ssh -oServerAliveInterval=60 host ls` keep
+  their classification). Values the gate cannot read ask (#154, D-038).
+- Environment dumps (`printenv X`, a bare `env`, `set`, `export -p`, `declare -x`) are `credentials` behind
+  `uv run`, `poetry run`, `pdm run`, `pipenv run`, `hatch run`, `coproc`, `sudo`, `nice`, `timeout`, `env` and
+  the other prefixes, and inside `if`/`for`/`while` bodies, as they are on their own (#155, D-038).
+- Gate (#184, D-038): brace sets are expanded as bash does before a path is matched against the secret stores.
+  `cat ~/.config/gh/{hosts,x}.yml`, `cat ~/.docker/{*,}`, `cat ~/{},.netrc}`, `cat ''{},.env}`,
+  `cat $""{.env,x}` and `cat .{d..f}{m..o}{u..w}` were allowed reads, as was `ls /srv/exo{007..1000..993}/keys`
+  with `EXO_HOME=/srv/exo0007` (bash pads the sequence to `0007 1000`); they are `credentials` now and ask. A shell
+  word is expanded from its source text, so quoted and escaped braces stay literal and keep their class; the
+  word as written is still checked, and `$"..."` is also read as plain `"..."`. A word that expands past 1,024
+  words, 32 levels of nesting, a sequence bound over 18 digits or a zero-padded bound past a 32-bit int (bash
+  wraps those), and any brace word after one tool call has expanded 4,096 words in all (globs count more), asks
+  as a secret-store path; so does `echo {1..2000}`, and so does a string literal in code holding compact JSON
+  with 11 or more objects, since code literals are read as shell commands.
 - Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
   `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
+- Gate (#178, D-038): naming `opaque_exec` at `ask` or `deny` (a category line or a rule) no longer turns off the
+  indirection floor. Before, `categories: {opaque_exec: deny}` let `bash -c 'git push origin main'` log. Only
+  lowering `opaque_exec` to `log` or `allow` turns the floor off, as before.
 - `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
   requests from the web server only, no inline script, style attribute or eval, no framing, plus
   `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
@@ -171,6 +267,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
   stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
   call the rules allow into an ask (`docs/GATE.md`).
+- Gate (#224, D-038): brace sets are expanded as bash does before a write is matched against the Exo store, as
+  #184 does for secret-store reads. `echo x > ~/.exo/polic{i..i}es/default.yaml`,
+  `cp x ~/.exo/{state,zz}/approval-grants.json`, `dd of=~/.exo/polic{i,x}es/default.yaml` and a `write_file` to
+  `~/.exo/{policies,x}/default.yaml` were allowed local writes, so one tool call could rewrite the gate's policy
+  or grants without a card. They are `store_write` now and ask the principal. Quoted and escaped braces stay
+  literal, as in bash. The store checks have their own brace budget, so no secret-store outcome changes.
 
 ## [0.2.0] (egg) - 2026-10-13
 
