@@ -322,7 +322,8 @@ The gate does not claim to stop that; it stops the one-step forms. A sandbox is 
 Known limit (#160). Some wrapper forms are not read and ask as `opaque_exec`, as they did before:
 BSD and macOS `script -q FILE CMD`, `screen -R` and `-RR` (they start the command when no session
 is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot`, `strace`,
-`prlimit`, `systemd-nspawn` and `ip netns exec`. Two are read but not fully: `systemd-run
+`prlimit`, `systemd-nspawn`, `ip netns exec`, and tmux's `if-shell`, `pipe-pane` and
+`display-popup`. Two are read but not fully: `systemd-run
 --on-calendar` (and its other timer options) is read as running its command, not as `schedule`,
 and `parallel -S` carries no remote-host signal. Both still ask.
 
