@@ -173,7 +173,8 @@ exo import-store ~/hafiz --id a --include-private --root /path/to/fresh/dir
 ## 4. Config
 
 `exo.config` owns `$EXO_HOME/config.json`: `principal`, `hermes_dir`, `hermes_home`, `venv`,
-`plugins`, `plugin_config.<plugin>`, `principals.<id>` (explicit store roots). Each value
+`plugins`, `plugin_selection` (the installer's remembered `--plugins` list), `plugin_config.<plugin>`,
+`principals.<id>` (explicit store roots). Each value
 resolves from the environment (`EXO_PRINCIPAL`, `EXO_HERMES_DIR`, `EXO_HERMES_HOME`,
 `EXO_VENV`), then the file, then the default. Environment values are never written back.
 

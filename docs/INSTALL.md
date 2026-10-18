@@ -42,6 +42,17 @@ For a `uv tool install`, it runs `uv tool upgrade exo`. After installation a fre
 imports, the protocol export and `exo models`. `exo update --dry-run` only prints the plan: it runs no
 subprocesses, preflight probes, upgrades or checks.
 
+That refresh keeps what you chose at install. `config.json` remembers a `--plugins` list (`plugin_selection`) and
+the Hermes home the plugins were copied into (`hermes_home`, written by `--with-hermes`, `--hermes-home` or
+`EXO_HERMES_HOME`). A re-run without those options, like the one `exo update` makes, installs the same plugins and
+refreshes the copies in that Hermes home. `--plugins all` goes back to every plugin, new ones included. A remembered
+Hermes home inside `~/.hermes` is left alone with a warning: pass `--hermes-home` again to refresh it. The core
+loads every folder in `$EXO_HOME/plugins`, so a list also removes the plugins an earlier run installed there and the
+list leaves out. Folders without the `.exo-managed` marker stay, and a Hermes home is left as is, since its
+`config.yaml` decides what loads. An install from before `plugin_selection` existed has no list on record, so its
+next refresh installs every plugin. After that update, run `scripts/install.sh --no-pip --plugins LIST` once: it
+records your list and removes the plugins the refresh added.
+
 After updating, finish active turns, close your clients, run `exo stop`, then reopen `exo` or `exo web`.
 The running shared core and clients retain their loaded code until restarted. The updater prints this
 instruction and leaves stopping the core to you.
@@ -113,7 +124,7 @@ pinned checkout. Hermes exact-pins its dependencies, so the result matches upstr
 | `--tag TAG` | Hermes release tag (needs `--with-hermes`) |
 | `--exo-source SRC` | a local exo checkout or a git URL (cloned into `$EXO_HOME/src/exo`) |
 | `--python PY` | interpreter for the venv |
-| `--plugins LIST` | comma list, for example `exo-memory,exo-context` |
+| `--plugins LIST` | comma list, for example `exo-memory,exo-context`. Remembered for re-runs and `exo update`. `all` means every plugin. Removes the other plugins an earlier run installed in `$EXO_HOME/plugins`. |
 | `--principal ID`, `--answers FILE` | run the interview without prompts |
 | `--no-pin`, `--no-pip`, `--no-interview` | skip a step |
 | `--strict-patches` | fail when a patch does not apply (needs `--with-hermes`) |

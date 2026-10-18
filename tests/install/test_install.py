@@ -412,3 +412,120 @@ def test_no_pip_refresh_preserves_existing_install_metadata_and_default_paths(bo
     envsh = (exo / "env.sh").read_text()
     assert f'export EXO_HOME="{exo}"' in envsh
     assert "PYTHONPATH" not in envsh and "EXO_PYTHON" not in envsh and "EXO_VENV" not in envsh
+
+
+# --- re-runs and `exo update` keep the plugins and Hermes home chosen at install -----------
+
+ALL_PLUGINS = {p.parent.name for p in (REPO / "plugins").glob("*/plugin.yaml")}
+
+
+def update_step(tmp_path):
+    """Run the installer step that `exo update` runs for an installer-managed install."""
+    from exo import update_cmd
+    if not (REPO / ".git").exists():
+        pytest.skip("not a git checkout")
+    install = {"mode": "venv", "checkout": str(REPO), "source": str(REPO), "python": sys.executable}
+    step = update_cmd.plan(install)["steps"][2]
+    assert "--no-pip" in step and "--plugins" not in step and "--hermes-home" not in step
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("EXO_", "HERMES_"))}
+    env.update(HOME=str(tmp_path / "home"), EXO_HOME=str(tmp_path / "exo"))
+    return subprocess.run(step, env=env, capture_output=True, text=True, timeout=120, umask=0o022)
+
+
+def installed(where: Path) -> set:
+    return {p.name for p in where.iterdir()}
+
+
+def config(tmp_path) -> dict:
+    import json
+    return json.loads((tmp_path / "exo" / "config.json").read_text())
+
+
+def test_update_step_keeps_the_plugin_subset_chosen_at_install(box):
+    r = run(box, "--no-pip", "--no-interview", "--yes", "--plugins", "exo-gate,exo-memory")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert config(box)["plugin_selection"] == ["exo-gate", "exo-memory"]
+    r = update_step(box)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "keeping the --plugins selection" in r.stdout
+    assert installed(box / "exo" / "plugins") == {"exo-gate", "exo-memory"}
+    cfg = config(box)
+    assert cfg["plugins"] == ["exo-gate", "exo-memory"] and cfg["plugin_selection"] == ["exo-gate", "exo-memory"]
+
+
+def test_plugins_all_goes_back_to_every_plugin(box):
+    assert run(box, "--no-pip", "--no-interview", "--yes").returncode == 0
+    assert "plugin_selection" not in config(box)               # a default install records no list,
+    assert update_step(box).returncode == 0
+    assert installed(box / "exo" / "plugins") == ALL_PLUGINS   # so new upstream plugins still arrive
+    assert run(box, "--no-pip", "--no-interview", "--yes", "--plugins", "exo-gate").returncode == 0
+    assert config(box)["plugin_selection"] == ["exo-gate"]
+    r = run(box, "--no-pip", "--no-interview", "--yes", "--plugins", "all")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert config(box)["plugin_selection"] == "all" and set(config(box)["plugins"]) == ALL_PLUGINS
+    r = update_step(box)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "keeping" not in r.stdout and set(config(box)["plugins"]) == ALL_PLUGINS
+
+
+@pytest.mark.parametrize("mode", ["with-hermes", "hermes-home"])
+def test_update_step_refreshes_the_hermes_copies(box, mode):
+    custom = box / "custom-hermes"
+    args = ["--with-hermes", "--no-pin"] if mode == "with-hermes" else ["--hermes-home", str(custom)]
+    hh = box / "exo" / "hermes-home" if mode == "with-hermes" else custom
+    r = run(box, "--no-pip", "--no-interview", "--yes", "--plugins", "exo-gate,exo-memory", *args)
+    assert r.returncode == 0, r.stderr + r.stdout
+    stale = hh / "plugins" / "exo-memory" / "plugin.yaml"
+    stale.write_text(stale.read_text() + "# stale\n")
+    kept = [p for p in (hh / "config.yaml", box / "exo" / "bin" / "exo-hermes") if p.exists()]
+    before = {p: p.read_bytes() for p in kept}
+    r = update_step(box)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert stale.read_text() == (REPO / "plugins" / "exo-memory" / "plugin.yaml").read_text()
+    assert installed(hh / "plugins") == installed(box / "exo" / "plugins") == {"exo-gate", "exo-memory"}
+    assert {p: p.read_bytes() for p in kept} == before         # the launcher and config.yaml stay as they were
+    assert len(kept) == (2 if mode == "with-hermes" else 0)
+
+
+def test_update_step_leaves_a_remembered_live_hermes_home_alone(box):
+    live = box / "home" / ".hermes"
+    r = run(box, "--no-pip", "--no-interview", "--yes", "--plugins", "exo-gate", "--hermes-home", str(live))
+    assert r.returncode == 0, r.stderr + r.stdout
+    stale = live / "plugins" / "exo-gate" / "plugin.yaml"
+    stale.write_text(stale.read_text() + "# stale\n")
+    before = snapshot(live)
+    r = update_step(box)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert snapshot(live) == before                            # ~/.hermes changes only with --hermes-home
+    assert "not refreshed" in r.stderr and "--hermes-home" in r.stderr
+    assert installed(box / "exo" / "plugins") == {"exo-gate"}
+
+
+def test_a_list_removes_the_plugins_an_earlier_run_installed(box):
+    """An install widened to every plugin (by an update before plugin_selection existed) goes back to its list."""
+    custom = box / "custom-hermes"
+    assert run(box, "--no-pip", "--no-interview", "--yes", "--hermes-home", str(custom)).returncode == 0
+    plugins = box / "exo" / "plugins"
+    assert installed(plugins) == installed(custom / "plugins") == ALL_PLUGINS
+    (plugins / "mine").mkdir()                                  # a folder of yours: no .exo-managed marker
+    (plugins / "mine" / "notes.txt").write_text("mine\n")
+    elsewhere = box / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / ".exo-managed").write_text("marked, but behind a link\n")
+    (plugins / "linked").symlink_to(elsewhere, target_is_directory=True)
+    before = snapshot(box)
+    r = run(box, "--dry-run", "--no-pip", "--no-interview", "--yes", "--plugins", "exo-gate,exo-memory")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert f"rm -rf {plugins.resolve()}/exo-bus" in r.stdout and snapshot(box) == before
+    r = run(box, "--no-pip", "--no-interview", "--yes", "--plugins", "exo-gate,exo-memory")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert installed(plugins) == {"exo-gate", "exo-memory", "mine", "linked"}
+    assert {m.name for m in discover([plugins])} == {"exo-gate", "exo-memory"}    # what the core loads
+    assert config(box)["plugins"] == config(box)["plugin_selection"] == ["exo-gate", "exo-memory"]
+    assert installed(custom / "plugins") == ALL_PLUGINS         # a Hermes home: its config.yaml decides
+    assert (elsewhere / ".exo-managed").exists() and (plugins / "mine" / "notes.txt").exists()
+    r = run(box, "--no-pip", "--no-interview", "--yes", "--plugins", "exo-gate")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert installed(plugins) == {"exo-gate", "mine", "linked"}  # a narrower list leaves no stale copy behind
+    assert update_step(box).returncode == 0
+    assert installed(plugins) == {"exo-gate", "mine", "linked"}
