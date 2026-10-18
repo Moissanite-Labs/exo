@@ -28,7 +28,8 @@ the other changes course at its next step. In Exo this works between Exo session
 Hold means an approval card (TUI and web) shows the sender and text. Allow delivers it; deny drops it;
 nothing happens in 30 minutes and it expires. A held message never enters the model's context. When the sender
 named no session and none is live (running, or used within `active_hours`, 12 by default), the card belongs to no
-thread: both clients show it in every thread, and allow opens a new thread for the message.
+thread: both clients show it in every thread, and allow opens a new thread of the seat for the message. If that
+thread cannot open, the message closes as not delivered and a notice says why.
 
 Change it per seat in the seat file (or `peers` in config.json):
 
