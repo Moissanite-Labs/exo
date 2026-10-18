@@ -93,6 +93,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Upstream tracking (`exo upstream`) | `docs/PINNING.md`, `docs/STANDALONE.md` §3 | n/a | MISSING | WP §25 |
 | Public roadmap page (`site/roadmap/`): delivery order, revision evidence, now / next / horizon with status per initiative, concept diagrams, screenshots, references | `docs/SITE-STATUS.md`, `site/roadmap/index.html`; content drawn from `docs/TASTE-BASELINE.md`, `docs/BRAND.md` and `DECISIONS.md` D-020, D-044, D-049, D-050, D-055 | n/a (no user commands changed) | `docs/DEVELOPER-GUIDE.md` "Deploying the site" (staging first) | n/a (the page links the whitepaper) |
 | Fix sweep of October 18, 2026: 45 branches, merge order, held findings, notes for parallel agents | `docs/FIX-SWEEP.md`, patches in `docs/fix-sweep/` | n/a (status report) | n/a | n/a |
+| Optimization program of October 18, 2026: Hermes-style audit, 12 ranked findings, Waves 0-3 with per-unit ownership and acceptance commands (issues #252-#266) | `docs/OPTIMIZATION.md` | n/a (plan) | n/a | n/a |
 
 ## Whitepaper gaps
 
