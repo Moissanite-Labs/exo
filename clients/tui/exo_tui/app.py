@@ -883,6 +883,7 @@ class ExoApp(App):
             if rows:
                 self.transcript.mount(Hero(rows))
             self.transcript.mount(Welcome(self.seat or "main", self.model))
+        await self.restore_approvals()  # a request of no thread shows in a new thread too (D-026)
         self.refresh_status()
 
     # ------------------------------------------------------------ sending

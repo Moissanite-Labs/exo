@@ -223,6 +223,36 @@ def test_a_window_opened_later_shows_the_card_with_no_thread(tmp_path):
     asyncio.run(main())
 
 
+def test_a_window_started_on_a_new_thread_shows_the_card_with_no_thread(tmp_path):
+    """Plain `exo` opens a new thread: a held request of no thread that was already open shows there too (D-026)."""
+    eng = make_engine(tmp_path)
+    client = FakeServerClient(eng)
+
+    async def main():
+        threadless(eng)
+        app = ExoApp(client, seat="tester")
+        async with app.run_test(size=(120, 40)) as pilot:
+            await asyncio.wait_for(app.ready.wait(), 5)
+            await until(lambda: app.card is not None, pilot)
+            assert app.card.req.request_id == "r_peer" and "r_peer" in app.threadless
+
+    asyncio.run(main())
+
+
+def test_new_shows_a_card_with_no_thread_that_waited_behind_another_threads_card(tmp_path):
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "ask")
+        await until(lambda: app.card is not None, pilot)
+        own = app.card.req.request_id
+        threadless(eng)
+        await until(lambda: any(a.request_id == "r_peer" for a in app.approvals), pilot)   # queued behind the card
+        await send(app, pilot, "/new")
+        await until(lambda: app.card is not None and app.card.req.request_id == "r_peer", pilot)
+        assert own not in {a.request_id for a in app.approvals}                           # the old thread's stays behind
+
+    run(tmp_path, sc)
+
+
 # ---------------------------------------------------------------- turn state stays with its thread
 def test_a_switch_while_a_turn_runs_leaves_the_new_thread_idle(tmp_path):
     async def sc(app, pilot, client, eng):

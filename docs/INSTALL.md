@@ -121,7 +121,7 @@ pinned checkout. Hermes exact-pins its dependencies, so the result matches upstr
 | `--tag TAG` | Hermes release tag (needs `--with-hermes`) |
 | `--exo-source SRC` | a local exo checkout or a git URL (cloned into `$EXO_HOME/src/exo`) |
 | `--python PY` | interpreter for the venv |
-| `--plugins LIST` | comma list, for example `exo-gate,exo-memory,exo-context`. Remembered for re-runs and `exo update`. `all` means every plugin. Removes the other plugins an earlier run installed in `$EXO_HOME/plugins`. Always keeps `exo-gate`: without it the core refuses every tool call. A name that matches no plugin stops the installer before it removes anything. |
+| `--plugins LIST` | comma list, for example `exo-gate,exo-memory,exo-context`. Remembered for re-runs and `exo update`. `all` means every plugin. Removes the other plugins an earlier run installed in `$EXO_HOME/plugins`. Always keeps `exo-gate`: without it the core refuses every tool call. A name given here that matches no plugin stops the installer before it removes a plugin or writes config.json (the check runs after the venv and pip steps). A remembered name only warns. |
 | `--principal ID`, `--answers FILE` | run the interview without prompts |
 | `--no-pin`, `--no-pip`, `--no-interview` | skip a step |
 | `--strict-patches` | fail when a patch does not apply (needs `--with-hermes`) |

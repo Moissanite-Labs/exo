@@ -157,7 +157,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   steer and numbers: the new thread no longer shows `LIVE`, `running tool` or steer mode once the old turn ends,
   and `COST` no longer shows the other thread's dollars. A thread opened again keeps its `COST` and the `+` for an
   unpriced call. An answer the core refuses brings its card back. A card with no thread (a held peer message) now
-  stays in every thread. Before, the window's check against `approvals.list` dropped it within seconds. A
+  stays in every thread, a new thread and a window started on one included. Before, the window's check against
+  `approvals.list` dropped it within seconds. A
   finished subagent whose calls had no price adds the `+` to `COST`, and its roll-up no longer moves `MEM`.
 - `exo update` no longer widens a `--plugins` install to every plugin. The installer records the list in
   `config.json` (`plugin_selection`) and a re-run without `--plugins`, such as the one `exo update` makes, keeps it.
@@ -166,8 +167,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   in the Hermes home an earlier `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME` run used (one inside `~/.hermes`
   still needs `--hermes-home`). An install from before this change has no list on record, so its first update installs
   every plugin: after it, re-run `install.sh --no-pip --plugins LIST` once to go back to yours. A list ignores spaces
-  and always keeps `exo-gate`, since without it the core refuses every tool call. A name that matches no plugin
-  stops the installer before it removes or records anything.
+  and always keeps `exo-gate`, since without it the core refuses every tool call. A name given with `--plugins` that
+  matches no plugin stops the installer before it removes a plugin or writes config.json. A remembered name only
+  warns.
 - `scripts/deploy-site.sh` no longer tags and pushes a version after a failed deploy, which burned the version and
   exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
   refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
