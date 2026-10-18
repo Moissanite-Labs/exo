@@ -435,7 +435,9 @@ class ExoMemoryProvider(MemoryProvider):
         belief_tokens = int(budget * (1 - st.cfg["episodic_share"])) if has_epi else budget
         sections, node_ids, hit_ids = [], [], []
         if st.rt.store.exists():
-            asm = assemble(st.rt.store, query, max(belief_tokens - 20, 50))
+            with st.rt.lock:  # beliefs accepted, edited or reverted since the last turn; one read for find and ctx
+                st.rt.store.refresh()
+                asm = assemble(st.rt.store, query, max(belief_tokens - 20, 50))
             if asm.node_ids:
                 node_ids = asm.node_ids
                 sections.append("## Principal beliefs (exo store)\n" + asm.text)
@@ -781,13 +783,13 @@ class ExoMemoryProvider(MemoryProvider):
         store = st.rt.store
         if not store.exists():
             return json.dumps({"error": "no principal store for this seat"})
-        if nid not in store.nodes:
-            store.reload()  # a node written since the store was last read
-        if nid not in store.nodes:
-            near = [i for i, _ in store.find(nid.split("/")[-1].replace("-", " "), n=5)]
-            return json.dumps({"error": f"no node {nid}", "did_you_mean": near})
-        body_only = bool(args.get("body_only"))
-        text = store.render(nid, body_only)
+        with st.rt.lock:
+            store.refresh()  # a node written, edited or removed since the store was last read
+            if nid not in store.nodes:
+                near = [i for i, _ in store.find(nid.split("/")[-1].replace("-", " "), n=5)]
+                return json.dumps({"error": f"no node {nid}", "did_you_mean": near})
+            body_only = bool(args.get("body_only"))
+            text = store.render(nid, body_only)
         cut = len(text) > GET_LIMIT
         return json.dumps({"id": nid, "result": text[:GET_LIMIT] + ("\n[cut]" if cut else ""),
                            "body_only": body_only, "truncated": cut})

@@ -2515,7 +2515,8 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files and
 # the core sockets steer the gate itself, so a write to them always asks the principal. Names that are
 # distinctive match anywhere (a relative `policies/gates.yaml` may sit in the tool's working folder);
-# absolute paths are also checked against EXO_HOME, its principal stores and EXO_PRINCIPAL_STORE.
+# absolute paths are also checked against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE and every
+# store root recorded in config `principals` (`exo init --root`, `exo import-store --root`).
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
@@ -2532,7 +2533,8 @@ def _store_roots() -> list[tuple[str, tuple, bool]]:
     if os.environ.get("EXO_PRINCIPAL_STORE"):
         roots.append((os.path.expanduser(os.environ["EXO_PRINCIPAL_STORE"]), _STORE_PROTECTED,
                       False))
-    return roots
+    from .store import explicit_roots  # stores made with --root (config `principals`): live, outside the home
+    return roots + [(os.path.abspath(r), _STORE_PROTECTED, False) for r in explicit_roots(_exo_home()).values()]
 
 
 def _protected_rel(parts: list[str], names: tuple) -> bool:
