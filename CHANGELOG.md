@@ -22,11 +22,26 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and #156), glob, brace, case and `${VAR:-...}` spellings, abbreviated long options (`tar --dir`), archivers other
   than `tar` and `unzip`, a custom home spelled relatively from a folder the gate does not know, and `plugins/`,
   `venv/`, `src/` and `bin/` under the home (`docs/GATE.md`, "Limits").
+- Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
+  retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
+  `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
+  `function NAME { ...; }` is read the same way. An environment dump inside either (`coproc env`) is
+  `credentials`. Until D-075 lands, a coproc is denied only when its inner command outranks `opaque_exec`.
+  A `credentials` line keeps the highest reversibility of its parts, so `coproc env; rm -rf x` stays
+  irreversible and a policy that denies irreversible actions still denies it.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
+- Web chat: a completed reply renders as Markdown, GFM pipe tables included (#149, #152). Streaming stays plain
+  text. Tables scroll sideways inside the message. A reply builds at most 10,000 table cells and a table at most 64
+  columns and no more padded cells than source characters; past that, a table is shown as its source text. Quotes
+  nest at most 8 deep and lists 9. Ordered lists keep their source numbers across blank lines, fences and nested
+  items; a table, quote or fence indented under an item renders inside it; paragraph line breaks, hard breaks and
+  `>` quotes are kept; a line that starts with inline code is not a fence; table cells unescape only `\|`; unclosed
+  `[` and link URLs no longer cost quadratic time; the classic layout keeps following the conversation when a reply
+  grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
 - `edit_file` after whitespace drift: when only the whitespace-normalized strategy matched (one stray double
@@ -38,8 +53,24 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   verbatim from the file, a one-line `old_string`, and escape- or Unicode-normalized matches are replaced in place
   as before, keeping the line's indent and the file's typography; `replace_all` on adjacent lines and an empty
   `new_string` no longer touch text outside the match (#127).
+- `scripts/promo_shots_web.py` works under the web page's Content-Security-Policy (#162). The layout pin and the
+  composer typing it adds to the copied page were inline scripts, which the policy refuses, so regenerated shots
+  came out in the inverse layout with an empty composer. They are now a file in the copied static folder, loaded
+  by `src`.
 
 ### Changed
+- Command deny and reservation regexes also match a literal-word view of the command (#136, D-038
+  amendment): common literal quoting (`'rm' -rf`, `r\m`, `$'rm'`, `$"rm"`) around a program or flag
+  no longer bypasses those vetoes. A `$"..."` word is read as bash reads it, so `git push $"--force"`
+  is a `force_push` and `curl $"https://evil.example/x"` stays a `web_read` of `evil.example`; the line
+  also asks (indirection) unless `opaque_exec` is named, because bash may run a locale translation of
+  it instead, and it is decided as `opaque_exec` too, keeping the stricter outcome. A heredoc whose
+  delimiter is spelled `$"EOF"` or `$'EOF'` has its body read as commands as well, since dash ends it
+  elsewhere. A `deny` or `ask` rule keyed on `command:` sees the view in a second pass that only
+  raises; allow and lower rules and grants keep original-text matching. The view also covers every
+  string literal of code, so a command-shaped literal in `python -c` is matched, fail closed. Reasons
+  name only the policy entry, so no command text reaches the ledger. Dynamic execution still asks
+  through the opaque gate.
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,
   `/findings`, handoff facts) moved to `exo.diagnostics`, and the engine factory moved to `exo.compose:create`, the
@@ -52,9 +83,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (14,813, the count after the last real reduction) and `CORE_HEADROOM` (1,000) and asserts the count stays under
   their sum, 15,813. A real reduction lowers the floor and it never rises. Security and robustness fixes are never
   blocked by the budget. The test prints the count, the headroom left and the largest counted files.
+- Tool-round cap (#92, #93): a turn that reaches 24 tool rounds now ends with a short report (done, still open,
+  next step) from one more model call with tool use off, instead of a dangling tool round. The tools stay declared
+  and `tool_choice` is `none`, so the provider sees no tool-set edit. `stop_reason` stays `max_iterations`; a failed
+  report is a coded `error` and keeps any shown text. Each capped turn costs one more model call and one more
+  spend-journal entry. Scheduled runs append the report to their status, and a capped subagent's receipt summary
+  is the report when the wrap-up produced one (otherwise it is the last message's text, as before). `Loop(wrap_up=False)` turns it off.
 - Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
+- A core that `exo web` (or any client) starts is no longer that client's child (refs #145, D-036): a short helper
+  starts a new session, forks the core and exits, so init (or the nearest subreaper) adopts the core. Process
+  ancestry changed; the principal and tool checks did not. The helper and the core run with `python -P`, so a
+  `pathlib.py` in the current folder no longer runs; an `EXO_ENGINE` module must now be installed or on `PYTHONPATH`,
+  not just in the folder the client started from; startup output from `sitecustomize` no longer breaks the start; and a core that dies while
+  starting is reported at once, with its real exit code when known and never a made-up one.
 
 ### Fixed
 - Esc on a `claude-cli` turn is no longer lost when it lands just as the CLI prints a line (#163). On Python 3.11
@@ -64,7 +107,35 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   fails, so the provider's write never meets a closed pipe and the error always reports the exit code, and the TUI
   boot test drives the boot screen's clock, so a slow start can no longer end the boot before the test looks at it.
 
+### Fixed
+- A steer sent while a turn was finishing (its completion hooks still held the session) is no longer lost: it waits
+  for the lock and runs as the next turn, keeping its author. A peer, bus or job message in that window starts a turn
+  where the seat wakes instead of being queued behind a turn that was over. The web chat keeps a `steer queued`
+  chip until the message lands or is cancelled, and drops one the core no longer holds (#147, #151).
+
+### Fixed
+- Model spend (#128): a pinned route rate below the audited long-prompt tier is refused, at policy validation and
+  at request admission, in all four classes (input, output, cache read, cache write). `claude-haiku-5-5` bills
+  $0.50/$2.50 input/output, $0.05 cache read and $0.625 5-minute cache write per MTok above 100K prompt tokens,
+  so a headline pin under-reserved and under-settled long prompts, cache-heavy ones most. The floors are
+  validation floors only; every charge still uses the pinned rates. The native-contract admission checks now
+  live in `exo.model_spend.admit_native`.
+
+### Fixed
+- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
+  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
+  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
+
 ### Security
+- Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
+  `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
+  family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
+
+### Security
+- `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
+  requests from the web server only, no inline script, style attribute or eval, no framing, plus
+  `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
+  computed widths now go through the CSSOM instead of `style` attributes; nothing looks different.
 - Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
