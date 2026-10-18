@@ -22,9 +22,10 @@ async def _main_last(r):
 
 def test_spare_main_never_calls_a_main_route():
     chat, r = _one_login('{"choice": "b"}', main=["chat:big"])
-    with pytest.raises(DecisionError, match="no decision route"):
+    with pytest.raises(DecisionError, match="no decision route") as caught:
         asyncio.run(ask_choice_result(r, "s", "q", ["a", "b"], spare="main"))
     assert chat.calls == [] and r.cooldowns == {}
+    assert "outside the 'main' routes" in str(caught.value) and "credentials" not in str(caught.value)
     res = asyncio.run(ask_choice_result(r, "s", "q", ["a", "b"]))  # other callers still fall back to main
     assert (res.choice, res.route) == ("b", "chat:big")
 

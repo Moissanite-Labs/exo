@@ -112,6 +112,9 @@ def test_store_falls_back_to_the_active_principal_in_config(make_engine, templat
     assert resolve_store(eng, {"EXO_PRINCIPAL": "env-pick"}) == eng.home / "principals" / "env-pick"
     (eng.home / "config.json").write_text(json.dumps({"principal": "../escape"}))
     assert resolve_store(eng, {}) is None  # a bad id in the file is ignored, not joined into a path
+    shutil.copytree(template_store.root, eng.home / "principals" / "7")
+    (eng.home / "config.json").write_text(json.dumps({"principal": 7}))
+    assert resolve_store(eng, {}) is None  # only a string names a principal, as exo-memory reads it
 
 
 def test_no_principal_at_all_is_a_quiet_notice_that_names_the_fix(make_engine, caplog):

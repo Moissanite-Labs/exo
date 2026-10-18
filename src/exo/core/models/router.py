@@ -84,6 +84,7 @@ class Cooldown:
     strikes: int = 0
     reset_at: float | None = None
     status: int | None = None
+    error: str = ""  # the provider's text, so a later call that sends nothing can still say why
 
 
 @dataclass
@@ -326,12 +327,12 @@ class Router:
 
     # --- outcome bookkeeping ---------------------------------------------------
     def record_failure(self, cred_id: str, model: str, status: int | None, retry_after: float | None,
-                       sole: bool, model_only: bool = False) -> Cooldown:
+                       sole: bool, model_only: bool = False, error: str = "") -> Cooldown:
         now = self.clock()
         key = f"{cred_id}|{model}" if status == 404 or model_only else cred_id
         cd = self.cooldowns.get(key) or Cooldown()
         cd.strikes += 1
-        cd.status = status
+        cd.status, cd.error = status, error
         if retry_after:
             cd.reset_at = now + retry_after
         elif cd.reset_at is not None and cd.reset_at <= now:
@@ -524,7 +525,7 @@ class Router:
                 # 400, 413 and 422 do not fall back, unless the transport marked the upstream as down (retryable).
                 fallback = (ev.status not in NO_FALLBACK_STATUS or ev.retryable) if ev.status is not None else ev.retryable
                 if fallback:
-                    self.record_failure(cred.id, route.model, ev.status, retry_after, sole,
+                    self.record_failure(cred.id, route.model, ev.status, retry_after, sole, error=ev.error or "",
                                         model_only=model_only or ev.status in NO_FALLBACK_STATUS)  # a 400: this model's
                     if ev.status == 429:
                         # A responding rate limiter is reachable. Retry-After belongs to the credential cooldown,
@@ -576,13 +577,20 @@ class Router:
     def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
                  now: float) -> tuple[int | None, str] | None:
         """Status and message when waiting cannot help: the provider refused the key or login (401, 402, 403; on a
-        later call too, while that credential is the chain's first to reopen), or a local server is not running."""
-        if last is None:  # nothing ran: the chain's credential that reopens first holds the cause
-            names = {r.provider for r in self.chain(role)}
-            cooling = sorted(((cd.until, k.partition("|")[0].partition("#")[0], cd.status)
-                              for k, cd in self.cooldowns.items() if cd.until > now), key=lambda c: c[0])
-            _, name, status = next((c for c in cooling if c[1] in names), (0, "", None))
-            err = f"HTTP {status}"
+        later call too, while that credential, or a model of the chain on it, reopens first), or a local server is
+        not running."""
+        if last is None:  # nothing ran: the first of this chain's cooldowns to reopen holds the cause
+            routes = {(r.provider, r.model) for r in self.chain(role)}
+            cooling: list[tuple[float, str, Cooldown]] = []
+            for key, cd in self.cooldowns.items():
+                cred, scoped, model = key.partition("|")
+                name = cred.partition("#")[0]
+                # A credential|model cooldown counts only for a model of this chain. A gate side call (D-081) cools a
+                # model this role never asks, and that model's refusal says nothing about this role's routes.
+                if cd.until > now and ((name, model) in routes if scoped else any(name == n for n, _ in routes)):
+                    cooling.append((cd.until, name, cd))
+            _, name, cd = min(cooling, key=lambda c: c[0], default=(0.0, "", Cooldown()))
+            status, err = cd.status, cd.error or f"HTTP {cd.status}"
         else:
             name, status, err = tried[-1].partition(":")[0], last.status, last.error or ""
         spec = self.providers.get(name) or {}

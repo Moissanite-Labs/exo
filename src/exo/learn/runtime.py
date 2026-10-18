@@ -85,8 +85,9 @@ def resolve_store(engine: Any, env: Mapping[str, str] | None = None) -> Path | N
     root = plugin_cfg.get("store_root") or env.get("EXO_STORE")
     if root:
         return Path(str(root)).expanduser()
-    # Last, the active principal in config.json (`exo init` sets it), read from the file as exo-memory does.
-    pid = plugin_cfg.get("principal") or env.get("EXO_PRINCIPAL") or (cfg.data.get("principal") if cfg else None)
+    # Last, the active principal in config.json (`exo init` sets it), a string only, as exo-memory reads it.
+    active = cfg.data.get("principal") if cfg else None
+    pid = plugin_cfg.get("principal") or env.get("EXO_PRINCIPAL") or (active if isinstance(active, str) else None)
     if pid and PID_RE.match(str(pid)):
         return home / "principals" / str(pid)
     return None

@@ -12,6 +12,7 @@ import pytest
 from exo.core.context import DefaultCompressor, SummaryError
 from exo.core.loop import Loop
 from exo.core.models import FakeProvider, Router
+from exo.core.models.decision import DecisionError, ask_choice_result
 from exo.core.models.fake import rate_limited
 from exo.core.models.router import AUTH_TTL
 from exo.core.sessions import EventBus, SessionStore
@@ -61,7 +62,22 @@ def test_later_calls_during_the_auth_cooldown_keep_the_cause():
     ev = run(r)[-1]
     assert len(rec.requests) == 1  # the credential is benched: nothing is sent
     assert ev.kind == "error" and not ev.retryable and ev.status == 401
-    assert ev.error == "anthropic rejected the key (HTTP 401): fix ANTHROPIC_API_KEY or add a key in /providers"
+    assert ev.error == ("anthropic rejected the key (HTTP 401: invalid x-api-key): fix ANTHROPIC_API_KEY "
+                        "or add a key in /providers")
+
+
+def test_a_later_call_keeps_the_providers_own_text():
+    """A 403 is not always the key: some providers send it for flagged input. A later call in the cooldown keeps
+    the provider's text, so it still says which."""
+    clock = Clock()
+    r = Router(roles={"main": ["p:m"]}, providers={"p": {"key_env": "P_API_KEY"}},
+               catalog={"providers": {}, "models": {}, "roles": {}},
+               instances={"p": FakeProvider([refused(403, "your input was flagged")], name="p")}, env={}, clock=clock)
+    run(r)
+    clock.t += 5
+    ev = run(r)[-1]
+    assert not ev.retryable and ev.status == 403
+    assert ev.error.startswith("p rejected the key (HTTP 403: your input was flagged)")
 
 
 def test_key_is_tried_again_after_the_auth_cooldown_or_a_reload():
@@ -132,7 +148,27 @@ def test_a_later_call_names_the_refusal_only_while_nothing_reopens_sooner():
     run(r)
     clock.t += 5
     ev = run(r)[-1]
-    assert not ev.retryable and ev.error.startswith("p refused the login (HTTP 401)")
+    assert not ev.retryable and ev.error.startswith("p refused the login (HTTP 401: refused)")
+
+
+def test_a_gate_side_call_refusal_does_not_blame_the_key_for_main():
+    """A spared side call (the gate, D-081) cools only the model it asked. When a later main call runs nothing, a
+    refusal on a model outside the main chain is not the cause: main's own rate limit is, and it stays retryable."""
+    clock = Clock()
+    p = FakeProvider([refused(403, "model not allowed"), rate_limited()], name="p")
+    r = Router(roles={"main": ["p:big"], "aux": ["p:small"]}, providers={"p": {"key_env": "P_KEY"}},
+               catalog={"providers": {}, "models": {}, "roles": {}}, instances={"p": p}, env={}, clock=clock)
+    with pytest.raises(DecisionError):
+        asyncio.run(ask_choice_result(r, "s", "q", ["a", "b"], spare="main"))
+    assert set(r.cooldowns) == {"p|small"}
+    clock.t += 1
+    assert run(r)[-1].retryable  # main's own 429
+    clock.t += 1
+    ev = run(r)[-1]  # nothing runs: the key is cooling for main's rate limit
+    assert len(p.calls) == 2
+    assert ev.retryable and "cooling down" in ev.error and "rejected the key" not in ev.error
+    ev = run(r, "aux")[-1]  # the aux chain asks p:small, so there the refusal is still the cause
+    assert not ev.retryable and ev.error.startswith("p rejected the key (HTTP 403: model not allowed)")
 
 
 @pytest.mark.parametrize("name,where", [("ollama", "127.0.0.1:11434"), ("lmstudio", "127.0.0.1:1234"),

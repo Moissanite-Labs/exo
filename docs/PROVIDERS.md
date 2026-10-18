@@ -270,12 +270,17 @@ The error says why. When waiting cannot fix the cause, it also says what will, a
 
 - The last route tried refused its key (HTTP 401, 402 or 403): `anthropic rejected the key (HTTP 401: invalid
   x-api-key): fix ANTHROPIC_API_KEY or add a key in /providers`. A provider with no key, such as `claude-cli`,
-  asks you to log in again instead. The key stays benched for its cooldown (5 minutes after a 401). Calls in that
-  time repeat the cause, not a wait, unless another route of the role reopens sooner.
+  asks you to log in again instead. Some providers also send 403 for a refused request, such as flagged input.
+  The provider's text in the parentheses says which. The key stays benched for its cooldown (5 minutes after a
+  401). Calls in that time repeat the cause and that text, not a wait, unless another route of the role reopens
+  sooner. Only the role's own routes count. A refusal on a model the role never asks, such as the gate's aux
+  model (D-081), is not named in a main-role error.
 - A local provider's server refused the connection: `ollama is not running at 127.0.0.1:11434: start it, then
   test it in /providers`.
 
 Other failures (429, 5xx, timeouts, a remote network error) stay retryable and say when the next route reopens.
+Only the last route tried decides. When an earlier route was down and the last one refused its key, the error
+names the key and not the outage.
 The two errors above still carry `retry_after`, the time the route reopens. A background summary that failed on
 one tries again then instead of giving up on the span (`docs/MEMORY-MODEL.md`).
 A passing test in `/providers` (`t`) or in the web Providers tab tells the running core to reload that provider.
