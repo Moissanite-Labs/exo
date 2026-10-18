@@ -1316,22 +1316,32 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Parts are checked for `deny` and `reserved` only: rules, category overrides, the opaque bump, third-party
   escalation, posting checks and the floors still see the dominant part, which sets the card, the category and
   everything else. A part carries the tool of the call it came in on (`tool:execute_code` names the tool, not
-  `python -c` run from bash), the `ssh` hop is a part of its own with the host as its target, and the inner commands
-  of an `ssh` line are `internal` like the line. A flat mapping entry may carry `reason` or `name` like a rule.
-  `Decision.reserved` lists the parts a reserved entry matched, under the pinned policy and a pending one alike,
-  and the exo-gate hook refuses a standing grant for the line's category when one of them lies outside the
-  grant. The ledger view (`as_dict`) leaves the parts out,
-  so approval bindings and trace rows are unchanged.
+  `python -c` run from bash), the `ssh` hop is a part of its own whose target is the bare host (no `user@`, `ssh://` or
+  `:port`) and the destination as written, and the inner commands of an `ssh` line are `internal` like the line. A
+  string literal in code is kept when any simple command in it is non-benign, whatever the order. A mapping entry in
+  `deny` or `reserved` counts only its match keys: `reason`, `name`, a note or a typo is dropped, so it widens the entry
+  and never voids it (rejecting it at load would fall back to the defaults and lose the whole list). `Decision.reserved`
+  lists the parts a reserved entry matched, once each, under the pinned policy and a pending one alike, and the exo-gate
+  hook refuses a standing grant for the line's category when one of them lies outside the grant; it compares the targets
+  as written, and only the decision's ledger view redacts URL userinfo. `ssh` options are read as getopt reads them, so
+  a value-taking letter at the end of a cluster (`-vp 22`) or `-B`/`-P`/`-I` no longer puts the option's value in the
+  host's place; such a line asks. `mosh` long options are read the same way, and the command given to `mosh --ssh`,
+  `--client` or `--server` is read as a command and the line asks. The ledger view of a classification (`as_dict`)
+  leaves the parts out, so approval bindings and trace rows are unchanged.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
   under two policies while a change is pending).
-- **Limits:** commands inside `python -c` or `execute_code` count only when they classify as a non-benign category
-  (a `web_read` or `local_write` literal is dropped), and code can reach a target with no literal at all. Residual
-  deny → ask paths, where the gate cannot read the command and files the line as `opaque_exec`, so a `deny` on the
-  hidden action becomes an `ask`: `coproc` (addressed by #140); nesting past the depth cap (#137, #141);
-  `eval $(...)`; a command arriving on stdin (`echo ... | xargs -I{} sh -c '{}'`); the wrappers `watch`,
-  `parallel`, `tmux`, `screen` and `setsid`. `${...}` bodies are worse: the lexer does not read them, so the line
-  can be `allow` until #143 / #144 land.
+- **Limits:** a literal inside `python -c` or `execute_code` counts only when one of its commands classifies as a
+  non-benign category (an all-`web_read` or all-`local_write` literal is dropped), and code can reach a target with
+  no literal at all. Deny → ask: where the gate cannot read the command it files the line as `opaque_exec`, so a
+  `deny` on the hidden action becomes an `ask`, for example `coproc` (addressed by #140), nesting past the depth
+  cap (#137, #141), `eval $(...)`, a command arriving on stdin (`echo ... | xargs -I{} sh -c '{}'`) and the
+  wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`; the list is not closed. Deny → allow: the fallback
+  has gaps where the line is `allow` outright even under `deny`: an `ssh`/`mosh` chain past the hop cap (#153);
+  command-valued options of allowlisted programs (`tar --to-command`, `split --filter`, `sort
+  --compress-program`, `man -P`, `rsync -e`, `sqlite3 .shell`; #154) and likewise `ssh -o ProxyCommand=` or
+  `LocalCommand=`, `less +!` and `PAGER=`/`GIT_PAGER=`/`LESSOPEN=` before the program, all fixed by open PR
+  #164; `${...}` bodies, which the lexer does not read (#143, #144).
 - **Revisit if:** a principal wants a denied action to be allowed when it is part of a longer line. None asked;
   the entry format says "no agent may take" the action.
 

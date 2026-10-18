@@ -137,12 +137,15 @@ class Decision:
     violations: list[str] = field(default_factory=list)
     exposure: str = ""                # effective exposure after scopes
     third_party: bool = False
-    # (category, target) of each part a reserved entry matched (D-075). A standing grant for the line's
-    # own category must not cover a reserved part outside it.
+    # (category, target) of each part a reserved entry matched, once each (D-075). A standing grant for the
+    # line's own category must not cover a reserved part outside it, so the targets stay as written here.
     reserved: list[tuple[str, str]] = field(default_factory=list)
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        """Ledger view: reserved targets with URL userinfo redacted."""
+        d = asdict(self)
+        d["reserved"] = list(dict.fromkeys((cat, redact_userinfo(t)) for cat, t in self.reserved))
+        return d
 
 
 # --- helpers -------------------------------------------------------------------------------
@@ -166,6 +169,35 @@ def _most_severe(cs: Iterable[Classification]) -> Classification | None:
 
 
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]")
+
+
+_USERINFO = re.compile(r"(?<=://)[^/\s?#]+@")
+
+
+def redact_userinfo(s: str) -> str:
+    """``s`` with the user and password of any URL in it replaced by ``***``, for text that reaches the ledger."""
+    return _USERINFO.sub("***@", s or "")
+
+
+# ssh's options that take a value (ssh(1)), and the ones the gate read with their value before D-075. With any
+# other option, the gate took the value for the host.
+_SSH_VALUE_OPTS = "BbcDEeFIiJLlmOoPpQRSWw"
+_SSH_VALUE_OPTS_READ = ("-i", "-p", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-W", "-b", "-c", "-E", "-m", "-O", "-Q",
+                        "-S", "-w", "-e")
+# mosh's long options that take a value (mosh(1)), given as `--opt=value` or `--opt value`; the first three name a
+# command mosh runs.
+_MOSH_VALUE_OPTS = ("--client", "--server", "--ssh", "--predict", "--family", "--port", "--bind-server",
+                    "--experimental-remote-ip")
+
+
+def _ssh_host(dest: str) -> str:
+    """The host an ssh destination names: `user@host`, `ssh://user@host:2222` and `[::1]:22` give the host alone."""
+    if dest.startswith("ssh://"):
+        dest = dest[len("ssh://"):].split("/", 1)[0]
+    dest = dest.rpartition("@")[2]
+    if dest.startswith("["):
+        return dest[1:].partition("]")[0]
+    return dest.rsplit(":", 1)[0] if dest.count(":") == 1 else dest
 
 
 def _host_of(url: str) -> str:
@@ -1060,22 +1092,48 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
         return [_classify_http(argv, cmd)]
     if prog in ("ssh", "mosh"):
-        rest, i = argv[1:], 0
+        rest, i, moved, runs = argv[1:], 0, "", []
         while i < len(rest) and rest[i].startswith("-"):
-            i += 2 if rest[i] in ("-i", "-p", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-W", "-b", "-c", "-E", "-m",
-                                  "-O", "-Q", "-S", "-w", "-e") else 1
-        host = rest[i] if i < len(rest) else ""
+            w = rest[i]
+            i += 1
+            if w.startswith("--"):
+                name, eq, val = w.partition("=")
+                if prog == "mosh" and name in _MOSH_VALUE_OPTS:
+                    if not eq and i < len(rest):
+                        val, i = rest[i], i + 1
+                        moved = moved or name
+                    if name in _MOSH_VALUE_OPTS[:3]:
+                        runs.append((name, val))
+                continue
+            # Short options cluster as in getopt: the first letter that takes a value ends the word, and the
+            # value is the rest of it or the next word (`-vp 22`, `-oPort=22`, `-B eth0`).
+            v = next((j for j, ch in enumerate(w[1:], 1) if ch in _SSH_VALUE_OPTS), 0)
+            if v and v == len(w) - 1:
+                i += 1
+                if w not in _SSH_VALUE_OPTS_READ:
+                    moved = moved or w
+        dest = rest[i] if i < len(rest) else ""
+        host = _ssh_host(dest)
         inner = " ".join(rest[i + 1:])
         if inner and depth < _DEPTH:
             c = classify_shell(inner, inner_depth)
-            # The hop is a part too, so a `target:<host>` entry matches when the inner command has its own target.
-            c.parts.append(_make("shell", summary=f"ssh {host}", target=host, command=cmd, signals=["remote host"]))
         else:
-            c = _make("shell", summary=f"ssh {host}", command=cmd)
+            c = _make("shell", summary=f"ssh {dest}", command=cmd)
+        if moved:
+            # The gate used to read this option's value as the host. The parts are read as above, and the line
+            # asks, so a line that used to ask on a host it misread is not allowed now.
+            c = _combine([_opaque(f"{prog} {moved}: the host follows the option's value", cmd), c], cmd)
+        for name, val in runs:                # mosh --ssh, --client, --server: a command it runs; it asks
+            run = classify_shell(val, inner_depth) if val and depth < _DEPTH else _make("shell", command=cmd)
+            c = _combine([_opaque(f"mosh {name}: runs a command", cmd), run, c], cmd)
+        # The hop is a part too, so a `target:<host>` entry matches when the inner command has its own target:
+        # the bare host, and the destination as written when it carries a user, a scheme or a port.
+        c.parts += [_make("shell", summary=f"ssh {dest}", target=t, command=cmd, signals=["remote host"])
+                    for t in dict.fromkeys((host, dest)) if t]
         for p in _each_part(c):               # every part runs on the remote host (D-075)
             if EXPOSURE.index(p.exposure) < 1:
                 p.exposure = "internal"
-        c.target = c.target or host
+        c.target = c.target or dest
         c.signals.append("remote host")
         return [c]
     if prog in ("vercel", "netlify"):
@@ -1304,9 +1362,12 @@ def classify_code(code: str) -> Classification:
     texts = [m.group(2) for m in _CODE_STRINGS.finditer(code)]
     texts += [" ".join(shlex.quote(s) for _, s in re.findall(r"(['\"])((?:(?!\1).)*)\1", m.group(1)))
               for m in _CODE_LISTS.finditer(code)]
+    # A `\n` or `\t` escape in a literal separates commands once the code runs; read that form too.
+    texts += [t.replace("\\n", "\n").replace("\\t", "\t") for t in texts if "\\n" in t or "\\t" in t]
     for s in texts[:200]:
         c = classify_shell(s, depth=_DEPTH - 1)
-        if c.category not in _BENIGN:
+        # Any part, not only the dominant one: `./build.sh; systemctl enable x` is opaque on top (D-075).
+        if any(p.category not in _BENIGN for p in _each_part(c)):
             parts.append(c)
     c = _combine(parts, code)      # `classify` stamps the tool; a nested result keeps the shell's (D-075)
     c.command = code
@@ -1821,6 +1882,9 @@ def _as_list(v: Any) -> list:
     return v if isinstance(v, list) else [v]
 
 
+_MATCH_KEYS = ("category", "tool", "target", "command", "exposure", "reversibility", "third_party")
+
+
 def _rule_matches(match: Mapping, c: Classification) -> bool:
     for k, want in match.items():
         if k == "category" and c.category not in [str(x) for x in _as_list(want)]:
@@ -1837,7 +1901,7 @@ def _rule_matches(match: Mapping, c: Classification) -> bool:
             return False
         if k == "third_party" and bool(want) != c.third_party:
             return False
-        if k not in ("category", "tool", "target", "command", "exposure", "reversibility", "third_party"):
+        if k not in _MATCH_KEYS:
             return False      # unknown key: never match, so a typo cannot widen a rule
     return True
 
@@ -1847,8 +1911,10 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
     or a mapping like a rule's match. Plain prose that matches none of these is ignored."""
     for e in entries:
         if isinstance(e, Mapping):
-            # A flat entry may carry reason or name like a rule does; they are not match keys.
-            match = e["match"] if "match" in e else {k: v for k, v in e.items() if k not in ("decision", "reason", "name")}
+            # Only match keys count. Anything else (reason, name, decision, a note, a typo) is dropped, so it
+            # widens a deny or reserved entry instead of voiding it: these lists only make a decision stricter.
+            raw = e["match"] if isinstance(e.get("match"), Mapping) else e
+            match = {k: v for k, v in raw.items() if k in _MATCH_KEYS}
             if e and _rule_matches(match, c):
                 return str(e.get("reason") or e.get("name") or e)
             continue
@@ -2014,7 +2080,7 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         outcome, reason, rule = "deny", f"denied by policy ({denied[0][1]})", "deny"
     return Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
                     exposure=eff.exposure, third_party=eff.third_party,
-                    reserved=[(p.category, p.target) for p, _ in reserved])
+                    reserved=list(dict.fromkeys((p.category, p.target) for p, _ in reserved)))
 
 
 def summarize(c: Classification, d: Decision, default: str = "skip") -> str:
