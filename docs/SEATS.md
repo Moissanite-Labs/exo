@@ -3,6 +3,10 @@
 A seat is one named configuration of an Exo agent: who it serves, which models, which tools, which
 skills, which MCP servers, which plugins and channels. Run one with `exo serve --seat <name>`
 (sets `EXO_SEAT`; the engine factory reads it). `seat.list` shows the files and the active seat.
+A second seat beside a running `exo serve` needs its own `--socket`, for example
+`exo serve --seat scout --socket $EXO_HOME/run/scout.sock`, and its clients pass the same `--socket`. `exo serve`
+refuses a socket that another core answers on and exits 1 without loading the seat. Only the core on
+`run/exod.sock` writes `run/exod.pid`, so `exo stop` stops that core and never a seat on its own socket.
 
 This is the one seat format. The role templates in `plugins/exo-orchestra/seats/*/seat.toml` are written in
 it (see `plugins/exo-orchestra/SEATS.md`), and `/orchestra check <file>` validates a file against it.
@@ -89,3 +93,23 @@ enables, `exo serve` calls `factory(link, **config)`, runs `start()` after the s
 shutdown. The link is exod's in-process `ChannelLink`: it runs commands as the caller `channel` (`docs/GATE.md`
 "Who answered"), the only caller the core takes a bus message from. A channel run through a protocol `Client` on
 the socket cannot hand in bus messages.
+
+## Several seats in one home
+
+Seats whose files sit in one `$EXO_HOME` run side by side. With no `exo serve` on the home's `run/exod.sock`,
+`exo tui --seat scout` and `exo tui --seat forge` are two cores, one per seat. So are two `exo serve --seat NAME`,
+each with its own `--socket`. A TUI window joins a server on `run/exod.sock` whatever its `--seat`, so it then talks
+to that server's seat. Each core holds its own writer lock (`run/agent-<seat>.lock`, see docs/MEMORY-MODEL.md), and
+all of them use the home's `sessions.sqlite` and `schedule.sqlite`.
+
+- **Events.** Each core numbers its own events, and the database raises a number past the table's highest inside
+  the write transaction, so two cores never reuse one. One core's stream still rises, with gaps where the other
+  seat wrote. A core sends only its own events live. Replay goes by number, not by seat, so it returns the other
+  seat's events too. A session filter still lets through the ones with no session, such as a scheduled job's card.
+  `hello`, `events.subscribe` and `/health` report the table's highest number, so a client that starts from there
+  replays none of the other seat's past events.
+- **Delegate tasks.** A core fails the queued or running tasks a dead process left behind only for its own agent,
+  and only once it holds the writer lock. Another seat's core, or a second core of the same seat that fails the
+  lock, leaves live tasks alone.
+- **Scheduled jobs.** A job with a `seat` runs only in that seat's core, and each due slot runs once
+  (docs/SCHEDULE.md).

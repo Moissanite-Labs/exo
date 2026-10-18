@@ -144,10 +144,15 @@ class Delegator:
         self.over: set[str] = set()           # children stopped for their token budget
         self.marks: dict[str, list[str]] = {}  # child -> "steered by ..." notes for its receipt (exo.subagents, #97)
         self.sems: dict[int, asyncio.Semaphore] = {}
-        db = engine.store
-        db._q(TABLE)
-        db._q("UPDATE tasks SET status='failed', updated=? WHERE status IN ('queued','running') "
-              "AND (child IS NULL OR child NOT LIKE 'bus:%')", (s.now_ts(),))
+        engine.store._q(TABLE)
+
+    def fail_stale(self) -> None:
+        """Fail this agent's tasks a dead process left queued or running. ``claim_writer`` calls it, so another
+        seat's core, or a second core of this seat that fails the lock, never touches live tasks."""
+        a = getattr(self.engine, "agent", "default")
+        self.engine.store._q("UPDATE tasks SET status='failed', updated=? WHERE status IN ('queued','running') AND "
+                             "(child IS NULL OR child NOT LIKE 'bus:%') AND (parent IN (SELECT id FROM sessions WHERE "
+                             "agent=?) OR child IN (SELECT id FROM sessions WHERE agent=?))", (s.now_ts(), a, a))
 
     def install(self) -> None:
         self.engine.registry.register(SPEC, self.tool, replace=True)
@@ -314,6 +319,7 @@ class Delegator:
                      run_tool=run_tool, system_prompt=prompt, model=model, max_iterations=b.max_turns or 24,
                      max_retries=e.loop.max_retries, retry_delay=e.loop.retry_delay)
         child.approval_ms = e.loop.approval_ms  # engine.ask adds to one table; the parent turn reads it
+        child._state = e.loop._state  # one lock, steer queue and running flag per session, whichever loop runs it
         return child
 
     def _emit(self, parent: str, b: Brief, status: str, child: str | None, packet: str) -> None:

@@ -666,6 +666,53 @@ _INTERP_VALUE_FLAGS = {"python": ("-X", "-W"), "pypy": ("-X", "-W"), "node": ("-
                        "ruby": ("-r", "-I"), "perl": ("-I",)}
 _SAFE_PY_MODULES = {"pytest", "pip", "venv", "json.tool", "ruff", "mypy", "black", "isort", "unittest",
                     "compileall", "py_compile", "coverage", "build", "pydoc", "pyright", "flake8", "pylint"}
+# Wrappers that run a command given in their arguments (#160): program -> options that take a value. An option
+# ending in "=" takes one only attached (`-mFILE`, `--mount=FILE`). The command is the argv after the options
+# and _WRAPPER_OPERANDS operands (a lock file, a new root, a CPU mask, a priority), or a shell command string
+# (`flock -c`, `script -c`, `tmux -c`, watch without -x, a tmux shell-command, a parallel template).
+_WRAPPERS = {
+    "setsid": (), "chronic": (), "unbuffer": (), "catchsegv": (), "firejail": (), "taskset": (),
+    "dbus-run-session": ("--dbus-daemon", "--config-file"),
+    "flock": ("-w", "--timeout", "--wait", "-E", "--conflict-exit-code", "-c", "--command"),
+    "chroot": ("--userspec", "--groups"),
+    "chrt": ("-T", "--sched-runtime", "-P", "--sched-period", "-D", "--sched-deadline"),
+    "numactl": ("-C", "--physcpubind", "-N", "--cpunodebind", "-m", "--membind", "-p", "--preferred", "-i",
+                "--interleave", "-P", "--preferred-many", "-w", "--weighted-interleave"),
+    "xvfb-run": ("-e", "--error-file", "-f", "--auth-file", "-n", "--server-num", "-p", "--xauth-protocol", "-s",
+                 "--server-args", "-w", "--wait"),
+    "unshare": ("-R", "--root", "-w", "--wd", "-S", "--setuid", "-G", "--setgid", "--map-user", "--map-group",
+                "--map-users", "--map-groups", "--propagation", "--setgroups", "--monotonic", "--boottime",
+                "-m=", "-u=", "-i=", "-n=", "-p=", "-U=", "-C=", "-T="),
+    "nsenter": ("-t", "--target", "-W", "--wdns", "-S", "--setuid", "-G", "--setgid", "-m=", "-u=", "-i=", "-n=",
+                "-p=", "-C=", "-U=", "-T=", "-r=", "-w="),
+    "systemd-run": ("-H", "--host", "-M", "--machine", "-u", "--unit", "-p", "--property", "--description",
+                    "--slice", "--expand-environment", "--service-type", "--uid", "--gid", "--nice",
+                    "--working-directory", "-E", "--setenv", "-C", "--capsule", "--json", "--background",
+                    "--path-property", "--socket-property", "--timer-property", "--on-active", "--on-boot",
+                    "--on-startup", "--on-unit-active", "--on-unit-inactive", "--on-calendar"),
+    "watch": ("-n", "--interval", "-q", "--equexit", "-d="),
+    "script": ("-I", "--log-in", "-O", "--log-out", "-B", "--log-io", "-T", "--log-timing", "-m", "--logging-format",
+               "-E", "--echo", "-o", "--output-limit", "-c", "--command", "-t="),
+    "tmux": ("-c", "-f", "-L", "-S", "-T"),
+    "screen": ("-c", "-e", "-h", "-p", "-s", "-S", "-t", "-T"),
+    "parallel": ("-a", "--arg-file", "--arg-file-sep", "--arg-sep", "--basefile", "--bf", "--block", "--block-size",
+                 "-C", "--colsep", "-d", "--delimiter", "--delay", "-E", "--env", "--halt", "--header", "-I", "-j",
+                 "--jobs", "-P", "--max-procs", "--joblog", "-L", "--max-lines", "-n", "--max-args", "-N", "--load",
+                 "--memfree", "--nice", "--results", "--res", "--retries", "--return", "-s", "--max-chars", "-S",
+                 "--sshlogin", "--slf", "--sshloginfile", "--ssh", "--tagstring", "--timeout", "--tmpdir",
+                 "--termseq", "--transferfile", "--tf", "--wd", "--workdir", "--rpl", "--sshdelay", "--profile",
+                 "-J"),
+}
+_WRAPPER_OPERANDS = {"flock": 1, "chroot": 1, "taskset": 1, "chrt": 1}
+# Wrappers that run the command as another user, in other namespaces or as a system unit: like sudo, the line
+# carries a signal named after the wrapper and a reversible part counts as costly.
+_PRIVILEGED_WRAPPERS = ("chroot", "nsenter", "unshare", "systemd-run")
+# tmux commands that take a shell-command, with their options that take a value
+_TMUX_RUNS = {"new-session": "cefFnstxy", "new-window": "ceFnt", "split-window": "ceFlpt", "respawn-pane": "cet",
+              "respawn-window": "cet", "run-shell": "cdt"}
+_TMUX_ALIASES = {"new": "new-session", "neww": "new-window", "splitw": "split-window", "respawnp": "respawn-pane",
+                 "respawnw": "respawn-window", "run": "run-shell", "splitp": "split-window",
+                 "split-pane": "split-window"}
 _OPAQUE_PROGRAMS = {"source": "reads and runs a shell file", ".": "reads and runs a shell file",
                     "alias": "defines an alias", "function": "defines a shell function",
                     "trap": "sets a command to run on a signal", "make": "runs Makefile recipes",
@@ -1019,6 +1066,127 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
     return words, sudo, None
 
 
+def _wrapper_args(argv: list[str], i: int, takes: tuple, permute: bool = False) -> tuple[int, list]:
+    """Read a wrapper's options from argv[i] as getopt does: up to the first operand (past it with `permute`)
+    or `--`, `--opt=value` or `--opt value` (an unambiguous prefix of four letters or more counts), short
+    options clustered (`-qc`, `-n5`). Returns the index of the first operand and the (option, value) pairs read."""
+    seen: list[tuple[str, str]] = []
+    while i < len(argv):
+        a = argv[i]
+        i += 1
+        if a == "--":
+            break
+        if not a.startswith("-") or a == "-":
+            if not permute:
+                return i - 1, seen
+        elif a.startswith("--"):
+            name, eq, val = a.partition("=")
+            full = [t for t in takes if len(name) > 5 and t.startswith(name) and not t.endswith("=")]
+            name = name if name in takes or len(full) != 1 else full[0]
+            if not eq and name in takes and i < len(argv):
+                val, i = argv[i], i + 1
+            seen.append((name, val))
+        else:
+            for k, ch in enumerate(a[1:], 2):
+                if "-" + ch in takes or "-" + ch + "=" in takes:
+                    val = a[k:]
+                    if not val and "-" + ch in takes and i < len(argv):
+                        val, i = argv[i], i + 1
+                    seen.append(("-" + ch, val))
+                    break
+                seen.append(("-" + ch, ""))
+    return i, seen
+
+
+def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words) -> list[Classification]:
+    """A wrapper that runs a command (#160): setsid, flock, chroot, watch, script -c, tmux, screen, parallel...
+    The command is classified as a nested command beside an opaque part, like the command after xargs: the line
+    asks as before, and a deny on what runs applies when its category outranks opaque_exec (until D-075). A
+    command the gate cannot find or read stays opaque."""
+    argv = [w.text for w in words]
+    head = _opaque(f"{prog}: {_OPAQUE_PROGRAMS.get(prog, 'runs a command')}", cmd)
+    parts, texts, rest = [head], [], []
+    if prog == "screen":
+        multi = {"-Logfile": "--logfile", "-ls": "-Q", "-list": "-Q", "-wipe": "-Q", "-fn": "--fn", "-fa": "--fa",
+                 "-ln": "--ln"}
+        i, seen = _wrapper_args([multi.get(a, a) for a in argv], 1, _WRAPPERS[prog] + ("--logfile",))
+        opts = {o for o, _ in seen}
+        # -r and -x reattach, -ls, -wipe and -Q query: nothing new runs. -R reattaches, or starts the command when
+        # no session is detached; it is not read and asks (a known limit). -X sends a screen command; its
+        # `screen` command opens a window that runs argv. Otherwise the argv after the options runs.
+        if "-X" not in opts and not {"-r", "-R", "-x", "-Q"} & opts:
+            rest = words[i:]
+        elif "-X" in opts and argv[i:i + 1] == ["screen"]:
+            j, _ = _wrapper_args(argv, i + 1, ("-t", "-T", "-h"))
+            rest = words[j + 1:] if argv[j:j + 1] and argv[j].isdigit() else words[j:]
+    elif prog == "tmux":
+        i, seen = _wrapper_args(argv, 1, _WRAPPERS[prog])
+        texts = [v for o, v in seen if o == "-c"]
+        # A command list, split as tmux splits it (cmd_parse_from_arguments): an argument whose last character is
+        # `;` ends a command and loses the `;` (`';'`, `'sleep 3;'`); one ending in `\;` does not end it and
+        # reads as ending in `;`.
+        cmds: list[list[str]] = [[]]
+        for a in argv[i:]:
+            if a.endswith("\\;"):
+                cmds[-1].append(a[:-2] + ";")
+            elif a.endswith(";"):
+                cmds[-1] += [a[:-1]] if a[:-1] else []
+                cmds.append([])
+            else:
+                cmds[-1].append(a)
+        for sub_argv in cmds:
+            sub = _TMUX_ALIASES.get(sub_argv[0], sub_argv[0]) if sub_argv else ""
+            if sub in _TMUX_RUNS:
+                j, flags = _wrapper_args(sub_argv, 1, tuple("-" + c for c in _TMUX_RUNS[sub]))
+                body = sub_argv[j:]
+                if body and not (sub == "run-shell" and ("-C", "") in flags):
+                    texts.append(body[0] if len(body) == 1 else shlex.join(body))
+    elif prog == "parallel":
+        i, _ = _wrapper_args(argv, 1, _WRAPPERS[prog])
+        seps = (":::", "::::", ":::+", "::::+")
+        j = next((k for k in range(i, len(argv)) if argv[k] in seps), len(argv))
+        template = " ".join(argv[i:j])
+        if template:
+            # Each argument is appended to the template, or put where {} stands, and the line runs in a shell.
+            # Only on the line itself and up to four times this command's own length, sized before any text is
+            # built: a template can be a parallel line too, and reading every argument at each level would
+            # multiply the work. The template is also read alone.
+            args = argv[j + 1:] if argv[j:j + 1] == [":::"] and not depth else []
+            args = list(dict.fromkeys(args[:next((n for n, a in enumerate(args) if a in seps), len(args))]))[:16]
+            budget, slots = 4 * sum(len(a) + 1 for a in argv), template.count("{}")
+            for a in args if slots or "{" not in template else []:
+                q = shlex.quote(a)
+                budget -= len(template) + (slots * (len(q) - 2) if slots else len(q) + 1)
+                if budget < 0:
+                    break
+                texts.append(template.replace("{}", q) if slots else f"{template} {q}")
+            texts.append(template)
+    else:
+        i, seen = _wrapper_args(argv, 1, _WRAPPERS[prog], permute=prog == "script")
+        texts = [v for o, v in seen if prog in ("flock", "script") and o in ("-c", "--command")]
+        i += _WRAPPER_OPERANDS.get(prog, 0)
+        if prog == "flock" and argv[i:i + 1] in (["-c"], ["--command"]):
+            texts.append(argv[i + 1] if i + 1 < len(argv) else "")
+        elif prog == "watch" and not {("-x", ""), ("--exec", "")} & set(seen):
+            texts.append(" ".join(argv[i:]))         # watch runs the words joined through `sh -c`
+        elif prog != "script":
+            rest = words[i:]
+    for text in texts:
+        parts.append(classify_shell(text, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
+    parts += inner_words(rest)
+    if _env_dump(_strip_prefixes_keep_env([w.text for w in rest])[0]):   # as for coproc and the prefixes (#155)
+        parts.append(_make("credentials", summary="shell touching environment dump", command=cmd,
+                           signals=["secret store"]))
+    shown = " ".join(w.text for w in rest) or "; ".join(t for t in texts if t)
+    if shown:
+        head.summary = f"{prog} runs {shown}"[:120]
+    if prog in _PRIVILEGED_WRAPPERS:
+        head.signals.append(prog)
+        for p in parts:
+            p.reversibility = "costly" if p.reversibility == "reversible" else p.reversibility
+    return parts
+
+
 def _trusted_path(prog: str) -> bool:
     """A program named by path runs as itself only from a system bin folder or a virtualenv/node bin."""
     p = _expand_text(prog)
@@ -1032,6 +1200,73 @@ def _stdin_texts(k: _Cmd, piped: str | None) -> list[str]:
     if piped is not None:
         out.append(piped)
     return out
+
+
+# Builtins that take a variable name and evaluate an array subscript in it as arithmetic, which runs any
+# $( ) or ` ` there (#179): program -> (options whose value is a name, options with another value, operands are names).
+_NAME_BUILTINS = {"printf": ("v", "", False), "read": ("a", "dinNptu", True), "declare": ("", "", True),
+                  "typeset": ("", "", True), "local": ("", "", True), "unset": ("", "", True),
+                  "wait": ("p", "", False), "test": ("v", "", False), "[": ("v", "", False)}
+
+
+def _subscript_parts(prog: str, args: list[str], cmd: str, depth: int, done: list[str]) -> list[Classification]:
+    """The commands inside the array subscripts of a name-taking builtin's name arguments, whatever their quoting
+    (`done`: bodies the line's own parse already classified). Any expansion there also asks: bash evaluates its
+    value (a variable's, or a $( )'s output) as arithmetic too, and a value such as `b[$(cmd)]` runs cmd."""
+    named, valued, operands = _NAME_BUILTINS[prog]
+    names, i, opts = [], 0, True
+    while i < len(args):
+        a, i = args[i], i + 1
+        if prog in ("test", "["):
+            if a == "-v" and i < len(args):
+                names.append(args[i])
+            continue
+        if opts and a == "--":
+            opts = False
+        elif opts and len(a) > 1 and a[0] in "-+":
+            for n, letter in enumerate(a[1:], 2):
+                if letter in named + valued:
+                    val = a[n:] or (args[i] if i < len(args) else "")
+                    i += 0 if a[n:] else 1
+                    names += [val] if letter in named else []
+                    break
+        elif operands:
+            names.append(a)
+            opts = False
+        else:
+            break
+    parts: list[Classification] = []
+    for name in names:
+        m = re.match(r"[^=\[]*\[", name)
+        if not m:
+            continue
+        lx, level, other, q, inner = _Lexer(name), 1, False, "", 0
+        lx.i = m.end()
+        while lx.i < len(name) and level:     # to the ] that ends it as bash finds it: a quote or \ hides a ]
+            ch = name[lx.i]
+            if ch == "`" or name.startswith(("$(", "${"), lx.i):   # read in any quoting, as bash does
+                (lx._dollar if ch == "$" else lx._backtick)(_Word())
+                other = True
+                continue
+            if ch == "\\" and q != "'":   # a top-level \$ or \` is literal; bash < 5.2 expands a nested [ ] again
+                lx.i += 1
+                if name[lx.i:lx.i + 1] in ("$", "`") and (level > 1 or inner > 0):
+                    other = True
+                    continue
+            elif ch in "'\"" and q in ("", ch):
+                q, inner = ("" if q else ch), 0
+            elif not q:
+                level += {"[": 1, "]": -1}.get(ch, 0)
+            elif q == '"':   # bash 3.2 reads a [ ] in double quotes as a nested subscript
+                inner += {"[": 1, "]": -1}.get(ch, 0)
+            other = other or ch in "\\'\"$"   # quoting or a variable: bash reads it, the gate does not
+            lx.i += 1
+        parts += [classify_shell(sub, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd)
+                  for sub in lx.subs if sub not in done]
+        if other:   # a signal, not an opaque part, so a deny on another part of the line still wins
+            why = f"{prog} evaluates an array subscript the gate cannot read ({name[:40]})"
+            parts.append(_make("read", summary=why[:120], command=cmd, signals=["indirection"]))
+    return parts
 
 
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
@@ -1051,6 +1286,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(classify_shell(split, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
+        if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
+            parts += _subscript_parts(words[0].text, [w.text for w in words[1:]], cmd, depth, ctx.get("subs", []))
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped)
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
@@ -1112,6 +1349,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         return _classify_simple(_Cmd(words=ws, heredocs=k.heredocs, herestrings=k.herestrings), cmd,
                                 inner_depth, ctx, piped)
 
+    if prog in _WRAPPERS:
+        return _classify_wrapper(prog, words, cmd, depth, inner_words)
     if prog in _OPAQUE_PROGRAMS:
         parts = [_opaque(f"{prog}: {_OPAQUE_PROGRAMS[prog]}", cmd)]
         if prog in ("coproc", "function"):
@@ -2091,7 +2330,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part."""
     cmds, subs, func = _parse(cmd or "")
-    ctx: dict = {}
+    ctx: dict = {"subs": subs}
     parts: list[Classification] = []
     prev: _Cmd | None = None
     for k in cmds:
@@ -2214,6 +2453,12 @@ _SENSITIVE_PATH = re.compile(
     r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
     r"proc/[^/]+/environ)(/|$)")
 
+# D-039: a run folder holds the principal credential and the TCP token beside each socket, so the folder itself
+# is a secret store; what is below it keeps its own class (job output in run/jobs/ stays readable). A relative
+# path counts only when it spells `.exo/run`: a bare `run` is not resolved against the gate's working folder (a
+# relative `keys` is). The secrets are glob samples (_run_secrets); their names already match _SENSITIVE_PATH.
+_RUN_DIR = re.compile(r"(^|/)\.exo/(principals/[^/]+/)?run$")
+
 # Concrete examples a shell glob is tested against ("could this glob match a secret store?").
 _SENSITIVE_SAMPLES = ("keys.env", ".exo/keys", ".config/exo/keys.env", ".divan/seat.key", "auth.json",
                       "google_token.json", ".unii/acct/token", "client_secret_1.json", ".hermes/p/.env",
@@ -2250,6 +2495,39 @@ def _dynamic_secret_paths() -> list[str]:
     claude_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(_home(), ".claude")
     paths.append(os.path.expanduser(claude_dir))
     return paths
+
+
+def _is_run_dir(path: str, real: str = "") -> bool:
+    """The run folder itself (D-039), in any spelling: `$EXO_HOME/run`, `.exo/run` or a principal's `run`. An
+    absolute path is also resolved as written, links before `..` (``real``, when the caller has resolved it)."""
+    raw = path.replace("\\", "/")
+    path = os.path.normpath(raw)
+    if _RUN_DIR.search(path):
+        return True
+    if not path.startswith("/"):
+        return False
+    try:
+        cands = {c for c in (path, real or os.path.realpath(raw)) if c.endswith("/run")}
+        homes = {os.path.normpath(_exo_home()), os.path.realpath(_exo_home())} if cands else set()
+    except (OSError, ValueError):
+        return False
+    return any(re.fullmatch(re.escape(h) + r"(/principals/[^/]+)?/run", c) for c in cands for h in homes)
+
+
+def _run_secrets() -> list[str]:
+    """The credential files a run folder can hold: the core's, and the principal key of each agent that may serve
+    there, run/agent-<seat>.principal.key (`default`, $EXO_SEAT and up to 64 seats under $EXO_HOME/seats, named
+    as internal_names does: filtered, then sorted, then capped, so other files there take no place; the scan reads
+    at most 4,096 entries)."""
+    names = ["default", os.environ.get("EXO_SEAT") or ""]
+    try:
+        with os.scandir(os.path.join(_exo_home(), "seats")) as it:   # bounded: this runs for every glob word
+            seats = {e.name if e.is_dir() else os.path.splitext(e.name)[0] for e in itertools.islice(it, 4096)
+                     if not e.name.startswith((".", "_")) and (e.is_dir() or e.name.endswith((".toml", ".json")))}
+            names += sorted(seats)[:64]
+    except OSError:
+        pass
+    return ["exod.principal.key", "exod.token"] + [f"agent-{n}.principal.key" for n in dict.fromkeys(names) if n]
 
 
 _BRACE_CAP = 1024
@@ -2446,8 +2724,8 @@ def _real(path: str, memo: dict[str, str]) -> str:
 
 def is_sensitive_path(path: str) -> bool:
     """True when ``path`` names one of the secret stores (ssh, cloud and netrc credentials, Exo's key
-    stores, signing keys, token and client-secret files, .env files). Never reads the file. A brace set
-    counts when the path or any word bash expands it to names a store, or when it expands past the cap."""
+    stores and run folders, signing keys, token and client-secret files, .env files). Never reads the file. A
+    brace set counts when the path or any word bash expands it to names a store, or when it expands past the cap."""
     words = _brace_words(str(path or ""))
     return words is None or _sensitive_words(words)
 
@@ -2463,10 +2741,11 @@ def _sensitive_words(words: list[str]) -> bool:
     for w in words:
         try:
             a = os.path.abspath(w)
-            cands = {a, os.path.realpath(w) if ".." in w.split(os.sep) or a.startswith("//") else _real(a, memo)}
+            real = os.path.realpath(w) if ".." in w.split(os.sep) or a.startswith("//") else _real(a, memo)
+            cands = {a, real}
         except (OSError, ValueError):
-            cands = {w}
-        if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots):
+            real, cands = "", {w}
+        if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots) or _is_run_dir(w, real):
             return True
     return False
 
@@ -2487,16 +2766,33 @@ def _glob_words(words: list[str]) -> bool:
     home = _home()
     samples = [os.path.join(home, x) for x in _SENSITIVE_SAMPLES] + [os.path.join(_exo_home(), "keys", "seat.key"),
                                                                        _dynamic_secret_paths()[1]]
-    return any(_glob_word(w, home, samples) for w in words)
+    secrets = _run_secrets()
+    runs = [os.path.join(_exo_home(), "run"), os.path.join(home, ".exo", "run"), ".exo/run"]
+    return any(_glob_word(w, home, samples, secrets, runs) for w in words)
 
 
-def _glob_word(tok: str, home: str, samples: list[str]) -> bool:
+def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
+    raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
+    tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
-    in_store_dir = bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
+    linked = bool(d_abs) and _is_run_dir(raw if raw.startswith("/") else os.path.join(home, raw))
+    if linked:                                           # also when normpath lost it: ~/<link to run/jobs>/..
+        runs = runs + [d_abs]
+    keys = "agent-" in tok or ".principal" in tok
+    if "/" in tok:   # an agent key only when the glob spells its key part, names a run folder, or has a literal
+        # folder part around its wildcards (`~/.exo/*/`); not for `*/*default*` or `~/*test*`, which bash cannot
+        # expand into a run folder but fnmatch's `*` would match across `/`
+        reach = keys or linked or (d_abs in [os.path.normpath(os.path.join(home, r)) for r in runs] if d_abs else any(
+            q and not re.fullmatch(r"[*?]+|\.{1,2}", q) for q in d.split("/")))
+        samples = samples + [os.path.join(r, x) for r in runs for x in secrets if reach or x.startswith("exod.")]
+    in_store_dir = linked or bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
     if len(stem) < 3 and not in_store_dir:
         return False
+    if "/" not in tok:   # a bare name: a run secret by its own name, an agent key only by its `agent-` or key part
+        if any(_glob_rx(tok).match(x) for x in secrets if keys or x.startswith("exod.")):
+            return True
     head, tail = re.split(r"[*?\[]", tok, maxsplit=1)[0], re.split(r"[*?\[\]]", tok)[-1]   # literal: narrow first
     xs = [x for x in samples + list(_SENSITIVE_SAMPLES)
           if x.endswith(tail) and (x.startswith(head) if tok.startswith("/") else head in x)]
