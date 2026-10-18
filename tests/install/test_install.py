@@ -378,3 +378,44 @@ def test_a_list_removes_the_plugins_an_earlier_run_installed(box):
     assert installed(plugins) == {"exo-gate", "mine", "linked"}  # a narrower list leaves no stale copy behind
     assert update_step(box).returncode == 0
     assert installed(plugins) == {"exo-gate", "mine", "linked"}
+
+
+@pytest.mark.parametrize("spaced", ["exo-gate, exo-memory", " exo-memory ,exo-gate "])
+def test_spaces_in_a_plugin_list_do_not_drop_a_plugin(box, spaced):
+    assert run(box, "--no-pip", "--no-interview", "--yes").returncode == 0
+    r = run(box, "--no-pip", "--no-interview", "--yes", "--plugins", spaced)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert installed(box / "exo" / "plugins") == {"exo-gate", "exo-memory"}
+    assert config(box)["plugin_selection"] == ["exo-gate", "exo-memory"]
+
+
+def test_a_plugin_name_that_matches_nothing_stops_the_install(box):
+    """A typo must not narrow the install: the list removes the other plugins and is remembered for updates."""
+    assert run(box, "--no-pip", "--no-interview", "--yes").returncode == 0
+    for args in (["--dry-run"], []):
+        r = run(box, *args, "--no-pip", "--no-interview", "--yes", "--plugins", "exo-gate,exo-memroy")
+        assert r.returncode != 0 and "exo-memroy" in r.stderr and "exo-memory" in r.stderr  # names what exists
+        assert "rm -rf" not in r.stdout
+    assert installed(box / "exo" / "plugins") == ALL_PLUGINS
+    assert "plugin_selection" not in config(box)
+
+
+def test_a_remembered_name_this_checkout_lacks_warns_and_goes_on(box):
+    import json
+    assert run(box, "--no-pip", "--no-interview", "--yes", "--plugins", "exo-gate,exo-memory").returncode == 0
+    path = box / "exo" / "config.json"
+    path.write_text(json.dumps({**config(box), "plugin_selection": ["exo-gate", "exo-memory", "exo-gone"]}))
+    r = run(box, "--no-pip", "--no-interview", "--yes")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "exo-gone" in r.stderr
+    assert installed(box / "exo" / "plugins") == {"exo-gate", "exo-memory"}
+
+
+def test_a_list_without_the_gate_keeps_the_gate(box):
+    """Without exo-gate the core refuses every tool call, so a list (such as INSTALL.md's example) keeps it."""
+    assert run(box, "--no-pip", "--no-interview", "--yes").returncode == 0
+    r = run(box, "--no-pip", "--no-interview", "--yes", "--plugins", "exo-memory,exo-context")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "adding exo-gate" in r.stdout
+    assert installed(box / "exo" / "plugins") == {"exo-context", "exo-gate", "exo-memory"}
+    assert config(box)["plugin_selection"] == ["exo-context", "exo-gate", "exo-memory"]

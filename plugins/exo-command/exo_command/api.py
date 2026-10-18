@@ -12,10 +12,16 @@ centre's source. A core that does not handle a command yet answers 501.
   POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
   POST /api/chat/sessions/<id>/rename      command.run rename     {title}; principal only (D-069)
   POST /api/chat/sessions/<id>/command     command.run           {name, args}; read-only names only
+  POST /api/chat/sessions/<id>/model       session.get, then models.set {model}; the shared main route, principal only
+  GET  /api/chat/models                    models.list           the /model picker's choices
   GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
   POST /api/feedback                       feedback.send         {session, verdict, message_id, text}
   POST /api/ui/respond                     ui.respond            {panel_id, action, value}
-  GET  /api/complete/commands             the slash commands this page runs, with argument shapes and choices
+  GET  /api/complete/commands             the slash commands this page runs, with argument shapes and choices, the
+                                           core's commands.list names and the terminal client's own (client); of
+                                           those, the names the page does not run (/grants, /help) are held, not sent;
+                                           core is null while the core cannot answer, [] from an older core without
+                                           commands.list
   GET  /api/complete/files?q=&session=     files under the session's folder for @ (D-037); the server guards it
   GET  /api/tasks                          tasks.list
   GET  /api/tasks/<task>                   command.run subagent open   the child's task row and session tail (#97)
@@ -81,6 +87,7 @@ def error_reply(exc: Exception) -> Reply:
         return 400, {"error": str(exc)}
     if isinstance(exc, SourceError):
         status = (404 if exc.code == "not_found" else 403 if exc.code == "forbidden" else 409 if exc.code == "conflict"
+                  else 400 if exc.code in ("bad_model", "bad_request")
                   else 501 if exc.code in ("unsupported", "unknown_command") else 502)
         return status, {"error": exc.message, "code": exc.code}
     return 502, {"error": core_message(exc)}
@@ -105,6 +112,7 @@ def _route(method: str, p: list, key: str):
     get, post = method == "GET", method == "POST"
     table = {
         "chat/sessions": (_sessions, _create),
+        "chat/models": (_models, None),
         "chat/panels": (_panels, None),
         "feedback": (None, _feedback),
         "ui/respond": (None, _ui_respond),
@@ -122,8 +130,8 @@ def _route(method: str, p: list, key: str):
         return _task_open if get else False
     if len(p) == 3 and p[0] == "tasks" and p[2] in ("steer", "stop"):
         return ({"steer": _task_steer, "stop": _task_stop}[p[2]]) if post else False
-    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command", "unsteer", "rename"):
-        return ({"send": _send, "interrupt": _interrupt, "command": _command, "unsteer": _unsteer, "rename": _rename}[p[3]]) if post else False
+    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command", "unsteer", "rename", "model"):
+        return ({"send": _send, "interrupt": _interrupt, "command": _command, "unsteer": _unsteer, "rename": _rename, "model": _model}[p[3]]) if post else False
     return None
 
 
@@ -154,6 +162,18 @@ async def _send(c, p, q, body):
     text = _str(body, "text", required=True, limit=MAX_TEXT)
     mode = _choice(body, "mode", MODES, "send")
     return await c.source.call(s.TurnSend(session=p[2], text=text, mode=mode))
+
+
+async def _models(c, p, q, body):
+    return await c.source.call(s.ModelsList())
+
+
+async def _model(c, p, q, body):
+    # The core validates the route and enforces principal authority, just as for the TUI.
+    model = _str(body, "model", required=True, limit=300)
+    # Validate the target before models.set changes the shared router (the core checks it afterwards).
+    await c.source.call(s.SessionGet(session=p[2]))
+    return await c.source.call(s.ModelsSet(model=model, session=p[2]))
 
 
 async def _command(c, p, q, body):
@@ -249,26 +269,49 @@ async def _schedule_edit(c, p, q, body):
 
 # ---------------------------------------------------------------- completion (D-037)
 WEB_COMMANDS = {"context": "what the next model call carries, part by part",
+                "model": "pick or set the shared main model; default <ref> saves the default",
+                "default": "pick or set the default model for new threads",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
                 "new": "start a new thread", "rename": "give this thread a new title",
                 "layout": "inverse puts the box on top with the newest message under it; classic is the usual order"}
+# The names of the shared table that core plugins serve through commands.list, not the terminal client: credited to
+# the core when listed, and unknown (so sent, as in the TUI) when their plugin is not loaded.
+PLUGIN_COMMANDS = {"trace", "findings", "grants", "exo", "orchestra", "peer-release", "peer-deny", "exo-command"}
 _INDEXES: Dict[tuple, cm.FileIndex] = {}
 
 
 async def _complete_commands(c, p, q, body):
-    """Static: the commands the web composer runs itself. Also says whether the guidance line is on."""
+    """Static: the commands the web composer runs itself. Also says whether the guidance line is on, which names the
+    core's commands.list has, and the terminal client's own commands (``client``: /help, /quit, ...), so typo help
+    covers them and the composer holds those it does not run instead of sending them (D-037)."""
     rows = []
     for name, desc in WEB_COMMANDS.items():
         slot = cm.plan(name, [])
         rows.append({"name": name, "description": desc, "args": cm.ARG_HINTS.get(name, ""),
                      "choices": [{"value": v, "meta": m} for v, m in (slot.choices if slot else ())]})
-    guidance = True
+    guidance: bool | None = True
     try:
         got = await c.source.call(s.ConfigGet(key="guidance.enabled"))
         guidance = got.get("value") is not False
+    except SourceError as exc:
+        # not_found: the key is unset, so the default (on) holds; unknown_command/unsupported: an older core.
+        if exc.code not in ("unknown_command", "unsupported", "not_found"):
+            guidance = None   # not known yet (a core down or restarting): the page asks again
     except Exception:
-        pass   # an older core: leave the line on
-    return {"commands": rows, "guidance": guidance}
+        guidance = None
+    # null when commands.list fails for now (a core down or restarting): the page asks again for as long as it takes.
+    # An older core that has no commands.list says so, and its [] ends the asking.
+    core = None
+    try:
+        listed = await c.source.call(s.CommandsList())
+        core = [str(r["name"]) for r in listed.get("commands") or [] if isinstance(r, dict) and r.get("name")]
+    except SourceError as exc:
+        if exc.code in ("unknown_command", "unsupported"):
+            core = []
+    except Exception:
+        pass
+    client = [n for n in cm.ARG_HINTS if n not in WEB_COMMANDS and n not in PLUGIN_COMMANDS]
+    return {"commands": rows, "guidance": guidance, "core": core, "client": client}
 
 
 async def _complete_files(c, p, q, body):
