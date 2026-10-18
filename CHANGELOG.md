@@ -6,14 +6,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
-- A `deny` or `reserved` entry in `gates.yaml` now matches any simple command on a compound line, nested ones
-  included (D-075). Before, only the most severe part was checked, so `git push origin main && rm -rf build` asked
-  about the delete and ran the denied push on approval. Each part carries the tool of its call (`tool:execute_code`
-  no longer denies `python -c` run from bash), the `ssh` hop and the `internal` exposure of an `ssh` line reach
-  every part, a flat mapping entry with a `reason` or `name` is no longer ignored, and a standing grant in exo-gate
-  no longer covers a reserved part of the line. Where the gate cannot read a command (`coproc`, nesting past the
-  depth cap, `eval $(...)`, a command on stdin, `watch`/`tmux`-style wrappers) the line still asks as opaque rather
-  than denying; `docs/GATE.md` lists these paths, and `${...}` bodies are #143 / #144.
+- A `deny` or `reserved` entry in `gates.yaml` now matches any simple command on a compound line, nested ones included
+  (D-075). Before, only the most severe part was checked, so `git push origin main && rm -rf build` asked about the
+  delete and ran the denied push on approval. Each part carries the tool of its call (`tool:execute_code` no longer
+  denies `python -c` run from bash), the `ssh` hop and the `internal` exposure of an `ssh` line reach every part, and a
+  standing grant in exo-gate no longer covers a reserved part of the line. A denied command in a `python -c` or
+  `execute_code` string literal denies whatever its place in the literal (`./build.sh; systemctl enable x` was dropped
+  as opaque), and `\n` escapes split the literal. A mapping entry's keys that are not match keys (`reason`, a note, a
+  typo) widen it instead of making it match nothing. A `target:` entry matches the `ssh` host whatever the form
+  (`user@host`, `ssh://host:22`), and `ssh` options are read as getopt reads them: the value of `-B`, `-P`, `-I` or of a
+  cluster ending in a value letter (`ssh -vp 22 host rm -rf /data`) was read as the host, so the line was `allow` even
+  under `deny: [delete]`; such a line now asks or denies. The same goes for `mosh` long options, and the command given
+  to `mosh --ssh`, `--client` or `--server` is read and asks. `Decision.reserved` lists each hit once, and its ledger
+  view redacts URL userinfo. Where the gate cannot read a command (for example `coproc`, nesting past the depth cap,
+  `eval $(...)`, a command on stdin, `watch`/`tmux`-style wrappers) the line asks as opaque rather than denying. Some
+  paths are still `allow` even under `deny`: `ssh` chains past the hop cap (#153), command-valued options of allowlisted
+  programs (#154; both fixed by open PR #164) and `${...}` bodies (#143 / #144); `docs/GATE.md` lists them.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit

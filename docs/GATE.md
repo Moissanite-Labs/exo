@@ -172,14 +172,16 @@ Any indirection walked past it. It now works the other way round. A small lexer
 and splits the line into simple commands. Each simple command has one program position (after
 assignments, reserved words such as `if` and `do`, and prefixes such as `sudo`, `env`, `timeout`).
 
-A command is `allow` only when every program in it is known and nothing is hidden:
+A command is meant to be `allow` only when every program in it is known and nothing is hidden.
+The known limits below name the paths where a known program still runs a command the gate does
+not read.
 
 - Known programs: `READ_PROGRAMS` (cat, ls, rg, head...), `SHELL_PROGRAMS` (mkdir, cp, pytest,
   ruff...), the tools with their own rules (git, gh, curl, vercel, stripe, ssh, exo...), and
   `TOOL_SUBCOMMANDS` (npm install, cargo test, go build, uv sync...). A program given by path
   runs as itself only from a system bin folder or a virtualenv or `node_modules/.bin` folder.
-- Everything else is `opaque_exec`, which asks: a variable, `$( )` or a glob in the program
-  position; a script file; `bash`/`sh`/`zsh` reading `-c`, a file, a pipe or a heredoc;
+- Everything else is `opaque_exec`, which asks. For example: a variable, `$( )` or a glob in the
+  program position; a script file; `bash`/`sh`/`zsh` reading `-c`, a file, a pipe or a heredoc;
   `python -c`, `node -e`, `perl -e`, `ruby -e`, `osascript`; `make`, `npm run`, `npm test`,
   `npx`, `uvx`; `xargs`; `find -exec`; `eval`, `source`, `.`, `alias`, `trap`, shell functions;
   git aliases and command-running git config; gh aliases and extensions; an unknown program.
@@ -194,15 +196,21 @@ A command is `allow` only when every program in it is known and nothing is hidde
   parts: rules, category overrides, the opaque bump, third-party escalation, posting checks and
   the floors see the dominant part. A part carries the tool of the call it came in on
   (`tool:execute_code` matches the `execute_code` tool, not `python -c` run from bash), the `ssh`
-  hop is a part with the host as its target, and the inner commands of an `ssh` line are
-  `internal`. The ledger view of a classification (`as_dict`) leaves the parts out.
-  `Decision.reserved` names the parts a reserved entry matched, and the exo-gate hook does not
-  let a standing grant for the line's category cover one of them.
+  hop is a part whose target is the bare host (`user@`, `ssh://` and a `:port` stripped) and the
+  destination as written, and the inner commands of an `ssh` line are `internal`. A mapping entry
+  in `reserved` or `deny` counts only its match keys: any other key (`reason`, `name`, a note, a
+  typo) is dropped, so it widens the entry instead of voiding it, and an entry left with no match
+  key matches every action. The ledger view of a classification (`as_dict`) leaves the parts out.
+  `Decision.reserved` names the parts a reserved entry matched, once each, and the exo-gate hook
+  does not let a standing grant for the line's category cover one of them. Its ledger view
+  (`Decision.as_dict`) redacts URL userinfo (`https://***@host/...`).
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
-  (`subprocess.run(['gh','pr','comment',...])` is a `github_post`). A command inside such code
-  becomes a part only when it classifies as a non-benign category; a `web_read` or
-  `local_write` literal is dropped, and code can reach a target with no literal at all.
+  (`subprocess.run(['gh','pr','comment',...])` is a `github_post`). A literal is also read with
+  its `\n` and `\t` escapes applied. It becomes a part when any simple command in it classifies
+  as a non-benign category, whatever the order (`ls; git push` and `./build.sh; systemctl enable
+  x` alike); a literal that is all `read`, `web_read`, `local_write` and the like is dropped, and
+  code can reach a target with no literal at all.
 - The principal can lower `opaque_exec` only by naming it: `categories: {opaque_exec: act}` or a
   rule whose match has `category: opaque_exec` (for example with a `command` regex for `make`).
 
@@ -210,12 +218,34 @@ Known limit. A trusted program that runs project code (pytest runs conftest.py, 
 `npm install` runs package scripts) can run code the agent wrote earlier with a local write.
 The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
 
-Residual `deny` → `ask` paths (D-075). Where the gate cannot read a command it files the line
-as `opaque_exec`, which asks, so a `deny` entry on the hidden action does not fire. Today:
+Known limit: `deny` → `ask` (D-075). Where the gate cannot read a command it files the line as
+`opaque_exec`, which asks, so a `deny` entry on the hidden action becomes an `ask`. For example:
 `coproc` (addressed by #140); nesting past the depth cap (#137, #141); `eval $(...)`; a command
 arriving on stdin (`echo ... | xargs -I{} sh -c '{}'`); the wrappers `watch`, `parallel`, `tmux`,
-`screen` and `setsid`. `${...}` bodies are worse: the lexer does not read them, so the line can
-be `allow` until #143 / #144 land.
+`screen` and `setsid`. These are examples, not a complete list.
+
+Known limit: `deny` → `allow`. The fallback has gaps. On these paths the line is `allow` outright,
+even with the hidden action in `deny`:
+
+- an `ssh` or `mosh` chain with more hops than the gate reads (four) is plain `shell` (#153);
+- options of allowlisted programs whose value is a command the program runs: `tar --to-command`
+  and `-I`, `split --filter`, `sort --compress-program`, `man -P`, `rsync -e`, `sqlite3 '.shell
+  ...'` (#154), and likewise `ssh -o ProxyCommand=...` or `LocalCommand=...`, `less '+!...'` and a
+  command-valued variable set before the program (`PAGER=`, `GIT_PAGER=`, `LESSOPEN=`);
+- `${...}` bodies, which the lexer does not read (#143, #144).
+
+Open PR #164 fixes #153 and #154, including the `ssh -o`, `less` and variable forms above.
+`git -c core.pager=...` and the other command-running git config keys already ask.
+
+`ssh` options are read as getopt reads them: in a cluster such as `-vp 22`, the first letter
+that takes a value ends the word, and the value is the rest of the word or the next word. Before,
+the gate took the value of `-B`, `-P`, `-I` or of a cluster ending in a value letter for the host
+and the host for the program, so `ssh -vp 22 host rm -rf /data` was `allow` even under `deny:
+[delete]`. Now the inner command is read, and a line written that way also asks, because a few
+such lines used to ask on the program the gate misread. `mosh` long options that take a value
+(`--port 60001`, `--family inet`) are read the same way. The value of `mosh --ssh`, `--client` or
+`--server` is a command that runs, so the gate reads it as one: `mosh --ssh='rm -rf /data' host`
+denies under `deny: [delete]`, and any such line asks.
 
 ## The store is credentials (D-038)
 
