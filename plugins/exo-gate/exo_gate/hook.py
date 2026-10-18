@@ -45,6 +45,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
 from exo.principal import require_principal
+from exo.store import principal_root
 
 logger = logging.getLogger("exo_gate")
 
@@ -102,7 +103,10 @@ def resolve_settings(overrides: Mapping[str, Any] | None = None,
     exo_home = Path(env.get("EXO_HOME") or Path.home() / ".exo").expanduser()
     store = get("principal_store") or env.get("EXO_PRINCIPAL_STORE") or ""
     if not store and env.get("EXO_PRINCIPAL"):
-        store = str(exo_home / "principals" / env["EXO_PRINCIPAL"])
+        try:  # config principals.<id> first: a store made with --root
+            store = str(principal_root(env["EXO_PRINCIPAL"], exo_home))
+        except ValueError:  # not a principal id: no store, so the default policies apply
+            store = ""
     author = str(get("author"))
     seat = env.get("EXO_SEAT") or author  # the seat's own signing key, the same file the bus client uses
     key_path = get("key_path") or str(exo_home / "keys" / f"{seat}.key")
@@ -495,6 +499,8 @@ class Gate:
             d2 = gate.decide(c, changed, ctx)
             if _RANK[d2.outcome] > _RANK[d.outcome]:
                 d = d2
+            # A part reserved under either policy keeps its ask from a standing grant (D-075).
+            d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
             d.reason += " (policy files changed this session; the stricter of old and new applies until /gate accept)"
         if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
             d.reason += f" (registry risk is high and {tool} is not a known tool)"
@@ -601,6 +607,10 @@ class Gate:
 
     def _grant_for(self, c: gate.Classification, d: gate.Decision, binding: str, outward: bool) -> Optional[dict]:
         if c.category in gate.NO_GRANT or (d.violations and not binding):
+            return None
+        # D-075: a grant covers the act it was given for. A reserved entry that matched another part of
+        # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.
+        if any(hit != (c.category, c.target) for hit in d.reserved):
             return None
         try:
             return self.grants.match(c.category, c.target or c.tool, binding, outward)

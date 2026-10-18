@@ -183,6 +183,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   file (Command Code pattern, `research/UI.md`).
 - **Calls made by the lead:** unguarded taste auto-promotes after evidence from two separate sessions,
   shown in the brief and reversible; taste syncs between A's machines only through the signed store.
+  *Amendment 2026-10-18 (PR #219):* evidence that is all imported history (`exo ingest` rows) does not
+  auto-promote under rule 4. The principal reviews that first batch, as `docs/ARCHITECTURE.md` section 5 says.
+  Imported evidence is dated by its source time, and superseded rows (an edited ChatGPT prompt's older
+  versions, inactive Hermes rows) do not count for the rule of three.
 - **Waiting on A (spend and model choice):** monthly ceiling for the nightly eval and climb; the judge
   model.
 - **Rejected:** Hermes-style direct edits by the reviewer (no check that a lesson helps); Command Code
@@ -404,6 +408,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Policy is the receiving seat's: auto for the same principal, hold otherwise, deny for a bad signature; held
   messages wait 30 minutes for an approval card. A peer message is input, never consent: attempts to approve
   are refused and shown to the principal.
+  *Amendment 2026-10-18 (PR #212):* a held message whose sender named no session, while no session is live, has an
+  approval with no thread. Both clients show that card in every thread. Allow used to close it as denied ("no
+  session here can take a message"), although the card says allow delivers it. Allow now opens a new thread of the
+  seat, titled after the sender, and delivers the message there. If that thread cannot open, the message closes as
+  not delivered and the principal gets a notice. Deny and expiry open no thread.
 - **Protocol:** one command `peers` with actions list, send, deliver and receipt (the brief said
   `peers.list` and `peers.send`, but a second command would break the cap; this uses the last slot, 30 of 30, so
   the test now allows 30). Events `peer.message` and `peer.delivery` (26 of 30).
@@ -427,6 +436,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Subagents keep their own logs (`memory_zoom(subagent=...)`); their report reaches the parent as the delegate
   result. exo-memory reads the core log instead of writing its own. Existing sessions were imported once, in time
   order, with `origin=import`; nothing deleted.
+  *Amendment 2026-10-18 (several seats in one home):* seats whose files sit in one `$EXO_HOME` are separate agents.
+  Each runs its own core with its own writer lock, and all of them share `sessions.sqlite` and `schedule.sqlite`.
+  The database numbers each event past the table's highest, so two cores never reuse a `seq`. `hello` reports that
+  highest number, so a joining client skips the other seat's past events. Only an agent's writer fails that agent's
+  leftover delegate tasks. A scheduled job with a `seat` runs only in that seat's core. A job with no seat runs once
+  per slot, in the seat whose timer claims the slot first. `add` refuses a seat that no core could run
+  (docs/SEATS.md "Several seats in one home", docs/SCHEDULE.md).
 - **Protocol:** still 30 commands: `session.create` takes `kind`, `SessionInfo` carries `agent` and `kind`. One
   event, `memory.summarized` (27 of 30): tree upkeep was showing as `context.compacted`, which read as context
   compaction in the trace and TUI.
@@ -743,6 +759,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Under reduced motion there is no timer: it only updates on events.
 - **Typo help:** an unknown `/comand` is not sent. The note says "did you mean /compact?" and the corrected line waits
   in the composer. With nothing close, the line goes to the core as before. The web does the same for its commands.
+  *Amendment 2026-10-18 (issue #146):* on the web the names are the page's own commands, the core's `commands.list`
+  and the terminal client's own (its `COMMANDS` table: core plugin names such as `/grants` count only when
+  `commands.list` has them, as in the TUI), and "near" is the TUI's rule (a port of `complete.closest`, for
+  lower-case names only). A `/name` from those the page does not run (`/grants`, `/help`), or a near typo of one,
+  stays in the box with a note rather than becoming a message; a line close to no name (`/tmp is full`, `/data is
+  corrupted`, `/Users is big`) is a message. Until the page has the core's names it holds every `/name` line that is
+  not its own or the terminal client's, and asks again with no limit (1 s doubling to every 30 s, and on each send,
+  which does not move the backoff on). The asking ends once the core has given its names (an older core that
+  answers `unknown_command` or `unsupported` for `commands.list` counts, with no core names) and its
+  `guidance.enabled` (an unset key, answered `not_found`, is on).
 - **Rejected:** a model call to suggest commands (cost, latency, and the rules are enough); a second ranking in each
   client (they would drift); storing history in the browser (the web client keeps none across page loads, on purpose).
 - **Not done:** file completion for bare paths (`./x`, `~/x`) outside `@`; `/findings <id>` (the core takes only
@@ -793,6 +819,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   is searchable and another home's config folder is not. `code_find`, whose `jg` walks the folder itself, refuses a
   folder that is or holds a known store. Chosen over a gate-side ask for every broad search because a search of a
   project or the home folder stays an allowed read and only the stores drop out; the count keeps the result honest.
+  *Amendment 2026-10-18 (issue #169):* the run folder is a secret store (D-039 limits, `docs/GATE.md` "Who
+  answered"), and a secret wins over the store rule, as for `keys/`. So a write, delete, move or replacement that
+  touches the folder itself or a credential file in it is `credentials`, not `store_write`: `rm -rf ~/.exo/run`,
+  `rm ~/.exo/run/*`, and moving or replacing the folder that holds the core sockets (`mv ~/.exo/run x`,
+  `ln -sfn /tmp/x ~/.exo/run`, `cp -rT /tmp/x ~/.exo/run`, `mkdir -p ~/.exo/run`, `chmod 777 ~/.exo/run`). It
+  still always asks and is never granted, but it is no longer principal-only: a seat that `approvals.yaml`
+  delegates `credentials` to, or lists in `default:` with no `credentials:` line, may answer it, and
+  `deny: [store_write]` no longer matches it. Job output in `run/jobs/` and a socket or pid file named alone stay
+  `store_write`. Chosen because one class per call keeps the read and write rules of a secret store the same;
+  keeping the store part principal-only through `_combine` is a follow-up.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
@@ -853,6 +889,38 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   vetoes and never authorizes. Accepted cost, fail closed: a literal that code only prints, and separately
   quoted data arguments under an unanchored regex, are matched too. The reason names only the policy entry,
   never the matched words: the hook writes decisions to the signed ledger, which holds no command text.
+  *Amendment 2026-10-17 (issue #179):* bash runs a `$( )` or backticks inside the array subscript of a variable
+  name, even when the name is single-quoted, so `printf -v 'a[$(gh pr comment ...)]' %s x` was `read` (allow). The
+  name arguments of `printf -v`, `read`, `declare`, `typeset`, `local`, `unset`, `test -v`/`[ -v` and `wait -p`
+  are now read for a subscript: each command in it is classified like a `$( )`, and since bash evaluates the
+  command's output (or a variable's value) as arithmetic too, any expansion or quoting there also asks through the
+  `indirection` signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
+  without expansion and plain names keep their class; a bare name such as `a[i]` is a known limit (GATE.md).
+  The scan finds the `]` that ends the subscript as bash does: a nested `[ ]` counts, and a `\` outside single
+  quotes hides the next character, so `a[\$(cmd)]` reads no command, as bash runs none. In a nested subscript
+  bash before 5.2 runs a `\$( )` again, so the gate reads it there. Past the depth cap a command there is
+  `opaque_exec`, as an unquoted `$( )` is.
+  *Amendment 2026-10-17 (issue #160):* wrappers that run a command were unknown or opaque programs, so the command
+  was never classified and a deny on its category asked (`setsid git push origin main`, `flock /tmp/l git push`,
+  `watch git push`, `script -qc '...'`, `tmux new-session -d '...'`, `screen -dm ...`, `parallel git push :::
+  origin`). The gate now reads them as it reads `xargs` (`gate._WRAPPERS`, `_classify_wrapper`): options and fixed
+  operands are skipped as getopt reads them, and the argv or the command string (`flock -c`, `script -c`, `watch`
+  through `sh -c`, a tmux shell-command, a parallel template) is classified as a nested command beside an opaque
+  part, so the line asks as before. Until D-075 lands, the line is denied only when what runs outranks
+  `opaque_exec` (`delete`, `vcs_push`, `credentials`); a category that ties with it or ranks below it
+  (`schedule`; `web_read`, `local_write`) still asks, as for `coproc`. A tmux command list is split as tmux
+  splits it: an argument ending in `;` ends a command, one ending in `\;` does not; tmux's default aliases
+  `splitp` and `split-pane` name `split-window`. An environment dump behind a wrapper is `credentials`, as behind a
+  prefix or runner (#155): the wrapped argv goes through the same `_env_dump` check. `chroot`, `nsenter`, `unshare`
+  and `systemd-run` follow the `sudo` precedent: a signal named after the wrapper, reversible counts as costly. Forms
+  the gate cannot read (a variable, `tmux send-keys`, `screen -X stuff`, `parallel` without a template) stay
+  `opaque_exec`. A deny on `opaque_exec` itself no longer reaches a wrapped command that outranks it, as with
+  `bash -c` and `xargs`, so the line asks there (it was denied) until D-075. To keep that an ask and not the inner
+  category's `log`, this change carries #178's floor rule: only naming `opaque_exec` at `log` or `allow` turns the
+  indirection floor off. A `parallel` template is read per argument only on the line itself (16 distinct
+  arguments, four times that command's own length, each text sized before it is built); a nested one is read
+  alone, so a template that is a parallel line cannot multiply the work. `function NAME {` from the same issue is
+  read by #181.
   *Amendment 2026-10-17 (issue #167):* the lexer decoded `$'..'` with Python's `unicode_escape`. Bash's short
   escapes (`\u65`, `\x4`, `\U41`), its 8-bit octal (`\545` is `e`), `\x{..}` and its NUL cut-off differ from that,
   so `git push $'--forc\u65' origin main` read as a plain push while bash ran a force push. `$'..'` is now decoded
@@ -921,12 +989,34 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
   today).
 - **Limits:** a tool process is the same OS user. Code that reads the credential file without the gate seeing it
-  (the gate classes a plain read as `credentials`, always ask; indirection is the gate branch's work) and also
-  detaches from the core's process tree could still pass. The real fix is an OS sandbox for tool subprocesses.
-  The page link sits in browser history and, briefly, in the browser launcher's argv. The env scrub is a
+  (the gate classes a read of the file, of its run folder or of a wildcard there as `credentials`, always ask,
+  #169; indirection is the gate branch's work) and also detaches from the core's process tree could still pass.
+  The real fix is an OS sandbox for tool subprocesses. The page link sits in browser history and, briefly, in the
+  browser launcher's argv. The env scrub is a
   heuristic.
 - **Not changed:** the TUI approval card's focus behaviour (another branch is editing the TUI); noted for later.
   The echo engine (a test double) still accepts any answer.
+- **Later (2026-10-17, #166):** the launcher's argv was a real leak, not a brief one: `webbrowser.open` hands the
+  `#token=` link to `xdg-open` and the browser, whose command lines any user of the host can read in `/proc` unless
+  it is mounted with `hidepid`, and the token answers approvals as `principal:web`. So the one-time bootstrap code
+  rejected above is now how the browser opens: `exo web` opens `#code=<one-time code>` (fresh per launch, in memory,
+  one use, 120 seconds), and the page trades it for the token at `POST /api/launch`, the only `/api/` route without
+  the token, with every other check of `providers.guard`. A used code that comes back means two parties held it: the
+  token is replaced, every other connection ends (the old token's streams, and requests that passed the token check
+  but still wait for their body), a body is checked against the current token again once read, and the terminal
+  gets a warning and the new link, to paste into the open browser rather than click (a click puts it back in a
+  launcher's argv). The printed `#token=` link is unchanged (stdout is the user's own); with a non-loopback `--host`
+  no browser is opened. Limit, stated plainly: the hop from the browser to the web server is not checked by uid. Any
+  process on the host that has the token, or wins the race for an unused code inside its 120 seconds, is the page.
+  The race shows up as a replaced token and a terminal warning only when the launched page also redeems the code
+  after the winner: the first redemption is silent. A browser that never runs the page's script (a text browser
+  such as `lynx` or `w3m`, which `webbrowser` falls back to with no display) never redeems, so the winner keeps a
+  working token and nothing warns. Kernel peer checks do not cover this hop either: D-060 (#175, Unix peer
+  authentication) checks clients of the core's socket, not a browser on TCP, and must name this hop in its Limits
+  when it lands. Rejected for now: opening a 0600 local file that redirects to the `#token=` link
+  (the other fix #166 named). It needs no second redemption, but leaves the token on disk until removed, and a
+  sandboxed browser (snap, flatpak) may not read the file. Revisit if launches without a script-running browser
+  matter. `docs/ui/WEB.md` "Opening the page and the page token".
 
 ## D-040 (2026-10-12) Who wrote it: authors on every message, pinned keys, an anchored ledger head
 - **Why:** the 12 October audit (priorities 4 and 6). (a) `exo_note` let the agent write `kind="ruling"`, and
@@ -1311,6 +1401,80 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** tests check the `--version` form and that the changelog's latest release equals the pyproject version.
 - **Docs:** `docs/VERSIONING.md`, `CHANGELOG.md`, `docs/DEVELOPER-GUIDE.md`.
 
+## D-060 (2026-10-13) Unix peer authentication before the principal credential moves
+- **Why:** D-039 bound approval identity to the connection, but the credential checks were one-sided and partly
+  fail-open. A principal client read the credential file and sent it to whatever served the socket path, so a
+  replaced socket received it. The core checked only that the peer pid was not a descendant, never the peer's
+  user, and an unreadable parent chain counted as "not a descendant": a tool child that connected and then exited,
+  leaving the connection to an orphan, was stamped the principal. Handoff: the shared-protocol review of
+  2026-10-13 (peer authentication first, then the snapshot and heartbeat contract).
+- **Decision, client:** `Client(socket, principal=label)` uses `exo.peerauth.PrincipalTransport`. It connects,
+  asks the kernel for the peer (`SO_PEERCRED` on Linux; `LOCAL_PEERCRED` and `LOCAL_PEERPID` on macOS), reads the
+  launch record through one descriptor (no symlink, one link, owner-only, bounded, v1), and requires this user,
+  the record's pid and the record's process start identity. Only then does that record's token go on that same
+  connection, and only on `POST /command`. Any failure is a `ConnectError` (`PrincipalRefused`) with the reason and
+  zero bytes written; the web page passes the reason through with a restart hint.
+- **Decision, core:** the launch record (`<socket stem>.principal.key`, same path and mode) is JSON binding token,
+  pid, uid, process start identity and launch instance in one atomic write, before the socket accepts. The core
+  takes the kernel peer and that pid's start identity at accept. `principal` needs the token, this uid, a peer
+  pid that still names that process and started before the accept (a pid reused after the accept fails), and a parent chain that reads
+  cleanly to pid 1 without the core; an unreadable chain is the tool tree. `descends_from` fails closed
+  accordingly; there is one walker. A credential taken as local is logged once per process with the reason, and
+  that connection's refusals name it (`/rename` and the subagent verbs too); a log line that cannot be written
+  does not change the answer. Other platforms: no principal over the socket.
+- **Unchanged (D-039, D-052):** the principal comes from the connection; in-process clients are the principal by
+  construction; stdio and TCP are local; only a principal caller acts as the principal. No command or event added.
+- **Snapshot and liveness (handoff items 2 and 3, the parts that ride on this):** `hello` reports `instance` and
+  `heartbeat`; the event stream's opening comment carries both; `approvals.list` adds `cursor: {instance, seq}`
+  from the same await-free copy. A failed `approval.requested` publication no longer leaves a pending row. A
+  filtered subscription's heartbeat timeout is absolute, so other sessions' traffic cannot starve it. The Python
+  client ends a stream with no complete frame (event or heartbeat) for 45 s and skips a frame over 16 Mi characters, resuming
+  after its seq (resuming at it replayed it forever). The core writes frames as raw UTF-8, so a frame stays near
+  the request that made it (`ensure_ascii` had made raw emoji three times larger). A joined terminal window no
+  longer resends a turn, approval answer or other change after a lost reply; it resends only reads and commands
+  whose connection never opened. It says the change may not have been delivered, keeps the typed text and
+  re-reads `approvals.list` to put back a card the core still holds. The client reads on after a skipped frame
+  without `reconnect` too, so a caller that keeps its own `since` (the exo-bus channel, the web source) gets the
+  next event. Until a later event arrives, each new stream it opens (after a restart or a dropped connection)
+  still asks for the skipped frame and skips it again: one re-read per reconnect, not a stall. A skipped frame
+  that comes again ends such a stream.
+- **Scope against the handoff:** no ruling conflicted. D-039's file name and gate credential class are kept, so the
+  launch record replaces the token file's contents rather than adding a file. The OS surface lives in another
+  repository and migrates there. Clients expose the stream `instance` but the terminal and web views do not yet
+  take a fresh snapshot when it changes. Required response bindings, phone factors and transcript cursors stay out
+  (handoff items 3 and 4; item 4 needs a ruling on D-033's "principal always").
+- **Limits:** same-user code outside the core's tree remains trusted and can read the record. A tool child whose
+  parent exits before it sends its request is still not caught (issue #31); the fix is the tool sandbox. The
+  dead-peer check, not the parent walk, makes the orphan of a tool child that connected and exited local, and
+  only reliably on Linux: macOS `LOCAL_PEERPID` names the last process to use the socket. A core from before this
+  change has a plain-token file, which new clients refuse (restart the core). An old client against a new core
+  sends the whole record as its token and is local with no message (restart `exo`, `exo web`, `exo chat`). Under
+  `hidepid`, `ProtectProc` or `ProcSubset=pid` an unreadable ancestor (`sshd`, `login`, `su`, `sudo`) makes every
+  client below it local, on purpose: stopping at the first unreadable ancestor would let `tool -> sudo -u $USER
+  exo` pass. The core logs it and the refusal says so. A client in another PID namespace than the core is refused
+  (the kernel names pid 0), and a core that cannot read its own process entry warns and serves no principal. A pid
+  reused between connect and accept is not detected (that window is the accept latency; Linux `SO_PEERPIDFD` would
+  pin the process). The browser-to-web hop (the `exo web` page to its own server, over TCP) is not peer-checked;
+  the page token protects it and, once #177 lands, the one-time launch code (D-039, #166).
+- **Validation:** `tests/security/test_unix_peer_auth.py`: a replaced socket gets zero bytes; stale, symlinked,
+  shared, old-format and missing records refuse before any byte; an unsupported platform fails closed both ways; a
+  mismatched kernel uid is local; a tool child through the real client, and the orphan of one that exited, are
+  local; the TUI and web clients act as the principal and stream; reconnect after restart takes the new record;
+  the snapshot cursor, the publication failure, heartbeat starvation, the frame deadline and no-resend. The D-039
+  and D-052 attack scripts now steal the record's real token. `tests/security/test_unix_peer_auth_edges.py`: a
+  raw UTF-8 `turn.send` near `MAX_BODY` against a real core does not stall `Client.events` or a joined window's
+  `SharedClient.events` (an emoji message is delivered, a NEL one is skipped); a frame too large is skipped by
+  seq; line separators and lone surrogates round-trip; a uid above 2^31; pid 0; a pid that names another process
+  by stamp time; the parent walk with a clean, unreadable and descendant chain; the demotion reason in the log and
+  the refusal, also from `/rename` and the subagent verbs and with stderr closed or broken; a core without its own
+  start identity; the record in place before the socket accepts and revoked when the listen fails; a frame too
+  large with no `id:` ends the stream; the refusal type. `tests/clients/tui/test_lost_reply.py` (a lost turn,
+  approval answer, `question.answer` or unsteer) and the web's
+  `test_refused_principal_names_the_reason_and_the_restart`. A skipped frame that comes again ends the stream
+  (`test_unix_peer_auth_edges.py`), and the exo-bus channel's event loop reads past one
+  (`plugins/exo-bus/tests/test_bus_plugin.py`).
+- **Docs:** `docs/GATE.md` "Unix peer authentication", `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
+
 ## D-061 (2026-10-13) Web sub-pages to the site v2 standard
 - **Why:** the chat page and the site v2 (front page, roadmap) set a high bar; Tasks, Schedule, Command and Providers
   still looked like a debug console: small mono panel titles, cramped lanes, colour-only status, plain one-line empty
@@ -1401,6 +1565,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   loop is never repaired mid-turn.
 - **Limits:** child approvals shown in the parent, and `followup` or `resume`, are follow-ups. Typing straight into a
   child's session still steers it through `turn.send`; that path works but leaves no note on the receipt.
+  *Amendment 2026-10-18 (fix sweep, core sessions):* the child's loop shares the engine's per-session state. So
+  `turn.send` into a running child steers it in any mode, and only the principal may send it (D-052). While the
+  child starts or finishes, no round can take a steer, and `turn.send` fails with `conflict`. It never starts a
+  main-loop turn in the child. A send that waited behind a child that was locked meanwhile runs no turn. A peer
+  message with no session never picks a child (docs/AGENT-WIRE.md).
 - **Docs:** `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md`, `docs/USER-GUIDE.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-073 (2026-10-13) Signed updates verify against a pinned trust list (issue #42)
@@ -1414,6 +1583,59 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Limits:** trust on first use of the pin; SSH signatures only; commit signatures, not tags; `uv tool` installs
   cannot be verified. A key compromise needs the pin edited by hand.
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
+
+## D-075 (2026-10-13) A deny or reserved entry matches any simple command on a line
+- **Why:** the 2026-10-13 review. `classify_shell` reduces a compound line to its most severe part, and `decide`
+  checked the principal's `deny` and `reserved` lists against that one part only. With `vcs_push` in `deny`,
+  `git push origin main` alone was denied, but `git push origin main && rm -rf build` was an `ask` for the delete,
+  `git push origin main; cat ~/.ssh/id_rsa` an `ask` for the credential read, and `git push origin main && gh pr
+  comment 3 --body hi` an `ask` for the post. The card named the other action, and the denied push ran once it was
+  approved. Only `command:<regex>` entries were immune, because they see the whole line.
+- **Decision:** a classification keeps the simple commands it was built from (`parts`, nested through `bash -c`,
+  `python -c`, `eval`, `xargs` and the rest). `decide` applies the principal's scopes to each and checks `reserved`
+  and `deny` entries against the combined result and every part; a hit on any part denies (or reserves) the line.
+  Parts are checked for `deny` and `reserved` only: rules, category overrides, the opaque bump, third-party
+  escalation, posting checks and the floors still see the dominant part, which sets the card, the category and
+  everything else. A part carries the tool of the call it came in on (`tool:execute_code` names the tool, not
+  `python -c` run from bash) and the decoded views of its line (#136), so a `command` entry matches a part as it
+  matches the line (`g''it push origin main && rm -rf build`), the `ssh` hop is a part of its own whose target is
+  the bare host (no `user@`, `ssh://` or `:port`) and the destination as written, and the inner commands of an `ssh`
+  line are `internal` like the line. A
+  string literal in code is kept when any simple command in it is non-benign, whatever the order. A mapping entry in
+  `deny` or `reserved` counts only its match keys: `reason`, `name`, a note or a typo is dropped, so it widens the entry
+  and never voids it (rejecting it at load would fall back to the defaults and lose the whole list). `Decision.reserved`
+  lists the parts a reserved entry matched, once each, under the pinned policy and a pending one alike, and the exo-gate
+  hook refuses a standing grant for the line's category when one of them lies outside the grant; it compares the targets
+  as written, and only the decision's ledger view redacts URL userinfo. `ssh` options are read as getopt reads them, so
+  a value-taking letter at the end of a cluster (`-vp 22`) or `-B`/`-P`/`-I` no longer puts the option's value in the
+  host's place; such a line asks, and wherever the gate now reads another host than it used to, the line asks and
+  both readings' parts are matched. A `--` right after the `ssh` host ends the options. `mosh` options are read as mosh's
+  Perl Getopt::Long reads them in its default mode, against mosh's own option list: one or two dashes or `+`, any
+  case, a unique prefix, `=value` or the next word, options after the host, `--` ending them, and mosh's own short
+  options (`-o` takes no value, `-l` is `--local`). A word that names no single option stops mosh and the line asks.
+  The command given to `mosh --ssh`, `--client` or `--server` is read as a command and the line asks (the `--ssh` and
+  `--client` helpers run locally and keep their own exposure; `--server` runs on the remote host, and with `--local`
+  the server and the command run locally too, so nothing on the line is `internal`). Another option's value that
+  reads as `--server`, `--ssh` or `--client` (`--port '--server=...'`) is not run by mosh, but the gate read it as
+  the command before, so it still does and the line asks. Words after the host that mosh takes as options or values
+  are also read as the command and the line asks, since with `POSIXLY_CORRECT` set mosh runs them as the command;
+  the same holds where the host the gate reads changed. The
+  ledger view of a classification (`as_dict`) leaves the parts out, so approval bindings and trace rows are unchanged.
+- **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
+  `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
+  under two policies while a change is pending).
+- **Limits:** a literal inside `python -c` or `execute_code` counts only when one of its commands classifies as a
+  non-benign category (an all-`web_read` or all-`local_write` literal is dropped), and code can reach a target with
+  no literal at all. Deny → ask: where the gate cannot read the command it files the line as `opaque_exec`, so a
+  `deny` on the hidden action becomes an `ask`, for example a heredoc after a `coproc` block (the rest of `coproc` is
+  read since #140 / #181), nesting past the depth cap (#137, #141), `eval $(...)`, a command arriving on stdin
+  (`echo ... | xargs -I{} sh -c '{}'`) and the
+  wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`; the list is not closed. Deny → allow: the fallback
+  has gaps where the line is `allow` outright even under `deny`: `${...}` bodies, which the lexer does not read
+  (#143; open PR #158). Since #164 an `ssh`/`mosh` chain past the hop cap asks (#153) and command-valued options of
+  allowlisted programs are read (#154).
+- **Revisit if:** a principal wants a denied action to be allowed when it is part of a longer line. None asked;
+  the entry format says "no agent may take" the action.
 
 ## D-077 (2026-10-15) Core budget: a ratchet with headroom, functionality and robustness first
 - **Status:** Accepted 2026-10-15. The principal's ruling: "important to be lean and optimized but not at the cost of
