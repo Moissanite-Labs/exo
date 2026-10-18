@@ -133,6 +133,40 @@ def test_check_prose_loads_principal_policy(tmp_path):
     assert r.returncode == 1 and "northstar" in r.stdout and "synergy" in r.stdout
 
 
+def test_check_prose_finds_a_recorded_store_root(tmp_path):
+    """A store made with `exo init --root` lives where config principals.<id> says (exo.store.principal_root),
+    so its internal names still block. Not the default $EXO_HOME/principals/<id>, which is empty here."""
+    import exo
+    root, home = tmp_path / "elsewhere" / "p", tmp_path / "home"
+    (root / "policies").mkdir(parents=True)
+    (root / "policies" / "internal-names.txt").write_text("northstar\n")
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps({"principal": "p", "principals": {"p": str(root)}}))
+    text = tmp_path / "t.md"
+    text.write_text("Ask northstar first.\n")
+    script = SKILLS / "clean-writing" / "scripts" / "check-prose.py"
+    env = {"PATH": "/usr/bin:/bin", "EXO_HOME": str(home), "EXO_PRINCIPAL": "p",
+           "PYTHONPATH": str(Path(exo.__file__).resolve().parents[1])}  # the Exo under test, not an installed one
+    r = subprocess.run([sys.executable, "-s", str(script), str(text)], capture_output=True, text=True, env=env)
+    assert r.returncode == 1 and "northstar" in r.stdout, r.stdout + r.stderr
+
+
+def test_check_prose_runs_under_an_older_exo(tmp_path):
+    """A newer skill under a python whose Exo predates `principal_root(pid, home)` uses the default store location
+    and still passes clean text, rather than crashing with the findings exit code."""
+    old = tmp_path / "old" / "exo"
+    old.mkdir(parents=True)
+    (old / "__init__.py").write_text("")
+    (old / "store.py").write_text("def principal_root(pid):\n    return pid\n")
+    text = tmp_path / "t.md"
+    text.write_text("The build passed.\n")
+    script = SKILLS / "clean-writing" / "scripts" / "check-prose.py"
+    env = {"PATH": "/usr/bin:/bin", "EXO_HOME": str(tmp_path / "home"), "EXO_PRINCIPAL": "p",
+           "PYTHONPATH": str(old.parent)}
+    r = subprocess.run([sys.executable, "-s", str(script), str(text)], capture_output=True, text=True, env=env)
+    assert r.returncode == 0 and "clean" in r.stdout, r.stdout + r.stderr
+
+
 def test_sym_protocol_skill_suite_passes():
     r = subprocess.run([sys.executable, "-I", str(SKILLS / "sym-protocol" / "tests" / "run-tests.py")],
                        capture_output=True, text=True)

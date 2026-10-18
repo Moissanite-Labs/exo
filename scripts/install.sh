@@ -17,7 +17,8 @@
 #   --tag TAG            Hermes release tag (default: latest stable). Needs --with-hermes.
 #   --exo-source SRC     a local exo checkout or a git URL (default: the repo holding this script)
 #   --python PY          interpreter for the venv (default: newest python3.11+ on PATH)
-#   --plugins LIST       comma list of plugins to install (default: every plugins/*/plugin.yaml)
+#   --plugins LIST       comma list of plugins to install (default and `all`: every plugins/*/plugin.yaml). Remembered
+#                        for re-runs and `exo update`; removes the other Exo-installed plugins from $EXO_HOME/plugins.
 #   --principal ID       principal id for the interview
 #   --answers FILE       answers YAML for a non-interactive interview
 #   --no-pin             with --with-hermes: do not pin (use an existing checkout, or skip Hermes)
@@ -42,7 +43,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-MODIFY_PATH=0 BIN_DIR_ARG=""
+MODIFY_PATH=0 BIN_DIR_ARG="" PLUGINS_EXPLICIT=0
 DRY=0 WITH_HERMES=0 PIN=1 PIP=1 INTERVIEW=1 STRICT=0 EDITABLE=0 YES=0
 EXO_HOME_ARG="" HERMES_HOME_ARG="" HERMES_HOME_EXPLICIT=0
 TAG="${EXO_HERMES_TAG:-}" EXO_SOURCE="" PY="${EXO_PYTHON:-}" PLUGINS="" PRINCIPAL="" ANSWERS=""
@@ -61,7 +62,7 @@ while [ $# -gt 0 ]; do
     --tag) need_arg "$@"; TAG="$2"; shift ;;
     --exo-source) need_arg "$@"; EXO_SOURCE="$2"; shift ;;
     --python) need_arg "$@"; PY="$2"; shift ;;
-    --plugins) need_arg "$@"; PLUGINS="$2"; shift ;;
+    --plugins) need_arg "$@"; PLUGINS="$2"; PLUGINS_EXPLICIT=1; shift ;;
     --principal) need_arg "$@"; PRINCIPAL="$2"; shift ;;
     --answers) need_arg "$@"; ANSWERS="$2"; shift ;;
     --no-pin) PIN=0 ;;
@@ -72,7 +73,7 @@ while [ $# -gt 0 ]; do
     --bin-dir) need_arg "$@"; BIN_DIR_ARG="$2"; shift ;;
     --modify-path) MODIFY_PATH=1 ;;
     -y|--yes) YES=1 ;;
-    -h|--help) sed -n '2,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option $1 (see --help)" ;;
   esac
   shift
@@ -260,6 +261,20 @@ if [ "$PIP" -eq 1 ]; then
 fi
 
 # --- 6. standalone plugins, plus Hermes plugins when requested --------------------
+# config.json remembers a --plugins list (plugin_selection) and the Hermes home the plugins went to (hermes_home).
+# A re-run without those options, such as the one `exo update` makes, refreshes the same plugins in the same places.
+CFG_SEL="" CFG_HH=""
+if [ -f "$EXO_HOME/config.json" ]; then
+  { IFS= read -r CFG_SEL && IFS= read -r CFG_HH; } < <("$PY" -I -c 'import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8")); s, h = d.get("plugin_selection"), d.get("hermes_home")
+print(",".join(map(str, s)) if isinstance(s, list) else "")
+print(h if isinstance(h, str) else "")' "$EXO_HOME/config.json" 2>/dev/null) || true
+fi
+if [ "$PLUGINS_EXPLICIT" -eq 0 ] && [ -n "$CFG_SEL" ]; then
+  PLUGINS="$CFG_SEL"
+  say "plugins: keeping the --plugins selection in config.json ($CFG_SEL); pass --plugins all for every plugin"
+fi
+[ "$PLUGINS" != all ] || PLUGINS=""
 SELECTED=()
 for d in "$EXO_SRC"/plugins/*/; do
   [ -f "$d/plugin.yaml" ] || continue
@@ -269,13 +284,29 @@ for d in "$EXO_SRC"/plugins/*/; do
   fi
   SELECTED+=("$name")
 done
-[ "${#SELECTED[@]}" -gt 0 ] || die "no plugins selected from $EXO_SRC/plugins"
+[ "${#SELECTED[@]}" -gt 0 ] || die "no plugins selected from $EXO_SRC/plugins${PLUGINS:+ (asked for: $PLUGINS; see --plugins)}"
 
 # The standalone core discovers EXO_HOME/plugins without launcher environment setup.
-PDIRS=("$EXO_HOME/plugins")
-if { [ "$WITH_HERMES" -eq 1 ] || [ "$HERMES_HOME_EXPLICIT" -eq 1 ] || [ -n "${EXO_HERMES_HOME:-}" ]; } \
-   && [ "$TARGET_HOME/plugins" != "$EXO_HOME/plugins" ]; then
-  PDIRS+=("$TARGET_HOME/plugins")
+PDIRS=("$EXO_HOME/plugins") HPLUG="" HERMES_ASKED=0
+if [ "$WITH_HERMES" -eq 1 ] || [ "$HERMES_HOME_EXPLICIT" -eq 1 ] || [ -n "${EXO_HERMES_HOME:-}" ]; then
+  HERMES_ASKED=1 HPLUG="$TARGET_HOME/plugins"
+elif [ -n "$CFG_HH" ] && [ -d "$CFG_HH/plugins" ]; then  # copies an earlier run made; ~/.hermes still needs --hermes-home
+  CFG_HH="$(abspath "$CFG_HH")"
+  if inside "$CFG_HH" "$LIVE_HERMES" || inside "$LIVE_HERMES" "$CFG_HH"; then
+    warn "plugins in $CFG_HH/plugins not refreshed: it overlaps $LIVE_HERMES. Re-run with --hermes-home $CFG_HH."
+  elif [ "$CFG_HH/plugins" != "$EXO_HOME/plugins" ]; then
+    HPLUG="$CFG_HH/plugins"
+    say "plugins: also refreshing the Hermes copies in $HPLUG (config.json hermes_home)"
+  fi
+fi
+[ -z "$HPLUG" ] || [ "$HPLUG" = "$EXO_HOME/plugins" ] || PDIRS+=("$HPLUG")
+# The core loads every folder in $EXO_HOME/plugins, so a selection removes the ones an earlier run installed (marked
+# .exo-managed) that it leaves out. Folders you added and links stay. A Hermes home is left as is: config.yaml decides.
+if [ -n "$PLUGINS" ]; then
+  for d in "$EXO_HOME"/plugins/*/; do
+    case " ${SELECTED[*]} " in *" $(basename "$d") "*) continue ;; esac
+    if [ ! -L "${d%/}" ] && [ -f "$d.exo-managed" ]; then run rm -rf "${d%/}"; fi
+  done
 fi
 MARK=".exo-managed"
 for PDIR in "${PDIRS[@]}"; do
@@ -412,15 +443,14 @@ set_cfg() {  # key json-value
     EXO_HOME="$EXO_HOME" PYTHONPATH="$EXO_SRC/src" "$PY" -m exo.config set "$1" "$2"
   fi
 }
-if [ "$WITH_HERMES" -eq 1 ]; then
-  set_cfg hermes_dir "\"$EXO_HERMES_DIR\""
-  set_cfg hermes_home "\"$TARGET_HOME\""
-fi
+if [ "$WITH_HERMES" -eq 1 ]; then set_cfg hermes_dir "\"$EXO_HERMES_DIR\""; fi
+if [ "$HERMES_ASKED" -eq 1 ]; then set_cfg hermes_home "\"$TARGET_HOME\""; fi
 set_cfg venv "\"$VENV\""
 if [ "$PIP" -eq 1 ]; then  # `exo update` reads this to know how to upgrade
   set_cfg install "{\"mode\": \"venv\", \"source\": \"${EXO_URL:-$EXO_SRC}\", \"checkout\": \"$EXO_SRC\", \"venv\": \"$VENV\", \"python\": \"$VPY\"}"
 fi
 set_cfg plugins "$plugins_json"
+if [ "$PLUGINS_EXPLICIT" -eq 1 ]; then set_cfg plugin_selection "$([ -z "$PLUGINS" ] && echo '"all"' || echo "$plugins_json")"; fi
 if [ -n "$PIN_SKIP" ]; then set_cfg hermes_patch_skip "\"$PIN_SKIP\""; fi
 
 # --- 8. interview -------------------------------------------------------------------
