@@ -22,7 +22,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   folders and file names resolve from the last (`git -C ~ -C my-exo/plugins/foo pull`; a writing line with more
   than 64 `-C` asks); `git diff --output` counts as a write. Before, a plain local write could drop the gate plugin
   from `core_plugins` or point `exo update` at another interpreter without an ask. A symlink alias of either path
-  asks too (the store-path resolution of #130, below). Not covered: glob, brace, case and `${VAR:-...}` spellings,
+  asks too (the store-path resolution of #130, below), and a relative `EXO_HOME` or `EXO_PRINCIPAL_STORE` names the store from the core's
+  own folder, so its absolute spelling asks as well. Not covered: glob, brace, case and `${VAR:-...}` spellings,
   abbreviated long options (`tar --dir`), archivers other than `tar` and `unzip`, a custom home spelled relatively
   from a folder the gate does not know, and `plugins/`, `venv/`, `src/` and `bin/` under the home (`docs/GATE.md`,
   "Limits").
