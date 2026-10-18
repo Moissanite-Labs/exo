@@ -81,7 +81,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Eval, ask queue, brief, consolidate | `docs/TOOLS-CLI.md` | §11 "Review what Exo learned" | §9 "Work on the learning loop" (consolidate and proposals) | WP §6, §22 |
 | D-035 Typing `exo` opens Exo: bare command, installer on PATH, `exo update` | `docs/INSTALL.md` "The `exo` command", `docs/COMMANDS.md` Part 2 "Running Exo" | §1 | n/a | n/a |
 | D-036 One shared core: `exo web` finds or starts it | `docs/ui/WEB.md` "Connecting to the core", `docs/USER-GUIDE.md` §2, `docs/COMMANDS.md` | §2 | n/a | n/a |
-| D-038 Gate default ask: shell allowlist, store is credentials, policy edits only tighten (amended 2026-10-16, #136: command vetoes match the literal-word view; amended 2026-10-17, #184: store paths are matched after brace expansion) | `docs/GATE.md` "Shell commands: an allowlist", "Secret-store paths", "The store is credentials", "Policy changes during a session", `docs/COMMANDS.md` | §6 | n/a | WP §7, §15.4 (programs trusted by name; exec options and test runners as the known gap, #164 in review), §26 |
+| D-038 Gate default ask: shell allowlist, store is credentials, policy edits only tighten (amended 2026-10-16, #136: command vetoes match the literal-word view; amended 2026-10-17, #184: store paths are matched after brace expansion) | `docs/GATE.md` "Shell commands: an allowlist", "Secret-store paths", "The store is credentials", "Policy changes during a session", `docs/COMMANDS.md` | §6 | n/a | WP §7, §15.4 (programs trusted by name; exec options and test runners as the known gap, #164 in review; shell forms not yet read, #143, #153, #179, #137, #160; store spellings missed, #217), §26 |
 | D-039 Approval identity from the connection, web token on every route, one secret scrub | `docs/GATE.md` "Who answered: the connection, not the body", `docs/ui/WEB.md` "Opening the page and the page token", `docs/TOOLS.md` "Environment of bash and jobs", `docs/SEATS.md` | §2, §6, §10 | §2 | WP §7, §12.5 (with the detach limit), §15.1, §15.3, §26, glossary |
 | D-037 Completion and guidance in the composer | `docs/COMMANDS.md` "Completion and guidance", `docs/UI.md`, `docs/ui/WEB.md` "The composer" | §3 "Typing help" | n/a | WP §8, §24 "Typing help" |
 | D-042 Repo hygiene, privacy and licensing | `docs/DEVELOPER-GUIDE.md` §7 "CI, lint, lockfile and the privacy deny-list", `docs/HANDOFF.md` | n/a | §7 | WP §31 (the security and correctness wave) |
@@ -139,15 +139,18 @@ keep their version 0.2 numbers, and the new parts are subsections (15.6, 20.1, 2
   paper to say (for example the site, brand and test-hygiene decisions D-047, D-049 and D-053) are `n/a` above.
 - **Stated as today's limits, with the open change named:** the shell allowlist trusts programs by name, and exec
   options of trusted programs are not read (#164, WP §15.4); `config.json` is an ordinary local write (D-074, #125,
-  WP §7, §26); the principal credential check passes a same-user process that detaches (D-060, #109, WP §12.5);
-  a read that reaches a key file through a wildcard or a folder walk is an ordinary read (no change open yet,
-  WP §12.5, §15.4).
-- **Stale since main moved on:** the iteration cap (WP §16) says the loop emits a `notice` and stops at 24 tool
-  rounds. Since #92 a capped turn ends with a short report from one more model call with tool use off. The
-  paper is corrected in the next batch.
-- **Covered as in progress, not on main:** Unix peer authentication (D-060, #109), protecting `config.json`
-  (D-074, #125), reading exec options (#164), the permissionless mode (keeping the operator floor, #96), `/rounds`,
-  the choice card, the exosphere, house taste waves 2 and 3, and event activation (WP §30.1).
+  WP §7, §26); the principal credential check passes a same-user process that detaches (D-060, #175, WP §12.5);
+  a wildcard or folder read of the principal credential is an ordinary read (#169, #185, WP §12.5, §15.4); a
+  command inside `${...}` or a single-quoted array subscript of a variable name is not read (#143, #158; #179, #189); an
+  `ssh` or `mosh` chain past four hops is allowed under a deny (#153, #164); a deny past the `bash -c` depth cap or
+  behind a wrapper only asks (#137, #160, #196); a store write by a relative name, a glob, brace or hard-link
+  spelling (docs/GATE.md, #224), or through `/dev/fd/N` (#217, no change open yet) is an ordinary write (all WP
+  §7, §15.4).
+- **Covered as in progress, not on main:** Unix peer authentication (D-060, #175), protecting `config.json`
+  (D-074, #125), reading `${...}` words (#158), reading exec options and asking past the ssh hop cap (#164),
+  reading array subscripts of variable names (#189), reading commands behind wrappers (#196), the permissionless
+  mode (keeping the operator floor, #96), `/rounds`, the choice card, the exosphere, house taste waves 2 and 3, and
+  event activation (WP §30.1).
 - **Covered as designed, not built:** D-011 (store version 2, WP §19), the staged retrieval pipeline (WP §21),
   the unbuilt parts of D-015 (calibration, `decision` ledger entries, exo-decide, WP §14), and the house taste
   adaptation (WP §22.7).
