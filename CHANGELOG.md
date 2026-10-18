@@ -142,11 +142,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - The web Chat view draws a peer, bus or job message as a card with its real author, never as a line the user
   typed: on reload and thread switch too, and the live `peer.message` and its stored message are one card. An
   approval with no thread (a held peer message that no live session could take) shows in every thread, as in the
-  terminal client, and allow now delivers it into a new thread instead of closing it as denied. A panel you dismiss
-  stays closed after the next panel event, a tab switch or a reconnect.
-- The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
-  the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
-  the card shows every argument of the call.
+  terminal client, and allow now delivers it into a new thread of the seat instead of closing it as denied. If that
+  thread cannot open, the message closes as not delivered and a notice says why. A panel you dismiss stays closed
+  after the next panel event, a tab switch or a reconnect.
 - `exo web` folded the core's replayed events into its state a second time after the core's stream dropped: message,
   tool call and task counts doubled, and a session stayed `waiting` after its approval was answered. Each event now
   counts once, and a core whose log is behind the page (a new `EXO_HOME`) starts the page over.
@@ -158,7 +156,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   such a request had no card and the turn waited for good. Leaving a thread drops its turn state, card, queued
   steer and numbers: the new thread no longer shows `LIVE`, `running tool` or steer mode once the old turn ends,
   and `COST` no longer shows the other thread's dollars. A thread opened again keeps its `COST` and the `+` for an
-  unpriced call. An answer the core refuses brings its card back. A
+  unpriced call. An answer the core refuses brings its card back. A card with no thread (a held peer message) now
+  stays in every thread. Before, the window's check against `approvals.list` dropped it within seconds. A
   finished subagent whose calls had no price adds the `+` to `COST`, and its roll-up no longer moves `MEM`.
 - `exo update` no longer widens a `--plugins` install to every plugin. The installer records the list in
   `config.json` (`plugin_selection`) and a re-run without `--plugins`, such as the one `exo update` makes, keeps it.
@@ -166,7 +165,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   core loads every folder there. `--plugins all` goes back to every plugin. The re-run also refreshes the plugin copies
   in the Hermes home an earlier `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME` run used (one inside `~/.hermes`
   still needs `--hermes-home`). An install from before this change has no list on record, so its first update installs
-  every plugin: after it, re-run `install.sh --no-pip --plugins LIST` once to go back to yours.
+  every plugin: after it, re-run `install.sh --no-pip --plugins LIST` once to go back to yours. A list ignores spaces
+  and always keeps `exo-gate`, since without it the core refuses every tool call. A name that matches no plugin
+  stops the installer before it removes or records anything.
 - `scripts/deploy-site.sh` no longer tags and pushes a version after a failed deploy, which burned the version and
   exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
   refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
@@ -226,6 +227,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `~/.exo/{policies,x}/default.yaml` were allowed local writes, so one tool call could rewrite the gate's policy
   or grants without a card. They are `store_write` now and ask the principal. Quoted and escaped braces stay
   literal, as in bash. The store checks have their own brace budget, so no secret-store outcome changes.
+- The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
+  the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
+  the card shows every argument of the call.
 
 ## [0.2.0] (egg) - 2026-10-13
 
