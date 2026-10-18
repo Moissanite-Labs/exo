@@ -843,6 +843,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   vetoes and never authorizes. Accepted cost, fail closed: a literal that code only prints, and separately
   quoted data arguments under an unanchored regex, are matched too. The reason names only the policy entry,
   never the matched words: the hook writes decisions to the signed ledger, which holds no command text.
+  *Amendment 2026-10-17 (issue #179):* bash runs a `$( )` or backticks inside the array subscript of a variable
+  name, even when the name is single-quoted, so `printf -v 'a[$(gh pr comment ...)]' %s x` was `read` (allow). The
+  name arguments of `printf -v`, `read`, `declare`, `typeset`, `local`, `unset`, `test -v`/`[ -v` and `wait -p`
+  are now read for a subscript: each command in it is classified like a `$( )`, and since bash evaluates the
+  command's output (or a variable's value) as arithmetic too, any expansion or quoting there also asks through the
+  `indirection` signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
+  without expansion and plain names keep their class; a bare name such as `a[i]` is a known limit (GATE.md).
+  The scan finds the `]` that ends the subscript as bash does: a nested `[ ]` counts, and a `\` outside single
+  quotes hides the next character, so `a[\$(cmd)]` reads no command, as bash runs none. In a nested subscript
+  bash before 5.2 runs a `\$( )` again, so the gate reads it there. Past the depth cap a command there is
+  `opaque_exec`, as an unquoted `$( )` is.
   *Amendment 2026-10-17 (issue #160):* wrappers that run a command were unknown or opaque programs, so the command
   was never classified and a deny on its category asked (`setsid git push origin main`, `flock /tmp/l git push`,
   `watch git push`, `script -qc '...'`, `tmux new-session -d '...'`, `screen -dm ...`, `parallel git push :::
