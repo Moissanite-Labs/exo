@@ -28,6 +28,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
 
+### Fixed
+- `edit_file` after whitespace drift: when only the whitespace-normalized strategy matched (one stray double
+  space in the file), the span could start inside the indentation before the match and the reindented replacement
+  shifted every following line by one column, leaving code that no longer parsed. The span now starts at the
+  match. When `old_string` is dedented to column 0 (its continuation lines sit shallower than the file's, a tab
+  counting to the next multiple of 8 columns, so a space-indented block in a tab-indented file counts too) and
+  matches after a line's indentation, the replacement is re-anchored on that indentation. An `old_string` copied
+  verbatim from the file, a one-line `old_string`, and escape- or Unicode-normalized matches are replaced in place
+  as before, keeping the line's indent and the file's typography; `replace_all` on adjacent lines and an empty
+  `new_string` no longer touch text outside the match (#127).
+
 ### Changed
 - A long `HOME` no longer stops the core with "cannot start": the peer socket falls back to a short private folder (#48).
 - Engine split, first pass (#46, `docs/ENGINE-SPLIT.md`): the diagnostic views (`/context`, `/compact`, `/trace`,
@@ -44,6 +55,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
+
+### Fixed
+- Esc on a `claude-cli` turn is no longer lost when it lands just as the CLI prints a line (#163). On Python 3.11
+  the per-line read timeout (`asyncio.wait_for`) returned the line and swallowed the cancel, so the turn ran to the
+  end as if Esc had not been pressed. The line read now uses `asyncio.timeout`, which keeps the cancel.
+- Tests that failed on a loaded machine (#163): the claude-cli fallback test's fake CLI now reads its input before it
+  fails, so the provider's write never meets a closed pipe and the error always reports the exit code, and the TUI
+  boot test drives the boot screen's clock, so a slow start can no longer end the boot before the test looks at it.
+
+### Security
+- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
+  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
+  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
+  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
 
 ## [0.2.0] (egg) - 2026-10-13
 
