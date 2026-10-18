@@ -335,8 +335,10 @@ class SessionStore:
             m.meta["local"] = "fork"  # the original is already in the agent log
             m.id = None
             self.append_message(child.id, m)
-        for row in self._q("SELECT * FROM summaries WHERE session=? AND end_seq<=? AND status='done'",
-                           (sid, upto)):
+        # the copies are renumbered 1..n: a range with an undone (hidden or deleted) row up to its end would shift
+        for row in self._q("SELECT * FROM summaries WHERE session=? AND end_seq<=? AND status='done' AND end_seq=("
+                           "SELECT COUNT(*) FROM messages m WHERE m.session=? AND hidden=0 AND seq<=summaries.end_seq)",
+                           (sid, upto, sid)):
             self._q("INSERT INTO summaries (id, session, level, idx, start_seq, end_seq, text, status,"
                     " lane) VALUES (?,?,?,?,?,?,?,?,?)",
                     (new_id("sum"), child.id, row["level"], row["idx"], row["start_seq"],

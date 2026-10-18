@@ -27,6 +27,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
 
+### Fixed
+- A private thread no longer forgets its own start (D-028). Its entries stay out of the agent tree, but its tail was
+  still cut at the agent's frontier, so once another thread's leaves were summarized only its last 12 messages were
+  left. It now keeps a summary tree of its own, and its tail starts at that tree's last summary, so spans too small
+  to summarize stay whole. Plugin hooks never see that tree, and no other thread, agent summary or search sees it
+  either. A fork made after an undo copies only the summaries that still match its renumbered messages.
+
 ## [0.2.0] (egg) - 2026-10-13
 
 First tracked version. It covers everything on main since the 0.1.0 scaffold (D-001 to D-054).

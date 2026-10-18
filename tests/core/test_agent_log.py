@@ -73,6 +73,39 @@ def test_fork_copies_stay_out_of_the_log():
     assert st.last_pos("razi") == 2
 
 
+def test_a_fork_copies_only_summaries_its_renumbered_copies_still_match():
+    """A fork renumbers its copies 1..n. A parent range with an undone row up to its end (hidden in the log, or a
+    deleted fork copy) would hold other messages in the fork, so only the summaries before the first gap go along."""
+    from exo.core.context import SummaryNode
+
+    st = SessionStore()
+
+    def say(sid, n):
+        for _ in range(n):
+            st.append_message(sid, Message.user("x"))
+
+    def leaves(sid, *starts):
+        for s in starts:
+            st.save_summary(SummaryNode(id=f"s_{sid}_{s}", session=sid, level=0, index=s // 2, start=s, end=s + 1,
+                                        text=f"{s}-{s + 1}", status="done"))
+
+    def copied(child):
+        return [(n.start, n.end) for n in st.summaries(child.id)]
+
+    p = st.create_session(agent="razi", kind="private")
+    say(p.id, 4)
+    st.truncate(p.id, 2)          # hides 3-4: the next row is 5, and the fork's copy of it is 3
+    say(p.id, 4)                  # 5-8
+    leaves(p.id, 1, 3, 5, 7)
+    child = st.fork(p.id)         # copies 1-6
+    assert copied(child) == [(1, 2)]
+    say(child.id, 2)              # 7-8, in the log
+    st.truncate(child.id, 3)      # deletes the copies 4-6 and hides 7-8: the next row is 9
+    say(child.id, 3)              # 9-11
+    leaves(child.id, 3, 7)        # 3-4 holds only 3: in a fork of the child it would hold the child's 9 too
+    assert copied(st.fork(child.id)) == [(1, 2)]
+
+
 def test_private_and_subagent_threads():
     st = SessionStore()
     p = st.create_session(agent="razi", kind="private")
