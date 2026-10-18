@@ -268,9 +268,10 @@ run such an exec unseen. When the closer has its own `<`, nothing is fed (the ga
 between a closer's redirections, so it does not guess which one bash applies last: `{ bash; } <<EOF
 < f`), and a closer heredoc or here-string wins over a pipe in. That holds for stdin (fd 0). The
 lexer drops fd numbers, so a closer heredoc on another fd (`{ bash; } 3<<EOF`), where bash leaves
-stdin alone, is read conservatively as stdin: its body is fed (code inside can still run it, as
-`{ source /dev/fd/3; }` does) and a pipe in is not. A shell read that way still asks at least, as
-`bash 3<<EOF` does. Every other inner command gets all of it. That over-approximates, and the fed
+stdin alone, is read as stdin too: its body is fed (code inside can still run it, as `{ source
+/dev/fd/3; }` does). The text piped in is still read, as for any `echo ... | bash`, so `echo 'rm -rf
+build' | { bash; } 3<<EOF` is a `delete` whichever text bash runs. A shell read that way still asks
+at least, as `bash 3<<EOF` does. Every other inner command gets all of it. That over-approximates, and the fed
 text can change the line's category and the summary shown when it asks: only shells, interpreters
 and gh act on it, so `{ cat; } <<EOF` stays `read`, while `{ bash; } <<EOF` with `rm -rf build` in
 the body is `delete`. Each text is read once per line, however many commands it reaches, and so is
