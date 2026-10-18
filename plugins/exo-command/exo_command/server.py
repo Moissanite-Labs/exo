@@ -20,17 +20,20 @@ Routes:
 
 Access (D-039). The server binds to loopback by default. Every request must name this server in its Host header
 (``127.0.0.1:<port>``, ``localhost:<port>`` or ``[::1]:<port>``), so a DNS rebinding name gets nothing, not even the
-page. Every ``/api/`` route and both event streams also need the per-launch page token: ``X-Exo-Token`` on fetches,
-or ``?token=`` on the two event streams (a browser EventSource cannot set headers). An Origin, when sent, must be
-this same host, and Sec-Fetch-Site must be same-origin or none. Only the page shell (``/`` and ``/static/``) is
-served without the token: it is code, not data. `exo web` prints the page address with the token in the URL
-fragment (never sent to a server); the page moves it to sessionStorage.
+page. Every ``/api/`` route except ``POST /api/launch`` (below) and both event streams also need the per-launch page
+token: ``X-Exo-Token`` on fetches, or ``?token=`` on the two event streams (a browser EventSource cannot set headers).
+An Origin, when sent, must be this same host, and Sec-Fetch-Site must be same-origin or none. Besides the launch
+route, only the page shell (``/`` and ``/static/``) is served without the token: it is code, not data. `exo web`
+prints the page address with the token in the URL fragment (never sent to a server); the page moves it to
+sessionStorage.
 
 Launch code (#166). The browser is opened on ``#code=<one-time code>``, never on the token: the launcher's argv is
 readable by other users of the host in /proc. ``/api/launch`` is the one ``/api/`` route without the token; it
 passes every other check of ``providers.guard``. A code answers the token once, for at most ``LAUNCH_TTL`` seconds.
-A code that comes back after it was used means two parties held it: the token is replaced, the streams opened with
-the old one end, and the terminal gets a warning and the new link.
+A code that comes back after it was used means two parties held it: the token is replaced, every request in flight
+ends (event streams, and requests that passed the token check but are still waiting for a body), and the terminal
+gets a warning and the new link. A body is checked against the current token again once it is read. Detection needs
+that second redemption: a launched browser that never runs the page's script never redeems, and then nothing warns.
 """
 from __future__ import annotations
 
@@ -64,6 +67,7 @@ DECISIONS = ("allow", "deny", "allow_always")
 STREAMS = ("/api/events", "/api/stream")
 LAUNCH = "/api/launch"
 LAUNCH_TTL = 120.0
+BAD_TOKEN = {"error": "missing or wrong page token: open the link `exo web` printed"}
 
 
 class WebServer:
@@ -79,7 +83,6 @@ class WebServer:
         self._hosts: set = set()
         self._codes: Dict[str, float] = {}   # unused launch codes -> monotonic deadline
         self._spent: set = set()             # redeemed launch codes: one coming back means it leaked
-        self._streams: set = set()           # event stream connections, ended when the token is replaced
         self._shown: Optional[Tuple[str, int]] = None
 
     # ------------------------------------------------------------ lifecycle
@@ -112,9 +115,12 @@ class WebServer:
         sent = headers.get(prov.TOKEN_HEADER, "")
         if not sent and path in STREAMS:
             sent = (q.get("token") or [""])[0]
-        if not sent or not hmac.compare_digest(sent.encode(), self.token.encode()):
-            return 403, {"error": "missing or wrong page token: open the link `exo web` printed"}
+        if not self._current(sent):
+            return 403, BAD_TOKEN
         return None
+
+    def _current(self, sent: str) -> bool:
+        return bool(sent) and hmac.compare_digest(sent.encode(), self.token.encode())
 
     async def run(self, host: str, port: int) -> None:
         """Connect to the core, then serve until cancelled. Keeps retrying the core in the background."""
@@ -196,13 +202,21 @@ class WebServer:
         return 403, {"error": "unknown launch code"}
 
     def rotate(self) -> None:
-        """Replace the page token. Every open page must re-open; streams opened with the old token end now."""
+        """Replace the page token. Every open page must re-open. Every other connection ends now: streams opened with
+        the old token, and requests that passed the token check and still wait for their body."""
         self.token = secrets.token_urlsafe(32)
-        for t in list(self._streams):
-            t.cancel()
+        try:
+            me = asyncio.current_task()
+        except RuntimeError:   # no running loop
+            me = None
+        for t in list(self._conns):
+            if t is not me:
+                t.cancel()
         if self._shown is not None:
+            # paste, not click: a click from the terminal hands the token to the URL opener's argv again (#166)
             print("exo-command: warning: a browser launch link was used twice, so someone else may have had it. "
-                  "The page token was replaced; open the new link:", flush=True)
+                  "The page token was replaced; paste the new link into the browser that is already open:",
+                  flush=True)
             print("exo-command: {}".format(self.page_url(*self._shown)), flush=True)
 
     async def close(self) -> None:
@@ -226,7 +240,6 @@ class WebServer:
             pass
         finally:
             self._conns.discard(task)
-            self._streams.discard(task)
             try:
                 writer.close()
             except Exception:
@@ -248,8 +261,6 @@ class WebServer:
         if refused is not None:
             return await self._json(writer, *refused)
         c = self.centre
-        if path in STREAMS:
-            self._streams.add(asyncio.current_task())
         if path == "/" and method == "GET":
             return await self._file(writer, STATIC / "index.html")
         if path.startswith("/static/") and method == "GET":
@@ -354,6 +365,9 @@ class WebServer:
             body = json.loads(await reader.readexactly(n)) if n else {}
         except ValueError:
             body = None
+        if not self._current(headers.get(prov.TOKEN_HEADER, "")):   # replaced while the body was on its way
+            await self._json(writer, 403, BAD_TOKEN)
+            return None
         if not isinstance(body, dict):
             await self._json(writer, 400, {"error": "body must be a json object"})
             return None
@@ -402,6 +416,8 @@ class WebServer:
             body = json.loads(await reader.readexactly(n)) if n else {}
         except ValueError:
             return await self._json(writer, 400, {"error": "bad json"})
+        if not self._current(headers.get(prov.TOKEN_HEADER, "")):   # replaced while the body was on its way
+            return await self._json(writer, 403, BAD_TOKEN)
         decision = body.get("decision")
         if decision not in DECISIONS:
             return await self._json(writer, 400, {"error": "decision must be one of {}".format(", ".join(DECISIONS))})

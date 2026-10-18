@@ -277,7 +277,7 @@ Details and the cost rules: `docs/TRACE.md`.
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
 | The warning about "not inside a git repo" | The thread's folder is not a repo. Set `[session] cwd` in the seat, or `/cwd` to see where you are. |
 | The web page says "missing or wrong page token" | Open the link `exo web` printed this time. Each launch has a new token. |
-| The web page says "this browser link was already used or has expired" | The browser link is good once, for two minutes. Open the link `exo web` printed in the terminal. If the terminal also warned that a link was used twice, use the new link it printed. |
+| The web page says "this browser link was already used or has expired" | The browser link is good once, for two minutes. Open the link `exo web` printed in the terminal. If the terminal also warned that a link was used twice, paste the new link it printed into the browser that is already open (do not click it in the terminal). |
 | Keys must stay private | Exo never writes secrets through `config.set`, and removes known key values from tool output. See `docs/SEATS.md`. |
 
 ## 11. Your store and the ledger
