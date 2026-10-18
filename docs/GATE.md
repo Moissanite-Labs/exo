@@ -301,7 +301,9 @@ and the host for the program, so `ssh -vp 22 host rm -rf /data` was `allow` even
 such lines used to ask on the program the gate misread. `mosh` long options that take a value
 (`--port 60001`, `--family inet`) are read the same way. The value of `mosh --ssh`, `--client` or
 `--server` is a command that runs, so the gate reads it as one: `mosh --ssh='rm -rf /data' host`
-denies under `deny: [delete]`, and any such line asks.
+denies under `deny: [delete]`, and any such line asks. The `--ssh` and `--client` helpers run on
+this machine, so they keep their own exposure; only `--server` runs on the remote host and is
+`internal` like the inner command.
 
 ## The store is credentials (D-038)
 

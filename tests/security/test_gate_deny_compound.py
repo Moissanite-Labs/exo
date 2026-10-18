@@ -253,6 +253,17 @@ def test_mosh_command_options_are_read_and_ask():
     assert decide(classify(sh("mosh --port=60001 prod-db"))).outcome == decide(classify(sh("mosh prod-db"))).outcome
 
 
+def test_mosh_local_helpers_keep_their_exposure():
+    # --ssh and --client run on this machine; only --server and the inner command run on the remote host.
+    private = normalize_policies({"gates": {"deny": [{"match": {"category": "delete", "exposure": "private"}}]}})
+    internal = normalize_policies({"gates": {"deny": [{"match": {"category": "delete", "exposure": "internal"}}]}})
+    for command in ("mosh --ssh='sh -c \"rm -rf /tmp/data; exit\"' host", "mosh --client='rm -rf /tmp/data' host"):
+        assert decide(classify(sh(command)), private).outcome == "deny", command
+    for command in ("mosh --server='rm -rf /data' host", "mosh host rm -rf /data"):
+        assert decide(classify(sh(command)), internal).outcome == "deny", command
+        assert decide(classify(sh(command)), private).outcome == "ask", command
+
+
 def test_ssh_value_inside_the_word_and_plain_value_options_read_as_before():
     pol = normalize_policies({"gates": {"deny": ["delete"]}})
     for command in ("ssh -vpls 22 rm -rf /data", "ssh -Beth0 prod-db rm -rf /data", "ssh -p 22 prod-db rm -rf /data"):

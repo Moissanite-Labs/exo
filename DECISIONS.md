@@ -1372,7 +1372,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   as written, and only the decision's ledger view redacts URL userinfo. `ssh` options are read as getopt reads them, so
   a value-taking letter at the end of a cluster (`-vp 22`) or `-B`/`-P`/`-I` no longer puts the option's value in the
   host's place; such a line asks. `mosh` long options are read the same way, and the command given to `mosh --ssh`,
-  `--client` or `--server` is read as a command and the line asks. The ledger view of a classification (`as_dict`)
+  `--client` or `--server` is read as a command and the line asks (the `--ssh` and `--client` helpers run locally and
+  keep their own exposure; `--server` runs on the remote host). The ledger view of a classification (`as_dict`)
   leaves the parts out, so approval bindings and trace rows are unchanged.
 - **Rejected:** denying the line when the combined category is in the list only (the bug); passing the policy into
   `classify` so `_combine` could prefer a denied part (ties classification to one policy, and the plugin decides
