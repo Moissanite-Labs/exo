@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, AsyncIterator
 
 import httpx
 
 from exo.peerauth import FrameTooLarge, PrincipalTransport, sse_frames, stream_info
 from exo.protocol import schema as s
+
+log = logging.getLogger(__name__)
 
 
 class ClientError(Exception):
@@ -103,6 +106,11 @@ class Client:
                 raise ClientError(s.ErrorInfo(code=f"http_{r.status_code}", message=(await r.aread()).decode()))
             async for comments, data in sse_frames(r.aiter_lines(), self.idle):
                 if data:
-                    yield s.Event.from_json("\n".join(data), strict=False)
+                    try:
+                        ev = s.Event.from_json("\n".join(data), strict=False)
+                    except s.ProtocolError as exc:  # skip one event it cannot read, never end the feed (D-045)
+                        log.warning("skipped an event: %s", exc)
+                    else:
+                        yield ev
                 elif (got := stream_info(comments).get("instance")) is not None:
                     self.instance = got  # a change means the core restarted: take a fresh approvals snapshot

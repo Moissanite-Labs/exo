@@ -109,9 +109,14 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   a focused button shortcut, or clicking Always) requires a separate Enter or Confirm always button; Escape,
   another key, Cancel, or leaving the card cancels confirmation. Deny opens an optional note. The page reconciles
   its cards with the server's list on every thread open and stream reconnect, and the server asks the core first,
-  so a card the core no longer holds is dropped (D-045). Taste, diff and the
-  other panels are cold. A peer message has the sender in the header, a grey rule and the line "from another
-  session, not from you": it never looks like the user. Panels and new transcript items reveal on arrival.
+  so a card the core no longer holds is dropped (D-045). A card with no thread (a held peer message that no live
+  session could take) shows in every thread, as in the terminal client. Taste, diff and the other panels are cold.
+  A dismissed panel stays closed. The core sends no `ui.panel` close for a dismissal, so the page drops the panel
+  from its own list as well, and the next panel event, a tab switch or a reconnect does not bring it back. A peer
+  message has the sender in the header, a grey rule and the line "from another session, not from you": it never
+  looks like the user. That holds after a reload or a thread switch too. A stored peer, bus or job message
+  (`meta.peer`, `meta.bus`, `meta.job`) is the same card with its real author (`Bus · <seat>`, `Job · <id>`), and a
+  live `peer.message` and its stored message make one card. Panels and new transcript items reveal on arrival.
 - **Composer.** Block caret in orange (`caret-shape: block`, where the browser supports it), `steer ›` instead of
   `›` while a turn runs, a cut-corner Send. A message sent while a turn runs shows as a `steer queued` chip above the
   box with an `×` (Up in an empty box does the same): it pulls the text back into the box if it has not landed
@@ -124,6 +129,12 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   retries after an HTTP error such as a 403 after a restart or a 502 while the core restarts), ignores a seq it has
   already handled, and the server resumes from the later of `?since=` and `Last-Event-ID`. Before D-045 a drop replayed
   the whole page history, so streamed text doubled. A stale page token shows "page link expired" in the corner.
+  A chat reader that falls 1000 events behind has its stream ended with nothing lost: the events still queued for it
+  are dropped unwritten, and the reconnect replays them from the ring or the core's log. Before, the oldest queued
+  event was thrown away and never replayed. `exo web` folds each core event into its state once, by `seq`, so its
+  re-bootstrap after the core's stream drops counts no message, tool call, task update or approval twice. A core
+  whose log is behind the page (a new `EXO_HOME`) starts the page over: the old picture goes, and every open stream
+  reconnects and gets the reset.
 - **Boot.** Four lines go green as real calls answer: core, agent, memory (message count on record), model
   route. A line the server cannot answer stays dim as `unavailable`. Skipped under reduced motion, with
   `?boot=0`, and after the first time in a tab.
@@ -216,6 +227,11 @@ Tasks, Schedule, Command and Providers follow the site v2 (`site/assets/style.cs
   The form sits beside the list, with labelled fields; under 1100px it follows the list.
 - **Command** is an instrument panel: six gauges (the selected one has an orange top rule), section tabs, then one
   hairline section per source. Approvals, decisions and sessions use pills; the Tasks section uses the Tasks board.
+  An approval card shows the whole call (the tool, then every argument) and answers by click. The card grows with
+  the call and the page scrolls to its end: the page redraws on every core event, and a scroll box of its own would
+  jump back to its top each time.
+  Allow always is a standing grant, so as on the Chat card it waits for a separate Confirm always click. Cancel,
+  another section, Refresh or the request closing elsewhere drops the confirm. Allow and deny answer at once.
   At 1280px and up approvals and decisions sit left of live sessions; tasks, projects and cost run full width.
   Empty sections say what will appear and how.
 - **Providers** is a rack of ruled rows: name and default mark, the status pill, then key source, env var, model count
