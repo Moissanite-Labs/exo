@@ -70,6 +70,20 @@ POSTS = [
     f"unset 'a[\\]$({GH})]'",
     f"unset \"a[']'\\$({GH})]\"",
     f"unset 'a[\"$({GH})\"]'",
+    # A [ in the subscript nests: the ] after b[0] does not end it, and bash runs the command after it.
+    f"unset 'a[b[0]+$({GH})]'",
+    f"printf -v 'a[b[1]$({GH})]' %s x",
+    # At the subscript's top level a \ hides the $ or ` after it, and bash runs the backticks that follow. On
+    # 6e44914 the scan read `\${` as the start of a ${ } and asked, or read `\`` as the start of backticks.
+    f"unset 'a[\\${{`{GH}`]'",
+    f"printf -v 'a[\\${{`{GH}`}}]' %s x",
+    f"unset 'a[\\``{GH}`]'",
+    # Bash before 5.2 expands a nested subscript again, so a \$ or \` there runs the command (bash 3.2 also for a
+    # [ ] in double quotes).
+    f"unset 'a[b[\\$({GH})]]'",
+    f"printf -v 'a[b[\\`{GH}\\`]]' %s x",
+    f"read 'a[1+b[\\$({GH})]]' <<< x",
+    f"unset 'a[\"b[\\$({GH})]\"]'",
 ]
 
 
@@ -195,3 +209,30 @@ def test_double_quoted_name_is_read_once(monkeypatch, n):
     monkeypatch.setattr(gate, "_NAME_BUILTINS", {})
     sh(line)
     assert with_scan == len(seen)
+
+
+# Bash reads `\$` at a subscript's top level as a literal $, so `a[\$(cmd)]` runs no command (bash 3.2 to 5.2):
+# the scan reads none either, and the \ still asks. On 6e44914 the scan read `$(date)` as a command.
+@pytest.mark.parametrize("line", ["unset 'a[\\$(date)]'", "printf -v 'a[\\$(date)]' %s x",
+                                  "unset 'a[\"\\$(date)\"]'"])
+def test_escaped_dollar_runs_no_command(monkeypatch, line):
+    seen = []
+    real = gate.classify_shell
+
+    def counted(cmd, depth=0):
+        seen.append(cmd)
+        return real(cmd, depth)
+
+    monkeypatch.setattr(gate, "classify_shell", counted)
+    c = sh(line)
+    assert "date" not in seen, seen
+    assert c.category == "read" and "indirection" in c.signals, c
+    assert decide(c).outcome == "ask", c
+
+
+# At the depth cap a command in a subscript is not read, and is opaque, as an unquoted $( ) there is.
+@pytest.mark.parametrize("line", [f"unset 'a[$({GH})]'", "printf -v 'a[`true`]' %s x"])
+def test_subscript_at_depth_cap_is_opaque(line):
+    c = gate.classify_shell(line, gate._DEPTH)
+    assert c.category == "opaque_exec", c
+    assert decide(c, {"gates": {"categories": {"opaque_exec": "deny"}}}).outcome == "deny", c
