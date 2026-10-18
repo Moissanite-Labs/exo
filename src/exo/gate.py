@@ -1506,7 +1506,10 @@ def _brace_seq(s: str) -> list[str] | None:
     vals = range(x, y + 1, step) if x <= y else range(x, y - 1, -step)
     if not m[1]:
         return [chr(v) for v in vals]
-    width = max((len(t) for t in m.group(1, 2) if re.match(r"-?0\d", t)), default=0)
+    # a leading zero on either bound pads every member to the longer bound, as bash does: {007..1000..993}
+    width = max(len(m[1]), len(m[2])) if any(re.match(r"-?0\d", t) for t in m.group(1, 2)) else 0
+    if width and not -2**31 <= min(x, y) <= max(x, y) < 2**31:
+        raise _BraceLimit    # bash prints a padded member as a C int, so it wraps past int32
     return [f"{v:0{width}d}" for v in vals]
 
 
