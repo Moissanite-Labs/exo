@@ -102,8 +102,11 @@ class JobTarget(EngineTarget):
     def __init__(self, engine: "CoreEngine", cfg: JobConfig) -> None:
         super().__init__(engine)
         self.cfg = cfg
+        self.closed = False  # exod is shutting down: a notice is kept for the next turn and never starts one
 
     def can_wake(self, session: str) -> bool:
+        if self.closed:
+            return False
         if self.cfg.wake is None:  # a client on the event stream means somebody is watching
             return not self.e.hub._subs
         return bool(self.cfg.wake)
@@ -334,19 +337,24 @@ class JobManager:
         return True
 
     async def close(self) -> None:
-        """Jobs end with exod: stop every running job's process group, then record it."""
-        for h in list(self.live.values()):
+        """Jobs end with exod: stop every running job's process group, then record it once, with no notice."""
+        self.target.closed = True
+        with self._lock:  # out of live first, so _finish leaves these to this loop when the watcher sees them end
+            handles = list(self.live.values())
+            self.live.clear()
+        for h in handles:
             h.reason, h.kill_by = "killed", "exod shutting down"
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(kill_process_group, h.proc)
             if h.timer:
                 h.timer.cancel()
-            self.live.pop(h.id, None)
+            masked_note(h.side)  # removes the side file, as _finish would
             self.e.store._q("UPDATE jobs SET state='killed', exit_code=?, ended=?, detail=? WHERE id=?",
                             (h.proc.returncode, time.time(), "stopped when exod shut down", h.id))
             self.e.hub.publish(s.JobUpdated(job_id=h.id, state="killed", command=h.command[:300], exit_code=h.proc.returncode,
                                             elapsed_ms=int(_elapsed(h.started, None) * 1000), log=str(self.log_path(h.id)),
                                             detail="stopped when exod shut down"), h.session)
+        await asyncio.gather(*self._tasks, return_exceptions=True)  # notices of jobs that ended just before
         await self.path.close()
 
     async def recover(self) -> list[str]:
