@@ -68,12 +68,15 @@ A client that drops resumes from the last `seq`.
 **Schedule** and **Command** (the overview below). It is plain HTML, CSS and ES modules, with no build step
 and nothing loaded from another site. It follows the system light or dark setting.
 
-- **Chat:** sessions on the left, a monospace transcript with streamed text, tool lines, approval cards and
-  a composer in the middle, and the side panel area on the right. Each answer has accept, edit (with a
-  text box) and reject, which send `feedback.send`. Enter sends; while a turn runs it steers.
+- **Chat:** sessions on the left, a transcript with streamed text, tool lines, approval cards and a composer
+  in the middle, and the side panel area on the right. A reply streams as plain text and, once complete, is
+  rendered as Markdown (headings, lists, code, quotes and pipe tables, built as DOM nodes, never as HTML).
+  Each answer has accept, edit (with a text box) and reject, which send `feedback.send`. Enter sends; while
+  a turn runs it steers.
 - **Panels:** `ui.panel` events open panels beside the chat. Kinds: markdown, diff, table, tasks,
-  approval, taste, choice, file, chart. A panel whose data is missing or odd shows its `text`. The page
-  sends `ui.respond` for opened, dismissed and acted (a choice or a taste verdict).
+  approval, taste, choice, file, chart. A markdown panel uses the same renderer as a completed reply, so it
+  keeps its line breaks. A panel whose data is missing or odd shows its `text`. The page sends `ui.respond`
+  for opened, dismissed and acted (a choice or a taste verdict).
 - **Tasks:** `tasks.list`, kept current by `task.updated`.
 - **Schedule:** `schedule.edit` list, add, pause, resume, run now, remove.
 

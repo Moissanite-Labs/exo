@@ -32,7 +32,20 @@ a stop reason yields the retryable error "stream ended without a response", even
 stream is never a normal end. When an error arrives after text the user already saw, the loop stores that text
 as an assistant message marked `meta.interrupted` and `meta.error`, as it does for an interrupt (no retry: text
 was shown). Common opts: `model`, `max_tokens`, `temperature`, `reasoning`,
-`stop`; unknown opts are ignored.
+`stop`, `tool_choice`; unknown opts are ignored. `tool_choice="none"` keeps the same tools declared and turns tool
+use off: Anthropic sends `{"type": "none"}`, OpenAI-compatible transports send `"none"`, and `claude-cli`, which
+cannot say it, ignores it. `muse-cli` is text only and refuses any call that declares tools, so a wrap-up on that
+route falls through to the next route, as a tool round does.
+
+Round cap (issue #92): a turn that reaches `max_iterations` tool rounds (24) emits the `stopped after N tool rounds`
+notice, then makes one more model call with `tool_choice="none"` and a transient `[harness]` prompt asking what was
+done, what is open and the next step. The prompt is never stored. The reply is stored with `meta.wrap_up` (and the
+route's `meta.model`); a tool call in it is dropped and never runs, and its signed thinking is not kept (it was
+signed against the unstored prompt). `stop_reason` stays `max_iterations`. A failed wrap-up stores any shown text
+as above, emits the same coded `error` as a failed round (`provider_error`, `model_spend_refused`,
+`model_spend_stopped`) and sets the turn's error; another exception is a `harness.error` (`wrap-up`). An interrupt
+ends the turn `interrupted`. The call is one more model call and spend-journal entry per capped turn;
+`Loop(wrap_up=False)` turns it off.
 
 Codec: `to_dict(obj)` and `from_dict(cls, data, strict=True)` work for every dataclass here and in the
 protocol. Nested dataclasses, lists, optionals and Literals are decoded and checked. `strict=True`
