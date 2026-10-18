@@ -27,6 +27,7 @@ import contextvars
 import fnmatch
 import functools
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -246,6 +247,7 @@ class _Word:
     dynamic: bool = False      # holds $var, ${..}, $(..) or `..` outside single quotes
     quoted: bool = False
     glob: bool = False         # an unquoted * or ?, or a [ or { after the first character
+    brace: bool = False        # an unquoted {
     started: bool = False
     raw: str = ""              # the source text of the word, quotes kept
     locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
@@ -362,6 +364,8 @@ class _Lexer:
             else:
                 if ch in "*?" or (ch in "[{" and w.started):
                     w.glob = True
+                if ch == "{" and isinstance(w, _Word):
+                    w.brace = True
                 w.text += ch
                 w.started = True
                 self.i += 1
@@ -662,6 +666,53 @@ _INTERP_VALUE_FLAGS = {"python": ("-X", "-W"), "pypy": ("-X", "-W"), "node": ("-
                        "ruby": ("-r", "-I"), "perl": ("-I",)}
 _SAFE_PY_MODULES = {"pytest", "pip", "venv", "json.tool", "ruff", "mypy", "black", "isort", "unittest",
                     "compileall", "py_compile", "coverage", "build", "pydoc", "pyright", "flake8", "pylint"}
+# Wrappers that run a command given in their arguments (#160): program -> options that take a value. An option
+# ending in "=" takes one only attached (`-mFILE`, `--mount=FILE`). The command is the argv after the options
+# and _WRAPPER_OPERANDS operands (a lock file, a new root, a CPU mask, a priority), or a shell command string
+# (`flock -c`, `script -c`, `tmux -c`, watch without -x, a tmux shell-command, a parallel template).
+_WRAPPERS = {
+    "setsid": (), "chronic": (), "unbuffer": (), "catchsegv": (), "firejail": (), "taskset": (),
+    "dbus-run-session": ("--dbus-daemon", "--config-file"),
+    "flock": ("-w", "--timeout", "--wait", "-E", "--conflict-exit-code", "-c", "--command"),
+    "chroot": ("--userspec", "--groups"),
+    "chrt": ("-T", "--sched-runtime", "-P", "--sched-period", "-D", "--sched-deadline"),
+    "numactl": ("-C", "--physcpubind", "-N", "--cpunodebind", "-m", "--membind", "-p", "--preferred", "-i",
+                "--interleave", "-P", "--preferred-many", "-w", "--weighted-interleave"),
+    "xvfb-run": ("-e", "--error-file", "-f", "--auth-file", "-n", "--server-num", "-p", "--xauth-protocol", "-s",
+                 "--server-args", "-w", "--wait"),
+    "unshare": ("-R", "--root", "-w", "--wd", "-S", "--setuid", "-G", "--setgid", "--map-user", "--map-group",
+                "--map-users", "--map-groups", "--propagation", "--setgroups", "--monotonic", "--boottime",
+                "-m=", "-u=", "-i=", "-n=", "-p=", "-U=", "-C=", "-T="),
+    "nsenter": ("-t", "--target", "-W", "--wdns", "-S", "--setuid", "-G", "--setgid", "-m=", "-u=", "-i=", "-n=",
+                "-p=", "-C=", "-U=", "-T=", "-r=", "-w="),
+    "systemd-run": ("-H", "--host", "-M", "--machine", "-u", "--unit", "-p", "--property", "--description",
+                    "--slice", "--expand-environment", "--service-type", "--uid", "--gid", "--nice",
+                    "--working-directory", "-E", "--setenv", "-C", "--capsule", "--json", "--background",
+                    "--path-property", "--socket-property", "--timer-property", "--on-active", "--on-boot",
+                    "--on-startup", "--on-unit-active", "--on-unit-inactive", "--on-calendar"),
+    "watch": ("-n", "--interval", "-q", "--equexit", "-d="),
+    "script": ("-I", "--log-in", "-O", "--log-out", "-B", "--log-io", "-T", "--log-timing", "-m", "--logging-format",
+               "-E", "--echo", "-o", "--output-limit", "-c", "--command", "-t="),
+    "tmux": ("-c", "-f", "-L", "-S", "-T"),
+    "screen": ("-c", "-e", "-h", "-p", "-s", "-S", "-t", "-T"),
+    "parallel": ("-a", "--arg-file", "--arg-file-sep", "--arg-sep", "--basefile", "--bf", "--block", "--block-size",
+                 "-C", "--colsep", "-d", "--delimiter", "--delay", "-E", "--env", "--halt", "--header", "-I", "-j",
+                 "--jobs", "-P", "--max-procs", "--joblog", "-L", "--max-lines", "-n", "--max-args", "-N", "--load",
+                 "--memfree", "--nice", "--results", "--res", "--retries", "--return", "-s", "--max-chars", "-S",
+                 "--sshlogin", "--slf", "--sshloginfile", "--ssh", "--tagstring", "--timeout", "--tmpdir",
+                 "--termseq", "--transferfile", "--tf", "--wd", "--workdir", "--rpl", "--sshdelay", "--profile",
+                 "-J"),
+}
+_WRAPPER_OPERANDS = {"flock": 1, "chroot": 1, "taskset": 1, "chrt": 1}
+# Wrappers that run the command as another user, in other namespaces or as a system unit: like sudo, the line
+# carries a signal named after the wrapper and a reversible part counts as costly.
+_PRIVILEGED_WRAPPERS = ("chroot", "nsenter", "unshare", "systemd-run")
+# tmux commands that take a shell-command, with their options that take a value
+_TMUX_RUNS = {"new-session": "cefFnstxy", "new-window": "ceFnt", "split-window": "ceFlpt", "respawn-pane": "cet",
+              "respawn-window": "cet", "run-shell": "cdt"}
+_TMUX_ALIASES = {"new": "new-session", "neww": "new-window", "splitw": "split-window", "respawnp": "respawn-pane",
+                 "respawnw": "respawn-window", "run": "run-shell", "splitp": "split-window",
+                 "split-pane": "split-window"}
 _OPAQUE_PROGRAMS = {"source": "reads and runs a shell file", ".": "reads and runs a shell file",
                     "alias": "defines an alias", "function": "defines a shell function",
                     "trap": "sets a command to run on a signal", "make": "runs Makefile recipes",
@@ -1015,6 +1066,127 @@ def _strip_prefix_words(words: list) -> tuple[list, bool, str | None]:
     return words, sudo, None
 
 
+def _wrapper_args(argv: list[str], i: int, takes: tuple, permute: bool = False) -> tuple[int, list]:
+    """Read a wrapper's options from argv[i] as getopt does: up to the first operand (past it with `permute`)
+    or `--`, `--opt=value` or `--opt value` (an unambiguous prefix of four letters or more counts), short
+    options clustered (`-qc`, `-n5`). Returns the index of the first operand and the (option, value) pairs read."""
+    seen: list[tuple[str, str]] = []
+    while i < len(argv):
+        a = argv[i]
+        i += 1
+        if a == "--":
+            break
+        if not a.startswith("-") or a == "-":
+            if not permute:
+                return i - 1, seen
+        elif a.startswith("--"):
+            name, eq, val = a.partition("=")
+            full = [t for t in takes if len(name) > 5 and t.startswith(name) and not t.endswith("=")]
+            name = name if name in takes or len(full) != 1 else full[0]
+            if not eq and name in takes and i < len(argv):
+                val, i = argv[i], i + 1
+            seen.append((name, val))
+        else:
+            for k, ch in enumerate(a[1:], 2):
+                if "-" + ch in takes or "-" + ch + "=" in takes:
+                    val = a[k:]
+                    if not val and "-" + ch in takes and i < len(argv):
+                        val, i = argv[i], i + 1
+                    seen.append(("-" + ch, val))
+                    break
+                seen.append(("-" + ch, ""))
+    return i, seen
+
+
+def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words) -> list[Classification]:
+    """A wrapper that runs a command (#160): setsid, flock, chroot, watch, script -c, tmux, screen, parallel...
+    The command is classified as a nested command beside an opaque part, like the command after xargs: the line
+    asks as before, and a deny on what runs applies when its category outranks opaque_exec (until D-075). A
+    command the gate cannot find or read stays opaque."""
+    argv = [w.text for w in words]
+    head = _opaque(f"{prog}: {_OPAQUE_PROGRAMS.get(prog, 'runs a command')}", cmd)
+    parts, texts, rest = [head], [], []
+    if prog == "screen":
+        multi = {"-Logfile": "--logfile", "-ls": "-Q", "-list": "-Q", "-wipe": "-Q", "-fn": "--fn", "-fa": "--fa",
+                 "-ln": "--ln"}
+        i, seen = _wrapper_args([multi.get(a, a) for a in argv], 1, _WRAPPERS[prog] + ("--logfile",))
+        opts = {o for o, _ in seen}
+        # -r and -x reattach, -ls, -wipe and -Q query: nothing new runs. -R reattaches, or starts the command when
+        # no session is detached; it is not read and asks (a known limit). -X sends a screen command; its
+        # `screen` command opens a window that runs argv. Otherwise the argv after the options runs.
+        if "-X" not in opts and not {"-r", "-R", "-x", "-Q"} & opts:
+            rest = words[i:]
+        elif "-X" in opts and argv[i:i + 1] == ["screen"]:
+            j, _ = _wrapper_args(argv, i + 1, ("-t", "-T", "-h"))
+            rest = words[j + 1:] if argv[j:j + 1] and argv[j].isdigit() else words[j:]
+    elif prog == "tmux":
+        i, seen = _wrapper_args(argv, 1, _WRAPPERS[prog])
+        texts = [v for o, v in seen if o == "-c"]
+        # A command list, split as tmux splits it (cmd_parse_from_arguments): an argument whose last character is
+        # `;` ends a command and loses the `;` (`';'`, `'sleep 3;'`); one ending in `\;` does not end it and
+        # reads as ending in `;`.
+        cmds: list[list[str]] = [[]]
+        for a in argv[i:]:
+            if a.endswith("\\;"):
+                cmds[-1].append(a[:-2] + ";")
+            elif a.endswith(";"):
+                cmds[-1] += [a[:-1]] if a[:-1] else []
+                cmds.append([])
+            else:
+                cmds[-1].append(a)
+        for sub_argv in cmds:
+            sub = _TMUX_ALIASES.get(sub_argv[0], sub_argv[0]) if sub_argv else ""
+            if sub in _TMUX_RUNS:
+                j, flags = _wrapper_args(sub_argv, 1, tuple("-" + c for c in _TMUX_RUNS[sub]))
+                body = sub_argv[j:]
+                if body and not (sub == "run-shell" and ("-C", "") in flags):
+                    texts.append(body[0] if len(body) == 1 else shlex.join(body))
+    elif prog == "parallel":
+        i, _ = _wrapper_args(argv, 1, _WRAPPERS[prog])
+        seps = (":::", "::::", ":::+", "::::+")
+        j = next((k for k in range(i, len(argv)) if argv[k] in seps), len(argv))
+        template = " ".join(argv[i:j])
+        if template:
+            # Each argument is appended to the template, or put where {} stands, and the line runs in a shell.
+            # Only on the line itself and up to four times this command's own length, sized before any text is
+            # built: a template can be a parallel line too, and reading every argument at each level would
+            # multiply the work. The template is also read alone.
+            args = argv[j + 1:] if argv[j:j + 1] == [":::"] and not depth else []
+            args = list(dict.fromkeys(args[:next((n for n, a in enumerate(args) if a in seps), len(args))]))[:16]
+            budget, slots = 4 * sum(len(a) + 1 for a in argv), template.count("{}")
+            for a in args if slots or "{" not in template else []:
+                q = shlex.quote(a)
+                budget -= len(template) + (slots * (len(q) - 2) if slots else len(q) + 1)
+                if budget < 0:
+                    break
+                texts.append(template.replace("{}", q) if slots else f"{template} {q}")
+            texts.append(template)
+    else:
+        i, seen = _wrapper_args(argv, 1, _WRAPPERS[prog], permute=prog == "script")
+        texts = [v for o, v in seen if prog in ("flock", "script") and o in ("-c", "--command")]
+        i += _WRAPPER_OPERANDS.get(prog, 0)
+        if prog == "flock" and argv[i:i + 1] in (["-c"], ["--command"]):
+            texts.append(argv[i + 1] if i + 1 < len(argv) else "")
+        elif prog == "watch" and not {("-x", ""), ("--exec", "")} & set(seen):
+            texts.append(" ".join(argv[i:]))         # watch runs the words joined through `sh -c`
+        elif prog != "script":
+            rest = words[i:]
+    for text in texts:
+        parts.append(classify_shell(text, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
+    parts += inner_words(rest)
+    if _env_dump(_strip_prefixes_keep_env([w.text for w in rest])[0]):   # as for coproc and the prefixes (#155)
+        parts.append(_make("credentials", summary="shell touching environment dump", command=cmd,
+                           signals=["secret store"]))
+    shown = " ".join(w.text for w in rest) or "; ".join(t for t in texts if t)
+    if shown:
+        head.summary = f"{prog} runs {shown}"[:120]
+    if prog in _PRIVILEGED_WRAPPERS:
+        head.signals.append(prog)
+        for p in parts:
+            p.reversibility = "costly" if p.reversibility == "reversible" else p.reversibility
+    return parts
+
+
 def _trusted_path(prog: str) -> bool:
     """A program named by path runs as itself only from a system bin folder or a virtualenv/node bin."""
     p = _expand_text(prog)
@@ -1028,6 +1200,73 @@ def _stdin_texts(k: _Cmd, piped: str | None) -> list[str]:
     if piped is not None:
         out.append(piped)
     return out
+
+
+# Builtins that take a variable name and evaluate an array subscript in it as arithmetic, which runs any
+# $( ) or ` ` there (#179): program -> (options whose value is a name, options with another value, operands are names).
+_NAME_BUILTINS = {"printf": ("v", "", False), "read": ("a", "dinNptu", True), "declare": ("", "", True),
+                  "typeset": ("", "", True), "local": ("", "", True), "unset": ("", "", True),
+                  "wait": ("p", "", False), "test": ("v", "", False), "[": ("v", "", False)}
+
+
+def _subscript_parts(prog: str, args: list[str], cmd: str, depth: int, done: list[str]) -> list[Classification]:
+    """The commands inside the array subscripts of a name-taking builtin's name arguments, whatever their quoting
+    (`done`: bodies the line's own parse already classified). Any expansion there also asks: bash evaluates its
+    value (a variable's, or a $( )'s output) as arithmetic too, and a value such as `b[$(cmd)]` runs cmd."""
+    named, valued, operands = _NAME_BUILTINS[prog]
+    names, i, opts = [], 0, True
+    while i < len(args):
+        a, i = args[i], i + 1
+        if prog in ("test", "["):
+            if a == "-v" and i < len(args):
+                names.append(args[i])
+            continue
+        if opts and a == "--":
+            opts = False
+        elif opts and len(a) > 1 and a[0] in "-+":
+            for n, letter in enumerate(a[1:], 2):
+                if letter in named + valued:
+                    val = a[n:] or (args[i] if i < len(args) else "")
+                    i += 0 if a[n:] else 1
+                    names += [val] if letter in named else []
+                    break
+        elif operands:
+            names.append(a)
+            opts = False
+        else:
+            break
+    parts: list[Classification] = []
+    for name in names:
+        m = re.match(r"[^=\[]*\[", name)
+        if not m:
+            continue
+        lx, level, other, q, inner = _Lexer(name), 1, False, "", 0
+        lx.i = m.end()
+        while lx.i < len(name) and level:     # to the ] that ends it as bash finds it: a quote or \ hides a ]
+            ch = name[lx.i]
+            if ch == "`" or name.startswith(("$(", "${"), lx.i):   # read in any quoting, as bash does
+                (lx._dollar if ch == "$" else lx._backtick)(_Word())
+                other = True
+                continue
+            if ch == "\\" and q != "'":   # a top-level \$ or \` is literal; bash < 5.2 expands a nested [ ] again
+                lx.i += 1
+                if name[lx.i:lx.i + 1] in ("$", "`") and (level > 1 or inner > 0):
+                    other = True
+                    continue
+            elif ch in "'\"" and q in ("", ch):
+                q, inner = ("" if q else ch), 0
+            elif not q:
+                level += {"[": 1, "]": -1}.get(ch, 0)
+            elif q == '"':   # bash 3.2 reads a [ ] in double quotes as a nested subscript
+                inner += {"[": 1, "]": -1}.get(ch, 0)
+            other = other or ch in "\\'\"$"   # quoting or a variable: bash reads it, the gate does not
+            lx.i += 1
+        parts += [classify_shell(sub, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd)
+                  for sub in lx.subs if sub not in done]
+        if other:   # a signal, not an opaque part, so a deny on another part of the line still wins
+            why = f"{prog} evaluates an array subscript the gate cannot read ({name[:40]})"
+            parts.append(_make("read", summary=why[:120], command=cmd, signals=["indirection"]))
+    return parts
 
 
 def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None = None) -> list[Classification]:
@@ -1047,6 +1286,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
             parts.append(classify_shell(split, depth + 1))
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
+        if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
+            parts += _subscript_parts(words[0].text, [w.text for w in words[1:]], cmd, depth, ctx.get("subs", []))
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped)
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
@@ -1108,6 +1349,8 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
         return _classify_simple(_Cmd(words=ws, heredocs=k.heredocs, herestrings=k.herestrings), cmd,
                                 inner_depth, ctx, piped)
 
+    if prog in _WRAPPERS:
+        return _classify_wrapper(prog, words, cmd, depth, inner_words)
     if prog in _OPAQUE_PROGRAMS:
         parts = [_opaque(f"{prog}: {_OPAQUE_PROGRAMS[prog]}", cmd)]
         if prog in ("coproc", "function"):
@@ -1661,10 +1904,433 @@ def _piped_text(k: _Cmd) -> str | None:
     return None
 
 
+# Store folders and files that _SENSITIVE_PATH names and _SENSITIVE_SAMPLES does not show (/proc/<pid>/environ).
+_STORE_FOLDERS = ("/proc", ".config/gcloud", ".config/muse", ".config/netlify", ".vercel")
+_STORE_FILES = ("environ",)
+_CHDIR_OPTS = {"env": ("-C", "--chdir"), "sudo": ("-D", "--chdir")}
+_GLOBBY = re.compile(r"[*?\[]")
+# The current folder at the start of a path: ~+, ~0, ~-0 (the folder stack), $PWD, ${PWD}, ${PWD:-x} and the like,
+# $(pwd), `pwd`; and its parents, ${PWD%/*} and ${PWD%/*/*}.
+_HERE = re.compile(r"^(~\+\d*|~-?\d+|\$PWD|\$\{PWD(?::?[-=?][^}]*)?\}|\$\{PWD%(?:/\*)+\}|\$\(pwd(?: -[LP])?\)|"
+                   r"`pwd(?: -[LP])?`)(?=/|$)")
+
+
+def _store_hints() -> tuple[set, dict, set]:
+    """(store folder names, {(parent, folder): its sample path}, store file names) from the sample store paths. A
+    dot folder (`.kube`) or `Netlify` is a store folder by its name; a plain one only below its parent (`.config/gh`,
+    `.config/exo`, `.exo/keys`, `/proc`), so a checkout called exo or gh is not. Folders below home count from home
+    ("~") down, one outside home (EXO_HOME, its keys) by its last part. HOME and EXO_HOME apply per call."""
+    home = os.path.normpath(_home())
+    root = home.rstrip("/") + "/"                   # HOME=/ too
+    singles, pairs, names = {"Netlify"}, {}, set(_STORE_FILES)
+    keys, keys_file, claude = _dynamic_secret_paths()
+    files = [os.path.join(home, s) for s in _SENSITIVE_SAMPLES] + [os.path.join(keys, "seat.key"), keys_file,
+                                                                    claude + "/"]
+    folders = [os.path.join(home, d) for d in _STORE_FOLDERS] + [os.path.dirname(keys)]     # and EXO_HOME
+    for folder, name in [x.rpartition("/")[::2] for x in files] + [(d, "") for d in folders]:
+        folder = os.path.normpath(folder)
+        if folder == home or folder.startswith(root):
+            parts, start = ["~"] + folder[len(root):].split("/"), 1
+        elif root.startswith(folder + "/"):
+            parts, start = [], 0
+        else:
+            parts = folder.split("/")
+            start = max(1, len(parts) - 1)
+        for k in range(start, len(parts)):
+            if parts[k].startswith("."):
+                singles.add(parts[k])
+            elif parts[k]:
+                pairs[parts[k - 1], parts[k]] = "/".join(parts[:k + 1])
+        names.add(name)
+    return singles, pairs, names - {""}
+
+
+def _brace_glob(text: str) -> str:
+    """A brace set (`{config,x}`, `config{,.bak}`) as a glob that matches at least what it names: the first `{` to the
+    last `}` is `*` (two string searches, not a regex that rescans the rest of the word from each `{`)."""
+    if not re.search(r"\{[^{}]*(,|\.\.)", text):
+        return text
+    i, j = text.find("{"), text.rfind("}")
+    return text[:i] + "*" + text[j + 1:] if j > i else text
+
+
+def _brace_alts(text: str) -> list:
+    """The words a brace set spells (`~/.{ssh,x}`: ~/.ssh and ~/.x; a range `{1..3}` or `{a..c}` too), up to 16, in a
+    word of up to 4096 characters; past that, or for a stepped range (`{1..9..2}`), one glob (_brace_glob)."""
+    if len(text) > 4096:
+        return [_brace_glob(text)]
+    out, todo = [], [text]
+    while todo:
+        t = todo.pop()
+        m = re.search(r"\{([^{},]*(?:,[^{},]*)+)\}", t)     # an innermost set with a comma
+        r = None if m else re.search(r"\{(-?\d{1,6})\.\.(-?\d{1,6})\}|\{([A-Za-z])\.\.([A-Za-z])\}", t)
+        if m:
+            alts, hit = m.group(1).split(","), m
+        elif r:                                         # a range: {1..3} is 1 2 3, {a..c} is a b c
+            a, b = (int(r.group(1)), int(r.group(2))) if r.group(1) else (ord(r.group(3)), ord(r.group(4)))
+            if abs(b - a) >= 16:
+                return [_brace_glob(text)]
+            step = 1 if b >= a else -1
+            # a bound with a leading zero pads every word to the wider bound, as bash does: {007..10} is 007 ... 010
+            pad = max(map(len, r.group(1, 2))) if r.group(1) and any(re.match(r"-?0\d", n) for n in r.group(1, 2)) else 0
+            alts, hit = [f"{x:0{pad}d}" if r.group(1) else chr(x) for x in range(a, b + step, step)], r
+        else:
+            out.append(t)
+            continue
+        if len(out) + len(todo) + len(alts) > 16:
+            return [_brace_glob(text)]
+        todo += [t[:hit.start()] + x + t[hit.end():] for x in alts]
+    return out
+
+
+_POSIX_CLASSES = {"alpha": "a-zA-Z", "upper": "A-Z", "lower": "a-z", "digit": "0-9", "alnum": "a-zA-Z0-9",
+                  "xdigit": "0-9A-Fa-f", "word": "a-zA-Z0-9_", "space": " \t\n\r\x0b\x0c", "blank": " \t",
+                  "punct": ":-@!-/[-`{-~", "print": " -~", "graph": "\"-~!", "cntrl": "\x00-\x1f\x7f"}
+_NESTED_CLASS = re.compile(r"\[[!^]?\]?[^\][]*\[[:=.]")
+
+
+def _fn_glob(glob: str) -> str | None:
+    """A bash glob as an fnmatch pattern, or None when it could match anything (a long run of `[`, on which fnmatch
+    is quadratic, or an unknown class). `[^x]` is `[!x]`; a `]` first in a set is a member; a class inside a set
+    (`[[:alpha:]]`, `[[=e=]]`) is spelt out; a `[` that opens no set is a literal `[`."""
+    if glob.count("[") > 32:
+        return None
+    out, i, n = [], 0, len(glob)
+    while i < n:
+        if glob[i] != "[":
+            out.append(glob[i])
+            i += 1
+            continue
+        j = i + 1
+        neg = j < n and glob[j] in "!^"
+        j += neg
+        body = []
+        if j < n and glob[j] == "]":
+            body.append("]")
+            j += 1
+        closed = False
+        while j < n:
+            if glob[j] == "]":
+                closed = True
+                break
+            if glob[j] == "[" and glob[j + 1:j + 2] in (":", "=", "."):
+                kind = glob[j + 1]
+                end = glob.find(kind + "]", j + 2)
+                if end >= 0:
+                    name = glob[j + 2:end]
+                    if kind == ":" and name not in _POSIX_CLASSES or kind != ":" and len(name) != 1:
+                        return None
+                    body.append(_POSIX_CLASSES[name] if kind == ":" else name)
+                    j = end + 2
+                    continue
+            body.append(glob[j])
+            j += 1
+        if not closed:
+            out.append("[[]")
+            i += 1
+            continue
+        out.append("[" + ("!" if neg else "") + "".join(body) + "]")
+        i = j + 1
+    return "".join(out)
+
+
+def _glob_names(glob: str, names) -> list:
+    """The ``names`` a bash glob could match (see _fn_glob); all of them when it could match anything."""
+    pat = _fn_glob(glob)
+    return list(names) if pat is None else fnmatch.filter(names, pat)
+
+
+def _could_name(glob: str, hints: set) -> bool:
+    """A glob that could match one of ``hints``: its literal parts are tried as substrings first, which is cheap."""
+    pat = _fn_glob(glob)
+    if pat is None:
+        return True
+    lits, blob = [x for x in re.split(r"[*?]|\[!?\]?[^\]]*\]", pat) if x], "/".join(hints)
+    return all(t in blob for t in lits) and any(all(t in h for t in lits) for h in hints) \
+        and bool(fnmatch.filter(hints, pat))
+
+
+def _cd_walk(cmds: list, targets: list, pieces: list, bodies: list) -> None:
+    """From simple commands: the working-folder targets (cd, pushd, git -C, env -C, sudo -D, tar -C, also after
+    time, command, builtin, ! or an assignment), the words that may name a path (all but the program and the
+    targets, and redirection targets; with whether bash expands a brace set in them) and the text a shell runs
+    (`bash -c`, a heredoc fed to a shell)."""
+    for k in cmds:
+        ws = [w.text for w in k.words]
+        i = 0
+        skip: set = set()                           # the targets' own words: entering a folder reads nothing
+        while i < len(ws) and (ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) or ws[i].rsplit("/", 1)[-1] in _PREFIXES):
+            base = "" if ws[i] in _OPENERS or _ASSIGN.fullmatch(ws[i]) else ws[i].rsplit("/", 1)[-1]
+            i += 1
+            while base in _PREFIXES and i < len(ws) and ws[i].startswith("-") and ws[i] != "-":
+                word, i = ws[i], i + 1
+                opt, eq, val = word.partition("=")
+                if len(opt) >= (3 if base == "env" else 5) and "--chdir".startswith(opt):
+                    opt = "--chdir"                 # getopt takes a unique prefix: env --c=dir, sudo --chd=dir
+                c = next((j for j in range(1, len(word)) if "-" + word[j] in _PREFIXES[base]), 0)
+                if word[1:2] != "-" and len(word) > 2 and c:        # a short cluster or value: -iC dir, -Cdir
+                    opt, eq, val = "-" + word[c], word[c + 1:], word[c + 1:]
+                if not eq and (opt in _PREFIXES[base] or opt in _CHDIR_OPTS.get(base, ())) and i < len(ws):
+                    val, i = ws[i], i + 1
+                if opt in _CHDIR_OPTS.get(base, ()):
+                    targets += [val, val[1:]] if val.startswith("=") else [val]     # -C=dir: getopt's "=dir"
+                    skip.add(i - 1)
+            if base == "timeout" and i < len(ws) and re.fullmatch(r"[\d.]+[smhd]?", ws[i]):
+                i += 1
+        prog, rest = (ws[i].rsplit("/", 1)[-1], ws[i + 1:]) if i < len(ws) else ("", [])
+        if prog in ("cd", "pushd"):
+            j = next((j for j, a in enumerate(rest) if not re.fullmatch(r"-[LPen@]*|--", a)), len(rest))
+            targets += rest[j:j + 1]
+            skip.add(i + 1 + j)
+        elif prog == "git":
+            j = 0
+            while j < len(rest) and rest[j].startswith("-"):
+                if rest[j] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"):
+                    if rest[j] == "-C" and j + 1 < len(rest):
+                        targets.append(rest[j + 1])
+                        skip.add(i + 2 + j)
+                    j += 1
+                j += 1
+            skip.add(i + 1 + j)                     # the subcommand (`git config`) is not a path
+        elif prog == "tar":                         # tar -C dir: the names after it are in dir
+            j = 0
+            while j < len(rest):
+                a, j = rest[j], j + 1
+                opt, eq, val = a.partition("=")
+                if len(opt) >= 5 and "--directory".startswith(opt):        # --directory dir, --dir=dir
+                    m = None if eq else j
+                elif re.fullmatch(r"-C.+", a):                              # -Cdir
+                    val, m = a[2:], None
+                elif re.fullmatch(r"-[A-Za-z]*C", a) or j == 1 and re.fullmatch(r"[A-Za-z]*C[A-Za-z]*", a):
+                    # -C dir, -xC dir, -cfC x.tar dir, old-style czfC x.tar dir: the values follow in letter order
+                    m = j + sum(c in "fbgFHIKLNTVX" for c in a[:a.index("C")])
+                else:
+                    continue
+                if m is None:
+                    targets.append(val)
+                    skip.add(i + j)
+                elif m < len(rest):
+                    targets.append(rest[m])
+                    skip.add(i + 1 + m)
+        elif prog in ("jq", "yq", "gojq", "jaq"):    # the filter (`jq .`) is not a path, unless it is read from a file
+            first = next((f for f, a in enumerate(rest) if not a.startswith("-")), None)
+            from_file = any(a == "--from-file" or a.startswith("--from-file=") or re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a)
+                            for a in rest)
+            if first is not None and not from_file:
+                skip.add(i + 1 + first)
+        elif prog in _SHELLS:
+            for j, a in enumerate(rest):
+                if a == "-c" or (re.fullmatch(r"-[a-zA-Z]+", a) and "c" in a):
+                    bodies += rest[j + 1:j + 2]
+                    break
+                if not a.startswith(("-", "+")):
+                    break
+            else:
+                bodies += [h.body for h in k.heredocs] + [w.text for w in k.herestrings]
+        # not the program, the targets, or the words before the program but assignments (`! time sudo -u root`)
+        words = [w for j, w in enumerate(k.words) if j not in skip and (j > i or _ASSIGN.fullmatch(w.text))] + \
+            [t for _, t in k.redirs]
+        # (text, has an unquoted {); a word with a space is prose (a commit message, an echo, awk's '{print $1}'),
+        # not a path, unless bash expands a brace set in it ({config,"a b"})
+        pieces += [(w.text, w.brace) for w in words if w.brace or not re.search(r"\s", w.text)]
+
+
+_ANY = object()                                     # any path, in _cd_store_read's index of levels up
+
+
+def _cd_store_read(cmds: list, subs: list) -> str:
+    """D-038 (#192): a line that enters a folder that can hold a secret store may read it by a relative name. It
+    enters one when a working-folder target anywhere in it ($( ), <( ) and a shell's text included) has a store
+    folder among its parts (~/.kube, ~/.config/nvim, /proc/self; see _store_hints), or goes by a relative name into
+    a plain store folder below another target (`cd ~/.config && cd ./gh`, `cd / && cd proc`). Then a relative name
+    counts when its file name is a store file's (a glob or brace set: when it could match one) or it goes into a
+    store folder (`gh/x` after ~/.config, `../.docker/x`); any relative name counts when the target is itself a
+    store. The targets' own words are not names. The name, or ''. One pass over the words; neither the order nor
+    the success of the commands is followed, so this fails closed."""
+    targets: list = []
+    pieces: list = []
+    bodies: list = []
+    _cd_walk(cmds, targets, pieces, bodies)
+    queue = [(s, 0) for s in subs] + [(b, 1) for b in bodies]
+    seen: dict = {}             # text -> the shallowest depth it was read at
+    while queue:                # each $( ), <( ) and shell text once per depth at most, nested ones too
+        text, n = queue.pop()   # (subs may list them already); a text first met at the depth cap is read again
+        if seen.get(text, _DEPTH + 1) <= n:     # when it comes up shallower, so its own bodies are not lost
+            continue
+        seen[text] = n
+        c2, s2 = _parse(text)[:2]
+        more: list = []
+        _cd_walk(c2, targets, pieces, more)
+        if n < _DEPTH:
+            queue += [(s, n + 1) for s in s2] + [(b, n + 1) for b in more]
+    if not targets:
+        return ""
+    singles, pairs, names = _store_hints()
+    home = os.path.normpath(_home())
+    root = home.rstrip("/") + "/"
+    hp = home.rstrip("/").split("/")                # "/home/u": ["", "home", "u"]
+    kin: dict = {}                                  # plain store folder name -> [(its parent, its sample path)]
+    for (a, b), path in pairs.items():
+        kin.setdefault(b, []).append((a, path))
+    deep = max(len(p.split("/")) for p in pairs.values())       # the parts of the deepest sample store folder
+
+    def here(t: str) -> str:                        # the current folder as `.`, ${PWD%/*/*} as `../..`
+        return _HERE.sub(lambda m: "/".join([".."] * m.group(0).count("/*")) if "%" in m.group(0) else ".", t)
+
+    def folders(t: str) -> tuple:
+        t = here(t)
+        if re.match(r"~[\w.-]+(/|$)", t):          # ~root/..: that home, before .. is resolved
+            t = os.path.expanduser(t)
+        p = _expand_text(t)
+        p = os.path.normpath(p) if p else p         # bash's logical cd: /tmp/../proc is /proc, ./gh is gh
+        p = "~" if p == home else "~/" + p[len(root):] if p.startswith(root) else p
+        parts = _brace_glob(p).split("/")
+        parts[0] = "~" if parts[0].startswith("~") else parts[0]        # ~user/.kube: its folders
+        return p, [s for j, s in enumerate(parts) if s not in ("", ".") or j == 0 and s == ""] or ["."]
+
+    def could_be(s: str, prev) -> set:
+        """The store folder names a glob part could be below the part ``prev``, as bash matches: a dot name only
+        when the glob spells the dot, a folder that is a store by its name anywhere (Netlify) only when the glob
+        has a character of its own, and a plain store folder only below its parent."""
+        own = bool(re.sub(r"[*?]|\[[^\]]*\]?", "", s))
+        return {x for x in singles if (x[:1] == ".") == (s[:1] == ".") and (x[:1] == "." or own)} | \
+            {b for a, b in pairs if a == prev and (b[:1] == ".") == (s[:1] == ".")}
+
+    def last_store_folder(parts: list) -> int:
+        return max((k for k, s in enumerate(parts) if s in singles or k and (parts[k - 1], s) in pairs or
+                    _GLOBBY.search(s) and _could_name(s, could_be(s, parts[k - 1] if k else None))), default=-1)
+
+    # A plain store folder's parent above each target: name -> {levels up: its paths}. A target below home also
+    # has home's own folders above it; a relative one only its own parts (what it is below is not known). A path
+    # deeper than any sample store folder's parent keeps only its name, which is all a dot parent needs.
+    parents = {a for a, _ in pairs}
+    anc: dict = {}
+    top: dict = {}                                  # (name, its path or _ANY) -> the most levels up it is at
+    lo: dict = {}                                   # the fewest levels up at which / is
+
+    def index(parts: list) -> None:
+        up = [(hp[m], "/".join(hp[:m + 1])) for m in range(len(hp) - 1)] if parts[0] == "~" else []
+        chain = up + [(s, "/".join(parts[:j + 1]) if j < deep else None) for j, s in enumerate(parts) if s != ".."]
+        for n, (name, path) in enumerate(reversed(chain)):
+            if name in parents:
+                anc.setdefault(name, {}).setdefault(n, set()).add(path)
+                for key in ((name, path), (name, _ANY)):
+                    top[key] = max(top.get(key, -1), n)
+                if name == "":
+                    lo[""] = min(lo.get("", n), n)
+
+    split = [(p, parts, last_store_folder(parts)) for t in dict.fromkeys(targets) for alt in _brace_alts(t)
+             for p, parts in [folders(alt)]]
+    for _, parts, _ in split:
+        index(parts)
+    # `cd ..`, `cd ../..`, `cd .. && cd ..`: every number of levels up to all of them together (order is not
+    # followed); past 64, any number
+    total = sum(len(parts) for t in targets if ".." in here(t) for alt in _brace_alts(t) for _, parts in [folders(alt)]
+                if set(parts) == {".."})
+    ups = set(range(min(total, 65) + 1))
+
+    def reach(n: int, a: str, need) -> bool:
+        """A folder named ``a`` (at path ``need`` for a plain parent) n levels above a target, or above a `cd ..`
+        after one. `..` stops at /."""
+        levels = anc.get(a, {})
+        if a == "" and lo.get("", n + max(ups) + 1) <= n + max(ups):
+            return True
+        if len(ups) > 64:                           # any number of levels up: is it there n or more levels up?
+            return top.get((a, _ANY if need is None else need), -1) >= n
+        return any(m in levels and (need is None or need in levels[m]) for m in (n + u for u in ups))
+
+    matched: dict = {}                              # a glob -> the plain store folder names it could match
+
+    def into(parts: list, globs: bool = True) -> list:
+        """A relative path into a plain store folder below another target (`cd ~/.config && cd ./gh`, `cd / && cd
+        proc/self`, `cd ~/.config/nvim && cd ../gcloud`): [(that store folder's sample path, the rest)]. The other
+        target names a dot parent by its name (any .config) and a plain one by its path (/, EXO_HOME)."""
+        n = next((j for j, s in enumerate(parts) if s != ".."), len(parts))
+        if n == len(parts) or parts[0] in ("", "~"):
+            return []
+        first = parts[n]
+        if globs and _GLOBBY.search(first) and first not in matched:
+            matched[first] = _glob_names(first, kin) if _could_name(first, set(kin)) else []
+        hits = matched[first] if globs and _GLOBBY.search(first) else [first] if first in kin else []
+        return [(path, parts[n + 1:]) for b in hits for a, path in kin[b]
+                if reach(n, a, None if a in singles else path.rpartition("/")[0])]
+
+    # A relative target into a plain store folder enters it, at that folder's sample path. Its own folders then
+    # count as parents too (`cd /srv && cd exo-home && cd keys` with EXO_HOME=/srv/exo-home); a chain is as deep
+    # as the sample paths, so this ends.
+    after: dict = {}
+    new = {"/".join([path, *rest]): None for _, parts, _ in split for path, rest in into(parts)}
+    while new.keys() - after.keys():
+        fresh = new.keys() - after.keys()
+        after.update(new)
+        for full in fresh:
+            index(full.split("/"))
+        new = {"/".join([path, *rest]): None for _, parts, _ in split for path, rest in into(parts)}
+    split += [(full, full.split("/"), last_store_folder(full.split("/"))) for full in after]
+    entered = [(p, parts, k) for p, parts, k in split if k >= 0]
+    stored: dict = {}
+
+    def is_store(folder: str) -> bool:
+        """Is the folder a store? A glob in it (`~/.s?h`) is tried as each store folder name it could be
+        (could_be). Past 64 such paths, it counts as one."""
+        if folder not in stored:
+            parts = folder.split("/")
+            opts = [_glob_names(s, could_be(s, parts[j - 1] if j else None)) if _GLOBBY.search(s) else [s]
+                    for j, s in enumerate(parts)]
+            count = 1
+            for o in opts:
+                count = min(count * len(o), 65)
+            paths = ["/".join(x) for x in itertools.product(*opts)] if count <= 64 else []
+            stored[folder] = count > 64 or any(_SENSITIVE_PATH.search(x) or is_sensitive_path(x) for x in paths)
+        return stored[folder]
+
+    def candidates():
+        """The relative names on the line: (name, its parts, whether it is a glob); no parts is the folder itself
+        (`.`, `$PWD`). A quoted glob counts too, for the tools that match it themselves (`find -name 'conf*'`)."""
+        for word, brace in dict.fromkeys(pieces):
+            for text in [here(_brace_glob(x)) for x in _brace_alts(word)] if brace else [here(word)]:
+                # --kubeconfig=config, -d@config, f:=@config; a glob class (e[[:alpha:]]viron) stays whole
+                whole = text.count("[") > 32 or _NESTED_CLASS.search(text)
+                for q in re.split(r"[=@:,]", text) + ([text] if whole else []):
+                    q = here(q)
+                    q = _expand_text(q) if q[:1] in ("$", "~") else q
+                    if not q or q.startswith(("/", "-")) or q.startswith("~") and q[1:2] not in ("+", "-"):
+                        continue
+                    q = os.path.normpath(q) if "/.." in "/" + q else q         # lua/../../gcloud is ../gcloud
+                    yield q, [s for s in q.split("/") if s not in ("", ".")], bool(_GLOBBY.search(q))
+
+    if not entered:
+        # A name can still go into a plain store folder below a target: it counts when it names a store file or
+        # goes into a store (`cd /srv && tar cf - exo-home/keys` with EXO_HOME=/srv/exo-home).
+        for q, parts, globbed in candidates():
+            for path, rest in into(parts, globbed) if parts else []:
+                fp = f"{path}/{'/'.join(rest)}".rstrip("/").split("/")
+                if parts[-1] in names or is_store("/".join(fp[:last_store_folder(fp) + 1])):
+                    return q
+        return ""
+    nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
+    # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
+    roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in entered)
+    every = any(_SENSITIVE_PATH.search(p) for p, _, _ in entered) or any(map(is_store, roots))
+    hints = names | singles | nxt
+    held = any(k == len(parts) - 1 for _, parts, k in entered)     # a target is itself a store folder (~/.kube)
+    for q, parts, globbed in candidates():
+        if every or not parts and held:             # `tar czf - .` in a store, or in a store folder
+            return q
+        if not parts:
+            continue
+        inner = parts[:-1]              # a store folder counts when the name goes into it (`mkdir .kube` reads none)
+        if parts[-1] in names or not singles.isdisjoint(inner) or into(parts, globbed) or \
+                not pairs.keys().isdisjoint(zip(inner, inner[1:])) or globbed and any(
+                    _could_name(s, hints) for s in parts if _GLOBBY.search(s)):
+            return q
+    return ""
+
+
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
     """Classify a shell command line; a compound line takes its most severe part."""
     cmds, subs, func = _parse(cmd or "")
-    ctx: dict = {}
+    ctx: dict = {"subs": subs}
     parts: list[Classification] = []
     prev: _Cmd | None = None
     for k in cmds:
@@ -1685,6 +2351,14 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         signals = c.signals
         c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
+        c.signals = signals + ["secret store"]
+    # D-038: a relative read on a line that enters a store folder may read the store; store_write stays.
+    found = _cd_store_read(cmds, subs) if c.category not in ("credentials", "store_write") else ""
+    if found:
+        rev = max((p.reversibility for p in parts), key=REVERSIBILITY.index, default="costly")
+        signals = c.signals
+        c = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
+                  reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
     c.command = cmd
     c._command_views = list(dict.fromkeys([
@@ -1779,6 +2453,12 @@ _SENSITIVE_PATH = re.compile(
     r"\.config/netlify/config\.json|Netlify/config\.json|\.vercel/auth\.json|"
     r"proc/[^/]+/environ)(/|$)")
 
+# D-039: a run folder holds the principal credential and the TCP token beside each socket, so the folder itself
+# is a secret store; what is below it keeps its own class (job output in run/jobs/ stays readable). A relative
+# path counts only when it spells `.exo/run`: a bare `run` is not resolved against the gate's working folder (a
+# relative `keys` is). The secrets are glob samples (_run_secrets); their names already match _SENSITIVE_PATH.
+_RUN_DIR = re.compile(r"(^|/)\.exo/(principals/[^/]+/)?run$")
+
 # Concrete examples a shell glob is tested against ("could this glob match a secret store?").
 _SENSITIVE_SAMPLES = ("keys.env", ".exo/keys", ".config/exo/keys.env", ".divan/seat.key", "auth.json",
                       "google_token.json", ".unii/acct/token", "client_secret_1.json", ".hermes/p/.env",
@@ -1815,6 +2495,39 @@ def _dynamic_secret_paths() -> list[str]:
     claude_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(_home(), ".claude")
     paths.append(os.path.expanduser(claude_dir))
     return paths
+
+
+def _is_run_dir(path: str, real: str = "") -> bool:
+    """The run folder itself (D-039), in any spelling: `$EXO_HOME/run`, `.exo/run` or a principal's `run`. An
+    absolute path is also resolved as written, links before `..` (``real``, when the caller has resolved it)."""
+    raw = path.replace("\\", "/")
+    path = os.path.normpath(raw)
+    if _RUN_DIR.search(path):
+        return True
+    if not path.startswith("/"):
+        return False
+    try:
+        cands = {c for c in (path, real or os.path.realpath(raw)) if c.endswith("/run")}
+        homes = {os.path.normpath(_exo_home()), os.path.realpath(_exo_home())} if cands else set()
+    except (OSError, ValueError):
+        return False
+    return any(re.fullmatch(re.escape(h) + r"(/principals/[^/]+)?/run", c) for c in cands for h in homes)
+
+
+def _run_secrets() -> list[str]:
+    """The credential files a run folder can hold: the core's, and the principal key of each agent that may serve
+    there, run/agent-<seat>.principal.key (`default`, $EXO_SEAT and up to 64 seats under $EXO_HOME/seats, named
+    as internal_names does: filtered, then sorted, then capped, so other files there take no place; the scan reads
+    at most 4,096 entries)."""
+    names = ["default", os.environ.get("EXO_SEAT") or ""]
+    try:
+        with os.scandir(os.path.join(_exo_home(), "seats")) as it:   # bounded: this runs for every glob word
+            seats = {e.name if e.is_dir() else os.path.splitext(e.name)[0] for e in itertools.islice(it, 4096)
+                     if not e.name.startswith((".", "_")) and (e.is_dir() or e.name.endswith((".toml", ".json")))}
+            names += sorted(seats)[:64]
+    except OSError:
+        pass
+    return ["exod.principal.key", "exod.token"] + [f"agent-{n}.principal.key" for n in dict.fromkeys(names) if n]
 
 
 _BRACE_CAP = 1024
@@ -2011,8 +2724,8 @@ def _real(path: str, memo: dict[str, str]) -> str:
 
 def is_sensitive_path(path: str) -> bool:
     """True when ``path`` names one of the secret stores (ssh, cloud and netrc credentials, Exo's key
-    stores, signing keys, token and client-secret files, .env files). Never reads the file. A brace set
-    counts when the path or any word bash expands it to names a store, or when it expands past the cap."""
+    stores and run folders, signing keys, token and client-secret files, .env files). Never reads the file. A
+    brace set counts when the path or any word bash expands it to names a store, or when it expands past the cap."""
     words = _brace_words(str(path or ""))
     return words is None or _sensitive_words(words)
 
@@ -2028,10 +2741,11 @@ def _sensitive_words(words: list[str]) -> bool:
     for w in words:
         try:
             a = os.path.abspath(w)
-            cands = {a, os.path.realpath(w) if ".." in w.split(os.sep) or a.startswith("//") else _real(a, memo)}
+            real = os.path.realpath(w) if ".." in w.split(os.sep) or a.startswith("//") else _real(a, memo)
+            cands = {a, real}
         except (OSError, ValueError):
-            cands = {w}
-        if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots):
+            real, cands = "", {w}
+        if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots) or _is_run_dir(w, real):
             return True
     return False
 
@@ -2052,16 +2766,33 @@ def _glob_words(words: list[str]) -> bool:
     home = _home()
     samples = [os.path.join(home, x) for x in _SENSITIVE_SAMPLES] + [os.path.join(_exo_home(), "keys", "seat.key"),
                                                                        _dynamic_secret_paths()[1]]
-    return any(_glob_word(w, home, samples) for w in words)
+    secrets = _run_secrets()
+    runs = [os.path.join(_exo_home(), "run"), os.path.join(home, ".exo", "run"), ".exo/run"]
+    return any(_glob_word(w, home, samples, secrets, runs) for w in words)
 
 
-def _glob_word(tok: str, home: str, samples: list[str]) -> bool:
+def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
+    raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
+    tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
-    in_store_dir = bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
+    linked = bool(d_abs) and _is_run_dir(raw if raw.startswith("/") else os.path.join(home, raw))
+    if linked:                                           # also when normpath lost it: ~/<link to run/jobs>/..
+        runs = runs + [d_abs]
+    keys = "agent-" in tok or ".principal" in tok
+    if "/" in tok:   # an agent key only when the glob spells its key part, names a run folder, or has a literal
+        # folder part around its wildcards (`~/.exo/*/`); not for `*/*default*` or `~/*test*`, which bash cannot
+        # expand into a run folder but fnmatch's `*` would match across `/`
+        reach = keys or linked or (d_abs in [os.path.normpath(os.path.join(home, r)) for r in runs] if d_abs else any(
+            q and not re.fullmatch(r"[*?]+|\.{1,2}", q) for q in d.split("/")))
+        samples = samples + [os.path.join(r, x) for r in runs for x in secrets if reach or x.startswith("exod.")]
+    in_store_dir = linked or bool(d_abs) and d_abs != home and any(x.startswith(d_abs + "/") for x in samples)
     if len(stem) < 3 and not in_store_dir:
         return False
+    if "/" not in tok:   # a bare name: a run secret by its own name, an agent key only by its `agent-` or key part
+        if any(_glob_rx(tok).match(x) for x in secrets if keys or x.startswith("exod.")):
+            return True
     head, tail = re.split(r"[*?\[]", tok, maxsplit=1)[0], re.split(r"[*?\[\]]", tok)[-1]   # literal: narrow first
     xs = [x for x in samples + list(_SENSITIVE_SAMPLES)
           if x.endswith(tail) and (x.startswith(head) if tok.startswith("/") else head in x)]
@@ -2080,7 +2811,8 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files and
 # the core sockets steer the gate itself, so a write to them always asks the principal. Names that are
 # distinctive match anywhere (a relative `policies/gates.yaml` may sit in the tool's working folder);
-# absolute paths are also checked against EXO_HOME, its principal stores and EXO_PRINCIPAL_STORE.
+# absolute paths are also checked against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE and every
+# store root recorded in config `principals` (`exo init --root`, `exo import-store --root`).
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
@@ -2097,7 +2829,8 @@ def _store_roots() -> list[tuple[str, tuple, bool]]:
     if os.environ.get("EXO_PRINCIPAL_STORE"):
         roots.append((os.path.expanduser(os.environ["EXO_PRINCIPAL_STORE"]), _STORE_PROTECTED,
                       False))
-    return roots
+    from .store import explicit_roots  # stores made with --root (config `principals`): live, outside the home
+    return roots + [(os.path.abspath(r), _STORE_PROTECTED, False) for r in explicit_roots(_exo_home()).values()]
 
 
 def _protected_rel(parts: list[str], names: tuple) -> bool:
@@ -2685,14 +3418,17 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     outcome = gates["matrix"][eff.reversibility][eff.exposure]
     reason, rule = f"{eff.reversibility} and {eff.exposure}", "matrix"
-    # D-038: the principal may lower opaque code only by naming it (a category line or a rule on opaque_exec).
-    opaque_named = "opaque_exec" in gates.get("categories", {})
+    # D-038: the principal may lower opaque code only by naming it below ask (a category line or a rule on
+    # opaque_exec). Naming it at ask or deny keeps the indirection floor (#178).
+    below_ask = ("allow", "log")
+    opaque_named = gates.get("categories", {}).get("opaque_exec") in below_ask
     if eff.category in gates.get("categories", {}):
         outcome, reason, rule = gates["categories"][eff.category], f"category {eff.category}", "category"
     for r in gates.get("rules") or []:
         if _rule_matches(r["match"], eff):
             outcome, reason, rule = r["decision"], r["reason"], "rule"
-            opaque_named = opaque_named or "opaque_exec" in [str(x) for x in _as_list(r["match"].get("category", []))]
+            opaque_named = opaque_named or (r["decision"] in below_ask and "opaque_exec" in
+                                            [str(x) for x in _as_list(r["match"].get("category", []))])
             break
 
     def bump(level: str, why: str, step: str):

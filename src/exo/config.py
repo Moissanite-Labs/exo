@@ -7,6 +7,7 @@ It holds the machine-level choices the installer and the plugins share:
     hermes_home   the HERMES_HOME Exo installed its plugins into
     venv          the Python environment that runs Hermes and Exo
     plugins       the Exo plugins installed into hermes_home
+    plugin_selection  the installer's `--plugins` list (or "all"), kept for re-runs and `exo update`
     plugin_config per-plugin settings, keyed by plugin name
     principals    optional explicit store roots, keyed by principal id
     update        `exo update` settings: `update.require_signed` (default false) refuses a target

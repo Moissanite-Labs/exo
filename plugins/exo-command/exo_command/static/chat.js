@@ -9,7 +9,7 @@ import { attachComposer } from "./composer.js";
 import { attachApprovals } from "./approvals.js";
 import { getLayout, setLayout, ordered, homeScroll, nearHome, columnOrder, LAYOUTS } from "./layout.js";
 
-import { contextMetrics, mergeTranscript, slashInput, commandUsage } from "./chat_state.js";
+import { contextMetrics, mergeTranscript, slashInput, commandUsage, ingressItem } from "./chat_state.js";
 
 export function mount(root) {
   let sessions = [], current = null, items = [], busy = false, loadedSeq = 0, loading = false, pending = [];
@@ -87,7 +87,7 @@ export function mount(root) {
     for (const m of msgs) {
       if (m.role === "user" || m.role === "assistant") {
         const text = partsText(m.content);
-        if (text || m.role === "user") out.push({ kind: m.role, id: m.id || "m" + out.length, text, complete: true });
+        if (text || m.role === "user") out.push(ingressItem(m) || { kind: m.role, id: m.id || "m" + out.length, text, complete: true });
         for (const c of m.tool_calls || []) {
           const it = { kind: "tool", id: c.id, name: c.name, args: c.arguments || {}, output: "", status: "running" };
           byCall[c.id] = it;
@@ -104,6 +104,13 @@ export function mount(root) {
   }
 
   function find(id) { return items.find((i) => i.id === id); }
+  // One card per peer, bus or job message: peer.message and the stored message.completed share its msg_id and come
+  // in either order. The second adds what the first lacked: the stored kind (Bus, Job) or the delivery mode.
+  function card(it) {
+    const old = find(it.id);
+    if (!old) { push(it); return; }
+    old.label = old.label || it.label; old.mode = old.mode || it.mode; redraw(old);
+  }
 
   // ---------------------------------------------------------------- events
 
@@ -164,10 +171,10 @@ export function mount(root) {
         sys("memory", "log " + b.start + "-" + b.end + " folded \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
       case "context.compacted":
         sys("context", "compacted \u00B7 " + b.before_tokens + " \u2192 " + b.after_tokens + " tok", "mem"); break;
-      case "peer.message": push({ kind: "peer", id: b.msg_id || "peer" + items.length, sender: b.sender, text: b.text, trust: b.trust, mode: b.mode }); break;
+      case "peer.message": card({ kind: "peer", id: b.msg_id || "peer" + items.length, sender: b.sender, text: b.text, trust: b.trust, mode: b.mode }); break;
       case "taste.updated": push({ kind: "taste", id: "taste-" + b.rule_id + "-" + ev.seq, action: b.action, text: b.text, path: b.path }); break;
       case "message.delta": delta(b); break;
-      case "message.completed": completed(b.message || {}); break;
+      case "message.completed": { const it = ingressItem(b.message); if (it) card(it); else completed(b.message || {}); break; }
       case "tool.started": if (!find(b.call.id)) push({ kind: "tool", id: b.call.id, name: b.call.name, args: b.call.arguments || {}, output: "", status: "running", risk: b.risk }); break;
       case "tool.output": { const t = find(b.call_id); if (t && t.status === "running") { t.output += b.text; redraw(t); } break; }
       case "tool.completed": {
@@ -304,9 +311,9 @@ export function mount(root) {
       el = h("section", { class: "xc-msg xc-pn" + fresh }, h("div", { class: "xc-ph" }, it.title), h("pre", { class: "xc-report" }, it.text));
     } else if (it.kind === "peer") {
       el = h("section", { class: "xc-msg xc-pn xc-peer" + fresh },
-        h("div", { class: "xc-ph" }, "Peer \u00B7 " + (it.sender || "unknown"), it.trust ? tag(it.trust) : null, it.mode ? tag(it.mode) : null),
+        h("div", { class: "xc-ph" }, (it.label || "Peer") + " \u00B7 " + (it.sender || "unknown"), it.trust ? tag(it.trust) : null, it.mode ? tag(it.mode) : null),
         h("div", { class: "xc-pb xc-text" }, it.text),
-        h("div", { class: "xc-pm" }, "from another session, not from you"));
+        h("div", { class: "xc-pm" }, it.label === "Bus" ? "from another agent seat, not from you" : it.label === "Job" ? "an automatic notice about a background job, not from you" : "from another session, not from you"));
     } else if (it.kind === "taste") {
       el = h("section", { class: "xc-msg xc-pn" + fresh },
         h("div", { class: "xc-ph" }, "Taste \u00B7 " + (it.action || "updated")),
@@ -388,7 +395,7 @@ export function mount(root) {
   }
 
   function drawApprovals() {
-    const mine = Object.values(approvals).filter((a) => a.session === current);
+    const mine = Object.values(approvals).filter((a) => !a.session || a.session === current);   // no session: every thread, as in the terminal client
     approvalView.draw(mine);
   }
 
@@ -672,6 +679,7 @@ export function mount(root) {
   function panelAct(p, value) { respondPanel(p, "acted", value); }
   async function panelDismiss(p) {
     await respondPanel(p, "dismissed", {});
+    bus.forget(p.panel_id);   // the core sends no ui.panel close for this, so the next panel event or tab would bring it back
     panelsOpen = panelsOpen.filter((x) => x.panel_id !== p.panel_id);
     drawSide();
   }

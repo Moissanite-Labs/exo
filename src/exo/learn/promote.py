@@ -6,7 +6,8 @@
 2. Guarded (irreversible, public, financial, third party): never auto-promote. It becomes a question once.
 3. Conflict with an existing belief: stays held; consolidation already raised the question. Never silent.
 4. Taste or fact, not guarded, weight high, evidence from at least `min_sessions` different sessions, no critic
-   objection: auto-promote, logged as `learn_promotion` for the brief.
+   objection: auto-promote, logged as `learn_promotion` for the brief. Evidence that is all imported history
+   (`exo ingest` rows) waits for the principal's review instead.
 5. Skill patches and configured gated lessons must pass the eval gate, even with principal evidence.
    Without held-out cases they cannot pass. Configured non-skill lessons also need high weight and enough sessions.
 6. Everything else stays a proposal. Medium weight is a hint; low waits. Open past `stale_days` with enough
@@ -22,7 +23,7 @@ from typing import Any
 
 from exo import provenance, taste
 from exo.ask import QuestionQueue
-from exo.consolidate import (ConsolidateError, Proposal, load_policy, load_state, proposal_accept,
+from exo.consolidate import (ConsolidateError, Proposal, imported, load_policy, load_state, proposal_accept,
                              proposal_revert, _status)
 
 from .learner import Learner
@@ -51,6 +52,12 @@ def sessions_of(ledger: Any, evidence_ids: list[str]) -> set[str]:
         if ev:
             out.add(ev.get("session") or f"none:{i}")   # an event with no session counts as its own
     return out
+
+
+def imported_only(ledger: Any, evidence_ids: list[str]) -> bool:
+    """True when every evidence event is a row `exo ingest` wrote: history, with nothing said live."""
+    evs = [ledger.get(i) for i in evidence_ids]
+    return bool(evs) and all(ev is not None and imported(ev) for ev in evs)
 
 
 def principal_said(ledger: Any, p: Proposal, principals: Iterable[str] | None = None) -> bool:
@@ -127,7 +134,8 @@ def _decide(lr: Learner, p: Proposal, weight: float, held: bool, gated: bool, al
         return Decision(p.id, "question", 2, "guarded: irreversible, public or financial")
     # Rule 5 is mandatory for skill patches and configured gated lessons, including principal evidence.
     lab = taste.label(weight)
-    n_sessions = len(sessions_of(rt.ledger, [e["id"] for e in p.evidence]))
+    ledger, ids = rt.ledger, [e["id"] for e in p.evidence]
+    n_sessions = len(sessions_of(ledger, ids))
     if p.ptype == "skill" or gated:
         if p.critic_note:
             return Decision(p.id, "wait", 5, f"critic objection: {p.critic_note}")
@@ -143,9 +151,11 @@ def _decide(lr: Learner, p: Proposal, weight: float, held: bool, gated: bool, al
     # Rule 1 only shortcuts ordinary lessons after the mandatory checks.
     if principal_said(rt.ledger, p, provenance.principal_names(rt.store)):
         return Decision(p.id, "promoted", 1, "the principal said it")
-    # Rule 4.
+    # Rule 4. A first import is a batch the principal reviews (ARCHITECTURE section 5): history alone never applies it.
     if p.ptype in ("taste", "fact") and lab == "high" and n_sessions >= int(cfg["min_sessions"]) \
             and not p.critic_note:
+        if imported_only(ledger, ids):
+            return Decision(p.id, "wait", 4, "evidence is all imported history: waits for the principal's review")
         return Decision(p.id, "auto_promoted", 4, f"high weight, {n_sessions} sessions, no objection")
     return _rule6(lr, p, weight, lab, cfg, now)
 

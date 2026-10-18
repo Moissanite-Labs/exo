@@ -108,8 +108,11 @@ class State:
     # ------------------------------------------------------------ the event stream
 
     def apply(self, ev: Dict[str, Any]) -> None:
+        seq = int(ev.get("seq") or 0)
+        if seq and seq <= self.seq:
+            return  # folded already (a replay after the stream dropped): counts must not double
         typ, body, sid, ts = ev.get("type"), ev.get("body") or {}, ev.get("session"), epoch(ev.get("ts"))
-        self.seq = max(self.seq, int(ev.get("seq") or 0))
+        self.seq = max(self.seq, seq)
         fn = getattr(self, "_on_" + str(typ).replace(".", "_"), None)
         if sid and typ not in ("session.created", "session.updated"):
             s = self._session(sid)

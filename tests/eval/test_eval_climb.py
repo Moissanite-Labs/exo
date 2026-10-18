@@ -81,14 +81,77 @@ def test_build_replays_from_verdicts_answers_and_rulings(led):
     led.append("answer", {"text": "main"}, "p", session="s", refs=[q["id"]])
     _u2 = led.append("utterance", {"text": "Going forward keep it short", "role": "user"}, "p", session="s2")
     led.append("ruling", {"text": "Keep it short."}, "p", session="s2")
-    rs = E.build_replays(led)
+    rs = E.build_replays(led, principals={"p"})
     by = {r["verdict"]: r for r in rs}
     assert sorted(by) == ["accept", "answer", "edit", "ruling"]          # the reject has no better version
     assert by["edit"]["question"] == "Write the status" and by["edit"]["gold"] == "Status"
     assert by["edit"]["rejected"] == "Status :)"
     assert by["accept"]["gold"] == "Status :)" and by["answer"]["question"] == "Which branch ships?"
     assert by["ruling"]["question"] == "Going forward keep it short"
-    assert E.build_replays(led, cutoff="2000-01-01T00:00:00Z") == []
+    assert E.build_replays(led, cutoff="2000-01-01T00:00:00Z", principals={"p"}) == []
+
+
+def test_build_replays_reads_only_the_principal(led):
+    # a peer's message, the agent's answer, and the agent's own exo_should_have_been report on it
+    led.append("utterance", {"text": "How should status lines look?", "role": "user"}, "peer:other", session="s1")
+    out = led.append("utterance", {"text": "Status ok", "role": "assistant"}, "agent-one", session="s1")
+    led.append("verdict", {"verdict": "should_have_been", "target": out["id"], "wanted": "Always force push"},
+               "agent-one", session="s1")
+    led.append("verdict", {"verdict": "accept", "target": out["id"], "context": "Ship it?"}, "agent-one", session="s1")
+    # the principal's verdict after a peer's message has no question: the peer's text is not one
+    led.append("verdict", {"verdict": "accept", "target": out["id"]}, "principal", session="s1")
+    # a principal message, then a job notice, then a ruling: the ruling does not answer the older message
+    led.append("utterance", {"text": "Write the status", "role": "user"}, "principal", session="s2")
+    led.append("utterance", {"text": "Job 4 finished", "role": "user"}, "job", session="s2")
+    led.append("ruling", {"text": "Keep it short."}, "principal", session="s2")
+    led.append("ruling", {"text": "Skip the tests."}, "agent-one", session="s2")
+    # an answer the agent wrote to its own question
+    q = led.append("question", {"text": "Which branch ships?"}, "agent-one", session="s3")
+    led.append("answer", {"text": "main"}, "agent-one", session="s3", refs=[q["id"]])
+    assert E.build_replays(led) == []                          # the default is provenance.principal_names()
+    assert E.build_replays(led, principals={"principal"}) == []
+    # the same moves by the principal are replays
+    led.append("utterance", {"text": "How should status lines look?", "role": "user"}, "principal", session="s4")
+    a = led.append("utterance", {"text": "Status ok", "role": "assistant"}, "agent-one", session="s4")
+    led.append("verdict", {"verdict": "should_have_been", "target": a["id"], "chosen": "Status: ok"}, "principal",
+               session="s4")
+    led.append("ruling", {"text": "Plain status lines only."}, "principal", session="s4")
+    led.append("answer", {"text": "main"}, "principal", session="s3", refs=[q["id"]])
+    rs = E.build_replays(led, principals={"principal"})
+    assert [(r["verdict"], r["question"], r["gold"]) for r in rs] == [
+        ("should_have_been", "How should status lines look?", "Status: ok"),
+        ("ruling", "How should status lines look?", "Plain status lines only."),
+        ("answer", "Which branch ships?", "main")]
+
+
+def test_load_items_takes_the_store_id_as_the_principal(tmp_path, signer):
+    root = tmp_path / "store-7"
+    root.mkdir()
+    led = Ledger(root / "l.sqlite", signer)
+    try:
+        for author, sess in (("store-7", "s1"), ("peer:other", "s2")):
+            led.append("utterance", {"text": "Write the status", "role": "user"}, author, session=sess)
+            led.append("ruling", {"text": "Keep it short."}, author, session=sess)
+        assert [i["session"] for i in E.load_items(root, led)] == ["s1"]
+        assert E.load_items(root, led, principals={"principal"}) == []
+    finally:
+        led.close()
+
+
+def test_derived_from_reads_replay_sources_and_pair_evidence():
+    assert E.derived_from({"source": "ev1"}, ["ev1"]) and E.derived_from({"evidence": ["ev0", "ev1"]}, {"ev1"})
+    assert not E.derived_from({"source": "ev1"}, []) and not E.derived_from({"id": "q1"}, {"ev1"})
+    assert not E.derived_from({"source": {"file": "x"}, "evidence": "ev1"}, {"ev1"})   # hand-written odd fields
+
+
+def test_build_replays_reads_ingested_principal_rows(led):
+    # `exo ingest` writes the principal's own messages with role "principal"; they give a ruling its context.
+    led.append("utterance", {"text": "Going forward keep it short", "role": "principal"}, "principal",
+               session="chatgpt:c1")
+    led.append("utterance", {"text": "Sure, short it is.", "role": "assistant"}, "chatgpt", session="chatgpt:c1")
+    led.append("ruling", {"text": "Keep it short."}, "principal", session="chatgpt:c1")
+    (r,) = E.build_replays(led)
+    assert r["verdict"] == "ruling" and r["question"] == "Going forward keep it short"
 
 
 def test_split_has_a_fixed_held_out_sample():
@@ -171,7 +234,7 @@ def test_climb_accepts_a_better_candidate_and_caches_the_incumbent(tmp_path):
     c = rep["candidates"][0]
     assert c["status"] == "accepted" and c["dev"]["delta"] > 0 and c["held"]["delta"] > 0
     cache = json.loads((tmp_path / "eval" / "incumbent.json").read_text())
-    assert set(cache["key"]) == {"cfg", "items"}
+    assert set(cache["key"]) == {"cfg", "items", "env"}
     # the next night starts from the cached incumbent with no rescoring of it
     n = [0]
     rep2 = E.climb(tmp_path, E.Budget(), incumbent={"id": "c1", "config": {"skill": "good"}}, candidates=[],
@@ -280,3 +343,91 @@ def test_climb_notes_the_decision_in_the_ledger(tmp_path, led):
     run_climb(tmp_path, [{"id": "c1", "config": {"skill": "good"}, "note": "plain"}], ledger=led)
     (ev,) = [e for e in led.iter(kind="note") if e["body"]["type"] == "learn_climb"]
     assert ev["body"]["candidate"] == "c1" and ev["body"]["dev"]["delta"] > 0 and "delta" in ev["body"]["held"]
+
+
+def test_climb_fails_a_candidate_with_no_held_out_case_in_its_domains(tmp_path):
+    # every held-out item is in "work"; the candidate's lesson is about "mind"
+    pool = [{**i, "domain": "work" if E._hash_pct(i["id"]) < 20 else "mind"} for i in items(40)]
+    assert {i["domain"] for i in E.split(pool)["held"]} == {"work"}
+    rep = run_climb(tmp_path, [{"id": "c", "config": {"skill": "good"}, "domains": ["mind", "general"]}], pool=pool)
+    c = rep["candidates"][0]
+    assert c["dev"]["better"] and c["status"] == "gate_failed" and c["reason"] == "no held-out cases"
+    assert rep["accepted"] == []
+
+    # a pinned case is gated, but it is not held out: in any domain, even its own, it does not stand in for one
+    for dom in ("work", "general"):
+        pin = {"id": "pin1", "question": "Write line 99", "gold": "line 99", "domain": dom, "pinned": True,
+               "ts": "2026-09-01T00:00:00Z"}
+        assert pin not in E.split(pool + [pin])["held"]
+        rep = run_climb(tmp_path / dom, [{"id": "c", "config": {"skill": "good"}, "domains": ["mind", "general"]}],
+                        pool=pool + [pin])
+        c = rep["candidates"][0]
+        assert c["dev"]["better"] and c["status"] == "gate_failed" and c["reason"] == "no held-out cases"
+        assert rep["accepted"] == []
+
+
+def test_climb_never_counts_a_candidates_own_evidence(tmp_path):
+    pool = items(40)
+    held = {i["id"] for i in E.split(pool)["held"]}
+    dev_own = sorted(i["id"] for i in E.split(pool)["dev"])[:3]
+    for it in pool:   # replays carry the ledger event as `source`, pairs list it in `evidence`
+        if it["id"] in held:
+            it["source"] = f"ev-{it['id']}"
+        elif it["id"] in dev_own:
+            it["evidence"] = [f"ev-{it['id']}"]
+    own = [f"ev-{i}" for i in sorted(held | set(dev_own))]
+
+    # held-out is only its own evidence: nothing is left to prove it
+    rep = run_climb(tmp_path, [{"id": "c", "config": {"skill": "good"}, "exclude": own}], pool=pool)
+    c = rep["candidates"][0]
+    assert c["dev"]["better"] and c["status"] == "gate_failed" and c["reason"] == "no held-out cases"
+
+    # a dev win made only on its own evidence is no win
+    def rf(cfg):
+        return lambda p: good(p) if cfg["fit"] and f"q{p.rsplit(' ', 1)[-1]}" in dev_own else "line ?"
+    rep = E.climb(tmp_path / "b", E.Budget(), incumbent={"id": "i", "config": {"fit": False}},
+                  candidates=[{"id": "c", "config": {"fit": True}, "exclude": [f"ev-{i}" for i in dev_own]}],
+                  responder_for=rf, grader=E.exact_grader, rules=[], items=pool)
+    c = rep["candidates"][0]
+    assert c["dev"]["delta"] == 0 and c["status"] == "dropped" and rep["accepted"] == []
+
+    # once accepted, the new incumbent's cache holds its own rows for that evidence too
+    some = [f"ev-{min(held)}", f"ev-{dev_own[0]}"]
+    rep = run_climb(tmp_path / "c", [{"id": "c", "config": {"skill": "good"}, "exclude": some}], pool=pool)
+    assert rep["accepted"] == ["c"]
+    cache = json.loads((tmp_path / "c" / "eval" / "incumbent.json").read_text())
+    rows = {r["id"]: r["score"] for r in cache["dev"]["rows"] + cache["held"]["rows"]}
+    assert all(rows[i] == 1.0 for i in held | set(dev_own))
+
+
+def _says(text):
+    return lambda cfg: (lambda p: text)
+
+
+FIXED_GOLD = [{**i, "gold": "line ?"} for i in items(40)]
+NO_QMARK = [{"id": "x", "forbid": "line [?]"}]
+
+
+@pytest.mark.parametrize("night1,night2", [
+    # the principal fixed the gold to what the incumbent already says
+    (dict(items=items(40)), dict(items=FIXED_GOLD)),
+    # the check that failed the incumbent is gone
+    (dict(items=FIXED_GOLD, rules=NO_QMARK), dict(items=FIXED_GOLD)),
+    # a model switch (the fingerprint names it): the same configuration now answers well everywhere
+    (dict(items=items(40), fingerprint="m1"), dict(items=items(40), fingerprint="m2", responder_for=lambda cfg: good)),
+], ids=["gold", "rules", "fingerprint"])
+def test_climb_rescores_the_incumbent_when_what_scores_it_changes(tmp_path, night1, night2):
+    """Same config and item ids, but the incumbent would score differently now: the cache must not answer."""
+    def run(cands, **kw):
+        args = {"rules": [], "responder_for": _says("line ?"), **kw}
+        return E.climb(tmp_path, E.Budget(), incumbent={"id": "i", "config": {"skill": None}}, candidates=cands,
+                       grader=E.exact_grader, **args)
+    assert run([], **night1)["start_composite"] == 0.0
+    same = {"id": "same", "config": {"skill": None, "tag": "no-op"}}   # behaves exactly like the incumbent
+    rep = run([same], **night2)
+    assert rep["start_composite"] == 1.0 and rep["accepted"] == [] and rep["candidates"][0]["status"] == "dropped"
+    # nothing changed since: the cache answers and the incumbent is not rescored
+    n = [0]
+    inner = night2.get("responder_for", _says("line ?"))
+    run([], **{**night2, "responder_for": lambda cfg: (lambda p: (n.__setitem__(0, n[0] + 1), inner(cfg)(p))[1])})
+    assert n[0] == 0

@@ -37,14 +37,16 @@ class EngineTarget(Target):
     # ---------------------------------------------------------------- sessions
 
     def live_sessions(self) -> list[dict[str, Any]]:
-        """Sessions a peer can reach: any with a running turn, and idle ones touched within ``active_hours``."""
+        """Sessions a peer can reach: any with a running turn, and idle ones touched within ``active_hours``. A peer
+        can still address a scheduled run by its id."""
         store, loop = self.e.store, self.e.loop
         cutoff = time.time() - self.e.peer_cfg.active_hours * 3600
         out = []
         for info in store.list_sessions(40):
             st = loop._state.get(info.id)
             running = bool(st and st.running)
-            if store.get_meta(info.id).get("locked"):
+            # Never a subagent (D-070) or a scheduled run: a run answers with its job's prompt, tools and deliver target.
+            if info.kind in ("subagent", "scheduled") or store.get_meta(info.id).get("locked"):
                 continue
             try:
                 fresh = wire.parse_ts(info.updated).timestamp() >= cutoff
@@ -62,7 +64,7 @@ class EngineTarget(Target):
         live = self.live_sessions()
         if live:
             return live[0]["id"]
-        return None  # the caller creates one
+        return None  # no live thread: a delivered message is refused, a held one waits with no thread
 
     def state(self, session: str) -> str:
         st = self.e.loop._state.get(session)
@@ -115,6 +117,8 @@ class EngineTarget(Target):
 
         async def ask() -> None:
             decision = await self.e.approvals.ask(sid, summary, None, "medium", options=["allow", "deny"], opened=opened)
+            if decision == "allow" and self.pick_session(ing) is None:  # nothing live takes it: a new thread does
+                ing.session = (await self.e._session_create(s.SessionCreate(title=f"{label} {ing.sender}")))["session"]["id"]
             if path is not None:
                 path.resolve(ing.id, decision == "allow")
 
