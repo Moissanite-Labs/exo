@@ -11,7 +11,10 @@ or file from outside.
 `exo web` needs one core for the agent. It looks for `$EXO_HOME/run/exod.sock` (`exo serve`), then
 `run/agent-<seat>.sock` (a terminal window running the core in process, D-028), and joins whichever answers. If
 neither does it starts `exo serve` detached (log `$EXO_HOME/logs/exod.log`, pid `run/exod.pid`), under a start lock so
-two clients never start two. While it starts, the page shows "Exo core is not running, starting it...". If it cannot
+two clients never start two. A short helper (`python -P`, so the current folder is not on the import path) starts a
+new session, forks the core and exits, so the core is a child of init (or the nearest subreaper), not of `exo web`; it passes the core's pid
+back on the last line of its output. If the core exits while starting, the page says so at once, with its exit code
+when this process reaped it. While it starts, the page shows "Exo core is not running, starting it...". If it cannot
 start, the page shows the reason and the log path. If the agent is held by a window that is not sharing it, the page
 says to close that window or run `exo stop`. The background core stays up after the page closes (`exo stop` ends it).
 With `--socket` or `--url` nothing is started; the page says the core is not reachable.
@@ -29,7 +32,8 @@ Every `/api/` route needs the token: the page sends it as `X-Exo-Token` on every
 `?token=` on the two event streams (`stream()` in `dom.js`; a browser EventSource cannot send headers). The Host
 header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, so a DNS rebinding name gets nothing, not
 even the page. An Origin, when sent, must be that same host, and Sec-Fetch-Site must be same-origin or none. Only
-the page shell (`/`, `/static/`) loads without the token. Responses carry `Referrer-Policy: no-referrer`.
+the page shell (`/`, `/static/`) loads without the token. Responses carry `Referrer-Policy: no-referrer`,
+`X-Content-Type-Options: nosniff` and the Content-Security-Policy below.
 
 The web process answers approvals as the principal: it reads the core's principal credential
 (`run/<socket>.principal.key`) on each request, so it re-joins a core that restarted with a new one. The optional
@@ -40,6 +44,30 @@ After replay the page refreshes durable messages, session activity, open panels 
 drafts and unfinished streamed output survive that refresh. `/context` uses typed token counts (`command.run`,
 `args="json"`), while the default core command still returns the human-readable report. `/new private` creates a
 private session; malformed known commands show usage. Literal paths such as `/etc/hosts is broken` remain messages.
+
+## Content-Security-Policy (#162)
+
+The page builds every node with `h()` and text nodes, never `innerHTML`, so model text cannot become markup. That
+alone was the XSS defence, and Markdown panels (and completed replies) run model text through `markdown.js`. So
+every response the web server writes, the page, static files, JSON, both event streams and every error, carries one
+policy, `CSP` in `server.py`:
+
+```
+default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self';
+object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+```
+
+with `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` (`SECURITY_HEADERS`). Script and styles
+load only from this server (in practice `/static/`); requests (fetch and the two EventSource streams) go only to
+this server; there are no WebSockets, fonts or `data:` images; no other site may frame the page; forms never post
+natively (each is handled in script). Inline scripts, inline event handlers, `javascript:` links, `eval` and string
+timers, `<style>` blocks and `style` attributes are all refused, so markup that a renderer slip ever let into the
+page would not run or restyle it. The policy has no `'unsafe-inline'`, `'unsafe-eval'`, hash or nonce, and must not
+get one: a page that needs an inline script or style moves it into a file under `static/`. The few computed sizes
+(gauges, bars, the task board's column count) are set through the CSSOM: `h()` turns a `style` key into
+`el.style.cssText`, which the policy allows. `plugins/exo-command/tests/test_csp_web.py` pins the header on every
+kind of response, loads the page in headless Chrome with no violation, and shows that injected markup runs without
+the policy and does not run with it.
 
 ## Screens
 
@@ -57,10 +85,19 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   against the reported model capacity; an unknown capacity stays unknown, from `usage.updated` and structured
   `/context` reports), cache share of that call, session cost. While busy a
   packet travels along a dashed wire at the end of the strip. Findings are the open count from `/findings count`.
-- **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed;
-  click to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded ·
-  1781 → 153 tok` and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic
-  (a `notice` that starts with `tip`).
+- **Transcript.** `›` prompt in orange, agent text in fg-2, one dim line per tool (name, short args, elapsed; click
+  to open the arguments and output; a small wire runs while it works), `memory · log 1-16 folded · 1781 → 153 tok`
+  and `context · compacted` lines in dim with a cold label, `tip:` lines in dim italic (a `notice` that starts with
+  `tip`). A reply streams as plain text; once complete it is rendered as Markdown: headings, lists (ordered lists
+  keep their source numbers, across blank lines and the fences or sub-items that belong to an item; a table, quote
+  or fence indented under an item renders inside it), fenced code, `>` quotes, and GFM pipe tables that scroll
+  sideways inside the message. Line breaks inside a paragraph are kept, as the streamed text showed them. Everything
+  is built as DOM nodes, so model text never becomes markup: only `http(s)` links become anchors, images and raw
+  HTML stay text. A reply builds at most 10,000 table cells, and a table has at most 64 columns and no more cells
+  padded onto short rows than its source has characters; past that, a table is shown as its source text, so many
+  replies in one thread cost what their bytes cost. Quotes nest at most 8 deep and lists 9, and a deeper `>` stays
+  text. In the classic layout a reply that grows when it renders (a table is taller than its pipe text) keeps the
+  view at the bottom if it was there.
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
   `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
   automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
