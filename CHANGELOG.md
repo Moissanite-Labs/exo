@@ -41,12 +41,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   composer typing it adds to the copied page were inline scripts, which the policy refuses, so regenerated shots
   came out in the inverse layout with an empty composer. They are now a file in the copied static folder, loaded
   by `src`.
-- Protocol strict decoding: a command whose `type` is not a string is `unknown_command`, a wrong-typed `int`,
-  `float`, `str` or `bool` body field (such as `events.subscribe` `since: "5"`) is `bad_body`, and JSON nested too
-  deep is `bad_json`. An `events.subscribe` `since` past SQLite's 64-bit range is `internal`. Before, these raised
-  out of the server: over HTTP the connection closed with no reply, and on stdio one bad line ended
-  `exo serve --stdio`. The server now answers every malformed command and keeps serving. Messages an older core
-  stored load as written.
 
 ### Changed
 - Command deny and reservation regexes also match a literal-word view of the command (#136, D-038
@@ -115,21 +109,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
   with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
-
-### Security
-- Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
-  `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
-  family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
-
-### Security
-- `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
-  requests from the web server only, no inline script, style attribute or eval, no framing, plus
-  `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
-  computed widths now go through the CSSOM instead of `style` attributes; nothing looks different.
-- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
-  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
-  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
-  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- Protocol strict decoding: a command whose `type` is not a string is `unknown_command`, a wrong-typed `int`,
+  `float`, `str` or `bool` body field (such as `events.subscribe` `since: "5"`) is `bad_body`, and JSON nested too
+  deep is `bad_json`. An `events.subscribe` `since` past SQLite's 64-bit range is `internal`. Before, these raised
+  out of the server: over HTTP the connection closed with no reply, and on stdio one bad line ended
+  `exo serve --stdio`. The server now answers every malformed command and keeps serving. Messages an older core
+  stored load as written.
 - A client that stops reading the event stream can no longer grow the core's memory (D-079). The hub queued every
   event for every subscriber without a limit. Now a subscriber 4,096 unread events behind has its stream ended
   after the last event it read, and it resumes with `since`. Every client in the repo resumes and misses nothing:
@@ -164,6 +149,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   confirm sends `allow_always`. Before, the client read only the first letter, so it sent `allow`. A reply
   that only starts with a or y (`abort`, `yeah no`) no longer approves, and `Allow` no longer denies: a reply
   is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else denies.
+
+### Security
+- Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
+  `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
+  family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
+
+### Security
+- `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
+  requests from the web server only, no inline script, style attribute or eval, no framing, plus
+  `X-Content-Type-Options: nosniff`. A slip in the page's Markdown rendering can no longer run script. The page's
+  computed widths now go through the CSSOM instead of `style` attributes; nothing looks different.
+- Gate: `$'..'` words are decoded the way bash does (#167, D-038). `git push $'--forc\u65' origin main`,
+  `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
+  `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
+  drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
 
 ## [0.2.0] (egg) - 2026-10-13
 
