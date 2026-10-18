@@ -797,28 +797,32 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   for `{ bash; } <<EOF`, `( bash ) <<EOF` and `while ...; do bash; done <<EOF` is the closing token, so the shell
   inside ran a body the gate never read (ask, where `bash <<EOF` with the same body is denied by a category deny).
   Now a heredoc or here-string after a closing `}`, `)`, `done`, `fi` or `esac`, and readable text piped into a
-  compound, is fed to the commands inside it, nested ones included, except a command whose stdin is already set:
-  its own heredoc, here-string or `<` redirection, a pipe from a command inside, an earlier `exec < file` inside
+  compound, is fed to the commands inside it, nested ones included, except a command whose stdin is already set: its
+  own heredoc, here-string or `<` redirection, a pipe from a command inside, an earlier `exec < file` inside
   (however spelled or prefixed, or possibly run by eval, source, `.`, a variable program or a function on the line),
   or a nested compound's own closer redirection or pipe (inner closers win, as in bash). Nothing is fed when the
   closer has its own `<`, and a closer heredoc wins over a pipe in. Feeding such a command would read decoy text as
   what the shell runs (`{ curl ... | bash; } <<< 'rm -rf build'` would leave `opaque_exec` for `delete`). Chosen
-  over feeding only the last command: any inner command may read stdin. Only shells, interpreters and gh act on
-  it, so `{ cat; } <<EOF` stays `read`, but the fed text can change the line's category and the summary shown at
-  ask. Each text is classified once per line and a shared stdin is listed once, and the parser finds command
-  position and a closer's opener without rescanning, so the cost stays linear (a group of shells fed a body that
-  is itself a group of fed shells was read width to the power of depth times, n here-strings fed to n shells cost
-  n squared, and so did n openers in a row; a body after `<<$'EOF'`, which is also read as commands, was read
-  once per command it reached, so nested groups of plain commands took a minute for 462 bytes). A line read this
-  way leaves `opaque_exec` for its inner category, so it carries the issue #178 floor (only naming `opaque_exec`
-  at `log` or `allow` turns the indirection floor off): under `deny: [opaque_exec]` or
-  `categories: {opaque_exec: deny}` these lines now ask where they were denied, as `bash <<EOF` already does,
-  until D-075 (#126) / #191; under `categories: {opaque_exec: deny}` the floor keeps them at ask rather than
-  falling to the push's own `log`. `coproc W { ...; } <<EOF` and `function NAME { ...; } <<EOF` are fed the same
-  way, as #181 reads their bodies; the body of `time { ...; }` is not read at all, so it still asks as
-  `opaque_exec`. A closer heredoc wins over a pipe in on stdin only; the lexer drops fd numbers, so one on
-  another fd (`{ bash; } 3<<EOF`) is read conservatively as stdin (its body fed, a pipe in not), and a shell
-  read that way still asks at least, as `bash 3<<EOF` does.
+  over feeding only the last command: any inner command may read stdin. Only shells, interpreters and gh act on it, so
+  `{ cat; } <<EOF` stays `read`, but the fed text can change the line's category and the summary shown at ask. Each
+  text is classified once per line (the stdin of a `sqlite3`, `psql` or `mysql` client too, #154), every command it
+  reaches still gets what that reading found (its own store check needs a delete there: skipping the repeat let a
+  later `psql <store folder>` pass as a `delete`), a shared stdin is listed once, the parser finds command position
+  and a closer's opener without rescanning, and the scan for function names on the line starts only where a word does,
+  so the cost stays linear (a group of shells fed a body that is itself a group of fed shells was read width to the
+  power of depth times, n here-strings fed to n shells cost n squared, and so did n openers in a row; a body after
+  `<<$'EOF'`, which is also read as commands, was read once per command it reached, so nested groups of plain commands
+  took a minute for 462 bytes, and groups of `psql` fed `\!` lines took 210 s for 604 bytes nested four deep; looking
+  for `name()` from every character of an unbroken word took 26 s for one of 50,000 characters). A line read this way
+  leaves `opaque_exec` for its inner category, so it carries the issue #178 floor (only naming `opaque_exec` at `log`
+  or `allow` turns the indirection floor off): under `deny: [opaque_exec]` or `categories: {opaque_exec: deny}` these
+  lines now ask where they were denied, as `bash <<EOF` already does, until D-075 (#126) / #191; under `categories:
+  {opaque_exec: deny}` the floor keeps them at ask rather than falling to the push's own `log`. `coproc W { ...; }
+  <<EOF` and `function NAME { ...; } <<EOF` are fed the same way, as #181 reads their bodies; the body of `time { ...;
+  }` is not read at all, so it still asks as `opaque_exec`. A closer heredoc wins over a pipe in on stdin only; the
+  lexer drops fd numbers, so one on another fd (`{ bash; } 3<<EOF`) is read as stdin: its body is fed, and text piped
+  in reaches only the first command inside, so in `echo ... | { true; bash; } 3<<EOF` bash is read with the body, not
+  the pipe it reads. A shell read that way still asks at least, as `bash 3<<EOF` does and as main asks.
   *Amendment 2026-10-17 (issue #192):* on a line that enters a folder that can hold a secret store, a relative read of
   a store file is `credentials`. The hints come from the sample store paths, per call: the store folders (a dot folder
   along a sample below home by its name, a plain one only below its parent, such as `.config/gh`, `.exo/keys` or

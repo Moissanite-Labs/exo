@@ -229,6 +229,64 @@ def test_a_body_fed_to_many_shells_is_read_once(width, levels, counted):
     assert counted["shell"] <= 2 * levels + 2, counted
 
 
+def _fed_db_groups(width, levels, prog, run):
+    # `{ psql; ... } <<< $'\! <the next level>'`: each database client runs the shell command in its stdin
+    body = PUSH
+    for _ in range(levels):
+        text = (run + body).replace("\\", "\\\\").replace("'", "\\'")
+        body = "{ " + f"{prog}; " * width + "} <<< $'" + text + "'"
+    return body
+
+
+@pytest.mark.parametrize("prog, run, width, levels", [
+    ("psql", "\\! ", 20, 3),
+    ("psql", "\\! ", 8, 4),
+    ("mysql", "system ", 20, 3),
+    ("sqlite3 x.db", ".shell ", 20, 3),
+])
+def test_a_body_fed_to_many_database_clients_is_read_once(prog, run, width, levels, counted):
+    # A sqlite3, psql or mysql client reads shell commands from its stdin (#154). Reading the group's shared
+    # stdin once per client made width ** depth calls: 8,421 for psql (20, 3), and minutes at depth 4.
+    line = _fed_db_groups(width, levels, prog, run)
+    assert _classify(line).category == "vcs_push"
+    assert counted["shell"] <= 2 * levels + 2, counted
+
+
+@pytest.mark.parametrize("first, then, text", [
+    ("psql", "psql {S}", "\\! rm -rf x"),
+    ("mysql", "mysql {S}", "system rm -rf x"),
+    ("sqlite3 a.db", "sqlite3 {S}/home/.exo", ".shell rm -rf x"),
+    ("python3", "python3 - {S}", 'import shutil; shutil.rmtree("x")'),
+])
+@pytest.mark.parametrize("form", ["{first} <<< '{text}'; {then} <<< '{text}'", "{{ {first}; {then}; }} <<< '{text}'"])
+def test_a_text_read_once_still_counts_for_each_command_that_gets_it(first, then, text, form, tmp_path, monkeypatch):
+    # A later command fed the same text gets the parts of the first reading too: its own store check needs
+    # the delete there to check its arguments with their ancestors. Skipping the repeat made this delete/ask.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("EXO_HOME", str(tmp_path / "home" / ".exo"))
+    then = then.format(S=tmp_path)
+    for line in (form.format(first=first, then=then, text=text), form.format(first=then, then=first, text=text)):
+        c = _classify(line)
+        assert c.category == "store_write", (line, c)
+        assert gate.decide(c, {"gates": {"deny": ["store_write"]}}).outcome == "deny"
+
+
+@pytest.mark.parametrize("shape", [
+    lambda w: f"echo '{w}'",
+    lambda w: f"cat > logo.b64 <<'EOF'\n{w}\nEOF",
+])
+def test_a_long_word_is_read_in_linear_time(shape):
+    # Looking for function names from every position inside an unbroken word cost its length squared: a
+    # 50,000-character quoted word took 26 s. Linear work is about 4x from 25 KB to 100 KB; that was 16x.
+    took = []
+    for n in (25_000, 100_000):
+        line = shape(("QUJD" * n)[:n])
+        start = time.perf_counter()
+        _classify(line)
+        took.append(time.perf_counter() - start)
+    assert took[1] < 8 * took[0] + 1, took
+
+
 @pytest.mark.parametrize("prog", ["ls", "bash", "python3", "command bash"])
 def test_an_ambiguous_body_fed_to_many_commands_is_read_once(prog, counted):
     # A body after <<$'..' is also read as commands, since dash ends it on another line. Reading it again for
@@ -261,6 +319,19 @@ def test_a_closer_heredoc_on_another_fd_is_read_as_stdin(command):
     c = _classify(command)
     assert c.category == "delete", c
     assert gate.decide(c, {"gates": {"deny": ["delete"]}}).outcome == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    f"echo '{RM}' | {{ true; bash; }} 3<<'X'\nls\nX",
+    f"echo '{RM}' | {{ true; bash; }} 3<<< 'ls'",
+])
+def test_a_pipe_in_reaches_only_the_first_command_past_a_closer_heredoc_on_another_fd(command):
+    # The pipe reaches the first command inside (`true`); a closer heredoc wins over it for the rest, and the
+    # gate cannot tell fd 3 from stdin. So bash is read with the `ls` body and asks, as on main, where a deny
+    # on delete is not met either.
+    c = _classify(command)
+    assert c.category == "opaque_exec", c
+    assert gate.decide(c, {"gates": {"deny": ["delete"]}}).outcome == "ask"
 
 
 @pytest.mark.parametrize("shape", [_many_herestrings, _nested_herestrings])

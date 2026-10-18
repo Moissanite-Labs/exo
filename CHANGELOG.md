@@ -215,7 +215,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   Commands that do not run their input (`{ cat; } <<EOF`) keep their class, and a command whose stdin is already
   set (its own heredoc, here-string or `<`, a pipe inside: `{ curl ... | bash; } <<< 'ls'`, or an earlier
   `exec < file` however spelled, or an eval, source, `.`, variable program or function that may run one) is not
-  fed and stays `opaque_exec`, as is the whole compound when its closer has its own `<`.
+  fed and stays `opaque_exec`, as is the whole compound when its closer has its own `<`. Past a closer heredoc on
+  another fd (`3<<EOF`, read as stdin), text piped in reaches only the first command inside. Each fed text is read
+  once per line, also by the `sqlite3`, `psql` and `mysql` clients in a group (#154), yet still counts for every
+  command it reaches, so a later client or interpreter whose argument is a store folder stays `store_write` (which
+  outranks `delete`, so under `deny: [delete]` such a line asks until D-075). The parser stays linear in the length
+  of an unbroken word (base64, a long path).
   Under `deny: [opaque_exec]` or `categories: {opaque_exec: deny}` these compound lines now ask where they were
   denied, as `bash <<EOF` already does, until D-075 (#126) / #191. It carries the #178 floor change (naming
   `opaque_exec` at `ask` or `deny` keeps the indirection floor), so they ask rather than falling to the push's own
