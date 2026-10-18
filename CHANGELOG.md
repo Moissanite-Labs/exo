@@ -115,8 +115,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   skills you add there are kept. So is a copy of a pack skill made to change it: its marker names the skill it came
   from, so the installer keeps it with a warning. A skills folder or skill that links into the checkout is left
   alone. When the skill is still missing, the terminal client shows a short orientation instead of sending a model
-  turn that could only improvise. A first intro that started but failed or got no reply is no longer sent again at every launch: the
-  composer offers `/intro` instead, and the one that completes still turns tutorial mode on.
+  turn that could only improvise. A first intro that started but failed or got no reply is no longer sent again
+  at every launch: the composer offers `/intro` instead, and the one that completes still turns tutorial mode on.
 - The terminal client no longer freezes on the boot screen when first run opens the model picker (the claude CLI
   on PATH and a configured main route that is down). The boot screen's dismiss closed the picker in its place, and
   only ctrl+c got out. It now closes before the first-run check opens anything, so a first run with no provider also
