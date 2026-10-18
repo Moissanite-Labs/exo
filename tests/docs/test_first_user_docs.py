@@ -119,13 +119,24 @@ def test_claude_code_route_is_documented_as_the_core_picks_it():
 
 
 def test_first_run_without_a_key_is_described_as_the_terminal_client_does():
-    """What a keyless first run always gets is a note that names /providers, so the docs tell the user to type it."""
-    client = _read("clients/tui/exo_tui/app.py") + _read("clients/tui/exo_tui/providers.py")
-    assert "Type /providers to add a key." in client, "the first-run note changed"
+    """A keyless first run gets a note and the providers panel, or the model picker when one provider is set up and
+    no main model is chosen (tests/clients/tui/test_providers.py runs it). The docs say so, and how to reopen it."""
+    app = _read("clients/tui/exo_tui/app.py")
+    m = re.search(r"\n    async def first_run_providers\(.*?(?=\n    (?:async )?def )", app, re.S)
+    assert m, "first_run_providers moved: point this test at the first-run check"
+    check = m.group(0)
+    assert "Type /providers to add a key." in check, "the first-run note changed"
+    assert "self.open_providers()" in check and "self.pick_provider_default(" in check, (
+        "the first-run check no longer opens the panel or the model picker: change the docs with it")
     for where, text in (("README.md Quick start", _section(_read("README.md"), "Quick start")),
                         ("docs/INSTALL.md", _read("docs/INSTALL.md")),
                         ("USER-GUIDE.md §1", _section(_read("docs/USER-GUIDE.md"), "1. Install and first run"))):
-        assert "type `/providers`" in text, f"{where} must tell a keyless first run to type /providers"
+        flat = " ".join(text.split())
+        assert "opens the providers panel" in flat or "the providers panel opens" in flat, (
+            f"{where} must say a keyless first run opens the providers panel")
+        assert "the model picker opens instead" in flat, f"{where} must say when the model picker opens instead"
+        assert "Type `/providers` to open the panel again" in flat, f"{where} must say how to reopen the panel"
+        assert "tells you to type `/providers`" not in flat, f"{where} still says the first run only shows a note"
 
 
 def test_user_guide_offers_no_role_limited_provider_as_the_main_model():

@@ -85,7 +85,9 @@ If `~/.local/bin` is not on your PATH, the installer prints the line to add to y
 with `--modify-path` and it adds the line). With no model key, Exo uses your Claude Code login when the `claude`
 command is on your PATH: the model is `claude-cli:sonnet`, and cost reads `unknown` because a subscription has
 no per-call price ([`docs/PROVIDERS.md`](docs/PROVIDERS.md#use-your-claude-code-login-claude-cli)). Otherwise,
-the first run with no model key says so and tells you to type `/providers`. Upgrade with `exo update`.
+the first run with no model key says so in a note and opens the providers panel. If one provider is set up but no
+main model is chosen, the model picker opens instead. Type `/providers` to open the panel again. Upgrade with
+`exo update`.
 `exo --version` shows the version and, for a checkout install, the git sha. Flags pass through to the client:
 `exo --resume` (or `exo resume`), `exo --seat NAME`, `exo --no-intro`. Other commands keep working:
 `exo models`, `exo providers`, `exo -h` lists all.

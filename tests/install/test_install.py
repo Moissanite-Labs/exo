@@ -223,6 +223,33 @@ def test_rerun_refreshes_the_pack_and_keeps_your_skills(box):
     assert snapshot(skills) == first                        # nothing changed upstream: nothing rewritten
 
 
+def test_rerun_keeps_a_skill_you_copied_from_the_pack(box):
+    """`cp -r` copies the hidden marker too. Exo replaces or removes only a folder it installed under that name."""
+    src = checkout_copy(box)
+    args = ("--no-pip", "--no-interview", "--yes", "--exo-source", str(src))  # `exo update` re-runs it like this
+    assert run(box, *args).returncode == 0
+    skills = box / "exo" / "skills"
+    shutil.copytree(skills / "exo-intro", skills / "my-intro")  # a copy to change, marker and all
+    (skills / "my-intro" / "SKILL.md").write_text("---\nname: my-intro\ndescription: mine\n---\nmy intro\n")
+    shutil.copytree(skills / "council", skills / "my-council")  # a copy not changed yet
+    (skills / "jevgrep").rename(skills / "my-grep")  # a pack skill you renamed
+    kept = {name: snapshot(skills / name) for name in ("my-intro", "my-council", "my-grep")}
+    r = run(box, *args)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "rm -rf" not in r.stdout
+    assert {name: snapshot(skills / name) for name in kept} == kept
+    assert (skills / "my-intro" / "SKILL.md").read_text().endswith("my intro\n")
+    for name in kept:
+        assert f"{skills / name} was not installed by Exo under this name" in r.stderr
+    assert (skills / "jevgrep" / ".exo-managed").is_file()  # the pack's own skill comes back beside your copy
+    shutil.copytree(src / "skills" / "jevgrep", src / "skills" / "my-intro", dirs_exist_ok=True)
+    r = run(box, *args)  # the pack now ships a skill with your copy's name: yours still wins
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert f"{skills / 'my-intro'} was not installed by Exo; left alone" in r.stderr
+    assert snapshot(skills / "my-intro") == kept["my-intro"]
+    assert (skills / "my-intro" / "SKILL.md").read_text().endswith("my intro\n")
+
+
 def test_skill_pack_leaves_folders_it_did_not_install(box):
     skills = box / "exo" / "skills"
     (skills / "exo-intro").mkdir(parents=True)

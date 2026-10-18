@@ -112,9 +112,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - First run (user-readiness audit, blocker 1): the installer now copies the skill pack (`skills/` with
   `MANIFEST.json`) into `$EXO_HOME/skills`, so `/intro` loads its `exo-intro` skill and exo-orchestra stops warning
   "no skill manifest" at launch. Each pack skill is a marked folder that a re-run or `exo update` refreshes, and
-  skills you add there are kept. A skills folder or skill that links into the checkout is left alone. When the skill
-  is still missing, the terminal client shows a short orientation instead of sending a model turn that could only
-  improvise. A first intro that started but failed or got no reply is no longer sent again at every launch: the
+  skills you add there are kept. So is a copy of a pack skill made to change it: its marker names the skill it came
+  from, so the installer keeps it with a warning. A skills folder or skill that links into the checkout is left
+  alone. When the skill is still missing, the terminal client shows a short orientation instead of sending a model
+  turn that could only improvise. A first intro that started but failed or got no reply is no longer sent again at every launch: the
   composer offers `/intro` instead, and the one that completes still turns tutorial mode on.
 - The terminal client no longer freezes on the boot screen when first run opens the model picker (the claude CLI
   on PATH and a configured main route that is down). The boot screen's dismiss closed the picker in its place, and
@@ -130,9 +131,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   readiness audit and its review. #146 tracks the web composer side.
 - Docs for a first user. The README now opens with what Exo is today: a coding agent for the terminal and the
   browser that runs on your Claude Code login or an API key. The Quick start, `docs/INSTALL.md` and the site's
-  install step say the repository is a private preview with access on request. They no longer say a first run
-  with no model key opens the providers panel: the terminal client prints a note that tells you to type
-  `/providers`.
+  install step say the repository is a private preview with access on request.
 - The automatic Claude Code route is documented (`docs/PROVIDERS.md` "Use your Claude Code login", user guide
   §1): it uses `claude-cli:sonnet`, cost reads `unknown`, and `exo models` does not list it. The user guide no
   longer offers Muse as the keyless main model, because Muse serves only the `aux` role.
