@@ -173,6 +173,8 @@ gate's policies, the command center's decisions queue and check-prose's policy. 
 through one function, `exo.store.principal_root`. The gate protects
 that store's `policies/`, `state/`, `keys/` and ledger as it protects the stores in the home.
 `exo memory verify` with no `--principal` checks every store in the home and every recorded root.
+A recorded root must be an absolute path once `~` is expanded. One that is relative, holds a NUL byte or names an
+unknown user (`~nosuchuser/x`) is skipped, and the id finds `$EXO_HOME/principals/<id>` instead.
 
 ```sh
 exo config show

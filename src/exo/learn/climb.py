@@ -139,7 +139,8 @@ def gate_proposal(lr: Learner, p: Proposal) -> dict:
 def candidates_for(lr: Learner, limit: int) -> list[dict]:
     """Add candidates from held-back lessons (medium weight and up), then drop candidates from auto-promoted ones.
     Only ordinary lessons are added: not guarded, not gated (rule 5 keeps its critic, weight, session and held-out
-    checks in `apply_policy`) and with no critic objection. An add candidate never scores on its own evidence."""
+    checks in `apply_policy`) and with no critic objection. No candidate scores on its lesson's own evidence: the
+    replays and preference pairs built from it count neither for adding the lesson nor for dropping it."""
     rt = lr.runtime
     pol = lr.settings["promote"]
     st = load_state(rt.ledger)
@@ -166,7 +167,7 @@ def candidates_for(lr: Learner, limit: int) -> list[dict]:
         if auto and b is not None and b.status == "accepted" and any(r["id"] == pid for r in cfg["rules"]):
             p = st.proposals[pid]
             out.append({"id": f"drop:{pid}", "config": without_lesson(cfg, pid), "domains": [p.domain, "general"],
-                        "note": p.claim, "kind": "drop", "proposal": pid})
+                        "note": p.claim, "kind": "drop", "proposal": pid, "exclude": [e["id"] for e in p.evidence]})
     return out
 
 

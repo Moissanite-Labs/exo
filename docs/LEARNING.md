@@ -26,6 +26,11 @@ peer, a bus seat or a job notice is never read as yours, whatever it says. Conso
 turn. A Hermes row that may be an agent's brief is authored `hermes:unverified-user` and never does. The eval cases
 built from the ledger follow the same rule: see "The slow loop".
 
+Imported history counts as of when you said it: its evidence carries the row's source time, not the time of the
+import. Superseded text does not count for the rule of three: the older versions of an edited ChatGPT prompt
+(`branch: alt`) and Hermes rows marked inactive. Rule 4 never applies a lesson whose evidence is all imported. You
+review that first batch (`exo proposals`).
+
 ## The fast loop
 
 After a turn, a cheap reviewer on the `aux` route reads new signals and writes typed proposals. It only proposes.
@@ -50,7 +55,8 @@ numbers stay fixed for ledger records:
 - Rule 1: an ordinary unguarded, ungated proposal citing your ruling or answer promotes immediately.
   The event's author is checked, so an agent-written ruling never triggers this rule (D-040).
 - Rule 4: ordinary taste or fact with high weight, at least `min_sessions` sessions, and no critic objection
-  promotes automatically and is logged for the brief.
+  promotes automatically and is logged for the brief. When all its evidence came from `exo ingest`, it waits for
+  your review instead.
 - Rule 6: anything else stays a proposal. After `stale_days` (14) it becomes a question or decays.
 
 These checks govern lessons derived by the reviewer. Your original rulings remain in the ledger and context.
@@ -71,7 +77,8 @@ is not worse on held-out cases, and passes the gate. The night is capped by `cli
 The climb adds only ordinary lessons: not guarded, not gated by rule 5, and with no critic objection. Only rule 5
 promotes a gated lesson on its own. It runs earlier the same night and keeps its critic, weight, session and
 held-out checks. A candidate with no held-out case in its domains fails the gate. A lesson's own evidence never
-counts for or against it, on dev or on held-out cases.
+counts for or against it, on dev or on held-out cases, whether the candidate adds the lesson or drops it. The climb
+can add a lesson drawn only from imported history, but only when the eval shows it helps.
 
 The cases are your eval Q&A, your preference pairs, and replays built from the ledger. A replay comes only from
 your own verdict, answer or ruling, and its question is your own message before it (D-040). An agent's

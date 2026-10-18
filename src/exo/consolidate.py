@@ -16,7 +16,9 @@ with `exo_note`, or one a peer's text produced, is skipped and counted in `not_p
   (context, rejected, chosen, evidence), appended to `training/preference-pairs.jsonl` on accept.
 - **Rule of three:** an instruction the principal gives in 3+ utterances with no encoded belief
   gets a proposal to encode it. Live turns carry role `user` and rows from `exo ingest` role `principal`;
-  both count. Summaries (`secondary`) are not anyone's own words and do not.
+  both count. Summaries (`secondary`) are not anyone's own words and do not. Nor is superseded text: the older
+  versions of an edited ChatGPT prompt (`branch: alt`) and Hermes rows marked `inactive`. An imported row
+  counts as said at its source time (`source_ts`), not when it was imported (`said_at`).
 - **Taste:** a new event that agrees with a known belief reinforces it (a `note` of type
   `belief_reinforced`); weight decays by half-life unless reinforced (`exo.taste`).
 - **Conflict:** an event that opposes a known belief goes through the store's conflict rule.
@@ -286,6 +288,26 @@ def _event_text(ev: Mapping | None) -> str:
     return ""
 
 
+def imported(ev: Mapping) -> bool:
+    """True for a row `exo ingest` wrote: its body names the adapter it came from (`src.adapter`)."""
+    src = (ev.get("body") or {}).get("src")
+    return isinstance(src, Mapping) and bool(src.get("adapter"))
+
+
+def said_at(ev: Mapping) -> str:
+    """When the words were said: an imported row's own time (`source_ts`), else when the ledger got them. A source
+    time after the ledger time, or one with no time zone, is not believed."""
+    ts, src = ev["ts"], (ev.get("body") or {}).get("source_ts")
+    if isinstance(src, str):
+        try:
+            when = taste.parse_ts(src)
+            if when.tzinfo is not None and when < taste.parse_ts(ts):
+                return src
+        except (TypeError, ValueError):
+            pass
+    return ts
+
+
 def observe_event(ev: Mapping, ledger: Ledger) -> Observation | None:
     """Observation for a verdict or ruling event, else None."""
     b = ev.get("body") or {}
@@ -330,10 +352,12 @@ def observe_event(ev: Mapping, ledger: Ledger) -> Observation | None:
 
 def instructions_in(ev: Mapping) -> list[Observation]:
     """Instruction-like sentences in a principal utterance (for the rule of three). Role `user` is a live turn,
-    `principal` an `exo ingest` row. The caller checks the author (D-040)."""
+    `principal` an `exo ingest` row, dated by its source time. The caller checks the author (D-040)."""
     b = ev.get("body") or {}
     if b.get("role", "user") not in ("user", "principal") or b.get("secondary"):
         return []
+    if b.get("branch") == "alt" or b.get("inactive"):
+        return []  # superseded: an edited ChatGPT prompt's older versions, a Hermes row no longer active
     text = _event_text(ev)
     if is_trivial(text):
         return []
@@ -343,7 +367,7 @@ def instructions_in(ev: Mapping) -> list[Observation]:
         if kind not in (RULING, CORRECTION) and not is_imperative(s):
             continue
         want, avoid, reason = parse_instruction(s)
-        o = Observation(ev["id"], ev["seq"], ev["ts"], "instruction", "utterance", clip(s), want, avoid, reason,
+        o = Observation(ev["id"], ev["seq"], said_at(ev), "instruction", "utterance", clip(s), want, avoid, reason,
                         None, tuple(cues), STRENGTH["instruction"], ev.get("session"), [ev["id"]])
         if len(o.sig) >= 2:
             out.append(o)
@@ -928,14 +952,14 @@ class _Run:
 
     def _ts(self, eid: str) -> str:
         ev = self.ledger.get(eid)
-        return ev["ts"] if ev else self.now
+        return said_at(ev) if ev else self.now
 
     def _quotes(self, ids: Sequence[str]) -> list[dict]:
         out = []
         for i in ids:
             ev = self.ledger.get(i)
             if ev:
-                out.append({"text": clip(_event_text(ev), 200), "ts": ev["ts"], "id": i})
+                out.append({"text": clip(_event_text(ev), 200), "ts": said_at(ev), "id": i})
         return out
 
     # -- handlers ------------------------------------------------------------

@@ -6,7 +6,7 @@ import pytest
 from exo import eval as E
 from exo.consolidate import proposals_list
 from exo.learn import learned_since, nightly
-from exo.learn.climb import check_regression, current_config
+from exo.learn.climb import candidates_for, check_regression, current_config
 from exo.learn.promote import apply_policy
 
 from helpers import correction, propose, ruling, scripted_model, write_qa
@@ -201,3 +201,53 @@ def test_nightly_rescores_the_incumbent_after_a_model_switch(learner):
     out = run(learner)
     assert out["climb"]["start_composite"] == 1.0 and out["climb"]["accepted"] == []
     assert status(learner, res["id"]) == "proposed"
+
+
+def _replay(rt, k, chosen, session):
+    """The principal's question, the agent's answer and the principal's edit of it: one replay case."""
+    rt.ledger.append("utterance", {"text": f"Next status line {k}", "role": "user"}, "principal", session=session)
+    out = rt.ledger.append("utterance", {"text": f"Status fine {k}", "role": "assistant"}, "agent", session=session)
+    return rt.ledger.append("verdict", {"verdict": "edit", "target": out["id"], "chosen": chosen}, "principal",
+                            session=session)
+
+
+def _held_out(monkeypatch, own, also=()):
+    """Put the cases built from the events in `own`, and the items named in `also`, in the held-out set."""
+    def split(items, **kw):
+        held = [i for i in items if E.derived_from(i, own) or i["id"] in also]
+        return {"train": [], "dev": [i for i in items if i not in held], "held": held}
+    monkeypatch.setattr(E, "split", split)
+
+
+def test_nightly_add_candidate_never_wins_on_its_own_evidence(learner, monkeypatch):
+    """The climb hands the lesson's evidence to the eval (`exclude`): the replay of the verdict it cites is no
+    held-out proof for it."""
+    rt = learner.runtime
+    write_qa(rt.root)
+    learner._complete = scripted_model()
+    edit = _replay(rt, 7, "Status ok 7", "s1")
+    res = propose(rt, evidence=[edit["id"]])
+    _held_out(monkeypatch, {edit["id"]})
+    assert [(c["id"], c["exclude"]) for c in candidates_for(learner, 10)] == [(f"add:{res['id']}", [edit["id"]])]
+    out = run(learner)
+    (c,) = [c for c in out["climb"]["candidates"] if c["id"] == f"add:{res['id']}"]
+    assert c["dev"]["better"] and (c["status"], c.get("reason")) == ("gate_failed", "no held-out cases")
+    assert status(learner, res["id"]) == "proposed"
+
+
+def test_nightly_drop_candidate_is_not_held_back_by_its_own_evidence(learner, monkeypatch):
+    """A harmful auto-promoted lesson is judged on the cases it was not learned from. Before, the replays of the
+    verdicts it cites, and the preference pair its acceptance wrote, sat in the held-out set and kept it."""
+    rt = learner.runtime
+    write_qa(rt.root)
+    learner._complete = scripted_model(base_good=True)
+    ev = [_replay(rt, 100 + k, f"Status ok {100 + k} :)", f"s{k}")["id"] for k in range(3)]
+    res = propose(rt, evidence=ev, wants="emoticons in status lines", avoid="plain text",
+                  claim="The principal wants emoticons in status lines, not plain text.")
+    assert apply_policy(learner)[0].action == "auto_promoted"
+    _held_out(monkeypatch, set(ev), also={"q0", "q1"})
+    (drop,) = candidates_for(learner, 10)
+    assert drop["id"] == f"drop:{res['id']}" and sorted(drop["exclude"]) == sorted(ev)
+    out = run(learner)
+    assert out["climb"]["accepted"] == [f"drop:{res['id']}"]
+    assert status(learner, res["id"]) == "rejected" and current_config(learner)["rules"] == []

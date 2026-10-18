@@ -53,6 +53,18 @@ def exo_home() -> Path:
     return Path(os.environ.get('EXO_HOME') or Path.home() / '.exo').expanduser()
 
 
+def _root_path(root: object) -> Path | None:
+    """A recorded store root as an absolute path, or None. A root that is not a string, is blank, holds a NUL byte,
+    names an unknown user (`~nosuchuser/x`) or is relative after `~` expansion is not a store root."""
+    if not isinstance(root, str) or not root.strip() or '\0' in root:
+        return None
+    try:
+        path = Path(root).expanduser()
+    except (RuntimeError, ValueError, OSError):
+        return None
+    return path if path.is_absolute() else None
+
+
 def explicit_roots(home: str | os.PathLike | None = None) -> dict[str, Path]:
     """Store roots by principal id from `principals` in `<home>/config.json` (`exo init --root` and
     `exo import-store --root` record them). A missing or unreadable file, or a bad entry, adds nothing."""
@@ -61,8 +73,12 @@ def explicit_roots(home: str | os.PathLike | None = None) -> dict[str, Path]:
     except (OSError, ValueError):
         return {}
     roots = data.get('principals') if isinstance(data, dict) else None
-    return {pid: Path(root).expanduser() for pid, root in (roots.items() if isinstance(roots, dict) else ())
-            if isinstance(pid, str) and ID_RE.match(pid) and isinstance(root, str) and root.strip()}
+    out = {}
+    for pid, root in (roots.items() if isinstance(roots, dict) else ()):
+        path = _root_path(root)
+        if isinstance(pid, str) and ID_RE.match(pid) and path is not None:
+            out[pid] = path
+    return out
 
 
 def principal_root(pid: str, home: str | os.PathLike | None = None) -> Path:
