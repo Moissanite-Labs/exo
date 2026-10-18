@@ -185,19 +185,59 @@ commit = "{base}"
 
 CORE = ["src/exo/core", "src/exo/protocol", "src/exo/server", "src/exo/cli_chat.py", "src/exo/upstream.py"]
 
+# The core budget is a ratchet with headroom (D-077, docs/ENGINE-SPLIT.md "Budget policy").
+CORE_FLOOR = 14813  # counted lines right after the last real reduction (#124, D-067). It only ever goes down.
+CORE_HEADROOM = 1000  # room for shipping. A security or robustness fix may raise it, by the minimum, with a note.
+BIG_FILE = 1000  # the report flags counted files above this many lines. Information, not an assertion.
+
 
 def test_core_line_budget():
-    """Check 6: the core stays under budget (generated protocol files excluded).
+    """Check 6: the core stays under CORE_FLOOR + CORE_HEADROOM counted lines (generated protocol files excluded).
 
-    Wave 1 shipped under 8k. STANDALONE.md section 6 allows 15k by the end of wave 3; delegation (D-016)
-    is a wave 3 item, so the budget moved to 15k on 2026-10-12. Raised to 16k the same day for the audit
-    security wave (D-038..D-042). Engine split step 4 (D-067) brought it under the old 15k goal, and the ceiling
-    went back to 15k on 2026-10-13 to keep that gain (docs/ENGINE-SPLIT.md "Budget policy"). Issue #46 tracks the
-    rest of the split."""
+    A ratchet with headroom (D-077, docs/ENGINE-SPLIT.md "Budget policy"). The principal's ruling of 2026-10-15:
+    "important to be lean and optimized but not at the cost of functionality and robustness and product-market fit".
+
+    1. Two recorded numbers, CORE_FLOOR and CORE_HEADROOM. The only assertion is
+       ``total < CORE_FLOOR + CORE_HEADROOM``.
+    2. The floor ratchets down. Every real reduction PR (deletions, simplification, real seams per ENGINE-SPLIT)
+       sets CORE_FLOOR to its post-merge count in the same PR. The floor never goes up.
+    3. Headroom is for shipping. Fixes and features land inside it with no ceremony. The test prints the count,
+       the floor and the headroom left on every run (pytest -s or -rP shows it), and its failure message shows them.
+    4. Security and robustness fixes are never blocked by the budget. If one would cross the ceiling, its PR raises
+       CORE_HEADROOM by the minimum needed with a one-line DECISIONS note, and the lead schedules a reduction within
+       the week. A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+    5. The structural goal carries the real intent: ENGINE-SPLIT step 4's criteria (no private-state reads across
+       module boundaries, no product imports into the engine, one responsibility per module). The count is a
+       signal. The printed report lists the largest counted files and flags any above 1,000 lines. It asserts
+       nothing.
+    6. The CORE list is never edited to dodge the count.
+
+    History. Wave 1 shipped under 8k. STANDALONE.md section 6 allows 15k by the end of wave 3; delegation (D-016)
+    is a wave 3 item, so the budget moved to 15k on 2026-10-12. Raised to 16k the same day for the audit security
+    wave (D-038..D-042). Engine split step 4 (D-067, #124) brought the count to 14,813, and the cap went back to
+    15k on 2026-10-13 as a hard wall. On 2026-10-15 the wall became this ratchet (D-077): floor 14,813, headroom
+    1,000, ceiling 15,813. Issue #46 tracks the rest of the split."""
     files = [p for c in CORE for p in ((REPO / c).rglob("*.py") if (REPO / c).is_dir() else [REPO / c])
              if "generated" not in p.parts]
-    total = sum(len(p.read_text().splitlines()) for p in files)
-    assert total < 15000, total
+    counts = {p.relative_to(REPO).as_posix(): len(p.read_text().splitlines()) for p in files}
+    total, ceiling = sum(counts.values()), CORE_FLOOR + CORE_HEADROOM
+    left = ceiling - total
+    status = (f"core budget: {total:,} counted lines, floor {CORE_FLOOR:,}, headroom {CORE_HEADROOM:,}, "
+              f"ceiling {ceiling:,}, headroom left {left:,}")
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    big = sum(n > BIG_FILE for _, n in ranked)
+    print(f"\n{status}")
+    if total < CORE_FLOOR:
+        print(f"{CORE_FLOOR - total:,} below the floor: a real reduction sets CORE_FLOOR = {total} in its PR")
+    print(f"largest of {len(counts)} counted files (information, not an assertion):")
+    for name, n in ranked[:max(10, big)]:
+        print(f"  {n:6,}  {name}" + (f"  <- above {BIG_FILE:,} lines" if n > BIG_FILE else ""))
+    print(f"{big} counted file{'s' if big > 1 else ''} above {BIG_FILE:,} lines" if big
+          else f"no counted file above {BIG_FILE:,} lines")
+    assert total < CORE_FLOOR + CORE_HEADROOM, (
+        f"{status}. A security or robustness fix raises CORE_HEADROOM by the minimum, {1 - left:,}, with a one-line "
+        f"DECISIONS note. A feature waits for a reduction or carries a recorded decision. "
+        f"See docs/ENGINE-SPLIT.md 'Budget policy'.")
 
 
 def test_dependencies_are_listed():

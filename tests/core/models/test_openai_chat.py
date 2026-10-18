@@ -181,3 +181,11 @@ def test_clean_close_without_finish_is_an_error_even_after_text():
     ok = b'data: {"choices":[{"delta":{"content":"fine"},"finish_reason":"stop"}]}\n\n'  # no [DONE], but a stop reason
     events = collect(P("http://h/v1", client=Recorder((200, ok, {})).client()).stream([Message.user("x")], []))
     assert events[-1].kind == "done" and events[-1].stop_reason == "end"
+
+
+def test_build_body_tool_choice_none_keeps_the_tools():
+    prov, spec = OpenAIChatProvider("http://h/v1"), ToolSpec(name="weather", description="w")
+    on = prov.build_body([Message.user("x")], [spec], model="m")
+    off = prov.build_body([Message.user("x")], [spec], model="m", tool_choice="none")
+    assert off["tools"] == on["tools"] and off["tool_choice"] == "none" and "tool_choice" not in on
+    assert "tool_choice" not in prov.build_body([Message.user("x")], [], model="m", tool_choice="none")
