@@ -42,7 +42,9 @@ sleeps at most a minute, so a job that another seat's core adds or resumes start
   A `turn.send` steer lands at its next tool round, and a plain send waits for the run to end. A job or peer
   notice is steered in. It is never stored between a tool call and its result, and never starts a second turn.
   Opening the thread (`session.resume`) leaves the run's open tool call alone. A peer message with no session
-  never picks the run: it goes to the user's thread. A peer that names the run's session still reaches it.
+  never picks the run: it goes to the user's live thread. With none live, a message delivered at once is refused
+  ("no session here can take a message") and a held one waits with no thread. A peer that names the run's session
+  still reaches it.
 - The timer loop survives a failing check or next-run database listing: the error is recorded as a
   `harness.error` (`scheduler tick`) and the loop waits a few seconds and goes on. If the loop ever ends by
   itself, that is recorded too (`scheduler loop`) and a

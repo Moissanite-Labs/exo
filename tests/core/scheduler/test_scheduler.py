@@ -672,7 +672,7 @@ async def test_an_unaddressed_peer_message_never_picks_a_running_run(tmp_path, u
     eng, sid, gate = await live_run(tmp_path)
     target, ing = eng._peer_target, Ingress("peer", "x", "trusted", "hi")
     assert target.state(sid) == "running"
-    assert target.pick_session(ing) is None  # only the run is live: the caller makes a new thread
+    assert target.pick_session(ing) is None  # only the run is live: no thread is picked
     user = (await eng.loop.create_session(title="mine")).id
     if user_running:
         eng.loop.state(user).running = True  # stands in for a user turn held in a tool call
