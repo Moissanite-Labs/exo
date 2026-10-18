@@ -2,6 +2,7 @@
 
 Every command string here is data for exo.gate.classify/decide; none is run."""
 import fnmatch
+import shlex
 import time
 import tracemalloc
 
@@ -25,6 +26,13 @@ def _bash(cmd: str):
     return gate.classify({"tool": "bash", "args": {"command": cmd}})
 
 
+def _wrap(text: str, times: int) -> str:
+    for _ in range(times):
+        text = "bash -c " + shlex.quote(text)
+    return text
+
+
+KUBE = "bash -c \"cd ~/.kube\""
 DENY_FORMS = ({"gates": {"categories": {"credentials": "deny"}}}, {"gates": {"deny": ["credentials"]}})
 
 
@@ -208,6 +216,13 @@ DENY_FORMS = ({"gates": {"categories": {"credentials": "deny"}}}, {"gates": {"de
     # a brace set whose other member has a space still names config
     "cd ~/.kube && cat {config,\"a b\"}",
     "cd ~/.kube && cat {config,a\\ b}",
+    # a brace range spells its words; one that names a store folder still enters it
+    "cd ~/.config/g{h..h} && cat hosts.yml",
+    "cd ~/.kub{e..e} && cat config",
+    # a shell text first met at the depth cap is read again where it comes up shallower
+    _wrap(KUBE, 1) + " ; " + _wrap(KUBE, 4) + " ; cat config",
+    _wrap(KUBE, 4) + " ; " + _wrap(KUBE, 1) + " ; cat config",
+    _wrap(KUBE, 3) + " ; " + _wrap(KUBE, 2) + " ; " + _wrap(KUBE, 4) + " ; cat config",
 ])
 def test_relative_store_read_on_a_store_folder_line_is_credentials(cmd):
     c = _bash(cmd)
@@ -449,6 +464,12 @@ HEREDOC = "cd ~/.config/app && cat > settings.toml <<'EOF'\n" + "\n".join(
     "cd ~/src/exo/state && cd ../keys && cat x",
     "cd /tmp && cd ../srv && cat config",
     HEREDOC,
+    # a brace range spells digits or letters, never a store file
+    "cd /proc && for i in {1..5}; do cat loadavg; sleep 1; done",
+    "cd ~/.kube && for i in {1..10}; do kubectl get pods; sleep 5; done",
+    "cd ~/.config/nvim && echo {1..3}",
+    "cd ~/.config/nvim && printf '%s\\n' {a..c}",
+    "cd ~/.docker && printf '%s\\n' {10..-5}",
     # dynamic targets add nothing (a known limit)
     "cd $X && cat config",
     "cd \"$DIR\" && cat config.json",
@@ -559,6 +580,32 @@ def test_a_wide_brace_set_is_not_copied_per_member():
     finally:
         tracemalloc.stop()
     assert peak < 8 * 2**20, peak
+
+
+def _ups_line(n: int, folder: str, name: str) -> str:
+    """70 levels up (any number, to the gate), then a long relative path, then many relative names."""
+    return f"cd {'/'.join(['..'] * 70)} ; cd x{folder * (n // len(folder))} ; cat " + " ".join(
+        f"{name}/{i}" for i in range(n // 10))
+
+
+@pytest.mark.parametrize("env, folder, name", [
+    ({"HOME": "/"}, "/~", "proc"),
+    ({"EXO_HOME": "/srv/exo-home"}, "/exo-home", "keys"),
+], ids=["home-at-root", "exo-home-outside-home"])
+def test_many_levels_up_stays_linear(env, folder, name, monkeypatch):
+    """A plain store folder's parent reached any number of levels up is answered from the most levels up it is at,
+    not by scanning every level per name (180 KB took 30 s)."""
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    if "EXO_HOME" not in env:
+        monkeypatch.delenv("EXO_HOME")
+    took = []
+    for n in (20000, 80000):
+        line = _ups_line(n, folder, name)
+        start = time.monotonic()
+        _bash(line)
+        took.append(time.monotonic() - start)
+    assert took[1] < 6 * took[0] + 0.5, took
 
 
 @pytest.mark.parametrize("line", list(SHAPES.values()), ids=list(SHAPES))
