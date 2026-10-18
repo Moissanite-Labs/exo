@@ -34,7 +34,7 @@ import re
 import shlex
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, Mapping, TypeVar, cast
 from urllib.parse import urlparse
 
 REVERSIBILITY = ("reversible", "costly", "irreversible")
@@ -117,11 +117,15 @@ class Classification:
     text_file: str = ""               # body read from a file (the caller may load it)
     command: str = ""                 # shell command text, if any
     signals: list[str] = field(default_factory=list)
+    # The simple commands a compound line was built from (D-075). `decide` checks reserved and deny
+    # entries against each of them, so a denied action cannot ride along with a more severe one.
+    parts: list["Classification"] = field(default_factory=list, repr=False, compare=False)
     _command_views: list[str] = field(default_factory=list, repr=False, compare=False)
 
     def as_dict(self) -> dict:
         """Ledger-safe view: no outbound text or command, only their digests and sizes."""
         d = asdict(self)
+        d.pop("parts", None)
         d.pop("_command_views")
         for k in ("text", "title", "command"):
             v = d.pop(k)
@@ -139,9 +143,15 @@ class Decision:
     violations: list[str] = field(default_factory=list)
     exposure: str = ""                # effective exposure after scopes
     third_party: bool = False
+    # (category, target) of each part a reserved entry matched, once each (D-075). A standing grant for the
+    # line's own category must not cover a reserved part outside it, so the targets stay as written here.
+    reserved: list[tuple[str, str]] = field(default_factory=list)
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        """Ledger view: reserved targets with URL userinfo redacted."""
+        d = asdict(self)
+        d["reserved"] = list(dict.fromkeys((cat, redact_userinfo(t)) for cat, t in self.reserved))
+        return d
 
 
 # --- helpers -------------------------------------------------------------------------------
@@ -165,6 +175,78 @@ def _most_severe(cs: Iterable[Classification]) -> Classification | None:
 
 
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]")
+
+
+_USERINFO = re.compile(r"(?<=://)[^/\s?#]+@")
+
+
+def redact_userinfo(s: str) -> str:
+    """``s`` with the user and password of any URL in it replaced by ``***``, for text that reaches the ledger."""
+    return _USERINFO.sub("***@", s or "")
+
+
+# The ssh options the gate read with their value before D-075 (ssh's own are _SSH_VALUE_OPTS). With any other
+# option, the gate took the value for the host.
+_SSH_VALUE_OPTS_READ = ("-i", "-p", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-W", "-b", "-c", "-E", "-m", "-O", "-Q",
+                        "-S", "-w", "-e", "-I")
+# mosh's options as mosh.pl gives them to Perl's Getopt::Long: each name (the negated forms of `!` options too)
+# with its option and whether it takes a value. `client`, `server` and `ssh` name a command mosh runs.
+_MOSH_OPTS: dict[str, tuple[str, bool]] = {
+    **{n: (n, True) for n in ("client", "server", "ssh", "predict", "port", "p", "family", "bind-server",
+                              "experimental-remote-ip")},
+    **{n: (n, False) for n in ("a", "n", "4", "6", "local", "help", "version")},
+    **{neg + n: (opt, False) for opt, names in (("predict-overwrite", ("predict-overwrite", "o")), ("ssh-pty", ("ssh-pty",)),
+                                                ("init", ("init",)), ("fake-proxy", ("fake-proxy",)))
+       for n in names for neg in ("", "no", "no-")},
+}
+
+
+def _mosh_args(rest: list[str]) -> tuple[list[str], list[tuple[str, str]], str]:
+    """mosh's arguments as Getopt::Long reads them in its default mode: the host and command words, each
+    option with its value, and the first word that names no single option ('' if none).
+
+    An option starts with `--`, `-` or `+`, in any case, and may be a unique prefix of a name; its value follows
+    `=` or is the next word, and options may follow the host. `--` ends the options. From a word that names no
+    single option (mosh stops there) on, the words are read as the host and command, the word itself as well
+    once a host is read."""
+    words: list[str] = []
+    opts: list[tuple[str, str]] = []
+    i = 0
+    while i < len(rest):
+        w = rest[i]
+        i += 1
+        if w == "--":
+            words += rest[i:]
+            break
+        m = re.match(r"(--|-|\+)(.*)", w, re.S)
+        if not m or w == "-":
+            words.append(w)
+            continue
+        name, val = m.group(2), None
+        if (eq := name.find("=", 1)) > 0:
+            name, val = name[:eq], name[eq + 1:]
+        key = name.lower()
+        hits = {_MOSH_OPTS[key]} if key in _MOSH_OPTS else {o for n, o in _MOSH_OPTS.items() if n.startswith(key)}
+        opt, valued = next(iter(hits)) if len(hits) == 1 else ("", False)
+        if valued and val is None and i < len(rest):
+            val, i = rest[i], i + 1
+        elif valued and val == "":
+            opt = ""                  # `--server=` is an error; `--server ''` is not
+        if not opt or (val is None) == valued:
+            words += rest[i - 1 if words else i:]
+            return words, opts, w
+        opts.append((opt, val or ""))
+    return words, opts, ""
+
+
+def _ssh_host(dest: str) -> str:
+    """The host an ssh destination names: `user@host`, `ssh://user@host:2222` and `[::1]:22` give the host alone."""
+    if dest.startswith("ssh://"):
+        dest = dest[len("ssh://"):].split("/", 1)[0]
+    dest = dest.rpartition("@")[2]
+    if dest.startswith("["):
+        return dest[1:].partition("]")[0]
+    return dest.rsplit(":", 1)[0] if dest.count(":") == 1 else dest
 
 
 def _host_of(url: str) -> str:
@@ -1572,25 +1654,87 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
         return [_classify_http(argv, cmd)]
     if prog in ("ssh", "mosh"):
-        rest, i = argv[1:], 0
-        while i < len(rest) and rest[i].startswith("-"):
-            i += 2 if rest[i] in ("-i", "-p", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-W", "-b", "-c", "-E", "-m",
-                                  "-O", "-Q", "-S", "-w", "-e", "-I") else 1
-        host = rest[i] if i < len(rest) else ""
-        inner = " ".join(rest[i + 1:])
+        rest, i, moved, runs, here = argv[1:], 0, "", [], False
+        # The host and command as the gate read them before D-075, for both programs.
+        old = 0
+        while old < len(rest) and rest[old].startswith("-"):
+            old += 2 if rest[old] in _SSH_VALUE_OPTS_READ else 1
+        old_tail = rest[old + 1:]
+        old_dest, old_inner = (rest[old] if old < len(rest) else ""), " ".join(old_tail[old_tail[:1] == ["--"]:])
+        if prog == "mosh":
+            # mosh reads its options with Perl's Getopt::Long, not getopt (see _mosh_args); `--local` runs the
+            # server and the command on this machine.
+            rest, opts, bad = _mosh_args(rest)
+            runs = [(o, v) for o, v in opts if o in ("ssh", "client", "server")]
+            here = any(o == "local" for o, _ in opts)
+            moved = f"{bad.partition('=')[0]}: not one of mosh's options" if bad else ""
+            # Another option's value that reads as --server, --ssh or --client (`--port '--server=...'`): mosh
+            # takes it as that value and does not run it, but the gate read it as a command before, so it still
+            # does, and the line asks.
+            for opt, val in opts:
+                for o2, v2 in _mosh_args([val])[1] if val and opt not in ("ssh", "client", "server") else ():
+                    if o2 in ("ssh", "client", "server"):
+                        runs.append((o2, v2))
+                        moved = moved or f"--{opt}: takes a value that reads as --{o2}"
+        while prog == "ssh" and i < len(rest) and rest[i].startswith("-"):
+            w = rest[i]
+            i += 1
+            if w.startswith("--"):
+                continue
+            # Short options cluster as in getopt: the first letter that takes a value ends the word, and the
+            # value is the rest of it or the next word (`-vp 22`, `-oPort=22`, `-B eth0`).
+            v = next((j for j, ch in enumerate(w[1:], 1) if ch in _SSH_VALUE_OPTS), 0)
+            if v and v == len(w) - 1:
+                i += 1
+        dest = rest[i] if i < len(rest) else ""
+        host = _ssh_host(dest)
+        tail = rest[i + 1:]
+        if prog == "ssh" and tail[:1] == ["--"]:      # a `--` right after the host ends ssh's options
+            tail = tail[1:]
+        inner = " ".join(tail)
         if inner and depth >= _DEPTH:
             # A chain past the cap is not read, so it asks (#153). The hops that were read keep the
             # first host as target, so a `target:` deny on it still matches.
-            c = _opaque("ssh chain nested too deep to read", cmd, target=host)
+            c = _opaque("ssh chain nested too deep to read", cmd, target=dest)
             c.signals.append("unread hops")
         elif inner:
             c = classify_shell(inner, inner_depth)
         else:
-            c = _make("shell", summary=f"ssh {host}", command=cmd)
-        if EXPOSURE.index(c.exposure) < 1:
-            c.exposure = "internal"
-        c.target = host if "unread hops" in c.signals else (c.target or host)
-        c.signals.append("remote host")
+            c = _make("shell", summary=f"ssh {dest}", command=cmd)
+        dests = [host, dest]
+        if dest != old_dest:
+            # The gate used to read another word as the host. The line asks and both readings' parts are
+            # matched, so a line the old reading asked about or denied is not allowed now.
+            moved = moved or f"{dest or 'no host'}: the gate used to read {old_dest or 'no word'} as the host"
+            dests += [_ssh_host(old_dest), old_dest]
+        elif old_inner != inner:
+            # mosh took words after the host as its options or their values (`mosh host ls --port 'x; rm ..'`).
+            # With POSIXLY_CORRECT set, Getopt::Long stops at the host and mosh runs them as the command, so
+            # the old reading's parts are matched too and the line asks.
+            moved = moved or f"{dest}: words after the host run as the command when POSIXLY_CORRECT is set"
+        if old_inner and old_inner != inner and depth < _DEPTH:
+            c = _combine([c, classify_shell(old_inner, inner_depth)], cmd)
+        if moved:
+            c = _combine([_opaque(f"{prog} {moved}", cmd), c], cmd)
+        local = []
+        for name, val in runs:                # mosh --ssh, --client, --server: a command it runs; it asks
+            run = classify_shell(val, inner_depth) if val and depth < _DEPTH else _make("shell", command=cmd)
+            if name == "server" and not here:  # the server helper runs on the remote host, like the inner command
+                c = _combine([_opaque(f"mosh --{name}: runs a command", cmd), run, c], cmd)
+            else:                             # the ssh and client helpers run here, and with --local the server
+                local.append(_combine([_opaque(f"mosh --{name}: runs a command", cmd), run], cmd))
+        # The hop is a part too, so a `target:<host>` entry matches when the inner command has its own target:
+        # the bare host, and the destination as written when it carries a user, a scheme or a port.
+        c.parts += [_make("shell", summary=f"ssh {dest}", target=t, command=cmd, signals=["remote host"])
+                    for t in dict.fromkeys(dests) if t]
+        for p in _each_part(c) if not here else ():   # every part runs on the remote host (D-075)
+            if EXPOSURE.index(p.exposure) < 1:
+                p.exposure = "internal"
+        if local:                             # local helpers keep their own exposure
+            c = _combine(local + [c], cmd)
+        c.target = dest if "unread hops" in c.signals else (c.target or dest)
+        if not here:
+            c.signals.append("remote host")
         return [c]
     if prog in ("vercel", "netlify"):
         if "login" in argv:
@@ -2022,6 +2166,7 @@ def _combine(parts: list[Classification], cmd: str) -> Classification:
     store = [p for p in parts if p.category == "store_write"]
     c = credentials[0] if credentials else (store[0] if store else (_most_severe(parts) or _make("shell", command=cmd)))
     c.signals = list(dict.fromkeys(c.signals + signals))
+    c.parts = c.parts + [p for p in parts if p is not c]    # keep what the chosen part was itself built from
     return c
 
 
@@ -2491,6 +2636,7 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         c = _make("credentials", summary=f"shell touching {hit}"[:120], target=hit if "/" in hit or "." in hit else "",
                   command=cmd, reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
+        c.parts = list(parts)
     # D-038: a relative read on a line that enters a store folder may read the store; store_write stays.
     found = _cd_store_read(cmds, subs) if c.category not in ("credentials", "store_write") else ""
     if found:
@@ -2499,6 +2645,7 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         c = _make("credentials", summary=f"shell touching {found}"[:120], target=found, command=cmd,
                   reversibility=max(rev, "costly", key=REVERSIBILITY.index))
         c.signals = signals + ["secret store"]
+        c.parts = list(parts)
     c.command = cmd
     c._command_views = list(dict.fromkeys([
         _policy_command_view(cmd),
@@ -2538,16 +2685,18 @@ def classify_code(code: str) -> Classification:
     texts = [m.group(2) for m in _CODE_STRINGS.finditer(code)]
     texts += [" ".join(shlex.quote(s) for _, s in re.findall(r"(['\"])((?:(?!\1).)*)\1", m.group(1)))
               for m in _CODE_LISTS.finditer(code)]
+    # A `\n` or `\t` escape in a literal separates commands once the code runs; read that form too.
+    texts += [t.replace("\\n", "\n").replace("\\t", "\t") for t in texts if "\\n" in t or "\\t" in t]
     views: list[str] = []
     signals = ["indirection"]
     for s in texts[:200]:
         c = classify_shell(s, depth=_DEPTH - 1)
         views += c._command_views                 # every literal feeds the veto view, benign or not
         signals += [x for x in c.signals if x == "locale translation"]
-        if c.category not in _BENIGN:
+        # Any part, not only the dominant one: `./build.sh; systemctl enable x` is opaque on top (D-075).
+        if any(p.category not in _BENIGN for p in _each_part(c)):
             parts.append(c)
-    c = _combine(parts, code)
-    c.tool = "execute_code"
+    c = _combine(parts, code)      # `classify` stamps the tool; a nested result keeps the shell's (D-075)
     c.command = code
     c.signals = list(dict.fromkeys(c.signals + signals))
     c._command_views = list(dict.fromkeys(views))
@@ -3418,6 +3567,9 @@ def _as_list(v: Any) -> list:
     return v if isinstance(v, list) else [v]
 
 
+_MATCH_KEYS = ("category", "tool", "target", "command", "exposure", "reversibility", "third_party")
+
+
 def _policy_command_view(command: str) -> str:
     """Decode literal shell words without turning word contents into shell syntax.
 
@@ -3444,15 +3596,19 @@ def _policy_command_view(command: str) -> str:
     return " ".join(rendered)
 
 
-def _command_matches(pattern: str, c: Classification, *, veto: bool = False) -> bool:
+def _command_matches(pattern: str, c: Classification, *, veto: bool = False,
+                     line: Callable[[str], bool] | None = None) -> bool:
     regex = re.compile(pattern)
     texts = [c.command or ""]
+    if veto and line is not None:       # a part of a line: its own text, or any decoded view of the line (#136)
+        return bool(regex.search(texts[0])) or line(pattern)
     if veto:
         texts.extend(c._command_views)
     return any(regex.search(text) for text in texts)
 
 
-def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False) -> bool:
+def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False,
+                  line: Callable[[str], bool] | None = None) -> bool:
     for k, want in match.items():
         if k == "category" and c.category not in [str(x) for x in _as_list(want)]:
             return False
@@ -3460,7 +3616,7 @@ def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False) -> b
             return False
         if k == "target" and not _glob_any(c.target, _as_list(want)):
             return False
-        if k == "command" and not any(_command_matches(str(p), c, veto=veto) for p in _as_list(want)):
+        if k == "command" and not any(_command_matches(str(p), c, veto=veto, line=line) for p in _as_list(want)):
             return False
         if k == "exposure" and c.exposure not in _as_list(want):
             return False
@@ -3468,18 +3624,22 @@ def _rule_matches(match: Mapping, c: Classification, *, veto: bool = False) -> b
             return False
         if k == "third_party" and bool(want) != c.third_party:
             return False
-        if k not in ("category", "tool", "target", "command", "exposure", "reversibility", "third_party"):
+        if k not in _MATCH_KEYS:
             return False      # unknown key: never match, so a typo cannot widen a rule
     return True
 
 
-def _list_matches(entries: Iterable, c: Classification) -> str:
+def _list_matches(entries: Iterable, c: Classification, line: Callable[[str], bool] | None = None) -> str:
     """Reserved/deny entries: a category name, `tool:<glob>`, `command:<regex>`, `target:<glob>`,
     or a mapping like a rule's match. Plain prose that matches none of these is ignored."""
     for e in entries:
         if isinstance(e, Mapping):
-            if e and _rule_matches(e.get("match", e), c, veto=True):
-                return str(e.get("reason") or e)
+            # Only match keys count. Anything else (reason, name, decision, a note, a typo) is dropped, so it
+            # widens a deny or reserved entry instead of voiding it: these lists only make a decision stricter.
+            raw = e["match"] if isinstance(e.get("match"), Mapping) else e
+            match = {k: v for k, v in raw.items() if k in _MATCH_KEYS}
+            if e and _rule_matches(match, c, veto=True, line=line):
+                return str(e.get("reason") or e.get("name") or e)
             continue
         s = str(e).strip()
         if s == c.category:
@@ -3489,9 +3649,41 @@ def _list_matches(entries: Iterable, c: Classification) -> str:
             return s
         if kind == "target" and _glob_any(c.target, [val.strip()]):
             return s
-        if kind == "command" and val.strip() and _command_matches(val.strip(), c, veto=True):
+        if kind == "command" and val.strip() and _command_matches(val.strip(), c, veto=True, line=line):
             return s
     return ""
+
+
+def _scoped(c: Classification, scopes: Mapping, tool: str = "") -> Classification:
+    """``c`` with the principal's scopes applied, and the same for every simple command it was built from.
+    A part carries the tool of the call it came in on, so a `tool:` entry matches it too."""
+    exposure, third = apply_scopes(c, scopes)
+    tool = c.tool or tool
+    return replace(c, exposure=exposure, third_party=third, tool=tool, parts=[_scoped(p, scopes, tool) for p in c.parts])
+
+
+def _each_part(c: Classification) -> Iterator[Classification]:
+    """The classification and every simple command it was built from, nested ones included."""
+    yield c
+    for p in c.parts:
+        yield from _each_part(p)
+
+
+def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classification, str]]:
+    """Each part of the classification (the combined result first, then every simple command it was built
+    from) with the reserved or deny entry that matches it (D-075): a compound line is denied when any simple
+    command on it is. A `command` pattern matches a part on the part's own text or on any decoded view of the
+    line (#136); each pattern is run over the line's views once, not once per part."""
+    entries = list(entries)
+    views = list(dict.fromkeys(v for p in _each_part(c) for v in p._command_views))
+    seen: dict[str, bool] = {}
+
+    def line(pattern: str) -> bool:
+        if pattern not in seen:
+            regex = re.compile(pattern)
+            seen[pattern] = any(regex.search(v) for v in views)
+        return seen[pattern]
+    return [(p, hit) for p in _each_part(c) if (hit := _list_matches(entries, p, line))]
 
 
 def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
@@ -3552,8 +3744,7 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
     gates, budget, posting = pol["gates"], pol["budget"], pol["posting"]
     ctx = dict(context or {})
-    exposure, third = apply_scopes(c, gates.get("scopes") or {})
-    eff = Classification(**{**asdict(c), "exposure": exposure, "third_party": third})
+    eff = _scoped(c, gates.get("scopes") or {})
 
     outcome = gates["matrix"][eff.reversibility][eff.exposure]
     reason, rule = f"{eff.reversibility} and {eff.exposure}", "matrix"
@@ -3591,9 +3782,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
 
     if (eff.category == "opaque_exec" or "indirection" in eff.signals) and not opaque_named:
         bump("ask", "runs code the gate cannot fully see (" + (c.summary or "indirection") + ")", "opaque")
-    hit = _list_matches(gates.get("reserved") or [], eff)
-    if hit:
-        bump("ask", f"reserved for the principal ({hit})", "reserved")
+    reserved = _part_hits(gates.get("reserved") or [], eff)
+    if reserved:
+        bump("ask", f"reserved for the principal ({reserved[0][1]})", "reserved")
     esc = gates.get("escalate") or {}
     if esc.get("cost_over_budget", True):
         per_action = float(budget.get("per_action_max") or 0)
@@ -3630,16 +3821,17 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     if eff.category == "store_write":
         bump("ask", "writes to the Exo store; only the principal approves, every time", "floor")
 
-    hit = _list_matches(gates.get("deny") or [], eff)
-    if hit:
-        outcome, reason, rule = "deny", f"denied by policy ({hit})", "deny"
+    if (denied := _part_hits(gates.get("deny") or [], eff)):
+        outcome, reason, rule = "deny", f"denied by policy ({denied[0][1]})", "deny"
     d = Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
-                 exposure=eff.exposure, third_party=eff.third_party)
+                 exposure=eff.exposure, third_party=eff.third_party,
+                 reserved=list(dict.fromkeys((p.category, p.target) for p, _ in reserved)))
     if "locale translation" in c.signals and c.category != "opaque_exec":
         # A $".." word can turn into any code (#136): decide the line as opaque_exec too, and keep the stricter.
+        # `replace` keeps the parts as classifications, so their deny and reserved entries still apply.
         rev, exp, third = CATEGORIES["opaque_exec"]
-        alt = decide(Classification(**{**asdict(c), "category": "opaque_exec", "reversibility": rev, "exposure": exp,
-                                       "third_party": third, "signals": ["indirection"]}), pol, ctx)
+        alt = decide(replace(c, category="opaque_exec", reversibility=rev, exposure=exp, third_party=third,
+                             signals=["indirection"]), pol, ctx)
         if OUTCOMES.index(alt.outcome) > OUTCOMES.index(d.outcome):
             return alt
     return d

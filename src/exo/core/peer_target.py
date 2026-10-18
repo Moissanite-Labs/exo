@@ -118,7 +118,11 @@ class EngineTarget(Target):
         async def ask() -> None:
             decision = await self.e.approvals.ask(sid, summary, None, "medium", options=["allow", "deny"], opened=opened)
             if decision == "allow" and self.pick_session(ing) is None:  # nothing live takes it: a new thread does
-                ing.session = (await self.e._session_create(s.SessionCreate(title=f"{label} {ing.sender}")))["session"]["id"]
+                new = s.SessionCreate(title=f"{label} {ing.sender}", seat=self.e.seat.name if self.e.seat else None)
+                try:  # in the seat's threads, so a seated window's --resume finds it
+                    ing.session = (await self.e._session_create(new))["session"]["id"]
+                except Exception as exc:  # it closes below as not delivered ("no session here can take a message")
+                    await self.notice(None, f"{label} {ing.sender} was allowed, but no thread could open for it: {exc}")
             if path is not None:
                 path.resolve(ing.id, decision == "allow")
 
