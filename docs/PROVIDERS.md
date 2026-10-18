@@ -100,7 +100,8 @@ private auth files, or network models. This remaining compatibility scope is tra
 
 Every stream exit cancels and awaits the stderr reader. It retains a bounded, scrubbed diagnostic tail rather
 than waiting for a descendant to close stderr. The adapter stops its process group even after the leader exits,
-and finishes cleanup before returning a terminal response to the router.
+and finishes cleanup before returning a terminal response to the router. A cancel (Esc) while the stream is read
+stops it, even when it lands just as a line arrives (#163).
 
 ## Use a Muse Code subscription (`muse-cli`)
 

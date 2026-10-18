@@ -197,6 +197,32 @@ async def test_wake_starts_a_turn_only_when_the_seat_allows(tmp_path):
 
 
 @aio
+async def test_notice_during_turn_cleanup_starts_the_next_turn(tmp_path):
+    """A notice that arrives while the finished turn still holds the session (its completion hooks run under the
+    lock) can no longer be steered (#147): the receipt says started, and the new turn waits for the lock as a job's."""
+    eng = engine(tmp_path, jobs={"wake": True})
+    sid = (await eng.loop.create_session(agent="tester")).id
+    closing, release = asyncio.Event(), asyncio.Event()
+
+    async def hold(session, turn_id):
+        if not closing.is_set():
+            closing.set()
+            await release.wait()
+    eng.loop.on_turn_end = hold
+    turn = asyncio.ensure_future(eng.loop.send(sid, "go"))
+    await asyncio.wait_for(closing.wait(), 5)
+    rec = await eng.jobs.path.submit(eng.jobs._notice("j1", "done", 0, "echo late", time.time(), time.time(), sid))
+    assert (rec.mode, rec.detail) == ("started", "started a turn on an idle session")
+    assert not eng.loop.state(sid).steer  # nothing sits in a queue no round will drain
+    release.set()
+    assert (await turn).message.text() == "no notice"
+    await until(lambda: any(m.role == "assistant" and "saw job notice" in m.text() for m in eng.store.messages(sid)))
+    users = [m for m in eng.store.messages(sid) if m.role == "user"]
+    assert "job notice" in users[-1].text() and users[-1].meta["author"] == "job"
+    await eng.close()
+
+
+@aio
 async def test_kill_stops_the_whole_group_and_sends_no_notice(tmp_path):
     eng = engine(tmp_path)
     sid = (await eng.loop.create_session(agent="tester")).id

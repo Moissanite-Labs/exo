@@ -403,3 +403,46 @@ raise SystemExit(main(["serve", "--stdio"]))
     assert status['result']['spend']['daily_cap_usd'] == '0.000000000'
     assert transcript['ok'] and 'saved before stop' in json.dumps(transcript['result']['messages'])
     assert SpendJournal(cfg).status()['stop_reason'] == 'principal review required'
+
+
+def _tiered_route(**overrides):
+    route = {'contract': 'text-tokens-v1', 'transport': 'anthropic', 'base_url': 'https://api.anthropic.com',
+             'model': 'claude-haiku-5-5', 'input_bound': 1_000_000, 'max_output': 128_000,
+             'input': '0.50', 'output': '2.50', 'cache_read': '0.05', 'cache_write': '0.625'}
+    route.update(overrides)
+    return route
+
+
+def test_policy_refuses_pin_below_audited_tier(protected):
+    from exo.model_spend import validate_policy
+    cfg, _ = protected
+    for field, low in (('input', '0.10'), ('output', '0.50')):
+        bad = dict(cfg, routes={'anthropic:claude-haiku-5-5': _tiered_route(**{field: low})})
+        with pytest.raises(ValueError, match='tier'):
+            validate_policy(bad)
+
+
+def test_policy_refuses_cache_pin_below_audited_tier(protected):
+    from exo.model_spend import validate_policy
+    cfg, _ = protected
+    for field, low in (('cache_read', '0.01'), ('cache_write', '0.60'), ('cache_write', '0.125')):
+        bad = dict(cfg, routes={'anthropic:claude-haiku-5-5': _tiered_route(**{field: low})})
+        with pytest.raises(ValueError, match=f'{field} rate below audited tier'):
+            validate_policy(bad)
+
+
+def test_policy_accepts_pin_at_audited_tier(protected):
+    from exo.model_spend import validate_policy
+    cfg, _ = protected
+    good = dict(cfg, routes={'anthropic:claude-haiku-5-5': _tiered_route()})
+    assert validate_policy(good) is good
+
+
+def test_policy_ignores_single_tier_routes(protected):
+    from exo.model_spend import validate_policy
+    cfg, _ = protected
+    single = dict(cfg, routes={'openai:gpt-4.1-2025-04-14': {
+        'contract': 'text-tokens-v1', 'transport': 'openai', 'base_url': 'https://api.openai.com/v1',
+        'model': 'gpt-4.1-2025-04-14', 'input_bound': 1_047_576, 'max_output': 100,
+        'input': '0.01', 'output': '0.02', 'cache_read': '0.01', 'cache_write': '0.01'}})
+    assert validate_policy(single) is single
