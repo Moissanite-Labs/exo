@@ -124,3 +124,29 @@ def test_graph_and_index(template_store):
     saved = json.loads((template_store.root / "graph" / "graph.json").read_text())
     assert saved == g
     assert template_store.index() == 5
+
+
+NODE = ("---\nid: work/zebra-deploys\ntitle: Zebra deploys\ntype: rule\ndomain: work\n"
+        "summary: Zebra deploys go out on Fridays only.\nload_when: zebra deploy\nconfidence: high\n"
+        "stability: durable\nvalid_from: 2026-01-01\nsources: [test]\nlinks: []\n---\n{body}\n")
+
+
+def test_refresh_sees_nodes_another_store_wrote(template_store):
+    """A long-lived store (exo-memory's, the learner's) reads nodes once. `refresh` picks up what another store
+    object or process added, edited or removed since; `nodes` alone stays the cached read."""
+    other = PrincipalStore(template_store.root)
+    assert other.refresh() is True  # nothing read yet
+    assert other.refresh() is False and template_store.refresh() is False  # nothing changed
+    path = other.nodes_dir / "work" / "zebra-deploys.md"
+    path.write_text(NODE.format(body="Zebra deploys go out on Fridays only."))
+    assert "work/zebra-deploys" not in template_store.nodes  # cached
+    assert template_store.refresh() is True and "work/zebra-deploys" in template_store.nodes
+    assert template_store.find("zebra deploy")[0][0] == "work/zebra-deploys"
+    assert template_store.refresh() is False
+    path.write_text(NODE.format(body="Zebra deploys moved to Tuesdays, after the freeze."))
+    assert template_store.refresh() is True
+    assert "Tuesdays" in template_store.render("work/zebra-deploys", body_only=True)
+    path.unlink()
+    assert template_store.refresh() is True and "work/zebra-deploys" not in template_store.nodes
+    template_store.reload()  # a direct reload also counts as the last read
+    assert template_store.refresh() is False
