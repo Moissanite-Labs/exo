@@ -804,6 +804,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `\U` value that is no character is written as bash's u32toutf8 writes it (up to six bytes that are not ASCII,
   nothing from 0x80000000 on), so every `$'..'` word is read. Category and target vetoes see the decoded word; a
   `command:` regex still sees the raw line until the literal-word view (#187) uses the same decoder.
+  *Amendment 2026-10-18 (issues #143, #144, PR #158):* the lexer balances `${...}` words as bash 5.2 and 5.3 do in
+  their default mode and classifies every command source nested in them (`$( )`, backticks, `<( )`, `$((cmd) )`).
+  It never lets a nested scan hide a command that follows on the line: a scan inside a quoted span of the word stops
+  at the closing quote, quoted and escaped parentheses are not arithmetic structure, an unclosed `$((` is read as an
+  unclosed `$(`, and a heredoc opened inside a substitution stays with that substitution. Whatever bash would leave
+  unclosed there makes the line opaque (ask), and the commands after it are still classified. `${!name}`, `${!@}`,
+  `${!*}` and the `@P` transformation, of a name or of `@` and `*`, run code held in a value and carry the
+  `indirection` signal. Chosen over a full bash grammar: a small fail-closed lexer whose limits (dash's and bash
+  3.2's different pairing, arithmetic on a bare name) are listed in `docs/GATE.md` "Shell parameter expansion".
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

@@ -175,13 +175,93 @@ def test_command_source_beyond_the_scan_limit_is_opaque():
     assert decide(classification).outcome == "ask"
 
 
-@pytest.mark.parametrize("word", ["${x@P}", '"${arr[0]@P}"', "${!x}", "${!x:-y}", "${!arr[1]}"])
+@pytest.mark.parametrize("word", [
+    "${x@P}", '"${arr[0]@P}"', "${!x}", "${!x:-y}", "${!arr[1]}",
+    # each positional parameter is prompt-expanded, or its value is used as a variable name (`a[$(..)]` runs)
+    "${@@P}", "${*@P}", '"${@@P}"', "${!@}", "${!*}", "${!@:-y}",
+])
 def test_expansions_that_run_the_variables_value_ask(word):
     classification = classify_shell("echo " + word)
     assert "indirection" in classification.signals
     assert decide(classification).outcome == "ask"
 
 
-@pytest.mark.parametrize("word", ["${!x*}", "${!x@}", "${!arr[@]}", "${!arr[*]}", "${x@Q}", "${x@a}", "${#x}"])
+@pytest.mark.parametrize("word", [
+    "${!x*}", "${!x@}", "${!arr[@]}", "${!arr[*]}", "${x@Q}", "${x@a}", "${#x}", "${@@Q}", "${#@}", "${@}",
+])
 def test_listing_and_inert_transformations_still_allow(word):
     assert decide(classify_shell("echo " + word)).outcome == "allow"
+
+
+_FORCE_DENY = {"gates": {"categories": {"force_push": "deny"}}}
+
+
+@pytest.mark.parametrize("line", [
+    "echo \"${x#'${y'}\" ; git push --force origin main ; echo \"'}\"",
+    "echo \"${x:-'${y'}\" ; git push --force origin main ; echo \"'}\"",
+    "echo \"${x:-'$(y'}\" ; git push --force origin main ; echo \"')}\"",
+    "echo \"${x:-'`y'}\" ; git push --force origin main ; echo \"'`}\"",
+    "echo \"${x:-$'${y'}\" ; git push --force origin main ; echo \"'}\"",
+])
+def test_scan_inside_a_quoted_span_stops_at_its_closing_quote(line):
+    """bash ends the '..' span at its quote; an expansion opened inside it cannot take the next command."""
+    classification = classify_shell(line)
+    assert classification.category == "force_push"
+    assert decide(classification, _FORCE_DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("line", [
+    "echo $(( '(' ) ; git push --force origin main ; echo ))",
+    'echo $(( "(" ) ; git push --force origin main ; echo ))',
+    "echo $(( \\( ) ; git push --force origin main ; echo ))",
+    "echo $(( 1 ; git push --force origin main",
+])
+def test_arithmetic_matching_skips_quoted_parentheses_and_never_closes_at_end(line):
+    classification = classify_shell(line)
+    assert classification.category == "force_push"
+    assert decide(classification, _FORCE_DENY).outcome == "deny"
+
+
+@pytest.mark.parametrize("line", ["echo $(( 1", "echo $(( (1 + 2)", "echo $(( 1 + (2 )"])
+def test_unclosed_arithmetic_is_opaque(line):
+    classification = classify_shell(line)
+    assert "indirection" in classification.signals
+    assert decide(classification).outcome == "ask"
+
+
+@pytest.mark.parametrize("line", ["echo $(( 1 + 2 ))", "echo $(( (1 + 2) * 3 ))", "echo $(( x > 1 ? 2 : 3 ))"])
+def test_closed_arithmetic_still_allows(line):
+    assert decide(classify_shell(line)).outcome == "allow"
+
+
+@pytest.mark.parametrize("line", [
+    "echo $(cat <<EOF) ; echo hi\ngit push --force origin main\nEOF",
+    "echo ${x:-$(cat <<EOF)} ; echo hi\ngit push --force origin main\nEOF",
+    "cat <(cat <<EOF) ; echo hi\ngit push --force origin main\nEOF",
+])
+def test_heredoc_left_open_in_a_substitution_does_not_take_the_following_lines(line):
+    classification = classify_shell(line)
+    assert classification.category == "force_push"
+    assert "indirection" in classification.signals
+    assert decide(classification, _FORCE_DENY).outcome == "deny"
+
+
+def test_outer_heredoc_body_starts_after_the_outer_newline():
+    """A newline inside $( ) does not read the outer line's heredoc, as in bash."""
+    line = "cat <<EOF $(echo x\n)\nbody\nEOF\ngit push --force origin main"
+    assert decide(classify_shell(line), _FORCE_DENY).outcome == "deny"
+    cmds, _, _, _ = _parse(line)
+    assert [h.body for k in cmds for h in k.heredocs] == ["body"]
+
+
+@pytest.mark.parametrize("line", [
+    "echo \"${x:-" + "'$(( 1 )) ${y}'" * 5000 + "}\"",
+    "echo \"${x:-" + "'${y:-'" * 5000 + "}\"",
+    "echo " + "$(( '(' + 1 )) " * 5000,
+    "echo " + "$(( (1) " * 5000,
+    "echo " + "$(cat <<EOF) " * 5000,
+])
+def test_bounded_scans_stay_linear(line):
+    started = time.perf_counter()
+    _parse(line)
+    assert time.perf_counter() - started < 1.0
