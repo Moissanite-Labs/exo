@@ -100,11 +100,15 @@ The run folder is a secret store (#169), like `~/.ssh` and `keys/`. Its secrets 
 
 - the folder itself, named as a path in any spelling: `$EXO_HOME/run`, `${EXO_HOME}/run`,
   `~/.exo/run`, `.exo/run`, `$EXO_HOME/principals/<name>/run`, also with a trailing `/`, `/.`,
-  `//` or `jobs/..`;
+  `//` or `jobs/..`, and through a symlink (a path is resolved as written, so `<link to
+  run/jobs>/..` is the folder);
 - the credential files in it, by name: `exod.principal.key`, `<socket stem>.principal.key` and
   the TCP token `exod.token`;
 - a wildcard in the folder that could match one of them: `run/*`, `run/*.key`,
-  `run/exod.principal.k*`, `run/exod.tok*`, `run/agent-*`.
+  `run/exod.principal.k*`, `run/exod.tok*`, `run/agent-*`, `run/agent-default.*`. The agent keys
+  are sampled as `agent-<seat>.principal.key` for `default` (the terminal client's agent when no
+  seat is given), `$EXO_SEAT` and the first 64 seats under `$EXO_HOME/seats` (`<name>.toml`,
+  `<name>.json` or `<name>/`).
 
 A call that touches one is `credentials`, reads and writes alike, wherever the gate finds
 `~/.ssh`: shell words, redirections, `$( )`, `bash -c`, interpreter `-c` code, `execute_code`
@@ -114,18 +118,34 @@ of the folder, the built-in `read_file`, `list_dir`, `grep` and `glob` with it a
 as before: what is below the folder apart from those files, so job output in `run/jobs/` stays
 `read` (`cat run/jobs/*`, `ls run/jobs`) and deleting it stays `store_write`; the socket and pid
 files by exact name. A bare relative `run` is never the folder (`uv run`, `npm run`, `gh run
-list`, `ls run`): the gate does not resolve a word against a working folder. A wildcard is
-matched with `.` and `..` resolved, for every secret store, so `cat ./.env*` asks like
-`cat .env*`. The file names are also matched without a folder, so a bare `cat exod*`, `ls run*`
-or `ls agent-*` asks in any folder, as `cat id_rs*` and `ls seat*` already did.
+list`, `ls run`): the gate does not resolve `run` against its own working folder, though it does
+for `keys`, so with the gate's working folder at `$EXO_HOME`, `ls keys` asks and `ls run` does
+not. Brace sets are expanded first (#184), so `run/{*,}`, `{$EXO_HOME/run,x}/*`,
+`$EXO_HOME/{run,x}/*` and `$EXO_HOME/r{u,}n/*` ask, and `run/jobs/{1,2}.log` stays `read`. A
+wildcard is matched with `.` and `..` resolved, for every secret store, so `cat ./.env*` asks like
+`cat .env*`. A wildcard with no folder is matched against the secrets' own file names, not their
+paths, and an agent's key only when the wildcard spells its `agent-` or `.principal` part: a bare
+`cat exod*`, `cat *.principal.key` or `ls agent-*` asks in any folder, as `cat id_rs*` and
+`ls seat*` already did, while `ls *run*`, `find . -name 'run*'`, `ls age*` and `ls *main*` keep
+their class, also when `main` is a seat. A wildcard with a folder reaches an agent's key the same way,
+or when its folder names a run folder or holds a literal part around its wildcards
+(`cat ~/.exo/*/*default*`, `cat .exo/run/*main*`), so `ls */*default*` and `ls ~/*test*` keep their
+class. Any wildcard that spells the folder's path still asks (`ls ~/.exo/run*`, `ls */run*`). Known friction (fails closed, no grant): a bare glob that
+matches the core's file names or spells `agent-` asks in any folder, such as `ls *prin*`,
+`ls *xod*` or `git diff -- 'agent-*'`.
 
 Limits. No environment variable carries the credential, and `tool_env` drops `EXOD_*`,
 `EXO_PRINCIPAL*` and `EXO_*SOCK*`. The gate does not catch: a walk over an ancestor
 (`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`); a relative `run` after `cd` into
-`$EXO_HOME` (`cd ~/.exo && cat run/*`); a wildcard in a folder name above a file
-(`principals/*/run/*`, `$EXO_HOME/r*/*`); a brace set (`run/{*,}`, `{$EXO_HOME/run,x}/*`),
-which the gate does not expand, the same as for every store it matches by sample
-(`~/.config/gh/{*,}`, #184); `${EXO_HOME:-...}`, as for `$EXO_HOME/keys`; a wildcard that spells part of an agent's name (`run/agent-scout*`); the
+`$EXO_HOME` (`cd ~/.exo && cat run/*`), or a `..` after `cd` into the readable `run/jobs`
+(`cd ~/.exo/run/jobs && cat ../*`; the same as `cd` for `~/.docker` or `~/.kube`); a wildcard
+in a folder name above a file (`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for
+the folder itself (`grep -r . ~/.exo/ru?`, `ru[n]`: the last part needs three literal
+characters, the same as for `~/.ss?`; `~/.exo/r*` asks); an upper-case spelling on a
+case-insensitive filesystem (`~/.exo/RUN/*`, as `~/.SSH/*`); `${EXO_HOME:-...}`, as for
+`$EXO_HOME/keys`; a wildcard that spells part of an agent's name that is not sampled
+(`run/agent-scout*` when `scout` is neither `$EXO_SEAT` nor a seat under `$EXO_HOME/seats`), or
+a bare one for a key after `cd` into the folder (`cd ~/.exo/run && cat age*`); the
 built-in `glob` with the folder in `pattern` rather than `path` (it lists names; the same for
 `~/.ssh`); and a key beside a custom `--socket`, which is caught by name only
 (`cat <dir>/exod.principal.key` asks, `cat <dir>/*` does not). A tool process is the same OS
@@ -350,9 +370,15 @@ principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is e
 observe mode too. Reads of the store stay `read`, except `keys/` and the run folder's secrets
 (see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
 or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,
-`rm ~/.exo/run/*`, `mv ~/.exo/run/* /tmp/`) is `credentials`. It still always asks and is never
-granted, but a seat that `approvals.yaml` delegates `credentials` to may answer it. A delete of
-job output only (`rm ~/.exo/run/jobs/1.log`) stays `store_write`.
+`rm ~/.exo/run/*`, `mv ~/.exo/run/* /tmp/`) is `credentials`. That covers moving or replacing
+the folder that holds the core sockets too: `mv ~/.exo/run ~/.exo/run.old`,
+`mv /tmp/x ~/.exo/run`, `ln -sfn /tmp/x ~/.exo/run`, `cp -rT /tmp/x ~/.exo/run`,
+`mkdir -p ~/.exo/run` and `chmod 777 ~/.exo/run` are `credentials`, not `store_write`. It still
+always asks and is never granted, but a seat that `approvals.yaml` delegates `credentials` to
+(or a seat in `default:` with no `credentials:` line) may answer it, where only the principal
+answers a `store_write` (#169, the D-038 amendment; `keys/` was already so). A delete of job
+output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name (`rm ~/.exo/run/exod.sock`)
+stays `store_write`.
 
 ## Policy changes during a session (D-038)
 

@@ -770,6 +770,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   or the principal store are on a protected list. Any write is `store_write`: a floor like credentials, no standing
   grant, principal-only (`approvals.yaml` cannot add seats), enforced in observe mode. Reads stay `read`; `keys/`
   reads stay `credentials`.
+  *Amendment 2026-10-18 (issue #169):* the run folder is a secret store (D-039 limits, `docs/GATE.md` "Who
+  answered"), and a secret wins over the store rule, as for `keys/`. So a write, delete, move or replacement that
+  touches the folder itself or a credential file in it is `credentials`, not `store_write`: `rm -rf ~/.exo/run`,
+  `rm ~/.exo/run/*`, and moving or replacing the folder that holds the core sockets (`mv ~/.exo/run x`,
+  `ln -sfn /tmp/x ~/.exo/run`, `cp -rT /tmp/x ~/.exo/run`, `mkdir -p ~/.exo/run`, `chmod 777 ~/.exo/run`). It
+  still always asks and is never granted, but it is no longer principal-only: a seat that `approvals.yaml`
+  delegates `credentials` to, or lists in `default:` with no `credentials:` line, may answer it, and
+  `deny: [store_write]` no longer matches it. Job output in `run/jobs/` and a socket or pid file named alone stay
+  `store_write`. Chosen because one class per call keeps the read and write rules of a secret store the same;
+  keeping the store part principal-only through `_combine` is a follow-up.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,
