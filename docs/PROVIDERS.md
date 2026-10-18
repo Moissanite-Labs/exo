@@ -276,7 +276,9 @@ The error says why. When waiting cannot fix the cause, it also says what will, a
   sooner. Only the role's own routes count. A refusal on a model the role never asks, such as the gate's aux
   model (D-081), is not named in a main-role error.
 - A local provider's server refused the connection: `ollama is not running at 127.0.0.1:11434: start it, then
-  test it in /providers`.
+  test it in /providers`. The address is the host and port of `base_url` only. A user or password in the URL is
+  never shown, so it stays out of the session store. With no usable host the error says "its configured
+  address".
 
 Other failures (429, 5xx, timeouts, a remote network error) stay retryable and say when the next route reopens.
 Only the last route tried decides. When an earlier route was down and the last one refused its key, the error

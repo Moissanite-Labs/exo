@@ -44,6 +44,18 @@ def test_setup_advice_follows_what_the_default_needs():
     assert setup_advice([]) == ADD_A_KEY
 
 
+@pytest.mark.parametrize("base_url,where", [("http://user:pw@127.0.0.1:8000/v1", "127.0.0.1:8000"),
+                                            ("http://user:pw@[::1]:8000/v1", "[::1]:8000"),
+                                            ("", "its configured address"), (None, "its configured address")])
+def test_setup_advice_shows_host_and_port_never_the_urls_login(base_url, where):
+    """A base_url may carry user:password@. The note shows the host and port only."""
+    from exo_tui.providers import setup_advice
+
+    note = setup_advice([{"provider": "lm", "default": True, "ready": False, "needs": "server", "base_url": base_url}])
+    assert note == f"lm is not running at {where}: start it, then test it in /providers."
+    assert "user" not in note and "pw" not in note
+
+
 @pytest.mark.parametrize("name,advice", [
     ("ollama", "ollama is not running at 127.0.0.1:11434: start it, then test it in /providers."),
     ("claude-cli", "claude-cli is not installed: install it and log in, then test it in /providers."),

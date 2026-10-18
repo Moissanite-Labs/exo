@@ -61,6 +61,20 @@ def load_catalog(path: Path | str = CATALOG_PATH) -> dict[str, Any]:
         return tomllib.load(f)
 
 
+def server_address(base_url: str | None) -> str:
+    """A server's host and port for text people or the model read. Never the netloc: it keeps any user:password@
+    in the URL. IPv6 keeps its brackets. Use the raw URL for the connection only."""
+    try:
+        u = urlsplit(base_url or "")
+        host, port = u.hostname, u.port
+    except ValueError:  # a bad IPv6 literal or port
+        return "its configured address"
+    if not host:
+        return "its configured address"
+    host = f"[{host}]" if ":" in host else host
+    return f"{host}:{port}" if port is not None else host
+
+
 @dataclass(frozen=True)
 class Route:
     provider: str
@@ -600,7 +614,7 @@ class Router:
             return status, (f"{name} rejected the key ({err}): fix {' or '.join(envs)} or add a key in /providers"
                             if envs else f"{name} refused the login ({err}): log in again, then test it in /providers")
         if last is not None and spec.get("local") and err.startswith("ConnectError"):
-            return None, (f"{name} is not running at {urlsplit(spec.get('base_url', '')).netloc}: "
+            return None, (f"{name} is not running at {server_address(spec.get('base_url', ''))}: "
                           "start it, then test it in /providers")
         return None
 
