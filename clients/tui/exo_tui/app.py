@@ -1153,6 +1153,10 @@ class ExoApp(App):
             self.pending_steers.append((resp.result["message_id"], block))
             block.pending = True
             block.flush()
+        elif resp.ok and resp.result.get("steered") and resp.result.get("message_id"):  # core steered a plain send into a child (D-070)
+            self.pending_steers.append((resp.result["message_id"], block))
+            block.steer = block.pending = True
+            block.flush()
 
     def keep_text(self, text: str) -> None:
         """A message whose delivery is unknown goes back in an empty composer, to send again or drop."""
