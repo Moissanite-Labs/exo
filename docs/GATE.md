@@ -380,9 +380,45 @@ A command is `allow` only when every program in it is known and nothing is hidde
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
   `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
-  or `hatch run`, or inside an `if`, `for` or `while` body, classify as `credentials` just as the
-  bare command does. A runner followed by ordinary work (`uv run pytest -q`) is unchanged.
-  `uvx`, `pipx run` and `npx` stay `opaque_exec`.
+  or `hatch run`, inside an `if`, `for` or `while` body, or behind a wrapper below (`setsid env`,
+  `taskset 1 printenv GITHUB_TOKEN`), classify as `credentials` just as the bare command does. A
+  runner followed by ordinary work (`uv run pytest -q`) is unchanged. `uvx`, `pipx run` and `npx`
+  stay `opaque_exec`.
+- Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
+  `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
+  `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and
+  `watch -x` run the argv after their options and fixed operands (the lock file of `flock`,
+  the new root of `chroot`, the mask of `taskset`, the priority of `chrt`). A wrapper's options
+  are read as `getopt` reads them: a value attached, inside a cluster (`-nw5`) or in the next
+  word, `--opt=value`, `--`, and, for these wrappers only, a long option shortened to four
+  letters or more (`--time` for `--timeout`; a shorter one, `flock --tim 5`, is not read and the
+  line asks, unlike the one-letter rule for the trusted programs above). The
+  command-string forms are read like `bash -c`: `flock FILE -c CMD`,
+  `script -c CMD` (`--command`), `watch CMD...` (the words joined, run through `sh -c`), the
+  shell-command of `tmux new-session`, `new-window`, `split-window` (also by its default aliases
+  `splitp` and `split-pane`), `respawn-pane`, `respawn-window` and `run-shell` in each command of
+  a tmux command list and of `tmux -c` (the list is split as tmux splits it: an argument ending in
+  `;`, such as `';'` or `'sleep 3;'`, ends a command and loses the `;`, one ending in `\;` does
+  not), the argv of `screen [-dm] [-S name]` and `screen -X screen`, and the template of
+  `parallel CMD ::: args` with each argument appended or put where `{}` stands (on the line itself, up to 16 distinct arguments and four times that
+  command's own length, each text sized before it is built; a nested `parallel` template is read
+  alone, so the work stays linear in the line).
+  The wrapper itself stays an `opaque_exec` part with `indirection`, so
+  the line asks as before. Until D-075 lands, a wrapped line is denied only when its inner
+  command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`: `setsid git push`); a
+  category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`:
+  `setsid systemctl enable foo`, `setsid curl URL`) still asks. `chroot`, `nsenter`,
+  `unshare` and `systemd-run` run the command with other privileges, namespaces or as a
+  system unit: like `sudo`, the line carries a signal named after the wrapper and a reversible
+  part counts as costly. What the gate cannot read stays `opaque_exec`: a program from a
+  variable, `tmux send-keys`, a `screen -X` command other than `screen`, `parallel` with no
+  template (commands from its input or `:::`), a wrapper with no command (an interactive shell,
+  `flock 9`), and options the tables do not know. As with `bash -c`, a wrapped command that
+  outranks `opaque_exec` (`setsid git push`) takes the line's category, so a deny on
+  `opaque_exec` itself no longer reaches it: under `deny: [opaque_exec]`, `categories:
+  {opaque_exec: deny}` or a rule on `opaque_exec` with decision `deny` the line asks (the
+  `indirection` floor below), where it was denied before. D-075 makes such a deny apply to
+  every part.
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
@@ -484,6 +520,18 @@ folder from more than one level above its parent (`cd / && cd srv/exo-home/keys`
 `${PWD...}` forms; the text `eval` runs (it asks as `opaque_exec`); `cd -` and `OLDPWD`,
 `CDPATH`, `HOME` set on the line and `shopt -s dotglob`; and a store reached through a folder
 link whose name does not say so.
+
+Known limit (#160). Some wrapper forms are not read and ask as `opaque_exec`, as they did before:
+BSD and macOS `script -q FILE CMD`, `screen -R` and `-RR` (they start the command when no session
+is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot`, `strace`,
+`prlimit`, `systemd-nspawn`, `ip netns exec`, tmux's `if-shell`, `pipe-pane` and `display-popup`,
+a tmux command name cut short (`new-w`) and an alias set in a tmux config file. Two are read but
+not fully: `systemd-run --on-calendar` (and its other timer options) is read as running its
+command, not as `schedule`, and `parallel -S` carries no remote-host signal. Both still ask.
+Under a non-default `deny: [opaque_exec]`, a wrapped line whose inner command outranks
+`opaque_exec` (a wrapped env dump is `credentials`, a wrapped push is `vcs_push`) is decided by
+that inner category and asks instead of being denied, until D-075 (#126) makes a `deny:` entry
+match any part of the line.
 
 ## The store is credentials (D-038)
 
