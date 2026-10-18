@@ -30,6 +30,9 @@ from exo.core.models.claude_cli import ClaudeCliProvider
 from exo.core.models.muse_cli import MuseCliProvider
 from exo.core.models.decision import DecisionProvider
 from exo.core.models.keys import lookup_key
+from exo.model_spend import SpendJournal, configured
+from exo.core.models.spend import admitted_stream
+from exo.model_spend import POLICY_ENV, required as spend_required, resolve_spend_policy
 from exo.core.models.openai_chat import OpenAIChatProvider
 from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
@@ -48,6 +51,7 @@ BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
+CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
 
 
 def load_catalog(path: Path | str = CATALOG_PATH) -> dict[str, Any]:
@@ -123,7 +127,15 @@ class Router:
                  *, catalog: dict[str, Any] | None = None, instances: Mapping[str, Provider] | None = None,
                  env: Mapping[str, str] | None = None, clock: Callable[[], float] = time.time,
                  client: Any = None, key_sources: bool | None = None,
-                 breaker: Mapping[str, Any] | None = None) -> None:
+                 breaker: Mapping[str, Any] | None = None, spend: SpendJournal | None = None,
+                 spend_config: Mapping[str, Any] | None = None, principal: str | None = None) -> None:
+        selection = resolve_spend_policy(spend_config if spend is None else {"principal": spend.principal},
+                                         principal=principal)
+        if selection.source is not None and spend is not None:
+            from exo.model_spend import SpendDenied
+            raise SpendDenied("an injected journal cannot replace protected model-spend policy")
+        self.spend = spend if spend is not None else configured(selection.config, required=selection.required)
+        self._spend_required, self._spend_source = selection.required, selection.source
         cat = load_catalog() if catalog is None else catalog
         self.providers: dict[str, dict] = {**cat.get("providers", {}), **(providers or {})}
         self.models: dict[str, dict] = dict(cat.get("models", {}))
@@ -153,11 +165,33 @@ class Router:
         overrides of the catalog: ``input``, ``output``, ``cache_read``, ``cache_write`` USD per million tokens,
         ``context``)."""
         config = config or {}
+        kw.setdefault("spend_config", config.get("spend"))
         r = cls(roles=config.get("roles"), providers=config.get("providers"), breaker=config.get("breaker"), **kw)
         for ref, info in (config.get("models") or {}).items():  # prices and limits per "provider:model" (D-032)
             if isinstance(info, dict):
                 r.models[ref] = {**r.models.get(ref, {}), **info}
         return r
+
+    @property
+    def spend_enforced(self) -> bool:
+        return self.spend is not None or self._spend_required or spend_required()
+
+    def check_spend_policy(self) -> None:
+        from exo.model_spend import SpendDenied
+        if POLICY_ENV in os.environ and os.environ[POLICY_ENV] != self._spend_source:
+            raise SpendDenied("protected model-spend policy changed; restart the engine")
+        if self.spend_enforced and self.spend is None:
+            raise SpendDenied("required model-spend policy is missing; ask the principal to configure it")
+
+    def spend_status(self) -> dict[str, Any] | None:
+        try:
+            self.check_spend_policy()
+            if self.spend is None:
+                return None
+            return {**self.spend.status(), "policy_source": self._spend_source or "config"}
+        except Exception:
+            return {"state": "unavailable", "policy_source": self._spend_source or "config",
+                    "stop_reason": "Model-spend accounting is unavailable; ask the principal to review."}
 
     # --- resolution ----------------------------------------------------------
     def chain(self, role: str = "main") -> list[Route]:
@@ -225,23 +259,17 @@ class Router:
 
     def _load_credentials(self, provider: str) -> list[Credential]:
         creds: list[Credential] = []
+        spec = self.providers.get(provider)
+        timeout = {"read_timeout": float(spec["read_timeout"])} if spec and spec.get("read_timeout") else {}
         if provider in self.instances:
             creds = [Credential(provider, None, self.instances[provider])]
-        elif (spec := self.providers.get(provider)) is not None and spec.get("transport") == "claude-cli":
-            # No key: the CLI's own OAuth login is the credential. Available only if the binary is on PATH.
-            exe = shutil.which(spec.get("command", "claude"), path=self.env.get("PATH", ""))
+        elif spec is not None and spec.get("transport") in CLI_TRANSPORTS:
+            # No key: the CLI's own login is the credential (D-051 for muse). Available only if the binary is on PATH.
+            cls = CLI_TRANSPORTS[spec["transport"]]
+            exe = shutil.which(spec.get("command", cls.default_command), path=self.env.get("PATH", ""))
             if exe:
-                prov = ClaudeCliProvider(exe, name=provider, env=self.env,
-                                         **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
-                creds = [Credential(provider, None, prov)]
-        elif (spec := self.providers.get(provider)) is not None and spec.get("transport") == "muse-cli":
-            # No key: the muse CLI's own login is the credential (D-051). Available only if the binary is on PATH.
-            exe = shutil.which(spec.get("command", "muse"), path=self.env.get("PATH", ""))
-            if exe:
-                prov = MuseCliProvider(exe, name=provider, env=self.env,
-                                       **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
-                creds = [Credential(provider, None, prov)]
-        elif (spec := self.providers.get(provider)) is not None:
+                creds = [Credential(provider, None, cls(exe, name=provider, env=self.env, **timeout))]
+        elif spec is not None:
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
@@ -249,8 +277,7 @@ class Router:
             for i, key in enumerate(keys):
                 cid = provider if len(keys) == 1 else f"{provider}#{i}"
                 prov = transport(spec["base_url"], key, name=provider, client=self.client,
-                                 headers=spec.get("headers"), session_header=spec.get("session_header"),
-                                 **({"read_timeout": float(spec["read_timeout"])} if spec.get("read_timeout") else {}))
+                                 headers=spec.get("headers"), session_header=spec.get("session_header"), **timeout)
                 creds.append(Credential(cid, key, prov))
         return creds
 
@@ -466,6 +493,18 @@ class Router:
         """One call on one credential. A failure that may fall back is swallowed and
         appended to ``failed``; anything else (including a terminal error) is yielded.
         Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``)."""
+        try:
+            self.check_spend_policy()
+        except RuntimeError as exc:
+            event = error_event(str(exc), None, retryable=False)
+            event.attempts = [{"route": route.ref, "outcome": "spend_refused"}]
+            yield event
+            return
+        if self.spend is not None:
+            async for event in admitted_stream(self.spend, route.ref, cred.provider, messages, tools,
+                                               {**opts, "model": route.model}):
+                yield event
+            return
         started, t0 = False, time.monotonic()
         attempts = [] if attempts is None else attempts
         cool: float | None = None  # set when this failure opens the route's breaker
@@ -607,9 +646,6 @@ _BG: dict[str, Any] = {}
 def aux_sync(router: Router, prompt: str | list[Message], *, timeout: float | None = 120.0, **kw: Any) -> str:
     """Blocking ``aux`` for sync callers (plugin threads). Runs on one shared background event loop so the
     router's HTTP clients stay bound to a single loop. Never call it from that loop."""
-    import asyncio
-    import threading
-
     if "loop" not in _BG:
         loop = asyncio.new_event_loop()
         threading.Thread(target=loop.run_forever, name="exo-aux-loop", daemon=True).start()

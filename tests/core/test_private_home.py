@@ -9,7 +9,7 @@ import pytest
 from exo import cli_chat, ensure_core
 from exo.core import agentlog
 from exo.core.private import private_dir, private_file
-from exo.core.scheduler import Scheduler
+from exo.scheduler import Scheduler
 from exo.core.sessions import SessionStore
 
 
@@ -84,16 +84,16 @@ def test_serve_pid_is_private_before_server_runs(tmp_path, monkeypatch):
 
 def test_spawn_log_and_pid_are_private(tmp_path, monkeypatch):
     home = tmp_path / "newhome"
-    proc = SimpleNamespace(pid=12345)
+    proc = SimpleNamespace(pid=12345, returncode=0, communicate=lambda **kw: (b"12345\n", None))
 
     def popen(*args, **kwargs):
-        out = kwargs["stdout"]
+        out = kwargs["stderr"]
         assert mode(Path(out.name)) == 0o600
         out.write(b"startup log\n")
         return proc
 
     monkeypatch.setattr(ensure_core.subprocess, "Popen", popen)
-    assert ensure_core._spawn(home) is proc
+    assert ensure_core._spawn(home).pid == 12345
     assert mode(home) == mode(home / "logs") == mode(home / "run") == 0o700
     assert mode(ensure_core.log_path(home)) == mode(ensure_core.pid_path(home)) == 0o600
     assert ensure_core.log_path(home).read_bytes() == b"startup log\n"

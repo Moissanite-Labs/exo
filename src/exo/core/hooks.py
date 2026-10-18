@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -34,6 +35,22 @@ KNOWN_UNFIRED_HOOKS: frozenset[str] = frozenset({
     "pre_auxiliary_call", "post_auxiliary_call", "pre_gateway_dispatch",
     "kanban_task_completed", "kanban_task_blocked",
 })
+
+
+async def maybe_await(value: Any) -> Any:
+    """A sync or async callback's result: awaited when it is awaitable, else as it is."""
+    return await value if inspect.isawaitable(value) else value
+
+
+def accepted(fn: Callable[..., Any], kw: dict[str, Any]) -> dict[str, Any]:
+    """The keyword arguments ``fn`` declares (all of them when it takes **kwargs, or has no signature)."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return kw
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kw
+    return {k: v for k, v in kw.items() if k in params}
 
 
 class HookError(ValueError):
@@ -111,14 +128,15 @@ class HookRegistry:
         return out
 
     async def afire(self, name: str, *, _fail_closed_plugins: frozenset[str] = frozenset(),
+                    _isolate_arguments: bool = False,
                     **kwargs: Any) -> list[Any]:
         """Like ``fire``; the engine can require a trusted security hook to succeed."""
         out = []
         for e in self.entries(name):
             try:
-                r = e.callback(**kwargs)
-                if inspect.isawaitable(r):
-                    r = await r
+                # Broker-bound tool hooks inspect independent JSON copies of the request.
+                call_kw = {**kwargs, "args": deepcopy(kwargs["args"])} if _isolate_arguments else kwargs
+                r = await maybe_await(e.callback(**call_kw))
             except Exception as exc:
                 logger.warning("hook %s from %s failed", name, e.plugin or "?", exc_info=True)
                 trace.report(f"hook {name} ({e.plugin or '?'})", exc, kwargs.get("session_id") or None)

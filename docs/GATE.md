@@ -103,6 +103,38 @@ both reads the file without the gate seeing it and detaches from the core's proc
 still pass. The full fix is an OS sandbox for tools; until then the gate and the process-tree
 check are the guard.
 
+## Secret-store paths
+
+A path names a secret store (`credentials`, always asks) when it matches the store list in `exo.gate`
+(`~/.ssh`, `~/.aws`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `.env`, `*.key`,
+token files, Exo's `keys/`...), or when it is a glob that could match one of the sample store paths. This holds
+for shell words, redirection targets, `bash -c` and `$( )` text, string literals in code, and the path arguments
+of file tools. Brace sets are expanded as bash does before matching (issue #184). In a shell word the gate
+expands the source text, quotes kept, and then removes the quotes from each word, so only unquoted braces
+expand: `'{a,b}'`, `"{a,b}"` and `\{a,b\}` stay literal, while in `''{},.env}` the `{` follows a quote, is not
+at the start of the word, and opens a group. A `$"..."` is also read as the plain `"..."` bash gives it without
+a message catalog, so `cat $""{.env,x}` asks. A path argument of a file tool has no quoting and is expanded as
+written. The scan follows bash's: a group ends at the first top-level `}` after a comma or `..`, so `{},hosts}`
+is one group; a `{x..y[..n]}` sequence expands to its members, padded as bash pads them (a leading zero on
+either bound pads every member to the longer bound, so `{007..1000..993}` is `0007 1000`); nested groups expand
+too; `${...}`, `$(...)` and groups with neither a comma nor a sequence stay literal. The word as written and
+every word it expands to are checked, and a hit on any counts, so `cat ~/.config/gh/{hosts,x}.yml`,
+`cat ~/.docker/{*,}` and `cat ~/{},.netrc}` ask.
+
+The work is bounded. A word that would expand to more than 1,024 words (or past a million characters in all),
+nests groups more than 32 deep, or has a sequence bound longer than 18 digits counts as a store path (asks)
+rather than being matched in part. So does a zero-padded sequence with a bound past a 32-bit int: bash prints
+its members as C ints, so they wrap (`{04294967296..04294967296}` is `00000000000`). One tool call expands at
+most 4,096 words in all, across its words, redirections, nested commands and code literals (a glob word counts
+four times, and a long word once more per 64 characters); past that, each further word with a brace set counts
+as a store path too. The trade-off: this fails closed, so an ordinary line past a limit, such as
+`echo {1..2000}` or `for i in {1..2000}`, is `credentials` and asks every time with no grant. A string literal
+in code is read as a shell command, so compact JSON with 11 or more objects in one literal
+(`'[{"a":1,"b":2},...]'`) goes past the cap the same way.
+Known limit: the folder a `cd` enters is tracked for stores matched by name (`cd ~/.aws && cat credentials`
+asks), not for stores matched only by sample paths (`cd ~/.config/gh && cat hosts.yml`; #192).
+Tests: `tests/security/test_gate_brace_sets.py`.
+
 ## Muse CLI credentials
 
 `muse login`, `muse auth` and `muse logout` are `credentials` acts, like `vercel login`: they always ask and never
@@ -166,11 +198,53 @@ targets with `footer_exposures: [public]`.
 
 ## Shell commands: an allowlist (D-038)
 
+Command regexes in `deny` and `reserved` match both the original command and a literal-word
+view from the shell lexer, so `command:rm -rf` also vetoes `r"m" -"rf" ~`, `'rm' -rf ~`,
+`r\m -rf ~`, `$'rm' -rf ~` and `$"rm" -rf ~`: common literal quoting cannot weaken a veto.
+A word that holds a variable or a substitution is a placeholder in the view, so a regex that needs
+the literal part of such a word matches only the original text.
+A `$"..."` word is read as bash reads it without a catalog, so the line keeps its category and
+target (`curl $"https://evil.example/x"` is a `web_read` of `evil.example`, and a `deny: [web_read]`
+still denies it). With a message catalog and a non-C locale bash runs a translation instead, and
+expands `$( )` in it, so the line also carries the `indirection` signal and asks unless
+`opaque_exec` is named. It is decided a second time as `opaque_exec`, and the stricter outcome
+stands, so a deny, reservation or rule on `opaque_exec` still holds for it. A heredoc whose
+delimiter is spelled `<<$"EOF"` or `<<$'EOF'` ends on different lines in bash and in dash, which
+runs commands when bash is missing, so its body is read as commands too.
+Mapping entries use the same matching. A rule with decision `deny` or `ask` whose match has a
+`command` regex sees the view too, in a second pass that only raises: the first matching rule
+is still chosen on the original text, and the pass lifts the outcome to the rule's decision only
+when the view matches and the original text did not, so an ordered list such as an allow for one
+push target before an ask on `^git push` keeps working for plainly spelled commands. Allow and
+lower rules, and grants, match the original text only. The view keeps operators and word
+boundaries; whitespace, control characters and shell syntax inside a word are escaped, and
+dynamic words and heredoc bodies become placeholders made of control characters, which no
+literal word renders to and no regex naming letters or operators matches, so a veto on `>` or
+`exo` does not fire on `ls $HOME`. It does not expand variables or run a shell. A `$"..."` inside
+`${...}` is left to the parameter-expansion work (#143, #158). Nested views come from the text the
+classifier already reads: command substitutions and backticks, `bash -c`, `eval`, shell stdin and
+every string literal of code (`python -c`, `execute_code`), with the existing depth limit of
+four. The gate can only guess which literals in code are commands, so each literal is matched as
+a command even when the code merely prints it: `python3 -c "print('rm -rf build')"` is denied under
+`command:^rm -rf`, fail closed, since the same path catches `os.system('rm -rf build')`. The
+reason names only the policy entry, never the matched words: decisions go to the ledger, which
+holds no command text. An unanchored veto regex also matches separately quoted data arguments
+(`printf %s r"m" -"rf"` matches `rm -rf`), fail closed by design. These remain regex policies,
+not a shell sandbox: original-text matches still apply, spellings outside literal quoting need
+their own patterns, and dynamic or deeper execution asks through `opaque_exec` rather than being
+caught by a command-regex veto.
+
 The shell classifier used to name dangerous programs and let everything else through as `shell`.
 Any indirection walked past it. It now works the other way round. A small lexer
 (`exo.gate._Lexer`) reads quotes, escapes, `$( )`, backticks, `$VAR`, redirections and heredocs,
 and splits the line into simple commands. Each simple command has one program position (after
 assignments, reserved words such as `if` and `do`, and prefixes such as `sudo`, `env`, `timeout`).
+A `$'..'` word is decoded with bash's ANSI-C rules (bash 5.2, UTF-8 locale; issue #167): `\n`, `\e`
+and the other letter escapes, octal and `\x` values (also `\x{..}`) cut to 8 bits, `\u` with 1 to 4
+and `\U` with 1 to 8 hex digits, `\cX` (`\c\\` takes one backslash), and an unknown escape kept with
+its backslash. A NUL ends the quoted part, so `$'--forc\0x'e` is `--force`. A `\u` or `\U` value that
+is no character is written as bash writes it: a few bytes that are not ASCII, or nothing at all from
+`\U80000000` on, so `$'--forc\UFFFFFFFFe'` is `--force` too.
 
 A command is `allow` only when every program in it is known and nothing is hidden:
 
@@ -187,6 +261,17 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
+  form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
+  before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
+  skipped; before a simple command (`coproc w echo hi`) the first word is the program.
+  `function NAME { ...; }` is read the same way. An environment dump inside (`coproc env`,
+  `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Until D-075 lands, a coproc is denied
+  only when its inner command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
+  category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`) still
+  asks. A heredoc after the closing `}` of a block (`coproc W { bash; } <<EOF`) attaches to the
+  `}` and is not fed to the inner command, which asks as `opaque_exec`; the same limit applies
+  to `{ ...; } <<EOF` on its own.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
@@ -204,6 +289,26 @@ The gate's own inputs are on the protected list (`is_store_path`): `policies/`, 
 `$EXO_HOME`, `$EXO_HOME/run` (the core and agent sockets) and `$EXO_HOME/seats`, any
 `seat.toml`, and `$EXO_PRINCIPAL_STORE`. Distinctive names match anywhere, so a relative
 `policies/gates.yaml` or `state/approval-grants.json` counts too.
+
+Absolute paths are checked in both their lexical form and their resolved symlink form, including
+missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
+directory aliases into protected stores, aliases used to delete a store or its ancestors, a `cd` into
+an alias of the store, and `//` or `/proc/self/root` spellings. Resolution preserves `symlink/..`
+filesystem order; lexical protection still applies when a protected path links outside the store. A
+path that cannot be resolved (a NUL byte) keeps its lexical check, so the floor never depends on
+resolution working. `cp -s` and `cp -l` count as writes to whatever they alias, and a relative `ln -s`
+target is read against the link's folder in the two-operand form (`ln -s TARGET LINK`). Relative paths only use the distinctive-name checks because
+the tool's working directory is unknown here.
+
+Known limits. These are classification checks, not a filesystem sandbox: a symlink can change
+between classification and execution (TOCTOU). A hardlink made earlier (`cp -al`) shares the file
+without a link to resolve, so only distinctive names catch a write through it. Only the store roots
+are resolved: when a protected entry itself links out of the store (`policies -> ~/dotfiles/x`), a
+write to the outside spelling is a local write. Name and prefix checks are case-sensitive, so a
+case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob or brace spelling
+(`sta*/gate-grants.json`, `{state,x}/...`) is expanded by the shell, not seen here. A link planted
+and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
+followed, and the bash tool's `cwd` argument is not read.
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,

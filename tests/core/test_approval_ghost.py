@@ -28,7 +28,7 @@ def test_cancelled_ask_publishes_resolved(tmp_path):
         eng = engine(tmp_path)
         d = Dispatcher(eng, caller="principal:tui")
         sid = (await d.run(s.Command.of(s.SessionCreate(title="t")))).result["session"]["id"]
-        task = asyncio.ensure_future(eng.ask(sid, "run it?", ToolCall(id="c1", name="bash", arguments={})))
+        task = asyncio.ensure_future(eng.approvals.ask(sid, "run it?", ToolCall(id="c1", name="bash", arguments={})))
         await asyncio.sleep(0.05)
         (req,) = events_of(d.hub, "approval.requested")
         task.cancel()  # a stopped turn cancels the call that waits on the card
@@ -45,7 +45,7 @@ def test_answered_ask_publishes_resolved_once(tmp_path):
         eng = engine(tmp_path)
         d = Dispatcher(eng, caller="principal:tui")
         sid = (await d.run(s.Command.of(s.SessionCreate(title="t")))).result["session"]["id"]
-        task = asyncio.ensure_future(eng.ask(sid, "run it?", None))
+        task = asyncio.ensure_future(eng.approvals.ask(sid, "run it?", None))
         await asyncio.sleep(0.05)
         (req,) = events_of(d.hub, "approval.requested")
         r = await d.run(s.Command.of(s.ApprovalRespond(request_id=req.body.request_id, decision="allow")))
@@ -82,4 +82,34 @@ def test_steer_can_be_cancelled_before_delivery(tmp_path):
         texts = [m.text() for m in eng.store.messages(sid) if m.role == "user"]
         assert texts == ["slow"]  # neither cancelled steer reached the conversation
 
+    asyncio.run(go())
+
+
+def test_late_steer_dispatch_preserves_principal_author_and_starts_next_turn(tmp_path):
+    async def go():
+        eng = engine(tmp_path)
+        d = Dispatcher(eng, caller="principal:tui")
+        closing, release = asyncio.Event(), asyncio.Event()
+        async def observer(session, turn):
+            if not closing.is_set():
+                closing.set()
+                await release.wait()
+        eng.loop.on_turn_end = observer
+        sid = (await d.run(s.Command.of(s.SessionCreate(title="t")))).result["session"]["id"]
+        await d.run(s.Command.of(s.TurnSend(session=sid, text="hello")))
+        await asyncio.wait_for(closing.wait(), 3)
+        late = (await d.run(s.Command.of(s.TurnSend(session=sid, text="hello again", mode="steer")))).result
+        assert late == {"accepted": True}
+        release.set()
+        for _ in range(100):
+            if not eng._tasks:
+                break
+            await asyncio.sleep(0.02)
+        users = [m for m in eng.store.messages(sid) if m.role == "user"]
+        assert [m.text() for m in users] == ["hello", "hello again"]
+        assert users[-1].meta["author"] == "principal"
+        assert users[-1].id
+        assert not eng.loop.state(sid).steer
+        assert len(events_of(eng.hub, "turn.completed")) == 2
+        await eng.close()
     asyncio.run(go())

@@ -6,10 +6,11 @@ centre's source. A core that does not handle a command yet answers 501.
 
   GET  /api/chat/sessions                  session.list
   POST /api/chat/sessions                  session.create        {title, seat, model, cwd}
-  GET  /api/chat/sessions/<id>             session.get           the transcript so far
+  GET  /api/chat/sessions/<id>             session.get           the transcript so far, and the ids of queued steers
   POST /api/chat/sessions/<id>/send        turn.send             {text, mode}
   POST /api/chat/sessions/<id>/interrupt   turn.interrupt
   POST /api/chat/sessions/<id>/unsteer     command.run unsteer    {message_id}; pulls a queued steer back (D-045)
+  POST /api/chat/sessions/<id>/rename      command.run rename     {title}; principal only (D-069)
   POST /api/chat/sessions/<id>/command     command.run           {name, args}; read-only names only
   GET  /api/chat/panels                    open ui.panel panels, folded from the event stream
   POST /api/feedback                       feedback.send         {session, verdict, message_id, text}
@@ -17,6 +18,9 @@ centre's source. A core that does not handle a command yet answers 501.
   GET  /api/complete/commands             the slash commands this page runs, with argument shapes and choices
   GET  /api/complete/files?q=&session=     files under the session's folder for @ (D-037); the server guards it
   GET  /api/tasks                          tasks.list
+  GET  /api/tasks/<task>                   command.run subagent open   the child's task row and session tail (#97)
+  POST /api/tasks/<task>/steer             command.run subagent send   {text}; the core allows the principal only
+  POST /api/tasks/<task>/stop              command.run subagent stop
   GET  /api/schedule                       schedule.edit list
   POST /api/schedule                       schedule.edit         {action, job_id, when, prompt, title, ...}
 """
@@ -24,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from typing import Any, Dict, Optional, Tuple
 
 from exo import complete as cm
@@ -38,6 +43,7 @@ READ_COMMANDS = ("context", "findings", "trace")   # read-only reports the core 
 PANEL_ACTIONS = ("opened", "dismissed", "acted", "ignored")
 SCHEDULE_ACTIONS = ("list", "add", "remove", "pause", "resume", "run_now")
 TIERS = ("fast", "standard", "deep")
+TASK_REF = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
 
 Reply = Tuple[int, Dict[str, Any]]
 
@@ -74,7 +80,8 @@ def error_reply(exc: Exception) -> Reply:
     if isinstance(exc, BadRequest):
         return 400, {"error": str(exc)}
     if isinstance(exc, SourceError):
-        status = 404 if exc.code == "not_found" else 501 if exc.code in ("unsupported", "unknown_command") else 502
+        status = (404 if exc.code == "not_found" else 403 if exc.code == "forbidden" else 409 if exc.code == "conflict"
+                  else 501 if exc.code in ("unsupported", "unknown_command") else 502)
         return status, {"error": exc.message, "code": exc.code}
     return 502, {"error": core_message(exc)}
 
@@ -111,8 +118,12 @@ def _route(method: str, p: list, key: str):
         return (g if get else po if post else None) or False
     if len(p) == 3 and p[:2] == ["chat", "sessions"]:
         return _transcript if get else False
-    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command", "unsteer"):
-        return ({"send": _send, "interrupt": _interrupt, "command": _command, "unsteer": _unsteer}[p[3]]) if post else False
+    if len(p) == 2 and p[0] == "tasks":
+        return _task_open if get else False
+    if len(p) == 3 and p[0] == "tasks" and p[2] in ("steer", "stop"):
+        return ({"steer": _task_steer, "stop": _task_stop}[p[2]]) if post else False
+    if len(p) == 4 and p[:2] == ["chat", "sessions"] and p[3] in ("send", "interrupt", "command", "unsteer", "rename"):
+        return ({"send": _send, "interrupt": _interrupt, "command": _command, "unsteer": _unsteer, "rename": _rename}[p[3]]) if post else False
     return None
 
 
@@ -135,7 +146,8 @@ async def _create(c, p, q, body):
 async def _transcript(c, p, q, body):
     since = c.state.seq  # before the RPC: replay events arriving while the snapshot is read
     res = await c.source.call(s.SessionGet(session=p[2]))
-    return {"session": res.get("session"), "messages": res.get("messages") or [], "seq": since}
+    return {"session": res.get("session"), "messages": res.get("messages") or [], "steers": res.get("steers") or [],
+            "seq": since}
 
 
 async def _send(c, p, q, body):
@@ -152,6 +164,12 @@ async def _command(c, p, q, body):
 async def _unsteer(c, p, q, body):
     res = await c.source.call(s.CommandRun(name="unsteer", args=_str(body, "message_id", limit=80), session=p[2]))
     return res.get("output") or {"cancelled": []}
+
+
+async def _rename(c, p, q, body):
+    title = _str(body, "title", required=True, limit=200)
+    res = await c.source.call(s.CommandRun(name="rename", args=title, session=p[2]))
+    return res.get("output") or {}
 
 
 async def _interrupt(c, p, q, body):
@@ -188,6 +206,28 @@ async def _tasks(c, p, q, body):
     return {"tasks": res.get("tasks") or []}
 
 
+def _task_ref(p) -> str:
+    if not TASK_REF.fullmatch(p[1]):
+        raise BadRequest("not a task id")
+    return p[1]
+
+
+async def _subagent(c, args: str):
+    return (await c.source.call(s.CommandRun(name="subagent", args=args))).get("output") or {}
+
+
+async def _task_open(c, p, q, body):
+    return await _subagent(c, "open " + _task_ref(p))
+
+
+async def _task_steer(c, p, q, body):
+    return await _subagent(c, "send {} {}".format(_task_ref(p), _str(body, "text", required=True, limit=MAX_TEXT)))
+
+
+async def _task_stop(c, p, q, body):
+    return await _subagent(c, "stop " + _task_ref(p))
+
+
 async def _schedule_list(c, p, q, body):
     res = await c.source.call(s.ScheduleEdit(action="list"))
     return {"jobs": res.get("jobs") or []}
@@ -210,9 +250,9 @@ async def _schedule_edit(c, p, q, body):
 # ---------------------------------------------------------------- completion (D-037)
 WEB_COMMANDS = {"context": "what the next model call carries, part by part",
                 "findings": "open harness findings", "trace": "how the harness performed this session",
-                "new": "start a new thread",
+                "new": "start a new thread", "rename": "give this thread a new title",
                 "layout": "inverse puts the box on top with the newest message under it; classic is the usual order"}
-_INDEXES: Dict[str, cm.FileIndex] = {}
+_INDEXES: Dict[tuple, cm.FileIndex] = {}
 
 
 async def _complete_commands(c, p, q, body):
@@ -241,10 +281,12 @@ async def _complete_files(c, p, q, body):
     if not cwd or not os.path.isdir(cwd):
         return {"files": []}
     query = (q.get("q") or [""])[0][:200]
-    ix = _INDEXES.get(cwd)
+    required = bool(getattr(c.source, "executor_required", True))
+    key = (cwd, required)
+    ix = _INDEXES.get(key)
     if ix is None:
         while len(_INDEXES) >= 4:
             _INDEXES.pop(next(iter(_INDEXES)))
-        ix = _INDEXES[cwd] = cm.FileIndex(cwd)
+        ix = _INDEXES[key] = cm.FileIndex(cwd, executor_required=required)
     items = await asyncio.to_thread(ix.query, query, 30)
     return {"files": [{"value": i.value, "label": i.label, "meta": i.meta} for i in items]}

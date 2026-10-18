@@ -21,8 +21,8 @@ from typing import Any, Callable, Iterable, Sequence
 # name -> argument shape shown after the name. Descriptions live with each client's own table (the TUI COMMANDS
 # dict) and in commands.list; this table only adds the shape and the group for commands every client may meet.
 ARG_HINTS: dict[str, str] = {
-    "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "undo": "", "clear": "",
-    "cwd": "", "context": "", "compact": "", "restart": "", "stop": "", "unsteer": "", "exit": "", "quit": "",
+    "new": "[private]", "sessions": "", "resume": "[thread]", "fork": "[title]", "rename": "<title>", "undo": "", "clear": "",
+    "cwd": "", "context": "", "compact": "", "restart": "", "stop": "[task]", "tasks": "", "open": "<task>", "steer": "<task> <text>", "unsteer": "", "exit": "", "quit": "",
     "model": "[default] <model>", "default": "[model]", "providers": "[add] [name]", "usage": "",
     "panel": "", "peers": "", "send": "<peer> <text>", "handoff": "[path]", "intro": "",
     "tutorial": "[on|off|reset]", "copy": "[last|error|all]", "help": "",
@@ -105,6 +105,8 @@ def plan(cmd: str, done: Sequence[str]) -> Slot | None:
         return Slot("<peer> <text>", "peers") if n == 0 else (Slot("<text>") if n == 1 else None)
     elif cmd == "fork":
         return Slot("[title]") if n == 0 else None
+    elif cmd == "rename":
+        return Slot("<title>") if n == 0 else None
     elif cmd == "exo":
         if n == 0:
             return Slot("<subcommand>", "", _c("help|list the subcommands", "branch|write a handoff and a fresh-session line",

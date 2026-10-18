@@ -8,7 +8,9 @@ the intended region::
     new_content, count, strategy, error = fuzzy_find_and_replace(
         content, old_string, new_string, replace_all=False)
 
-Exo trims: metrics hooks dropped, docstrings shortened, logic unchanged.
+Exo trims: metrics hooks dropped, docstrings shortened. Two fixes: the whitespace-normalized span
+mapping no longer starts a match inside the blank run before it, and a dedented pattern matched after a
+line's indentation is re-anchored on that indentation before the reindent (see _apply_replacements).
 """
 
 from __future__ import annotations
@@ -19,10 +21,6 @@ from difflib import SequenceMatcher
 from typing import Callable
 
 Span = tuple[int, int]
-
-IDENTICAL_STRINGS_ERROR = (
-    "No edit was applied because old_string and new_string are identical. "
-    "Provide the existing text in old_string and the changed text in new_string.")
 
 UNICODE_MAP = {
     "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
@@ -41,16 +39,13 @@ def _unicode_normalize(text: str) -> str:
 
 # ---------------------------------------------------------------- positions
 
-def _calculate_line_positions(lines: list[str], start: int, end: int, length: int) -> Span:
-    start_pos = sum(len(line) + 1 for line in lines[:start])
-    end_pos = sum(len(line) + 1 for line in lines[:end]) - 1
-    return start_pos, min(length, end_pos)
-
-
 def _window_spans(content: str, lines: list[str], n: int,
                   accept: Callable[[int], bool]) -> list[Span]:
-    return [_calculate_line_positions(lines, i, i + n, len(content))
-            for i in range(len(lines) - n + 1) if accept(i)]
+    def span(i: int) -> Span:
+        start = sum(len(line) + 1 for line in lines[:i])
+        end = sum(len(line) + 1 for line in lines[:i + n]) - 1
+        return start, min(len(content), end)
+    return [span(i) for i in range(len(lines) - n + 1) if accept(i)]
 
 
 def _match_transformed_lines(content: str, pattern: str,
@@ -59,14 +54,6 @@ def _match_transformed_lines(content: str, pattern: str,
     pat = transform(pattern.split("\n"))
     n = len(pat)
     return _window_spans(content, lines, n, lambda i: transform(lines[i:i + n]) == pat)
-
-
-def _strip_boundary(lines: list[str]) -> list[str]:
-    lines = list(lines)
-    lines[0] = lines[0].strip()
-    if len(lines) > 1:
-        lines[-1] = lines[-1].strip()
-    return lines
 
 
 def _build_orig_to_norm_map(original: str) -> list[int]:
@@ -105,15 +92,19 @@ def _map_normalized_positions(original: str, normalized: str, matches: list[Span
     orig_to_norm: list[int] = []
     oi = ni = 0
     while oi < len(original) and ni < len(normalized):
-        if original[oi] == normalized[ni]:
-            orig_to_norm.append(ni)
-            oi += 1
-            ni += 1
-        elif original[oi] in " \t" and normalized[ni] == " ":
+        if original[oi] in " \t":
+            # Every blank of a run maps to the one space it collapsed to; the run's last blank moves on.
+            # (A blank must take this branch: matching it as an ordinary character consumed the normalized
+            # space on the run's first blank and mapped the rest of the run onto the next word, so a span
+            # could start inside the indentation and the reindented replacement shifted every line.)
             orig_to_norm.append(ni)
             oi += 1
             if oi < len(original) and original[oi] not in " \t":
                 ni += 1
+        elif original[oi] == normalized[ni]:
+            orig_to_norm.append(ni)
+            oi += 1
+            ni += 1
         else:
             orig_to_norm.append(ni)
             oi += 1
@@ -156,17 +147,9 @@ def _strategy_whitespace_normalized(content: str, pattern: str) -> list[Span]:
     return _map_normalized_positions(content, normalized, found) if found else []
 
 
-def _strategy_indentation_flexible(content: str, pattern: str) -> list[Span]:
-    return _match_transformed_lines(content, pattern, lambda ls: [x.lstrip() for x in ls])
-
-
 def _strategy_escape_normalized(content: str, pattern: str) -> list[Span]:
     unescaped = pattern.replace("\\n", "\n").replace("\\t", "\t").replace("\\r", "\r")
     return [] if unescaped == pattern else _strategy_exact(content, unescaped)
-
-
-def _strategy_trimmed_boundary(content: str, pattern: str) -> list[Span]:
-    return _match_transformed_lines(content, pattern, _strip_boundary)
 
 
 def _strategy_unicode_normalized(content: str, pattern: str) -> list[Span]:
@@ -227,9 +210,7 @@ STRATEGIES: list[tuple[str, Callable[[str, str], list[Span]]]] = [
     ("exact", _strategy_exact),
     ("line_trimmed", _strategy_line_trimmed),
     ("whitespace_normalized", _strategy_whitespace_normalized),
-    ("indentation_flexible", _strategy_indentation_flexible),
     ("escape_normalized", _strategy_escape_normalized),
-    ("trimmed_boundary", _strategy_trimmed_boundary),
     ("unicode_normalized", _strategy_unicode_normalized),
     ("block_anchor", _strategy_block_anchor),
     ("context_aware", _strategy_context_aware)]
@@ -277,7 +258,9 @@ def fuzzy_find_and_replace(content: str, old_string: str, new_string: str,
             "old_string is only whitespace. Provide non-blank text to match. "
             "Do not re-send this call unchanged.")
     if old_string == new_string:
-        return content, 0, None, IDENTICAL_STRINGS_ERROR
+        return content, 0, None, (
+            "No edit was applied because old_string and new_string are identical. "
+            "Provide the existing text in old_string and the changed text in new_string.")
 
     for name, strategy in STRATEGIES:
         matches = strategy(content, old_string)
@@ -422,17 +405,40 @@ def _preserve_unicode_in_replacement(region: str, new_string: str, plan: tuple[s
     return "".join(parts)
 
 
+def _dedented_form(region: str, old_string: str) -> bool:
+    """True when old_string's first indented continuation line sits shallower than the file's (a tab
+    counts to the next multiple of 8 columns, so spaces against a tab-indented file compare too): the
+    block was dedented to column 0, so its lines need the file's indent back. A verbatim copy
+    (continuation lines already at the file's depth) and a one-line old_string are not."""
+    for old_line, file_line in zip(old_string.split("\n")[1:], region.split("\n")[1:]):
+        if old_line.strip():
+            return len(_leading_ws(old_line).expandtabs(8)) < len(_leading_ws(file_line).expandtabs(8))
+    return False
+
+
 def _apply_replacements(content: str, matches: list[Span], new_string: str,
                         old_string: str | None = None,
                         unicode_plan: tuple[str, list] | None = None) -> str:
     result = content
-    for start, end in sorted(matches, key=lambda x: x[0], reverse=True):
+    ordered = sorted(matches)
+    for i in reversed(range(len(ordered))):
+        start, end = ordered[i]
         adjusted = new_string
         if old_string is not None:
             region = content[start:end]
             if unicode_plan is not None:
                 adjusted = _preserve_unicode_in_replacement(region, adjusted, unicode_plan)
-            adjusted = _reindent_replacement(region, old_string, adjusted)
+            line_start = content.rfind("\n", 0, start) + 1
+            if i:
+                line_start = max(line_start, ordered[i - 1][1])  # never back into the previous match
+            at_eol = end == len(content) or content[end] in "\r\n" or content[end - 1] == "\n"
+            if (line_start < start and not content[line_start:start].strip(" \t")
+                    and _dedented_form(region, old_string) and (adjusted or at_eol)):
+                # A dedented pattern matched after the line's indentation. Take that indentation into the
+                # region, so the reindent below sees the file's base indent and the replacement's lines
+                # keep their depth. A deletion that stops mid-line keeps the indent.
+                start = line_start
+            adjusted = _reindent_replacement(content[start:end], old_string, adjusted)
         result = result[:start] + adjusted + result[end:]
     return result
 
@@ -459,8 +465,8 @@ def find_closest_lines(old_string: str, content: str, context: int = 2, limit: i
     return "\n---\n".join(parts)
 
 
-def format_no_match_hint(error: str | None, match_count: int, old_string: str, content: str) -> str:
-    if match_count != 0 or not error or not error.startswith("Could not find"):
+def format_no_match_hint(error: str | None, old_string: str, content: str) -> str:
+    if not error or not error.startswith("Could not find"):
         return ""
     hint = find_closest_lines(old_string, content)
     return "\n\nDid you mean one of these sections?\n" + hint if hint else ""
