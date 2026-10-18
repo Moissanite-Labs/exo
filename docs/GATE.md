@@ -197,6 +197,78 @@ Known limit. A trusted program that runs project code (pytest runs conftest.py, 
 `npm install` runs package scripts) can run code the agent wrote earlier with a local write.
 The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
 
+The working folder (#192). A line that enters a folder that can hold a secret store, and reads a
+file there by a relative name, is `credentials`: `cd ~/.config/gh && cat hosts.yml`,
+`cd ~/.kube/cache && cat ../config`, `time cd ~/.kube && cat config`,
+`cd ~/.kube && tar czf - .` and `git -C ~/.kube diff --no-index config /dev/null` ask like
+`cat ~/.kube/config`. The gate does not follow the folder from command to command; it reads the
+whole line in one pass:
+
+- Store folders and store file names come from the sample store paths the path matchers use, per
+  call so that `HOME` and `EXO_HOME` apply. A dot folder along a sample below home is a store
+  folder by its name (`.kube`, `.docker`, `.config`, `.ssh`, `.aws`, `.exo`, `.vercel`, also
+  `Netlify`). A plain folder is one only below its parent in the sample (`.config/gh`,
+  `.config/gcloud`, `.exo/keys`, `.hermes/p`, `/proc`, `EXO_HOME` and its `keys` when `EXO_HOME`
+  is outside home), so a checkout called `exo` or `gh` is not. The store file names are the
+  samples' file names (`config`, `config.json`, `hosts.yml`, `environ`, `token`, ...).
+- The targets are those of `cd`, `pushd`, `git -C`, `env -C`/`--chdir`, `sudo -D`/`--chdir` and
+  `tar -C`/`--directory`, wherever they stand (after `&&`, `||`, `;`, `|` or `&`, behind `time`,
+  `command`, `builtin` or `!`, in a loop, `( )`, `{ }`, `$( )`, `<( )` or the text a shell
+  runs), however the command is spelt (`c\d`, `"cd"`, `$'\x63d'`) and with the option attached,
+  in a cluster, old-style or cut to a unique prefix (`env -C~/.kube`, `sudo -iD ~/.kube`,
+  `tar czfC - ~/.kube`, `env --c=~/.kube`, `tar --dir ~/.kube`). A brace set is the words it
+  spells (`~/.{ssh,x}`), up to 16 in a word of up to 4096 characters, and one glob past that.
+- A line enters a store folder when a target has one among its parts (`~user/` and folders
+  outside home count by their parts: `/proc/self`, `/srv/app/.kube`), or goes by a relative name
+  into a plain one below another target: `cd ~/.config && cd ./gcloud`, `cd / && cd proc/self`,
+  `cd ~/.config/nvim && cd ../gcloud`, `cd ~/.config/nvim/lua && cd .. && cd .. && cd gcloud`.
+  The other target names a dot parent by its name (any `.config`) and a plain one by its path
+  (`/`, `EXO_HOME`); a folder entered this way is a parent in turn. `..` is resolved as bash's
+  `cd` does and stops at `/`. `~+`, `~0`, `$PWD`, `${PWD}`, `${PWD:-x}` and `$(pwd)` are the
+  current folder, and `${PWD%/*}` is its parent.
+- On such a line a relative name counts when its file name is a store file name, when it goes
+  into a store folder (`gh/hosts.yml` after `cd ~/.config`, `../.docker/config.json`,
+  `lua/../../gcloud/x` after `cd ~/.config/nvim`), and when it is a glob or brace set that could
+  match one. The folder itself (`.`, `./`, `$PWD`) counts when a target is a store folder
+  (`cd ~/.kube && tar czf - .`), and any relative name counts when a target is itself a store
+  (`~/.ssh`, `~/.s?h`). A name that goes into a plain store folder from its parent counts on any
+  line when it names a store (`cd /srv && tar cf - exo-home/keys` with
+  `EXO_HOME=/srv/exo-home`).
+- Globs are read as bash reads them: `[^x]` is `[!x]`, a `]` first in a set is a member, a class
+  is spelt out (`e[[:alpha:]]viron`), a `[` that opens no set is a literal, and only a glob that
+  spells a leading dot matches one (`*` is not `.ssh`). A glob with an unknown class or many `[`
+  could match anything. A glob part with no character of its own (`cd */`, `cd node_modules/*/`)
+  is not a store folder by its name. A quoted glob counts too, for the tools that match it
+  themselves (`find -name 'conf*'`), so a quoted regex, `tr` set or jq slice names a store only
+  when its pattern could match a store name.
+- Names are read from the words and their pieces (`--kubeconfig=config`, `-d@config`,
+  `f:=@config`), redirection targets and the bodies of `$( )`, `<( )` and the text a shell runs
+  (`bash -c`, a heredoc fed to `bash`). They are not read from the program, the words before it
+  (`sudo -u root`), the targets' own words (`mkdir -p .kube && cd .kube && ls` keeps its class),
+  a `git` subcommand, a jq filter (`jq .`), other heredoc text or a word with a space in it (a
+  commit message, an `echo`, `awk '{print $1, $2}'`) unless it holds an unquoted brace set.
+
+A line that enters no store folder, and names none, is classified as before. The work is linear
+in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64
+store tests per store folder (one per glob candidate), and a parent path kept only as deep as
+the deepest sample store folder. The trade-off, which fails closed: neither the order nor the
+success of the commands is followed, so on a line that enters a store folder a word named like a
+store file asks even when it is elsewhere or is not a file
+(`cd ~/.kube && cd ~/project && cat config`, `cat config; cd ~/.kube`,
+`cd ~/.config/fish && cat config`, `cd ~/.config/nvim && ls *`,
+`cd ~/.config/nvim && npm config get prefix`), and `.` asks in a store folder even for a listing
+(`cd ~/.config && find . -name '*.toml'`). A line that is already `store_write` stays
+`store_write` (the principal's alone). Known limits: a target in a variable or made by a command
+(`X=~/.kube; cd $X`, `cd $(...)`); a name made by a command or with a space in it (`cat $(ls)`,
+`"$(pwd -P)/config"`); a dot store folder named last in an operand
+(`cd ~/.config && tar czf x ../.kube`, as for `tar czf x ~/.kube`); a relative target taken from
+another relative one (`cd ~/.config && cd nvim && cd ../gcloud`); a glob in the parent of a
+plain store folder (`cd /sr?/exo-home && cd keys`); a relative path that reaches a plain store
+folder from more than one level above its parent (`cd / && cd srv/exo-home/keys`); other
+`${PWD...}` forms; the text `eval` runs (it asks as `opaque_exec`); `cd -` and `OLDPWD`,
+`CDPATH`, `HOME` set on the line and `shopt -s dotglob`; and a store reached through a folder
+link whose name does not say so.
+
 ## The store is credentials (D-038)
 
 The gate's own inputs are on the protected list (`is_store_path`): `policies/`, `state/`
