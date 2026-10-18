@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from exo.model_spend import NATIVE_BOUNDS, SpendDenied, SpendJournal, SpendStopped
+from exo.model_spend import SpendDenied, SpendJournal, SpendStopped, admit_native
 from exo.model_spend.billing import SCALE, positive_tokens
 
 
@@ -31,11 +31,7 @@ async def admitted_stream(journal: SpendJournal, route: str, provider: Any,
         price = journal.prices.get(route)
         if price is None:
             raise SpendDenied(f"no pinned model-spend contract for {route}")
-        bounds = NATIVE_BOUNDS.get((price.transport, price.base_url, price.model))
-        if bounds is None:
-            raise SpendDenied("model/endpoint lacks an audited native token ceiling")
-        if price.input_bound < bounds[0] or price.max_output > bounds[1]:
-            raise SpendDenied("policy must reserve the full native context and obey its output ceiling")
+        admit_native(price)
         expected = AnthropicProvider if price.transport == "anthropic" else OpenAIChatProvider
         if type(provider) is not expected or provider.base_url != price.base_url:
             raise SpendDenied("model-spend contract does not cover this transport or endpoint")
