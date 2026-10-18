@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any, AsyncIterator
 
 import httpx
 
 from exo.protocol import schema as s
+
+log = logging.getLogger(__name__)
 
 
 class ClientError(Exception):
@@ -102,7 +105,12 @@ class Client:
             async for line in r.aiter_lines():
                 if line == "":
                     if data:
-                        yield s.Event.from_json("\n".join(data), strict=False)
+                        try:
+                            ev = s.Event.from_json("\n".join(data), strict=False)
+                        except s.ProtocolError as exc:  # skip one event it cannot read, never end the feed (D-045)
+                            log.warning("skipped an event: %s", exc)
+                        else:
+                            yield ev
                     data = []
                 elif line.startswith("data:"):
                     data.append(line[5:].lstrip(" "))
