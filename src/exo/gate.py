@@ -1015,7 +1015,8 @@ def _wrapper_args(argv: list[str], i: int, takes: tuple, permute: bool = False) 
 def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words) -> list[Classification]:
     """A wrapper that runs a command (#160): setsid, flock, chroot, watch, script -c, tmux, screen, parallel...
     The command is classified as a nested command beside an opaque part, like the command after xargs: the line
-    asks as before, and a deny on what runs applies. A command the gate cannot find or read stays opaque."""
+    asks as before, and a deny on what runs applies when its category outranks opaque_exec (until D-075). A
+    command the gate cannot find or read stays opaque."""
     argv = [w.text for w in words]
     head = _opaque(f"{prog}: {_OPAQUE_PROGRAMS.get(prog, 'runs a command')}", cmd)
     parts, texts, rest = [head], [], []
@@ -1024,7 +1025,8 @@ def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words)
                  "-ln": "--ln"}
         i, seen = _wrapper_args([multi.get(a, a) for a in argv], 1, _WRAPPERS[prog] + ("--logfile",))
         opts = {o for o, _ in seen}
-        # -r, -R and -x reattach, -ls, -wipe and -Q query: nothing new runs. -X sends a screen command; its
+        # -r and -x reattach, -ls, -wipe and -Q query: nothing new runs. -R reattaches, or starts the command when
+        # no session is detached; it is not read and asks (a known limit). -X sends a screen command; its
         # `screen` command opens a window that runs argv. Otherwise the argv after the options runs.
         if "-X" not in opts and not {"-r", "-R", "-x", "-Q"} & opts:
             rest = words[i:]
@@ -1034,15 +1036,25 @@ def _classify_wrapper(prog: str, words: list, cmd: str, depth: int, inner_words)
     elif prog == "tmux":
         i, seen = _wrapper_args(argv, 1, _WRAPPERS[prog])
         texts = [v for o, v in seen if o == "-c"]
-        while i < len(argv):                         # a command list: commands split by `;` words
-            end = argv.index(";", i) if ";" in argv[i:] else len(argv)
-            sub = _TMUX_ALIASES.get(argv[i], argv[i])
+        # A command list, split as tmux splits it (cmd_parse_from_arguments): an argument whose last character is
+        # `;` ends a command and loses the `;` (`';'`, `'sleep 3;'`); one ending in `\;` does not end it and
+        # reads as ending in `;`.
+        cmds: list[list[str]] = [[]]
+        for a in argv[i:]:
+            if a.endswith("\\;"):
+                cmds[-1].append(a[:-2] + ";")
+            elif a.endswith(";"):
+                cmds[-1] += [a[:-1]] if a[:-1] else []
+                cmds.append([])
+            else:
+                cmds[-1].append(a)
+        for sub_argv in cmds:
+            sub = _TMUX_ALIASES.get(sub_argv[0], sub_argv[0]) if sub_argv else ""
             if sub in _TMUX_RUNS:
-                j, flags = _wrapper_args(argv[:end], i + 1, tuple("-" + c for c in _TMUX_RUNS[sub]))
-                body = argv[j:end]
+                j, flags = _wrapper_args(sub_argv, 1, tuple("-" + c for c in _TMUX_RUNS[sub]))
+                body = sub_argv[j:]
                 if body and not (sub == "run-shell" and ("-C", "") in flags):
                     texts.append(body[0] if len(body) == 1 else shlex.join(body))
-            i = end + 1
     elif prog == "parallel":
         i, _ = _wrapper_args(argv, 1, _WRAPPERS[prog])
         seps = (":::", "::::", ":::+", "::::+")

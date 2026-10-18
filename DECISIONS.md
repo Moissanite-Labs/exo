@@ -803,8 +803,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   origin`). The gate now reads them as it reads `xargs` (`gate._WRAPPERS`, `_classify_wrapper`): options and fixed
   operands are skipped as getopt reads them, and the argv or the command string (`flock -c`, `script -c`, `watch`
   through `sh -c`, a tmux shell-command, a parallel template) is classified as a nested command beside an opaque
-  part, so the line asks as before and a deny on what runs applies. `chroot`, `nsenter`, `unshare` and
-  `systemd-run` follow the `sudo` precedent: a signal named after the wrapper, reversible counts as costly. Forms
+  part, so the line asks as before. Until D-075 lands, the line is denied only when what runs outranks
+  `opaque_exec` (`delete`, `vcs_push`, `credentials`); a category that ties with it or ranks below it
+  (`schedule`; `web_read`, `local_write`) still asks, as for `coproc`. A tmux command list is split as tmux
+  splits it: an argument ending in `;` ends a command, one ending in `\;` does not. `chroot`, `nsenter`, `unshare`
+  and `systemd-run` follow the `sudo` precedent: a signal named after the wrapper, reversible counts as costly. Forms
   the gate cannot read (a variable, `tmux send-keys`, `screen -X stuff`, `parallel` without a template) stay
   `opaque_exec`. A deny on `opaque_exec` itself no longer reaches a wrapped command that outranks it, as with
   `bash -c` and `xargs`, so the line asks there (it was denied) until D-075. To keep that an ask and not the inner

@@ -11,10 +11,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `xvfb-run`, `systemd-run` and `watch`, after their options and fixed operands, and the command strings of
   `flock -c`, `script -c`, `watch`, `tmux new-session`/`new-window`/`split-window`/`respawn-pane`/`respawn-window`/
   `run-shell`, `tmux -c`, `screen -dm` and `parallel CMD ::: args`. `setsid git push origin main` was `opaque_exec`,
-  so a deny on `vcs_push` only asked; it is now `vcs_push` and denied. The wrapper keeps the `indirection` floor, so
-  a line that asked still asks; `chroot`, `nsenter`, `unshare` and `systemd-run` add a signal like `sudo`. A command the
-  gate cannot read (`setsid $CMD`, `tmux send-keys`, `parallel` reading its input) stays `opaque_exec`. A deny
-  on `opaque_exec` itself (`deny:`, a category line or a rule) now asks for such a line instead of denying it;
+  so a deny on `vcs_push` only asked; it is now `vcs_push` and denied. Until D-075 lands, a wrapped line is denied
+  only when its inner command outranks `opaque_exec`; `setsid systemctl enable foo` under `deny: [schedule]` still
+  asks. A tmux command list is split at an argument ending in `;` (`'sleep 3;'`), not only at a `;` word, so
+  `tmux new-session -d 'sleep 3;' new-window 'git push origin main'` is `vcs_push` too. The wrapper keeps the
+  `indirection` floor, so a line that asked still asks; `chroot`, `nsenter`, `unshare` and `systemd-run` add a
+  signal like `sudo`. A command the gate cannot read (`setsid $CMD`, `tmux send-keys`, `parallel` reading its
+  input) stays `opaque_exec`. A deny on `opaque_exec` itself (`deny:`, a category line or a rule) now asks for such a line instead of denying it;
   naming `opaque_exec` at `ask` or `deny` no longer turns off the indirection floor (#178), so none of these
   lines logs.
 - Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
