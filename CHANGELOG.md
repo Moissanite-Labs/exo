@@ -6,23 +6,47 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- A `deny` or `reserved` entry in `gates.yaml` now matches any simple command on a compound line, nested ones included
+  (D-075). Before, only the most severe part was checked, so `git push origin main && rm -rf build` asked about the
+  delete and ran the denied push on approval. Each part carries the tool of its call (`tool:execute_code` no longer
+  denies `python -c` run from bash) and the decoded views of its line (`g''it push origin main && rm -rf build` denies
+  under a `command: 'git push'` entry), the `ssh` hop and the `internal` exposure of an `ssh` line reach every part, and
+  a standing grant in exo-gate no longer covers a reserved part of the line. A denied command in a `python -c` or
+  `execute_code` string literal denies whatever its place in the literal (`./build.sh; systemctl enable x` was dropped
+  as opaque), and `\n` escapes split the literal. A mapping entry's keys that are not match keys (`reason`, a note, a
+  typo) widen it instead of making it match nothing. A `target:` entry matches the `ssh` host whatever the form
+  (`user@host`, `ssh://host:22`), and `ssh` options are read as getopt reads them: the value of `-B`, `-P`, `-I` or of a
+  cluster ending in a value letter (`ssh -vp 22 host rm -rf /data`) was read as the host, so the line was `allow` even
+  under `deny: [delete]`; such a line now asks or denies. `mosh` options are read as mosh's Getopt::Long reads them
+  (one dash or two, any case, a unique prefix, options after the host, mosh's own short options), so `mosh
+  --serv='rm -rf /data' host` and `mosh host --server=...` are read, and a word that names no single option asks. The
+  command given to `mosh --ssh`, `--client` or `--server` is read and asks; with `mosh --local` it runs here and is
+  not `internal`. An option's value that reads as `--server=...` (`mosh --port '--server=...' host`) is still read
+  as a command and asks, and so are words after the host that mosh takes as its options or values (with
+  `POSIXLY_CORRECT` set mosh runs them as the command). A `--` right after the `ssh` or `mosh` host ends the options,
+  and the command after it is read.
+  `Decision.reserved` lists each hit once, and its ledger view redacts URL userinfo. Where the gate cannot read a
+  command (for example a heredoc after a `coproc` block,
+  nesting past the depth cap, `eval $(...)`, a command on stdin, `watch`/`tmux`-style wrappers) the line asks as opaque
+  rather than denying, and so does an `ssh` chain past the hop cap (#153). `${...}` bodies are still `allow` even
+  under `deny` (#143); `docs/GATE.md` lists the open paths.
 - The gate reads the command behind wrappers that run one (#160, D-038): `setsid`, `flock`, `chroot`, `unshare`,
   `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`, `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`,
   `xvfb-run`, `systemd-run` and `watch`, after their options and fixed operands, and the command strings of
   `flock -c`, `script -c`, `watch`, `tmux new-session`/`new-window`/`split-window`/`respawn-pane`/`respawn-window`/
   `run-shell`, `tmux -c`, `screen -dm` and `parallel CMD ::: args`. `setsid git push origin main` was `opaque_exec`,
-  so a deny on `vcs_push` only asked; it is now `vcs_push` and denied. Until D-075 lands, a wrapped line is denied
-  only when its inner command outranks `opaque_exec`; `setsid systemctl enable foo` under `deny: [schedule]` still
-  asks. A tmux command list is split at an argument ending in `;` (`'sleep 3;'`), not only at a `;` word, so
+  so a deny on `vcs_push` only asked; it is now `vcs_push` and denied. With D-075 a `deny` entry for the inner
+  command denies the line even when it does not outrank `opaque_exec` (`setsid systemctl enable foo` under
+  `deny: [schedule]`). A tmux command list is split at an argument ending in `;` (`'sleep 3;'`), not only at a `;` word, so
   `tmux new-session -d 'sleep 3;' new-window 'git push origin main'` is `vcs_push` too, and tmux's default
   aliases `splitp` and `split-pane` are read as `split-window`. An environment dump behind a wrapper
   (`setsid printenv GITHUB_TOKEN`, `taskset 1 env`, `xvfb-run -a env`) is `credentials` like the bare command
   (#155), so `deny: [credentials]` denies it; it was `opaque_exec` and asked. The wrapper keeps the
   `indirection` floor, so a line that asked still asks; `chroot`, `nsenter`, `unshare` and `systemd-run` add a
   signal like `sudo`. A command the gate cannot read (`setsid $CMD`, `tmux send-keys`, `parallel` reading its
-  input) stays `opaque_exec`. A deny on `opaque_exec` itself (`deny:`, a category line or a rule) now asks for
-  such a line instead of denying it; naming `opaque_exec` at `ask` or `deny` no longer turns off the indirection
-  floor (#178), so none of these lines logs.
+  input) stays `opaque_exec`. A category line or a rule that denies `opaque_exec` itself now asks for such a line
+  instead of denying it (a `deny:` entry still denies it, D-075); naming `opaque_exec` at `ask` or `deny` no longer
+  turns off the indirection floor (#178), so none of these lines logs.
 - Gate (#192, D-038): on a line that enters a folder that can hold a secret store, a relative read of a store file is
   `credentials` and asks. `cd ~/.config/gh && cat hosts.yml`, `cd ~/.kube && cat config`,
   `cd ~/.docker && cat config.json`, `cd ~/.kube && tar czf - .` and `cd ~/.config/g{h..h} && cat hosts.yml` were
@@ -49,7 +73,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
   `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
   `function NAME { ...; }` is read the same way. An environment dump inside either (`coproc env`) is
-  `credentials`. Until D-075 lands, a coproc is denied only when its inner command outranks `opaque_exec`.
+  `credentials`. Before D-075, a coproc was denied only when its inner command outranked `opaque_exec`;
+  with it, a `deny` entry matching any inner command denies the coproc.
   A `credentials` line keeps the highest reversibility of its parts, so `coproc env; rm -rf x` stays
   irreversible and a policy that denies irreversible actions still denies it.
 - The gate reads the array subscript in the variable names of `printf -v`, `read`, `declare`, `typeset`, `local`,
