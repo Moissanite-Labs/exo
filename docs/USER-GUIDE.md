@@ -248,6 +248,8 @@ Details: `docs/PEERS.md`.
 
 A seat is one named setup of an agent: whom it serves, which models, tools, skills and plugins it has, and where its
 threads start. Seat files live in `$EXO_HOME/seats/`. Run one with `exo serve --seat NAME` or `exo tui --seat NAME`.
+When an `exo serve` already runs, a second seat needs its own socket:
+`exo serve --seat NAME --socket $EXO_HOME/run/NAME.sock`. Without it, `exo serve` refuses to start and says so.
 Ready-made role templates are in `plugins/exo-orchestra/seats/`. To write your own, see `docs/SEATS.md`.
 
 A seat can set the folder its threads start in, with `[session] cwd` in `seat.toml`. Exo warns once when a thread's

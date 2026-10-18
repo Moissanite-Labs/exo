@@ -159,6 +159,48 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
   with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
+- Turn state (D-070, D-052): a scheduled run and a subagent now share the engine's per-session state, so a turn
+  running there is a running turn everywhere. `session.list` shows it `live`. A job or peer notice is steered in,
+  and a `turn.send` steer lands in that turn. Before, the engine saw these sessions as idle: a notice was stored
+  between a tool call and its result or started a second turn at the same time, and the model got a false
+  "not run" result for a command that did run. The principal typing into a running subagent's session steers it,
+  whatever the mode, and the terminal shows the line as a queued steer that up pulls back. Anyone else gets
+  `forbidden`. While the child starts or finishes, no round can take a steer, so `turn.send` fails with `conflict`.
+  It never starts a main-loop turn in the child. A send that waited behind a child that was locked meanwhile runs
+  no turn. An unaddressed peer message never picks a subagent's session or a scheduled run: it goes to the user's
+  live thread. With none live, a message delivered at once is refused and a held one waits with no thread.
+- Opening a thread whose turn is still running (`/resume`, `/sessions`, `exo tui --session` or `--resume`,
+  `exo chat --resume`) no longer writes "not run: session was interrupted" for the tool call in flight, so the
+  model never sees two results for one call. `session.resume` still closes a round a crash left open.
+- Two seats in one `$EXO_HOME` now run side by side. Each core numbered events from its own counter, so the core
+  that fell behind failed every publish with a UNIQUE constraint error until it restarted. The database now numbers
+  each event past the table's highest. `hello`, `events.subscribe` and `/health` report that highest number, so a
+  window that joins one seat's core does not replay the other seat's job cards as new notes. Starting any core, even
+  one that then failed the writer lock, also marked every agent's running delegate tasks failed. Now only an agent's
+  writer fails its own leftovers.
+- Scheduled jobs on a home with several seats: both seats' timers ran the same due job, and a job's `seat` was
+  never read, so a job for one seat could run as another. A timer now claims the slot before it runs it, a
+  seat-bound job runs only in its seat, `run_now` from another seat is refused, and `add` refuses a seat no core
+  could run.
+- Background jobs (D-032): shutting down exod with a job running no longer sends the thread a "was killed"
+  notice. With `wake` unset or on, that notice started a model turn while the engine was closing, a paid call
+  at every such shutdown. The job now ends with one `killed` record and one `job.updated`. Once shutdown has
+  begun no job notice starts a turn. A notice still in delivery is queued for the next one.
+- Scheduled jobs when clocks go back: a cron job added, resumed or overdue in the repeated hour's second pass got
+  a next run in the hour's first pass, up to an hour in the past, so the timer ran it again each time a run ended
+  until that hour was over. The next run is now always later than now (`docs/SCHEDULE.md`, "Clock changes").
+- A second `exo serve --seat NAME` beside a running exod no longer takes over its socket and `run/exod.pid`. It
+  deleted the live core's `run/exod.sock`, bound its own and wrote its pid, so `exo stop` stopped the second core
+  and left the first running with the agent's writer lock and no way to reach it. `exo serve` now refuses a socket
+  that another core answers on, exits 1 and names `--socket`, and a core removes `run/exod.pid` on exit only if
+  the file still holds its own pid.
+- Trace (D-025, D-032): a model call stopped with ctrl+c or `/stop` is now recorded, whether the stop came mid
+  stream, before the first token or in the backoff before a retry. It gets a `model.call` event with `stop_reason`
+  `interrupted`, and its time counts in `model_ms`. Before, the wait counted as harness overhead, so stopping a slow
+  model after 30 s filed a false `turn.slow` finding and could reopen a fixed one. The record keeps the routes that
+  timed out or failed before the stop, so stopping the fallback route still flags the route before it. A call whose
+  only tries timed out files no `model.slow`, because `model.timeout` already names that route. The `/trace`
+  header names the route that served the last call, not "no model call recorded yet", after a stop.
 - History brought in with `exo ingest` now feeds the rule of three in `exo consolidate`. Ingest writes your own
   messages with role `principal`, and consolidation read only role `user`, so an import never drafted a belief. Rows
   read before this fix are not in the cluster cache: delete `<store>/proposals/state.json` and the next run rebuilds
