@@ -806,6 +806,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `[::1]:<port>`, for the page too. Origin and Sec-Fetch-Site checks stay. Only the page shell is served without
   the token. The token stays per launch, in memory, delivered in the URL fragment that `exo web` prints and opens.
   `asgi.py` is deleted (unused).
+  *Amendment 2026-10-17 (issue #162):* the page builds every node with `h()` and text nodes, and that discipline
+  was the only XSS defence, while every `ui` Markdown panel (and, with #149, every completed reply) goes through
+  `markdown.js`: one renderer slip would be a stored XSS reachable by prompt injection, holding the page token. Every
+  response the web server writes (page, static files, JSON, both event streams, errors) now carries one policy,
+  `server.CSP`: `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self';
+  object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, with
+  `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. It is the issue's draft narrowed to what
+  the page uses: no WebSocket (fetch and EventSource only, so `connect-src 'self'`), no images from `data:`, no
+  fonts, and no native form posts (every form is handled in script). No `'unsafe-inline'`, `'unsafe-eval'`, hash
+  or nonce: the page had no inline script, and its few computed sizes (gauges, bars, the task board) now go
+  through the CSSOM (`el.style.cssText` in `h()`), which the policy does not block, instead of a `style`
+  attribute, which it does. Rejected: a `<meta>` policy (cannot set `frame-ancestors`, and misses the JSON and
+  stream responses); `'unsafe-inline'` for styles (would let injected markup restyle the page into a lure).
+  `docs/ui/WEB.md` "Content-Security-Policy".
 - **Decision, environment:** one function, `exo.envscrub.scrub_env`, for bash, jobs and `code_find`: catalog
   `key_env` names, secret suffixes and words, `AWS_*`, `GH_*`, `GITHUB_TOKEN`, `*DATABASE_URL`, `*_DSN`, the bus
   identity, the core socket and credential variables, and a new seat `[tools] env_deny` (names or patterns).
