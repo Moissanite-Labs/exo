@@ -59,7 +59,9 @@ The server binds to loopback, and a POST from another origin is refused.
 
 On start the client reads the last 5000 events so recent approvals, usage and task moves are not missed.
 When its stream ends (a core restart, or a stream the core ended for falling behind, D-079), it replays from the
-last event it applied, so it misses nothing.
+last event it applied, so it misses nothing. That holds up to 16,384 missed events (`RESUME_GAP`, four times the
+core's limit). After a longer gap, such as a long outage while the core kept working, it reads the last 5000
+events as on start, so one reply never carries the whole gap. An approval asked before those does not show.
 
 ## The web UI
 

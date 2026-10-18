@@ -113,6 +113,8 @@ class ContextAdapter:
         return apply_selection(msgs, flat, out)
 
     def on_turn_complete(self, session: str, usage: Usage) -> None:
+        """``usage`` is the turn's last model call (the loop's ``TurnResult.last_usage``), so ``prompt_tokens`` is
+        the size of the last prompt, not the sum of every call in a tool-using turn."""
         if self.plugin is not None:
             safe_plugin_call(self.plugin, "update_from_response", _usage_dict(usage))
             safe_plugin_call(self.plugin, "on_turn_complete", self.transcript(session), usage=_usage_dict(usage),

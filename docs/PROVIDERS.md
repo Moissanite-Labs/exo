@@ -238,7 +238,8 @@ it sets, never the catalog's. With only `base_url = "http://127.0.0.1:1234/v1"` 
 OpenAI key is ever sent to it. To send a key along with your `base_url`, set `key_env` in the same table: the
 catalog's variable or one of your own. A new provider needs a `base_url` (a CLI transport needs none). Without
 one it gets no credential, its routes are skipped and the providers list shows it as `no base_url`, even when
-its key is found.
+its key is found. A seat's `[models.providers.NAME]` merges over config.json's table first, by the same rule,
+and the result merges over the catalog (`docs/SEATS.md`).
 
 ## Roles
 

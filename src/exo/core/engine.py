@@ -32,7 +32,7 @@ from exo.core.findings import Findings
 from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
-from exo.core.models.router import Router
+from exo.core.models.router import Router, merge_provider
 from exo.model_spend import resolve_spend_policy
 from exo.core import jobs as jobs_mod
 from exo.core.peer_target import EngineTarget
@@ -158,7 +158,11 @@ class CoreRuntime:
             raise ValueError("seat principal conflicts with EXO_PRINCIPAL")
         selection = resolve_spend_policy(principal_spend, principal=active_principal)
         over, models = (seat.models if seat else {}), dict(models or {})  # the seat's tables win entry by entry, like [trace]
-        models |= {k: {**models[k], **v} if isinstance(v, dict) and isinstance(models.get(k), dict) else v for k, v in over.items()}
+        for k, v in over.items():  # a provider entry merges key by key with the router's rule, so it keeps config's URL
+            old = models.get(k)
+            if isinstance(v, dict) and isinstance(old, dict):
+                v = {**old, **({n: merge_provider(old.get(n), p) for n, p in v.items()} if k == "providers" else v)}
+            models[k] = v
         if principal_spend is not None:
             models["spend"] = principal_spend
         elif seat and "spend" in seat.models and selection.source is None:

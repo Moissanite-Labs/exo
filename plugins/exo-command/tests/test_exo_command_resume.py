@@ -9,7 +9,7 @@ from exo.server.app import Dispatcher
 from exo.server.echo import EchoEngine
 from exo.server.engine import Hub
 from exo_command.config import load_settings
-from exo_command.service import REPLAY_WINDOW, CommandCentre
+from exo_command.service import REPLAY_WINDOW, RESUME_GAP, CommandCentre
 from exo_command.source import DispatcherSource
 
 
@@ -57,5 +57,28 @@ def test_rebootstrap_resumes_from_the_page_so_an_approval_older_than_the_window_
         c.source = src = Recording(Dispatcher(EchoEngine(), fresh))
         await c.bootstrap()
         assert src.since == [0]
+
+    asyncio.run(go())
+
+
+def test_rebootstrap_after_a_gap_above_resume_gap_replays_the_window():
+    """A gap far past the stream limit (a long outage while the core kept working) is not replayed in one response.
+    Up to RESUME_GAP missed events the page resumes where it stopped; past that it replays the newest window, as a
+    first start does."""
+    async def go():
+        hub = Hub()
+        src = Recording(Dispatcher(EchoEngine(), hub))
+        c = CommandCentre(load_settings({}), src)
+        hub.publish(s.Notice(text="start"))
+        await c.bootstrap()
+        first = hub.seq
+        for i in range(RESUME_GAP):
+            hub.publish(s.Notice(text=f"n {i}"))
+        await c.bootstrap()  # exactly RESUME_GAP behind: every missed event replays
+        assert src.since[-1] == first and c.state.seq == hub.seq
+        for i in range(RESUME_GAP + 1):
+            hub.publish(s.Notice(text=f"m {i}"))
+        await c.bootstrap()
+        assert src.since[-1] == hub.seq - REPLAY_WINDOW and c.state.seq == hub.seq
 
     asyncio.run(go())

@@ -188,6 +188,54 @@ def test_context_engine_sees_the_whole_prompt_after_a_turn():
     assert e.last_prompt_tokens == 92_012 and e.should_compress()
     assert e.turn_usage == {"prompt_tokens": 92_012, "completion_tokens": 5, "total_tokens": 92_017}
 
+
+def test_context_engine_gets_the_last_prompt_after_a_tool_using_turn(tmp_path):
+    """Three calls of a 30,012-token prompt (two tool rounds, then a reply) hand the engine one prompt, 30,012
+    tokens, not the turn's sum (90,036), so a 75,000 threshold in a 100,000 window does not fire."""
+    from exo.core.context import TreeContext
+    from exo.core.loop import Loop
+    from exo.core.sessions import SessionStore
+    from exo.core.types import Message, ProviderEvent, ToolCall, ToolResult, ToolSpec, Usage
+    from exo.plugin_context import ContextAdapter
+
+    class Seen(Eng):
+        def on_turn_complete(self, messages, usage=None, **kw):
+            self.turn_usage = usage
+
+    call = Usage(input_tokens=12, cache_read_tokens=28_000, cache_write_tokens=2_000, output_tokens=50)
+
+    class TwoRounds:
+        name = "fake"
+        n = 0
+
+        async def stream(self, messages, tools, **opts):
+            self.n += 1
+            calls = [ToolCall(id=f"c{self.n}", name="echo", arguments={})] if self.n < 3 else []
+            for c in calls:
+                yield ProviderEvent(kind="tool_call", tool_call=c)
+            yield ProviderEvent(kind="usage", usage=call)
+            yield ProviderEvent(kind="done", stop_reason="tool_use" if calls else "end",
+                                message=Message.assistant("" if calls else "done", tool_calls=calls))
+
+    async def echo(c, ctx):
+        return ToolResult.of_text(c.id, "ok")
+
+    e = Seen("ctx")
+    e.update_model("m", 100_000)  # compress above 75,000 prompt tokens
+    store = SessionStore(tmp_path / "s.sqlite")
+    loop = Loop(store, TwoRounds(), context=ContextAdapter(TreeContext(store, None), e), retry_delay=0,
+                tool_specs=[ToolSpec(name="echo", description="echo", risk="low")], run_tool=echo)
+
+    async def go():
+        s = await loop.create_session(title="t")
+        return await loop.send(s.id, "hi")
+
+    res = asyncio.run(go())
+    assert res.stop_reason == "end" and res.usage.cache_read_tokens == 84_000  # the turn's sum is still the sum
+    assert e.last_prompt_tokens == 30_012 and not e.should_compress()
+    assert e.turn_usage == {"prompt_tokens": 30_012, "completion_tokens": 50, "total_tokens": 30_062}
+
+
 def test_memory_provider_defaults_and_thread():
     class M(MemoryProvider):
         name = "m"
