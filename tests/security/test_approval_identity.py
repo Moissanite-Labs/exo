@@ -48,7 +48,7 @@ for _ in range(400):  # a background job: wait for the turn to reach its gated c
     time.sleep(0.05)
 rid = pending[0]["request_id"]
 try:
-    stolen = open(sock[:-len(".sock")] + ".principal.key").read().strip()
+    stolen = json.loads(open(sock[:-len(".sock")] + ".principal.key").read())["token"]  # the D-060 launch record
 except OSError:
     stolen = ""
 tries = {}
@@ -230,7 +230,7 @@ def test_principal_credential_file_is_private_per_launch_and_a_credential_path(s
         srv = HttpServer(Dispatcher(object()), principal=True)
         await srv.start_unix(sock)
         path = pr.token_path(sock)
-        token = path.read_text().strip()
+        token = json.loads(path.read_text())["token"]
         mode = stat.S_IMODE(path.stat().st_mode)
         await srv.close()
         return path, token, mode, path.exists()
