@@ -1,0 +1,7 @@
+name: probe-local
+on: [push, workflow_dispatch]
+jobs:
+  local:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "no external actions used"
