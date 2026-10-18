@@ -14,20 +14,27 @@ from exo_command import api
 from exo_command.config import load_settings
 from exo_command.server import STATIC, WebServer
 from exo_command.service import CommandCentre
+from exo_command.source import SourceError
 
 TOKEN = "test-page-token-0123456789"
 
 
 class Src:
-    def __init__(self, cwd="", guidance=None):
-        self.cwd, self.guidance, self.calls = cwd, guidance, []
+    def __init__(self, cwd="", guidance=None, commands=None):
+        self.cwd, self.guidance, self.commands, self.calls = cwd, guidance, commands, []
 
     async def call(self, body):
         self.calls.append(body)
         t = type(body).TYPE
+        if t == "commands.list" and self.commands is not None:
+            if isinstance(self.commands, Exception):
+                raise self.commands
+            return {"commands": self.commands}
         if t == "session.get":
             return {"session": {"id": body.session, "cwd": self.cwd if body.session == "s1" else ""}, "messages": []}
         if t == "config.get":
+            if isinstance(self.guidance, Exception):
+                raise self.guidance
             return {"key": body.key, "value": self.guidance}
         return {}
 
@@ -58,10 +65,57 @@ def repo(tmp_path):
 def test_commands_route_lists_what_the_composer_runs():
     code, d = dispatch(Src(), "/api/complete/commands")
     names = [c["name"] for c in d["commands"]]
-    assert code == 200 and names == ["context", "findings", "trace", "new", "rename", "layout"]
+    assert code == 200 and names == ["context", "model", "default", "findings", "trace", "new", "rename", "layout"]
     trace = next(c for c in d["commands"] if c["name"] == "trace")
     assert trace["args"] == "[last N turns]" and [x["value"] for x in trace["choices"]] == ["5", "10", "25"]
     assert d["guidance"] is True
+
+
+def test_commands_route_names_the_core_commands_the_composer_holds():
+    rows = [{"name": "context", "description": "d", "args": ""}, {"name": "grants", "description": "d", "args": ""}, {"description": "no name"}]
+    assert dispatch(Src(commands=rows), "/api/complete/commands")[1]["core"] == ["context", "grants"]
+    code, d = dispatch(Src(commands=ConnectionError("core restarting")), "/api/complete/commands")
+    assert code == 200 and d["core"] is None and len(d["commands"]) == 8   # null: the page asks again
+    # The terminal client's own names (its COMMANDS table), less what the page runs: held, not sent. Core plugin names
+    # (/grants, /orchestra) are not the terminal client's: unknown unless commands.list has them, as in the TUI.
+    from exo_tui.app import COMMANDS
+    assert set(d["client"]) == set(COMMANDS) - set(api.WEB_COMMANDS)
+    assert not {r["name"] for r in d["commands"]} & set(d["client"])
+
+
+def test_commands_route_tells_an_older_core_from_one_that_cannot_answer_now():
+    """Only a core without commands.list answers [] and stops the page asking; a core down or failing is null (#146)."""
+    for exc, core in ((SourceError("unknown_command", "'commands.list'"), []),
+                      (SourceError("unsupported", "commands.list is not supported yet"), []),
+                      (SourceError("internal", "boom"), None), (ConnectionError("refused"), None),
+                      (RuntimeError("Exo core is not reachable"), None)):
+        code, d = dispatch(Src(commands=exc), "/api/complete/commands")
+        assert code == 200 and d["core"] == core, exc
+
+
+def test_guidance_is_unknown_while_config_get_fails_and_on_for_an_older_core():
+    # null while the core cannot say (the page asks again); an older core without the key leaves the line on
+    assert dispatch(Src(guidance=ConnectionError("down")), "/api/complete/commands")[1]["guidance"] is None
+    assert dispatch(Src(guidance=SourceError("internal", "x")), "/api/complete/commands")[1]["guidance"] is None
+    assert dispatch(Src(guidance=SourceError("unknown_command", "x")), "/api/complete/commands")[1]["guidance"] is True
+    # the core answers not_found for an unset key: the default (on) holds, and the page stops asking
+    unset = SourceError("not_found", "guidance.enabled is not set")
+    assert dispatch(Src(guidance=unset), "/api/complete/commands")[1]["guidance"] is True
+
+
+def test_a_real_core_with_a_fresh_home_settles_the_guidance_setting(tmp_path):
+    """A real core answers config.get for the unset guidance.enabled with not_found; the route reads that as on."""
+    from exo.core.engine import CoreEngine
+    from exo.protocol import schema as s
+    from exo.server.app import Dispatcher
+    from exo_command.source import DispatcherSource
+
+    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={})
+    src = DispatcherSource(Dispatcher(eng))
+    code, d = dispatch(src, "/api/complete/commands")
+    assert code == 200 and d["guidance"] is True and d["core"]
+    asyncio.run(src.call(s.ConfigSet(key="guidance.enabled", value=False)))
+    assert dispatch(src, "/api/complete/commands")[1]["guidance"] is False
 
 
 def test_guidance_config_key_turns_the_line_off():
@@ -224,6 +278,27 @@ console.log(JSON.stringify({
     assert got["noat"] == "" and got["mail"] == ""
     assert got["ghHist"] == {"text": "he test", "ok": True} and got["ghCmd"] == {"text": "ce", "ok": True}
     assert got["ghHint"] == {"text": "[last N turns]", "ok": False}
+
+
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_js_typo_guess_is_the_tuis(tmp_path):
+    """#146: the page holds a /word for the same guesses the TUI's cm.closest makes, so `/data is corrupted` is sent."""
+    import random
+    from exo import complete as cm
+    pool = ["context", "model", "default", "findings", "trace", "new", "rename", "layout", "compact", "grants", "gate",
+            "peers", "peer-release", "peer-deny", "exo", "exo-command", "orchestra", "help", "quit", "undo"]
+    rnd = random.Random(146)
+    words = ["data", "note", "repo", "users", "tmp", "home", "me", "grant", "contex", "tarce", "modle", "comand", "peer",
+             "tex", "ord", "orch", "peerdeny", "lay"] + ["".join(rnd.choice("acdeghilmnoprstx-") for _ in range(rnd.randint(1, 9))) for _ in range(400)]
+    for _ in range(400):   # near typos: a name with a letter or two dropped, changed or swapped
+        w = list(rnd.choice(pool))
+        for _ in range(rnd.randint(1, 2)):
+            i = rnd.randrange(len(w))
+            w[i:i + 2] = rnd.choice([[], [rnd.choice("aeinorst")], w[i:i + 2][::-1]])
+        words.append("".join(w))
+    got = node(tmp_path, f"console.log(JSON.stringify({json.dumps(words)}.map(w => c.closest(w, {json.dumps(pool)}))));")
+    assert got == [cm.closest(w, pool) for w in words]
+    assert [cm.closest(w, pool) for w in ("data", "note", "repo", "grant")] == [None, None, None, "grants"]
 
 
 @pytest.mark.skipif(not NODE, reason="node is not installed")
