@@ -3,6 +3,7 @@
 Touching the folder itself, a credential file in it, or a wildcard there that could match one is credentials,
 reads and writes alike. Job output below run/jobs/ and a bare relative `run` keep main's class.
 Classification only; nothing here is run or read."""
+import os
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,9 @@ SECRET = [
     lambda r: sh(f"cat {{{r},x}}/*"),
     lambda r: sh(f"cat {Path(r).parent}/{{run,x}}/*"),
     lambda r: sh(f"cat {Path(r).parent}/r{{u,}}n/*"),
+    lambda r: sh(f"cd {r} && cat age*"),                   # a cd on the line (#192)
+    lambda r: sh(f"cd {r}/jobs && cat ../*"),
+    lambda r: sh(f"cd {Path(r).parent} && cat run/*"),
 ]
 
 
@@ -213,6 +217,57 @@ def test_a_seat_or_agent_principal_key_is_credentials(shape, run_dir, monkeypatc
     monkeypatch.setenv("EXO_SEAT", "lead")
     for name in ("lead", "scout", "ops", "ops-desk"):
         assert gate.classify(sh(shape.format(run_dir, name))).category == "credentials", name
+
+
+def _seats_listed(monkeypatch, order):
+    """$EXO_HOME/seats listed in `order` (a sort key), as a filesystem may list it; other folders as they are."""
+    real = os.scandir
+
+    class Listing:
+        def __init__(self, path):
+            with real(path) as it:
+                self.entries = sorted(it, key=order) if os.path.basename(path) == "seats" else list(it)
+
+        def __enter__(self):
+            return iter(self.entries)
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(gate.os, "scandir", Listing)
+
+
+def _sampled():
+    return sorted(s[len("agent-"):-len(".principal.key")] for s in gate._run_secrets() if s.startswith("agent-"))
+
+
+def test_seats_are_sampled_after_other_files_are_skipped(run_dir, monkeypatch):
+    """Files, dot and underscore entries in seats/ take no place among the 64: a seat listed after 120 of them, and
+    named after them, is still sampled."""
+    seats = Path(gate._exo_home()) / "seats"
+    seats.mkdir(parents=True)
+    for i in range(40):
+        (seats / f"scout.toml.bak{i}").write_text("")
+        (seats / f".old{i}").mkdir()
+        (seats / f"_draft{i}.toml").write_text("")
+    (seats / "zz-ops.toml").write_text("")
+    _seats_listed(monkeypatch, lambda e: (e.name == "zz-ops.toml", e.name))
+    assert _sampled() == ["default", "zz-ops"]
+    for cmd in (f"cat {run_dir}/agent-zz-ops*", f"cat {run_dir}/agent-zz-ops.principal.k*"):
+        assert gate.classify(sh(cmd)).category == "credentials", cmd
+
+
+def test_at_most_64_seats_are_sampled_the_first_by_name(run_dir, monkeypatch):
+    """The cap holds, and it keeps the same 64 seats whatever order the folder lists them in."""
+    seats = Path(gate._exo_home()) / "seats"
+    seats.mkdir(parents=True)
+    names = [f"s{i:02d}" for i in range(1, 71)]
+    for n in names:
+        (seats / f"{n}.toml").write_text("")
+    (seats / "s01").mkdir()                           # the same seat as s01.toml: one place, not two
+    _seats_listed(monkeypatch, lambda e: tuple(-ord(ch) for ch in e.name))
+    assert _sampled() == sorted(["default"] + names[:64])
+    assert gate.classify(sh(f"cat {run_dir}/agent-s64.principal.k*")).category == "credentials"
 
 
 # A glob with no folder is matched against the run secrets by their own names, not their paths (fnmatch's `*`

@@ -107,8 +107,9 @@ The run folder is a secret store (#169), like `~/.ssh` and `keys/`. Its secrets 
 - a wildcard in the folder that could match one of them: `run/*`, `run/*.key`,
   `run/exod.principal.k*`, `run/exod.tok*`, `run/agent-*`, `run/agent-default.*`. The agent keys
   are sampled as `agent-<seat>.principal.key` for `default` (the terminal client's agent when no
-  seat is given), `$EXO_SEAT` and the first 64 seats under `$EXO_HOME/seats` (`<name>.toml`,
-  `<name>.json` or `<name>/`).
+  seat is given), `$EXO_SEAT` and up to 64 seats under `$EXO_HOME/seats` (`<name>.toml`,
+  `<name>.json` or `<name>/`; other files there are skipped first, then the first 64 by name are
+  taken).
 
 A call that touches one is `credentials`, reads and writes alike, wherever the gate finds
 `~/.ssh`: shell words, redirections, `$( )`, `bash -c`, interpreter `-c` code, `execute_code`
@@ -129,23 +130,23 @@ paths, and an agent's key only when the wildcard spells its `agent-` or `.princi
 `ls seat*` already did, while `ls *run*`, `find . -name 'run*'`, `ls age*` and `ls *main*` keep
 their class, also when `main` is a seat. A wildcard with a folder reaches an agent's key the same way,
 or when its folder names a run folder or holds a literal part around its wildcards
-(`cat ~/.exo/*/*default*`, `cat .exo/run/*main*`), so `ls */*default*` and `ls ~/*test*` keep their
+(`cat ~/.exo/*/*default*`, `cat .exo/run/*default*`), so `ls */*default*` and `ls ~/*test*` keep their
 class. Any wildcard that spells the folder's path still asks (`ls ~/.exo/run*`, `ls */run*`). Known friction (fails closed, no grant): a bare glob that
 matches the core's file names or spells `agent-` asks in any folder, such as `ls *prin*`,
 `ls *xod*` or `git diff -- 'agent-*'`.
 
 Limits. No environment variable carries the credential, and `tool_env` drops `EXOD_*`,
 `EXO_PRINCIPAL*` and `EXO_*SOCK*`. The gate does not catch: a walk over an ancestor
-(`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`); a relative `run` after `cd` into
-`$EXO_HOME` (`cd ~/.exo && cat run/*`), or a `..` after `cd` into the readable `run/jobs`
-(`cd ~/.exo/run/jobs && cat ../*`; the same as `cd` for `~/.docker` or `~/.kube`); a wildcard
+(`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`); a relative name when the folder is
+the bash tool's own `cwd` argument rather than a `cd` on the line (`{"command": "cat *", "cwd":
+"~/.exo/run"}` is `read`, as is `cat id*` with `~/.ssh` as `cwd`; `cd ~/.exo/run && cat age*`,
+`cd ~/.exo && cat run/*` and `cd ~/.exo/run/jobs && cat ../*` ask, see "The working folder" below); a wildcard
 in a folder name above a file (`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for
 the folder itself (`grep -r . ~/.exo/ru?`, `ru[n]`: the last part needs three literal
 characters, the same as for `~/.ss?`; `~/.exo/r*` asks); an upper-case spelling on a
 case-insensitive filesystem (`~/.exo/RUN/*`, as `~/.SSH/*`); `${EXO_HOME:-...}`, as for
 `$EXO_HOME/keys`; a wildcard that spells part of an agent's name that is not sampled
-(`run/agent-scout*` when `scout` is neither `$EXO_SEAT` nor a seat under `$EXO_HOME/seats`), or
-a bare one for a key after `cd` into the folder (`cd ~/.exo/run && cat age*`); the
+(`run/agent-scout*` when `scout` is neither `$EXO_SEAT` nor among the 64 sampled seats); the
 built-in `glob` with the folder in `pattern` rather than `path` (it lists names; the same for
 `~/.ssh`); and a key beside a custom `--socket`, which is caught by name only
 (`cat <dir>/exod.principal.key` asks, `cat <dir>/*` does not). A tool process is the same OS

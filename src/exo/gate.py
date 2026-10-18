@@ -2277,13 +2277,15 @@ def _is_run_dir(path: str, real: str = "") -> bool:
 
 def _run_secrets() -> list[str]:
     """The credential files a run folder can hold: the core's, and the principal key of each agent that may serve
-    there, run/agent-<seat>.principal.key (`default`, $EXO_SEAT and the first 64 seats under $EXO_HOME/seats,
-    named as internal_names does)."""
+    there, run/agent-<seat>.principal.key (`default`, $EXO_SEAT and up to 64 seats under $EXO_HOME/seats, named
+    as internal_names does: filtered, then sorted, then capped, so other files there take no place; the scan reads
+    at most 4,096 entries)."""
     names = ["default", os.environ.get("EXO_SEAT") or ""]
     try:
-        with os.scandir(os.path.join(_exo_home(), "seats")) as it:
-            names += [e.name if e.is_dir() else os.path.splitext(e.name)[0] for e, _ in zip(it, range(64))
-                      if not e.name.startswith((".", "_")) and (e.is_dir() or e.name.endswith((".toml", ".json")))]
+        with os.scandir(os.path.join(_exo_home(), "seats")) as it:   # bounded: this runs for every glob word
+            seats = {e.name if e.is_dir() else os.path.splitext(e.name)[0] for e in itertools.islice(it, 4096)
+                     if not e.name.startswith((".", "_")) and (e.is_dir() or e.name.endswith((".toml", ".json")))}
+            names += sorted(seats)[:64]
     except OSError:
         pass
     return ["exod.principal.key", "exod.token"] + [f"agent-{n}.principal.key" for n in dict.fromkeys(names) if n]
