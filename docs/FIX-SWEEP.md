@@ -5,10 +5,26 @@ How to read this: what one agent team pushed to this repository, how the branche
 ## For the other agents
 
 - **Who owns these branches.** The 45 branches below belong to this sweep. Please do not push to them. Comment on their pull requests instead, or open your own branch.
-- **How they land.** They go in as pull requests. Each one merges only after a review by an agent other than the one that drafted it, with CI green on the current head.
+- **How they land.** 43 of the 45 branches are regrouped into nine pull requests, one commit per fix, rebased on main with the
+  conflicts below resolved. Each merges only after a review by an agent other than the one that drafted it, with the
+  checks green on its current head. The source branches stay as they are.
+
+  | Pull request | Branches |
+  |---|---|
+  | #213 first run, part 1 | fix/first-run-skills, fix/tui-boot-resume, fix/claude-cli-route, docs/first-user |
+  | #214 first run, part 2 | fix/memory-learning-principal, fix/provider-error-messages, fix/web-first-run, fix/decision-answer-cooldown, fix/gate-side-calls |
+  | #215 core sessions | fix/running-session-state, fix/multi-seat-home, fix/shutdown-job-notice, fix/cron-dst, fix/serve-socket-takeover, fix/record-interrupted-model-call |
+  | #218 protocol and config | fix/server-event-backpressure, fix/protocol-strict-decode, fix/usage-input-tokens, fix/seat-models-merge, fix/provider-table-merge, fix/command-cost-double-count, fix/chat-allow-always |
+  | #216 privacy | fix/private-thread-ledger, fix/context-undo-fork, fix/private-thread-tail, fix/context-provenance |
+  | #219 learning | fix/ingest-provenance, fix/learn-climb-gates, fix/learn-export-judge, fix/store-roots-recall |
+  | #221 security, part 1 | fix/bus-channel, fix/relay-hardening, fix/update-trust, fix/ledger-integrity |
+  | #222 security, part 2 | fix/tools-fs-safety, fix/bash-stream-redaction, fix/skill-gates, fix/edit-context-aware |
+  | #212 clients | fix/web-chat-view, fix/web-command-stream, fix/tui-thread-switch, fix/tui-pump, fix/install-update-scripts |
+
+  fix/gate-env-inject-config waits for PR #164. site/raise-prep waits for the owner.
 - **Decision numbers taken.** D-079 (event backpressure), D-080 (usage tokens) and D-081 (gate side calls). D-078 and D-082 are free.
 - **Left to the gate agent.** The open gate pull requests change src/exo/gate.py every few hours, so this sweep did not touch the gate findings listed under "Not done". The gate agent is welcome to take them.
-- **What this sweep is doing next.** Bringing each branch up to date with main, opening its pull request, and reviewing other agents' pull requests when asked.
+- **What this sweep is doing next.** Answering reviews on those nine pull requests, merging main into them as it moves, and reviewing other agents' pull requests.
 
 ## Where things stand
 
@@ -18,6 +34,8 @@ How to read this: what one agent team pushed to this repository, how the branche
 - Decision numbers in use: D-079 (event backpressure), D-080 (usage tokens), D-081 (gate side calls). No other branch uses them.
 
 ## How to merge
+
+The nine pull requests above already apply all of this. It is kept for anyone merging the source branches by hand.
 
 Most branches add a `### Fixed` block to CHANGELOG.md, so nearly every merge conflicts there. Keep both sides. A few docs pages (DOCS-MAP, USER-GUIDE, UI, SEATS, LEARNING, COMMANDS) conflict the same way: two branches add lines in the same place, so keep both.
 
@@ -114,12 +132,14 @@ These close the blockers and most majors in READINESS.md.
 
 ## Not done, and why
 
-- Five gate findings are held because another agent changes src/exo/gate.py every few hours:
-  - A post whose body comes from a file or a command bypasses the outbound scrub, so a standing grant can cover changed text. High.
-  - A symlink with a harmless name into ~/.ssh, ~/.aws or a .env file is read as a plain file. High.
-  - The bus registry is not protected like the store files.
-  - Tightening approvals.yaml mid-session waits for `/gate accept`.
-  - A quoted `}` inside `${..}` hides the rest of the line from the gate. This is already on main.
+- Five gate findings were held because the gate changes every few hours. Each is now tracked:
+  - A post whose body comes from a file or a command bypasses the outbound scrub: #208. High.
+  - A symlink with a harmless name into ~/.ssh, ~/.aws or a .env file is read as a plain file: #209. High.
+  - The bus registry is not protected like the store files: #210.
+  - Tightening approvals.yaml mid-session waits for `/gate accept`: #211.
+  - A quoted `}` inside `${..}` hides the rest of the line from the gate: open PR #158.
+- Nested `$( )` costs about n^5 to classify, and at about 500 levels observe mode lets a store write run: #220. Open
+  PR #158 fixes the classifier half.
 - A safety stop halted the store-glob task, and it was not retried.
 - The CHANGELOG backfill is left alone, because every branch edits that file.
 - Gate decision calls still do not show in `/trace` or the turn cost. That needs a plugin event seam in the core.
