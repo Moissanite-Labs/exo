@@ -312,7 +312,10 @@ A command is `allow` only when every program in it is known and nothing is hidde
   drops a backslash-newline from a compound value before it reads the value again as words, and so
   does the gate: in `declare -a 'b=($\<newline>(cmd))'` cmd runs and is classified. A `\\<newline>`
   is an escaped backslash and a newline, and stays; so does a backslash-newline in an `-i` or `-n`
-  value, which bash keeps.
+  value, which bash keeps. A `$( )` the line itself runs (in a double-quoted value) is read once,
+  with or without a backslash-newline in it. A backslash-newline in single quotes or a
+  here-document there is the exception: the line's run keeps it but the value bash reads again has
+  lost it, so a copy of that body in the value runs another command and is read on its own.
 - Nesting is read four levels deep. Past that the text is `opaque_exec` and asks. An `ssh` or
   `mosh` chain with more hops than that is not read either: the hops that were read keep the
   `remote host` exposure and the first host as target (so a `target:` deny on it still

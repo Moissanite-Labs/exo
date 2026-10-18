@@ -1168,7 +1168,10 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
             odd = odd or dynamic
         elif value and attrs & {"i", "n"}:   # arithmetic, or a name whose subscript runs when the nameref is used
             _, more, odd = _arith_scan(v, 0, nested=False)
-        more = [sub for sub in more if sub not in done]   # a command bash runs only as it reads the value again
+        # a body the line ran loses its \newlines too, unless bash kept one there (single quotes, a here-document)
+        seen = set(done) | {re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", d) for d in done
+                            if v != raw and not re.search("'|<<", d)}
+        more = [sub for sub in more if sub not in seen]   # a command bash runs only as it reads the value again
         parts += [classify_shell(sub, depth + 1) for sub in subs if depth < _DEPTH and sub not in done]
         late += [classify_shell(sub, depth + 1) for sub in more if depth < _DEPTH]
         fresh = bool(more or set(subs) - set(done))   # commands the line's own parse did not see

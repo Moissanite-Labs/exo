@@ -859,7 +859,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   line's own parts, as the line parse adds an unquoted one (so it does not take a tie from a redirection), a
   `[key]=` is read as a subscript, and a quoted operand after one or more unquoted compound ones is read too. A
   backslash-newline is dropped from a compound value before it is read, as bash drops it first (an `-i` or `-n`
-  value keeps it, as bash does). A command the
+  value keeps it, as bash does), and a `$( )` the line's own parse read is not read again, also when it holds a
+  backslash-newline (unless in single quotes or a here-document, which bash keeps there but not in the value it
+  reads again, so a copy of the body in the value is read). A command the
   line runs only because bash reads a value again also asks through `indirection`, as does an expansion in a `-i` or
   `-n` value, in a `-i` element, or in a compound value the line itself expanded. So when such a command outranks
   the line's own category, a deny on that category becomes ask, never allow or log
