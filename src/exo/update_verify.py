@@ -47,7 +47,8 @@ def _git(root, *args: str) -> list[str]:
 
 
 def _out(cmd: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    # surrogateescape: a commit message need not be UTF-8, and its bytes survive; writing them out still fails
+    return subprocess.run(cmd, capture_output=True, text=True, errors='surrogateescape', timeout=120)
 
 
 def _verify(root, sha: str, pin: Path, read=_out) -> subprocess.CompletedProcess:

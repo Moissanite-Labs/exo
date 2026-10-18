@@ -84,6 +84,19 @@ def test_signed_target_accepted(world):
     assert sha == sh(world["origin"], GIT, "rev-parse", "HEAD").stdout.strip()
 
 
+def test_signed_target_with_a_latin1_message_accepted(world):
+    """Only the commit's header is read for the signature check; its message need not be UTF-8 (#221 review)."""
+    pin(world)
+    (world["origin"] / "a.txt").write_text("2")
+    msg = world["origin"].parent / "msg.txt"
+    msg.write_bytes("caf\xe9\n".encode("latin-1"))
+    sh(world["origin"], GIT, "add", "-A")
+    r = sh(world["origin"], GIT, *_cfg(world["good"]), "-c", "i18n.commitEncoding=ISO-8859-1", "commit", "-q", "-S",
+           "-F", str(msg))
+    assert r.returncode == 0, r.stderr
+    assert update_verify.verify_target(world["local"]) == sh(world["origin"], GIT, "rev-parse", "HEAD").stdout.strip()
+
+
 def test_unsigned_target_refused(world):
     pin(world)
     commit(world["origin"], "next", None, {"a.txt": "2"})

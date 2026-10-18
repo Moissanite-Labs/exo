@@ -828,7 +828,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   The channel was a local socket client, so every first message from a new seat would be refused and trust on
   first use would end. Also rejected: a leader-signed pin, which needs a leader key the principal pinned, and no
   home has one by default. A same-user process that writes `keys/registry.json` directly stays out of scope (D-040
-  "Not covered").
+  "Not covered"). The bus seat registry, `$EXO_HOME/bus/registry.json`, is not yet a store path, so a plain `cp` to
+  it is not asked about (#210).
 - **Decision, approvals:** a principal connection answers as the principal (`client` is a label: `by` is
   `principal:tui`). A local connection answers only as `seat:<name>` with the D-033 signature, and never with
   `allow_always`. `approver_identity` returns `unknown` for an empty or unrecognised name, and `unknown` may not
@@ -910,6 +911,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   registry, or sends `turn.send` on the seat's socket (that counts as the principal until approval identity is
   bound to the connection, a separate change). The gate is what asks before writes to `keys/` and the store; the
   registry, the anchors and `ledger.sqlite.head` belong on its sensitive-path list.
+- *Amendment 2026-10-18 (fix sweep, #221):* the anchors are written after the append's COMMIT, from the committed
+  head, so a writer killed in between leaves them one event behind, never ahead. That lag of one event is accepted.
+  When the anchor beside the ledger cannot be written, the copy under `keys/heads/` still is, and the next append
+  tries again before it writes and refuses if it still fails: appends never go on with both anchors frozen.
+  `verify` reports `anchored_seq`. `exo log anchor` refuses to replace an anchor that does not match.
+  `--force` does, for a store an older Exo left one event ahead. `exo import-store` skips `.head` with the ledger
+  and drops a stale anchor a deleted store left for the destination. Not covered: a store folder deleted whole.
+  `exo memory verify` lists only the stores that exist, so the deleted store's `keys/heads/` anchor is read only
+  with `--principal <id>`.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
@@ -1362,7 +1372,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `--pin-trust REV` takes a different list only if the commit that last changed it in REV's first-parent history
   verifies against the current pin. The commit that set the list is checked, not REV, because the documented
   rotation pins `@{u}` when later commits are signed only by the new key. No override flag: the hand edit above is
-  the override. A list a pinned key signed earlier can still be pinned again (no rollback protection).
+  the override. A list a pinned key signed earlier can still be pinned again (no rollback protection). The pin,
+  `$EXO_HOME/update/allowed_signers`, and `config.json` are not yet store paths, so a plain `cp` or redirect to
+  them is not asked about. D-074 (#125) adds them. A commit message need not be UTF-8: only the header is read.
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
 
 ## D-077 (2026-10-15) Core budget: a ratchet with headroom, functionality and robustness first
