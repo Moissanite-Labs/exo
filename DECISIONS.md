@@ -1276,7 +1276,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the request that made it (`ensure_ascii` had made raw emoji three times larger). A joined terminal window no
   longer resends a turn, approval answer or other change after a lost reply; it resends only reads and commands
   whose connection never opened. It says the change may not have been delivered, keeps the typed text and
-  re-reads `approvals.list` to put back a card the core still holds.
+  re-reads `approvals.list` to put back a card the core still holds. The client reads on after a skipped frame
+  without `reconnect` too, so a caller that keeps its own `since` (the exo-bus channel, the web source) gets the
+  next event instead of asking for the skipped one again; a skipped frame that comes again ends such a stream.
 - **Scope against the handoff:** no ruling conflicted. D-039's file name and gate credential class are kept, so the
   launch record replaces the token file's contents rather than adding a file. The OS surface lives in another
   repository and migrates there. Clients expose the stream `instance` but the terminal and web views do not yet
@@ -1306,6 +1308,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   by stamp time; the parent walk with a clean, unreadable and descendant chain; the demotion reason in the log and
   the refusal; a core without its own start identity; the record in place before the socket accepts; the refusal
   type. `tests/clients/tui/test_lost_reply.py` and the web's `test_refused_principal_names_the_reason_and_the_restart`.
+  A skipped frame that comes again ends the stream (`test_unix_peer_auth_edges.py`), and the exo-bus channel's
+  event loop reads past one (`plugins/exo-bus/tests/test_bus_plugin.py`).
 - **Docs:** `docs/GATE.md` "Unix peer authentication", `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-061 (2026-10-13) Web sub-pages to the site v2 standard

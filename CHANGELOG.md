@@ -123,7 +123,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   client against a new core is quietly local. Protocol additions: `hello` reports `instance` and `heartbeat`, the
   event stream opens with a comment naming both, `approvals.list` returns a `cursor`, and the Python client ends a
   stream with no event or heartbeat for 45 s. Event frames are raw UTF-8, and a frame too large to read is skipped
-  instead of stalling the stream. A joined terminal window never resends a turn or approval answer whose reply was
+  instead of stalling the stream, also for a caller that keeps its own cursor (the exo-bus channel, so bus replies
+  after it still go out). A joined terminal window never resends a turn or approval answer whose reply was
   lost; it says so and keeps the text. Under `hidepid` or `ProtectProc` clients are local, with the reason logged and
   named in refusals.
 - `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and

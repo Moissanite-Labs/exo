@@ -83,6 +83,26 @@ def test_reconnecting_stream_moves_past_a_frame_too_large_to_read():
     assert asked == [0, 2]
 
 
+def test_a_frame_too_large_that_comes_again_ends_the_stream():
+    """A core that sends the same large frame after the client moved past it does not keep the client looping."""
+    async def main(asked):
+        def handler(request: httpx.Request) -> httpx.Response:
+            asked.append(int(request.url.params["since"]))
+            if len(asked) > 5:  # the mock never yields to the loop, so wait_for cannot end a spin: fail here
+                raise RuntimeError(f"the stream kept asking for the same frame: asked since={asked}")
+            return httpx.Response(200, headers={"Content-Type": "text/event-stream"},
+                                  content=_sse([(2, _notice(2, "x" * (FRAME + 10)))]))
+        c = Client(url="http://exod")
+        c._http = httpx.AsyncClient(base_url="http://exod", transport=httpx.MockTransport(handler))
+        try:
+            return [ev.seq async for ev in c.events(0)]
+        finally:
+            await c.aclose()
+    asked: list[int] = []
+    assert asyncio.run(asyncio.wait_for(main(asked), 15)) == []
+    assert asked == [0, 2]
+
+
 def test_joined_window_stream_moves_past_a_frame_too_large_to_read(monkeypatch):
     from exo_tui import conn
 
