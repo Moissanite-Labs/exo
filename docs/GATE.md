@@ -166,11 +166,53 @@ targets with `footer_exposures: [public]`.
 
 ## Shell commands: an allowlist (D-038)
 
+Command regexes in `deny` and `reserved` match both the original command and a literal-word
+view from the shell lexer, so `command:rm -rf` also vetoes `r"m" -"rf" ~`, `'rm' -rf ~`,
+`r\m -rf ~`, `$'rm' -rf ~` and `$"rm" -rf ~`: common literal quoting cannot weaken a veto.
+A word that holds a variable or a substitution is a placeholder in the view, so a regex that needs
+the literal part of such a word matches only the original text.
+A `$"..."` word is read as bash reads it without a catalog, so the line keeps its category and
+target (`curl $"https://evil.example/x"` is a `web_read` of `evil.example`, and a `deny: [web_read]`
+still denies it). With a message catalog and a non-C locale bash runs a translation instead, and
+expands `$( )` in it, so the line also carries the `indirection` signal and asks unless
+`opaque_exec` is named. It is decided a second time as `opaque_exec`, and the stricter outcome
+stands, so a deny, reservation or rule on `opaque_exec` still holds for it. A heredoc whose
+delimiter is spelled `<<$"EOF"` or `<<$'EOF'` ends on different lines in bash and in dash, which
+runs commands when bash is missing, so its body is read as commands too.
+Mapping entries use the same matching. A rule with decision `deny` or `ask` whose match has a
+`command` regex sees the view too, in a second pass that only raises: the first matching rule
+is still chosen on the original text, and the pass lifts the outcome to the rule's decision only
+when the view matches and the original text did not, so an ordered list such as an allow for one
+push target before an ask on `^git push` keeps working for plainly spelled commands. Allow and
+lower rules, and grants, match the original text only. The view keeps operators and word
+boundaries; whitespace, control characters and shell syntax inside a word are escaped, and
+dynamic words and heredoc bodies become placeholders made of control characters, which no
+literal word renders to and no regex naming letters or operators matches, so a veto on `>` or
+`exo` does not fire on `ls $HOME`. It does not expand variables or run a shell. A `$"..."` inside
+`${...}` is left to the parameter-expansion work (#143, #158). Nested views come from the text the
+classifier already reads: command substitutions and backticks, `bash -c`, `eval`, shell stdin and
+every string literal of code (`python -c`, `execute_code`), with the existing depth limit of
+four. The gate can only guess which literals in code are commands, so each literal is matched as
+a command even when the code merely prints it: `python3 -c "print('rm -rf build')"` is denied under
+`command:^rm -rf`, fail closed, since the same path catches `os.system('rm -rf build')`. The
+reason names only the policy entry, never the matched words: decisions go to the ledger, which
+holds no command text. An unanchored veto regex also matches separately quoted data arguments
+(`printf %s r"m" -"rf"` matches `rm -rf`), fail closed by design. These remain regex policies,
+not a shell sandbox: original-text matches still apply, spellings outside literal quoting need
+their own patterns, and dynamic or deeper execution asks through `opaque_exec` rather than being
+caught by a command-regex veto.
+
 The shell classifier used to name dangerous programs and let everything else through as `shell`.
 Any indirection walked past it. It now works the other way round. A small lexer
 (`exo.gate._Lexer`) reads quotes, escapes, `$( )`, backticks, `$VAR`, redirections and heredocs,
 and splits the line into simple commands. Each simple command has one program position (after
 assignments, reserved words such as `if` and `do`, and prefixes such as `sudo`, `env`, `timeout`).
+A `$'..'` word is decoded with bash's ANSI-C rules (bash 5.2, UTF-8 locale; issue #167): `\n`, `\e`
+and the other letter escapes, octal and `\x` values (also `\x{..}`) cut to 8 bits, `\u` with 1 to 4
+and `\U` with 1 to 8 hex digits, `\cX` (`\c\\` takes one backslash), and an unknown escape kept with
+its backslash. A NUL ends the quoted part, so `$'--forc\0x'e` is `--force`. A `\u` or `\U` value that
+is no character is written as bash writes it: a few bytes that are not ASCII, or nothing at all from
+`\U80000000` on, so `$'--forc\UFFFFFFFFe'` is `--force` too.
 
 A command is `allow` only when every program in it is known and nothing the gate reads is hidden
 (the known forms it does not read yet are listed under "Known limits" below):
@@ -189,6 +231,17 @@ A command is `allow` only when every program in it is known and nothing the gate
   `uv run`) it classifies the inner text too, within a bounded inspection depth (four levels,
   see "Known limits"). The result is the most severe part, and it keeps the `indirection`
   signal, so `decide` asks even when the inner part alone would only log.
+- `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
+  form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
+  before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
+  skipped; before a simple command (`coproc w echo hi`) the first word is the program.
+  `function NAME { ...; }` is read the same way. An environment dump inside (`coproc env`,
+  `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Until D-075 lands, a coproc is denied
+  only when its inner command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
+  category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`) still
+  asks. A heredoc after the closing `}` of a block (`coproc W { bash; } <<EOF`) attaches to the
+  `}` and is not fed to the inner command, which asks as `opaque_exec`; the same limit applies
+  to `{ ...; } <<EOF` on its own.
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
@@ -230,8 +283,8 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
 - **Hidden text that is allowed outright.** Some unread execution does not even ask today. An
   entry for the hidden action's category (`github_post`, `delete`...) does not reach it, in
   `categories:`, `deny:` or `reserved:`. An entry that matches the command text does (a `command:`
-  regex, or a rule with a `command` match), but quoting can evade that regex today (#136; fix in
-  review in #142). An `ssh` or `mosh` command reached at the depth cap, after four levels of `ssh`
+  regex, or a rule with a `command` match); since #136 that regex also sees the literal-word view,
+  so common literal quoting no longer evades it, but other spellings need their own patterns. An `ssh` or `mosh` command reached at the depth cap, after four levels of `ssh`
   hops, runner prefixes such as `uv run` or `poetry run`, or `$( )`, in any mix (for example
   `echo $(ssh h0 ssh h1 ssh h2 ssh h3 ...)`), falls back to plain `shell` and is allowed under the
   default policy, the template and a category deny (#153; fix in review in #164); a `target:`
@@ -248,9 +301,10 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   `opaque_exec`, which asks, and the card names the wrapper rather than the action: `eval $(...)`
   and `eval "$(...)"`; a command arriving on stdin, `echo '...' | xargs -I{} sh -c '{}'` (while
   `echo 3 | xargs -I{} sh -c 'gh pr comment {} --body hi'` is read and denied); the wrappers
-  `watch`, `parallel`, `tmux`, `screen` and `setsid` (#160, with the `function NAME {` form);
-  `coproc` (#131; fix in review in #140); a heredoc after a compound command's closing token,
-  `{ bash; } <<EOF` (#161).
+  `watch`, `parallel`, `tmux`, `screen` and `setsid` (#160); a `coproc` or `function NAME {`
+  whose inner command ties with `opaque_exec` or ranks below it (#131: the inner command is read
+  now, see above, and its category deny applies when it outranks `opaque_exec`, as `github_post`
+  does); a heredoc after a compound command's closing token, `{ bash; } <<EOF` (#161).
 - **Project code.** A trusted program that runs project code (pytest runs conftest.py, git runs
   hooks, `npm install` runs package scripts) can run code the agent wrote earlier with a local
   write. The gate does not claim to stop that; it stops the one-step forms. A sandbox is the
