@@ -125,6 +125,19 @@ def test_fuzzy_verbatim_form_keeps_absolute_indent():
     assert err is None and new == "\tx := g()\n\tlog(x)"
 
 
+def test_fuzzy_dedented_spaces_in_a_tab_indented_file():
+    # A block dedented to column 0 with space indentation, matched in a tab-indented file: a tab counts to the
+    # next multiple of 8 columns, so its lines sit shallower than the file's and get the file's indent back.
+    content = "def f():\n\tif  x:\n\t\ty()\n\treturn 1\n"
+    new, _n, strategy, err = fuzzy_find_and_replace(content, "if x:\n    y()", "if x:\n    y2()\n    z()")
+    assert err is None and strategy == "whitespace_normalized"
+    assert new == "def f():\n\tif x:\n\t    y2()\n\t    z()\n\treturn 1\n"
+    compile(new, "<edit>", "exec")
+    # The same block dedented with a tab is re-anchored as before.
+    new, _n, _s, err = fuzzy_find_and_replace(content, "if x:\n\ty()", "if x:\n\ty2()")
+    assert err is None and new == "def f():\n\tif x:\n\t\ty2()\n\treturn 1\n"
+
+
 def test_fuzzy_indented_unicode_and_escape_matches_stay_in_place():
     # Unicode- and escape-normalized matches after a line's indent keep the file's typography and are never
     # re-anchored: their continuation lines land exactly where new_string puts them.
