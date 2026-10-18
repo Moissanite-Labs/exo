@@ -167,20 +167,23 @@ def type_script(kind: str) -> str:
     """A snippet that types into the composer once the scripted events have landed (it sits in the copied page)."""
     if not kind or not TYPED[kind]:
         return ""
-    return ('<script>addEventListener("DOMContentLoaded", () => setTimeout(() => { const i = document.querySelector(".xc-input");'
+    return ('addEventListener("DOMContentLoaded", () => setTimeout(() => { const i = document.querySelector(".xc-input");'
             f' i.focus(); i.value = {TYPED[kind]!r}; i.setSelectionRange(i.value.length, i.value.length);'
-            ' i.dispatchEvent(new Event("input")); }, 2000));</script>')
+            ' i.dispatchEvent(new Event("input")); }, 2000));')
 
 
 def hold_load(kind: str = "") -> None:
     """Chrome shoots at the load event. Serve a copy of the client with one slow image so the load event waits for
-    the scripted events and the fade animations to finish. The repo's static files are not touched."""
+    the scripted events and the fade animations to finish. The repo's static files are not touched. The page's
+    Content-Security-Policy refuses inline scripts, so the added script is a file in the copy, loaded by src."""
     import shutil
     dest = Path(tempfile.mkdtemp(prefix="exo-static")).resolve() / "static"
     shutil.copytree(STATIC0, dest)
+    pin = 'localStorage.setItem("xc-layout", "classic");'  # the older shots show the classic order (D-046)
+    (dest / "promo.js").write_text(pin + "\n" + type_script(kind) + "\n")
     index = dest / "index.html"
-    pin = '<script>localStorage.setItem("xc-layout", "classic");</script>'  # the older shots show the classic order (D-046)
-    index.write_text(index.read_text().replace("</body>", pin + '<img src="/api/hold" alt="" hidden>' + type_script(kind) + "</body>"))
+    index.write_text(index.read_text().replace(
+        "</body>", '<script src="/static/promo.js"></script><img src="/api/hold" alt="" hidden></body>'))
     server.STATIC = dest
     api.dispatch = dispatch0
 
