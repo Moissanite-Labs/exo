@@ -770,6 +770,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   or the principal store are on a protected list. Any write is `store_write`: a floor like credentials, no standing
   grant, principal-only (`approvals.yaml` cannot add seats), enforced in observe mode. Reads stay `read`; `keys/`
   reads stay `credentials`.
+  *Amendment 2026-10-18 (issue #224):* a write target is matched against the protected list after bash brace
+  expansion, read as for the secret stores (#184): a shell word from its source text, a file tool's path as
+  written. A hit on any expanded word counts, and a word past the brace limits counts as the store. The store
+  checks have their own 4,096-word budget per tool call. `echo x > ~/.exo/polic{i..i}es/default.yaml` was an
+  allowed local write.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,

