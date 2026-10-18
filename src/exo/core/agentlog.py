@@ -107,15 +107,15 @@ class AgentLogView:
         return e[0].created if e else f"no log entry {pos}"
 
     def subagent(self, name: str, start: int = 1, n: int = 40, caller: str | None = None) -> str:
-        """A subagent's own log, by role, title or session id (the newest match). One under a private thread, at
-        any depth, opens only from that thread or a fork of it: the hidden set starts at each private thread that
-        is not the caller or one of its parents (D-028)."""
+        """A subagent's own log, by role, title or session id (the newest match, the later row on a tied timestamp).
+        One under a private thread, at any depth, opens only from that thread or a fork of it: the hidden set starts
+        at each private thread that is not the caller or one of its parents (D-028)."""
         rows = self.store._q(
             "WITH RECURSIVE up(id) AS (SELECT id FROM sessions WHERE id=? UNION SELECT s.parent FROM sessions s JOIN up"
             " ON s.id=up.id WHERE s.parent IS NOT NULL), hid(id) AS (SELECT id FROM sessions WHERE kind='private' AND"
             " id NOT IN up UNION SELECT c.id FROM sessions c JOIN hid ON c.parent=hid.id) SELECT id, title FROM"
             " sessions WHERE agent=? AND kind='subagent' AND (id=? OR title LIKE ?) AND id NOT IN hid"
-            " ORDER BY created DESC LIMIT 1", (caller, self.agent, name, f"{name}%"))
+            " ORDER BY created DESC, rowid DESC LIMIT 1", (caller, self.agent, name, f"{name}%"))
         if not rows:
             return f"no subagent named {name!r}"
         sid = rows[0]["id"]
