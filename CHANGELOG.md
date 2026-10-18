@@ -54,6 +54,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   verbatim from the file, a one-line `old_string`, and escape- or Unicode-normalized matches are replaced in place
   as before, keeping the line's indent and the file's typography; `replace_all` on adjacent lines and an empty
   `new_string` no longer touch text outside the match (#127).
+- `scripts/promo_shots_web.py` works under the web page's Content-Security-Policy (#162). The layout pin and the
+  composer typing it adds to the copied page were inline scripts, which the policy refuses, so regenerated shots
+  came out in the inverse layout with an empty composer. They are now a file in the copied static folder, loaded
+  by `src`.
 
 ### Changed
 - Command deny and reservation regexes also match a literal-word view of the command (#136, D-038
@@ -103,6 +107,30 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Tests that failed on a loaded machine (#163): the claude-cli fallback test's fake CLI now reads its input before it
   fails, so the provider's write never meets a closed pipe and the error always reports the exit code, and the TUI
   boot test drives the boot screen's clock, so a slow start can no longer end the boot before the test looks at it.
+
+### Fixed
+- A steer sent while a turn was finishing (its completion hooks still held the session) is no longer lost: it waits
+  for the lock and runs as the next turn, keeping its author. A peer, bus or job message in that window starts a turn
+  where the seat wakes instead of being queued behind a turn that was over. The web chat keeps a `steer queued`
+  chip until the message lands or is cancelled, and drops one the core no longer holds (#147, #151).
+
+### Fixed
+- Model spend (#128): a pinned route rate below the audited long-prompt tier is refused, at policy validation and
+  at request admission, in all four classes (input, output, cache read, cache write). `claude-haiku-5-5` bills
+  $0.50/$2.50 input/output, $0.05 cache read and $0.625 5-minute cache write per MTok above 100K prompt tokens,
+  so a headline pin under-reserved and under-settled long prompts, cache-heavy ones most. The floors are
+  validation floors only; every charge still uses the pinned rates. The native-contract admission checks now
+  live in `exo.model_spend.admit_native`.
+
+### Fixed
+- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
+  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
+  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
+
+### Security
+- Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
+  `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
+  family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
 - `exo web` sends a strict Content-Security-Policy on every response (#162, D-039): script, style, images and
