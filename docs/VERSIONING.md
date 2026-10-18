@@ -45,6 +45,9 @@ Core, clients and plugins ship together under one version.
   - `--prod` needs `--version site-vX.Y`. It refuses if that tag exists, then tags the deployed commit and pushes the tag.
   - Staging takes an optional `--version site-vX.Y-rc.N` and tags the same way.
   - Every deploy writes `version.json` at the site root: site version, exo version, commit, date. The footer can show it.
+  - A failed copy or deploy exits non-zero and tags nothing, so the version stays free for the retry. It needs
+    `rsync`. A versioned deploy refuses uncommitted changes under `site/`. An unversioned one deploys them and
+    marks the commit `-dirty` in `version.json`.
   - The copy is still git-free and staging is still noindex.
 
 ## 3. Documents
