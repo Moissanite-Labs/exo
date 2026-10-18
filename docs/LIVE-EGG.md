@@ -1,7 +1,7 @@
 # The live egg: x0 reacts to repo activity (D-059)
 
 Status: **Proposed** (2026-10-13), revised the same day for instant events, the name x0 and meditation, and on
-2026-10-18 after the review of PR #107. Nothing here is built. D-059 in `DECISIONS.md`. The XP rules the feed applies
+2026-10-18 after the reviews of PR #107. Nothing here is built. D-059 in `DECISIONS.md`. The XP rules the feed applies
 are in `docs/EXOPET.md` section 3 (D-058). The egg itself is `site/brand/egg.js` (`docs/BRAND.md`, D-049). This page
 does not depend on the event-activation decision (D-057), and D-057 does not depend on this page.
 
@@ -137,8 +137,9 @@ A `v: 1` page still reads `egg` and grows the fill correctly, and drops every ev
 #108 is such a page. It was written against `v: 1`: its client (`site/brand/egg-feed.js`) updates the egg block from a
 feed whose `v` is above 1 and ignores the events, its demo feed is one `v: 1` response, its `ExoEgg.EVENTS` has
 `issue`, `pr`, `merge` and `release` only, and its comments cite section 1.2 for the feed client, which is section 1.3
-here. Either #108 moves to `v: 2` before it merges (recommended), or `v: 1` stays the deployed contract and this page
-waits. This page does not change #108.
+here. Its release animation also lifts the stage by 0.15 (`lift` in its `egg.js` at `da5cfe8`), which section 2.1 drops.
+Either #108 moves to `v: 2` before it merges (recommended), or `v: 1` stays the deployed contract and this page waits.
+This page does not change #108.
 
 Errors: `429` with a `retry-after` header when a client polls too fast; `503` when the store is down. On any error the
 page keeps the last good state and retries after `poll_s` (or `retry-after`), doubling up to 300 seconds.
@@ -215,11 +216,11 @@ XP counter that adds `weight` as each `validated` event plays, and must reset it
 
 ## 2. What each event looks like
 
-The repository events use the egg's existing parts: packets on edges, lit dots, cell glow, the core heartbeat and the
-stage. Meditation needs three things `site/brand/egg.js` does not have: a fold of the lattice, a dim of the line alpha
-and a slow breath (the egg has a one-percent breathing of its scale, which is not that). They are new work, listed in
-section 5. Orange means "something happened now", as everywhere in Exo. Cold blue means "learned", as in the pet (EXOPET
-section 5), so the absorb glow in meditation is cold blue.
+The repository events use the egg's existing parts: packets on edges, lit dots, cell glow and the core heartbeat. None
+of them moves the stage. Meditation needs three things `site/brand/egg.js` does not have: a fold of the lattice, a dim
+of the line alpha and a slow breath (the egg has a one-percent breathing of its scale, which is not that). They are new
+work, listed in section 5. Orange means "something happened now", as everywhere in Exo. Cold blue means "learned", as
+in the pet (EXOPET section 5), so the absorb glow in meditation is cold blue.
 
 ### 2.1 Repository events: instant
 
@@ -229,7 +230,7 @@ section 5), so the absorb glow in meditation is cold blue.
 | 2 | pr | a strong beat; 4 packets leave the core, and one long orange packet enters at a random outer dot and travels the lattice to the core, lighting each dot it passes | 1.5 to 2.5 s |
 | 2 | review | one orange packet enters at a random outer dot, crosses the lattice through the core and leaves at the opposite side, lighting each dot it passes; one beat as it passes the core | 1.5 s |
 | 3 | merge | a bloom: a wave of cell glow runs from the core to the outer cells, every live dot lights for an instant, 12 packets leave the core | 1.2 s |
-| 4 | release | a growth flash: the stage lifts by 0.15 and eases back, the bloom runs twice, 24 packets, then the stage settles at the feed's new value | 2.5 s |
+| 4 | release | a growth flash: the bloom runs twice, the core heartbeat beats three times, each stronger than the last, and 24 packets leave the core. The stage does not move | 2.5 s |
 
 No delay is added anywhere. An event starts the moment the poll that carries it returns, if nothing is playing.
 GitHub delivers the webhook within a second or two, the edge cache adds at most 5 seconds and the poll at most 10, so a
@@ -245,7 +246,10 @@ Pacing, only when several events arrive in the same poll, so a burst stays reada
 - The queue holds at most 20. When it is full, the waiting events are folded into one: the highest level among them,
   played once.
 - At most one bloom (level 3 or 4) every 3 seconds; extra merges inside that window play as level 2.
-- `egg.event` never changes `activity`. The page may raise `activity` a little while the queue is not empty.
+- `egg.event` never changes `activity` or the stage. Only `setStage` moves the stage, because `egg.js` thins the shell
+  from stage 0.25. A release flash that lifted a full fill of 0.25 by 0.15 would give `sh` of about 0.953 and drop the
+  shell edges whose seed is below about 0.051, so about 5 percent of the shell would flicker. The page may raise
+  `activity` a little while the queue is not empty.
 
 ### 2.2 Meditation
 
@@ -309,7 +313,10 @@ client code or the feed.
 2. **Signature.** Compute HMAC-SHA256 of the raw body with `EGG_WEBHOOK_SECRET` and compare with the
    `X-Hub-Signature-256` header in constant time. Mismatch or missing: `401`, nothing stored, nothing logged except a
    counter. Verify before parsing JSON.
-3. **Replay.** Keep each `X-GitHub-Delivery` id for 48 hours; a repeat gets `200` and is ignored.
+3. **Replay.** GitHub signs the raw body only. The `X-GitHub-Delivery` id is a header outside the signature, so a
+   captured body and signature replays under a new id, and the id alone stops nothing. Keep two keys for 48 hours: the
+   delivery id, and the SHA-256 of the raw body, which the signature covers. A repeat of either gets `200` and is
+   ignored. A replay after 48 hours meets step 7: instant XP is awarded once for each item and action.
 4. **Repository.** Accept only the one configured repository id (`EGG_REPO_ID`).
 5. **Events taken.** `issues` (`opened`, `closed`, `labeled`, `deleted`, `transferred`), `pull_request` (`opened`,
    `closed`, `edited`, `labeled`), `pull_request_review` (`submitted`), `create` with `ref_type` `tag`, `ping`.
@@ -325,10 +332,12 @@ client code or the feed.
    instant XP, and its merged pull requests count inside the core cap). The rule looks at the sender, the account that
    acted. Credit for a merged pull request still goes to the pull request's author.
 7. **Classify and score.** Apply D-058 (`docs/EXOPET.md` section 3): author class (core, agent, outside), instant XP
-   and its caps, voids. The private record keeps an HMAC of the item's repository number and of the author login
-   (keyed with `EGG_HASH_KEY`), the GitHub node id of reviews (needed to read reactions), the class, the type, the time
-   and the status. Logins in the clear are never stored. The list of core logins is an environment variable, not a
-   file in the repo.
+   and its caps, voids. Instant XP is awarded once for each item and action. The key is the item's HMAC with the action
+   (`opened`, `merged`, a review's node id, or a release's tag). An event whose key is already in the record adds no XP
+   and no feed event, so a replayed merge cannot add its 2 XP again. The private record keeps an HMAC of the item's
+   repository number and of the author login (keyed with `EGG_HASH_KEY`), the GitHub node id of reviews (needed to read
+   reactions), the class, the type, the time and the status. Logins in the clear are never stored. The list of core
+   logins is an environment variable, not a file in the repo.
 8. **Record validations.** On a merged pull request, and on an `edited` merged pull request up to 7 days after the
    merge when the edit's sender is a core account, apply the detection rules in section 3.3. An edit by anyone else
    counts nothing. Each validated item joins the validation queue with its kind and XP; `egg.pending` rises.
@@ -481,12 +490,13 @@ brief.
 2. **Functions.** `site/api/egg/hook`, `meditate`, `feed`, `settle`; the store; secrets and the read-only token in both
    Vercel projects; webhooks on the repo; `scripts/x0_meditate.py` (staging first); the `deploy-site.sh` change that
    keeps `crons` on staging (section 3.7). Tests: a fixture payload with a good and a bad signature, a replayed
-   delivery, a bot event, an App on the agent list, a spam-labelled issue that never validates, a merged pull request
-   with "Fixes #N" and a `Salvaged-from` line, an `edited` merged pull request edited by its author and by a core
-   account, a tag `create` event from a core account, from anyone else and for a pre-release tag, a review with a
-   `rocket` from the bot's id and one from a maintainer, a meditation start with a bad signature, an empty queue, and a
-   stop. A site test reads `egg.js` and checks that at stage 0.25 no shell edge is dropped. A feed test checks that
-   `egg.stage` is at most 0.25 while `egg.state` is `filling`, `meditating` or `waking` (also when a meditation takes
-   `xp` past the target) and below 1 until `hatched`.
+   delivery id, the same body under a new delivery id, a merged pull request delivered twice (its XP counts once), a
+   bot event, an App on the agent list, a spam-labelled issue that never validates, a merged pull request with "Fixes
+   #N" and a `Salvaged-from` line, an `edited` merged pull request edited by its author and by a core account, a tag
+   `create` event from a core account, from anyone else and for a pre-release tag, a review with a `rocket` from the
+   bot's id and one from a maintainer, a meditation start with a bad signature, an empty queue, and a stop. A site test
+   reads `egg.js` and checks that at stage 0.25 no shell edge is dropped, and that playing every event type at stage
+   0.25 leaves the stage at 0.25. A feed test checks that `egg.stage` is at most 0.25 while `egg.state` is `filling`,
+   `meditating` or `waking` (also when a meditation takes `xp` past the target) and below 1 until `hatched`.
 3. **Production.** Point the production webhook, check the feed and one meditation for a day on staging, then
    promote.
