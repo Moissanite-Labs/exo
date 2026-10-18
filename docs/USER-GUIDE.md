@@ -65,7 +65,7 @@ and the number of open findings. Screenshots are in `docs/ui/` (for example `doc
 Set `EXO_REDUCED_MOTION=1` to turn motion off. `NO_COLOR` turns colour off.
 
 **Web (`exo web`).** Run `exo web` in a terminal. It opens the page in your browser for you. If it does not (no
-browser, `--no-open`, or `--host` on a non-loopback address), open the link it prints: `http://127.0.0.1:7342/#token=...`. The part after `#token=` is a
+browser, `--no-open`, or a `--host` other than `127.0.0.1`, `localhost`, `::1` or a wildcard bind), open the link it prints: `http://127.0.0.1:7342/#token=...`. The part after `#token=` is a
 key for this launch only; the page needs it for everything and refuses requests without it. After you restart
 `exo web`, use the new link: the old one stops working. Run `exo` and `exo web` in either order: both
 see the same agent and threads. `exo web` joins a terminal window's core, or `exo serve`, if one is running; if
@@ -277,7 +277,7 @@ Details and the cost rules: `docs/TRACE.md`.
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
 | The warning about "not inside a git repo" | The thread's folder is not a repo. Set `[session] cwd` in the seat, or `/cwd` to see where you are. |
 | The web page says "missing or wrong page token" | Open the link `exo web` printed this time. Each launch has a new token. |
-| The web page says "this browser link was already used or has expired" | The browser link is good once, for two minutes. Open the link `exo web` printed in the terminal. If the terminal also warned that a link was used twice, paste the new link it printed into the browser that is already open (do not click it in the terminal). |
+| The web page says "this browser link was already used or has expired" | The browser link is good once, for two minutes. Paste the link `exo web` printed in the terminal into this tab; do not click it in the terminal. If the terminal also warned that a link was used twice, paste the new link it printed into the browser that is already open. |
 | Keys must stay private | Exo never writes secrets through `config.set`, and removes known key values from tool output. See `docs/SEATS.md`. |
 
 ## 11. Your store and the ledger

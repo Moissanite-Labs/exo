@@ -37,9 +37,10 @@ async function takeCode() {
   try { got = await redeem(decodeURIComponent(c.slice(5))); } catch (e) { got = {}; }
   const value = got.token || "";
   const why = got.error || "";
+  // paste, not click: a click in the terminal hands the #token= link to the URL opener's argv again (#166)
   launchRefused = value ? "" : (!why || why.includes("launch code")
-    ? "This browser link was already used or has expired. Open the link exo web printed in the terminal."
-    : "This browser link was refused (" + why + "). Open the link exo web printed in the terminal.");
+    ? "This browser link was already used or has expired. Paste the link exo web printed in the terminal into this tab."
+    : "This browser link was refused (" + why + "). Paste the link exo web printed in the terminal into this tab.");
   if (value) sessionStorage.setItem("xc-token", value);
   return !!value;
 }

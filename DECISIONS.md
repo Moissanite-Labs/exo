@@ -881,7 +881,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   The race shows up as a replaced token and a terminal warning only when the launched page also redeems the code
   after the winner: the first redemption is silent. A browser that never runs the page's script (a text browser
   such as `lynx` or `w3m`, which `webbrowser` falls back to with no display) never redeems, so the winner keeps a
-  working token and nothing warns. Rejected for now: opening a 0600 local file that redirects to the `#token=` link
+  working token and nothing warns. Kernel peer checks do not cover this hop either: D-060 (#175, Unix peer
+  authentication) checks clients of the core's socket, not a browser on TCP, and must name this hop in its Limits
+  when it lands. Rejected for now: opening a 0600 local file that redirects to the `#token=` link
   (the other fix #166 named). It needs no second redemption, but leaves the token on disk until removed, and a
   sandboxed browser (snap, flatpak) may not read the file. Revisit if launches without a script-running browser
   matter. `docs/ui/WEB.md` "Opening the page and the page token".

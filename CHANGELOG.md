@@ -125,7 +125,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   token ends every other connection, including a request that passed the token check and still waits for its body,
   and a body is checked against the current token again once read. The warning shows only when the launched page
   redeems the code too, so a browser that runs no script (a text browser) gives none. The printed `#token=` link is
-  unchanged. With a non-loopback `--host` no browser is opened; use the printed link.
+  unchanged. Unless `--host` is `127.0.0.1`, `localhost`, `::1` or a wildcard bind, no browser is opened; use the
+  printed link. A refused browser link tells you to paste the printed link into the tab, not click it in the
+  terminal (a click hands the token to the URL opener's argv).
 - Gate (#184, D-038): brace sets are expanded as bash does before a path is matched against the secret stores.
   `cat ~/.config/gh/{hosts,x}.yml`, `cat ~/.docker/{*,}`, `cat ~/{},.netrc}`, `cat ''{},.env}`,
   `cat $""{.env,x}` and `cat .{d..f}{m..o}{u..w}` were allowed reads, as was `ls /srv/exo{007..1000..993}/keys`
