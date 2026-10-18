@@ -236,3 +236,54 @@ def test_subscript_at_depth_cap_is_opaque(line):
     c = gate.classify_shell(line, gate._DEPTH)
     assert c.category == "opaque_exec", c
     assert decide(c, {"gates": {"categories": {"opaque_exec": "deny"}}}).outcome == "deny", c
+
+
+# The gate reads the command a trusted program is told to run (#154: an exec option, an ssh -o setting, a sqlite3
+# or psql shell command, GIT_SSH_COMMAND or PAGER set before it), and a subscript in that command is read too. A
+# name builtin with an assignment before it, or an export-like argument after it, has both read. Before #164 was
+# merged in (1427d60) each exec form was allow, or opaque_exec for a GIT_SSH_COMMAND prefix (ask, never deny); on
+# main 3cd13f3 (before #179) each row was allow, or opaque_exec for the same prefix.
+EXEC_POSTS = [
+    f"ssh -o \"ProxyCommand=unset 'a[\\$({GH})]'\" host",
+    f"ssh -o \"ProxyCommand printf -v 'a[\\$({GH})]' %s x\" host",
+    f"ssh -oProxyCommand=\"read 'a[\\`{GH}\\`]' <<< x\" host",
+    f"GIT_SSH_COMMAND=\"unset 'a[\\$({GH})]'\" git fetch",
+    f"env GIT_SSH_COMMAND=\"unset 'a[\\$({GH})]'\" git fetch",
+    f"export GIT_SSH_COMMAND=\"unset 'a[\\$({GH})]'\"",
+    f"export PAGER=\"unset 'a[\\$({GH})]'\"",
+    f"tar --to-command=\"unset 'a[\\$({GH})]'\" -xf a.tar",
+    f"tar -xf a.tar -I \"declare 'a[\\$({GH})]=1'\"",
+    f"rsync -e \"test -v 'a[\\$({GH})]'\" src host:dst",
+    f"git rebase -x \"unset 'a[b[0]+\\$({GH})]'\" main",
+    f"sqlite3 db \".shell unset 'a[\\$({GH})]'\"",
+    f"sqlite3 db <<'EOF'\n.shell unset 'a[$({GH})]'\nEOF",
+    f"sqlite3 -cmd \".system printf -v 'a[\\$({GH})]' %s x\" db",
+    f"psql -c \"\\\\! unset 'a[\\$({GH})]'\"",
+    f"PAGER=less printf -v 'a[$({GH})]' %s x",
+    f"declare 'a[$({GH})]=1' PAGER=less",
+]
+
+
+@pytest.mark.parametrize("line", EXEC_POSTS)
+def test_command_in_exec_option_subscript_is_classified(line):
+    c = sh(line)
+    assert c.category == "github_post", c
+    assert decide(c).outcome == "ask", c
+    assert decide(c, DENY_CATEGORY).outcome == "deny", c
+    assert decide(c, DENY_LIST).outcome == "deny", c
+
+
+# An expansion in such a subscript asks, as it does on the line itself; a literal subscript keeps the line's class.
+# On main 3cd13f3 each of the first four was allow.
+@pytest.mark.parametrize("line,outcome", [
+    ("ssh -o \"ProxyCommand=unset 'a[\\$i]'\" host", "ask"),
+    ("tar --to-command=\"unset 'a[\\$i]'\" -xf a.tar", "ask"),
+    ("rsync -e \"read 'a[\\${x}]' <<< x\" src host:dst", "ask"),
+    ("sqlite3 db \".shell printf -v 'a[\\$(cat f)]' %s x\"", "ask"),
+    ("ssh -o \"ProxyCommand=unset 'a[0]'\" host", "allow"),
+    ("rsync -e \"wait -p 'a[0]'\" src host:dst", "allow"),
+])
+def test_exec_option_subscript_expansion_asks(line, outcome):
+    c = sh(line)
+    assert decide(c).outcome == outcome, c
+    assert ("indirection" in c.signals) == (outcome == "ask"), c
