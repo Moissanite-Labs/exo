@@ -114,6 +114,16 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 
 ### Security
+- Gate (#184, D-038): brace sets are expanded as bash does before a path is matched against the secret stores.
+  `cat ~/.config/gh/{hosts,x}.yml`, `cat ~/.docker/{*,}`, `cat ~/{},.netrc}`, `cat ''{},.env}`,
+  `cat $""{.env,x}` and `cat .{d..f}{m..o}{u..w}` were allowed reads, as was `ls /srv/exo{007..1000..993}/keys`
+  with `EXO_HOME=/srv/exo0007` (bash pads the sequence to `0007 1000`); they are `credentials` now and ask. A shell
+  word is expanded from its source text, so quoted and escaped braces stay literal and keep their class; the
+  word as written is still checked, and `$"..."` is also read as plain `"..."`. A word that expands past 1,024
+  words, 32 levels of nesting, a sequence bound over 18 digits or a zero-padded bound past a 32-bit int (bash
+  wraps those), and any brace word after one tool call has expanded 4,096 words in all (globs count more), asks
+  as a secret-store path; so does `echo {1..2000}`, and so does a string literal in code holding compact JSON
+  with 11 or more objects, since code literals are read as shell commands.
 - Tool subprocesses no longer see git's environment config by default (#159): `GIT_CONFIG_VALUE_<n>` and
   `GIT_CONFIG_PARAMETERS` can carry credentials (`http.extraHeader`) and used to pass. A seat keeps the numbered
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
