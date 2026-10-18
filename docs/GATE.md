@@ -235,16 +235,23 @@ A command is `allow` only when every program in it is known and nothing is hidde
   `watch -x` run the argv after their options and fixed operands (the lock file of `flock`,
   the new root of `chroot`, the mask of `taskset`, the priority of `chrt`). Options are read as
   `getopt` reads them: a value attached, inside a cluster (`-nw5`) or in the next word,
-  `--opt=value`, `--`. The command-string forms are read like `bash -c`: `flock FILE -c CMD`,
+  `--opt=value`, `--`, and a long option shortened to four letters or more (`--time` for
+  `--timeout`; a shorter one, `flock --tim 5`, is not read and the line asks). The
+  command-string forms are read like `bash -c`: `flock FILE -c CMD`,
   `script -c CMD` (`--command`), `watch CMD...` (the words joined, run through `sh -c`), the
   shell-command of `tmux new-session`, `new-window`, `split-window`, `respawn-pane`,
-  `respawn-window` and `run-shell` and of `tmux -c`, the argv of `screen [-dm] [-S name]` and
+  `respawn-window` and `run-shell` in each command of a tmux command list and of `tmux -c` (the list
+  is split as tmux splits it: an argument ending in `;`, such as `';'` or `'sleep 3;'`, ends a
+  command and loses the `;`, one ending in `\;` does not), the argv of `screen [-dm] [-S name]` and
   `screen -X screen`, and the template of `parallel CMD ::: args` with each argument appended or
   put where `{}` stands (on the line itself, up to 16 distinct arguments and four times that
   command's own length, each text sized before it is built; a nested `parallel` template is read
   alone, so the work stays linear in the line).
   The wrapper itself stays an `opaque_exec` part with `indirection`, so
-  the line asks as before and a deny on the inner category applies. `chroot`, `nsenter`,
+  the line asks as before. Until D-075 lands, a wrapped line is denied only when its inner
+  command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`: `setsid git push`); a
+  category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`:
+  `setsid systemctl enable foo`, `setsid curl URL`) still asks. `chroot`, `nsenter`,
   `unshare` and `systemd-run` run the command with other privileges, namespaces or as a
   system unit: like `sudo`, the line carries a signal named after the wrapper and a reversible
   part counts as costly. What the gate cannot read stays `opaque_exec`: a program from a
@@ -279,6 +286,13 @@ A command is `allow` only when every program in it is known and nothing is hidde
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
 `npm install` runs package scripts) can run code the agent wrote earlier with a local write.
 The gate does not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+
+Known limit (#160). Some wrapper forms are not read and ask as `opaque_exec`, as they did before:
+BSD and macOS `script -q FILE CMD`, `screen -R` and `-RR` (they start the command when no session
+is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot`, `strace`,
+`prlimit`, `systemd-nspawn` and `ip netns exec`. Two are read but not fully: `systemd-run
+--on-calendar` (and its other timer options) is read as running its command, not as `schedule`,
+and `parallel -S` carries no remote-host signal. Both still ask.
 
 ## The store is credentials (D-038)
 

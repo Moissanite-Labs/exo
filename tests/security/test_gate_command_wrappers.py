@@ -4,7 +4,8 @@ On main 35b7de8 each wrapper was an unknown program or an opaque one, so the com
 `setsid git push origin main` was `opaque_exec` and a deny on `vcs_push` only asked. Now the wrapper's options and
 fixed operands are skipped as getopt reads them, and its command (an argv, or a shell command string) is
 classified as a nested command beside an opaque part, as the command after `xargs` is. The line still asks as it
-did, and a deny on what runs applies.
+did. Until D-075 lands, a deny on what runs applies only when its category outranks opaque_exec (`vcs_push`,
+`delete`); a category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`) still asks.
 
 Every line here is classification data only; nothing runs it.
 """
@@ -81,6 +82,8 @@ OPTION_ROWS = [
     "tmux -L sock new-window -t x 'git push origin main'",
     "tmux run-shell 'git push origin main'",
     "tmux -c 'git push origin main'",
+    "tmux new-session -d 'sleep 3;' new-window 'git push origin main'",
+    "tmux new-session -d ls\\; new-window 'git push origin main'",
     "screen -dmS x git push origin main",
     "screen -dm -Logfile /tmp/log git push origin main",
     "screen -S x -X screen git push origin main",
@@ -116,7 +119,6 @@ def test_wrapped_push_is_vcs_push_and_denied(line):
     assert gate.decide(c).outcome == "ask"
 
 
-@pytest.mark.skip(reason="`function NAME {` is read by #181 (fix/issue-131-coproc-2), not by this change")
 def test_function_keyword_without_parentheses():
     c = sh("function f { git push origin main; }; f")
     assert c.category == "vcs_push"
@@ -139,6 +141,28 @@ def test_privileged_wrappers_carry_a_signal_like_sudo(line, signal):
     assert signal in sh(line).signals
     c = sh(line.split(" git ")[0] + " ls")
     assert signal in c.signals and c.reversibility == "costly"
+
+
+def test_privileged_wrapper_bumps_a_reversible_inner_command():
+    # `ssh host ls` alone is reversible and internal; behind chroot it counts as costly, as behind sudo, so it
+    # outranks the opaque head (costly, private) and the line is costly and internal. Without the bump the head
+    # would win and the line would read as private.
+    assert (sh("ssh host ls").reversibility, sh("ssh host ls").exposure) == ("reversible", "internal")
+    c = sh("chroot / ssh host ls")
+    assert (c.reversibility, c.exposure) == ("costly", "internal")
+    assert gate.decide(c).outcome == "ask"
+
+
+# D-075 (#126): a deny entry matches any simple command on a line, not only the most severe one. A wrapped
+# category that ties with opaque_exec needs it, as `coproc systemctl enable foo` does in test_coproc.py.
+_D075 = gate.decide(gate.classify_shell("git push origin main && rm file"),
+                    {"gates": {"deny": ["vcs_push"]}}).outcome == "deny"
+
+
+@pytest.mark.xfail(not _D075, strict=True, reason="a tie with opaque_exec is denied only once D-075 checks every part")
+def test_wrapped_tie_category_is_denied():
+    c = sh("setsid systemctl enable foo")
+    assert gate.decide(c, {"gates": {"deny": ["schedule"]}}).outcome == "deny"
 
 
 def test_store_write_behind_a_wrapper_is_store_write():
@@ -182,6 +206,9 @@ def test_interpreter_behind_taskset_keeps_what_main_gives_it():
     "watch -x $CMD",
     "tmux send-keys -t x 'git push origin main' Enter",
     "tmux new-session -d -s x \\; send-keys 'git push origin main' Enter",
+    # An argument ending in an escaped `\;` (as tmux sees it) does not end the command: new-session runs `ls;`.
+    "tmux new-session -d 'ls\\;' new-window 'git push origin main'",
+    "tmux new-session -d ls\\\\; new-window 'git push origin main'",
     "screen -S x -X stuff 'git push origin main'",
     "screen -r x",
     "parallel",
