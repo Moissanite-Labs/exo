@@ -23,11 +23,13 @@ Panels:
 
 ```sh
 exo serve                      # the core, in one terminal
-exo web                        # the web client: opens http://127.0.0.1:7342/#token=...
+exo web                        # the web client: prints http://127.0.0.1:7342/#token=... and opens the page
 ```
 
-The page needs the token in that link for every request (D-039): `exo web` prints the link and opens it in your
-browser; open the latest complete printed link yourself after `--no-open` or a restart.
+The page needs the token in that link for every request (D-039): `exo web` prints the link and opens the page in
+your browser with a one-time code that the page trades for the token (#166), so the token never sits in the browser
+launcher's argv; open the latest complete printed link yourself after `--no-open`, a restart or a
+non-loopback `--host` (no browser is opened then).
 The bare URL has no token. Each web launch creates a new token; old links expire. The tab keeps it in
 `sessionStorage` only, never permanent browser storage. See `docs/ui/WEB.md`.
 
@@ -107,7 +109,7 @@ Set them as `EXO_COMMAND_<KEY>` environment variables or pass them to `load_sett
 | `socket` | `$EXO_HOME/run/exod.sock` | Core socket. |
 | `url`, `token`, `token_file` | none | Core on TCP. The token falls back to `$EXO_TOKEN`, then `$EXO_HOME/run/exod.token`. |
 | `host`, `port` | `127.0.0.1`, `7342` | Where the web client listens. |
-| `principal_store` | `$EXO_PRINCIPAL_STORE`, else `$EXO_HOME/principals/$EXO_PRINCIPAL` | Principal store root. No guess when unset. |
+| `principal_store` | `$EXO_PRINCIPAL_STORE`, else the store of `$EXO_PRINCIPAL`: config `principals.<id>`, else `$EXO_HOME/principals/<id>` | Principal store root. No guess when unset. |
 | `decisions_queue` | `queues/decisions.jsonl` | Relative paths resolve inside the store. |
 | `live_window_seconds` | 900 | A session is live if it moved in this window. |
 | `past_window_hours` | 24 | Finished subagent sessions shown under Past. |

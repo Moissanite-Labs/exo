@@ -562,8 +562,9 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
             add(f"model.wait:{c.route or t.shown}", "bug" if wait > th.model_wait_s * 5000 else "papercut",
                 f"Model waited {_fmt_ms(wait)} for the first token",
                 f"{c.route or t.shown}: {_fmt_ms(wait)} before output; limit {th.model_wait_s:g} s.")
+        timed_out = any(a.get("outcome") == "timeout" for a in c.attempts)  # model.timeout names that route
         for r, ms in ([(a["route"], a.get("ms", 0)) for a in c.attempts if a.get("outcome") != "timeout" and a.get("route")]
-                      or [(c.route or t.shown, c.total_ms)]):  # a slow route, whichever try it was
+                      or ([] if timed_out else [(c.route or t.shown, c.total_ms)])):  # a slow route, whichever try it was
             limit = th.model_call_routes.get(r, th.model_call_s)
             if ms > limit * 1000:
                 add(f"model.slow:{r}", "bug" if ms > limit * 5000 else "papercut", f"{r} took {_fmt_ms(ms)} for one call",

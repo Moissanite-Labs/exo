@@ -509,10 +509,14 @@ class SessionStore:
         return ev
 
     def write_event(self, ev: Event) -> None:
-        """Store an event that already has its ``seq`` (the server Hub numbers events)."""
-        self._tx(lambda db: db.execute("INSERT INTO events (seq, id, session, type, ts, body) VALUES"
-                                       " (?,?,?,?,?,?)", (ev.seq, ev.id, ev.session, ev.type, ev.ts,
-                                                          json.dumps(to_dict(ev.body), ensure_ascii=False))))
+        """Store an event the server Hub numbered. Seats of one home each run a Hub on this file, so the seq is
+        raised past the table's highest inside the write transaction; ``Hub.publish`` then takes ``ev.seq``."""
+        def write(db: sqlite3.Connection) -> None:
+            ev.seq = max(ev.seq, db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0] + 1)
+            db.execute("INSERT INTO events (seq, id, session, type, ts, body) VALUES (?,?,?,?,?,?)",
+                       (ev.seq, ev.id, ev.session, ev.type, ev.ts, json.dumps(to_dict(ev.body), ensure_ascii=False)))
+
+        self._tx(write)
 
     def events_since(self, since: int = 0, session: str | None = None, limit: int = 10000,
                      with_global: bool = False, skip: tuple[str, ...] = ()) -> list[Event]:
