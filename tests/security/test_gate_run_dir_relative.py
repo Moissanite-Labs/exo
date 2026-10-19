@@ -81,6 +81,9 @@ def test_a_link_into_run_jobs_is_resolved(layout, tmp_path):
 
 @pytest.mark.parametrize("cmd, category", [
     ("cd {h}/run/jobs && cat 1.log", "read"),       # job output stays readable
+    ("cd {h}/run/jobs/7 && cd .. && ls", "read"),   # one `cd ..` is one level: run/jobs, not run
+    ("cd {h}/run/jobs/7 && cd .. && cat 1.log", "read"),
+    ("cd {h}/run/jobs/a && cd ../b && cd .. && ls", "read"),
     ("cd {h}/run/jobs && tail -f 3.log", "read"),
     ("cd {h}/run/jobs && ls", "read"),
     ("cd {h}/run/jobs && cat *.log", "read"),

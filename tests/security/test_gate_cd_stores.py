@@ -737,3 +737,35 @@ def test_a_spent_join_budget_asks(monkeypatch):
     monkeypatch.setattr(gate, "_EXO_JOINS", 100)
     c = _bash(line)
     assert c.category == "credentials" and "too many to resolve" in c.summary
+
+
+_NEAR_CAP = ("cd ~/.exo/" + "/".join(f"d{j}" for j in range(62)) + "; cd " + "/".join([".."] * 64) + "; cat "
+             + " ".join(f"n{i}" for i in range(200)))      # 63 store folders and 12,600 names: just under both caps
+SUB_SHAPES = {
+    "nested-substitutions": lambda k: "".join(f"$(echo $(echo $(echo $({_NEAR_CAP})))) " for _ in range(k)),
+    "substitutions": lambda k: "".join(f"$({_NEAR_CAP}) " for _ in range(k)),
+}
+
+
+@pytest.mark.parametrize("shape, units", [("nested-substitutions", 2), ("substitutions", 8)], ids=list(SUB_SHAPES))
+def test_the_join_budget_is_shared_by_every_substitution(shape, units, monkeypatch):
+    """Each `$( )` is classified again by its own classify_shell, nested ones too. The join budget is kept in the
+    classify call's memo, so they all draw on one budget and a line pays it once, not once per substitution (a fresh
+    budget each made these lines 34x to 41x slower than without the check). Timed through gate.classify, CPU time,
+    against the same call with the check stubbed out, at two sizes: a ratio with a margin, not a limit."""
+    lines = [SUB_SHAPES[shape](units), SUB_SHAPES[shape](2 * units)]
+    took, base = [], []
+    for line in lines:
+        start = time.process_time()
+        c = _bash(line)
+        took.append(time.process_time() - start)
+        assert c.category == "credentials" and "too many to resolve" in c.summary     # fails closed once spent
+    real = gate._exo_relative
+    monkeypatch.setattr(gate, "_exo_relative", lambda *a, **kw: "")
+    for line in lines:
+        start = time.process_time()
+        _bash(line)
+        base.append(time.process_time() - start)
+    monkeypatch.setattr(gate, "_exo_relative", real)
+    for t, b in zip(took, base):
+        assert t < 2 * b + 0.5, (took, base)

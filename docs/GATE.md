@@ -882,10 +882,13 @@ climb; an absolute target is also resolved, so a link into `run/jobs` counts. Fr
 the store, a name that spells the store's folder name is joined too (`cd /srv && tar czf -
 exo-home/run` with `EXO_HOME=/srv/exo-home`). The run folder's credential file names are store file
 names as well (`exod.principal.key`, `exod.token`, the sampled `agent-<seat>.principal.key`), so
-`cat ../exod*` asks on any line that enters a store folder. Each join of a folder with a target or
-name, and each level up, is charged to one budget of 16,384 per line as it is made, so the work stays
-linear in the line; past it, or past 64 such folders, the line asks (fails closed). A line that names
-no store folder makes no join. A folder spelt with a wildcard is left to the store-folder check above.
+`cat ../exod*` asks on any line that enters a store folder. A `cd ..` counts once, as levels up, so
+`cd ~/.exo/run/jobs/7 && cd .. && ls` lists `run/jobs` and stays `read`. Each join of a folder with a
+target or name, and each level up, is charged as it is made to one budget of 16,384 for the whole tool
+call, which every `$( )` shares (each is classified again, nested ones too), so the work stays linear
+in the line. Past the budget, or on a line that reaches more than 64 such folders, the line asks (fails
+closed, no grant). A line that names no store folder makes no join. A folder spelt with a wildcard is
+left to the store-folder check above.
 
 A line that enters no store folder, and names none, is classified as before. The work is linear
 in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64
