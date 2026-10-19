@@ -198,9 +198,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   live in `exo.model_spend.admit_native`.
 
 ### Fixed
-- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
-  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
-  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - First run (user-readiness audit, blocker 1): the installer now copies the skill pack (`skills/` with
   `MANIFEST.json`) into `$EXO_HOME/skills`, so `/intro` loads its `exo-intro` skill and exo-orchestra stops warning
   "no skill manifest" at launch. Each pack skill is a marked folder that a re-run or `exo update` refreshes, and
@@ -232,6 +229,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   skill say `exo`, not the `exo-tui` command the installer does not provide. The user guide's screenshot paths
   exist, and it gains a glossary (principal, store, ledger, seat, thread, gate, grant, finding, wave, D-number)
   that the README links before those words appear. `tests/docs/test_first_user_docs.py` keeps these true.
+- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
+  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
+  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - The signed ledger's head anchor (D-040) is now written after the append's COMMIT, so a writer killed in between
   leaves it one event behind, never ahead. Before, a kill at that moment made the ledger report "events were
   removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match, which
