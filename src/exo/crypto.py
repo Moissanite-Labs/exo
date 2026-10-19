@@ -16,6 +16,8 @@ from pathlib import Path
 from nacl.exceptions import BadSignatureError
 from nacl.signing import SigningKey, VerifyKey
 
+from .core.private import atomic_write
+
 GENESIS = "0" * 64
 
 
@@ -59,7 +61,7 @@ def save_key(key: SigningKey, path: str | os.PathLike) -> Path:
     with os.fdopen(fd, "w") as fh:
         fh.write(b64(bytes(key)) + "\n")
     os.chmod(path, 0o600)
-    path.with_suffix(".pub").write_text(pubkey_b64(key) + "\n")
+    atomic_write(path.with_suffix(".pub"), pubkey_b64(key) + "\n", mode=None)  # a symlink there is not followed
     from .keyring import pin_new_key  # D-040: a key made in $EXO_HOME/keys is pinned as it is made
     pin_new_key(path, pubkey_b64(key))
     return path

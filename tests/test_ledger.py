@@ -293,6 +293,131 @@ def test_a_ledger_swapped_for_a_symlink_to_a_truncated_copy_fails(tmp_path, sign
     assert led.head().seq == 3
 
 
+def _refuses(led):
+    res = led.verify()
+    assert not res["ok"] and "symbolic link" in res["error"]
+    with pytest.raises(LedgerError, match="symbolic link"):
+        led.append("note", {"i": 0}, "agent")
+    with pytest.raises(LedgerError, match="symbolic link"):
+        led.anchor()
+
+
+def test_opening_a_dangling_symlinked_ledger_creates_nothing(tmp_path, signer):
+    """Opening set WAL mode and ran the schema before any symlink check, so a dangling link made the database it
+    points at (#277). It is opened read-only now, and an empty ledger in memory stands in for a missing target."""
+    planted = tmp_path / "elsewhere" / "planted.db"
+    planted.parent.mkdir()
+    path = tmp_path / "ledger.sqlite"
+    path.symlink_to(planted)
+    with Ledger(path, signer) as led:
+        _refuses(led)
+        assert led.head().seq == 0 and list(led.iter()) == []
+    assert list(planted.parent.iterdir()) == [] and not path.with_name("ledger.sqlite.head").exists()
+
+
+def test_opening_a_ledger_symlinked_to_another_database_leaves_it_as_it_was(tmp_path, signer):
+    """A link to some other SQLite database of the user's left it in WAL mode with the ledger's tables and triggers
+    added (#277). Now it stays byte for byte as it was."""
+    other = tmp_path / "notes.db"
+    db = sqlite3.connect(other)
+    db.execute("CREATE TABLE notes (t TEXT)")
+    db.execute("INSERT INTO notes VALUES ('pat')")
+    db.commit()
+    db.close()
+    before = other.read_bytes()
+    path = tmp_path / "ledger.sqlite"
+    path.symlink_to(other)
+    with Ledger(path, signer) as led:
+        _refuses(led)
+        assert led.head().seq == 0
+    assert other.read_bytes() == before
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name != "exo-home") == ["ledger.sqlite", "notes.db"]
+
+
+@pytest.mark.parametrize("kind", ["fifo", "folder", "loop"])
+def test_opening_a_ledger_symlinked_to_a_fifo_or_folder_does_not_hang(tmp_path, signer, kind):
+    """A read-only open of a FIFO blocks until a writer comes, so `exo log verify` and `exo log tail` would hang
+    (#277). Only a regular file is opened. Anything else reads as an empty ledger, and verify, append and anchor
+    refuse."""
+    target = tmp_path / "target"
+    if kind == "fifo":
+        os.mkfifo(target)
+    elif kind == "folder":
+        target.mkdir()
+    path = tmp_path / "ledger.sqlite"
+    path.symlink_to(path if kind == "loop" else target)
+    opened: list = []
+    t = threading.Thread(target=lambda: opened.append(Ledger(path, signer)), daemon=True)
+    t.start()
+    t.join(10)
+    if t.is_alive():  # let the blocked open go before failing
+        os.close(os.open(target, os.O_WRONLY | os.O_NONBLOCK))
+        t.join(10)
+        pytest.fail("opening a ledger symlinked to a FIFO blocked")
+    with opened[0] as led:
+        _refuses(led)
+        assert led.head().seq == 0
+
+
+def test_opening_a_ledger_symlinked_to_another_exo_ledger_makes_no_wal_or_shm_files(tmp_path, signer):
+    """A read-only open of a WAL database still made its `-wal` and `-shm` files. Another Exo ledger is always in WAL
+    mode and is the likeliest target. `immutable=1` makes none when the target has no `-wal` file (#277). With a live
+    writer, the open reads through the writer's own files and adds none."""
+    other = tmp_path / "other" / "ledger.sqlite"
+    with Ledger(other, signer) as led:
+        for i in range(3):
+            led.append("note", {"i": i}, "agent")
+    before, beside = other.read_bytes(), sorted(p.name for p in other.parent.iterdir())
+    path = tmp_path / "ledger.sqlite"
+    path.symlink_to(other)
+    with Ledger(path, signer) as led:
+        _refuses(led)
+        assert [e["body"]["i"] for e in led.iter()] == [0, 1, 2]
+        assert sorted(p.name for p in other.parent.iterdir()) == beside
+    assert other.read_bytes() == before and sorted(p.name for p in other.parent.iterdir()) == beside
+    with Ledger(other, signer) as live:
+        live.append("note", {"i": 3}, "agent")
+        beside = sorted(p.name for p in other.parent.iterdir())
+        assert "ledger.sqlite-wal" in beside
+        with Ledger(path, signer) as led:
+            assert len(led) == 4
+        assert sorted(p.name for p in other.parent.iterdir()) == beside
+
+
+def test_an_append_does_not_fsync_its_anchors(tmp_path, signer, monkeypatch):
+    """An append writes two anchors. They go through mkstemp now (#273) but skip the helper's fsync, as before, so
+    an append costs what it did."""
+    calls: list = []
+    monkeypatch.setattr(os, "fsync", lambda fd: calls.append(fd))
+    with Ledger(tmp_path / "l.sqlite", signer) as led:
+        led.append("note", {"i": 0}, "agent")
+        assert all(a["seq"] == 1 for _, a in led.anchors()) and len(led.anchors()) == 2
+    assert calls == []
+
+
+def test_verify_warns_when_the_anchors_are_more_than_one_event_apart(tmp_path, signer, monkeypatch):
+    """A keys/ copy that cannot be written only logs a warning per append, by design, so a frozen copy can fall far
+    behind. verify says so, without failing (#277). One event apart is the accepted lag and gets no warning."""
+    from exo import ledger as ledger_mod
+    led = Ledger(tmp_path / "l.sqlite", signer)
+    led.append("note", {"i": 0}, "agent")
+    home = led.anchor_paths()[1]
+    real = ledger_mod._atomic_write
+
+    def frozen(path, data):
+        if path == home:
+            raise PermissionError(13, "read-only", str(path))
+        return real(path, data)
+    monkeypatch.setattr(ledger_mod, "_atomic_write", frozen)
+    led.append("note", {"i": 1}, "agent")
+    res = led.verify()
+    assert res["ok"] and "warning" not in res
+    led.append("note", {"i": 2}, "agent")
+    res = led.verify()
+    assert res["ok"] and res["anchored_seq"] == 1
+    assert res["warning"] == f"head anchor {home} is at seq 1, 2 events behind the other: it is not being written"
+
+
 def test_an_anchor_write_does_not_follow_a_symlink_planted_at_its_temporary_name(tmp_path, signer):
     """The old temporary name was `.<name>.<pid>.<thread>.tmp`, opened without O_EXCL or O_NOFOLLOW: a symlink there
     turned the next anchor write into a write to any file the user can write (#221 delta review)."""
