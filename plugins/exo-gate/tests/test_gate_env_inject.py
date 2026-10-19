@@ -407,6 +407,7 @@ def test_arithmetic_and_fd_redirection_assignments_ask(cmd, name):
     ("x=${a[PATH=${i}]}; ls", "PATH"),
     ("echo ${a[${b[0]},PATH=1]}; ls", "PATH"),           # nor does a nested subscript
     ("echo ${PATH[${i}]:=.}; ls", "PATH"),               # PATH[0] is PATH
+    ("echo ${PATH[${b[0]}]:=.}; ls", "PATH"),            # a subscript ends at the ] that matches its [
 ])
 def test_a_subscript_where_bash_reads_a_name_asks(cmd, name):
     asks_naming(cmd, name)
