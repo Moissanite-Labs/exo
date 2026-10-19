@@ -306,11 +306,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   name no longer redirects the write to another file.
 - Opening a direct-key ledger whose `ledger.sqlite` is a symlink no longer writes through the link (#277). Before
   verify and append refused it, the open switched the target to WAL mode and added the ledger's tables, and a
-  dangling link made the file it pointed at. The file is now opened read-only, and a target that is missing or holds
-  no ledger reads as empty. `exo log verify` and `exo memory verify` also warn, without failing, when the two head
-  anchors are more than one event apart. The copy under `keys/heads/` is best effort, so appends go on when it
-  cannot be written. A store folder replaced by a symlink to another folder is listed as not covered in
-  `docs/CORE.md` and D-040.
+  dangling link made the file it pointed at. The file is now opened read-only, and only when it is a regular file. A
+  target that is missing, is not a regular file or holds no ledger reads as empty. SQLite adds no `-wal` or `-shm`
+  file beside the target, except a `-shm` file beside a target that already has a `-wal` file. `exo log verify` and
+  `exo memory verify` also warn, without failing, when the two head anchors are more than one event apart. The copy
+  under `keys/heads/` is best effort, so appends go on when it cannot be written. A store folder replaced by a
+  symlink to another folder is listed as not covered in `docs/CORE.md` and D-040.
 - `exo import-store` of a store Exo made no longer fails partway and leaves a half-copied store. The ledger's
   `.head` anchor is skipped with the ledger, and a stale anchor a deleted store left for the destination is dropped.
 - `exo memory verify` fails a store whose `ledger.sqlite` was deleted while a head anchor remains. It used to print

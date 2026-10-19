@@ -29,10 +29,12 @@ head. It refuses when the one beside the ledger still trails, or when none is at
 appends never go on more than one event past every anchor. `verify` checks every anchor it finds: the ledger must
 hold at least that many events and the chain hash at that position must match. A ledger file that is gone while an
 anchor remains fails too (`missing_ledger_problem`). A ledger file that is a symlink fails verify, and append and
-anchor refuse it. Without an authority such a file is opened read-only, so opening it writes nothing through the
-link. `verify` warns when the anchors are more than one event apart. `append` also refuses to write past an anchor
-that does not match, so a truncated ledger cannot be papered over by the next event, and `anchor()` will not
-overwrite one unless forced. A trigger found missing when the ledger is opened is recreated, and `verify` reports it.
+anchor refuse it. Without an authority such a file is opened read-only, and only when it is a regular file, so
+opening it writes nothing through the link. The one exception is SQLite's own `-shm` file beside a target that
+already has a `-wal` file. `verify` warns when the anchors are more than one event apart. `append` also refuses to
+write past an anchor that does not match, so a truncated ledger cannot be papered over by the next event, and
+`anchor()` will not overwrite one unless forced. A trigger found missing when the ledger is opened is recreated, and
+`verify` reports it.
 
 What anchoring does not protect against: a process running as the same user that rewrites the database and both
 anchor files together, or deletes both anchors (verify then reports the ledger as unanchored, not as broken).
@@ -595,14 +597,18 @@ def missing_ledger_problem(path: str | os.PathLike) -> str:
 
 def _open_symlinked(path: Path) -> sqlite3.Connection:
     """A ledger file that is a symlink, opened read-only (SQLite's `mode=ro`): no WAL switch, no schema, no file
-    made at a dangling target. A target that is gone, not a database or has no events table reads as an empty
+    made at a dangling target. Only a regular file is opened: opening a FIFO would block. `immutable=1` keeps SQLite
+    from making `-wal` and `-shm` files beside a WAL target. Without a `-wal` file there, all its data is in the main
+    file. A target that is gone, not a regular file, not a database or without an events table reads as an empty
     ledger kept in memory. Reads see the target's events, verify reports the link, and append and anchor refuse."""
-    db = None
+    target, db = Path(os.path.realpath(path)), None
     try:
-        db = sqlite3.connect(f"{path.absolute().as_uri()}?mode=ro", uri=True, check_same_thread=False,
-                             isolation_level=None, timeout=30)
-        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
-            return db
+        if target.is_file():
+            ro = "mode=ro" if Path(f"{target}-wal").exists() else "mode=ro&immutable=1"
+            db = sqlite3.connect(f"{target.as_uri()}?{ro}", uri=True, check_same_thread=False, isolation_level=None,
+                                 timeout=30)
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
+                return db
     except sqlite3.DatabaseError:
         pass
     if db is not None:
