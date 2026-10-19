@@ -551,6 +551,50 @@ def test_memory_slot_call_sites(tmp_path):
     assert mem.log == [("prefetch", "hi"), ("sync", "hi", "hey")]
 
 
+def test_private_thread_reads_memory_but_never_writes_it(tmp_path):
+    """D-028: a private thread is not remembered. It still gets the prompt block and recall, but the loop never
+    calls on_turn_start, sync_turn or checkpoint for it, or for a session under it (its delegate child, which runs
+    a brief built from it). A normal thread of the same agent gets all three."""
+    class Mem:
+        def __init__(self):
+            self.log = []
+
+        def system_prompt_block(self):
+            return "MEMBLOCK"
+
+        def prefetch(self, query, session_id=""):
+            self.log.append(("prefetch", session_id))
+            return "RECALL"
+
+        def on_turn_start(self, turn_number, message, session_id="", **kw):
+            self.log.append(("on_turn_start", session_id))
+
+        def sync_turn(self, user, assistant, session_id="", **kw):
+            self.log.append(("sync_turn", session_id))
+
+        def checkpoint(self, session_id="", messages=None, reason="turn"):
+            self.log.append(("checkpoint", session_id))
+
+    mem = Mem()
+    prov = Script(reply("hush"), reply("brief done"), reply("noted"))
+    store, loop, _ = make(tmp_path, prov, memory=mem, system_prompt="SYS")
+
+    async def go():
+        p = await loop.create_session(agent="a", kind="private")
+        await loop.send(p.id, "a secret")
+        k = await loop.create_session(agent="a", kind="subagent", parent=p.id)
+        await loop.send(k.id, "a brief about the secret")
+        t = await loop.create_session(agent="a")
+        await loop.send(t.id, "a public fact")
+        return p.id, k.id, t.id
+
+    pid, kid, tid = run(go())
+    assert "MEMBLOCK" in prov.calls[0][0].text() and "RECALL" in prov.calls[0][0].text()
+    assert [e for e in mem.log if e[1] == pid] == [("prefetch", pid)]
+    assert [e for e in mem.log if e[1] == kid] == [("prefetch", kid)]
+    assert [e[0] for e in mem.log if e[1] == tid] == ["on_turn_start", "prefetch", "sync_turn", "checkpoint"]
+
+
 def test_summary_prompt_is_lifted_text():
     p = summary_prompt("X", 100, previous="P")
     assert "You are a summarization agent creating a context checkpoint" in p

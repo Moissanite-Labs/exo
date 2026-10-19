@@ -18,6 +18,11 @@ Learning writes to your principal store and its signed ledger. The store comes f
 
 Each signal becomes a ledger event. An edit also stores a preference pair: the answer, and your better version.
 
+A private thread gives no signal (D-028), and neither does a session under it (its delegate children, at any depth).
+The loop captures no correction from them and starts no review for them. `feedback.send` on one of their answers
+returns `recorded: false` and files no finding. `ui.respond` on a panel a private thread opened or updated is not
+noted.
+
 Only your own words are signals (D-040). The loop reads a ruling, verdict, answer or utterance only when its author is
 you (`exo.provenance.principal_names`: `principal`, your store's id, and the principal ids in the key registry). A
 ruling the agent wrote with `exo_note`, a correction it reported with `exo_should_have_been`, or text that came from a

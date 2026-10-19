@@ -12,11 +12,23 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 | `bash` | shell | high | Shell with timeout and output cap; `background: true` starts a job (docs/JOBS.md) |
 | `jobs`, `job_output`, `job_kill` | shell | low, low, medium | List, read and stop background jobs (D-032) |
 
+`glob` and `grep` skip `.git`, `node_modules`, virtualenvs and caches, and every secret store below the folder
+they search (`~/.ssh`, `~/.aws`, `.env`, `$EXO_HOME/keys`, `*.key`...; the list is `exo.gate.is_sensitive_path`),
+also through a link. When they skip a store they end with `[skipped N secret-store paths; read one by name to be
+asked]`. A store named as `path` is read, after the gate asks (#241, `docs/GATE.md` "What the search tools
+read"). In a repo's own `.claude` folder only `worktrees`, `commands`, `agents` and `skills` are searched. A
+search of the whole file system (`/`, or a path that resolves to it) is refused; name a folder below it.
+
 ## Environment of bash and jobs
 
 `bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,
 `exo.envscrub.scrub_env` (D-039). Removed:
 
+- shell startup hooks. bash itself acts on `BASH_ENV`, exported functions (`BASH_FUNC_<name>%%`, or
+  `BASH_FUNC_<name>()` in Red Hat-patched bash, which shadow builtins and commands), `SHELLOPTS` and `BASHOPTS`
+  when it starts. `ENV` is read by interactive POSIX shells a command starts (`sh -i`). `PS4` matters once xtrace
+  is on: bash expands it before every traced line, so a `$(...)` in it runs a command each time. These match by
+  exact name only (`ENV=dev` is dropped; `env`, `DEPLOY_ENV` and a `?env=` URL query are not secrets and stay);
 - every provider key named by `key_env` in the model catalog;
 - names ending `_API_KEY`, `_TOKEN`, `_SECRET`, `_PASSWORD`, `_CREDENTIALS`, `_KEY`, `_KEYS`, `_KEYS_DIR`,
   `_KEYS_FILE` or `_DSN`, and names containing `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY`,
@@ -32,9 +44,22 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
   token format; a bearer header is not one, so allow the count only for values tools may see (#159);
 - anything the seat lists in `[tools] env_deny` (exact names or patterns like `COMPANY_*`).
 
-A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_deny` wins over `env_allow`. This is
+A seat can keep named variables with `[tools] env_allow = ["GH_TOKEN"]`; `env_deny` wins over `env_allow`.
+Allowing `BASH_ENV`, `ENV` or an exported function (`env_allow = ["BASH_FUNC_module%%"]` for Lmod, for example)
+also allows shell startup code; only allow a startup file or function you trust. The bash tool and background
+jobs start bash as `bash --norc -c`: with `SSH_CLIENT` or `SSH2_CLIENT` set and `SHLVL` unset or 0, a plain
+`bash -c` (in many builds) sources `~/.bashrc` and skips an allowed `BASH_ENV`. The `/bin/sh`
+fallback, used only when no bash is on `PATH`, reads no startup file. This is
 a heuristic: an unrecognized secret under an innocent name still passes, so keep keys in the key store. `EXO_HOME` stays: tools
 run `exo` commands, and the default path is no secret.
+
+Not scrubbed, on purpose: loader and interpreter hooks such as `LD_PRELOAD`, `PYTHONPATH` (`sitecustomize`),
+`NODE_OPTIONS`, `PERL5OPT`, `RUBYOPT`, `GIT_SSH_COMMAND` and `GIT_EXTERNAL_DIFF`. They
+can run code in the programs a command starts, but they are general process hooks with everyday development
+uses (virtualenvs, debuggers, CA bundles, git over a jump host), and `PYTHONPATH` is deliberately on the
+claude-cli allowlist. The scrub's startup-hook list is limited to the shell's own hooks above;
+whoever controls the core's launch environment as the same OS user controls these too (D-039 Limits). A seat
+that wants them gone lists them in `env_deny`.
 
 Model providers read the real environment. The claude-cli and muse-cli providers do not pass it on: the child gets an
 explicit minimal set (`exo.envscrub.minimal_env`: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`,
@@ -90,7 +115,9 @@ ranked file list and verbatim excerpts. Use it for unfamiliar code and "where or
   is scrubbed from any error text. Nothing is logged.
 - **Limits:** 120 s default timeout (max 600; the process group is killed), output paged at 20,000 characters
   (`page=2` serves the rest from memory), jg itself capped at 256 KB. Read-only, so risk low, but it sends
-  eligible source files to the backend; jg skips ignored and known sensitive files.
+  eligible source files to the backend; jg skips ignored and known sensitive files. It refuses a folder that is
+  or holds one of Exo's known secret stores (the home folder, `$EXO_HOME`, `~/.config`, `/`), since jg cannot
+  leave those out (#241).
 - **Trace:** a normal tool call in `exo trace` (`tool.completed` with `duration_ms`); backend and duration are the
   first line of the result.
 - Skill: `skills/jevgrep` (adapted from dzhng/jevgrep's skill, MIT).
