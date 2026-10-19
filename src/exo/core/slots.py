@@ -47,6 +47,11 @@ class RecallStatus:
     glyph: str = INDICATOR_GLYPH
 
 
+class NotConfigured(RuntimeError):
+    """A setup step not taken (no principal store yet): say what is off and the fix. Raise it only from the memory
+    initialize (a notice); elsewhere trace.report files nothing, but hook and tool failure handling still runs."""
+
+
 # ---------------------------------------------------------------- memory slot
 
 
