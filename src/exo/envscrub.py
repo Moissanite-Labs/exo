@@ -1,4 +1,4 @@
-"""One secret scrub for every subprocess Exo starts for the model (D-039).
+"""One environment scrub for every subprocess Exo starts for the model (D-039).
 
 Used by the bash tool and background jobs (``tool_env``) and by ``code_find``. The ``claude`` CLI provider does not
 start from the parent environment at all: it gets ``minimal_env`` (a short allowlist) plus its own switches.
@@ -10,6 +10,9 @@ A variable is dropped when any of these holds:
 - it contains TOKEN, SECRET, PASSWORD, PASSWD, CREDENTIAL, APIKEY, API_KEY, PRIVATE_KEY, ACCESS_KEY or _KEY_;
 - it starts with AWS_, GH_, EXO_BUS_, EXOD_ or EXO_PRINCIPAL, or is GITHUB_TOKEN or ends in DATABASE_URL;
 - it is an EXO_ variable that names a socket (contains SOCK): the core's socket and credential stay out of tools;
+- it is a shell startup hook, matched by exact name only: bash itself acts on ``BASH_ENV``, an exported function
+  (``BASH_FUNC_<name>%%``, or ``BASH_FUNC_<name>()`` in Red Hat-patched bash), ``SHELLOPTS`` and ``BASHOPTS`` when
+  it starts; ``ENV`` is read by an interactive POSIX shell a command starts; ``PS4`` matters once xtrace is on;
 - it is a known credential/configuration name (including database passwords, package/docker auth and kube config);
 - its value has a recognized token/private-key format, or its URL/URI/proxy value carries userinfo or a credential query;
 - it is git's environment config (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_<n>, GIT_CONFIG_VALUE_<n>, GIT_CONFIG_PARAMETERS):
@@ -18,7 +21,8 @@ A variable is dropped when any of these holds:
 
 A seat's ``[tools] env_allow`` (exact names) keeps a variable the rules above would drop. The denylist wins over
 the allowlist. This is a heuristic: an unrecognized secret under an innocent name still passes, so keys belong in the key store,
-not the environment.
+not the environment. Loader and interpreter hooks (``LD_PRELOAD``, ``PYTHONPATH``, ``NODE_OPTIONS``,
+``GIT_SSH_COMMAND`` and the like) pass: they have ordinary development uses, and docs/TOOLS.md says so.
 """
 from __future__ import annotations
 
@@ -36,6 +40,11 @@ WORDS = ("TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "APIKEY", "API_K
 PREFIXES = ("AWS_", "GH_", "EXO_BUS_", "EXOD_", "EXO_PRINCIPAL")
 NAMES = frozenset({"GITHUB_TOKEN", "STRIPE_SK", "NPM_CONFIG__AUTH", "DOCKER_AUTH_CONFIG", "KUBECONFIG",
                    "PGPASSFILE", "PGSERVICEFILE", "PGSSLKEY", "SLACK_WEBHOOK_URL"})
+# Shell startup hooks: exact case, never through ``is_secret_name`` (it case-folds and has other callers, and ``ENV=dev``
+# or a ``?env=`` URL query is no secret). Exported functions arrive as ``BASH_FUNC_<name>%%`` (upstream bash since the
+# 2014 Shellshock patches; ``BASH_FUNC_<name>()`` in Red Hat-patched bash) and shadow commands. ``PS4`` is expanded
+# before every traced line once xtrace is on (``set -x`` in the command), so a ``$(...)`` in it runs a command.
+EXEC_HOOKS = frozenset({"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PS4"})
 VALUE_SECRET = re.compile(r"^(?:sk-|gh[pousr]_|xox[baprs]-|whsec_)[A-Za-z0-9_-]{16,}|-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----")
 URL_SECRETS = frozenset({"token", "access_token", "api_key", "apikey", "password", "passwd", "secret",
                         "auth", "authorization", "key", "signature", "sig"})
@@ -79,6 +88,12 @@ def is_secret_name(name: str) -> bool:
             or any(w in u for w in WORDS) or u.startswith(PREFIXES) or (u.startswith("EXO") and "SOCK" in u))
 
 
+def is_exec_hook(name: str) -> bool:
+    """A shell startup hook (exact name; see ``EXEC_HOOKS``): bash acts on ``BASH_ENV``, exported functions,
+    ``SHELLOPTS`` and ``BASHOPTS`` at startup, interactive POSIX shells read ``ENV``, xtrace expands ``PS4``."""
+    return name in EXEC_HOOKS or (name.startswith("BASH_FUNC_") and name.endswith(("%%", "()")))
+
+
 def is_secret_value(name: str, value: str) -> bool:
     """Recognized token formats and credential-bearing URL/URI fields; not arbitrary secret detection."""
     if VALUE_SECRET.search(value.strip()):
@@ -96,7 +111,7 @@ def is_secret_value(name: str, value: str) -> bool:
 
 def scrub_env(src: Mapping[str, str] | None = None, allow: Iterable[str] = (),
               deny: Iterable[str] = ()) -> dict[str, str]:
-    """A copy of ``src`` (default ``os.environ``) without secrets; see the module docstring for the rules."""
+    """A copy of ``src`` (default ``os.environ``) without secrets or shell startup hooks; see the module docstring for the rules."""
     src = os.environ if src is None else src
     allowed = {str(a) for a in allow or ()}
     denied = [str(d) for d in deny or () if str(d)]
@@ -111,7 +126,7 @@ def scrub_env(src: Mapping[str, str] | None = None, allow: Iterable[str] = (),
             return True
         if any(fnmatch.fnmatchcase(k, d) for d in denied):
             return True
-        return k not in allowed and (is_secret_name(k) or is_secret_value(k, v))
+        return k not in allowed and (is_exec_hook(k) or is_secret_name(k) or is_secret_value(k, v))
 
     return {k: v for k, v in src.items() if not drop(k, v)}
 

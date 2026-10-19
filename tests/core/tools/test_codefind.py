@@ -55,11 +55,13 @@ def fake(tmp_path, monkeypatch):
 
 
 def call(tmp_path, **args):
+    """Run code_find in a project folder; tmp_path itself holds the test EXO_HOME, which code_find refuses (#241)."""
+    (tmp_path / "repo").mkdir(exist_ok=True)
     return default_registry().call_sync(ToolCall(id="c1", name="code_find", arguments=args),
-                                        ToolContext(cwd=str(tmp_path)))
+                                        ToolContext(cwd=str(tmp_path / "repo")))
 
 
-def test_hidden_when_jg_and_npx_absent(monkeypatch):
+def test_hidden_when_jg_and_npx_absent(monkeypatch, tmp_path):
     monkeypatch.setattr(cf.shutil, "which", lambda n: "/usr/bin/node" if n == "node" else None)
     monkeypatch.setattr(cf, "_node_major", lambda: 22)
     runner, why = cf.detect_runner()
@@ -67,7 +69,7 @@ def test_hidden_when_jg_and_npx_absent(monkeypatch):
     monkeypatch.setattr(cf, "_runner", None)
     monkeypatch.setattr(cf, "_why", why)
     assert "code_find" not in [s.name for s in default_registry().specs()]
-    res = call(".", question="q")
+    res = call(tmp_path, question="q")
     assert res.is_error and "not available" in res.text()
     assert cf.status().startswith("code_find: hidden")
 
@@ -97,7 +99,7 @@ def test_key_goes_to_auth_stdin_only_and_temp_config_is_removed(fake, tmp_path):
     assert KEY not in json.dumps(auth["argv"]) + json.dumps(search["argv"])
     assert not auth["env_has_key"] and not search["env_has_key"]  # nothing secret in either child env
     assert auth["cfg_mode"] == 0o700 and not os.path.exists(auth["cfg"])
-    assert search["argv"][-2:] == ["how does x work?", str(tmp_path)]
+    assert search["argv"][-2:] == ["how does x work?", str(tmp_path / "repo")]
 
 
 def test_timeout(fake, tmp_path, monkeypatch):

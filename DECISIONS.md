@@ -462,6 +462,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (77% against 79% with recall).
 - **Not done:** a live 20-turn cache measurement on the fixed code; importing exo-memory's old episodic log (it
   holds copies of the same sessions); summaries for imports are slow on glm-5.3-flash (about 75 s per leaf).
+  *Amendment 2026-10-18 (PR #216):* a private thread wrote to the ledger and lost its own start. Now nothing in or
+  under a private thread is remembered: `SessionStore.private` walks up the parents, the loop skips the memory
+  writes, memory tools get `agent_context="private"`, and learning, findings, panel responses and the context
+  plugin record nothing from it. Its entries still stay out of the agent tree, so it keeps a summary tree of its
+  own (key: its session id). Its tail starts at that tree's last summary, and its turn waits for that tree as D-068
+  says. Its delegate children open with `memory_zoom(subagent=)` only from it or a fork of it. A fork's copies count
+  at their original's log position, so a fork opens with its parent's tail. Details in docs/MEMORY-MODEL.md
+  "Private threads".
 
 ## D-029 (2026-10-12) jevgrep as code_find; native port later if the measured win holds
 - **Why:** "where is X decided" questions cost an agent many grep and read rounds. dzhng/jevgrep (MIT, `jg`
@@ -650,6 +658,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `binding`, or sign as a seat (left for the UI work); no client helper beyond `sign_approval` for a seat to answer.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
+  printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
+  repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
+  are not secret-scrubbed by this display helper. No command, key, setting or setup step changes.
 - **Why:** a new user had no clean way to add a model key. Keys went in by hand (env, `security`, or a 0600
   file), `exo models` only reported, and the web client had no provider settings at all.
 - **Engine:** `exo/providers_setup.py`. `rows` gives every catalog provider with status (key found and where,
@@ -805,6 +817,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   written. A hit on any expanded word counts, and a word past the brace limits counts as the store. The store
   checks have their own 4,096-word budget per tool call. `echo x > ~/.exo/polic{i..i}es/default.yaml` was an
   allowed local write.
+  *Amendment 2026-10-18 (issue #241):* the store-read guarantee covers the search tools. The gate checks only the
+  `path` a `grep` or `glob` call names, and the tools walked everything below it, so `grep {pattern: "key", path:
+  HOME}` returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and the principal credential as an allowed read. The tools
+  now leave out every folder and file below the root that `is_sensitive_path` matches, as found and as resolved (a
+  link into `~/.ssh` by any name), do not enter a store folder, and end with `[skipped N secret-store paths; read one
+  by name to be asked]`. A store the call names is read after the gate asks; a link out of it into another store is
+  still left out. `~/.ssh/..` only looks like a store: it walks the home folder with the stores left out. A
+  store-named link to an ordinary folder (`x.key` to the home folder) returns nothing, since every path below it still
+  looks like a store (fail closed). A root whose real path is `/` is refused (the walk takes minutes). In a repo's own
+  `.claude` folder (beside a `.git`, not `~/.claude` or `CLAUDE_CONFIG_DIR`, holding no Claude login, transcripts or
+  shell snapshots) only `worktrees`, `commands`, `agents` and `skills` are searched, so a `.claude/worktrees` checkout
+  is searchable and another home's config folder is not. `code_find`, whose `jg` walks the folder itself, refuses a
+  folder that is or holds a known store. Chosen over a gate-side ask for every broad search because a search of a
+  project or the home folder stays an allowed read and only the stores drop out; the count keeps the result honest.
   *Amendment 2026-10-18 (issue #169):* the run folder is a secret store (D-039 limits, `docs/GATE.md` "Who
   answered"), and a secret wins over the store rule, as for `keys/`. So a write, delete, move or replacement that
   touches the folder itself or a credential file in it is `credentials`, not `store_write`: `rm -rf ~/.exo/run`,
@@ -829,6 +855,40 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
   package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
   `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+  *Amendment 2026-10-17 (issue #161):* the lexer attached a heredoc to the command whose line held the `<<`, which
+  for `{ bash; } <<EOF`, `( bash ) <<EOF` and `while ...; do bash; done <<EOF` is the closing token, so the shell
+  inside ran a body the gate never read (ask, where `bash <<EOF` with the same body is denied by a category deny).
+  Now a heredoc or here-string after a closing `}`, `)`, `done`, `fi` or `esac`, and readable text piped into a
+  compound, is fed to the commands inside it, nested ones included, except a command whose stdin is already set: its
+  own heredoc, here-string or `<` redirection, a pipe from a command inside, an earlier `exec < file` inside
+  (however spelled or prefixed, or possibly run by eval, source, `.`, a variable program or a function on the line),
+  or a nested compound's own closer redirection or pipe (inner closers win, as in bash). Nothing is fed when the
+  closer has its own `<`, and a closer heredoc wins over a pipe in. Feeding such a command would read decoy text as
+  what the shell runs (`{ curl ... | bash; } <<< 'rm -rf build'` would leave `opaque_exec` for `delete`). Chosen
+  over feeding only the last command: any inner command may read stdin. Only shells, interpreters and gh act on it, so
+  `{ cat; } <<EOF` stays `read`, but the fed text can change the line's category and the summary shown at ask. Each
+  text is classified once per line (the stdin of a `sqlite3`, `psql` or `mysql` client too, #154), every command it
+  reaches still gets what that reading found (its own store check needs a delete there: skipping the repeat let a
+  later `psql <store folder>` pass as a `delete`), a shared stdin is listed once, the parser finds command position
+  and a closer's opener without rescanning, and the scan for function names on the line starts only where a word does,
+  so the cost stays linear (a group of shells fed a body that is itself a group of fed shells was read width to the
+  power of depth times, n here-strings fed to n shells cost n squared, and so did n openers in a row; a body after
+  `<<$'EOF'`, which is also read as commands, was read once per command it reached, so nested groups of plain commands
+  took a minute for 462 bytes, and groups of `psql` fed `\!` lines took 210 s for 604 bytes nested four deep; looking
+  for `name()` from every character of an unbroken word took 26 s for one of 50,000 characters).
+  For fed shells and interpreters, a line that was `opaque_exec` takes the inner category
+  and carries the issue #178 floor. Only naming `opaque_exec` at `log` or `allow` turns that floor off.
+  A `deny: [opaque_exec]` entry still denies these shell and interpreter lines (D-075). Under
+  `categories: {opaque_exec: deny}` or an ordinary rule they now ask where they were denied, as
+  `bash <<EOF` already does, until #191. Fed SQL clients follow their plain-input classification,
+  without that floor. A compound feeding `\! git push origin main` to `psql` can change from ask
+  to the push's `log`. D-075 `deny` and `reserved` entries still match every retained part.
+  Category overrides and ordinary rules use the combined classification. `coproc W { ...; }
+  <<EOF` and `function NAME { ...; } <<EOF` are fed the same way, as #181 reads their bodies; the body of `time { ...;
+  }` is not read at all, so it still asks as `opaque_exec`. A closer heredoc wins over a pipe in on stdin only; the
+  lexer drops fd numbers, so one on another fd (`{ bash; } 3<<EOF`) is read as stdin: its body is fed, and text piped
+  in reaches only the first command inside, so in `echo ... | { true; bash; } 3<<EOF` bash is read with the body, not
+  the pipe it reads. A shell read that way still asks at least, as `bash 3<<EOF` does and as main asks.
   *Amendment 2026-10-17 (issue #192):* on a line that enters a folder that can hold a secret store, a relative read of
   a store file is `credentials`. The hints come from the sample store paths, per call: the store folders (a dot folder
   along a sample below home by its name, a plain one only below its parent, such as `.config/gh`, `.exo/keys` or
@@ -937,6 +997,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   of value-taking options lists only options known to take one. Rejected: scanning every word for option
   letters (the earlier form of this change), which lost `-oProxyCommand` to a later `o` and asked on `ssh host
   curl -I URL`. Environment dumps are credentials behind runners and prefixes too (`uv run printenv X`).
+  *Amendment 2026-10-18 (issues #230, #232):* follow-ups to the above. An ssh `-o` keyword the gate cannot read (`-o
+  "$OPT"`, a glob, an unclosed quote an expansion may close) asks as opaque_exec, like any other value in a variable.
+  `git ls-remote --exec`, a hidden synonym of `--upload-pack`, is followed (ls-remote rejects `-u`, which is still
+  read: reading more than git is fail closed). An assignment before a command is any form bash takes (`NAME+=value`,
+  `NAME[i]=value`), so a dump behind one is credentials. tar's `--checkpoint-action` is read in any abbreviation
+  longer than `--checkpoint` (an option of its own, whose optional value must not swallow the next word); `mosh
+  --ssh` in any case and after `+` is read by D-075's mosh reading (#126). Two asks the first change
+  added are dropped, and those lines classify exactly as before it: ssh's `none` value for a command or library
+  setting, which ssh_config documents as switching the setting off (CLEAR_ON_NONE, any case, the bare word only), and
+  a `psql` line starting with `system`, which is mysql's command and SQL in psql.
+  Rejected: keeping them as fail-safe asks, since they are ordinary spellings and the gate's docs never claimed them.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -992,6 +1063,25 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   identity, the core socket and credential variables, and a new seat `[tools] env_deny` (names or patterns).
   `env_allow` keeps a name; `env_deny` wins. The claude-cli child gets `minimal_env` (PATH, HOME, locale, terminal,
   CLAUDE_CONFIG_DIR, proxies, CA bundles) plus its switches.
+  *Amendment 2026-10-16 (issue #135):* the scrub also drops inherited shell startup hooks (`envscrub.EXEC_HOOKS`):
+  `BASH_ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS` and `BASHOPTS`, which bash itself acts on at
+  startup; `ENV`, which an interactive POSIX shell the command starts reads; and `PS4`, which matters once xtrace is
+  on (bash expands it before every traced line, so a `$(...)` in it runs a command). They are a separate exact-case
+  set, not secret names: `is_secret_name` case-folds and also classifies URL query keys and CLI diagnostics, so
+  `ENV=dev` or `?env=staging` must not count as a credential. The same `env_allow` (exact) and `env_deny` precedence
+  applies. The bash tool and background jobs start bash as `bash --norc -c`: with `SSH_CLIENT` or `SSH2_CLIENT` set
+  and `SHLVL` unset or 0, a plain `bash -c` (in many builds) sources `~/.bashrc`, a file the default
+  gate lets a tool call write, and skips an allowed `BASH_ENV`; `--norc` stops the first and still honours the
+  second. Limits: loader and interpreter hooks (`LD_PRELOAD`, `PYTHONPATH`, `NODE_OPTIONS`, `PERL5OPT`, `RUBYOPT`,
+  `GIT_SSH_COMMAND`, `GIT_EXTERNAL_DIFF`) pass, since they have everyday development uses; `bash -p` was rejected
+  because it would silently defeat an exact `env_allow` for a trusted startup file. Documented in `docs/TOOLS.md`.
+  *Amendment 2026-10-18 (issue #159):* git's environment config is dropped by default, since its values can carry
+  credentials (an `http.extraHeader` bearer token): `GIT_CONFIG_PARAMETERS`, kept only by an exact `env_allow`, and
+  the numbered family `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`. The family is one unit,
+  because a count without its keys fails every git command: it is kept whole only when `env_allow` names
+  `GIT_CONFIG_COUNT`, and dropped whole when `env_deny` or the token-format value check drops any member. So an exact
+  `env_allow` of a single `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` no longer keeps it, an exception to
+  "`env_allow` keeps a name". Documented in `docs/TOOLS.md`.
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
@@ -1066,6 +1156,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   registry, or sends `turn.send` on the seat's socket (that counts as the principal until approval identity is
   bound to the connection, a separate change). The gate is what asks before writes to `keys/` and the store; the
   registry, the anchors and `ledger.sqlite.head` belong on its sensitive-path list.
+  *Amendment 2026-10-18 (PR #216):* exo-context pinned peer, bus and job text as the principal's words. Its
+  `select_context` now gets each message's author, and it pins only the principal's. A handoff carries a pinned
+  block only from a message that opens with it (exo-context's own block) or with a compaction marker (a host's
+  summary). A block quoted further down a message is data: the core's system message quotes small spans word for
+  word, peer turns included.
 - *Amendment 2026-10-18 (fix sweep, #221):* the anchors are written after the append's COMMIT, from the committed
   head, so a writer killed in between leaves them one event behind, never ahead. That lag of one event is accepted.
   The copy under `keys/heads/` is written even when the anchor beside the ledger fails. Before it writes, an append
@@ -1099,6 +1194,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   refused, not replaced; remote descriptions are marked untrusted third-party text.
 - **Not done:** terminal event-loop blocking and approval focus (another branch); gate, approvals, capture and
   ledger items (other branches).
+  *Amendment 2026-10-18 (PR #216):* undo deleted every later agent-tree summary and the thread's context notes, so
+  other threads' news was lost. It now deletes only the nodes that hold an undone entry and the merges above them,
+  and keeps context notes. It also reaches the context plugin: `on_session_switch(rewound=True, messages=,
+  summaries=)`. exo-context then drops the undone turns' pins and the deleted nodes, and writes again each
+  automatic handoff that may quote them.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
@@ -1204,6 +1304,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-19 (#276):** the terminal serializes approval-card removal with thread switching and restoration,
+  and waits for removal before mounting the next card under the same widget id. A close or answer names its request,
+  so a stale event cannot remove its replacement. Threadless requests still survive thread switches. The response
+  worker starts after the answered card's removal. No command, key, setting or approval authority changes.
 - **Why:** the principal reported an approval card stuck on screen in the terminal and on the web with nothing pending in
   the core, a card the terminal could not answer, a web chat that stopped responding, and wanted to cancel a queued steer.
 - **Stuck card, core:** `CoreEngine.ask` published `approval.resolved` only from the respond path. A turn stopped or

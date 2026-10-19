@@ -231,6 +231,58 @@ def test_context_and_memory_hooks_get_session_transcript_and_compaction(tmp_path
     assert seen["pre"] and seen["compacted"][0] == (sid, 0, "done")
 
 
+def test_a_private_thread_is_never_shown_to_the_context_plugin(tmp_path):
+    """D-028: the context plugin (handoffs, pins) never sees a private thread: no session start, selection or
+    turn transcript for it, and the tree's hooks name the other thread even while the private one is talking."""
+    seen = []
+
+    class Ctx:
+        name = "c"
+
+        def on_session_start(self, session_id, **kw):
+            seen.append(("start", session_id, ""))
+
+        def select_context(self, request_messages, *, session_id="", **kw):
+            seen.append(("select", session_id, " ".join(m["content"] for m in request_messages)))
+
+        def on_turn_complete(self, messages, usage=None, session_id=""):
+            seen.append(("turn", session_id, " ".join(str(m.get("content")) for m in messages)))
+
+        def update_from_response(self, usage):
+            seen.append(("usage", "", ""))
+
+        def on_compacted(self, session, node):
+            seen.append(("compacted", session, node.text))
+
+        def should_compress(self, prompt_tokens=None):
+            return False
+
+        def compress(self, messages, **kw):
+            return messages
+
+    eng = _eng(tmp_path, register=lambda ctx: ctx.register_context_engine(Ctx()))
+
+    async def main():
+        d = Dispatcher(eng)
+        tree = eng.loop.context.tree
+        tree.min_compact_tokens, tree.leaf_size, tree.tail_messages = 0, 2, 2
+        a = (await d.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
+        p = (await d.run(s.Command.of(s.SessionCreate(kind="private")))).result["session"]["id"]
+        for sid, text in ((a, "hello"), (a, "again"), (p, "zebracorn plan"), (p, "more zebracorn")):
+            await d.run(s.Command.of(s.TurnSend(session=sid, text=text)))
+            while eng._tasks:
+                await asyncio.sleep(0.005)
+        await asyncio.gather(*[t for ts in tree._tasks.values() for t in ts.values()])
+        await eng.close()
+        return a, p
+
+    a, p = asyncio.run(main())
+    assert {k for k, _, _ in seen} >= {"start", "select", "turn", "compacted"}
+    assert sum(k == "usage" for k, _, _ in seen) == 2  # the two turns of the normal thread only
+    assert {sid for k, sid, _ in seen if k != "usage"} == {a}
+    assert not any("zebracorn" in text for _, _, text in seen)
+
+
 def test_compressor_forwards_session_id_and_summary_marker():
     from exo.core.context import DefaultCompressor, VIEW_HEADER, is_compaction_summary_message
     from exo.core.types import Message, ProviderEvent
