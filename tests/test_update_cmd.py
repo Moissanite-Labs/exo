@@ -86,7 +86,17 @@ def test_dirty_checkout_blocks_all_mutation(checkout, dirty, capsys):
     assert update.cmd_update([], run=fake) == 1
     assert not mutations(fake)
     assert '--untracked-files=all' in fake.calls[0]
-    assert 'local changes or untracked files' in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert 'local changes or untracked files' in err
+    assert dirty[3:].strip() in err  # the blocking path is named
+
+
+def test_dirty_checkout_names_at_most_five_paths(checkout, capsys):
+    dirty = ''.join(f'?? work/file{i}.txt\n' for i in range(7))
+    assert update.cmd_update([], run=Fake(dirty=dirty)) == 1
+    err = capsys.readouterr().err
+    assert 'work/file0.txt' in err and 'work/file4.txt' in err
+    assert 'work/file5.txt' not in err and 'and 2 more' in err
 
 
 def test_injected_runner_covers_metadata_and_selfchecks(checkout):
