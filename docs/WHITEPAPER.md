@@ -2313,8 +2313,11 @@ line, while a category setting or a rule still sees only the most severe part (D
 compound's heredoc, here-string or pipe fed to the commands inside it (#198, for #161); shell startup hooks
 dropped from tool environments (#168, for #135); the built-in `grep` and `glob` tools skipping secret stores and
 `code_find` refusing folders that hold them (#287, for #241); follow-ups to #164's reading of command options and
-environment dumps (#288, for #230 and #232); and head anchors written after each append is committed (#221). The
-core budget is now a ratchet with headroom (D-077).
+environment dumps (#288, for #230 and #232); head anchors written after each append is committed (#221); and the
+first-run fixes of #213: the installer copies the skill pack into `$EXO_HOME/skills`, the terminal client no
+longer freezes on the boot screen, `exo --resume` continues the newest thread with messages, and on the Claude
+Code route the system message names the thread's working folder. The core budget is now a ratchet with headroom
+(D-077).
 
 The items below have an open pull request, or an open issue for the permissionless mode. None is part of Exo
 yet, and none of the sections above relies on them. They are listed so the reader knows where the work is going,
