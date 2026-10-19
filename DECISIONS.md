@@ -735,6 +735,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   skills users add there. Rejected: removing every marked folder the pack lacks, because that deleted copies made to
   change a skill. Rejected: shipping the pack as package data, because exo-orchestra and the documented search
   order read `$EXO_HOME/skills`.
+  *Amendment 2026-10-19 (#268):* plugins follow the same rule. A `--plugins` list removes a marked plugin folder it
+  leaves out only when the marker names that folder, so a `cp -r` copy of a plugin is kept with a warning. A marker
+  with no name line comes from an install before markers named their folder. Exo cannot tell that folder from a
+  copy, so it is kept too, and a warning names it. A selected plugin with such a marker is refreshed and its marker
+  gains the name. Rejected: treating a marker with no name as Exo's, because that deletes copies made before this
+  change. Rejected: comparing the folder with the checkout's plugin, because an older install of a plugin that has
+  changed since differs from it as much as an edited copy does.
 
 ## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
 - **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
@@ -963,6 +970,32 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   quotes hides the next character, so `a[\$(cmd)]` reads no command, as bash runs none. In a nested subscript
   bash before 5.2 runs a `\$( )` again, so the gate reads it there. Past the depth cap a command there is
   `opaque_exec`, as an unquoted `$( )` is.
+  *Amendment 2026-10-17 (issue #188):* `declare`, `typeset`, `local`, `readonly` and `export` evaluate the value of
+  a `NAME=VALUE` operand again: with `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted
+  (the gate reads it with or without them, which is only stricter), and for the first three a `-i` value is
+  arithmetic and a `-n` value is a name whose subscript bash evaluates when used. So `declare -a 'b=($(gh ...))'`,
+  `export -a 'b=(<(gh ...))'` and `declare -i x='a[$(gh ...)]'` were `read` (allow). Those values are now read with
+  the subscript scan: each `$( )`, backticks or `<( )` in them is classified like a `$( )` and added after the
+  line's own parts, as the line parse adds an unquoted one (so it does not take a tie from a redirection), a
+  `[key]=` is read as a subscript, and a quoted operand after one or more unquoted compound ones is read too. A
+  backslash-newline is dropped from a compound value before it is read, as bash drops it first (an `-i` or `-n`
+  value keeps it, as bash does), and a `$( )` the line's own parse read is not read again, also when it holds a
+  backslash-newline. A body that holds a single quote or a here-document marker (`<<`) anywhere is compared as
+  written: bash keeps a backslash-newline in single quotes or a quoted here-document but not in the value it reads
+  again, and the gate does not track where it is, so with a backslash-newline such a body is read again and asks
+  (`declare -a "b=($(ls 'x' \<newline> -l))"`, only stricter: bash runs the same command). A command the
+  line runs only because bash reads a value again also asks through `indirection`, as does an expansion in a `-i` or
+  `-n` value, in a `-i` element, or in a compound value the line itself expanded. So when such a command outranks
+  the line's own category, a deny on that category becomes ask, never allow or log
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`); D-075 (#126) keeps the deny
+  for the `deny:` list form (#191 tracks the `categories` form). That command also carries the `reread` signal,
+  and naming `opaque_exec` does not lower its ask, which stands in for the line's own deny:
+  `{local_write: deny, opaque_exec: allow}` asks too. Past the
+  depth limit such a command, or one in a subscript, is an `opaque_exec` part, as on the line itself, with `reread`.
+  A plain expansion in a compound element without `-i` (`'b=("$@")'`) is expanded once and asks nothing, and the
+  unquoted compound form keeps the line parse's reading. readonly and export never evaluate a name's subscript, so
+  their names are not read. A later plain assignment to a `-i` or `-n` variable and values that come whole from a
+  variable stay a known limit (GATE.md).
   *Amendment 2026-10-17 (issue #160):* wrappers that run a command were unknown or opaque programs, so the command
   was never classified and a deny on its category asked (`setsid git push origin main`, `flock /tmp/l git push`,
   `watch git push`, `script -qc '...'`, `tmux new-session -d '...'`, `screen -dm ...`, `parallel git push :::
@@ -1846,3 +1879,31 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** the budget test, `tests/docs`, `tests/test_privacy.py`, `tests/test_versioning.py`, `ruff check`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
+
+## D-081 (2026-10-17) The gate's decision call never uses the main model
+- **Status:** Accepted 2026-10-17 by the lead (reversible). It amends D-019 for the gate only. The gate's chain is
+  Jev, then local Laya, then `aux`. `exo decide` and the baseline export's judge keep the full chain, `main` last.
+- **Why:** a user-readiness audit of main 35b7de8 found that with only the claude CLI on PATH (the route Exo picks
+  for anyone with Claude Code and no key), every tool call the rules allowed started a hidden main-model call. Each
+  one added 2 to 10 s and was missing from `/trace` and cost. When one failed, the router cooled the one CLI login,
+  and the user's next turn failed with "all routes for 'main' failed or are cooling down" for about 60 s. D-015
+  already rejected "a frontier model for every small decision (cost, latency)". The fallback to `main` made it the
+  default on the CLI route.
+- **Decision:** `ask_choice_result(..., spare="main")` skips every route in the `main` chain, including one also
+  listed under `aux`. A failure on that call cools only the model that failed (`credential|model`), never the
+  credential. The gate passes it on every call. With no decision or aux route the gate keeps the rule outcome, as
+  it already did on a failure or a timeout. Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`)
+  are `read` in `gate.TOOLS`.
+- **Rejected:**
+  - Dropping `main` from `ROLE_FALLBACK["decision"]` for every caller. It changes `exo decide` and the baseline
+    judge, which run once per command, not once per tool call.
+  - Skipping the decision call for `read` tools only. Writes, shell and web calls would still wait on the main
+    model and could still cool its login.
+  - Keeping `main` and only cooling per model. Every tool call would still pay for a main-model call.
+  - No cooling at all on a side call. A failing aux model would be retried on every tool call.
+- **Revisit if:** a local decision model ships by default (exo-decide, or Laya from the installer), or a principal
+  wants the main model's second opinion on the gate. That would be an explicit setting, not the fallback.
+- **Validation:** `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/test_decision_spare.py`,
+  and a first launch from a clean home with the claude CLI: no approval card for the intro skill, no decision
+  call to the CLI, and read-only tool calls at 0.0 s.
+- **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.

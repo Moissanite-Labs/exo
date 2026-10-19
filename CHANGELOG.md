@@ -126,6 +126,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`a[b[0]+$(cmd)]`) is read to its end. A `\$` or `` \` `` at the subscript's top level is literal, as bash
   reads it; bash before 5.2 expands a nested subscript again, so there the gate reads the command. Past the
   nesting limit such a command is `opaque_exec`.
+- The gate reads the values `declare`, `typeset`, `local`, `readonly` and `export` evaluate again (#188, D-038).
+  With `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted (the gate reads it with or
+  without them), a `-i` value is arithmetic and a `-n` value is a name whose subscript runs when used, so
+  `declare -a 'b=($(gh pr comment ...))'`, `export -a 'b=(<(gh ...))'`, `declare -i x='a[$(gh ...)]'` and
+  `declare -n r='a[$(gh ...)]'` were allowed and are now a `github_post`. A command there, and an expansion bash
+  evaluates again, also asks (`declare -a 'b=($(date))'`, `local -i n=$1`, `local -n ref=$1`,
+  `declare -a 'a=([$i]=1)'` and `declare -a "b=($x)"` were allowed and now ask). When such a command outranks the
+  line's own category, a category line or rule that denies the line's category asks, never allow or log, also when
+  the policy names `opaque_exec` (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`,
+  until #191); a `deny:` list entry still denies it (D-075). A command nested deeper
+  than the gate reads asks. A backslash-newline in a compound value is dropped before it is read, as bash drops
+  it (`declare -a 'b=($\<newline>(gh ...))'` was allowed and is now a `github_post`; a `$( )` the line itself runs
+  in a double-quoted value is still read once, unless it holds a single quote or a here-document marker `<<`
+  anywhere: such a body is compared as written, so with a backslash-newline it is read again and asks, as in
+  `declare -a "b=($(ls 'x' \<newline> -l))"`), and a quoted operand after
+  two unquoted compound values (`declare -a b=(1) x=(2) 'c=($(gh ...))'`, `opaque_exec` before) belongs to the same
+  declare and is a `github_post` too.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
@@ -144,6 +161,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Terminal approval cards wait for removal before the next queued card mounts (#276). Answering a card or
   reconciling a closed request no longer mounts two widgets under the same approval id. Close, restore and
   thread-switch transitions share a lock, and stale answers or close events cannot remove the next request's card.
+  After an answer the composer gets the focus back unless you moved it, so the next prompt is sent and the next
+  approval of the thread shows its card.
 - `exo update` names up to five of the files that block it when the checkout has local changes or untracked
   files, instead of only saying that some exist.
 - `edit_file` after whitespace drift: when only the whitespace-normalized strategy matched (one stray double
@@ -252,6 +271,51 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   In `apply_patch` a hunk's context lines count toward the two, so a hunk with one context line can still replace a
   changed `-` line. The rule counts lines, not exact lines: a changed line plus a lone `}` or the `def` line still
   matches by similarity. So copy `old_string` from a fresh read (docs/TOOLS.md "Edit matching").
+- Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
+  is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
+  only a string names a principal.
+- With no principal store yet (an install that skipped the interview), memory is a quiet off state. One dim notice
+  names `exo init <id>`, the memory tools are not offered, and nothing prints over the terminal. Before, it was a
+  harness error, a warning and a `bug` finding that grew with every launch.
+- A setup state is not a harness error. The memory provider's `initialize` raises `NotConfigured` (`exo.core.slots`)
+  when it has no store, and the engine turns that into one info notice, with no `harness.error` event or finding.
+  That is the only supported place to raise it. Elsewhere `trace.report` files no event or finding for it, but the
+  other failure handling still runs: the hook runner logs its warning with the traceback, a `pre_tool_call` hook that
+  raises it blocks the call as a failing approval hook does, and a tool that raises it is still a tool error (D-025,
+  `docs/TRACE.md`).
+- The terminal client's boot line and empty-start card show the memory plugin's real state (`ready`,
+  `off, no principal store`, `did not start`, `log only`) from the new `memory_status` built-in. Before, they always
+  said "memory ready".
+- A rejected key no longer reads as an outage. When the last route fails with HTTP 401, 402 or 403, the error names
+  the provider and the key to fix (`anthropic rejected the key (HTTP 401: ...): fix ANTHROPIC_API_KEY or add a key
+  in /providers`) and the turn is not retried three times. Later turns in the key's cooldown keep that cause and the
+  provider's text instead of "all routes failed or are cooling down". Some providers send 403 for flagged input, and
+  that text says so. A local server that refuses the connection is reported as `ollama is not running at
+  127.0.0.1:11434: start it, then test it in /providers`, not a raw `ConnectError`. That address, here and in the
+  terminal client's first-run note, is only the host and port of `base_url`. A user or password in the URL never
+  reaches the error, the session store or the note. A background summary that hits either error still tries again
+  once the route reopens. The terminal
+  client's first run no longer says "add a key" when the default is a keyless local server or CLI, and the
+  failed-call tip says `/providers` checks keys, servers and logins. A passing provider test in `/providers` or the
+  web Providers tab now tells the core to reload that provider, so the chat works at once instead of after the
+  cooldown (`docs/PROVIDERS.md`).
+- The web client no longer shows a context note from other threads (`meta.note`, D-028) as a message the user
+  typed. It skips the note on load and live, as the terminal client does. A second `exo web` on a busy port no
+  longer prints a raw `[Errno 98]`: it says Exo's web client is already running there and how to get back in (its
+  open page or printed link, Ctrl+C in its terminal, or `--port`), or that another program holds the port.
+  `exo stop -h` prints help instead of stopping the core, and `exo stop` with any other word is an error.
+- A decision answer from a chat model that is not the requested JSON, or names an option outside the list, no
+  longer cools the credential. Before, one such answer to the gate made the next main-role call, which often uses
+  the same key, fail with "cooling down" for 60 s. A failed chat decision call now counts one strike, not two
+  (`docs/PROVIDERS.md`).
+- The gate's decision call no longer uses the main model (D-081). With only the claude CLI login, every tool call
+  the rules allowed started a hidden main-model call (2 to 10 s), and one failed call cooled the login, so the
+  next turn failed with "all routes for 'main' failed or are cooling down". The call now uses the decision and aux
+  routes only, keeps the rule outcome when there are none, and a failure cools only the model that failed. A later
+  main-role error does not name that model's refusal as its cause. With only main routes, the gate's log line says
+  that this call skips them (D-081), not that credentials are missing (`docs/GATE.md`, `docs/PROVIDERS.md`).
+- Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`) classify as reads in the gate, so a new
+  user's first screen is no longer an approval card for loading the intro skill (`docs/GATE.md`).
 - First run (user-readiness audit, blocker 1): the installer now copies the skill pack (`skills/` with
   `MANIFEST.json`) into `$EXO_HOME/skills`, so `/intro` loads its `exo-intro` skill and exo-orchestra stops warning
   "no skill manifest" at launch. Each pack skill is a marked folder that a re-run or `exo update` refreshes, and
@@ -260,6 +324,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   alone. When the skill is still missing, the terminal client shows a short orientation instead of sending a model
   turn that could only improvise. A first intro that started but failed or got no reply is no longer sent again
   at every launch: the composer offers `/intro` instead, and the one that completes still turns tutorial mode on.
+- The skill pack's folders in `$EXO_HOME/skills` belong to Exo, and the docs now say so (`docs/INSTALL.md` step 5,
+  user guide §1). A re-run or `exo update` replaces an edit made in one, and now warns first when it replaces an
+  edited `SKILL.md`. To change a pack skill, copy its folder under a new folder name and set a new `name:` in its
+  `SKILL.md`. The skill index keeps one skill per name, so a copy that keeps the old name is hidden or hides the
+  pack's skill.
 - The terminal client no longer freezes on the boot screen when first run opens the model picker (the claude CLI
   on PATH and a configured main route that is down). The boot screen's dismiss closed the picker in its place, and
   only ctrl+c got out. It now closes before the first-run check opens anything, so a first run with no provider also
@@ -270,8 +339,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   text now names the thread's real working folder on every route, as the value that overrides any environment note.
   A message that starts with `/` (such as `/help`) now reaches the model. Before, the claude CLI answered it itself,
   the turn failed and the route cooled down. An `@path` in a message, including a peer or bus message, no longer
-  makes the claude CLI read that file and send it to the model past the gate, `~/.ssh` keys included. Found in the
-  readiness audit and its review. #146 tracks the web composer side.
+  makes the claude CLI read that file and send it to the model past the gate, `~/.ssh` keys included. Only an `@`
+  whose path can leave the CLI's empty folder is marked: `@/`, `@~`, `@.`, `@"` and a word with a `/..` step
+  (`@x/../../etc/hosts` reaches the file too). A decorator, CSS `@media`, a diff `@@` header and an address reach
+  the model as typed, so code it copies from them carries no hidden character. If a file turns up in the CLI's
+  folder, the call runs in a fresh empty one. Found in the readiness audit and its review. #146 tracks the web
+  composer side.
 - Docs for a first user. The README now opens with what Exo is today: a coding agent for the terminal and the
   browser that runs on your Claude Code login or an API key. The Quick start, `docs/INSTALL.md` and the site's
   install step say the repository is a private preview with access on request.
@@ -290,7 +363,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   them, and `/compact` no longer offers a private reply as the output a correction in another thread judges.
   `memory_zoom(subagent=)` opens a private thread's delegate children only from that thread or a fork of it, and
   of two matching children made in the same millisecond it opens the later one. All of this holds for those
-  children too, at any depth: feedback on a child's answer records nothing and files no finding. A response to a panel a private thread opened or updated is no longer noted in the ledger.
+  children too, at any depth: feedback on a child's answer records nothing and files no finding. A response to a
+  panel a private thread opened or updated is no longer noted in the ledger.
 - Undo in one thread no longer loses other threads' news: the context note stored during the undone turn stays,
   and undo deletes only the summaries that hold an undone entry and the merges above them, not every later one.
 - A forked thread no longer resends its parent's whole transcript on every model call: the fork's copies count at
@@ -449,6 +523,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and always keeps `exo-gate`, since without it the core refuses every tool call. A name given with `--plugins` that
   matches no plugin stops the installer before it removes a plugin or writes config.json. A remembered name only
   warns.
+- A `--plugins` list, or the one `exo update` keeps, no longer deletes your copy of an installed plugin (#268).
+  `cp -r` copies the hidden `.exo-managed` marker, so a copy such as `my-bus` made from `exo-bus` looked like a
+  plugin Exo installed and was removed with exit 0. A plugin folder is now removed only when its marker names that
+  folder, as for pack skills, and a copy is kept with a warning. A marker from an install before markers named
+  their folder cannot tell Exo's plugin from a copy. That folder is kept too, still loads, and a warning names it:
+  delete it yourself if Exo installed it. A plugin still in the list gets a named marker on that run.
 - `scripts/deploy-site.sh` no longer tags and pushes a version after a failed deploy, which burned the version and
   exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
   refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
@@ -530,6 +610,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   output, so a key split by that cut (for example, `bash` keeps 15,000 characters at each end) leaves a part in the
   result, as before. See docs/TOOLS.md "Streamed output". A background job's completion notice had no key redaction. It
   now cuts known key values out of its command and output before it cuts them (docs/JOBS.md).
+- The gate's decision call no longer falls back to the main model (D-081). With no decision or aux route, the rule
+  outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
+  stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
+  call the rules allow into an ask (`docs/GATE.md`).
 - Gate: a heredoc or here-string after a compound command's closing `}`, `)`, `done`, `fi` or `esac`, and text piped
   into a compound, now reach the commands inside it (#161). `{ bash; } <<'EOF'` with `git push origin main` in the
   body was `opaque_exec` (ask) and slipped past `deny: [vcs_push]`; it is now `vcs_push`, as `bash <<'EOF'` is.
