@@ -250,6 +250,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   alone. When the skill is still missing, the terminal client shows a short orientation instead of sending a model
   turn that could only improvise. A first intro that started but failed or got no reply is no longer sent again
   at every launch: the composer offers `/intro` instead, and the one that completes still turns tutorial mode on.
+- The skill pack's folders in `$EXO_HOME/skills` belong to Exo, and the docs now say so (`docs/INSTALL.md` step 5,
+  user guide §1). A re-run or `exo update` replaces an edit made in one, and now warns first when it replaces an
+  edited `SKILL.md`. To change a pack skill, copy its folder under a new folder name and set a new `name:` in its
+  `SKILL.md`. The skill index keeps one skill per name, so a copy that keeps the old name is hidden or hides the
+  pack's skill.
 - The terminal client no longer freezes on the boot screen when first run opens the model picker (the claude CLI
   on PATH and a configured main route that is down). The boot screen's dismiss closed the picker in its place, and
   only ctrl+c got out. It now closes before the first-run check opens anything, so a first run with no provider also
