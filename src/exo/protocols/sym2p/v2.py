@@ -5,7 +5,9 @@ Vendored from aska-digital/protean-sym2p, scripts/protean-sym2p/
 2d93ed603e94ddd3e4ddcab4b1d5fc4227832a1b (MIT, Copyright (c) 2026 ASKA Digital).
 See NOTICE in this package. Changes from the source: one module, no CLIs; the
 renderer and migrator take an optional `roles` mapping so a deployment can show
-its own party names instead of the generic role words. The wire grammar is unchanged.
+its own party names instead of the generic role words. The wire grammar is unchanged,
+except that its patterns anchor at the very end of the field (`$` let a trailing
+newline through), so an ID, TK or BASE ending in a newline fails.
 
 Line shape: V|ID|TK|F|T|A|ST|CF|CV|BODY|RQ|BASE|EXP[|SUM]
 """
@@ -13,11 +15,11 @@ Line shape: V|ID|TK|F|T|A|ST|CF|CV|BODY|RQ|BASE|EXP[|SUM]
 import hashlib
 import re
 
-TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*$")
-BASE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*:[A-Za-z0-9][A-Za-z0-9_.:/-]*$")
-SYM = re.compile(r"^(?:\*|[A-Za-z][A-Za-z0-9_./-]*)$")
-REF = re.compile(r"^\$[A-Za-z][A-Za-z0-9_./-]*$")
-SUM = re.compile(r"^[0-9a-f]{16}$")
+TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*\Z")
+BASE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*:[A-Za-z0-9][A-Za-z0-9_.:/-]*\Z")
+SYM = re.compile(r"^(?:\*|[A-Za-z][A-Za-z0-9_./-]*)\Z")
+REF = re.compile(r"^\$[A-Za-z][A-Za-z0-9_./-]*\Z")
+SUM = re.compile(r"^[0-9a-f]{16}\Z")
 
 ROLES = {0: "reserved", 1: "coordinator", 2: "builder", 3: "verifier",
          4: "scout", 5: "critic", 6: "operator", 7: "swarm"}

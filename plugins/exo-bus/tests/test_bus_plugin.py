@@ -2,8 +2,13 @@
 import asyncio
 import json
 
+import httpx
+import pytest
+from nacl.signing import SigningKey
 
 from exo.bus import wire
+from exo.peerauth import MAX_FRAME
+from exo.protocol.client import Client
 from exo_bus_hermes import adapter, settings, tools
 
 
@@ -165,6 +170,43 @@ def test_poll_once_skips_own_messages_and_does_not_repeat(as_seat, client_for):
     assert asyncio.run(chan.poll_once()) == 0
 
 
+def test_event_loop_reads_past_an_event_too_large_to_read():
+    """The channel keeps its own cursor and calls ``events(since)`` without reconnect: a skipped event must not
+    leave it asking for that event again, or every later reply is held back (D-060)."""
+    def frame(seq, text):
+        ev = {"id": f"e{seq}", "seq": seq, "session": None, "type": "notice", "ts": "", "body": {"text": text}}
+        return f"id: {seq}\nevent: notice\ndata: {json.dumps(ev)}\n\n"
+    log = [(1, frame(1, "before")), (2, frame(2, "x" * (MAX_FRAME + 10))), (3, frame(3, "after"))]
+    asked, got = [], []
+    link = Client(url="http://exod")
+    chan = adapter.BusChannel(link, {}, client=object())
+
+    def handler(request):
+        since = int(request.url.params["since"])
+        asked.append(since)
+        if len(asked) > 4:  # stuck at the same cursor: stop the loop instead of hanging
+            chan.running = False
+        body = ": exod instance=i_1 heartbeat=15\n\n" + "".join(f for seq, f in log if seq > since)
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=body.encode())
+    link._http = httpx.AsyncClient(base_url="http://exod", transport=httpx.MockTransport(handler))
+
+    async def on_event(ev):
+        got.append(ev.seq)
+        if ev.seq == 3:
+            chan.running = False
+    chan._on_event = on_event
+
+    async def main():
+        chan.running = True
+        try:
+            await asyncio.wait_for(chan._event_loop(), 15)
+        finally:
+            await link.aclose()
+    asyncio.run(main())
+    assert got == [1, 3]
+    assert asked == [0, 2]
+
+
 def test_standalone_send_needs_config_then_posts(as_seat, relay, monkeypatch):
     out = asyncio.run(adapter._standalone_send("beta", "x"))
     assert out["success"] is False
@@ -172,3 +214,80 @@ def test_standalone_send_needs_config_then_posts(as_seat, relay, monkeypatch):
     monkeypatch.setattr(adapter, "make_client", settings.make_client)
     out = asyncio.run(adapter._standalone_send("beta", "ping"))
     assert out["success"] is True and out["message_id"] == relay.log[0]["id"]
+
+
+# ---- a sealed body this seat cannot open
+
+UNOPENED = "<encrypted body could not be opened>"
+
+
+def _unopenable(case, alpha_key, beta_pub):
+    """(body, enc) sealed from alpha to beta that beta cannot open. The relay checks only the alg and the seat."""
+    n24, junk = wire.b64(b"n" * 24), wire.b64(b"x" * 40)
+    if case == "old key":  # sealed to a key beta no longer holds (beta rotated)
+        return wire.encrypt_body("hi", alpha_key, "beta", wire.pubkey_b64(SigningKey.generate()))
+    if case == "not utf-8":
+        sealed = wire._box(alpha_key, beta_pub).encrypt(b"\xff\xfe")
+        return wire.b64(sealed.ciphertext), {"alg": wire.ENC_ALG, "to": "beta", "nonce": wire.b64(sealed.nonce)}
+    body, nonce = {"garbage box": (junk, n24), "short nonce": (junk, wire.b64(b"n" * 5)), "no nonce": (junk, None),
+                   "bad base64": ("not base64!", n24), "nonce not a string": (junk, 24)}[case]
+    return body, {"alg": wire.ENC_ALG, "to": "beta", **({} if nonce is None else {"nonce": nonce})}
+
+
+def _post_unopenable(relay, case):
+    body, enc = _unopenable(case, relay.keys["alpha"], wire.pubkey_b64(relay.keys["beta"]))
+    env = wire.make_envelope("alpha", ["beta"], body, relay.head, "msg", None, enc, None)
+    assert relay.accept(wire.finish_envelope(env, relay.keys["alpha"]))[0] == 201
+
+
+CASES = ["garbage box", "short nonce", "no nonce", "bad base64", "nonce not a string", "not utf-8", "old key"]
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_an_unopenable_sealed_body_reads_as_a_placeholder(relay, client_for, case):
+    _post_unopenable(relay, case)
+    assert client_for("beta").text(relay.log[0]) == UNOPENED
+    assert client_for("gamma").text(relay.log[0]) == "<encrypted to beta>"
+
+
+@pytest.mark.parametrize("case", ["garbage box", "old key"])
+def test_poll_once_moves_past_an_unopenable_sealed_envelope(as_seat, relay, client_for, case):
+    """One bad envelope must not stop the inbox: it goes to the core (checked and held like any message) as the
+    placeholder, the cursor passes it, and the next message arrives."""
+    me = as_seat("beta")
+    _post_unopenable(relay, case)
+    client_for("alpha").post("beta", "hello after")
+    link = RecordingLink()
+    chan = adapter.BusChannel(link, {"state_dir": str(me.keys_dir)}, client=me)
+    chan._cursor = settings.Cursor("beta", {"state_dir": str(chan._extra["state_dir"])})
+    chan._map_path = chan._cursor.path.with_name("sessions-beta.json")
+    assert asyncio.run(chan.poll_once()) == 2
+    texts = [c.text for c in link.calls if getattr(c, "action", "") == "bus"]
+    assert texts[0] == UNOPENED and "hello after" in texts[1]
+    assert chan._cursor.get() == len(relay.log) == 2
+    assert asyncio.run(chan.poll_once()) == 0
+
+
+def test_poll_once_keeps_the_cursor_when_the_core_call_fails(as_seat, client_for):
+    """Regression guard: only a body that cannot be opened is passed over. A core that is restarting or busy
+    leaves the cursor where it is, so the message is tried again."""
+    me = as_seat("beta")
+    client_for("alpha").post("beta", "hello once the core is back")
+
+    class FlakyLink(RecordingLink):
+        down = True
+
+        async def call(self, body):
+            if getattr(body, "action", "") == "bus" and self.down:
+                self.down = False
+                raise RuntimeError("core restarting")
+            return await super().call(body)
+
+    link = FlakyLink()
+    chan = adapter.BusChannel(link, {"state_dir": str(me.keys_dir)}, client=me)
+    chan._cursor = settings.Cursor("beta", {"state_dir": str(chan._extra["state_dir"])})
+    chan._map_path = chan._cursor.path.with_name("sessions-beta.json")
+    with pytest.raises(RuntimeError):
+        asyncio.run(chan.poll_once())
+    assert chan._cursor.get() == 0
+    assert asyncio.run(chan.poll_once()) == 1 and chan._cursor.get() == 1

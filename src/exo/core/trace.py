@@ -25,6 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from exo.core.slots import NotConfigured
 from exo.protocol import schema as ev
 
 logger = logging.getLogger(__name__)
@@ -69,8 +70,12 @@ def error_body(where: str, exc: BaseException | str, error_type: str = "", tb: s
 
 
 def report(where: str, exc: BaseException | str, session: str | None = None, **kw: Any) -> ev.HarnessError:
-    """Record a caught exception as a ``harness.error`` event (and in the log). Safe to call from any hook."""
+    """Record a caught exception as a ``harness.error`` event (and in the log). Safe to call from any hook.
+    A ``NotConfigured`` (a setup step not taken) is logged at info only: no event, no finding and no notice."""
     body = error_body(where, exc, **kw)
+    if isinstance(exc, NotConfigured):
+        logger.info("%s is off until set up: %s", body.where, body.message)
+        return body
     logger.warning("harness error in %s: %s: %s", body.where, body.error_type, body.message)
     for fn in list(_sinks):
         try:
@@ -562,8 +567,9 @@ def detect(t: TurnTrace, th: Thresholds, child: bool = False) -> list[Flag]:
             add(f"model.wait:{c.route or t.shown}", "bug" if wait > th.model_wait_s * 5000 else "papercut",
                 f"Model waited {_fmt_ms(wait)} for the first token",
                 f"{c.route or t.shown}: {_fmt_ms(wait)} before output; limit {th.model_wait_s:g} s.")
+        timed_out = any(a.get("outcome") == "timeout" for a in c.attempts)  # model.timeout names that route
         for r, ms in ([(a["route"], a.get("ms", 0)) for a in c.attempts if a.get("outcome") != "timeout" and a.get("route")]
-                      or [(c.route or t.shown, c.total_ms)]):  # a slow route, whichever try it was
+                      or ([] if timed_out else [(c.route or t.shown, c.total_ms)])):  # a slow route, whichever try it was
             limit = th.model_call_routes.get(r, th.model_call_s)
             if ms > limit * 1000:
                 add(f"model.slow:{r}", "bug" if ms > limit * 5000 else "papercut", f"{r} took {_fmt_ms(ms)} for one call",

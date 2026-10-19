@@ -22,7 +22,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional
 
-from exo.core.slots import MemoryProvider, RecallStatus
+from exo.core.slots import MemoryProvider, NotConfigured, RecallStatus
 
 try:
     from exo.capture import (CORRECTION, clip, extract_signals, is_trivial, normalize,
@@ -39,10 +39,13 @@ from . import config as C
 logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "exo-memory"
+# No principal at all is a setup step not taken yet (D-004: the onboarding flow builds the store), not a fault.
+OFF_REASON = "memory is off: no principal store yet. Run exo init <id> to make one; memory turns on at the next start."
 NOTE_KINDS = ("note", "question", "action", "artifact")
 # D-040: kinds in the principal's voice. The agent's exo_note cannot write them: a note claiming one is kept as an
 # agent note (kind note, type agent_note), which consolidation and learning never read as the principal.
 PRINCIPAL_KINDS = ("ruling", "answer")
+WRITE_TOOLS = ("exo_note", "exo_should_have_been")  # D-028: refused in a private thread (agent_context="private")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 TOOLS_LINE = ("Memory tools: exo_recall(query, budget) for beliefs and past sessions; exo_get(id) reads a whole "
               "belief node when recall shows only its summary; exo_note(text, kind) to log; "
@@ -225,6 +228,7 @@ class ExoMemoryProvider(MemoryProvider):
         self._summarizer = summarizer
         self._states: dict[str, _State] = {}
         self._lock = threading.RLock()
+        self._off = ""  # set when initialize found no principal: memory is off, so it offers no tools
 
     # -- helpers -----------------------------------------------------------------
 
@@ -279,7 +283,7 @@ class ExoMemoryProvider(MemoryProvider):
         except ValueError as exc:
             return str(exc)
         if root is None:
-            return "no principal configured: set EXO_PRINCIPAL (or EXO_STORE), or save a config with exo-memory"
+            return OFF_REASON
         if not (root / "PRINCIPAL.md").is_file() and not (root / "nodes").is_dir():
             return f"no principal store at {root}: run exo init <id>"
         return ""
@@ -320,7 +324,8 @@ class ExoMemoryProvider(MemoryProvider):
                 cfg = self._cfg(home)
                 root = C.store_root(cfg)
                 if root is None:
-                    raise RuntimeError(self.unavailable_reason() or "exo-memory: no principal store configured")
+                    self._off = OFF_REASON
+                    raise NotConfigured(OFF_REASON)  # one quiet notice from the core, no harness error
                 agent = C.agent_id(cfg, kwargs.get("agent_identity"))
                 rkey = str(root.expanduser().resolve())
                 core_log = kwargs.get("agent_log")
@@ -434,7 +439,9 @@ class ExoMemoryProvider(MemoryProvider):
         belief_tokens = int(budget * (1 - st.cfg["episodic_share"])) if has_epi else budget
         sections, node_ids, hit_ids = [], [], []
         if st.rt.store.exists():
-            asm = assemble(st.rt.store, query, max(belief_tokens - 20, 50))
+            with st.rt.lock:  # beliefs accepted, edited or reverted since the last turn; one read for find and ctx
+                st.rt.store.refresh()
+                asm = assemble(st.rt.store, query, max(belief_tokens - 20, 50))
             if asm.node_ids:
                 node_ids = asm.node_ids
                 sections.append("## Principal beliefs (exo store)\n" + asm.text)
@@ -710,6 +717,8 @@ class ExoMemoryProvider(MemoryProvider):
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         tools = [RECALL_SCHEMA, GET_SCHEMA, NOTE_SCHEMA, SHB_SCHEMA]
         st = self._state()
+        if st is None and self._off:
+            return []  # off until set up: a tool the model could call would only fail
         if st is not None and st.core_log is not None:
             return tools  # the host's memory_zoom opens the one log
         if st is None or st.rt.episodic is not None:
@@ -718,6 +727,9 @@ class ExoMemoryProvider(MemoryProvider):
         return tools
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs) -> str:
+        if tool_name in WRITE_TOOLS and kwargs.get("agent_context") == "private":  # D-028: it is not remembered
+            return json.dumps({"error": f"{tool_name} writes memory, and this is a private thread: nothing from it "
+                                        "is remembered, so nothing was written. Recall still works here."})
         st = self._state(kwargs.get("exo_home"))
         if st is None:
             # The tools may be served by a bridge that never ran initialize(): start the
@@ -777,13 +789,13 @@ class ExoMemoryProvider(MemoryProvider):
         store = st.rt.store
         if not store.exists():
             return json.dumps({"error": "no principal store for this seat"})
-        if nid not in store.nodes:
-            store.reload()  # a node written since the store was last read
-        if nid not in store.nodes:
-            near = [i for i, _ in store.find(nid.split("/")[-1].replace("-", " "), n=5)]
-            return json.dumps({"error": f"no node {nid}", "did_you_mean": near})
-        body_only = bool(args.get("body_only"))
-        text = store.render(nid, body_only)
+        with st.rt.lock:
+            store.refresh()  # a node written, edited or removed since the store was last read
+            if nid not in store.nodes:
+                near = [i for i, _ in store.find(nid.split("/")[-1].replace("-", " "), n=5)]
+                return json.dumps({"error": f"no node {nid}", "did_you_mean": near})
+            body_only = bool(args.get("body_only"))
+            text = store.render(nid, body_only)
         cut = len(text) > GET_LIMIT
         return json.dumps({"id": nid, "result": text[:GET_LIMIT] + ("\n[cut]" if cut else ""),
                            "body_only": body_only, "truncated": cut})

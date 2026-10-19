@@ -13,10 +13,13 @@ never an allow.
 
 Decision model (D-015), on by default (``decision_model``, or ``EXO_GATE_DECISION_MODEL=0`` to turn it off): the async hook
 ``apre_tool_call`` asks the router's ``decision`` role ``ask_choice_result(router, state, question,
-["allow", "log", "ask", "deny"])`` after the rules ran, takes the top option and keeps the stricter of the
-two with ``tighten_only(rule_outcome, verdict)``. A model never loosens an outcome, is never asked about a
-call the rules already deny, and a failure or timeout keeps the rule outcome. The core awaits async hooks,
-so the gate registers ``apre_tool_call``; the sync ``pre_tool_call`` is the rules alone.
+["allow", "log", "ask", "deny"], spare="main")`` after the rules ran, takes the top option and keeps the
+stricter of the two with ``tighten_only(rule_outcome, verdict)``. A model never loosens an outcome, is never
+asked about a call the rules already deny, and a failure or timeout keeps the rule outcome. ``spare="main"``
+(D-081): the call uses the decision and aux routes only, never a main route, and a failure cools only the
+model that failed, so a gate call never slows a tool call by a main-model turn or locks the main role out.
+The core awaits async hooks, so the gate registers ``apre_tool_call``; the sync ``pre_tool_call`` is the
+rules alone.
 
 Settings resolve in this order, first hit wins: explicit overrides, a value set in config (Exo's
 plugin config, or Hermes ``plugins.entries.exo-gate.settings.<key>``), ``EXO_GATE_<KEY>`` env vars,
@@ -45,6 +48,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
 from exo.principal import require_principal
+from exo.store import principal_root
 
 logger = logging.getLogger("exo_gate")
 
@@ -102,7 +106,10 @@ def resolve_settings(overrides: Mapping[str, Any] | None = None,
     exo_home = Path(env.get("EXO_HOME") or Path.home() / ".exo").expanduser()
     store = get("principal_store") or env.get("EXO_PRINCIPAL_STORE") or ""
     if not store and env.get("EXO_PRINCIPAL"):
-        store = str(exo_home / "principals" / env["EXO_PRINCIPAL"])
+        try:  # config principals.<id> first: a store made with --root
+            store = str(principal_root(env["EXO_PRINCIPAL"], exo_home))
+        except ValueError:  # not a principal id: no store, so the default policies apply
+            store = ""
     author = str(get("author"))
     seat = env.get("EXO_SEAT") or author  # the seat's own signing key, the same file the bus client uses
     key_path = get("key_path") or str(exo_home / "keys" / f"{seat}.key")
@@ -404,8 +411,8 @@ class Gate:
             return ""
 
     async def _verdict(self, d: gate.Decision, c: gate.Classification, risk: str, tool: str) -> Optional[tuple]:
-        """``(top option, {"route", "source"})`` from the decision role, or None (no router, failure).
-        The route is the one that answered: the first route (Jev) or a fallback."""
+        """``(top option, {"route", "source"})`` from the decision role, or None (no router, no route, failure).
+        The route is the one that answered: the first route (Jev) or a fallback (Laya, aux; never main, D-081)."""
         router = self.router_getter() if self.router_getter else None
         if router is None:
             return None
@@ -415,12 +422,16 @@ class Gate:
                      "reason": d.reason}
             res = await asyncio.wait_for(
                 ask_choice_result(router, state, "How strictly should this tool call be gated?",
-                                  list(gate.OUTCOMES)), timeout=20)
+                                  list(gate.OUTCOMES), spare="main"), timeout=20)
         except Exception as exc:
+            from exo.core.models.decision import DecisionError
             from exo.model_spend import SpendDenied
             if isinstance(exc, SpendDenied):
                 raise
-            logger.warning("exo-gate: decision model failed; keeping the rule outcome", exc_info=True)
+            if isinstance(exc, DecisionError):  # no decision or aux route (often), or each one failed
+                logger.info("exo-gate: no decision verdict (%s); keeping the rule outcome", exc)
+            else:
+                logger.warning("exo-gate: decision model failed; keeping the rule outcome", exc_info=True)
             return None
         probs = res.probabilities
         return (max(probs, key=probs.get), {"route": res.route, "source": res.source}) if probs else None
@@ -495,6 +506,8 @@ class Gate:
             d2 = gate.decide(c, changed, ctx)
             if _RANK[d2.outcome] > _RANK[d.outcome]:
                 d = d2
+            # A part reserved under either policy keeps its ask from a standing grant (D-075).
+            d.reserved = list(dict.fromkeys(d.reserved + d2.reserved))
             d.reason += " (policy files changed this session; the stricter of old and new applies until /gate accept)"
         if risk == "high" and c.category == "unknown" and _RANK[d.outcome] < _RANK["ask"]:
             d.reason += f" (registry risk is high and {tool} is not a known tool)"
@@ -601,6 +614,10 @@ class Gate:
 
     def _grant_for(self, c: gate.Classification, d: gate.Decision, binding: str, outward: bool) -> Optional[dict]:
         if c.category in gate.NO_GRANT or (d.violations and not binding):
+            return None
+        # D-075: a grant covers the act it was given for. A reserved entry that matched another part of
+        # the line keeps the principal's ask, so `git push origin f && gh pr merge 3` is not run on a push grant.
+        if any(hit != (c.category, c.target) for hit in d.reserved):
             return None
         try:
             return self.grants.match(c.category, c.target or c.tool, binding, outward)

@@ -156,6 +156,69 @@ def test_bridge_needs_only_tree_protocol_and_retains_original_messages():
     assert tree.on_capture is None and callable(tree.on_pre_compress) and callable(tree.on_compacted)
 
 
+def test_undo_tells_the_context_plugin_what_the_thread_still_holds(tmp_path):
+    """D-041: after session.undo the context plugin gets ``on_session_switch(session, rewound=True, messages=,
+    summaries=)`` with every message left in the thread, each with its author (D-040), and the ids of the summary
+    nodes still stored for the thread's tree, so it can drop what it kept from the undone turns. A bare tree (no
+    bridge) has no such hook and undo still works."""
+    from exo.protocol import schema as s
+
+    seen = []
+
+    class Plugin:
+        def on_session_switch(self, new_session_id, *, rewound=False, messages=None, summaries=None, **kw):
+            seen.append((new_session_id, rewound, messages, kw.get("session_id"), summaries))
+
+    async def run(factory):
+        engine = CoreRuntime(tmp_path / str(len(seen)), MODELS, context_factory=factory, env={})
+        try:
+            session = await engine.loop.create_session(agent=engine.agent)
+            await engine.loop.send(session.id, "keep this", meta={"author": "principal"})
+            await engine.loop.send(session.id, "undo this", meta={"author": "principal"})
+            out = await engine._session_undo(s.SessionUndo(session=session.id, turns=1))
+            assert out["removed"] == 2
+            return session.id, engine.agent
+        finally:
+            await engine.close()
+
+    sid, agent = asyncio.run(asyncio.wait_for(run(lambda tree: ContextAdapter(tree, Plugin())), 5))
+    assert [(x[0], x[1], x[3]) for x in seen] == [(sid, True, sid)]
+    assert seen[0][4] == {f"agent:{agent}": []}  # the agent's tree, no summary yet
+    assert [(m["role"], m["content"], m["author"]) for m in seen[0][2]] == [
+        ("user", "keep this", "principal"), ("assistant", "offline", "agent")]
+    assert seen[0][2][0]["principal"] is True
+    asyncio.run(asyncio.wait_for(run(None), 5))  # no bridge: nothing to tell
+    assert len(seen) == 1
+
+
+def test_undo_in_a_private_thread_tells_the_context_plugin_nothing(tmp_path):
+    """D-028: a private thread is never shown to the context plugin, so an undo there hands it no messages."""
+    from exo.protocol import schema as s
+
+    seen = []
+
+    class Plugin:
+        def on_session_switch(self, new_session_id, *, rewound=False, messages=None, **kw):
+            seen.append((new_session_id, rewound, messages))
+
+    class PrivateAdapter(ContextAdapter):
+        def _private(self, session):
+            return True
+
+    async def run():
+        engine = CoreRuntime(tmp_path / "p", MODELS, context_factory=lambda tree: PrivateAdapter(tree, Plugin()), env={})
+        try:
+            session = await engine.loop.create_session(agent=engine.agent)
+            await engine.loop.send(session.id, "my private note", meta={"author": "principal"})
+            await engine.loop.send(session.id, "undo this", meta={"author": "principal"})
+            await engine._session_undo(s.SessionUndo(session=session.id, turns=1))
+        finally:
+            await engine.close()
+
+    asyncio.run(asyncio.wait_for(run(), 5))
+    assert [x for x in seen if x[1]] == []
+
+
 @pytest.mark.parametrize("engine_type", [CoreRuntime, CoreEngine])
 def test_injected_factory_cannot_precede_required_gate_validation(engine_type, tmp_path):
     class Broker:

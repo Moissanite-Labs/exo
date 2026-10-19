@@ -38,10 +38,11 @@ from exo.core.peer_target import EngineTarget
 from exo.core.ingress import STANDING_LINE, PeerConfig
 from exo.core.plugins import PluginManager, call_plugin, safe_plugin_call
 from exo.config import Config, ConfigError, check_not_secret, redact
-from exo.principal import current_caller, ingress_author, is_principal, require_principal
+from exo.principal import CHANNEL, current_caller, ingress_author, is_principal, require_principal
 from exo.core.approvals import ApprovalDesk
 from exo.core.seats import Seat, list_seats
 from exo.core.sessions import SessionLocked, SessionStore
+from exo.core.slots import NotConfigured
 from exo.core.skills import SkillIndex, register_skill_tool
 from exo.core.tools.builtin import harness as harness_tool
 from exo.core.tools.builtin import ui as ui_tool
@@ -140,6 +141,7 @@ class CoreRuntime:
         self.home = Path(home)
         self.cwd_note = ""  # why the default cwd is not the one asked for (shown at session start)
         self.memory_init_error = ""  # why exo-memory failed to start (shown at session start)
+        self.memory_off = ""  # why memory is off until set up (NotConfigured): a quiet notice, never a finding
         self.cwd = self._seat_cwd(seat) or cwd or os.getcwd()  # the seat's own folder beats the shared default
         self._cwd_seen: dict[str, set[str]] = {}  # session -> folders already warned about (D-032)
         self.handoff_sources: dict[str, Any] = {"jobs": lambda session: []}  # D-032: facts for /handoff; key -> fn(session)
@@ -289,7 +291,7 @@ class CoreRuntime:
         await self.mcp.start(self.registry)
 
     async def start_channels(self, link: Any) -> dict[str, str | None]:
-        """Run ``factory(link, **config)`` for each channel the seat enables; ``link`` is a protocol Client
+        """Run ``factory(link, **config)`` for each channel the seat enables; ``link`` is exod's ``ChannelLink``
         (or any object with ``call`` and ``events``). Returns name -> error (None when running)."""
         out: dict[str, str | None] = {}
         for name, cfg in self._channel_cfg.items():
@@ -319,8 +321,10 @@ class CoreRuntime:
         """Become the one writer of this agent's log and tree (raises agentlog.WriterBusy if another process is)."""
         if self._writer is None:
             self._writer = agentlog.claim_writer(self.home, self.agent)
+            self.agents.fail_stale()  # only the writer may call this agent's leftover delegate tasks dead
 
     async def close(self) -> None:
+        self.jobs.target.closed = True  # from here on no job notice starts a turn, while channels and peers stop too
         agentlog.release_writer(self._writer)
         self._writer = None
         trace.remove_sink(self._on_harness_error)
@@ -353,6 +357,8 @@ class CoreRuntime:
                     try:
                         call_plugin(fn, "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
                               agent_log=self.log_view)
+                    except NotConfigured as exc:
+                        self.memory_off = str(exc)
                     except Exception as exc:
                         # Loud at session start, not on the first exo_note: record why memory is down.
                         trace.report("memory.initialize", exc, None)
@@ -361,12 +367,18 @@ class CoreRuntime:
                 spec = ToolSpec(name=schema["name"], description=schema.get("description", ""),
                                 parameters=schema.get("parameters") or {"type": "object", "properties": {}},
                                 toolset="memory" if slot is pm.slots.memory else "context")
-                kw = {"exo_home": str(self.home), "agent_log": self.log_view} if slot is pm.slots.memory else {}
-                handler = (lambda o, n, kw: lambda args, ctx: o.handle_tool_call(n, args, session_id=ctx.session, **kw))(
-                    slot, spec.name, kw)
+                handler = (lambda o, n, mem: lambda args, ctx: o.handle_tool_call(
+                    n, args, session_id=ctx.session, **(self._memory_kw(ctx.session) if mem else {})))(
+                    slot, spec.name, slot is pm.slots.memory)
                 self.registry.register(spec, handler, replace=True)
         self.registry.add_hook("pre_tool_call", self._pre_hook)
         self.registry.add_hook("post_tool_call", self._post_hook)
+
+    def _memory_kw(self, session: str | None) -> dict[str, Any]:
+        """A memory tool call's keywords; ``agent_context="private"`` in or under a private thread: write nothing
+        (D-028)."""
+        kw = {"exo_home": str(self.home), "agent_log": self.log_view}
+        return {**kw, "agent_context": "private"} if self.store.private(session) else kw
 
     @staticmethod
     def _plugin_handler(fn: Any) -> Any:
@@ -437,7 +449,7 @@ class CoreRuntime:
         def emit(text: str) -> None:  # tool threads call this; publish on the event loop
             try:
                 from exo.core.models.keys import redact_secrets
-                text = redact_secrets(text)
+                text = redact_secrets(text, keep_markers=True)  # bash already redacted it across reads
             except Exception:
                 pass
             loop.call_soon_threadsafe(self.hub.publish, s.ToolOutput(call_id=call.id, text=text), sid)
@@ -498,6 +510,8 @@ class CoreRuntime:
         info = self.store.get_session(sid)
         if info is None:
             raise CommandFailed("not_found", f"no session {sid}")
+        st = self.loop._state.get(sid)  # session.get and session.resume show a running turn, as session.list does
+        info.status = "live" if st is not None and st.running else "idle"
         return info
 
     async def _session_create(self, b: s.SessionCreate) -> dict[str, Any]:
@@ -513,6 +527,8 @@ class CoreRuntime:
             self.hub.publish(s.Notice(
                 text=f"exo-memory did not start: {self.memory_init_error}; "
                      "memory tools will fail until it is fixed", level="warn"), info.id)
+        if self.memory_off:
+            self.hub.publish(s.Notice(text=self.memory_off, level="info"), info.id)
         return {"session": to_dict(info)}
 
     async def _session_list(self, b: s.SessionList) -> dict[str, Any]:
@@ -524,7 +540,8 @@ class CoreRuntime:
         return {"sessions": rows}
 
     async def _approvals_list(self, b: s.ApprovalsList) -> dict[str, Any]:
-        return {"approvals": self.approvals.listing(b.session)}
+        return {"approvals": self.approvals.listing(b.session),  # one await-free copy (D-060)
+                "cursor": {"instance": self.hub.instance, "seq": self.hub.seq}}
 
     async def _session_get(self, b: s.SessionGet) -> dict[str, Any]:
         info, queued = self._info(b.session), [m.id for m in self.loop.state(b.session).steer]  # chips a client still draws
@@ -546,6 +563,8 @@ class CoreRuntime:
     async def _session_undo(self, b: s.SessionUndo) -> dict[str, Any]:
         self._info(b.session)
         removed = self.store.undo(b.session, b.turns)
+        if removed and (rewound := getattr(self.loop.context, "rewound", None)):
+            rewound(b.session)  # the context plugin drops what it kept from the undone turns (D-041)
         info = self.store.update_session(b.session)
         self.hub.publish(s.SessionUpdated(session=info), b.session)
         return {"session": to_dict(info), "removed": removed}
@@ -556,6 +575,11 @@ class CoreRuntime:
             self.store.assert_open(b.session)
         except SessionLocked as exc:  # a finished child session takes no new turns
             raise CommandFailed("session_locked", str(exc)) from None
+        if b.session in self.agents.loops:  # typing into a running subagent steers it, never a new turn (D-070, D-052)
+            require_principal("steer a subagent")
+            if not self.loop.state(b.session).accepting_steers:  # starting or finishing: no round can take it
+                raise CommandFailed("conflict", "the subagent is starting or finishing and takes no message now")
+            b.mode = "steer"
         meta = {"author": ingress_author()}  # snapshot before dispatch returns and revokes its caller
         if b.mode == "steer" and self.loop.state(b.session).accepting_steers:
             await self.loop.send(b.session, b.text, list(b.parts), mode="steer", meta=meta)  # no await inside
@@ -591,6 +615,8 @@ class CoreRuntime:
 
     async def _peers(self, b: s.Peers) -> dict[str, Any]:
         if b.action == "bus":  # D-040: the bus channel's inbound path, whether or not peers are on
+            if current_caller() != CHANNEL:  # it pins a seat's key on first sight: never from a socket client
+                raise CommandFailed("forbidden", "only a channel the core runs can hand in a bus message")
             from exo.bus.ingress import bus_ingress
             try:
                 return await bus_ingress(self, b)
@@ -610,7 +636,8 @@ class CoreRuntime:
         require_principal("send feedback")
         from exo import learn  # outside the core; learning off just records nothing
         out = learn.handle_feedback(self, b)
-        if b.verdict in ("reject", "should_have_been"):  # the principal's own finding (D-025)
+        # The principal's own finding (D-025). Findings are global: none for a private thread or its child (D-028)
+        if b.verdict in ("reject", "should_have_been") and not self.store.private(b.session):
             note = (b.text or "").strip()
             self.findings.file(f"principal:{b.verdict}:{b.session}:{b.message_id or 'last'}",
                                f"Answer {'rejected' if b.verdict == 'reject' else 'should have been different'}"
@@ -673,13 +700,13 @@ class CoreRuntime:
     # ------------------------------------------------------------ self-observation (D-025)
 
     def _on_harness_error(self, body: s.HarnessError, session: str | None) -> None:
-        """Sink for ``trace.report``: publish the error. Outside a running turn (no turn-end check is coming)
-        it also becomes a finding right away."""
+        """Sink for ``trace.report``: publish the error. Outside a running turn, or in a subagent's (its loop has no
+        turn-end check, and a parent's reads only direct children), it also becomes a finding right away."""
         if session and self.store.get_session(session) is None:
             return  # another engine's session
         self.hub.publish(body, session)
         st = self.loop._state.get(session) if session else None
-        if self._trace_on and (st is None or not st.running):
+        if self._trace_on and (st is None or not st.running or session in self.agents.loops):
             self.findings.file(f"harness.error:{body.where}:{body.error_type}", f"Harness error in {body.where}",
                                severity="bug", detail=f"{body.error_type}: {body.message}", session=session)
 

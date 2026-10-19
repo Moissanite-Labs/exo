@@ -67,6 +67,18 @@ def test_output_cap_keeps_head_and_tail(tmp_path):
     assert "".join(seen).count("\n") == 100000
 
 
+def test_output_is_decoded_as_one_utf8_stream(tmp_path):
+    """A character split across two reads, or across a 64 KiB read edge, stays whole in the result and the stream;
+    only a sequence cut off by the end of the output becomes U+FFFD."""
+    seen = []
+    _, out, _ = run_command(r"printf 'caf\xc3'; sleep 0.3; printf '\xa9\n'", str(tmp_path), emit=seen.append)
+    assert out == "caf\u00e9\n" and "".join(seen) == out
+    big = "\u20ac" * 33000  # 99 KB of 3-byte characters: the read edges fall inside them
+    (tmp_path / "euro.txt").write_text(big, encoding="utf-8")
+    assert run_command("cat euro.txt", str(tmp_path), cap=200_000)[1] == big
+    assert run_command(r"printf 'ok\xc3'", str(tmp_path))[1] == "ok\ufffd"
+
+
 def test_background_straggler_does_not_hang(tmp_path):
     t0 = time.monotonic()
     code, out, status = run_command("sleep 30 & echo done", str(tmp_path), timeout=20)
