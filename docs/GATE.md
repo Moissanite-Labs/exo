@@ -718,17 +718,15 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   or `reserved:`. An entry that matches the command text does (a `command:` regex, or a rule
   with a `command` match). Since #136 that regex also sees the literal-word view of the text
   the gate reads, so quoting does not evade it there: the command-valued options read since
-  #164 and #288 and the array subscripts read since #189 are denied under
-  `command:gh pr comment` (`tar --to-command='g"h" pr comment 3 --body hi'`,
+  #164 and #288, the array subscripts read since #189 and the `declare` values read since #194
+  are denied under `command:gh pr comment` (`tar --to-command='g"h" pr comment 3 --body hi'`,
   `git ls-remote --exec='g"h" pr comment 3 --body hi' origin`,
-  `printf -v 'a[$(g"h" pr comment 3 --body hi)]' %s x`). In the forms below the regex sees only
+  `printf -v 'a[$(g"h" pr comment 3 --body hi)]' %s x`,
+  `declare -a 'b=($(g"h" pr comment 3 --body hi))'`). In the forms below the regex sees only
   the raw text, so quoting still evades it: `echo ${X:-$(g'h' pr comment 3 --body hi)}` is
   allowed under `command:gh pr comment`. The known forms:
   - `${...}` bodies are skipped by the lexer, so `echo ${X:-$(gh pr comment 3 --body hi)}` is
     `read` and allowed (#143; open PR #158).
-  - A quoted array, `-i` or `-n` value given to `declare` or `typeset` is expanded again by bash,
-    so its `$( )` runs: `declare -a 'b=($(gh pr comment 3 --body hi))'` is `read` and allowed
-    (#188; open PR #194).
   - Text piped or fed by heredoc to `ssh` with no remote command runs in the remote login shell,
     but the line reads as a plain `ssh`: `echo 'gh pr comment 3 --body hi' | ssh host` and
     `ssh host <<EOF` are `shell` and allowed under every category deny; a `target:` entry for the
