@@ -2804,7 +2804,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     return _exo_relative(split, max(ups), candidates)
 
 
-_EXO_JOINS = 16384   # joins of a folder with a name, and levels up, one line may make in _exo_relative (#269)
+_EXO_JOINS = 16384   # joins of a folder with a name, and levels up, one classify call may make in _exo_relative (#269)
 
 
 class _Spent(Exception):
@@ -2817,17 +2817,21 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     grep -r . ..`, `cat ../exod*` there, `cd ~/.exo/run/jobs && cd .. && ls` and `tar -C ~/.exo -czf - run` reach the
     run folder and its secrets as the absolute path would (is_sensitive_path, a glob in it). The folders are the
     targets (``split``, as _cd_store_read reads them; one with a glob is left to the store-folder check), each
-    relative target joined to each of them, and every folder up to ``up`` levels above them (`cd ..`); an absolute
-    target is also resolved (a link into the store). From a folder above the store only a target or name with the
+    relative target joined to each of them, and every folder up to ``up`` levels above them (`cd ..`, counted once:
+    a `..` target is not joined too); an absolute target is also resolved (a link into the store). From a folder above the store only a target or name with the
     store's folder name as a part (`.exo`, `exo-home`) is joined, so `cd /srv && tar cf -
     exo-home/run` counts and a line that names no store folder joins nothing. Each join and each level up is charged
-    to one budget of _EXO_JOINS as it is made, so the work stays linear in the line; past it, or past 64 store
-    folders, the line counts (fails closed). The name or folder, or ''."""
+    to one budget of _EXO_JOINS as it is made, shared by the whole classify call (each `$( )` is classified again,
+    nested ones too), so the work stays linear in the line; past it, or past 64 store folders, the line counts (fails
+    closed). The name or folder, or ''."""
     home = os.path.normpath(_home())
     exo = os.path.normpath(_exo_home())
     roots = _path_forms(exo)
     marks = {".exo", os.path.basename(exo)} - {""}
-    left = [_EXO_JOINS]
+    memo = _call_memo.get()
+    left = [_EXO_JOINS] if memo is None else memo.setdefault("exo_joins", [_EXO_JOINS])
+    if left[0] < 0:
+        return "a path in the Exo store (too many to resolve)"
 
     def inside(b: str, real: bool = False) -> bool:
         return any(re.search(r"(^|/)\.exo(/|$)", f) or any(f == r or f.startswith(r.rstrip("/") + "/") for r in roots)
@@ -2855,7 +2859,8 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
         if not (_GLOBBY.search(p) or "$" in p):
             folders.append(os.path.join(home, p[2:]) if p.startswith("~/") else home if p == "~" else p)
     folders = list(dict.fromkeys(folders))
-    relative = [r for r in folders if not r.startswith("/")]
+    # a `cd ..` is the level-up walk below (``up`` counts every one on the line), not a join as well
+    relative = [r for r in folders if not r.startswith("/") and set(r.split("/")) != {".."}]
     try:
         bases: set = set()
         for b in folders:
