@@ -1147,9 +1147,9 @@ alone.
 
 1. Close any tool call left dangling by a crash with an error result, so the transcript stays valid.
 2. Store the user message and emit `message.completed`, then `turn.started`.
-3. Build the system message: the base prompt, the memory provider's pack block and the agent's summary
-   tree. Memory recalled for this message goes in a separate message just before it, not in the system
-   message (section 17.1 explains why).
+3. Build the system message: the base prompt, the memory provider's pack block, the thread's working folder
+   and the agent's summary tree. Memory recalled for this message goes in a separate message just before it,
+   not in the system message (section 17.1 explains why).
 4. Build a fresh model input from the context engine (section 17).
 5. Stream one model call. Text arrives as `message.delta`, reasoning as `reasoning.delta`. Usage arrives as
    `usage.updated`, and a `model.call` event records the route asked for, the route that served, every
@@ -1234,9 +1234,9 @@ instead of deleting them, so the log stays append-only.
 
 A model call for one thread has four parts, in this order:
 
-1. **System message.** The base prompt, the memory provider's block, then the agent's summary tree across
-   all threads, oldest first. It ends at the last finished summary, so it is byte-identical for every thread
-   of the agent until a new summary lands.
+1. **System message.** The base prompt, the memory provider's block, the thread's working folder, then the
+   agent's summary tree across all threads, oldest first. It ends at the last finished summary, so it is
+   byte-identical for every thread of the agent in the same folder until a new summary lands.
 2. **This thread's tail.** Every message of the thread after the tree's frontier, and at least its last 12.
 3. **Notes from other threads.** Before a call, what other threads did since this thread last looked is
    written into this thread as one compact note ("In thread "tui 2", 4 min ago: ..."). The note is stored, so

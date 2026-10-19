@@ -45,7 +45,8 @@ the middle dot as separator come straight from the site.
    one line per tool with state glyph, name, short args, line count and elapsed time (ctrl+o expands); system
    lines dim; tips as `tip · ...` in dim italic; `memory · log 1-16 folded · 1781 → 153 tok` as a cold line.
 3. Panels: approval (orange rule, `APPROVAL · <risk>`, key chips `[o] once [a] always [d] deny`; both `a` and `A` wait for Enter; the card never takes focus automatically and says "tab, click or ctrl+f to answer"; it is removed when the core closes the request, when the turn is stopped, and by a check against `approvals.list` every few seconds), taste,
-   finding and `/context` report (cold rule), peer message (double cold rule, sender and trust in the header,
+   finding, `/context` report and the short orientation `INTRO` shows when the `exo-intro` skill is missing
+   (cold rule), peer message (double cold rule, sender and trust in the header,
    never styled as you). The side panel for `ui.panel` uses the same header and rule.
    The terminal waits for an approval card's removal before mounting the next queued card under the same widget id.
    Answers and close events name their request, so a late event cannot close its replacement. Thread switches and
@@ -64,7 +65,8 @@ the middle dot as separator come straight from the site.
    30), one still frame under reduced motion or `NO_COLOR`, gone with the first message. Idle cost measured with
    `scripts/idle_cpu.py`: about 1.3% of one core (0.5% without it). A plain startup prints no `new thread` line; `/new` does.
    Before that, a boot sequence (under a second, any key skips it) that marks `core`, `agent`, `memory`, `model` as
-   each real step finishes, then an empty-start card with the keys.
+   each real step finishes, then an empty-start card with the keys. The boot screen is gone before anything opens
+   over the start (the first-run providers panel or model picker): its dismiss closes the top screen.
 
 Where the numbers come from, all from events the core already sends: `model.call` (`requested`, `route`,
 `usage.cache_read_tokens`), `usage.updated` (context tokens, session cost), `memory.summarized`,
@@ -102,7 +104,8 @@ and an orange default mark. Key chips: `[a]` add or replace a key, `[t]` test, `
 the default model, `[esc]` close (leaving a panel is soft; Esc never stops a turn, ctrl+c or `/stop` does). `[a]` opens a small modal with one masked field; the key never goes through the
 composer, the transcript or any log, and a key typed after `/providers add <name>` in the composer is refused and
 not echoed. After a change the client tells a running core to read keys again. At start, if no provider is ready,
-one note says to type `/providers`.
+one note says so and the panel opens. If providers are ready but no main route uses one, the panel opens too, or
+the default-model picker when only one provider is ready.
 
 ## Focus, the big composer and the inverse layout (D-046)
 
