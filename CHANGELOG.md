@@ -440,10 +440,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   command it reaches, so a later client or interpreter whose argument is a store folder stays `store_write` (which
   outranks `delete`; `deny: [delete]` still denies it through its delete part, D-075). The parser stays linear in
   the length of an unbroken word (base64, a long path).
-  A `deny: [opaque_exec]` entry still denies these compound lines (D-075); under `categories: {opaque_exec: deny}`
-  or a rule they now ask where they were denied, as `bash <<EOF` already does, until #191. It carries the #178
-  floor change (naming `opaque_exec` at `ask` or `deny` keeps the indirection floor), so they ask rather than
-  falling to the push's own `log` (`docs/GATE.md` "Shell commands: an allowlist").
+  For fed shells and interpreters, a `deny: [opaque_exec]` entry still denies these compound lines
+  (D-075). Under `categories: {opaque_exec: deny}` or a rule they now ask where they were denied,
+  as `bash <<EOF` already does, until #191. The #178 floor keeps those lines at ask when
+  `opaque_exec` is named at `ask` or `deny`, rather than falling to the push's own `log`.
+  Fed SQL clients follow their plain-input classification, without that floor. A compound feeding
+  `\! git push origin main` to `psql` can change from ask to the push's `log`. D-075 `deny` and
+  `reserved` entries still match every retained part. Category overrides and ordinary rules use
+  the combined classification (`docs/GATE.md` "Shell commands: an allowlist").
 - Unix peer authentication (#175, D-060): principal clients ask the kernel who serves the socket before the
   credential moves, and the core asks who connected before it stamps the principal. The credential file
   (`run/<socket>.principal.key`) is now a JSON launch record, so restart the core and every running `exo`, `exo web`
