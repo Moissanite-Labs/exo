@@ -6,6 +6,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Gate (#209, #202, #225, #199, D-038): four spellings of a secret-store path were allowed reads and now ask. A
+  harmlessly named link into a store (`notes.txt` to `~/.ssh/id_rsa`, `cfg` to `~/.ssh`, `app.cfg` to a project
+  `.env`) is judged by where it leads, resolved from the session's working folder (the core now passes it to tool
+  hooks as `cwd`, and the bash tool's `cwd` argument is joined to it) and from the gate's own; a `.pub` name exempts
+  only a path that resolves to one. `${EXO_HOME:-$HOME/.exo}/keys` and the other `${VAR<op>word}` forms of `HOME`,
+  `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the default. An
+  expansion inside a store name (`cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc`, `cat ${x}.env`) is read as
+  empty, and as any text between two literal parts (`cat .e$(echo n)v`). A glob in bash's bracket syntax
+  (`~/.kube/[^x]onfig`, `[[:alpha:]]onfig`) is read as bash reads it, and `/proc/<pid>/<glob>` is matched against
+  `environ`. One classify call now shares its file-system lookups across the line's words, so a 10 KB line
+  classifies several times faster. Limits in GATE.md "Other spellings of a store path".
 - Search tools skip secret stores (#241, D-038). The gate checks only the path a `grep` or `glob` call names, and the
   tools walked everything below it, so `grep {pattern: "key", path: HOME}` (or the same search with no path from a cwd
   of HOME, or of `$EXO_HOME`) returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and `$EXO_HOME/run/exod.principal.key`
