@@ -152,9 +152,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   changes merged up to October 19, 2026: the security wave (D-038 to D-040) with its limits stated (allowlisted
   programs are trusted by name; the principal credential check, with D-060's kernel peer checks (#175), still passes
   a same-user process that detaches; the run folder is a secret store since #185 (for #169), but a shell walk from a
-  folder above it is an ordinary read; `config.json` is an ordinary write until D-074; a command inside `${...}` or
-  in a quoted compound, `-i` or `-n` value given to `declare` is not classified (#143, #188), while array subscripts
-  (#189, for #179), wrappers such as `setsid` (#196, for #160) and a compound's heredoc (#198, for #161) are read; a
+  folder above it is an ordinary read; `config.json` is an ordinary write until D-074; a command inside `${...}` is
+  not classified (#143), while array subscripts (#189, for #179), values given to `declare` (#194, for #188), wrappers such as `setsid` (#196, for #160) and a compound's heredoc (#198, for #161) are read; a
   deny past four `bash -c` nesting levels or `ssh` hops only asks (#137, #153); a `deny:` entry holds for every part
   of a line while a `categories:` setting or a rule sees only the most severe one (D-075, #126; #191); a store write
   by a relative name from the tool's working folder, by a glob or hard-link spelling (docs/GATE.md), or back through
@@ -169,8 +168,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (D-037, D-043, D-045, D-046), the house taste wave 1 (D-044), the engine split and the core budget ratchet (#46,
   D-067, D-077), turns that do not wait for memory upkeep (D-068), versioning (D-056), the web sub-pages (D-061),
   subagent controls and `/rename` (D-069, D-070), and an "In progress" section that names the open changes and
-  issues (#96, #107, #125, #158, #194) and the work on branches with no PR yet, and names what #164, #175, #177,
-  #185, #186, #189, #196, #198, #201, #213, #228, #287 and #288 changed on main. The user guide, developer guide,
+  issues (#96, #107, #125, #158) and the work on branches with no PR yet, and names what #164, #175, #177,
+  #185, #186, #189, #194, #196, #198, #201, #213, #228, #287 and #288 changed on main. The user guide, developer guide,
   command reference and docs map are brought up to date with main, and the docs map has one coverage table.
   `scripts/build_whitepaper.py` takes the version and the month from the paper's header line only, and stops with a
   message when that line is missing or reworded.
