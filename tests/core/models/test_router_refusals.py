@@ -291,3 +291,37 @@ def test_loop_does_not_retry_a_rejected_key(tmp_path):
     assert not [e for e in seen if e.type == "notice" and "retrying" in e.body.text]
     err = next(e.body for e in seen if e.type == "error")
     assert not err.retryable and "fix ANTHROPIC_API_KEY" in err.message
+
+
+def two_model_router(clock):
+    return Router(roles={"main": ["p:big"], "aux": ["p:small"]}, providers={"p": {"key_env": "P_KEY"}},
+                  catalog={"providers": {}, "models": {}, "roles": {}},
+                  instances={"p": FakeProvider([rate_limited()], name="p")}, env={}, clock=clock)
+
+
+def test_wait_hint_ignores_a_cooldown_on_a_model_outside_the_chain():
+    """A shorter cooldown on the aux model (a gate side call, D-081) must not set main's wait hint or retry_after:
+    main's own, later reopening does (#239)."""
+    clock = Clock()
+    r = two_model_router(clock)
+    r.record_failure("p", "small", 429, 20, sole=True, model_only=True)
+    r.record_failure("p", "big", 429, 60, sole=True)
+    own = r.cooldowns["p"].until - clock.t
+    ev = r._exhausted("main", ["p:big"], None)
+    assert ev.retry_after == pytest.approx(own) and own > 20
+    assert f"reopens in {own:.0f}s" in ev.error
+    # The aux chain asks p:small, so there that cooldown still counts.
+    assert r._exhausted("aux", ["p:small"], None).retry_after == pytest.approx(r.cooldowns["p|small"].until - clock.t)
+
+
+def test_wait_hint_ignores_another_provider_and_no_credentials_stays_true():
+    """A cooldown on a provider outside the chain gives no hint, and does not hide a chain with no credentials."""
+    clock = Clock()
+    r = Router(roles={"main": ["p:big"]}, providers={"p": {"key_env": "P_KEY"}, "q": {"key_env": "Q_KEY"}},
+               catalog={"providers": {}, "models": {}, "roles": {}}, instances={}, env={}, clock=clock)
+    r.record_failure("q", "m", 429, 300, sole=True)
+    ev = r._exhausted("main", [], None)
+    assert not ev.retryable and ev.retry_after is None and "no credentials for role 'main'" in ev.error
+    r.record_failure("p", "big", 429, 40, sole=True)  # the chain's own cooldown still gives its own hint
+    ev = r._exhausted("main", ["p:big"], None)
+    assert ev.retryable and ev.retry_after == pytest.approx(r.cooldowns["p"].until - clock.t)

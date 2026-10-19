@@ -142,6 +142,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Whitepaper build: version and month from the paper's header line only, the committed page checked against a fresh build | `scripts/build_whitepaper.py`, `tests/docs/test_build_whitepaper.py` | n/a | §8 "Cutting a release" (the whitepaper steps) | n/a (the paper is its input) |
 | Local-first workflow: local branch, canary test build, PR, staging, live | `docs/VERSIONING.md` §6, `docs/SITE-STATUS.md` | n/a | §8 "The local-first workflow" | WP §31 |
 | Fix sweep of October 18, 2026: 45 branches, merge order, held findings, notes for parallel agents | `docs/FIX-SWEEP.md`, patches in `docs/fix-sweep/` | n/a (status report) | n/a | n/a |
+| Router wait hint and `retry_after` come from the role's own routes only (#239, D-081) | `docs/PROVIDERS.md` "Other failures" | n/a | n/a | n/a |
 
 ## Whitepaper gaps
 

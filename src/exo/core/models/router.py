@@ -573,7 +573,7 @@ class Router:
 
     def _exhausted(self, role: str, tried: list[str], last: ProviderEvent | None) -> ProviderEvent:
         now = self.clock()
-        waits = [cd.until - now for cd in self.cooldowns.values() if cd.until > now]
+        waits = [until - now for until, _, _ in self._chain_cooldowns(role, now)]
         wait = min(waits) if waits else None
         if not self.chain(role):
             return error_event(f"no model configured for role {role!r}; use /providers and choose a default model",
@@ -589,21 +589,26 @@ class Router:
         return error_event(f"all routes for {role!r} failed or are cooling down{why}{hint}",
                            last.status if last is not None else 429, retryable=True, retry_after=wait)
 
+    def _chain_cooldowns(self, role: str, now: float) -> list[tuple[float, str, Cooldown]]:
+        """Live cooldowns that bear on ``role``: a credential of a chain provider, or a credential|model cooldown on a
+        model of the chain. A gate side call (D-081) cools a model this role never asks, and another provider's
+        cooldown says nothing about this role's routes, so neither moves the wait hint or the refusal."""
+        routes = {(r.provider, r.model) for r in self.chain(role)}
+        out: list[tuple[float, str, Cooldown]] = []
+        for key, cd in self.cooldowns.items():
+            cred, scoped, model = key.partition("|")
+            name = cred.partition("#")[0]
+            if cd.until > now and ((name, model) in routes if scoped else any(name == n for n, _ in routes)):
+                out.append((cd.until, name, cd))
+        return out
+
     def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
                  now: float) -> tuple[int | None, str] | None:
         """Status and message when waiting cannot help: the provider refused the key or login (401, 402, 403; on a
         later call too, while that credential, or a model of the chain on it, reopens first), or a local server is
         not running."""
         if last is None:  # nothing ran: the first of this chain's cooldowns to reopen holds the cause
-            routes = {(r.provider, r.model) for r in self.chain(role)}
-            cooling: list[tuple[float, str, Cooldown]] = []
-            for key, cd in self.cooldowns.items():
-                cred, scoped, model = key.partition("|")
-                name = cred.partition("#")[0]
-                # A credential|model cooldown counts only for a model of this chain. A gate side call (D-081) cools a
-                # model this role never asks, and that model's refusal says nothing about this role's routes.
-                if cd.until > now and ((name, model) in routes if scoped else any(name == n for n, _ in routes)):
-                    cooling.append((cd.until, name, cd))
+            cooling = self._chain_cooldowns(role, now)
             _, name, cd = min(cooling, key=lambda c: c[0], default=(0.0, "", Cooldown()))
             status, err = cd.status, cd.error or f"HTTP {cd.status}"
         else:
