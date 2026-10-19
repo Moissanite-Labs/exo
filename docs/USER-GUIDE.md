@@ -218,8 +218,9 @@ What the gate asks about, and why:
   function, `source`, or a program the gate does not know: each asks once, for that exact command. A few forms are
   not read yet and run without asking (`docs/GATE.md`, "Known limits"). Read the whole command before you allow
   it: the card names only the most severe part of the line, and approving runs all of it, including code the gate
-  could not see into and an action your policy denies when it stands alone. Plain work still runs: `pytest`,
-  `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like.
+  could not see into and an action a `categories:` line in your policy denies when it stands alone (a `deny:` entry
+  denies the whole line). Plain work still runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`,
+  `npm install`, `cargo test` and the like.
 - **Your store is like a key (D-038).** A write to your store's `policies/`, `state/` (your standing grants), the
   ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always" covers it. Reading your
   policies does not ask.
