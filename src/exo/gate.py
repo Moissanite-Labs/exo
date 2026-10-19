@@ -1532,6 +1532,11 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
         else:
             break
     parts: list[Classification] = []
+    # a body the line ran loses its \newlines too in a value bash reads again, but one that holds a single quote or
+    # a here-document marker is compared as written (bash may keep its \newline), so a copy of it is read again
+    done_set = set(done)
+    bare = done_set | {re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", d) for d in done
+                       if "\\\n" in d and not re.search("'|<<", d)}
     for name, dynamic in names:
         m = re.match(r"[^=\[]*\[", name) if prog not in _DECLARES[3:] else None
         end, subs, other = _arith_scan(name, m.end()) if m else (name.find("="), [], False)
@@ -1546,13 +1551,11 @@ def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: 
             odd = odd or dynamic
         elif value and attrs & {"i", "n"}:   # arithmetic, or a name whose subscript runs when the nameref is used
             _, more, odd = _arith_scan(v, 0, nested=False)
-        # a body the line ran loses its \newlines too, unless bash kept one there (single quotes, a here-document)
-        seen = set(done) | {re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", d) for d in done
-                            if v != raw and not re.search("'|<<", d)}
+        seen = bare if v != raw else done_set
         more = [sub for sub in more if sub not in seen]   # a command bash runs only as it reads the value again
-        parts += [classify_shell(sub, depth + 1) for sub in subs if depth < _DEPTH and sub not in done]
+        parts += [classify_shell(sub, depth + 1) for sub in subs if depth < _DEPTH and sub not in done_set]
         late += [classify_shell(sub, depth + 1) for sub in more if depth < _DEPTH]
-        fresh = bool(more or set(subs) - set(done))   # commands the line's own parse did not see
+        fresh = bool(more or set(subs) - done_set)   # commands the line's own parse did not see
         parts += [_opaque("nested too deep to read", cmd)] if fresh and depth >= _DEPTH else []
         if other or odd or more:   # a signal, not an opaque part, so a deny on another part of the line still wins
             what = ("evaluates an array subscript the gate cannot read" if other else
