@@ -29,10 +29,26 @@ def _engine(home, cwd):
 def test_close_releases_the_session_store_and_schedule_database(tmp_path):
     eng = _engine(tmp_path / "home", tmp_path)
     asyncio.run(eng.close())
-    with pytest.raises(sqlite3.ProgrammingError):
-        eng.store._db.execute("SELECT 1")
+    assert eng.store._conn is None
     with pytest.raises(sqlite3.ProgrammingError):
         eng.scheduler.db.execute("SELECT 1")
+
+
+def test_the_store_still_answers_after_close_and_releases_again(tmp_path):
+    eng = _engine(tmp_path / "home", tmp_path)
+    sid = asyncio.run(eng.loop.create_session(agent="tester")).id
+    asyncio.run(eng.close())
+    assert eng.store.get_session(sid) is not None  # a late reader reopens the file
+    eng.store.close()
+    assert eng.store._conn is None
+
+
+def test_a_closed_memory_store_stays_closed():
+    from exo.core.sessions import SessionStore
+    store = SessionStore()
+    store.close()
+    with pytest.raises(sqlite3.ProgrammingError):
+        store._db.execute("SELECT 1")
 
 
 @needs_fd_dir
