@@ -20,6 +20,14 @@ The loop: record, read, report, verify.
   stopped slow model does not read as harness time either: a long wait shows as `model.wait`, `model.slow` or `model.timeout`.
 - `harness.error` (event): an exception caught in a hook, handler, plugin, memory call, channel or the TUI
   event path: `where`, `error_type`, `message`, a short `traceback`. Never silent.
+- A setup state is not a harness error. exo-memory with no principal store raises `exo.core.slots.NotConfigured`
+  from its `initialize`, with a message that says what is off and the command that turns it on. The engine catches it
+  there and shows the message as one quiet info notice when a thread starts, with no event and no finding. That is
+  the only supported place to raise it. Raised anywhere else it gets no notice, and `trace.report` logs it at info
+  level with no `harness.error` event or finding, but the caller's own failure handling still runs. The hook runner
+  still logs its warning with the traceback. A `pre_tool_call` hook that raises it fails like any approval hook:
+  without a required executor that blocks the call, with a `tool.error` finding for the block. A tool handler that
+  raises it is still a tool error, with its `tool.error` finding.
 - Keys, auth headers and token-like strings are removed before any of this is written.
 
 ## Read

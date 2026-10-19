@@ -28,7 +28,7 @@ from exo_tui import theme as th
 from exo_tui.hero import Hero, hero_rows
 from exo_tui.boot import STEPS as BOOT_STEPS
 from exo_tui.boot import BootScreen
-from exo_tui.providers import ProvidersScreen, refuse_key_in_composer
+from exo_tui.providers import ProvidersScreen, refuse_key_in_composer, setup_advice
 from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, ComposeHeader, CompletionMenu,
                              EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
@@ -79,6 +79,9 @@ COMMANDS = {
 LOCAL_COMMANDS = {n: d for n, (_, d) in COMMANDS.items()}
 GROUPS = ("session", "model", "tools", "other")
 SCAFFOLD = "## Goal\n\n## Context\n\n## Constraints\n\n## Done when\n"  # /compose task
+# The core's memory_status state, as the boot line and the empty start say it. Unknown (an older core) says nothing.
+MEMORY_WORDS = {"on": "ready", "off": "off, no principal store", "failed": "did not start", "none": "log only"}
+MEMORY_SHORT = ("off", "failed")  # no green check on the boot line for these
 
 
 PROMPT_IDLE = th.PROMPT  # the mark left of the composer; PromptMark redraws it with steer state
@@ -189,6 +192,7 @@ class ExoApp(App):
         self.seat = seat
         self.title_arg = title
         self.model = ""
+        self.memory = ""  # the memory plugin's state (a MEMORY_WORDS key; "" unknown), read once at boot
         self.clipboard_verified = False
         self.window = DEFAULT_WINDOW
         self.capacities: dict[str, int] = {}
@@ -301,9 +305,9 @@ class ExoApp(App):
         if self.busy:
             self.refresh_activity()
 
-    def boot_mark(self, step: str, detail: str = "") -> None:
+    def boot_mark(self, step: str, detail: str = "", ok: bool = True) -> None:
         if self.boot_screen is not None:
-            self.boot_screen.mark(step, detail)
+            self.boot_screen.mark(step, detail, ok)
 
     def boot_end(self) -> None:
         if self.boot_screen is not None:
@@ -459,6 +463,11 @@ class ExoApp(App):
                 pass
             self.gstate.first_run = not self.onb.onboarded
             self.update_guidance()
+            try:  # the plugin's real state, not an assumed "ready" (the core says why in a notice)
+                st = (await self.client.call(s.CommandRun(name="memory_status"))).get("output") or {}
+                self.memory = str(st.get("state") or "") if isinstance(st, dict) else ""
+            except Exception:
+                self.memory = ""
             if self.resume and not self.session:
                 rows = (await self.client.call(s.SessionList(limit=50, seat=self.seat)))["sessions"]
                 # a thread, not a child's log, with something in it: every launch opens one, used or not
@@ -469,7 +478,7 @@ class ExoApp(App):
             else:
                 await self.new_session(announce=False)
             self.boot_mark("agent", self.seat or "main")
-            self.boot_mark("memory", "ready")
+            self.boot_mark("memory", MEMORY_WORDS.get(self.memory, ""), ok=self.memory not in MEMORY_SHORT)
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
             await self.boot_over()  # the provider check below may push a screen
             want_intro = self.auto_intro and not self.resume and self.onb.intro_due
@@ -897,7 +906,7 @@ class ExoApp(App):
             rows = hero_rows(self.size.height)
             if rows:
                 self.transcript.mount(Hero(rows))
-            self.transcript.mount(Welcome(self.seat or "main", self.model))
+            self.transcript.mount(Welcome(self.seat or "main", self.model, MEMORY_WORDS.get(self.memory, "")))
         await self.restore_approvals()  # a request of no thread shows in a new thread too (D-026)
         self.refresh_status()
 
@@ -1630,7 +1639,7 @@ class ExoApp(App):
                     self.note(f"{needs[0]} is set up; choose a default model before /intro.")
                     await self.pick_provider_default(needs[0])
                 else:
-                    self.note("No model provider is set up yet. Type /providers to add a key." if not needs
+                    self.note(setup_advice((result.get("output") or {}).get("providers") or []) if not needs
                               else "Choose a default main model in /providers before /intro.")
                     self.open_providers()
             except Exception:  # the app closed while the check ran

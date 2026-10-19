@@ -265,7 +265,10 @@ Decision models (Jev, Laya) return probabilities, not text. They speak `POST {ba
 with `state`, `model` and typed `questions` (choice, score, noul); the reply has `answers`. Docs:
 https://docs.typesafe.ai/api.md. Code: `exo/core/models/decision.py`. Use `ask_choice_result`
 there; they go through the `decision` role. If the route is a chat model, the same call asks for a JSON
-answer and reports the pick as probability 1.0 with `source="generative"`. A decision model may only make
+answer and reports the pick as probability 1.0 with `source="generative"`. A reply that is not that JSON,
+or names an option outside the list, moves the call to the next route and cools nothing: it says nothing
+about the key, and the main role often uses the same key. A transport failure on a chat route counts as one
+strike, and one call asks each credential and model pair at most once. A decision model may only make
 a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:
 
     exo decide "Is this safe to run?" --options safe,risky --state "rm -rf build/"
@@ -273,6 +276,8 @@ a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:
 Jev: set `TYPESAFE_API_KEY` (`exo providers add jev`, env, macOS Keychain service `exo`, Linux Secret Service, or keys.env). It is the first default route of the
 `decision` role (`["jev:jev-latest", "laya:laya"]`, owner ruling: base Laya was poor in a live check, Jev
 answered sensibly). Without a key Jev is skipped and the role falls through to Laya, then aux, then main.
+The gate's check on each tool call stops before main (D-081): it never asks a main route, and a failure there
+cools only the model that failed, so a login or key that also serves main keeps working (`docs/GATE.md`).
 Shapes were checked live on 2026-10-11 (7 calls). Score levels count from 0; a score can fall between
 levels (1.43). Errors: 401 and 422 are not retryable; 429, 529, 5xx and network errors are.
 
@@ -304,7 +309,7 @@ Override any role in `[models.roles]` in your config.
 A route that keeps failing is skipped instead of costing every turn a failed try. After `failures` consecutive
 retryable failures (429, 5xx, timeouts, or an upstream-unavailable 400) the route is skipped for `cooldown_s`.
 Then one trial call is allowed: success clears the route, failure skips it again for twice as long, up to
-`max_cooldown_s`. State is in memory, per process, and `exo providers` key changes reset it. If every route
+`max_cooldown_s`. State is in memory, per process. Key changes and a passing test reset it. If every route
 of a role is skipped, they are all tried anyway. The trip is logged once: the attempt that opened the breaker
 carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Config, in `[models.breaker]`:
 
@@ -317,9 +322,36 @@ carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Conf
 |---|---|---|
 | main | Anthropic Opus 5.5, then OpenRouter | none |
 | aux | Haiku 5.5 | main |
-| decision | Jev (`jev:jev-latest`), then local Laya (`laya:laya`) | aux, then main |
+| decision | Jev (`jev:jev-latest`), then local Laya (`laya:laya`) | aux, then main (the gate: aux only, D-081) |
 | eval | empty, which means the `main` route | main |
 | fast, standard, deep | Haiku, Sonnet, Opus | standard, then main |
+
+### When every route fails
+
+The error says why. When waiting cannot fix the cause, it also says what will, and the turn is not retried:
+
+- The last route tried refused its key (HTTP 401, 402 or 403): `anthropic rejected the key (HTTP 401: invalid
+  x-api-key): fix ANTHROPIC_API_KEY or add a key in /providers`. A provider with no key, such as `claude-cli`,
+  asks you to log in again instead. Some providers also send 403 for a refused request, such as flagged input.
+  The provider's text in the parentheses says which. The key stays benched for its cooldown (5 minutes after a
+  401). Calls in that time repeat the cause and that text, not a wait, unless another route of the role reopens
+  sooner. Only the role's own routes count. A refusal on a model the role never asks, such as the gate's aux
+  model (D-081), is not named in a main-role error.
+- A local provider's server refused the connection: `ollama is not running at 127.0.0.1:11434: start it, then
+  test it in /providers`. The address is the host and port of `base_url` only. A user or password in the URL is
+  never shown, so it stays out of the session store. With no usable host the error says "its configured
+  address".
+
+Other failures (429, 5xx, timeouts, a remote network error) stay retryable and say when the next route reopens.
+Only the last route tried decides. When an earlier route was down and the last one refused its key, the error
+names the key and not the outage.
+The two errors above still carry `retry_after`, the time the route reopens. A background summary that failed on
+one tries again then instead of giving up on the span (`docs/MEMORY-MODEL.md`).
+A passing test in `/providers` (`t`) or in the web Providers tab tells the running core to reload that provider.
+Its cooldown and breaker clear, so the next message reaches it at once. An environment variable still wins over a
+saved key: change it in the shell that starts Exo, then restart Exo. If no provider can serve the main role, the
+terminal client's first run says what the default needs. A keyed provider needs a key. A local server must be
+started, and a CLI must be installed and logged in.
 
 ## See what is set
 

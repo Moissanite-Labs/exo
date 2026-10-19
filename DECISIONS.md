@@ -1821,3 +1821,31 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** the budget test, `tests/docs`, `tests/test_privacy.py`, `tests/test_versioning.py`, `ruff check`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
+
+## D-081 (2026-10-17) The gate's decision call never uses the main model
+- **Status:** Accepted 2026-10-17 by the lead (reversible). It amends D-019 for the gate only. The gate's chain is
+  Jev, then local Laya, then `aux`. `exo decide` and the baseline export's judge keep the full chain, `main` last.
+- **Why:** a user-readiness audit of main 35b7de8 found that with only the claude CLI on PATH (the route Exo picks
+  for anyone with Claude Code and no key), every tool call the rules allowed started a hidden main-model call. Each
+  one added 2 to 10 s and was missing from `/trace` and cost. When one failed, the router cooled the one CLI login,
+  and the user's next turn failed with "all routes for 'main' failed or are cooling down" for about 60 s. D-015
+  already rejected "a frontier model for every small decision (cost, latency)". The fallback to `main` made it the
+  default on the CLI route.
+- **Decision:** `ask_choice_result(..., spare="main")` skips every route in the `main` chain, including one also
+  listed under `aux`. A failure on that call cools only the model that failed (`credential|model`), never the
+  credential. The gate passes it on every call. With no decision or aux route the gate keeps the rule outcome, as
+  it already did on a failure or a timeout. Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`)
+  are `read` in `gate.TOOLS`.
+- **Rejected:**
+  - Dropping `main` from `ROLE_FALLBACK["decision"]` for every caller. It changes `exo decide` and the baseline
+    judge, which run once per command, not once per tool call.
+  - Skipping the decision call for `read` tools only. Writes, shell and web calls would still wait on the main
+    model and could still cool its login.
+  - Keeping `main` and only cooling per model. Every tool call would still pay for a main-model call.
+  - No cooling at all on a side call. A failing aux model would be retried on every tool call.
+- **Revisit if:** a local decision model ships by default (exo-decide, or Laya from the installer), or a principal
+  wants the main model's second opinion on the gate. That would be an explicit setting, not the fallback.
+- **Validation:** `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/test_decision_spare.py`,
+  and a first launch from a clean home with the claude CLI: no approval card for the intro skill, no decision
+  call to the CLI, and read-only tool calls at 0.0 s.
+- **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.

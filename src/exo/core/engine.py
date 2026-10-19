@@ -42,6 +42,7 @@ from exo.principal import CHANNEL, current_caller, ingress_author, is_principal,
 from exo.core.approvals import ApprovalDesk
 from exo.core.seats import Seat, list_seats
 from exo.core.sessions import SessionLocked, SessionStore
+from exo.core.slots import NotConfigured
 from exo.core.skills import SkillIndex, register_skill_tool
 from exo.core.tools.builtin import harness as harness_tool
 from exo.core.tools.builtin import ui as ui_tool
@@ -140,6 +141,7 @@ class CoreRuntime:
         self.home = Path(home)
         self.cwd_note = ""  # why the default cwd is not the one asked for (shown at session start)
         self.memory_init_error = ""  # why exo-memory failed to start (shown at session start)
+        self.memory_off = ""  # why memory is off until set up (NotConfigured): a quiet notice, never a finding
         self.cwd = self._seat_cwd(seat) or cwd or os.getcwd()  # the seat's own folder beats the shared default
         self._cwd_seen: dict[str, set[str]] = {}  # session -> folders already warned about (D-032)
         self.handoff_sources: dict[str, Any] = {"jobs": lambda session: []}  # D-032: facts for /handoff; key -> fn(session)
@@ -355,6 +357,8 @@ class CoreRuntime:
                     try:
                         call_plugin(fn, "", exo_home=str(self.home), hermes_home=str(self.home), platform="exo",
                               agent_log=self.log_view)
+                    except NotConfigured as exc:
+                        self.memory_off = str(exc)
                     except Exception as exc:
                         # Loud at session start, not on the first exo_note: record why memory is down.
                         trace.report("memory.initialize", exc, None)
@@ -523,6 +527,8 @@ class CoreRuntime:
             self.hub.publish(s.Notice(
                 text=f"exo-memory did not start: {self.memory_init_error}; "
                      "memory tools will fail until it is fixed", level="warn"), info.id)
+        if self.memory_off:
+            self.hub.publish(s.Notice(text=self.memory_off, level="info"), info.id)
         return {"session": to_dict(info)}
 
     async def _session_list(self, b: s.SessionList) -> dict[str, Any]:
