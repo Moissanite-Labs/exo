@@ -266,6 +266,48 @@ def test_a_ledger_swapped_for_a_symlink_fails_memory_verify(tmp_path, capsys):
     assert "symbolic link" in capsys.readouterr().out
 
 
+def test_a_ledger_symlinked_to_another_database_fails_memory_verify_and_leaves_it_alone(tmp_path, capsys):
+    """Opening the ledger switched the linked database to WAL and added the ledger's tables to it (#277)."""
+    from exo.cli import main
+    store = _store(tmp_path)
+    _three(store)
+    other = tmp_path / "notes.db"
+    db = sqlite3.connect(other)
+    db.execute("CREATE TABLE notes (t TEXT)")
+    db.commit()
+    db.close()
+    before = other.read_bytes()
+    store.ledger_path.unlink()
+    store.ledger_path.symlink_to(other)
+    assert main(["memory", "verify", "--principal", "pat"]) == 1
+    assert "symbolic link" in capsys.readouterr().out
+    assert other.read_bytes() == before and not other.with_name("notes.db-wal").exists()
+
+
+def test_memory_verify_shows_the_warning_for_anchors_far_apart(tmp_path, capsys, monkeypatch):
+    from exo import ledger as ledger_mod
+    from exo.cli import main
+    from exo.store import exo_home
+    store = _store(tmp_path)
+    _three(store)
+    with Ledger(store.ledger_path) as led:
+        home = led.anchor_paths()[1]
+    real = ledger_mod._atomic_write
+
+    def frozen(path, data):
+        if path == home:
+            raise PermissionError(13, "read-only", str(path))
+        return real(path, data)
+    monkeypatch.setattr(ledger_mod, "_atomic_write", frozen)
+    signer = crypto.Signer("exo-memory", crypto.load_key(exo_home() / "keys" / "exo-memory.key"))
+    with Ledger(store.ledger_path, signer) as led:
+        for i in range(2):
+            led.append("note", {"i": i}, "exo-memory")
+    assert main(["memory", "verify", "--principal", "pat"]) == 0
+    out = capsys.readouterr().out
+    assert f"ledger pat: 5 events, ok (warning: head anchor {home} is at seq 3, 2 events behind" in out
+
+
 @pytest.mark.parametrize("left", ["both anchors", "home anchor", "unreadable home anchor"])
 def test_deleting_the_ledger_fails_memory_verify(tmp_path, capsys, left):
     from exo.cli import main
