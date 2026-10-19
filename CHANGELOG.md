@@ -198,9 +198,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   live in `exo.model_spend.admit_native`.
 
 ### Fixed
-- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
-  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
-  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - SYM-2P validators (`exo.protocols.sym2p` and the `sym-protocol` skill's `sym-validate.py`) reject an id, ref, hash
   or timestamp with a trailing newline. The grammar patterns ended in `$`, which also matches before a final
   newline, so `"builder\n"` passed as an ID and slipped past the `(f, id)` duplicate check.
@@ -210,6 +207,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
   In `apply_patch` a hunk's context lines count toward the two, so a hunk with one context line can still replace a
   changed `-` line.
+- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
+  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
+  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - The signed ledger's head anchor (D-040) is now written after the append's COMMIT, so a writer killed in between
   leaves it one event behind, never ahead. Before, a kill at that moment made the ledger report "events were
   removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match, which
@@ -392,6 +392,29 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
+- Skill gates fail closed. The draft pipeline's prose gate passes only when `check-prose.py` exits 0. Before, it
+  passed whenever the output held the word "clean", so a draft named `cleanup.md` passed with findings. A missing
+  `check-prose.py` now blocks, as does a missing `check-mermaid.py` when the draft has a mermaid fence. Both were
+  skipped, so a partial install posted unchecked drafts. `--allow-identifier` exempts only the token it names:
+  allowing `localhost:8080` no longer hides `localhost:9999/secret`, and a refused hit names the whole token.
+  Internal names that start or end with `.`, `~` or `@` now match, in `check-prose.py` and in the draft pipeline.
+- File tools: a write no longer follows a link planted at its temp name (`.<name>.exo-tmp`), which sent the
+  bytes, and the file's mode, to wherever the link pointed while the gate had classified only the named path. A
+  write to a symlinked file is refused with the link's target named, instead of replacing the link with a regular
+  file and leaving the target unedited. `read_file`, `edit_file`, `apply_patch` and `grep` refuse or skip FIFOs and
+  devices, which hung the core (cancel could not stop it) or read `/dev/zero` until memory ran out. All but `grep`
+  refuse files over 50 MB, also a file that grows past that while it is read. `code_find` passes the question to
+  jg after `--`, so a question such as `- --include-sensitive` can no longer turn off jg's sensitive-file filter
+  (docs/TOOLS.md).
+- Streamed `bash` output no longer leaks a known key split between two reads. The output went out per 64 KiB read
+  and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
+  halves. A read now holds back an ending that could start a key until the next read. Key redaction now finds every
+  key in the text itself and puts the `[redacted]` markers in after, so a key no longer matches across a marker.
+  Output changes only for a key value that holds `[` or `]` or is part of the word "redacted". The stream is cut
+  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output
+  for any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or
+  `]`. A key value learned while the command runs is cut out only inside one piece. The stream and the result also
+  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
 - Unix peer authentication (#175, D-060): principal clients ask the kernel who serves the socket before the
   credential moves, and the core asks who connected before it stamps the principal. The credential file
   (`run/<socket>.principal.key`) is now a JSON launch record, so restart the core and every running `exo`, `exo web`
@@ -440,29 +463,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
-- Skill gates fail closed. The draft pipeline's prose gate passes only when `check-prose.py` exits 0. Before, it
-  passed whenever the output held the word "clean", so a draft named `cleanup.md` passed with findings. A missing
-  `check-prose.py` now blocks, as does a missing `check-mermaid.py` when the draft has a mermaid fence. Both were
-  skipped, so a partial install posted unchecked drafts. `--allow-identifier` exempts only the token it names:
-  allowing `localhost:8080` no longer hides `localhost:9999/secret`, and a refused hit names the whole token.
-  Internal names that start or end with `.`, `~` or `@` now match, in `check-prose.py` and in the draft pipeline.
-- File tools: a write no longer follows a link planted at its temp name (`.<name>.exo-tmp`), which sent the
-  bytes, and the file's mode, to wherever the link pointed while the gate had classified only the named path. A
-  write to a symlinked file is refused with the link's target named, instead of replacing the link with a regular
-  file and leaving the target unedited. `read_file`, `edit_file`, `apply_patch` and `grep` refuse or skip FIFOs and
-  devices, which hung the core (cancel could not stop it) or read `/dev/zero` until memory ran out. All but `grep`
-  refuse files over 50 MB, also a file that grows past that while it is read. `code_find` passes the question to
-  jg after `--`, so a question such as `- --include-sensitive` can no longer turn off jg's sensitive-file filter
-  (docs/TOOLS.md).
-- Streamed `bash` output no longer leaks a known key split between two reads. The output went out per 64 KiB read
-  and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
-  halves. A read now holds back an ending that could start a key until the next read. Key redaction now finds every
-  key in the text itself and puts the `[redacted]` markers in after, so a key no longer matches across a marker.
-  Output changes only for a key value that holds `[` or `]` or is part of the word "redacted". The stream is cut
-  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output
-  for any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or
-  `]`. A key value learned while the command runs is cut out only inside one piece. The stream and the result also
-  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
 - Bus channel: a bus message steered into a turn you typed in a bus session no longer posts your answer to the
   sending seat, and neither does your next turn after one. The channel replies only for the turn that an
   auto-delivered message itself opened (D-040).
