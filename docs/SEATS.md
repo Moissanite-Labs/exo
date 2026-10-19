@@ -33,7 +33,8 @@ roles = { fast = ["local:qwen"] }   # optional router overrides; also providers,
 
 [tools]
 toolsets = ["fs", "search", "skills", "mcp"]   # omit for all. "mcp" matches every mcp:<server>; "skills" is always kept
-env_allow = ["GH_TOKEN"]     # secret-looking variables bash and jobs may keep (default none, see docs/TOOLS.md)
+env_allow = ["GH_TOKEN"]     # variables the scrub would drop (secrets, shell startup hooks) that bash and jobs keep
+                             # (default none; docs/TOOLS.md "Environment of bash and jobs" has the startup-code caveat)
 env_deny = ["COMPANY_*"]     # more names or patterns bash, jobs and code_find never see (D-039)
 
 [skills]
@@ -89,8 +90,10 @@ values shaped like API keys. Changes apply on the next start.
 ## Channels
 
 A plugin calls `register_channel(name, factory)`. For each channel a seat (or `channels` in config.json)
-enables, `exo serve` calls `factory(link, **config)` with a real protocol `Client` on the server socket, runs
-`start()` after the server listens, and `stop()` on shutdown.
+enables, `exo serve` calls `factory(link, **config)`, runs `start()` after the server listens, and `stop()` on
+shutdown. The link is exod's in-process `ChannelLink`: it runs commands as the caller `channel` (`docs/GATE.md`
+"Who answered"), the only caller the core takes a bus message from. A channel run through a protocol `Client` on
+the socket cannot hand in bus messages.
 
 ## Several seats in one home
 

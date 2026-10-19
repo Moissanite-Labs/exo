@@ -85,8 +85,13 @@ The core never takes the answerer from the `approval.respond` body. The transpor
   when it stops. A credential sent from a process that is a child, grandchild and so on of the
   core (a bash tool call or a background job) does not count, and neither does one from another
   user or from a process the kernel cannot name (see "Unix peer authentication" below).
-- **local**: everything else on the socket (a tool subprocess, a channel, another daemon), and
-  every stdio or TCP connection.
+- **local**: everything else on the socket (a tool subprocess, another daemon), and every stdio or
+  TCP connection.
+- **channel**: a channel exod runs in its own process (the exo-bus channel), through
+  `ChannelLink` in `src/exo/server/app.py`. It has the standing of a local caller, and only it may
+  hand the core a bus message (`docs/PEERS.md` "Bus seats"). No transport stamps it: a socket
+  client that names itself `channel` with the credential is `principal:channel`, and without it is
+  local.
 
 A principal connection answers as the principal; `client` is only a label (`principal:tui`,
 `principal:web`). A local connection can answer only as a seat, with the signature above. An
@@ -533,10 +538,9 @@ not read.
   only when its inner command outranked `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
   category that tied with it or ranked below it (`schedule`; `web_read`, `local_write`) still
   asked. The inner commands are now parts, so a `deny` entry matching any of them denies
-  (`coproc w { curl https://example.com; }` under `deny: [web_read]`). A heredoc after the
-  closing `}` of a block (`coproc W { bash; } <<EOF`) attaches to the `}` and is not fed to the
-  inner command, which asks as `opaque_exec`; the same limit applies to `{ ...; } <<EOF` on its
-  own.
+  (`coproc w { curl https://example.com; }` under `deny: [web_read]`).
+  A heredoc after the closing `}` of a block (`coproc W { bash; } <<EOF`) is fed to the commands
+  inside it, as for `{ ...; } <<EOF` on its own (see "Compound commands" below).
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
   (`subprocess.run(['gh','pr','comment',...])` is a `github_post`). A literal is also read with
@@ -633,12 +637,58 @@ folder from more than one level above its parent (`cd / && cd srv/exo-home/keys`
 `CDPATH`, `HOME` set on the line and `shopt -s dotglob`; and a store reached through a folder
 link whose name does not say so.
 
+Compound commands (#161). The stdin of a compound command reaches the commands inside it, nested
+compounds included: a heredoc or here-string after its closing `}`, `)`, `done`, `fi` or `esac`,
+and text the gate can read piped into it (`echo ... | ( bash )`, `... | while read l; do bash; done`).
+So `{ bash; } <<EOF`, `( bash ) <<EOF` and `while ...; do bash; done <<EOF` classify the body as
+`bash <<EOF` does, and `{ python3; } <<EOF` reads it as code. `coproc W { bash; } <<EOF` and
+`function f { bash; } <<EOF` are read the same way. As in bash, a command whose stdin is already
+set keeps it and is not fed: one with its own heredoc, here-string or `<` redirection (`{ cat <<EOF;
+bash; }` feeds cat only), one piped into from a command inside (`{ curl ... | bash; } <<< 'ls'`
+stays `opaque_exec`), and the commands of a nested compound with its own closer redirection or pipe.
+Nothing more is fed after a command that may make a file the shell's stdin for good: `exec` with its
+own stdin however it is spelled or prefixed (`"exec"`, `\exec`, `command exec`, `X=1 exec`), and
+`eval`, `source`, `.`, a program name from a variable or a function defined on the line, which can
+run such an exec unseen. When the closer has its own `<`, nothing is fed (the gate keeps no order
+between a closer's redirections, so it does not guess which one bash applies last: `{ bash; } <<EOF
+< f`), and a closer heredoc or here-string wins over a pipe in. That holds for stdin (fd 0). The
+lexer drops fd numbers, so a closer heredoc on another fd (`{ bash; } 3<<EOF`), where bash leaves
+stdin alone, is read as stdin too: its body is fed (code inside can still run it, as `{ source
+/dev/fd/3; }` does), and text piped in reaches only the first command inside, as in any `echo ... |
+bash`. So `echo 'rm -rf build' | { bash; } 3<<EOF` is a `delete` whichever text bash runs, but in
+`echo 'rm -rf build' | { true; bash; } 3<<EOF` bash, which reads the pipe there, is read with the
+body only. A shell read that way still asks at least, as `bash 3<<EOF` does (main asks for these
+lines too). Outside these cases, every command inside gets all of the compound's stdin. That
+over-approximates, and the fed text can change the line's category and the summary shown when it
+asks: shells, interpreters, gh and SQL clients act on it, so `{ cat; } <<EOF` stays `read`, while
+`{ bash; }
+<<EOF` with `rm -rf build` in the body is `delete`. Each text is read once per line, however many
+commands it reaches, and so is a body after `<<$'EOF'`, which is also read as commands, and the
+stdin of a `sqlite3`, `psql` or `mysql` client. Every command it reaches still counts what that
+reading found, so a later client whose argument is a store folder is still a `store_write` when the
+text deletes. For fed shells and interpreters, a line that was `opaque_exec` now takes the inner
+category. The floor above keeps it at ask at least under a policy that names `opaque_exec` at `ask`
+or `deny`. A `deny: [opaque_exec]` entry still denies these shell and interpreter lines, since the
+shell or interpreter inside is an `opaque_exec` part (D-075). Under
+`categories: {opaque_exec: deny}` or a rule they now ask where they were denied, as
+`bash <<EOF` already does, until #191. Fed SQL clients follow their plain-input classification,
+without that floor. A compound feeding `\! git push origin main` to `psql` can therefore change
+from ask to the push's `log`. D-075 `deny` and `reserved` entries still match every retained part.
+Category overrides and ordinary rules use the combined classification. Likewise a line whose later
+command takes a store folder is `store_write`, which outranks `delete` (D-038):
+`deny: [delete]` still denies it through its delete
+part (D-075), while `categories: {delete: deny}` asks where main denied it (#191). Known limits:
+the body of `time {
+...; }` is not read at all (`{` is an unknown program there), so a heredoc after it changes nothing;
+it asks as `opaque_exec`. As on main, text piped into a command is read even when the command's own
+`<` wins (`echo ... | bash < f`), and so is the pipe into the first command of `echo ... | { bash; }
+< f`.
+
 Known limit: `deny` → `ask` (D-075). Where the gate cannot read a command it files the line as
 `opaque_exec`, which asks, so a `deny` entry on the hidden action becomes an `ask`. For example:
-a heredoc after a `coproc` block (the rest of `coproc` is read since #140 / #181); nesting past
-the depth cap (#137, #141); `eval $(...)`; a command arriving on stdin (`echo ... | xargs -I{} sh
--c '{}'`); the wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`. These are examples,
-not a complete list.
+nesting past the depth cap (#137, #141); `eval $(...)`; a command arriving on stdin (`echo ... |
+xargs -I{} sh -c '{}'`); the wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`. These
+are examples, not a complete list.
 
 Known limit: `deny` → `allow`. The fallback has gaps. On these paths the line is `allow` outright,
 even with the hidden action in `deny`:
