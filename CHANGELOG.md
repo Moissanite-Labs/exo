@@ -158,6 +158,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- exo web shows an open approval that was asked before its replay window (#234). `reconcile_approvals` only dropped
+  cards the core no longer held, so a request older than the newest 5,000 events (first start, or a reconnect after a
+  gap above `RESUME_GAP`) never showed, though the terminal client could answer it. It now also adds each open request
+  from `approvals.list` that the page lacks, with no asked-time (the card shows none, not "asked never"), and an
+  approval already shown is no longer added or counted again when the stream replays it.
 - Terminal approval cards wait for removal before the next queued card mounts (#276). Answering a card or
   reconciling a closed request no longer mounts two widgets under the same approval id. Close, restore and
   thread-switch transitions share a lock, and stale answers or close events cannot remove the next request's card.

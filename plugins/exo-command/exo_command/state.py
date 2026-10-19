@@ -169,6 +169,8 @@ class State:
 
     def _on_approval_requested(self, sid, b, ts):
         rid = b.get("request_id")
+        if rid in self.approvals:
+            return  # already shown (replayed, or backfilled from approvals.list): never a second card or count
         self.approvals[rid] = {"request_id": rid, "session": sid, "summary": b.get("summary") or "",
                                "risk": b.get("risk") or "medium", "call": b.get("call"),
                                "options": b.get("options") or [], "requested_at": ts, "seq": self.seq}
@@ -183,6 +185,15 @@ class State:
         if a.get("session") and a["session"] in self.sessions:
             s = self.sessions[a["session"]]
             s["pending_approvals"] = max(0, s["pending_approvals"] - 1)
+
+    def add_open_approval(self, a: Dict[str, Any]) -> bool:
+        """An open request the core lists but this page never saw asked (it fell out of the replay window).
+        ``requested_at`` stays empty: the page shows no time rather than a wrong one."""
+        rid = a.get("request_id")
+        if not rid or rid in self.approvals:
+            return False
+        self._on_approval_requested(a.get("session"), a, None)
+        return True
 
     def forget_approval(self, rid: str) -> None:
         """The core no longer holds this request (D-045): drop it as a resolution nobody announced."""
