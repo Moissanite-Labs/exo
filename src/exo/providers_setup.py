@@ -358,7 +358,9 @@ def rows(router: Router | None = None, home: str | os.PathLike | None = None, *,
             needs, has = "cli", bool(installed) and logged_in is not False
         else:
             needs, has = "server", bool(reachable)
-        if last and not last.get("ok") and has:
+        if not cli and not spec.get("base_url") and name not in router.instances:  # the router gives it no route
+            status, has = "no base_url", False
+        elif last and not last.get("ok") and has:
             status = f"failed: {last.get('error_class') or 'error'}"
         elif last and last.get("ok") and has:
             status = "verified"
