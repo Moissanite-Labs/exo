@@ -123,6 +123,20 @@ assert.ok(root.textContent.includes("send_message"));
 ''')
 
 
+@pytest.mark.skipif(not NODE, reason="node is not installed")
+def test_a_card_with_no_asked_time_shows_no_asked_or_never_label(tmp_path):
+    execute(tmp_path, r'''
+pending=[{...ask,requested_at:null}];
+await changed();
+assert.ok(root.textContent.includes("send the release notes"));   // the card is there
+assert.ok(!root.textContent.includes("asked"));
+assert.ok(!root.textContent.includes("never"));
+pending=[{...ask,requested_at:Date.now()/1000-120}];
+await changed();
+assert.ok(root.textContent.includes("asked 2m ago"));              // and a real time still shows
+''')
+
+
 def could_match(selector, chain):
     """True when a CSS selector could match chain[0], whose ancestors follow it up to <html>. Pseudo-classes and
     attribute tests are dropped and `>` reads as any ancestor, so the check errs toward matching."""
