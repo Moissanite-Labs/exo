@@ -5,6 +5,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 
 ## [Unreleased]
 
+### Fixed
+- Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
+  two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
+  `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
+  core that starts next is never unlinked by the one before it). The loser exits 1 naming the running core's pid, and
+  only the lock holder writes `run/exod.pid`. A crashed core's lock is dropped by the OS. The lock covers all four
+  `start_unix` callers (`exo serve`, peers, the TUI window server, the exo-bus plugin); TCP needed none, since a
+  taken port fails at bind.
+
 ### Security
 - Search tools skip secret stores (#241, D-038). The gate checks only the path a `grep` or `glob` call names, and the
   tools walked everything below it, so `grep {pattern: "key", path: HOME}` (or the same search with no path from a cwd
