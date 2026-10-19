@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from exo.bus import BusError
+from exo.core.private import atomic_write
 from exo.protocol import schema as s
 
 from .settings import Cursor, configured, make_client, setting
@@ -152,9 +153,7 @@ class BusChannel:
     def _save_map(self) -> None:
         try:
             self._map_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._map_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._by_chat))
-            tmp.replace(self._map_path)
+            atomic_write(self._map_path, json.dumps(self._by_chat), mode=None)
         except OSError:
             logger.warning("[exo-bus] cannot save the session map", exc_info=True)
 

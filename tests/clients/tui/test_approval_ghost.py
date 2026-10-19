@@ -215,3 +215,60 @@ def test_a_send_the_core_steers_shows_pending_and_up_pulls_it_back(tmp_path):
         assert app.composer.text == "note for the child"
 
     run(tmp_path, sc)
+
+
+def test_a_key_repeat_on_a_focused_card_answers_once(tmp_path):
+    """#297: three answer keys posted before the first is handled (a held key) send one ApprovalRespond for the
+    request, write one note, and leave the request queued behind it unanswered."""
+    from textual import events
+
+    async def sc(app, pilot, client, eng):
+        for rid in ("r1", "r2"):
+            pending_approval(eng, app.session, s.ApprovalRequested(request_id=rid, summary=rid,
+                                                                  options=["allow", "deny"]))
+        await until(lambda: len(app.approvals) == 2 and app.card is not None, pilot)
+        assert app.card.req.request_id == "r1"
+        await pilot.press("ctrl+f")
+        await until(lambda: app.card.has_focus, pilot)
+        for _ in range(3):
+            app.card.post_message(events.Key("o", "o"))
+        await until(lambda: app.card is not None and app.card.req.request_id == "r2", pilot)
+        await pilot.pause(0.3)
+        assert [b.request_id for b in responds(app)] == ["r1"]
+        assert app.transcript_text().count("approval: allow") == 1
+        assert app.card is not None and app.card.req.request_id == "r2"
+
+    run(tmp_path, sc)
+
+
+def test_a_panel_that_takes_the_focus_while_a_card_is_removed_keeps_it(tmp_path, monkeypatch):
+    """#297 part 2, #290's guard: removing a focused card moves the focus to a neighbour at once, and the close waits
+    for the removal. If something else takes the focus meanwhile (a choice panel here), the composer does not take it
+    back. A removal the test holds open makes the order fixed."""
+    import asyncio
+
+    async def sc(app, pilot, client, eng):
+        pending_approval(eng, app.session, s.ApprovalRequested(request_id="r1", summary="r1",
+                                                              options=["allow", "deny"]))
+        await until(lambda: app.card is not None, pilot)
+        await pilot.press("ctrl+f")
+        await until(lambda: app.card.has_focus, pilot)
+        gone = asyncio.get_running_loop().create_future()
+        real = ApprovalCard.remove
+
+        def held_remove(card):
+            real(card)
+            return gone
+        monkeypatch.setattr(ApprovalCard, "remove", held_remove)
+        eng.approvals.open.pop("r1")
+        eng.hub.publish(s.ApprovalResolved(request_id="r1", decision="deny"), app.session)
+        await until(lambda: app.focused is app.transcript, pilot)  # the removal moved it; the close still waits
+        data = {"options": [{"id": "a", "label": "Alpha"}, "beta"]}
+        eng.hub.publish(s.UiPanel(panel_id="c1", action="open", kind="choice", text="pick", data=data), app.session)
+        await until(lambda: app.focused is not None and app.focused.id == "panel-choices", pilot)
+        gone.set_result(None)
+        await until(lambda: app.card is None, pilot)
+        await pilot.pause(0.2)  # a focus() from the close would land by now
+        assert app.focused is not None and app.focused.id == "panel-choices"
+
+    run(tmp_path, sc)
