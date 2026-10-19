@@ -366,7 +366,7 @@ class _Lexer:
         self.i = 0
         self.subs: list[str] = []          # sources of $( ), ` ` and <( ) met at this level
         self.pending: list[_Heredoc] = []
-        self.scan = scan                   # record _Word.exps (off where the words are not kept: only the subs are)
+        self.scan = scan                   # record _Word.exps, which only _parse's words are read for (_hidden_sets)
         self.covered = 0                   # the source before here lies in a ${..} already recorded
 
     def run(self, closer: bool = False) -> list:
@@ -1827,7 +1827,7 @@ def _arith_scan(text: str, i: int, nested: bool = True, procsub: bool = False) -
     """Read text from i as bash reads an arithmetic subscript: to the ] that ends it (a quote or \\ hides a ]), or
     to the end when not `nested`, outside any subscript. (end, the $( ) and ` ` bodies in it, and the <( ) ones
     with `procsub`, any expansion or quoting there.)"""
-    lx, level, other, q, inner = _Lexer(text), 1 if nested else 0, False, "", 0
+    lx, level, other, q, inner = _Lexer(text, scan=False), 1 if nested else 0, False, "", 0
     lx.i = i
     while lx.i < len(text) and (level or not nested):
         ch = text[lx.i]
@@ -1855,7 +1855,7 @@ def _compound_scan(value: str, arith: bool) -> tuple[list[str], bool]:
     """A compound value `(..)` that declare parses again as words: the $( ), ` ` and <( ) bodies in it, read in
     any quoting, and whether it holds what bash evaluates again: an expansion or quoting in a `[key]=` subscript,
     or with -i (`arith`) an expansion in an element."""
-    lx, q, start, other = _Lexer(value), "", True, False
+    lx, q, start, other = _Lexer(value, scan=False), "", True, False
     lx.i = 1
     while lx.i < len(value):
         ch = value[lx.i]
@@ -4011,7 +4011,7 @@ def _dequote(word: str) -> list[str]:
         return [word]
     out: list[str] = []
     for src in dict.fromkeys((word, word.replace('$"', '"'))):
-        toks = _Lexer("\\" + src if src.startswith("#") else src).run()
+        toks = _Lexer("\\" + src if src.startswith("#") else src, scan=False).run()
         out += [w.text for kind, w in toks if kind == "w"]
     return out
 
@@ -4305,7 +4305,7 @@ def _policy_command_view(command: str) -> str:
     This is an additional veto view, never an authorization view. Dynamic words stay
     opaque. Execution strings get their own views only through classify_shell recursion.
     """
-    tokens = _Lexer(command).run()
+    tokens = _Lexer(command, scan=False).run()
     rendered = []
     for kind, value in tokens:
         if kind == "w":
