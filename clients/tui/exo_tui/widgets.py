@@ -44,11 +44,12 @@ def reveal(widget: Widget) -> None:
 class Block(Static):
     """One transcript entry. ``text`` is the truth; ``flush`` paints it.
 
-    Kinds: user, assistant, error, warn, note, hint (a tip), memory (a cold one-liner), peer, taste, finding.
-    peer, taste and finding are panels: a coloured left rule (CSS) and a header line drawn here."""
+    Kinds: user, assistant, error, warn, note, hint (a tip), memory (a cold one-liner), peer, taste, finding, intro.
+    peer, taste, finding and intro (the short orientation) are panels: a coloured left rule (CSS) and a header line
+    drawn here."""
 
     PANELS = {"peer": ("cold", "PEER"), "taste": ("cold", "TASTE"), "finding": ("cold", "FINDING"),
-              "report": ("cold", "")}
+              "report": ("cold", ""), "intro": ("cold", "INTRO")}
     ROW = re.compile(r"^(\s+)(\S.*?)(\s{2,})(\d+)(\s*)(.*)$")  # `  recent tail   29   2 messages`
 
     def __init__(self, text: str = "", kind: str = "assistant", head: str = "", meta: str = "",
@@ -749,16 +750,17 @@ class PanelView(Vertical):
 class Welcome(Static):
     """The empty start: what to type and which keys matter. Gone with the first line of the transcript."""
 
-    def __init__(self, agent: str, model: str) -> None:
+    def __init__(self, agent: str, model: str, memory: str = "") -> None:
         super().__init__("", id="welcome")
-        self.agent, self.model = agent, model
+        self.agent, self.model, self.memory = agent, model, memory
         self.shown: Any = None
 
     def on_mount(self) -> None:
         head = Text()
         head.append("\u25e2 ", style=rich_style("accent"))
         head.append("E X O", style=rich_style("fg", "bold"))
-        info = Text(f"{self.agent}  {DOT}  {self.model or '-'}  {DOT}  memory ready", style=rich_style("fg3"))
+        bits = [self.agent, self.model or "-"] + ([f"memory {self.memory}"] if self.memory else [])
+        info = Text(f"  {DOT}  ".join(bits), style=rich_style("fg3"))
         keys = chips([("enter", "send"), ("@", "file"), ("!", "shell"), ("/", "commands"), ("ctrl+p", "palette"),
                       ("ctrl+c", "stop")])
         self.shown = Group(head, info, Text(""), keys)
