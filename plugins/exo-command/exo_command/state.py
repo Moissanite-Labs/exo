@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
-from typing import Any, Deque, Dict, Iterable, List, Optional
+from typing import Any, Deque, Dict, Iterable, List, Optional, Set
 
 OUTPUT_CAP = 1200
 PROBE_TAIL = 6
@@ -55,11 +55,13 @@ class State:
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.tasks: Dict[str, Dict[str, Any]] = {}
         self.approvals: Dict[str, Dict[str, Any]] = {}
+        self.resolved_ids: Deque = deque(maxlen=1024)  # (seq, request_id) of every resolution applied
         self.resolved: Deque[Dict[str, Any]] = deque(maxlen=20)
         self.decisions: Dict[str, Dict[str, Any]] = {}
         self.notices: Deque[Dict[str, Any]] = deque(maxlen=20)
         self.compactions = 0
         self.probe_tail = probe_tail
+        self.rolling: Dict[str, Set[str]] = {}  # parent -> finished children its next session_total includes
 
     # ------------------------------------------------------------ bootstrap from queries
 
@@ -71,7 +73,8 @@ class State:
                 "started_at": None, "last_activity_at": None, "message_count": 0, "tool_call_count": 0,
                 "running": False, "turn_id": None, "turn_model": None, "tool": None, "output": "",
                 "pending_approvals": 0, "stop_reason": None, "usage": {k: 0 for k in USAGE_KEYS},
-                "cost_usd": 0.0, "priced": False, "head": None, "tail": deque(maxlen=self.probe_tail),
+                "cost_usd": 0.0, "priced": False, "rolled_up": False, "head": None,
+                "tail": deque(maxlen=self.probe_tail),
             }
         return s
 
@@ -169,6 +172,8 @@ class State:
 
     def _on_approval_requested(self, sid, b, ts):
         rid = b.get("request_id")
+        if rid in self.approvals:
+            return  # already shown (replayed, or backfilled from approvals.list): never a second card or count
         self.approvals[rid] = {"request_id": rid, "session": sid, "summary": b.get("summary") or "",
                                "risk": b.get("risk") or "medium", "call": b.get("call"),
                                "options": b.get("options") or [], "requested_at": ts, "seq": self.seq}
@@ -176,6 +181,7 @@ class State:
             self._session(sid)["pending_approvals"] += 1
 
     def _on_approval_resolved(self, sid, b, ts):
+        self.resolved_ids.append((self.seq, b.get("request_id")))
         a = self.approvals.pop(b.get("request_id"), None)
         if a is None:
             return
@@ -183,6 +189,19 @@ class State:
         if a.get("session") and a["session"] in self.sessions:
             s = self.sessions[a["session"]]
             s["pending_approvals"] = max(0, s["pending_approvals"] - 1)
+
+    def resolved_since(self, seq: int) -> set:
+        """Request ids whose resolution was applied after ``seq``."""
+        return {rid for at, rid in self.resolved_ids if at > seq}
+
+    def add_open_approval(self, a: Dict[str, Any]) -> bool:
+        """An open request the core lists but this page never saw asked (it fell out of the replay window).
+        ``requested_at`` stays empty: the page shows no time rather than a wrong one."""
+        rid = a.get("request_id")
+        if not rid or rid in self.approvals:
+            return False
+        self._on_approval_requested(a.get("session"), a, None)
+        return True
 
     def forget_approval(self, rid: str) -> None:
         """The core no longer holds this request (D-045): drop it as a resolution nobody announced."""
@@ -200,6 +219,8 @@ class State:
         t["events"] += 1
         if t["status"] in TERMINAL_TASK:
             t["finished_at"] = ts
+            if sid and t.get("child_session"):  # the core adds a finished child's total to its parent's
+                self.rolling.setdefault(sid, set()).add(t["child_session"])
         self._flag_child(t)
 
     def _on_usage_updated(self, sid, b, ts):
@@ -217,6 +238,8 @@ class State:
         if cost is not None:
             s["cost_usd"] = float(cost)
             s["priced"] = s["priced"] or float(cost) > 0
+        for child in self.rolling.pop(sid, ()):
+            self._session(child)["rolled_up"] = True  # its spend is inside this session_total now
 
     def _on_context_compacted(self, sid, b, ts):
         self.compactions += 1

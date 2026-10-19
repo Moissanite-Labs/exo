@@ -4,7 +4,9 @@ The core prices every model call and publishes it as ``usage.updated`` (the call
 running ``session_total``). ``state.State`` folds those per session; this module aggregates them into
 the panel: total, top sessions, by seat and by model. A session counts as priced when the provider
 reported a cost above zero. A session the core could not price (a local model, an unknown rate)
-still shows its tokens, so the panel is never silently empty.
+still shows its tokens, so the panel is never silently empty. A finished subagent's spend is already in
+its parent's ``session_total`` (the core rolls it up), so its row is listed with ``rolled_up`` but not
+summed again.
 
 The Hermes version of this panel, which read ``state.db``, lives in
 ``exo.ingest.hermes_dashboard.cost_per_session`` for migration.
@@ -36,6 +38,13 @@ def per_session(sessions: Iterable[Dict[str, Any]], *, window_days: int = 7, top
         cost = float(s.get("cost_usd") or 0)
         model = s.get("turn_model") or s.get("model") or "unknown"
         seat = s.get("seat") or "main"
+        rows.append({"session_id": s["id"], "title": s.get("title") or None, "seat": seat, "models": [model],
+                     "subagent": bool(s.get("task_id") or s.get("parent")), "last_activity": last,
+                     "messages": int(s.get("message_count") or 0), "cost_usd": round(cost, 6),
+                     "priced": cost > 0, "rolled_up": bool(s.get("rolled_up")),
+                     **{k: int(usage.get(k) or 0) for k in USAGE_KEYS}})
+        if s.get("rolled_up"):  # already inside its parent's session_total
+            continue
         sb = by_seat.setdefault(seat, {"seat": seat, "cost_usd": 0.0, "sessions": 0, "priced_sessions": 0,
                                        **{k: 0 for k in USAGE_KEYS}})
         sb["sessions"] += 1
@@ -47,12 +56,9 @@ def per_session(sessions: Iterable[Dict[str, Any]], *, window_days: int = 7, top
         for k in USAGE_KEYS:
             sb[k] += int(usage.get(k) or 0)
             mb[k] += int(usage.get(k) or 0)
-        rows.append({"session_id": s["id"], "title": s.get("title") or None, "seat": seat, "models": [model],
-                     "subagent": bool(s.get("task_id") or s.get("parent")), "last_activity": last,
-                     "messages": int(s.get("message_count") or 0), "cost_usd": round(cost, 6),
-                     "priced": cost > 0, **{k: int(usage.get(k) or 0) for k in USAGE_KEYS}})
-    total = sum(r["cost_usd"] for r in rows)
-    priced = [r for r in rows if r["priced"]]
+    counted = [r for r in rows if not r["rolled_up"]]
+    total = sum(r["cost_usd"] for r in counted)
+    priced = [r for r in counted if r["priced"]]
     rows.sort(key=lambda r: (-r["cost_usd"], -(r["input_tokens"] + r["output_tokens"])))
     for b in by_seat.values():
         b["cost_usd"] = round(b["cost_usd"], 4)
@@ -62,7 +68,7 @@ def per_session(sessions: Iterable[Dict[str, Any]], *, window_days: int = 7, top
         "available": True,
         "window_days": window_days,
         "total_usd": round(total, 4),
-        "sessions": len(rows),
+        "sessions": len(counted),
         "priced_sessions": len(priced),
         "mean_per_priced_session_usd": round(total / len(priced), 4) if priced else 0.0,
         "top": rows[:top],

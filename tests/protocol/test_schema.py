@@ -73,12 +73,72 @@ def test_unknown_command_rejected():
         (json.dumps({"id": "c", "type": "hello", "body": {"zzz": 1}}), "bad_body"),
         (json.dumps({"id": "c", "type": "session.get", "body": {}}), "bad_body"),
         (json.dumps({"id": "c", "type": "turn.send", "body": {"session": "s", "mode": "x"}}), "bad_body"),
+        # a non-string type is unknown, not a TypeError out of the decoder
+        (json.dumps({"id": "c", "type": [], "body": {}}), "unknown_command"),
+        (json.dumps({"id": "c", "type": {}, "body": {}}), "unknown_command"),
+        (json.dumps({"id": "c", "type": 1, "body": {}}), "unknown_command"),
+        (json.dumps({"id": "c", "type": None, "body": {}}), "unknown_command"),
+        pytest.param("[" * 100_000, "bad_json", id="nesting-too-deep"),
+        # primitive fields are checked: int is int (not bool), float takes int, str is str, bool is bool
+        (json.dumps({"id": "c", "type": "events.subscribe", "body": {"since": "5"}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "events.subscribe", "body": {"since": None}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "events.subscribe", "body": {"since": 1.5}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "events.subscribe", "body": {"since": True}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "events.subscribe", "body": {"since": [5]}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "events.subscribe", "body": {"session": 7}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "session.list", "body": {"limit": "x"}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "session.undo", "body": {"session": "s", "turns": 1.5}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "session.get", "body": {"session": 1}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "session.get", "body": {"session": None}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "hello", "body": {"screen_cols": "80"}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "turn.send", "body": {"session": "s", "parts": [{"type": "text", "text": 1}]}}),
+         "bad_body"),
+        (json.dumps({"id": "c", "type": "peers", "body": {"action": "list", "local_only": "yes"}}), "bad_body"),
+        (json.dumps({"id": "c", "type": "peers", "body": {"action": "list", "local_only": 1}}), "bad_body"),
     ],
 )
 def test_bad_commands(raw, code):
     with pytest.raises(ProtocolError) as e:
         Command.from_json(raw)
     assert e.value.code == code
+
+
+@pytest.mark.parametrize(
+    "body,want",
+    [
+        ({"type": "events.subscribe", "body": {"since": 5, "session": None}}, s.EventsSubscribe(since=5)),
+        ({"type": "session.list", "body": {"limit": 3, "seat": "a"}}, s.SessionList(limit=3, seat="a")),
+        ({"type": "session.undo", "body": {"session": "s", "turns": 2}}, s.SessionUndo(session="s", turns=2)),
+        ({"type": "hello", "body": {"screen_cols": None}}, s.Hello()),
+        ({"type": "config.set", "body": {"key": "k", "value": [1, "x", True]}}, s.ConfigSet(key="k", value=[1, "x", True])),
+    ],
+)
+def test_well_typed_commands_still_decode(body, want):
+    assert Command.from_json(json.dumps({"id": "c", **body})).body == want
+
+
+def test_float_and_bool_fields_are_checked():
+    from exo.core.types import from_dict
+
+    assert from_dict(Usage, {"cost_usd": 2}).cost_usd == 2  # an int is a float
+    assert from_dict(Usage, {"cost_usd": 0.5}).cost_usd == 0.5
+    for bad in ({"cost_usd": True}, {"cost_usd": "1"}, {"input_tokens": False}):
+        with pytest.raises(ValueError):
+            from_dict(Usage, bad)
+    assert from_dict(ToolResult, {"call_id": "a", "is_error": True}).is_error is True
+    with pytest.raises(ValueError):
+        from_dict(ToolResult, {"call_id": "a", "is_error": 1})
+
+
+def test_lenient_events_keep_wrong_typed_primitives():
+    # Old rows in the event log decode with strict=False: the primitive check must not start rejecting them.
+    raw = json.dumps({"id": "e", "seq": 1, "type": "tool.completed",
+                      "body": {"result": {"call_id": 5, "content": []}, "duration_ms": "7"}})
+    with pytest.raises(ProtocolError) as e:
+        Event.from_json(raw)
+    assert e.value.code == "bad_body"
+    body = Event.from_json(raw, strict=False).body
+    assert body.duration_ms == "7" and body.result.call_id == 5
 
 
 def test_command_of_rejects_unregistered_body():
