@@ -3,12 +3,34 @@
 This guide shows you how to use Exo day to day. It is short on purpose. Each section ends with a link to the
 technical page that has the detail. The map of all docs is `docs/DOCS-MAP.md`.
 
+## Words Exo uses
+
+| Word | Means |
+|---|---|
+| principal | You, the person the agent works for. Only what you type counts as your ruling or correction. |
+| store | Your principal store: a folder, `~/.exo/principals/<id>`, with what Exo knows about you, your policies and your ledger. The installer's interview or `exo init` makes it (§11). |
+| ledger | A signed log in your store. Entries are only added, and a changed entry shows when `exo log verify` runs (§11). |
+| seat | One named agent, with its own models, tools and memory. With no seat you talk to the agent named `default`, which the terminal header shows as `main` (§8). |
+| thread | One conversation with that agent: a terminal window, a web chat or a scheduled run. All threads of a seat share its memory (§4). |
+| gate | The check on each tool call: allow, log, ask you or deny (§6). |
+| grant | An "always" answer to the gate. It expires (§6). |
+| finding | A problem Exo found in its own work, such as a slow turn or a model fallback. `/findings` lists them (§9). |
+| wave | A stage of the build plan. Waves 1 to 3 are built. You need the word only to read the project's plans. |
+| D-number | A numbered decision, such as D-038, in `DECISIONS.md`: what was chosen, why, and what was rejected. |
+
 ## 1. Install and first run
 
 Install steps are in the README (`## Quick start`: install, then type `exo`) and `docs/INSTALL.md`. Keys and models are in `docs/PROVIDERS.md`.
 Setting up your own store and the first interview are in `docs/ONBOARDING.md`. This guide does not repeat them.
 
-After install, set up a model provider. Pick one way; all three store the key the same way and show the same
+If Claude Code is installed (the `claude` command is on your PATH) and logged in, you need no key. While the
+main model has no key (by default Anthropic, then OpenRouter) and you have not chosen one, Exo uses your Claude
+Code login as the main model: `claude-cli:sonnet`. The status line shows it. Cost reads `unknown`, because a
+subscription has no per-call price. `exo models` and `exo config roles` show the configured routes, which do
+not include this automatic one. To choose it yourself, run
+`exo providers default claude-cli:sonnet` (or `claude-cli:opus`). Details: `docs/PROVIDERS.md` ("Use your Claude Code login").
+
+Otherwise, set up a model provider. Pick one of three ways. They store the key the same way and show the same
 status:
 
     exo providers                 # every provider: status, where its key is, models, default
@@ -19,24 +41,28 @@ Or type `/providers` in the terminal client, or open the Providers tab in `exo w
 type it after the command name. If no provider works, `exo` and `exo web` tell you. Details and the security of
 the web route: `docs/PROVIDERS.md`.
 
-To use a Muse Code subscription instead of a key, run `muse login` yourself, then `exo providers test muse-cli`. It is
-text only and has limits; they are listed in `docs/PROVIDERS.md` ("Use a Muse Code subscription").
+A Muse Code subscription (`muse-cli`) serves only the `aux` role, the side work such as context summaries and the
+learning review. It cannot be your main model, so it does not replace a key or the Claude Code login. Its setup and
+limits are in `docs/PROVIDERS.md` ("Use a Muse Code subscription").
 
 Then start the terminal client by typing the command, in the folder you want to work in:
 
     exo                     # same as `exo tui`; flags pass through: exo --resume (or `exo resume`), exo --seat NAME
 
 The first time it runs on an `EXO_HOME`, the agent gives a short orientation (`/intro`) and turns on tutorial mode.
-If no model provider works yet, the providers panel opens first and the orientation waits until you add one.
-Skip the orientation with `exo --no-intro`. Upgrade with `exo update`; `exo --version` shows what you have.
+If no model provider works yet, a note says so and the providers panel opens. If one provider is set up but no
+main model is chosen, the model picker opens instead. The orientation waits until a provider works. Type
+`/providers` to open the panel again.
+Skip the orientation with `exo --no-intro`. Upgrade with `exo update`. `exo --version` shows what you have.
 More: `docs/ONBOARDING.md`.
 
 ## 2. The two clients
 
 Both clients speak the same protocol to the same core. Use either, or both at once.
 
-**Terminal (`exo tui`).** Type a message and press Enter. Options: `--resume` continues the newest thread,
-`--session ID` continues one, `--seat NAME` picks the seat, `--title TEXT` names a new thread. Keys:
+**Terminal (`exo tui`).** Type a message and press Enter. Options: `--resume` continues the newest thread
+with messages (each launch opens a thread, so it skips the empty ones), `--session ID` continues one, `--seat NAME`
+picks the seat, `--title TEXT` names a new thread. Keys:
 
 | Key or prefix | Does |
 |---|---|
@@ -60,8 +86,9 @@ and reports that clipboard receipt cannot be verified; a terminal can ignore tha
 Click anywhere on the transcript and you are typing again; keys typed while nothing else has focus go to the composer.
 
 The screen shows the model that served each call, how full memory is, how much of the call came from cache, the cost,
-and the number of open findings. Screenshots are in `docs/ui/` (for example `docs/ui/01-empty.png`,
-`docs/ui/03-approval.png`, `docs/ui/05-context.png`). The look is described in `docs/UI.md`.
+and the number of open findings. Screenshots are in `docs/media/` (for example `docs/media/tui-01-start.png`,
+`docs/media/tui-03-approval.png`, `docs/media/tui-04-context.png`). They are older captures and may not show every
+current control. The look is described in `docs/UI.md`.
 Set `EXO_REDUCED_MOTION=1` to turn motion off. `NO_COLOR` turns colour off.
 
 **Web (`exo web`).** Run `exo web` in a terminal. It opens the page in your browser for you. If it does not (no
@@ -72,7 +99,8 @@ see the same agent and threads. `exo web` joins a terminal window's core, or `ex
 none is, it starts `exo serve` in the background (log `$EXO_HOME/logs/exod.log`). That background core keeps running
 after you close the web page, so a later `exo` joins it. `exo stop` ends it.
 It shows approvals, decisions waiting on you, live sessions, tasks, projects and cost. Screenshots are
-`docs/ui/web-*.png`. Details are in `docs/ui/WEB.md` and `plugins/exo-command/README.md`.
+`docs/media/web-*.png`, and the Providers tab is `docs/ui/web-providers.png`. Details are in `docs/ui/WEB.md` and
+`plugins/exo-command/README.md`.
 
 ## 3. Slash commands
 
@@ -283,7 +311,7 @@ Details and the cost rules: `docs/TRACE.md`.
 | The error says "next route reopens in" some seconds | The provider failed and Exo rests it for a while. Wait, or test it in `/providers` (`t`): a passing test retries it at once. |
 | A second `exo serve` refuses to start | One process writes an agent's log. Another `exo serve` or `exo tui` for that seat already holds it. Use that one, or stop it. |
 | A second `exo web` says Exo's web client is already running | One already serves that port. Keep using its page, or open the full link it printed, or stop it with Ctrl+C in its terminal. `exo web --port 7343` starts a second one on the same core. |
-| Cost shows `unknown` | The route has no price. Add one under `models.models` in `config.json` (`docs/TRACE.md`). |
+| Cost shows `unknown` | The route has no price. On the Claude Code login (`claude-cli`) this is expected. Add one under `models.models` in `config.json` (`docs/TRACE.md`). |
 | `code_find` is missing | It needs Node.js 22 or newer. `exo models` says why on its `code_find:` line (`docs/TOOLS.md`). |
 | Memory or learning is off | Both need a principal store. Without one the boot line says `memory off, no principal store`. Run `exo init <id>` (any short id, such as your first name), then start Exo again. If `exo web` started the core, run `exo stop` first (`docs/LEARNING.md`). |
 | A peer message never arrived | It may be held. Look for an approval card. Held messages expire after 30 minutes (`docs/PEERS.md`). |
