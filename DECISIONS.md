@@ -1123,8 +1123,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   is: the variable is checked, and the rest is the command it is (`env 'FOO=a b' ls` is `ls`, where it was an
   unknown program; `env 'X=1' rm -rf /srv/data` is `delete`). After `nice`, `timeout` and the other prefixes a
   quoted `NAME=VALUE` is still the program, as the shell runs it. Left out: `IFS`, which does not change how
-  literal words split. Known limits (rarer expansion forms that can still set a variable unseen) are listed in
-  `docs/GATE.md`. Cost: a line that sets one of these variables asks where it was allowed.
+  literal words split. `PS4` is read as a command-valued variable, as the double-quoted text bash expands before
+  every traced command (`set -x` needs no interactive shell, unlike `PROMPT_COMMAND`; #168 scrubs an inherited one
+  for the same reason). Arithmetic assigns with `++`, `--` and `<<=`/`>>=` too. Known limits (rarer expansion forms
+  that can still set a variable unseen) are listed in `docs/GATE.md`. *Cost, and what stays allowed.* A line that
+  sets one of these variables asks where it was allowed, except for values that change nothing the gate relies on:
+  an empty loader variable, `GIT_CONFIG_GLOBAL`/`SYSTEM` set to `/dev/null`, a `PATH` of `$PATH` and folders the
+  gate already trusts a program from by path (system bin folders, a virtualenv's `bin`, `node_modules/.bin`), and
+  `PYTHONPATH` before `pytest` or `python -m pytest`, which already run the project's code. Deliberate asks: an
+  empty `PATH` element (the current folder), any other `PATH` folder, appended or not, since it supplies every
+  program the earlier folders lack (`export PATH="$HOME/.local/bin:$PATH"`), and `PYTHONPATH` before any other
+  program or exported. Rejected: exempting any append-only `PATH`, which lets a planted program stand in for one the
+  gate trusts by name but the machine lacks.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

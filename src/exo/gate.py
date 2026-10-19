@@ -1001,8 +1001,10 @@ _SSH_LIB_SETTINGS = {k.lower(): k for k in ("PKCS11Provider", "SecurityKeyProvid
 _EXEC_ENV = frozenset("""
 GIT_SSH_COMMAND GIT_SSH GIT_PAGER GIT_EDITOR GIT_SEQUENCE_EDITOR GIT_EXTERNAL_DIFF GIT_ASKPASS SSH_ASKPASS
 RSYNC_RSH PAGER MANPAGER EDITOR VISUAL LESSOPEN LESSCLOSE GIT_PROXY_COMMAND BROWSER GH_PAGER GH_EDITOR GH_BROWSER
-PSQL_PAGER PSQL_EDITOR SUDO_ASKPASS SUDO_EDITOR RSYNC_CONNECT_PROG PROMPT_COMMAND
+PSQL_PAGER PSQL_EDITOR SUDO_ASKPASS SUDO_EDITOR RSYNC_CONNECT_PROG PROMPT_COMMAND PS4
 """.split())
+# PS4 is not a command line but a prompt bash expands before every traced command (`set -x`), interactive or not:
+# its `$( )` and backticks run. Its value is read as that double-quoted text (_prompt_text).
 # _EXEC_ENV_OPAQUE: the value is not a command the gate can read but decides what code runs: options the
 # program parses, libraries the loader injects, or where programs, modules, startup and config files are
 # found (HOME picks ~/.gitconfig, ~/.ssh/config and ~/.exo), and CDPATH, which moves a relative `cd` where
@@ -1028,12 +1030,36 @@ _GIT_CONFIG_ENV = re.compile(r"GIT_CONFIG_(KEY|VALUE)_(\d+)")
 _EXPORTERS = ("export", "declare", "typeset", "readonly", "local")
 
 
+# Values of a listed variable that change nothing the gate relies on, so everyday lines keep their class: an empty
+# loader variable (the loader skips it), git's global or system config pointed at /dev/null (nothing is read), an
+# empty CDPATH (it turns CDPATH off), and a PATH made of the current one and folders the gate already trusts a
+# program from by path (_trusted_path: a system bin folder, a virtualenv's or node_modules/.bin). An empty element
+# is the current folder, so `PATH= ls` and `PATH=$PATH: ls` still ask; so does any other folder, appended or not,
+# since it supplies every program the earlier ones lack.
+_EMPTY_IS_UNSET = frozenset("""LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH
+    DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH CDPATH""".split())
+
+
+def _harmless_value(name: str, value: str | None) -> bool:
+    if value is None:
+        return False
+    if name in _EMPTY_IS_UNSET:
+        return value == ""
+    if name in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
+        return value == "/dev/null"
+    return name == "PATH" and all(d in ("$PATH", "${PATH}") or d and not re.search(r"[*?\[]", d) and (
+        os.path.normpath(_expand_text(d)) in _SYSTEM_BIN or bool(_ENV_BIN.search(d.rstrip("/") + "/x")))
+        for d in value.split(":"))
+
+
 def _env_hazard(name: str, value: str | None = None) -> str:
     """Why setting this variable matters to the gate ("" when it does not). `value` None means the line
     sets it to a value the gate does not see (`read`, `printf -v`, a for loop, a nameref)."""
+    if name == "PS4":
+        return "is expanded, $( ) included, before each traced command"
     if name in _EXEC_ENV:
         return "holds a command a program runs"
-    if name in _EXEC_ENV_OPAQUE and not (name == "CDPATH" and value == ""):
+    if name in _EXEC_ENV_OPAQUE and not _harmless_value(name, value):
         return _EXEC_ENV_OPAQUE[name]
     if name == "LESS" and (value is None or "+" in value):
         return "sets a command less runs at start"
@@ -1050,7 +1076,7 @@ def _env_hazard(name: str, value: str | None = None) -> str:
 # read to the } bash closes it with and with quoted text blanked (_dollar_brace), and a bracket only as the
 # subscript of a name (`echo [HOME=x]` is a glob, `'${PATH:=.}'` and `${a:-'${PATH:=.}'}` are text).
 _PARAM_NAME = re.compile(r"\$\{([A-Za-z_]\w*)")            # then a subscript, and `:=` or `=` to assign
-_ARITH_SET = re.compile(r"\b([A-Za-z_]\w*)\s*[-+*/%&|^]?=(?!=)")
+_ARITH_SET = re.compile(r"\b([A-Za-z_]\w*)\s*(?:(?:<<|>>|[-+*/%&|^])?=(?!=)|\+\+|--)|(?:\+\+|--)\s*([A-Za-z_]\w*)")
 _SUBSCRIPT = re.compile(r"[A-Za-z_]\w*\[([^\]]*)\]")
 _EXP_SUBSCRIPT = re.compile(r"\$\{[#!]?[A-Za-z_]\w*\[")
 _FD_VAR = re.compile(r"\{([A-Za-z_]\w*)\}")
@@ -1114,10 +1140,18 @@ def _unquote_value(v: str) -> str:
     return re.sub(r"'([^']*)'|\"([^\"]*)\"|\\(.)", lambda m: "".join(g or "" for g in m.groups()), v)
 
 
+def _prompt_text(value: str) -> str:
+    """A PS4 value as the command line that expands it the way bash does (`: "<value>"`), or "" when nothing in it
+    runs. Backslashes are dropped first: bash decodes the prompt's own escapes (`\\$` is `$`) before it expands."""
+    if "$" not in value and "`" not in value:
+        return ""
+    return ': "' + value.replace("\\", "").replace('"', '\\"') + '"'
+
+
 def _subscript_sets(name: str) -> list[str]:
     """The variables assigned inside the subscript of a `NAME[...]` word (`a[PATH=10]` sets PATH)."""
     m = _SUBSCRIPT.match(name)
-    return [a.group(1) for a in _ARITH_SET.finditer(m.group(1))] if m else []
+    return [a.group(1) or a.group(2) for a in _ARITH_SET.finditer(m.group(1))] if m else []
 
 
 def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None]]:
@@ -1152,7 +1186,7 @@ def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None]]:
             arith, subs = _spans(vis)
             for region in (arith, subs):
                 for a, b in _covered(region):
-                    out += [(m.group(1), None) for m in _ARITH_SET.finditer(vis, a, b)]
+                    out += [(m.group(1) or m.group(2), None) for m in _ARITH_SET.finditer(vis, a, b)]
     out += [(n, None) for name in names for n in _subscript_sets(name)]
     if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
         out += [(fm.group(1), None) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
@@ -2444,9 +2478,16 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         n += 1
 
     def split_assign(a: str) -> tuple[str, str]:
-        return re.split(r"\+?=|\[", a, maxsplit=1)[0], a.partition("=")[2]
+        # NAME+=v appends: for a listed variable that is the value $NAME then v (`PATH+=:/usr/bin` is
+        # `$PATH:/usr/bin`); a command-valued one keeps v, the command text it adds
+        name, value = re.split(r"\+?=|\[", a, maxsplit=1)[0], a.partition("=")[2]
+        appends = re.match(r"[A-Za-z_]\w*\+=", a) and name not in _EXEC_ENV
+        return name, f"${{{name}}}{value}" if appends else value
 
     assigns = [w.text for w in before[:n] if _ASSIGN.fullmatch(w.text)]
+    # pytest, or python -m pytest, before which PYTHONPATH adds nothing: the runner imports conftest.py and the
+    # tests, project code the gate already lets it run (D-038 "Not done")
+    runner = prog in ("pytest", "py.test") or bool(re.fullmatch(r"python[\d.]*", prog)) and argv[1:3] == ["-m", "pytest"]
     sets: list[tuple[str, str | None, bool]] = [(*split_assign(a), not words) for a in assigns]
     if prog in _EXPORTERS:
         sets += [(*split_assign(a), True) for a in argv[1:] if _ASSIGN.fullmatch(a)]
@@ -2456,7 +2497,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     git_env: dict[tuple[str, ...], str] = {}
     for name, value, runs_nothing in sets:
         if name in _EXEC_ENV:
-            c = nested((value or "").lstrip("|"), name)
+            c = nested(_prompt_text(value or "") if name == "PS4" else (value or "").lstrip("|"), name)
             if c is not None and runs_nothing and c.category == "opaque_exec":
                 parts.pop()                              # export runs nothing; an unknown value is not a hit
         elif name == "GIT_CONFIG_PARAMETERS":           # git's own format: 'key'='value' 'key2'='value2'
@@ -2466,6 +2507,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
                 parts.append(_opaque(f"{name} sets git config the gate cannot read", cmd))
         elif m := _GIT_CONFIG_ENV.fullmatch(name):
             git_env[m.groups()] = value or ""
+        elif name == "PYTHONPATH" and not runs_nothing and runner:
+            pass                                         # a test runner already runs the project's code
         elif why := _env_hazard(name, value):         # _EXEC_ENV_OPAQUE, and LESS with a `+` command
             parts.append(_opaque(f"{name} {why}", cmd))
     parts += _indirect_sets(prog, words, cmd)
