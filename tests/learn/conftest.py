@@ -39,10 +39,13 @@ def learner(engine):
     lr.close()
 
 
-def new_session(engine, *msgs, title="chat"):
-    """Create a session and fill it with (role, text) messages; returns (session id, message ids)."""
+def new_session(engine, *msgs, title="chat", kind="", parent=None):
+    """Create a session and fill it with (role, text) messages; returns (session id, message ids). ``kind`` makes
+    it a thread of the engine's agent (``private``: one that is not remembered, D-028; ``subagent`` with
+    ``parent``: a delegate child)."""
     from exo.core.types import ContentPart, Message
-    info = engine.store.create_session(title=title, model="fake:x", cwd=".")
+    info = engine.store.create_session(title=title, model="fake:x", cwd=".", parent=parent,
+                                       **({"agent": engine.agent, "kind": kind} if kind else {}))
     ids = []
     for role, text in msgs:
         m = engine.store.append_message(info.id, Message(role=role, content=[ContentPart.of_text(text)]), "t1")
