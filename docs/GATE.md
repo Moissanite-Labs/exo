@@ -763,8 +763,8 @@ gate does not read:
   outranks `opaque_exec` (`setsid git push`) takes the line's category, so a deny on
   `opaque_exec` itself no longer reaches it: under `deny: [opaque_exec]`, `categories:
   {opaque_exec: deny}` or a rule on `opaque_exec` with decision `deny` the line asks (the
-  `indirection` floor below), where it was denied before. D-075 makes such a deny apply to
-  every part.
+  `indirection` floor below), where it was denied before. D-075 makes a `deny:` entry, and #191
+  a category line or rule that denies, apply to every part, so the wrapper part denies the line.
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
@@ -774,8 +774,8 @@ gate does not read:
   `coproc rm <<<x while ...`) gives a simple command that runs the name. The gate then reads the
   name as the program too, and keeps the skipped reading beside it (#207). A redirection after the
   opener, in the body or after the closing `}`, changes nothing. Such a line now takes the name's
-  category (`delete` for `rm`), so, as for wrappers, `categories: {opaque_exec: deny}` asks there
-  where main denied; `deny: [opaque_exec]` still denies through the coproc part (D-075).
+  category (`delete` for `rm`), but the coproc stays an `opaque_exec` part, so `deny: [opaque_exec]`
+  (D-075) and `categories: {opaque_exec: deny}` or a rule that denies it (#191) still deny the line.
   `function NAME { ...; }` is read the same way. An environment dump inside (`coproc env`,
   `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Before D-075, a coproc was denied
   only when its inner command outranked `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
@@ -1017,9 +1017,9 @@ the rest of the line. So `echo 'rm -rf /data' | ssh prod-db`, and `ssh prod-db <
 `rm -rf /data` in the body, deny under `deny: [delete]`, and text the gate cannot read (`ssh host
 < script.sh`, `generate | ssh host`) asks. As for `ssh host 'rm -rf /data'`, the most severe
 command in the text sets the line's category and target. `deny` and `reserved` entries see every
-part, so a `target:<host>` entry still matches through the hop part; a setting that sees only that
-command (`categories: {shell: deny}`, a rule keyed on the host as `target`) no longer reaches these
-lines, which ask where main denied them. ssh reads options after the host too, up to the
+part, so a `target:<host>` entry still matches through the hop part, and since #191 so does a
+category setting or rule that denies the hop (`categories: {shell: deny}`, a rule keyed on the host
+as `target`): these lines are denied as on main. ssh reads options after the host too, up to the
 remote command, so `ssh host -T` and `ssh host --` have no command, and an empty word (`ssh host
 ''`) is none either. `-n`, `-N` and `-f` keep ssh from running its stdin, and a remote command
 takes the stdin as its own input; those lines keep their reading. A word that may expand to no

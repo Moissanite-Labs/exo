@@ -1140,10 +1140,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `ssh host` starts runs ssh's stdin; a piped, heredoc or here-string text is read as shell, as for `bash -s`, and
   the line asks, with the parts `internal` (D-075). ssh's options after the host are read up to the remote command;
   `-n`, `-N`, `-f` or a remote command keep the old reading, and a word that may expand to no word or several before
-  the command, or as all of it, reads the stdin too (fail closed). As with wrappers and #191, the line takes the
-  category of what runs, so a `categories:` setting or rule written for the old dominant reading (`opaque_exec` for
-  the coproc lines, `shell` or the host as target for ssh) asks where it denied; `deny` and `reserved` entries see
-  every part and keep denying (D-075). Rejected: reading both coproc readings whenever
+  the command, or as all of it, reads the stdin too (fail closed). As with wrappers, the line takes the category of
+  what runs, but the old reading stays a part: `deny` and `reserved` entries see every part (D-075), and since #191
+  (#306) so does a `categories:` setting or rule that denies (`opaque_exec` for the coproc lines, `shell` or the host
+  as target for ssh), so these lines are denied as before. Rejected: reading both coproc readings whenever
   the line has any redirection (the issue's first sketch), which reads the name as a program in `coproc rm { echo
   >/dev/null hi; }`, where bash runs a named compound.
 
