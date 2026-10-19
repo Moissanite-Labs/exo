@@ -56,7 +56,9 @@ def add_sink(fn: Sink) -> None:
     if hasattr(fn, "__self__") and hasattr(fn, "__func__"):
         _sinks.append(weakref.WeakMethod(fn))  # type: ignore[arg-type]
     else:
-        _sinks.append(lambda fn=fn: fn)
+        def strong() -> Sink | None:
+            return fn
+        _sinks.append(strong)
 
 
 def remove_sink(fn: Sink) -> None:
