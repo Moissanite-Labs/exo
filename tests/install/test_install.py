@@ -574,6 +574,45 @@ def test_a_list_removes_the_plugins_an_earlier_run_installed(box):
     assert installed(plugins) == {"exo-gate", "mine", "linked"}
 
 
+def test_rerun_keeps_a_plugin_you_copied(box):
+    """#268: `cp -r` copies the hidden marker, so a copy of an installed plugin looked like one Exo installed, and a
+    re-run with a recorded --plugins list (the one `exo update` makes) deleted it with exit 0. Exo now removes a
+    plugin folder only when its marker names that folder, as it does for pack skills."""
+    args = ("--no-pip", "--no-interview", "--yes")
+    assert run(box, *args, "--plugins", "exo-gate,exo-memory,exo-bus").returncode == 0
+    plugins = box / "exo" / "plugins"
+    shutil.copytree(plugins / "exo-bus", plugins / "my-bus")  # a copy to change, marker and all
+    (plugins / "my-bus" / "notes.txt").write_text("mine\n")
+    kept = snapshot(plugins / "my-bus")
+    r = run(box, *args)  # no --plugins: the recorded list, as `exo update` re-runs it
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "keeping the --plugins selection" in r.stdout and "rm -rf" not in r.stdout
+    assert f"{plugins / 'my-bus'} was not installed by Exo under this name" in r.stderr
+    assert snapshot(plugins / "my-bus") == kept
+    r = run(box, *args, "--plugins", "exo-gate,exo-memory")  # exo-bus leaves the list: Exo's copy goes
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert installed(plugins) == {"exo-gate", "exo-memory", "my-bus"}
+    assert snapshot(plugins / "my-bus") == kept
+
+
+def test_a_plugin_marker_without_a_name_is_kept_with_a_warning(box):
+    """A marker from an install before markers named their folder cannot tell Exo's plugin from a copy, so a list that
+    leaves the plugin out keeps the folder and names it in a warning, never deletes it. A selected plugin with such a
+    marker is refreshed as before and its marker gains the name."""
+    args = ("--no-pip", "--no-interview", "--yes")
+    assert run(box, *args, "--plugins", "exo-gate,exo-memory,exo-bus").returncode == 0
+    plugins = box / "exo" / "plugins"
+    for name in ("exo-bus", "exo-memory"):
+        (plugins / name / ".exo-managed").write_text("installed by exo scripts/install.sh from /old/checkout\n")
+    kept = snapshot(plugins / "exo-bus")
+    r = run(box, *args, "--plugins", "exo-gate,exo-memory")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "rm -rf" not in r.stdout and snapshot(plugins / "exo-bus") == kept
+    assert f"{plugins / 'exo-bus'} has a .exo-managed from an older install that does not name the folder" in r.stderr
+    assert "name: exo-memory" in (plugins / "exo-memory" / ".exo-managed").read_text().splitlines()
+    assert installed(plugins) == {"exo-gate", "exo-memory", "exo-bus"}
+
+
 @pytest.mark.parametrize("spaced", ["exo-gate, exo-memory", " exo-memory ,exo-gate "])
 def test_spaces_in_a_plugin_list_do_not_drop_a_plugin(box, spaced):
     assert run(box, "--no-pip", "--no-interview", "--yes").returncode == 0
