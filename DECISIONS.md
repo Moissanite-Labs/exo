@@ -1161,6 +1161,32 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `GIT_CONFIG_COUNT`, and dropped whole when `env_deny` or the token-format value check drops any member. So an exact
   `env_allow` of a single `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` no longer keeps it, an exception to
   "`env_allow` keeps a name". Documented in `docs/TOOLS.md`.
+  *Amendment 2026-10-19 (PR #222):* redacting key values out of text has one match model too, `keys.secret_spans`.
+  `keys.redact_secrets` uses it for every caller: tool results in the registry, the engine's `tool.output` pieces, the
+  claude-cli provider, provider test and setup errors, and the `bash` stream. The values go longest first. Each value's
+  matches are found from the left, as `str.replace` finds them, in the text with the spans of the values before it
+  blanked out. So no match overlaps a span taken before. All matches are found in the text itself. Then one `[redacted]`
+  marker goes in per span, in one pass. So no value can match across a marker. Before, each value replaced its matches
+  in turn, and a later value could match text that held an earlier marker. Output changes only for a key value that
+  holds `[` or `]` or is part of the word "redacted". `keep_markers` takes each `[redacted]` already in the text first.
+  The engine's second pass over a streamed piece uses it. So that pass leaves the stream's redaction as it is and cuts
+  out only a key learned since. The `bash` stream holds back the longest end of the unsent text that could start a key.
+  Then, value by value in redaction order, a value's first match that would cross the cut moves the cut back to that
+  match's start. So no span of the whole output crosses a cut, and the stream equals redacting the whole output with the
+  key values known when the command starts. The held text stays under twice the length of all key values together. What
+  still goes out: a key value learned while the command runs is cut out only inside one piece, so such a key split
+  between two pieces goes out in two parts. The result is redacted whole, with every key value known when the call
+  returns. But every cut made to a result comes before that: any cut a tool makes in its own output, and the registry's
+  100,000-character result cap. For example, `bash` keeps 15,000 characters at each end of a longer output, `job_output`
+  keeps the last 20,000, `read_file` cuts a line at 2,000 characters, `grep` cuts a line at 300 and `jobs` cuts a
+  command at 100. So a key value that such a cut splits leaves a part in the result, as it did before this PR. The
+  `bash` stream is redacted before its cut, so its pieces hold no such part. A background job's completion notice had no
+  redaction at all. It now reads the job's whole log file and cuts out the key values known when the job ends. Only then
+  does it cut its command and output to size, so those cuts split no key. A key split where that file rotates at
+  `output_cap` can still leave a part. As before, only key values Exo knows are redacted: `known_secret_values`, or the
+  list a caller passes (claude-cli passes the secret-named variables of its own environment). Rejected: holding all
+  output until the command ends (no live output). `docs/TOOLS.md` "Streamed output", `docs/JOBS.md` "The completion
+  notice".
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
