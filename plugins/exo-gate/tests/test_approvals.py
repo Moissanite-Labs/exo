@@ -353,6 +353,23 @@ def test_outward_grant_without_binding_never_matches(tmp_path):
     assert gs.match("social_post", "x", "abd", outward=True) is None
 
 
+def test_grants_write_does_not_follow_a_symlink_at_the_old_temporary_name(tmp_path):
+    """The grants file was written as `<name>.tmp` with O_TRUNC and no O_EXCL: a symlink planted there sent the
+    grants to any file the user can write. It goes through mkstemp now (#273)."""
+    import os
+    import stat
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch\n")
+    path = tmp_path / "state" / "g.json"
+    path.parent.mkdir()
+    path.with_suffix(".tmp").symlink_to(victim)
+    assert hook.GrantStore(path).add("social_post", "x", "abc", 30, "tui") is not None
+    assert victim.read_text() == "do not touch\n"
+    st = os.lstat(path)
+    assert stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600
+    assert [r["binding"] for r in json.loads(path.read_text())] == ["abc"]
+
+
 # --- outbound scrub -------------------------------------------------------------------------
 
 @pytest.fixture

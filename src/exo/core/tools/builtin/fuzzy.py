@@ -246,9 +246,30 @@ def _format_match_locations(content: str, matches: list[Span], cap: int = 5) -> 
     return "\n".join(rows)
 
 
+def _same_line(a: str, b: str) -> bool:
+    """Equal up to indentation, runs of blanks, Unicode punctuation and literal \\t escapes."""
+    def norm(s: str) -> str:
+        return re.sub(r"[ \t]+", " ", _unicode_normalize(s)).strip()
+    return norm(a) == norm(b) or norm(a.replace("\\t", "\t")) == norm(b)
+
+
+def _first_line_mismatch(region: str, pattern: str, exact_lines: frozenset[int]) -> str | None:
+    """Describe the first pattern line in ``exact_lines`` that the matched region's line differs from."""
+    for i, (want, got) in enumerate(zip(pattern.split("\n"), region.split("\n"))):
+        if i in exact_lines and not _same_line(want, got):
+            return f"'-' line {want.strip()!r} does not match the file's line {got.strip()!r}"
+    return None
+
+
 def fuzzy_find_and_replace(content: str, old_string: str, new_string: str,
-                           replace_all: bool = False) -> tuple[str, int, str | None, str | None]:
-    """Returns ``(new_content, match_count, strategy, error)``; on failure ``(content, 0, None, error)``."""
+                           replace_all: bool = False, exact_lines: frozenset[int] = frozenset(),
+                           ) -> tuple[str, int, str | None, str | None]:
+    """Returns ``(new_content, match_count, strategy, error)``; on failure ``(content, 0, None, error)``.
+
+    ``exact_lines`` are 0-based line numbers of ``old_string`` (a patch hunk's ``-`` lines) that must
+    match their file line up to whitespace, escaping or Unicode; the similarity strategies may place
+    only the other lines.
+    """
     if not old_string:
         return content, 0, None, (
             "old_string is empty, nothing to match. Set old_string to the exact existing text "
@@ -263,8 +284,18 @@ def fuzzy_find_and_replace(content: str, old_string: str, new_string: str,
             "No edit was applied because old_string and new_string are identical. "
             "Provide the existing text in old_string and the changed text in new_string.")
 
+    refused: str | None = None
     for name, strategy in STRATEGIES:
         matches = strategy(content, old_string)
+        if matches and exact_lines and name in SIMILARITY_STRATEGIES:
+            kept = []
+            for span in matches:
+                bad = _first_line_mismatch(content[span[0]:span[1]], old_string, exact_lines)
+                if bad:
+                    refused = refused or bad
+                else:
+                    kept.append(span)
+            matches = kept
         if not matches:
             continue
         if len(matches) > 1 and not replace_all:
@@ -286,6 +317,8 @@ def fuzzy_find_and_replace(content: str, old_string: str, new_string: str,
             unicode_plan=(_unicode_edit_plan(old_string, effective)
                           if name == "unicode_normalized" else None))
         return new_content, len(matches), name, None
+    if refused:
+        return content, 0, None, f"Refused a similar block: {refused}. Re-read the file and send its current text."
     return content, 0, None, "Could not find a match for old_string in the file"
 
 

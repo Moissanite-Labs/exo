@@ -1760,11 +1760,12 @@ class ExoApp(App):
                 self.approvals.append(from_dict(s.ApprovalRequested, a, strict=False))
             self.show_approval()
 
-    async def close_card(self, request_id: str) -> None:
+    async def close_card(self, request_id: str) -> bool:
+        """True when this call closed the request's card; False when it was already gone."""
         async with self._card_transition:
             card = self.card
             if card is None or card.req.request_id != request_id:
-                return  # a resolved event or another closer already replaced this request's card
+                return False  # a resolved event or another closer already replaced this request's card
             restore = self.focused is card or card.has_focus_within
             removal = card.remove()
             moved = self.focused  # removal hands the focus to a neighbour at once; only a later move is the user's
@@ -1773,12 +1774,15 @@ class ExoApp(App):
             self.show_approval()
             if restore and self.focused is moved and not self.modal_open():
                 self.query_one(Composer).focus()
+            return True
 
     async def on_approval_card_answered(self, msg: ApprovalCard.Answered) -> None:
         self.approvals = [a for a in self.approvals if a.request_id != msg.request_id]
+        # A queued click must never close the replacement card, and a repeat of a key (the card is already gone)
+        # answers nothing: only the call that closed this request's card notes and sends.
+        if not await self.close_card(msg.request_id):
+            return
         self.note(f"approval: {msg.decision}" + (f" ({msg.note})" if msg.note else ""))
-        # A queued click still answers its own request after a switch; it must never close the replacement card.
-        await self.close_card(msg.request_id)
         self.run_worker(self.answer_approval(s.ApprovalRespond(request_id=msg.request_id, decision=msg.decision,
                                                                note=msg.note, client=CLIENT_ID)), exit_on_error=False)
 
