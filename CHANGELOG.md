@@ -523,10 +523,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   halves. A read now holds back an ending that could start a key until the next read. Key redaction now finds every
   key in the text itself and puts the `[redacted]` markers in after, so a key no longer matches across a marker.
   Output changes only for a key value that holds `[` or `]` or is part of the word "redacted". The stream is cut
-  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output
-  for any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or
-  `]`. A key value learned while the command runs is cut out only inside one piece. The stream and the result also
-  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
+  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output for
+  any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or `]`. A
+  key value learned while the command runs is cut out only inside one piece. The stream and the result also decode a
+  character split between reads (non-ASCII output got U+FFFD there). The result is still redacted after a tool cuts
+  its output, so a key split by that cut (`bash` keeps 15,000 characters at each end) leaves a part in the result,
+  as before. See docs/TOOLS.md "Streamed output".
 - Gate: a heredoc or here-string after a compound command's closing `}`, `)`, `done`, `fi` or `esac`, and text piped
   into a compound, now reach the commands inside it (#161). `{ bash; } <<'EOF'` with `git push origin main` in the
   body was `opaque_exec` (ask) and slipped past `deny: [vcs_push]`; it is now `vcs_push`, as `bash <<'EOF'` is.

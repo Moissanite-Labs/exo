@@ -108,16 +108,20 @@ them live and sessions.sqlite keeps them. The output is read as one UTF-8 stream
 reads stays whole in the stream and in the result. Invalid bytes, and a sequence cut off by the end of the output,
 become U+FFFD. Known key values are cut out of the stream as `[redacted]`, even when a key is split between two
 reads. The end of a read that could be the start of a key waits for the next read or for the end of the command.
-Other output is not held back. Redaction finds the keys in the output itself, longest key first, and skips a match
-that overlaps one already taken. The markers go in only after that, so no key can match across a `[redacted]`
-marker. The stream is cut only where no match that redaction could take crosses the cut, whatever output follows.
-So the stream equals redacting the whole output with the key values known when the command started, for any set
-of them. That holds when one key holds another (a URL with a password in it), when keys overlap in a chain and when
-a key holds `[` or `]`. The held text stays under twice the length of all key values together. Each piece is
-redacted once more on its way to clients. That pass keeps the markers already in the piece, so it does not change
-what the stream redaction did. It cuts out a key value learned after the command started, but only inside one
-piece, so such a key split between two pieces still goes out in two parts. The result is redacted as a whole, with
-every key value known by then, when the call returns.
+Other output is not held back. Redaction finds the keys in the output itself, longest key first. Each key is found
+in the output with the spans of the keys before it blanked out, so no match overlaps one already taken. The markers
+go in only after that, so no key can match across a `[redacted]` marker. The stream is cut only where no match that
+redaction could take crosses the cut, whatever output follows. So the stream equals redacting the whole output with
+the key values known when the command started, for any set of them. That holds when one key holds another (a URL
+with a password in it), when keys overlap in a chain and when a key holds `[` or `]`. The held text stays under
+twice the length of all key values together. Each piece is redacted once more on its way to clients. That pass keeps
+the markers already in the piece, so it does not change what the stream redaction did. It cuts out a key value
+learned after the command started, but only inside one piece, so such a key split between two pieces still goes out
+in two parts. The result is redacted as a whole, with every key value known by then, when the call returns. But a
+tool cuts its output before the result is redacted. `bash` keeps 15,000 characters at each end of a longer output,
+`read_file` cuts a line at 2,000 characters, `grep` cuts a line at 300 and every result is cut at 100,000 ("Result
+cap"). So a known key value that such a cut splits leaves a part in the result. The stream pieces are redacted
+before the cut, so they hold no such part.
 
 ## Execution brokers (D-020)
 
