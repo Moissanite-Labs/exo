@@ -275,18 +275,20 @@ from where something came from, never from what it says about itself.
 
 - **Read the command, not just its name.** The gate used to judge a shell command by the program it named. A
   command that hid its real work (a script, `python -c "..."`, a variable in the program's place) walked past
-  it. Now the gate reads the line and finds the program in each command its parser recognizes, and the
-  command runs without asking only when each one is on a list of trusted everyday programs, such as `ls`,
-  `git status` or `pytest`, and none is hidden. What it marks as unreadable asks, once, for that exact
-  command. This is an *allowlist*: a list of what is allowed, where everything else is not, the safer of the
-  two ways to write such a list. The parser does not read every shell form yet: a command inside a parameter
-  expansion such as `${x:-$(...)}`, inside a single-quoted array subscript such as `printf -v 'a[$(...)]'`, or
-  inside a quoted compound, `-i` or `-n` value given to `declare`, is never found, so it runs without asking
-  (#143, #179, #188). Past four levels of nesting, such as `bash -c` inside `bash -c` or an `ssh` chain, or
-  behind a wrapper such as `setsid`, the line asks, but a denied act only asks too (#137, #153, #160). Options
-  of trusted programs whose value is a command (`tar --to-command`, `rsync -e`) are read as nested commands
-  (#164, for #154). Programs on the list are still trusted by name, and some can run other code: a test runner
-  runs project files. Section 15.4 names these gaps and the changes in review that narrow them.
+  it. Now the gate reads the line and finds the program in each command its parser recognizes, and the command
+  runs without asking only when each one is on a list of trusted everyday programs, such as `ls`, `git status`
+  or `pytest`, and none is hidden. What it marks as unreadable asks, once, for that exact command. This is an
+  *allowlist*: a list of what is allowed, where everything else is not, the safer of the two ways to write such
+  a list. The parser does not read every shell form yet: a command inside a parameter expansion such as
+  `${x:-$(...)}`, or inside a quoted compound, `-i` or `-n` value given to `declare`, is never found, so it runs
+  without asking (#143, #188). A command in a single-quoted array subscript such as `printf -v 'a[$(...)]'` is
+  read since #189 (for #179), and so is the command behind a wrapper such as `setsid` or `flock` since #196 (for
+  #160), so a deny on either holds. Past four levels of nesting, such as `bash -c` inside `bash -c` or an `ssh`
+  chain, the line asks, but a denied act only asks too (#137, #153). A deny entry is checked against every
+  command the gate reads on a line, so a denied push joined to another command by `&&` is denied too (D-075,
+  #126). Options of trusted programs whose value is a command (`tar --to-command`, `rsync -e`) are read as
+  nested commands (#164, for #154). Programs on the list are still trusted by name, and some can run other code:
+  a test runner runs project files. Section 15.4 names these gaps and the changes in review that narrow them.
 - **The store is like a key.** The agent could once rewrite its own policy files and grants with an ordinary
   allowed write. Now a write the gate sees going to the principal store's policies, grants, ledger or keys
   asks you every time, like a password would. The gate resolves symbolic links in an absolute path (#130), but
@@ -294,16 +296,20 @@ from where something came from, never from what it says about itself.
   policies folder is an ordinary write on main. So is a store file opened on a numbered file descriptor and
   written back through `/dev/fd/3` (#217). Section 15.4 names the rest. And a policy file that
   changes during a session can only make the gate stricter until you accept the change.
-- **Who answered is the connection.** Your window and your web page carry a secret that is new each time
-  the core starts. A command the agent runs is refused even with it while it runs under the core, so it
-  cannot answer the agent's own approval cards, whatever it puts in its message. Reading the secret's file by
-  name asks you, but the gate does not see every read: a wildcard or a folder walk that reaches the file, or
-  code the agent wrote that a trusted program runs (a test runner, for example), reads it without asking. A
-  program that gets the secret that way and detaches from the core can still pass (section 12.5). The web
-  page needs its own secret on every data request, so another web site in your browser cannot drive it.
-  That secret travels in the page's link, so the link is a second way in: it sits in the browser's history,
-  and while `exo web` opens the browser the link is on the launcher's command line, where other programs on
-  the machine can read it (#166, fix in review in #177).
+- **Who answered is the connection.** Your window and your web page carry a secret that is new each time the
+  core starts. A command the agent runs is refused even with it while it runs under the core, so it cannot
+  answer the agent's own approval cards, whatever it puts in its message. Both ends of a connection to the
+  core's socket also ask the operating system who is on the other end: the client before it sends the secret,
+  the core before it accepts it (D-060, #175). Reading the secret's file, its folder or a wildcard in that
+  folder asks you (#169, fixed in #185), but the gate does not see every read: a folder walk from above (`grep
+  -r token ~/.exo`), a few other spellings (section 15.4), or code the agent wrote that a trusted program runs
+  (a test runner, for example), reads it without asking. A program that gets the secret that way and detaches
+  from the core can still pass (section 12.5). The web page needs its own secret on every data request, so
+  another web site in your browser cannot drive it. That secret travels in the link `exo web` prints, which sits
+  in the browser's history once opened. When `exo web` opens the browser itself, the launcher's command line,
+  which other programs on the machine can read, holds only a one-time code that works once, within 120 seconds,
+  and a code that comes back after use replaces the secret and warns in the terminal (#166, fixed in #177).
+  Section 12.5 gives the limits.
 - **Who wrote it is recorded.** Every message carries its author, stamped by the way it came in: you, the
   agent, a tool, a peer, a scheduled job. Only messages that came from you count as your words. An agent's
   note that looks like a rule is kept as the agent's note, so it cannot become one of your rulings.
@@ -582,30 +588,44 @@ and uses the same envelopes **[designed, not built]**.
   in the body. A caller is the principal in two cases: the client runs the core inside its own process (the
   terminal window's own core), or the request carries the *principal credential*, a random secret the core
   writes to an owner-only file beside the socket when it starts, replaces on every start and deletes on
-  stop, and the process on the other end is not a descendant of the core. The core asks the operating
-  system which process is connected (`LOCAL_PEERPID` on macOS, `SO_PEERCRED` on Linux) and walks its
-  parents. A tool's shell and anything it starts are descendants of the core, so they are refused even with
-  the credential. Every other caller, on standard input and output or TCP too, is `local`: it may drive
-  turns, but it is never the principal.
+  stop, and the process on the other end is not a descendant of the core. Both ends ask the operating system
+  who is on the other end of that one connection (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` and
+  `LOCAL_PEERPID` on macOS; D-060, #175). The client checks that the process serving the socket is the
+  user's own core, the one that wrote the credential file, before the credential leaves it. The core takes
+  the caller as the principal only when the credential matches, the caller is the same user, the process is
+  still the one that connected, and its parents reach the system's first process without passing the core.
+  A tool's shell and anything it starts are descendants of the core, so they are refused even with the
+  credential. On a system with none of these calls, no socket client is the principal. Every other caller,
+  on standard input and output or TCP too, is `local`: it may drive turns, but it is never the principal.
 - **The limit of that check.** It walks only live parent links. A process running as the same user that
-  obtains the credential and then detaches from the core (its parent exits and the operating system adopts
-  it) is no longer a descendant, and it passes. A read that names the credential file is a credentials act
-  that asks, but the gate judges a read by the path it can see. On main a read that reaches the file through
-  a wildcard or a folder walk, by the shell (`cat run/*`, `grep -r`) or by the built-in grep tool, is an
-  ordinary read and is allowed (#169, fix in review). Code the agent wrote can also read it when a trusted
-  program runs that code, such as a test runner loading a `conftest.py`. The remedy is an operating-system
-  sandbox for tool processes, which Exo does not have yet (section 26, #31). A check that also verifies the
-  connecting process's user and lineage is in review (#175, section 30.1). It narrows the gap, but a tool runs
-  as the same user, so it does not close it.
+  obtains the credential and then detaches from the core (its parent exits before it sends its request,
+  and the operating system adopts it) is no longer a descendant, and it passes (#31). A read that names
+  the credential file, its folder (`run/`) or a wildcard in that folder is a credentials act that asks (#169,
+  fixed in #185), and the built-in grep and glob tools leave secret stores out of a folder walk (#241, fixed
+  in #287). But the gate judges a read by the path it can see, so a shell walk from a folder above
+  (`grep -r token ~/.exo`), a relative name under a tool's working-folder argument, or a wildcard in a folder
+  name above the file is an ordinary read (`docs/GATE.md` lists these). Code the agent wrote can also read
+  it when a trusted program runs that code, such as a test runner loading a `conftest.py`. The remedy is an
+  operating-system sandbox for tool processes, which Exo does not have yet (section 26, #31). The kernel
+  checks narrow the gap, but a tool runs as the same user, so they do not close it.
 - **The web page.** `exo web` makes a second secret per launch, the *page token*, and puts it in the part
   of the link after `#`, which browsers never send to a server. The server refuses any request whose `Host`
   is not a loopback name (`127.0.0.1`, `localhost` or `[::1]` with the port), or a specific address given
-  with `--host` (a wildcard bind adds none). Every `/api` route and both event streams also need the token, and refuse a
-  request that a browser marks as coming from another site. Only the page shell and its static files are
-  served without the token: they are code, not data. This blocks *DNS rebinding*, a trick in which a
-  hostile web site makes your browser talk to a server on your own machine. The token's own weak point is
-  the link that carries it: it stays in the browser's history, and the browser launcher gets it on its
-  command line, which other programs on the machine can read (#166, fix in review in #177).
+  with `--host` (a wildcard bind adds none). Every `/api` route except `POST /api/launch`, and both event
+  streams, also need the token, and refuse a request that a browser marks as coming from another site. The
+  page shell, its static files and the launch route are served without the token. The shell and files are
+  code, not data. The launch route takes a one-time launch code instead, and answers only a loopback peer
+  with a loopback `Host`, a same-host `Origin` and a same-origin `Sec-Fetch-Site`. This blocks *DNS
+  rebinding*, a trick in which a hostile web site makes your browser talk to a server on your own machine.
+  The token's own weak point is the link that carries it. `exo web` prints a `#token=` link, which stays in
+  the browser's history once opened. It opens the browser on a `#code=` link instead, so the launcher's
+  command line, which other programs on the machine can read, holds a code that works once, for at most
+  120 seconds, and never the token (#166, fixed in #177). A code that comes back after it was used replaces
+  the token, ends every other connection to the page's server and prints a warning and the new link in the
+  terminal. With a `--host` that is neither loopback nor a wildcard, no browser is opened. The limits: the
+  hop from the browser to the page's server is not checked by user, so a process that has the token, or
+  wins the race for an unused code within its 120 seconds, is the page. The first redemption is silent, and
+  a browser that never runs the page's script never redeems its code, so then nothing warns.
 - **TCP.** The server refuses to start a TCP listener without a bearer token. The token is 32 random bytes,
   URL-safe encoded, written to a file created exclusively with mode `0600`, or taken from an environment
   variable. Every HTTP request must carry `Authorization: Bearer <token>`. The comparison is constant-time
@@ -879,9 +899,12 @@ The risk hint is information, not a decision. Deciding is the gate's job.
 Shell commands run with a filtered environment. One function does the filtering for the shell, background
 jobs and `code_find`: it removes provider keys, Exo's own keys and socket credentials, cloud and GitHub
 tokens, database addresses, and any variable whose name looks like a secret (ends in `_TOKEN`, `_SECRET`,
-`_PASSWORD`, `_API_KEY` and similar). A seat can name more variables to remove, or one to let through, and
-removal wins. A vendor's command-line tool run as a model provider gets only a minimal environment. The
-filter works on names, so it is a heuristic, not a guarantee.
+`_PASSWORD`, `_API_KEY` and similar). It also drops the hooks a shell acts on when it starts (`BASH_ENV`,
+`ENV`, exported shell functions and a few more), and bash is started without the user's `~/.bashrc` (#135,
+fixed in #168). Hooks for the program loader and for interpreters (`LD_PRELOAD`, `PYTHONPATH`) pass, since
+they have everyday uses. A seat can name more variables to remove, or one to let through, and removal wins.
+A vendor's command-line tool run as a model provider gets only a minimal environment. The filter works on
+names, so it is a heuristic, not a guarantee.
 A shell reports only the exit code of a pipeline's last stage, so `false | head -1` looks like success. Exo
 notices when an earlier stage failed and says so in the result.
 
@@ -963,7 +986,13 @@ is on the gate's list and none is hidden in a program's place. What it marks as 
 category called `opaque_exec` and asks:
 variables or `$( )` in a program's place, script files, interpreters given text to run, `make`, `npm run`,
 `npx`, `xargs`, `find -exec`, `eval`, `source`, functions and aliases, and unknown programs. Where the gate can
-see inside (a `bash -c` with plain text), it classifies the inner command too and keeps the stricter answer.
+see inside (a `bash -c` with plain text, or a heredoc or pipe fed to a shell, also through a group such as
+`{ bash; } <<EOF`, #198 for #161), it classifies the inner command too and keeps the stricter answer.
+A line of several commands is decided by its most severe part, which sets the card. A deny or reserved entry
+is checked against every part, nested ones included, so with pushes denied `git push origin main && rm -rf
+build` is denied, where before it asked about the delete and ran the push once approved (D-075, #126). A
+category setting or a rule still sees only the most severe part, so it can ask where a deny entry would deny
+(#191).
 An "always" on opaque code covers that exact command only. About 70 everyday commands (`pytest`, `git
 status`, `ls`, `rg`, `npm install`, `cargo test` and so on) are pinned by a test to run without asking, so
 the gate stays usable.
@@ -974,17 +1003,21 @@ or an array subscript such as `${a[$(...)]}`) is never classified, and a quoted 
 commands after it on the line. Such a line is read as `echo` and allowed, and a deny does not hold (#143).
 A change in review (#158) reads these words as bash does and classifies every command inside them. A `$( )`
 inside a single-quoted array subscript given to a builtin that takes a variable name (`printf -v 'a[$(...)]'`,
-`unset`, `declare`, `typeset`, `local`, `read`, `test -v`, `wait -p`) is read as plain text too, though bash
-runs it, so it is allowed even under a deny (#179). A change in review (#189) reads those subscripts. The
-same holds for a `$( )` in a quoted compound, `-i` or `-n` value given to `declare`, `typeset` or `local`
-(`declare -a 'b=($(...))'`), which bash expands again (#188, fix in review in #194).
+`unset`, `declare`, `typeset`, `local`, `read`, `test -v`, `wait -p`) was read as plain text too, though bash
+runs it (#179). Since #189 the gate reads those subscripts and classifies each command in them, so
+`printf -v 'a[$(git push origin main)]' x` is a push and a deny on pushes holds. A `$( )` in a quoted
+compound, `-i` or `-n` value given to `declare`, `typeset` or `local` (`declare -a 'b=($(...))'`), which
+bash expands again, is still read as plain text and allowed (#188, fix in review in #194).
 
 Nesting has a depth cap. A `bash -c` inside `bash -c`, and so on, is read four levels deep. Past that the
 rest is opaque, so it asks, but a deny written for the deeper command only asks too (#137). An `ssh` or
 `mosh` chain is read four hops deep, and past that the line is opaque and asks, keeping the first host as
 its target, so a deny on what the deeper hops run only asks too (#153, fixed in #164). A wrapper program
-such as `setsid`, `flock` or `watch` hides the command it runs in the same way: the line is opaque and asks,
-so a deny on the wrapped command only asks (#160). A change in review (#196) reads the wrapped command.
+such as `setsid`, `flock` or `watch` used to hide the command it runs in the same way, so a deny on the
+wrapped command only asked (#160). Since #196 the gate reads the command behind `setsid`, `flock`, `watch`,
+`script -c`, `tmux`, `screen`, `parallel` and similar wrappers, so `setsid git push origin main` is a push
+and a deny on pushes holds. A wrapper form it cannot read (a program from a variable, `su -c`) stays opaque
+and asks.
 
 The known gap is honest. Programs on the list are trusted by name, and some of them can run other code. A
 test runner runs project files (`pytest` runs `conftest.py`), git runs hooks and `npm install` runs package
@@ -996,9 +1029,13 @@ a cluster; a value the gate cannot read asks (#164, for #154). An environment du
 printenv`) is a credentials act, as on its own (#155). Code a trusted program runs from a file stays the gap.
 Reads are judged by the path text too: a read that names a key file is a credentials act, and so is a read by a
 relative name on a line that enters a store folder (`cd ~/.config/gh && cat hosts.yml`, #192, fixed in #201).
-One that reaches the file through a folder walk from above (`grep -r`), or through a wildcard that the gate
-does not match to a known store (`cat run/*`), is an ordinary read, and so is a harmlessly named symbolic
-link to a key file, read by its own name (#209). Only a sandbox closes the rest.
+Exo's own run folder, which holds the principal credential, is a secret store too, so a read of the folder
+or of a wildcard in it (`cat ~/.exo/run/*`, `grep -r token ~/.exo/run`) asks (#169, fixed in #185). The
+built-in `grep` and `glob` tools leave every secret store out of a folder walk and say how many they skipped,
+and `code_find` refuses a folder that holds one (#241, fixed in #287). A shell walk from a folder above
+(`grep -r token ~/.exo`), a relative name under the tool's working-folder argument, or a wildcard in a folder
+name above the file (`~/.exo/principals/*/run/*`) is still an ordinary read, and so is a harmlessly named
+symbolic link to a key file, read by its own name (#209). Only a sandbox closes the rest.
 
 **The store is a credential.** The principal store's policy files, its standing grants, the ledger, the key
 folder, seat files and the core's sockets are on a protected list. Any write there is `store_write`: it asks
@@ -1455,7 +1492,10 @@ another pinned name.
 cut off, because a shortened chain is still a valid chain. So every append also writes the chain's head
 (its last position, count and chain hash) to two small owner-only files, one beside the ledger and one in
 the key folder. Verification fails if the ledger no longer reaches the recorded head, or if the database's
-append-only triggers were missing when it was opened. An append refuses to write past a broken anchor.
+append-only triggers were missing when it was opened. An append refuses to write past a broken anchor. The
+anchors are written after each append is committed, so a writer stopped in between leaves them one event
+behind, never ahead, and an append that cannot bring them up to date refuses to go further. A ledger file
+that is a symbolic link fails the check (#221).
 `exo log verify` and `exo memory verify` run all of these checks.
 
 A process running as the same user can still rewrite the database and both anchors, or edit the registry.
@@ -1989,14 +2029,15 @@ policy file changed mid-session can only tighten until the principal accepts it 
 apply to what the gate classifies, and section 15.4 names the main shell forms it is known to misread and
 store paths it is known to miss; the open gate issues list more.
 
-**Identity from the connection.** Whether a caller is the principal is decided by the transport: a client
-running the core in its own process, or a connection that presents the per-launch principal credential from a
-process that is not a live descendant of the core. The body of a request never decides it. This refuses a tool
+**Identity from the connection.** Whether a caller is the principal is decided by the transport: a client running
+the core in its own process, or a connection that presents the per-launch principal credential from a process that
+is not a live descendant of the core. Both ends of a socket connection ask the operating system who is on the
+other end before the credential moves (D-060, #175). The body of a request never decides it. This refuses a tool
 while it runs under the core. A same-user process that obtains the credential and detaches can still pass, and
 only an operating-system sandbox closes that (section 12.5). Through the protocol, the principal's authority
-covers approvals, learning signals, settings, model choice and accepting a looser policy. The settings file
-itself is an ordinary file that a tool can write without asking until a change in review protects it (section
-30.1). Other local programs may drive turns, and their words are recorded as theirs (sections 12.5 and 20.1).
+covers approvals, learning signals, settings, model choice and accepting a looser policy. The settings file itself
+is an ordinary file that a tool can write without asking until a change in review protects it (section 30.1).
+Other local programs may drive turns, and their words are recorded as theirs (sections 12.5 and 20.1).
 
 **Outbound scrub.** Public posts are swept for internal names, home paths, model ids and internal ids before
 they leave, and held on a hit. Shell commands run without provider keys or token-like variables in their
@@ -2015,12 +2056,14 @@ the repository cannot add their own key. The first pin is trust on first use, on
 checked, and an install made with `uv tool` cannot be verified. It is opt-in because releases are not signed
 yet.
 
-**Transport.** The Unix socket is owner-only. TCP requires a bearer token compared in constant time. TCP has
-no TLS today, so it is for localhost or a trusted network. The web page needs its per-launch page token on
-every `/api` route and both event streams (the page shell and static files are served without it), and accepts
-only loopback host names plus a specific address given with `--host`. Provider keys come from environment variables,
-the operating system's keychain or one owner-only key file, never from chat or from shared config. Peer
-messages are signed by the sending seat and checked for age and replay.
+**Transport.** The Unix socket is owner-only. TCP requires a bearer token compared in constant time. TCP has no
+TLS today, so it is for localhost or a trusted network. The web page needs its per-launch page token on every
+`/api` route except `POST /api/launch`, and on both event streams. The page shell, its static files and the launch
+route are served without it; the launch route trades a one-time launch code (one use, 120 seconds) for the token
+and answers loopback callers only. The page accepts only loopback host names plus a specific address given with
+`--host`. Provider keys come from environment variables, the operating system's keychain or one owner-only key
+file, never from chat or from shared config. Peer messages are signed by the sending seat and checked for age and
+replay.
 
 **Known limits.** Every check above lives in the application. A program running as the person's own user
 can read the same files, and code that the agent wrote earlier can be run by a program trusted by name, such as
@@ -2194,9 +2237,11 @@ What that means in plain terms:
 - The trace records every call and turn, files findings, and reopens or verifies them after a fix, counting
   only turns that could have shown the problem.
 - Provenance is tracked and checked. The upstream report works on a test repository.
-- The security wave: the shell allowlist, the store as a credential, policy that only tightens mid-session,
-  approval identity from the connection, the page token on every web data route, one environment scrub, authors
-  on every message, pinned keys and head anchors, and principal authority over learning and settings.
+- The security wave: the shell allowlist, a deny checked against every command the gate reads on a line, the store
+  as a credential, policy that only tightens mid-session, approval identity from the connection with kernel peer
+  checks on the core's socket, the page token on every web data route and a one-time code for the browser launch,
+  one environment scrub, authors on every message, pinned keys and head anchors, and principal authority over
+  learning and settings.
 - A required execution broker mode, an optional ledger authority with an independent verifier, and an
   opt-in transport for an independent witness.
 - Opt-in spend ceilings that admit model calls against daily and monthly limits.
@@ -2235,7 +2280,7 @@ their next call, and the log verified after a restart.
 | Device footprint audit, device client and idle memory measurement | 27 | 5 |
 | An operating-system sandbox for tool processes (#31) | 15.4, 26 | with Exo OS |
 | The rest of the engine split: public queries (step 1), a protocol adapter (step 2), narrow interfaces in place of the engine's product imports (the rest of step 3) | 11 | next |
-| House taste adaptation: sustained-change rule, value step back, ask or silent mode, `/taste` | 22.7 | in progress (30.1) |
+| House taste adaptation: sustained-change rule, value step back, ask or silent mode, `/taste` | 22.7 | on a branch, no pull request yet (30.1) |
 | Running an independent witness for the ledger authority, and delivering checkpoints to it from Exo OS | 20.2 | deployment work (the transport is built and opt-in) |
 | A composer pane on the web page | 24 | not scheduled |
 | Exo OS | 27 | design only, though the broker seam (15.6) and ledger authority (20.2) are built on the Exo side |
@@ -2256,45 +2301,51 @@ against a pinned trust list (D-073, #122); store paths checked with their symbol
 secret stores (#193, for #184) and before a write is matched against the Exo store (#228, for #224); options of
 trusted programs whose value is a command read as nested commands, as each program's `getopt` reads them, with
 an `ssh` chain past the hop cap asking and an environment dump behind a runner read as credentials (#164, for
-#154, #153 and #155); a relative read on a line that enters a secret-store folder read as credentials (#201,
-for #192); and the indirection floor kept when `opaque_exec` is named at ask or deny (#186, for #178). The
+#154, #153 and #155); a relative read on a line that enters a secret-store folder read as credentials (#201, for
+#192); the indirection floor kept when `opaque_exec` is named at ask or deny (#186, for #178); Unix peer
+authentication, in which both ends of a principal connection ask the kernel who is on the other end before the
+credential moves (D-060, #175, which replaces #109); the browser opened on a one-time launch code rather than the
+page token (#177, for #166); Exo's run folder, which holds the principal credential, read as a secret store (#185,
+for #169); commands in array subscripts of variable names read (#189, for #179); commands behind wrappers such as
+`setsid`, `flock` and `watch` read (#196, for #160); a deny or reserved entry checked against every part of a
+line, while a category setting or a rule still sees only the most severe part (D-075, #126; #191 is open); a
+compound's heredoc, here-string or pipe fed to the commands inside it (#198, for #161); shell startup hooks
+dropped from tool environments (#168, for #135); the built-in `grep` and `glob` tools skipping secret stores and
+`code_find` refusing folders that hold them (#287, for #241); follow-ups to #164's reading of command options and
+environment dumps (#288, for #230 and #232); and head anchors written after each append is committed (#221). The
 core budget is now a ratchet with headroom (D-077).
 
-The items below are being built in separate branches. Some have been tried by the principal on a local test
-build. None is part of Exo yet, and none of the sections above relies on them. They are listed so the reader
-knows where the work is going, and they may change before they land.
+The items below have an open pull request, or an open issue for the permissionless mode. None is part of Exo
+yet, and none of the sections above relies on them. They are listed so the reader knows where the work is going,
+and they may change before they land.
 
-- **Unix peer authentication** (D-060, #175, which replaces #109). A stronger version of the principal check
-  in section 12.5. The client checks that the process serving the socket is the right user before it hands
-  over the credential, and the core checks the connecting process's user as well as its parents, refusing
-  when it cannot tell. A tool runs as the same user, so this narrows the limit of section 12.5 but does not
-  close it.
 - **Protecting the settings file** (D-074, #125). `config.json` names the plugins the core loads (the gate
   among them), the gate's own settings and the models, and the signed-update trust list of section 26 sits
   beside it. Today a tool can rewrite them with an ordinary local write. The change puts both on the store's
   protected list, so a write asks the principal every time, as section 15.4 describes for the store.
 - **Reading parameter expansions** (#158, for #143). The lexer reads a `${...}` word as bash does and
   classifies every command inside it, which closes the `${...}` gap of section 15.4.
-- **Reading array subscripts of variable names** (#189, for #179). The gate reads a `$( )` in a quoted array
-  subscript given to `printf -v`, `read`, `declare`, `unset`, `test -v` or `wait -p` and classifies it, which
-  closes that gap of section 15.4.
-- **Reading commands behind wrappers** (#196, for #160). The gate reads the command that `setsid`, `flock`,
-  `watch`, `script -c` and similar wrappers run, so a deny on it holds.
+- **Reading values given to `declare`** (#194, for #188). The gate reads a `$( )` in a quoted compound, `-i`
+  or `-n` value given to `declare`, `typeset` or `local`, which closes that gap of section 15.4.
 - **A permissionless mode.** A mode, switched on only by the principal, in which the gate allows what it
   would have asked about, so a long task does not stop at every unknown program. Writes to Exo's own records,
   anything touching credentials, and the operator floor (an irreversible public act that touches a third
   party) would still ask (#96).
-- **A tool-round cap you can set.** `/rounds` to show or change how many tool rounds one turn may take before
-  it wraps up, with a proper final call when the cap is reached.
-- **The choice card.** When the agent offers a choice, a card in the terminal that is answered from the
-  keyboard and whose answer reaches the agent as a reply.
-- **The exosphere.** Exo's evolving figure, drawn in the terminal client and on the web chat page, moving
-  with the agent's activity, and a live form of the lattice egg on the site.
-- **House taste, waves 2 and 3.** The sustained-change rule, the value step back, the ask or silent mode and
-  the `/taste` view of section 22.7.
 - **Event activation.** A design in which an event, such as a changed folder or a new message, can start a
   run, the way a schedule does today, with the event's sensitive fields masked until the gate sees them.
-  It is a design only (D-057 to D-059, with the community egg and the live egg on the same pull request).
+  It is a design only (D-057 to D-059, #107, with the community egg and the live egg on the same pull request).
+
+The items below were built on branches on October 13 and have no pull request open yet, so no one has reviewed
+them. They are listed for the same reason, and they may change more than the items above.
+
+- **A tool-round cap you can set** (branch `fix/update-and-rounds`). `/rounds` shows or changes how many tool
+  rounds one turn may take before it wraps up, with a proper final call when the cap is reached.
+- **The choice card** (branch `feat/cli-choice-selector`). When the agent offers a choice, a card in the terminal
+  is answered from the keyboard, and the answer reaches the agent as a reply.
+- **The exosphere** (branches `feat/exosphere-cli` and `feat/exosphere-web`). Exo's evolving figure, drawn in
+  the terminal client and on the web chat page, moving with the agent's activity.
+- **House taste, waves 2 and 3** (branch `feat/taste-waves-2-3`). The sustained-change rule, the value step
+  back, the ask or silent mode and the `/taste` view of section 22.7.
 
 Nothing in this paper reports a benchmark, an accuracy figure or a speed-up for Exo itself, beyond the small
 live checks named above. The numbers quoted for decision models and embedding models come from their vendors'
@@ -2495,8 +2546,9 @@ discipline, the item layer and the event-sourced team state described in section
 - **Opaque command.** A shell command whose real program the gate cannot see, such as a script or a
   variable in the program's place. It asks.
 - **Pack.** The one page about the person that is loaded on every request.
-- **Page token.** A secret made each time `exo web` starts, carried in the page's link, required on every
-  data request from the page (every `/api` route and both event streams).
+- **Page token.** A secret made each time `exo web` starts, carried in the link it prints, required on every
+  data request from the page (every `/api` route except `POST /api/launch`, and both event streams). The
+  browser `exo web` opens gets a one-time launch code instead and trades it for the token at the launch route.
 - **Peer.** Another live agent session on the same machine that can send messages, but never consent.
 - **Pinned key.** A public key recorded once in the key registry. A different key under the same name is
   refused.
