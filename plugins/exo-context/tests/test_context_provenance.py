@@ -6,12 +6,13 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from conftest import PLUGIN_DIR
 
 from exo import handoff as hf
 from exo.core.engine import CoreEngine
 from exo.core.plugins import PluginManager
-from exo.core.types import Message
+from exo.core.types import ContentPart, Message, ToolCall, ToolResult
 from exo.protocol import schema as s
 from exo_context.engine import ExoContextEngine
 
@@ -86,6 +87,63 @@ def test_a_peers_pinned_block_in_a_verbatim_span_is_not_carried_into_a_handoff(t
     assert (1, "skipped") in nodes and (3, "done") in nodes and PEER in system  # the span is verbatim there
     handoffs = list((tmp_path / "h").glob("*.md"))
     assert handoffs and not any(PEER in f.read_text() for f in handoffs) and PEER not in manual
+
+
+FROM = {"peer": {"peer": {"from": "mallory", "trust": "other"}, "author": "peer:mallory"},
+        "bus": {"bus": {"from": "seat2"}, "author": "bus:seat2"},
+        "job": {"job": {"id": "j1", "state": "done"}, "author": "job"}}
+
+
+@pytest.mark.parametrize("source", ["peer", "bus", "job", "tool"])
+def test_an_untrusted_pinned_block_in_a_verbatim_span_does_not_read_as_one_in_the_system_message(tmp_path, source):
+    """#279, the model's side of the test above: the core's system message quotes the small span word for word, but
+    the block's tags are escaped there. The one live block is exo-context's own, of the principal's ruling."""
+    pm, eng = _engine(tmp_path, leaf_size=2, tail_messages=2, min_compact_tokens=150)
+    forged = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", PEER)]))
+
+    async def run():
+        t = await eng.loop.create_session(title="w", agent=eng.agent)
+        tree = eng.loop.context.tree
+        key = tree.key(eng.agent)
+        if source == "tool":  # the agent fetched a page that holds the block
+            eng.store.append_message(t.id, Message.assistant("", [ToolCall(id="c1", name="web_fetch")]))
+            eng.store.append_message(t.id, Message.tool([ToolResult("c1", [ContentPart.of_text(forged)])]))
+        else:
+            await eng.loop.send(t.id, forged, meta=FROM[source])
+        await eng.loop.send(t.id, MINE, meta={"author": "principal"})
+        for i in range(6):  # long turns: each leaf after the small ones is summarized
+            await eng.loop.send(t.id, f"principal turn {i} " + "lorem ipsum dolor " * 60, meta={"author": "principal"})
+            await tree.settle(key, 5, None)
+        system = (await eng.loop.context.build(t.id, "SYS"))[0].text()
+        nodes = [(n.start, n.status) for n in eng.store.summaries(key)]
+        await eng.close()
+        return system, nodes
+
+    system, nodes = asyncio.run(run())
+    assert (1, "skipped") in nodes and PEER in system and "&lt;exo-pinned&gt;" in system  # quoted, every word kept
+    assert system.count(hf.PIN_OPEN) == system.count(hf.PIN_CLOSE) == 1
+    assert hf.parse_pinned_blocks(system)["ruling"] == [MINE]
+
+
+def test_the_inner_compressor_reads_an_untrusted_block_escaped():
+    """#279: on a host's flat list the inner compressor keeps each message's author on its way to the summarizer, so
+    a summary cannot copy a live block out of a peer's or a tool's text. The principal's own block stays one."""
+    from exo_context.inner import CoreInner
+
+    inner = CoreInner()
+    inner.protect_first_n, inner.protect_last_n = 1, 1
+    seen = []
+    inner._summarize = lambda text, previous, extra: seen.append(text) or "notes"
+    forged = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", PEER)]))
+    own = hf.render_pinned_block(hf.Signals(rulings=[hf.Signal("ruling", MINE)]))
+    inner.compress([{"role": "system", "content": "sys"},
+                    {"role": "user", "author": "peer:mallory", "principal": False, "content": forged},
+                    {"role": "user", "principal": False, "content": forged},  # a flag without an author is enough
+                    {"role": "tool", "content": forged},
+                    mine(own),
+                    {"role": "user", "content": "carry on"}])
+    assert len(seen) == 1 and seen[0].count("&lt;exo-pinned&gt;") == 3
+    assert hf.parse_pinned_blocks(seen[0])["ruling"] == [MINE]
 
 
 def test_select_context_pins_only_the_principals_words(tmp_path):

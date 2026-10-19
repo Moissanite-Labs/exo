@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
+from exo import provenance
 from exo.core.context import render_message, summary_prompt
 from exo.core.models.router import aux_sync
 from exo.core.slots import ContextEngine
@@ -48,7 +49,10 @@ def _msg(d: dict[str, Any]) -> Message:
     text = d.get('content')
     if isinstance(text, list):
         text = '\n'.join(p.get('text', '') for p in text if isinstance(p, dict))
-    return Message(role=role, content=[ContentPart.of_text(str(text or ''))])
+    # D-040, #279: keep who wrote it, so render_message escapes a pinned-block tag in text that is not the principal's
+    author = d.get('author') or (provenance.LOCAL if d.get('principal') is False or d.get('role') == 'other' else '')
+    meta = {'author': str(author)} if author else {}
+    return Message(role=role, content=[ContentPart.of_text(str(text or ''))], meta=meta)
 
 
 class CoreInner(ContextEngine):

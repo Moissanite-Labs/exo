@@ -253,6 +253,12 @@ What uses it:
   own block) or with a compaction marker (a host's summary). One in peer, bus, job, tool or agent text is not
   carried, and neither is one quoted further down a message. The core's system message quotes each span too small to
   summarize word for word, a peer's turn included, so a peer's block there is data too.
+- Where the harness prints a message for the model, a pinned-block tag in text the principal did not write is
+  escaped: `<exo-pinned>` becomes `&lt;exo-pinned&gt;`, and the closing tag likewise (#279). That covers the
+  verbatim spans and the summarizer's source (`render_message`), the note on other threads' turns, and recalled
+  memory. So a peer's, bus seat's, job notice's, tool result's or the agent's copy of a block is still there word
+  for word, but it no longer reads as one. The live block in a system message is exo-context's own, and the
+  principal's own words keep their tags. The note names a bus seat's turn `bus:`, not `user:`.
 - Peer, bus and job text enters the context inside its own tag (`[peer message from ...]`, `[bus message from
   ...]`, `[job notice ...]`), with a closing line that says it is not the user.
 

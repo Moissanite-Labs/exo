@@ -23,6 +23,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Protocol
 
+from exo import provenance
 from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.types import ContentPart, Message, Provider
@@ -177,7 +178,9 @@ def is_compaction_summary_message(msg: Any) -> bool:
 
 
 def render_message(msg: Message, limit: int = 4000) -> str:
-    """One message as labeled text for a summarizer or a view placeholder."""
+    """One message as labeled text for a summarizer or a view placeholder. Unless the principal wrote it, its
+    pinned-block tags are escaped (D-040, #279): a peer's, bus seat's, job's or tool's ``<exo-pinned>`` printed here
+    would otherwise sit in the system message as if exo-context had pinned the principal's words."""
     label = {"user": "USER", "assistant": "ASSISTANT", "tool": "TOOL", "system": "SYSTEM"}[msg.role]
     origin = msg.meta.get("origin")
     if origin == "import":
@@ -195,7 +198,8 @@ def render_message(msg: Message, limit: int = 4000) -> str:
     for r in msg.tool_results:
         flag = " error" if r.is_error else ""
         lines.append(f"[result {r.call_id}{flag}] {_cut(r.text(), limit // 2)}")
-    return f"[{label}] " + "\n".join(lines)
+    text = f"[{label}] " + "\n".join(lines)
+    return text if provenance.author_of(msg) == provenance.PRINCIPAL else provenance.defuse_pins(text)
 
 
 # ---------------------------------------------------------------- compressor
@@ -282,7 +286,6 @@ def is_principal(msg: Message) -> bool:
     """A message the principal wrote and a capture store should see (D-032): a live user message in a thread.
     Not peer, bus or job text, context notes, imports, scheduled prompts, delegation briefs, slash commands or
     bare acks. D-040: the test is the author the core stamped at ingress (exo.provenance), not the text."""
-    from exo import provenance
     from exo.capture import is_trivial
 
     if msg.role != "user":
@@ -848,24 +851,26 @@ class AgentContext(TreeContext):
 
         now, lines, cur = _time.time(), [NOTE_HEAD], None
         for e in entries:
-            m = e.message
+            m, out = e.message, []
+            text, author = m.text().strip(), provenance.author_of(m)
             if m.role == "tool":
                 bad = [r for r in m.tool_results if r.is_error]
                 if bad:
-                    lines.append(f"  tool error: {_cut(bad[0].text(), 160)}")
-                continue
-            if e.session != cur:
-                cur = e.session
-                lines.append(f"In thread {self.thread_label(e.session)}, {_ago(e.created, now)}:")
-            text = m.text().strip()
-            if m.role == "user" and text:
-                who = "peer" if m.meta.get("peer") else "job notice" if m.meta.get("job") else "user"
-                lines.append(f"  {who}: {_cut(text, self.note_user_chars)}")
-            elif m.role == "assistant":
-                if text:
-                    lines.append(f"  you: {_cut(text, self.note_reply_chars)}")
-                for c in m.tool_calls:
-                    lines.append(f"  you ran {c.name}({_cut(json.dumps(c.arguments, ensure_ascii=False), 120)})")
+                    out.append(f"  tool error: {_cut(bad[0].text(), 160)}")
+            else:
+                if e.session != cur:
+                    cur = e.session
+                    lines.append(f"In thread {self.thread_label(e.session)}, {_ago(e.created, now)}:")
+                if m.role == "user" and text:  # D-040: by its author; a bus seat's turn read as "user" before
+                    who = {"peer": "peer", "bus": "bus", "job": "job notice"}.get(author.split(":")[0], "user")
+                    out.append(f"  {who}: {_cut(text, self.note_user_chars)}")
+                elif m.role == "assistant":
+                    if text:
+                        out.append(f"  you: {_cut(text, self.note_reply_chars)}")
+                    for c in m.tool_calls:
+                        out.append(f"  you ran {c.name}({_cut(json.dumps(c.arguments, ensure_ascii=False), 120)})")
+            # #279: as in render_message, only the principal's own words keep a pinned-block tag
+            lines += out if author == provenance.PRINCIPAL else [provenance.defuse_pins(x) for x in out]
         return "\n".join(lines) if len(lines) > 1 else ""
 
     def _unseen(self, session: str, agent: str, frontier: int, meta: dict[str, Any]) -> tuple[int | None, str]:
