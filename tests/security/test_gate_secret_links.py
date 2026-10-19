@@ -67,6 +67,21 @@ def test_the_bash_tool_cwd_argument_is_read(tree):
         ("credentials", "ask")
 
 
+def test_a_cwd_argument_moves_only_a_shell(tree):
+    """Only a shell runs in its own `cwd` argument. The file tools take unknown arguments and read from the session's
+    folder, so a `cwd` on them changes nothing, and the session's folder is checked for every tool."""
+    w = str(tree)
+    assert outcome("read_file", {"path": "notes.txt", "cwd": "/"}, cwd=w) == ("credentials", "ask")
+    assert outcome("write_file", {"path": "cfg/authorized_keys", "content": "x", "cwd": "/tmp"}, cwd=w) == \
+        ("credentials", "ask")
+    assert outcome("grep", {"pattern": "x", "path": "cfg", "cwd": "/tmp"}, cwd=w) == ("credentials", "ask")
+    assert outcome("read_file", {"path": "README.md", "cwd": "/"}, cwd=w) == ("read", "allow")
+    # A shell runs in its `cwd`, joined to the session's folder; the session's folder still counts too.
+    assert outcome("bash", {"command": "cat notes.txt", "cwd": w}, cwd="/tmp") == ("credentials", "ask")
+    assert outcome("bash", {"command": "cat work/notes.txt", "cwd": ".."}, cwd=w) == ("credentials", "ask")
+    assert outcome("bash", {"command": "cat notes.txt", "cwd": "/tmp"}, cwd=w) == ("credentials", "ask")
+
+
 def test_a_pub_name_does_not_hide_a_private_key(tree):
     assert outcome("read_file", {"path": "key.pub"}, cwd=str(tree)) == ("credentials", "ask")
     assert outcome("bash", {"command": f"cat {tree / 'key.pub'}"}) == ("credentials", "ask")
@@ -96,22 +111,45 @@ def test_a_folder_named_like_a_store_does_not_make_every_read_ask(tree, tmp_path
 
 
 def test_the_core_passes_the_session_folder_to_tool_hooks(tmp_path):
+    """A hook that takes **kwargs gets `cwd`; an older one that declares neither `cwd` nor **kwargs still runs,
+    since each callback gets only the keywords it declares."""
     from exo.core.engine import CoreEngine
     from exo.core.tools.registry import ToolContext
     from exo.core.types import ToolCall
 
-    seen = []
+    seen, older = [], []
+
+    def old_hook(tool_name, args, session_id, task_id, tool_call_id, turn_id, risk):
+        older.append(tool_name)
+
     models = {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}, "fake": {"rules": []}}
     eng = CoreEngine(tmp_path / "home", models, cwd=str(tmp_path), env={})
     eng.plugins.hooks.register("pre_tool_call", lambda **kw: seen.append(kw), "probe")
+    eng.plugins.hooks.register("pre_tool_call", old_hook, "older")
+    eng.plugins.hooks.register("post_tool_call", old_hook, "older")
     (tmp_path / "work").mkdir()
     (tmp_path / "work" / "a.txt").write_text("hi")
 
     async def go():
         sid = (await eng.loop.create_session(title="t")).id
-        await eng.registry.call(ToolCall("c", "read_file", {"path": "a.txt"}),
-                                ToolContext(cwd=str(tmp_path / "work"), session=sid))
+        result = await eng.registry.call(ToolCall("c", "read_file", {"path": "a.txt"}),
+                                         ToolContext(cwd=str(tmp_path / "work"), session=sid))
         await asyncio.wait_for(eng.close(), 5)
-    asyncio.run(go())
+        return result
+    result = asyncio.run(go())
+    assert not result.is_error and "hi" in result.text()
     assert seen and seen[0]["cwd"] == str(tmp_path / "work")
     assert os.path.isabs(seen[0]["cwd"])
+    assert older == ["read_file", "read_file"]          # before the call and after it
+
+
+def test_hooks_get_only_the_keywords_they_declare():
+    from exo.core.hooks import HookRegistry
+
+    calls = []
+    reg = HookRegistry()
+    reg.register("post_tool_call", lambda tool_name: calls.append(tool_name))
+    reg.register("post_tool_call", lambda **kw: calls.append(sorted(kw)))
+    assert reg.fire("post_tool_call", tool_name="t", args={}, cwd="/w") == []
+    asyncio.run(reg.afire("post_tool_call", tool_name="u", args={}, cwd="/w"))
+    assert calls == ["t", ["args", "cwd", "tool_name"], "u", ["args", "cwd", "tool_name"]]

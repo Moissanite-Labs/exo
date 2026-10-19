@@ -9,7 +9,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Gate (#209, #202, #225, #199, D-038): four spellings of a secret-store path were allowed reads and now ask. A
   harmlessly named link into a store (`notes.txt` to `~/.ssh/id_rsa`, `cfg` to `~/.ssh`, `app.cfg` to a project
   `.env`) is judged by where it leads, resolved from the session's working folder (the core now passes it to tool
-  hooks as `cwd`, and the bash tool's `cwd` argument is joined to it) and from the gate's own; a `.pub` name exempts
+  hooks as `cwd`), from the gate's own and, for a shell tool, from the call's own `cwd` argument; a `cwd` argument on
+  a file tool, which the tool ignores, changes nothing. Each hook callback now gets only the keyword arguments it
+  declares (all of them with `**kwargs`), so a callback without `cwd` keeps working. A `.pub` name exempts
   only a path that resolves to one. `${EXO_HOME:-$HOME/.exo}/keys` and the other `${VAR<op>word}` forms of `HOME`,
   `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the default. An
   expansion inside a store name (`cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc`, `cat ${x}.env`) is read as

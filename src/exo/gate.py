@@ -3040,9 +3040,9 @@ def _brace_budget(fn: _F) -> _F:
 
 @dataclass
 class _Scope:
-    """What the secret-store checks of one classify call share: the folder the tool runs in (#209), the gate's own
-    folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot."""
-    cwd: str = ""
+    """What the secret-store checks of one classify call share: the folders the tool may read from (#209), the gate's
+    own folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot."""
+    cwds: tuple[str, ...] = ()
     here: str | None = None                      # the gate's own folder; "" when it cannot be read
     roots: set[str] | None = None
     real: dict[str, str] = field(default_factory=dict)
@@ -3051,20 +3051,31 @@ class _Scope:
 _scope: contextvars.ContextVar[_Scope | None] = contextvars.ContextVar("exo_gate_scope", default=None)
 
 
+def _runs_shell(tool: str, args: Mapping) -> bool:
+    """A call classify reads as a shell command line. Only these run in their own `cwd` argument; the file tools
+    take unknown arguments and still read from the session's folder."""
+    return tool in ("terminal", "shell", "bash", "run_command", "exec_command") or (
+        tool not in TOOLS and isinstance(args.get("command"), str) and tool.endswith(("terminal", "shell")))
+
+
 def _in_tool_folder(fn: _F) -> _F:
-    """Run ``fn(action, cwd)`` in one _Scope, with the folder the tool runs in set (#209): ``cwd`` (the session's
-    working folder, as the core passes it), joined with the call's own `cwd` argument when it has one (the bash
-    tool's). A relative path is then resolved from there as well as from the gate's own folder."""
+    """Run ``fn(action, cwd)`` in one _Scope that holds the folders the tool may read from (#209): ``cwd``, the
+    session's working folder as the core passes it, always; and for a shell tool, that folder joined with the
+    call's own `cwd` argument. A relative path is resolved from each of them and from the gate's own folder."""
     @functools.wraps(fn)
     def run(action: Any, cwd: str | None = None) -> Any:
-        folder = ""
+        folders: list[str] = []
         try:
-            sub = _args_of(action)[1].get("cwd")
-            parts = [os.path.expanduser(p) for p in (cwd, sub) if isinstance(p, str) and p]
-            folder = os.path.abspath(os.path.join(*parts)) if parts else ""
+            tool, args = _args_of(action)
+            base = os.path.expanduser(cwd) if isinstance(cwd, str) and cwd else ""
+            if base:
+                folders.append(os.path.abspath(base))
+            sub = args.get("cwd")
+            if isinstance(sub, str) and sub and _runs_shell(tool, args):
+                folders.append(os.path.abspath(os.path.join(base, os.path.expanduser(sub))))
         except (TypeError, ValueError, OSError):   # an odd action: classify reports it itself
             pass
-        token = _scope.set(_Scope(cwd=folder))
+        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders))))
         try:
             return fn(action, cwd)
         finally:
@@ -3261,7 +3272,7 @@ def _sensitive_words(words: list[str]) -> bool:
         except OSError:
             scope.here = ""
     roots, memo = scope.roots, scope.real
-    for base in dict.fromkeys(("", scope.cwd)):         # "": the gate's own folder
+    for base in dict.fromkeys(("", *scope.cwds)):       # "": the gate's own folder
         for w in words:
             p = os.path.join(base, w)                    # an absolute word stays as it is
             try:
@@ -3771,8 +3782,7 @@ def classify(action: Any, cwd: str | None = None) -> Classification:
     """Classify one tool call from its name and arguments. Pure; never raises on odd args. ``cwd`` is the folder the
     tool runs in, when the caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
     tool, args = _args_of(action)
-    if tool in ("terminal", "shell", "bash", "run_command", "exec_command") or (
-            tool not in TOOLS and isinstance(args.get("command"), str) and tool.endswith(("terminal", "shell"))):
+    if _runs_shell(tool, args):
         c = classify_shell(str(args.get("command") or args.get("cmd") or ""))
     elif tool == "execute_code":
         c = classify_code(str(args.get("code") or ""))

@@ -247,7 +247,8 @@ core currently fires: `pre_tool_call`, `post_approval_response`, `post_tool_call
 `on_turn_start`, and `on_turn_end`. Callbacks take keyword arguments only. The tool hooks (`pre_tool_call`,
 `post_tool_call`, `transform_tool_result`) get `tool_name`, `args`, `session_id`, `task_id`, `tool_call_id`,
 `turn_id`, `risk` and `cwd`, the session's working folder from which relative paths in `args` resolve (the gate
-reads them there, #209); accept `**kwargs` so a key added later does not break the callback. A failing callback is logged and
+reads them there, #209). Each callback gets only the keywords it declares, or all of them when it takes
+`**kwargs`, so a key added later does not break an older callback. A failing callback is logged and
 skipped (fail open), except that a failing `pre_tool_call` callback blocks tool execution. The core also refuses
 tools when no `pre_tool_call` callback is registered: reinstall the plugins or enable `exo-gate`, then restart.
 To veto a call, `pre_tool_call` returns `{"action": "block", "message": ...}`. To ask the principal, it returns
