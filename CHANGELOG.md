@@ -250,7 +250,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
   closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
   In `apply_patch` a hunk's context lines count toward the two, so a hunk with one context line can still replace a
-  changed `-` line.
+  changed `-` line. The rule counts lines, not exact lines: a changed line plus a lone `}` or the `def` line still
+  matches by similarity. So copy `old_string` from a fresh read (docs/TOOLS.md "Edit matching").
 - First run (user-readiness audit, blocker 1): the installer now copies the skill pack (`skills/` with
   `MANIFEST.json`) into `$EXO_HOME/skills`, so `/intro` loads its `exo-intro` skill and exo-orchestra stops warning
   "no skill manifest" at launch. Each pack skill is a marked folder that a re-run or `exo update` refreshes, and
