@@ -72,12 +72,23 @@ upstream tip with `git verify-commit` (SSH signatures, `ssh-keygen`) against a *
 and continue; otherwise it stops before changing the tree. It applies to checkout and installer installs, not
 `uv tool` installs. The project does not sign releases yet, so leave it off until it does.
 
+Only SSH signatures count. An OpenPGP or X.509 signature is refused whatever your gpg keyring holds, and so is
+GitHub's signature on a merge made in its web interface. If `config.json` exists but cannot be read (invalid
+JSON, or written by a newer Exo), or `update.require_signed` is not `true` or `false`, `exo update` refuses until
+you fix it. A missing `config.json` means the check is off. `exo update --dry-run` says whether the check is on.
+
 The pin is separate from the repo on purpose: a new commit that edits `trust/allowed_signers` cannot make
 itself trusted. You create it once with `exo update --pin-trust`, which copies `trust/allowed_signers` from
 `HEAD` (the code you already run) and prints it; read it before relying on it. After a key rotation, the new
-list arrives in a signed commit that the old pin still verifies; fetch, review `git show @{u}:trust/allowed_signers`, and
-run `exo update --pin-trust @{u}`. Until then, updates signed only by the new key are refused. Tag
-signatures are not consulted: the tip commit must be signed.
+list arrives in a commit signed by a key you already pinned. Fetch, review `git show @{u}:trust/allowed_signers`,
+and run `exo update --pin-trust @{u}`. Until then, updates signed only by the new key are refused. Once a pin
+exists, `--pin-trust REV` finds the commit that last changed the list in REV's first-parent history (the merge,
+if the list came in through one) and takes the list only if that commit verifies against the current pin.
+Otherwise it refuses and the pin stays as it was. A list that is not UTF-8 is refused too. Pinning the list you
+already have always works. If a pinned key is lost or compromised, edit `$EXO_HOME/update/allowed_signers` by
+hand. That is the only override. The check cannot tell an old list from a new one: a list that a pinned key
+signed earlier can be pinned again, so read what `--pin-trust` prints. Tag signatures are not consulted: the tip
+commit must be signed.
 
 ## What it does
 
