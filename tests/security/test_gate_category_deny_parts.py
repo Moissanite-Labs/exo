@@ -99,3 +99,39 @@ def test_opaque_exec_deny_reaches_a_wrapper_part():
     assert c.category == "vcs_push"
     assert decide(c, category_deny("opaque_exec")).outcome == "deny"
     assert decide(c, rule_deny("opaque_exec")).outcome == "deny"
+
+
+# #303 (#207, #240) reads the program a coproc name runs and the shell text fed to `ssh host`. The line then takes the
+# category of what runs, and the old dominant reading stays a part, so a category line or rule that denies it still
+# denies the line.
+@pytest.mark.parametrize("line", [
+    "coproc rm >/dev/null { -rf x; }",
+    "coproc 2>/dev/null rm { -rf x; }",
+    "coproc rm <<<x while true; do :; done",
+])
+def test_a_coproc_that_runs_its_name_is_denied_under_an_opaque_exec_deny(line):
+    c = classify(sh(line))
+    assert c.category == "delete", c
+    assert decide(c, category_deny("opaque_exec")).outcome == "deny"
+    assert decide(c, rule_deny("opaque_exec")).outcome == "deny"
+
+
+HOST_RULE = normalize_policies({"gates": {"rules": [{"match": {"target": "prod-db"}, "decision": "deny",
+                                                      "reason": "no prod-db"}]}})
+
+
+@pytest.mark.parametrize("line", [
+    "echo 'rm -rf /data' | ssh prod-db",
+    "ssh prod-db <<'EOF'\nrm -rf /data\nEOF",
+    "ssh prod-db <<< 'rm -rf /data'",
+    "ssh prod-db -T <<< 'rm -rf /data'",
+    "ssh prod-db '' <<< 'rm -rf /data'",
+    "ssh prod-db -- <<< 'ls'",
+    "generate | ssh prod-db",
+])
+def test_a_shell_fed_to_ssh_is_denied_under_a_shell_or_host_deny(line):
+    c = classify(sh(line))
+    assert c.category != "shell", c                         # what runs on the host sets the line's category
+    assert decide(c, category_deny("shell")).outcome == "deny"
+    d = decide(c, HOST_RULE)
+    assert d.outcome == "deny" and "no prod-db" in d.reason, d

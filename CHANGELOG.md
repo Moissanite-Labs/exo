@@ -9,7 +9,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Gate policy (#191, #211, #208). A `categories: {X: deny}` line or a rule with `decision: deny` now denies a line
   when any part of it is X, as a `deny:` entry has since D-075: `echo $(git push origin main) > /tmp/f` was `log`
   under `categories: {local_write: deny}`, and a wrapped or fed-shell line asked under `categories: {opaque_exec:
-  deny}`. Only a deny reaches the parts, and the reason names the part (D-075 amendment). A changed
+  deny}`, as do #303's coproc and ssh-fed lines under an `opaque_exec`, `shell` or host deny. Only a deny reaches the parts, and the reason names the part (D-075 amendment). A changed
   `approvals.yaml` now narrows who may answer at once and shortens new grants (`gate.strictest_approvers`, the
   shorter `always` value), where a seat the principal had just removed could still approve and `days: 0` still
   wrote a 7-day grant; a wider file still waits for `/gate accept` (D-038 amendment). A post whose body the gate
