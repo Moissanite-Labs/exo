@@ -304,3 +304,9 @@ def test_short_desc_cuts_at_a_clause_or_a_word():
     long = "summarize now what is eligible in this agent's memory then show tokens before and after it ran"
     out = cm.short_desc(long)
     assert out.endswith("\u2026") and len(out) <= 65 and " " not in out[-3:] and long.startswith(out[:-1])
+
+
+def test_failed_call_tip_does_not_assume_a_key():
+    """A keyless local server or a CLI login fails too: the tip names all three, not only keys."""
+    tip = guide()[0].pick(cm.State(provider_error=True))
+    assert tip.text == "that model call failed: /providers checks keys, servers and logins"

@@ -6,7 +6,11 @@ notes are in `research/LEARNING-LOOP.md`. This page is the short reference.
 ## Where learning needs a store
 
 Learning writes to your principal store and its signed ledger. The store comes from config `learn.store`, else the
-`exo-memory` plugin's store. With neither, learning is off and says so once as a notice.
+`exo-memory` plugin's store (its config, then `EXO_STORE` or `EXO_PRINCIPAL`), else the active principal in
+`$EXO_HOME/config.json`. That last one is what `exo init` and the installer set, and exo-memory falls back to it the
+same way, so memory and learning use one store. With none of these, learning is off and says so once. With no
+principal at all, that notice is logged at info level and not printed, since exo-memory already shows one quiet
+notice in the client. It names `exo init <id>`.
 
 ## Signals in
 

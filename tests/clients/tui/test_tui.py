@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import time
+from pathlib import Path
 
 from exo.core.approvals import Pending
 from exo.core.engine import CoreEngine
@@ -33,6 +35,12 @@ class FakeServerClient(LocalClient):
             self.seen.append(body)
             return s.Response(id="x", result={})
         return await super().send(body)
+
+
+def install_intro_skill(tmp_path) -> None:
+    """The installed layout (scripts/install.sh): the pack's exo-intro skill in the engine's $EXO_HOME/skills."""
+    pack = Path(__file__).resolve().parents[3] / "skills"
+    shutil.copytree(pack / "exo-intro", tmp_path / "home" / "skills" / "exo-intro", dirs_exist_ok=True)
 
 
 def make_engine(tmp_path) -> CoreEngine:

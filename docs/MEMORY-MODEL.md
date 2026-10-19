@@ -70,10 +70,11 @@ built from it and their results (the core checks `SessionStore.private`, which w
 
 Each model call is built fresh, in this order:
 
-1. **System message** (stable prefix): system prompt, memory provider block, then the agent's tree view
-   (all threads, oldest first). The view ends at the last summarized node: small spans after it (too
-   small to summarize, or a summary still running) stay in the recent part below. So the system message is
-   byte-identical for every thread of the agent until a real summary lands.
+1. **System message** (stable prefix): system prompt, memory provider block, the thread's working folder,
+   then the agent's tree view (all threads, oldest first). The view ends at the last summarized node: small
+   spans after it (too small to summarize, or a summary still running) stay in the recent part below. So the
+   system message is byte-identical for every thread of the agent in the same folder until a real summary
+   lands.
 2. **This thread's verbatim tail**: every message of the thread after the tree frontier, and at least its last
    `tail_messages`, widened back so it never starts with an orphan tool result. Context notes stored in the
    thread are part of it. A fork's copies count at their original's log position, so a fork opens with its
@@ -190,11 +191,13 @@ content is the same once the summaries finish. Tests: `tests/core/test_turn_sett
   another thread stored keeps the undone text (that thread's model has seen it, and the note is replayed byte
   for byte), and so does a fork. A summary of a deleted node that was already running when undo ran is not saved
   afterwards. The next turn rebuilds the summary from the entries that are left.
-- **Failures.** A node whose summary fails is retried with backoff (30 s, then 60 s, ...; `retry_backoff`), at most
-  `max_attempts` (3) times in all; the count is stored on the node (`summaries.attempts`). During backoff the span
-  stays verbatim and the turn does not wait for it. After the last try the node is marked `skipped`: the span stays
-  verbatim for good, and one `harness.error` event (`where` = `summary`) records it, so it shows in `exo trace` and
-  findings once, not every turn.
+- **Failures.** A node whose summary fails is retried with backoff (30 s, then 60 s, ... up to five minutes, set by
+  `retry_backoff`). During backoff the span stays verbatim and the turn does not wait for it. A temporary failure
+  keeps its turn on later upkeep: an outage, or an error that says when its route reopens (`retry_after`), such as
+  a refused key or a local server that is down. Any other failure is tried at most `max_attempts` (3) times in all.
+  The count is stored on the node (`summaries.attempts`). After the last try the node is marked `skipped`: the span
+  stays verbatim for good, and one `harness.error` event (`where` = `summary`) records it, so it shows in `exo trace`
+  and findings once, not every turn.
 
 Undo also tells the context plugin. The core calls `on_session_switch(session, rewound=True, messages=,
 summaries=)` with every message left in the thread and the ids of the summary nodes still stored for its tree
