@@ -11,6 +11,7 @@ PID-reuse fingerprint guard, snapshots and the Windows path.
 
 from __future__ import annotations
 
+import codecs
 import contextlib
 import os
 import shutil
@@ -53,13 +54,51 @@ class _Capped:
 
 
 def _drain(proc: subprocess.Popen, out: _Capped, emit: Callable[[str], None] | None) -> None:
+    """Read the output as one UTF-8 stream, so a character split across reads stays whole. ``emit`` gets it with
+    known key values cut out across reads too: a tail that could start a key waits for the next read or the end."""
+    from exo.core.models.keys import known_secret_values, redact_secrets
     assert proc.stdout is not None
-    for chunk in iter(lambda: proc.stdout.read1(65536), b""):  # type: ignore[union-attr]
-        text = chunk.decode("utf-8", errors="replace")
+    vals: list[str] = []
+    with contextlib.suppress(Exception):  # redaction never stops the drain: an unread pipe would stall the command
+        vals = known_secret_values() if emit else []
+    dec, held, eof = codecs.getincrementaldecoder("utf-8")("replace"), "", False
+    while not eof:
+        chunk = proc.stdout.read1(65536)  # type: ignore[union-attr]
+        eof = not chunk
+        text = dec.decode(chunk, final=eof)
         out.add(text)
-        if emit:
-            with contextlib.suppress(Exception):
-                emit(text)
+        if emit:  # cut the raw text, then redact what goes out: a key inside a longer key is not cut out first
+            raw = held + text
+            cut = len(raw) if eof else _safe_cut(raw, vals)
+            held, text = raw[cut:], redact_secrets(raw[:cut], vals)
+            if text:
+                with contextlib.suppress(Exception):
+                    emit(text)
+
+
+def _safe_cut(raw: str, vals: list[str]) -> int:
+    """Where ``raw`` may split so the stream equals whole-output redaction, whatever output follows.
+
+    The stream and the whole output take their spans from the same ``secret_spans``, which finds each value's
+    matches in the output itself, never across a ``[redacted]`` marker. When no span of the whole output crosses
+    the cut, the text before the cut gives the same spans alone, and so does the text after it. So the cut must be
+    a point that no span can cross, whatever output follows.
+
+    The cut starts before a tail that could start a key, so every match that later output adds starts at or after
+    it. Then ``secret_spans`` runs with the cut as ``end``, value by value in redaction order. Before each value,
+    the earlier values' spans in the whole output that start before the cut are the ones taken here, and they stop
+    at or before it. So a match that stops at or before the cut is taken or skipped as in the whole output. A
+    value's first match that stops after the cut moves the cut back to its start, if it starts before it, and the
+    value's later matches start after that. That keeps the rule true for the next value. Each value moves the cut at
+    most once, by less than its length, so the held text stays under twice the length of all values together."""
+    from exo.core.models.keys import secret_spans
+    return secret_spans(raw, vals, len(raw) - _key_start(raw, vals))[1]
+
+
+def _key_start(text: str, vals: list[str]) -> int:
+    """Length of the longest tail of ``text`` that is the start of a value in ``vals``."""
+    return max((len(text) - i for v in vals for i in range(max(len(text) - len(v) + 1, 0), len(text))
+                if v.startswith(text[i:])), default=0)
 
 
 def _wait_for_group_exit(proc: subprocess.Popen, pgid: int, timeout: float) -> bool:

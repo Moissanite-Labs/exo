@@ -53,7 +53,11 @@ Everything lives in the principal store. Nothing is written to the Exo home exce
 
 The Exo plugin loader finds this folder under `plugins/`. Select it with `memory_provider: exo-memory` in `$EXO_HOME/config.json` and set `EXO_PRINCIPAL` (or `plugin_config`).
 
-A store must exist first: `exo init <id>`.
+A store must exist first: `exo init <id>`. It also sets the active principal in `$EXO_HOME/config.json`, which the
+plugin falls back to when nothing above names one. With no principal at all, memory is off and that is a setup state,
+not a fault: `initialize` raises `exo.core.slots.NotConfigured`, the core shows one quiet notice naming
+`exo init <id>` and files no finding, and the plugin offers no tools. It turns on at the next start after the store
+exists.
 
 ## Config
 

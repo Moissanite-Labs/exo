@@ -54,7 +54,9 @@ but has not run it against models yet, and says so.
 ### 1.1 How current Exo's copy is
 
 Exo vendored the library in phase 4 (`src/exo/protocols/sym2p/`, NOTICE pins commit `2d93ed6`). That commit
-is still upstream `main` today, and the registries match byte for byte. So the copy is current. It holds
+is still upstream `main` today, and the registries match byte for byte. So the copy is current. One local
+change: the grammar patterns end in `\Z`, not `$`, because `$` also matches before a final newline and let an
+id, ref or hash such as `"builder\n"` pass. It holds
 the normative 1.0 JSON profile (`v1.py`) and the 2.0 draft dense lines with the v2.1 reasoning extension and
 the -rcp edition (`v2.py`). Before this work, only the bus used it, as an optional message body
 (`exo.bus.client.post_sym2p`, `exo-bus` plugin). Nothing in the standalone core used it.

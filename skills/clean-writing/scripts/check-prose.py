@@ -149,8 +149,18 @@ def load_policy(policy_path=None, names_path=None):
         names.extend(_read_names(names_path))
         loaded.append(str(names_path))
     if names:
-        IDENTIFIER_PATTERNS.append(r"\b(" + "|".join(re.escape(n) for n in names) + r")\b")
+        IDENTIFIER_PATTERNS.append(names_pattern(names))
     return loaded
+
+
+def names_pattern(names):
+    """Whole names: a word edge must not touch another word character, a non-word edge
+    ('.agents', '@bot', 'seat.') needs no boundary. Longest first, so the full name is reported."""
+    def one(n):
+        return ((r"(?<!\w)" if re.match(r"\w", n) else "") + re.escape(n)
+                + (r"(?!\w)" if re.search(r"\w\Z", n) else ""))
+    return "|".join(one(n) for n in sorted(names, key=len, reverse=True))
+
 
 # A GitHub handle mention on a thread owned by that same account is a self-ping
 # (see clean-writing: "Never @-mention the thread owner"). Flag every mention as

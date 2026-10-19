@@ -22,7 +22,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional
 
-from exo.core.slots import MemoryProvider, RecallStatus
+from exo.core.slots import MemoryProvider, NotConfigured, RecallStatus
 
 try:
     from exo.capture import (CORRECTION, clip, extract_signals, is_trivial, normalize,
@@ -39,6 +39,8 @@ from . import config as C
 logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "exo-memory"
+# No principal at all is a setup step not taken yet (D-004: the onboarding flow builds the store), not a fault.
+OFF_REASON = "memory is off: no principal store yet. Run exo init <id> to make one; memory turns on at the next start."
 NOTE_KINDS = ("note", "question", "action", "artifact")
 # D-040: kinds in the principal's voice. The agent's exo_note cannot write them: a note claiming one is kept as an
 # agent note (kind note, type agent_note), which consolidation and learning never read as the principal.
@@ -226,6 +228,7 @@ class ExoMemoryProvider(MemoryProvider):
         self._summarizer = summarizer
         self._states: dict[str, _State] = {}
         self._lock = threading.RLock()
+        self._off = ""  # set when initialize found no principal: memory is off, so it offers no tools
 
     # -- helpers -----------------------------------------------------------------
 
@@ -280,7 +283,7 @@ class ExoMemoryProvider(MemoryProvider):
         except ValueError as exc:
             return str(exc)
         if root is None:
-            return "no principal configured: set EXO_PRINCIPAL (or EXO_STORE), or save a config with exo-memory"
+            return OFF_REASON
         if not (root / "PRINCIPAL.md").is_file() and not (root / "nodes").is_dir():
             return f"no principal store at {root}: run exo init <id>"
         return ""
@@ -321,7 +324,8 @@ class ExoMemoryProvider(MemoryProvider):
                 cfg = self._cfg(home)
                 root = C.store_root(cfg)
                 if root is None:
-                    raise RuntimeError(self.unavailable_reason() or "exo-memory: no principal store configured")
+                    self._off = OFF_REASON
+                    raise NotConfigured(OFF_REASON)  # one quiet notice from the core, no harness error
                 agent = C.agent_id(cfg, kwargs.get("agent_identity"))
                 rkey = str(root.expanduser().resolve())
                 core_log = kwargs.get("agent_log")
@@ -713,6 +717,8 @@ class ExoMemoryProvider(MemoryProvider):
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         tools = [RECALL_SCHEMA, GET_SCHEMA, NOTE_SCHEMA, SHB_SCHEMA]
         st = self._state()
+        if st is None and self._off:
+            return []  # off until set up: a tool the model could call would only fail
         if st is not None and st.core_log is not None:
             return tools  # the host's memory_zoom opens the one log
         if st is None or st.rt.episodic is not None:

@@ -11,8 +11,9 @@ from typing import Any
 from .runtime import Runtime, load_settings, resolve_store
 
 logger = logging.getLogger("exo.learn")
-OFF_NOTICE = ("learning is off: no principal store is set. Set config learn.store, or set up the exo-memory "
-              "plugin with a store.")
+# No principal at all is a setup step not taken yet, and exo-memory already says so in the client: logged at info,
+# so it is not printed over the terminal before the client draws.
+OFF_NOTICE = "learning is off: no principal store yet. Run exo init <id> to make one; learning turns on at the next start."
 
 
 class Learner:
@@ -35,11 +36,11 @@ class Learner:
 
     # -- state ---------------------------------------------------------------
 
-    def notice(self, text: str) -> None:
+    def notice(self, text: str, level: int = logging.WARNING) -> None:
         """Say something once (the log, and `self.notices` for a client to show)."""
         if text not in self.notices:
             self.notices.append(text)
-            logger.warning(text)
+            logger.log(level, text)
 
     @property
     def runtime(self) -> Runtime | None:
@@ -50,7 +51,7 @@ class Learner:
                 return None
             root = resolve_store(self.engine, self.env)
             if root is None:
-                self.notice(OFF_NOTICE)
+                self.notice(OFF_NOTICE, logging.INFO)
                 return None
             if not (Path(root) / "nodes").is_dir():
                 self.notice(f"learning is off: no principal store at {root} (run exo init).")

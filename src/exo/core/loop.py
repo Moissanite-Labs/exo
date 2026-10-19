@@ -37,6 +37,9 @@ from exo.core.types import ContentPart, Message, Provider, ToolCall, ToolResult,
 from exo.protocol import schema as ev
 
 ToolRunner = Callable[[ToolCall, dict[str, Any]], "ToolResult | Awaitable[ToolResult]"]
+# The session's real cwd, as the authoritative value: a CLI route's own environment note names its private folder.
+WORKDIR_LINE = ("Your working directory is {cwd}. Tools run there and relative paths resolve against it; "
+                "this overrides any other working directory an environment note names.")
 
 
 @dataclass
@@ -285,14 +288,17 @@ class Loop:
             return False
         return "recall" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
-    async def base_system(self) -> str:
-        """The stable part of the system text: system prompt and the memory provider's block (no recall)."""
+    async def base_system(self, session: str | None = None) -> str:
+        """The stable part of the system text: system prompt, memory block (no recall) and the session's cwd line."""
         extra = self.system_extra() if self.system_extra else ""  # last: never moves what comes before it (D-030)
-        return "\n\n".join(p for p in (self.system_prompt, await self._memory("system_prompt_block") or "", extra) if p)
+        info = self.store.get_session(session) if session else None
+        where = WORKDIR_LINE.format(cwd=info.cwd) if info and info.cwd else ""
+        parts = (self.system_prompt, await self._memory("system_prompt_block") or "", where, extra)
+        return "\n\n".join(p for p in parts if p)
 
     async def _system(self, session: str, query: str) -> tuple[str, str]:
         """(system text, recall). Recall is folded into the system text unless the context engine takes it."""
-        base = await self.base_system()
+        base = await self.base_system(session)
         parts = [base]
         recall = await self._memory("prefetch", query, session_id=session) or ""
         if recall and not self._takes_recall():

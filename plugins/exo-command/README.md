@@ -26,8 +26,8 @@ exo serve                      # the core, in one terminal
 exo web                        # the web client: prints http://127.0.0.1:7342/#token=... and opens the page
 ```
 
-The page needs the token in that link for every request (D-039): `exo web` prints the link and opens the page in
-your browser with a one-time code that the page trades for the token (#166), so the token never sits in the browser
+Every `/api/` route except `POST /api/launch` needs the token in that link (D-039). `POST /api/launch` is served without it, because it trades a one-time launch code for the token (#177), and the page shell (`/` and `/static/`) is served without it, behind the Host check only.
+`exo web` prints the link and opens the page in your browser with a one-time code that the page trades for the token (#166), so the token never sits in the browser
 launcher's argv; open the latest complete printed link yourself after `--no-open`, a restart or a
 non-loopback `--host` (no browser is opened then).
 The bare URL has no token. Each web launch creates a new token; old links expire. The tab keeps it in
@@ -38,8 +38,9 @@ calls `exo_command.__main__.main()`; arguments after `web` go to it. `python -m 
 with `PYTHONPATH=plugins/exo-command`.
 
 Options: `--socket PATH` (default `$EXO_HOME/run/exod.sock`), `--url URL --token-file FILE` for a core
-on TCP, `--host`, `--port`. It uses the standard library only. `exo web` will call
-XX
+on TCP, `--host`, `--port`. It uses the standard library only. A second `exo web` on a port in use says whether
+Exo's web client already runs there (its open page and printed link still work, Ctrl+C in its terminal stops it)
+or another program holds it, and suggests `--port`.
 
 The slash command `/exo-command` prints a short text digest of the same panels (it connects to the
 running core).
@@ -76,6 +77,8 @@ and nothing loaded from another site. It follows the system light or dark settin
   rendered as Markdown (headings, lists, code, quotes and pipe tables, built as DOM nodes, never as HTML).
   Each answer has accept, edit (with a text box) and reject, which send `feedback.send`. Enter sends; while
   a turn runs it steers.
+  A context note from other threads (`meta.note`, D-028) is for the model and is not drawn, as in the terminal
+  client.
 - **Panels:** `ui.panel` events open panels beside the chat. Kinds: markdown, diff, table, tasks,
   approval, taste, choice, file, chart. A markdown panel uses the same renderer as a completed reply, so it
   keeps its line breaks. A panel whose data is missing or odd shows its `text`. The page sends `ui.respond`

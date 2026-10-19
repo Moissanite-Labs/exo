@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 import pytest
 
@@ -112,6 +113,82 @@ def test_harness_errors_are_persisted_and_scrubbed(tmp_path):
     assert "sk-abc" not in text and "abcdef123456" not in text and "[redacted]" in text
     assert "RuntimeError" in errs[0].traceback
     assert any(f["signature"].startswith("harness.error:hook on_turn_start") for f in eng.findings.list())
+
+
+def test_a_setup_state_is_not_a_harness_error(tmp_path, caplog):
+    """A NotConfigured that reaches trace.report (from a hook, or a direct call) files nothing: no harness.error event,
+    no finding and no notice. The hook runner still logs its own warning with the traceback, a real fault beside it is
+    still an event and a finding, and a tool handler that raises it is still a tool error. Only the memory provider's
+    initialize turns it into a notice (docs/TRACE.md; that path is tested in
+    plugins/exo-memory/tests/test_exo_memory_no_principal.py)."""
+    from exo.core.plugins import PluginManager, ToolEntry
+    from exo.core.slots import NotConfigured
+    from exo.core.types import ToolSpec
+
+    def off(*args, **kw):  # a hook and a tool handler of a plugin that is off until set up
+        raise NotConfigured("the relay is off: no relay address is set yet")
+
+    pm = PluginManager(config={})
+    pm.tools["relay_send"] = ToolEntry(ToolSpec(name="relay_send", description="send", parameters={"type": "object"}),
+                                       off, plugin="relay")
+    eng = engine(tmp_path, [{"match": "hi", "steps": [{"tool": "relay_send", "args": {}}, "done"]}], plugins=pm)
+
+    def bad_hook(**kw):
+        raise KeyError("real fault")
+
+    eng.plugins.hooks.register("on_turn_start", off, plugin="setup")
+    eng.plugins.hooks.register("on_turn_start", bad_hook, plugin="broken")
+    assert issubclass(NotConfigured, RuntimeError)  # hosts that catch RuntimeError keep working
+
+    async def go():
+        info = await eng.loop.create_session(title="t")
+        await eng.handle(s.Command.of(s.TurnSend(session=info.id, text="hi")), eng.hub)
+        await asyncio.sleep(0.2)
+        trace.report("direct caller", NotConfigured("off until set up"), info.id)
+        return info.id
+
+    caplog.set_level(logging.INFO, logger="exo")
+    sid = run(go())
+    errs = [e.body for e in types(eng, sid) if isinstance(e.body, s.HarnessError)]
+    assert [e.where for e in errs] == ["hook on_turn_start (broken)"]
+    assert not [e for e in types(eng, sid) if isinstance(e.body, s.Notice) and "relay" in e.body.text]
+    assert [d.is_error for d in (e.body for e in types(eng, sid)) if isinstance(d, s.ToolCompleted)] == [True]
+    sigs = [f["signature"] for f in eng.findings.list()]
+    harness = [x for x in sigs if x.startswith("harness.error")]
+    assert harness and all("(broken)" in x for x in harness), sigs
+    assert [x for x in sigs if x.startswith("tool.error:relay_send") and "notconfigured" in x], sigs
+    logged = [(r.levelno, r.getMessage(), bool(r.exc_info)) for r in caplog.records]
+    assert (logging.WARNING, "hook on_turn_start from setup failed", True) in logged, logged  # the hook runner's own
+    assert (logging.INFO, "direct caller is off until set up: off until set up", False) in logged, logged
+    assert not [m for lv, m, _ in logged if lv >= logging.WARNING and m.startswith("harness error in hook on_turn_start "
+                                                                                   "(setup)")], logged
+
+
+def test_a_setup_state_in_a_tool_approval_hook_still_blocks(tmp_path):
+    """A pre_tool_call hook that raises NotConfigured fails like any approval hook (fail closed): the call is blocked,
+    with a tool.error finding for the block and no harness.error event or finding (docs/TRACE.md)."""
+    from exo.core.slots import NotConfigured
+
+    (tmp_path / "a.txt").write_text("x")
+    eng = engine(tmp_path, [{"match": "go", "steps": [{"tool": "read_file", "args": {"path": "a.txt"}}, "done"]}])
+
+    def off(**kw):
+        raise NotConfigured("the audit hook is off: no audit sink is set yet")
+
+    eng.plugins.hooks.register("pre_tool_call", off, plugin="audit")
+
+    async def go():
+        info = await eng.loop.create_session(title="t")
+        await eng.loop.send(info.id, "go")
+        return info.id
+
+    sid = run(go())
+    done = [e.body for e in types(eng, sid) if isinstance(e.body, s.ToolCompleted)]
+    assert [d.is_error for d in done] == [True] and "Blocked: Tool approval hook failed" in done[0].result.text()
+    assert not [e for e in types(eng, sid) if isinstance(e.body, s.HarnessError)]
+    sigs = [f["signature"] for f in eng.findings.list()]
+    assert [x for x in sigs if x.startswith("tool.error:read_file:blocked")], sigs
+    assert not [x for x in sigs if x.startswith("harness.error")], sigs
 
 
 def test_scrub_removes_secrets_and_cuts():
