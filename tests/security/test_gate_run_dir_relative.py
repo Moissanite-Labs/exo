@@ -42,6 +42,7 @@ ASK = [
     "cd {h}/run/jobs && ls ${{PWD%/*}}",
     "cd {h}/run/jobs && cd .. && ls",
     "cd {h}/run/jobs/a && cd .. && ls ..",
+    "cd {h}/run/jobs/a && cd .. && cd .. && ls",    # two levels up, from one `..` target
     "cd {h} && cd run/jobs && grep -r . ..",
     "cd {h} && ls run",
     "cd {h} && cd run && ls",
