@@ -270,6 +270,14 @@ def test_rerun_warns_when_it_replaces_an_edited_pack_skill(box):
     assert (skills / "exo-intro" / "SKILL.md").read_text().endswith("## New fact\n")
     r = run(box, *args)
     assert r.returncode == 0 and "was edited" not in r.stderr
+    with open(src / "skills" / "council" / "SKILL.md", "a") as f:  # the pack changes and you copy it over by hand
+        f.write("\n## Synced\n")
+    shutil.copy2(src / "skills" / "council" / "SKILL.md", skills / "council" / "SKILL.md")
+    assert run(box, *args).returncode == 0  # up to date: the marker takes the new SKILL.md
+    with open(src / "skills" / "council" / "SKILL.md", "a") as f:
+        f.write("\n## Later\n")
+    r = run(box, *args)
+    assert r.returncode == 0 and "was edited" not in r.stderr, r.stderr
 
 
 def test_a_changed_pack_skill_needs_a_new_folder_and_a_new_name(box):
