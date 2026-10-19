@@ -183,6 +183,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- The router's wait hint and `retry_after` count only the role's own routes (#239). They took the earliest reopening
+  over every cooldown, so a cooldown on another provider, or on a model outside the chain (the gate's aux side call,
+  D-081), could make a main call say "next route reopens in 20s" while main's own key reopened later, and the loop
+  retried early. The same scope now decides the "no credentials" error.
 - A held answer key on a focused terminal approval card sends one answer (#297). Repeats of the key, posted before
   the first was handled, each wrote `approval: allow` to the transcript and sent `ApprovalRespond` again; only the
   call that closes the request's card now notes and sends, so a repeat is dropped and the next queued request is
