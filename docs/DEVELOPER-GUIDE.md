@@ -233,6 +233,13 @@ methods matter for the principal's words:
 Do not log or print message text from these hooks. Report errors through `exo.core.trace.report` so they show as
 `harness.error` and become findings.
 
+**Context engine hooks.** `select_context(messages, session_id=)` gets each message with `author` and `principal`,
+like the memory hooks. After `session.undo` the core calls `on_session_switch(session, rewound=True, messages=,
+summaries=)` with every message left in the thread and `{tree key: [ids of the summary nodes still stored]}`. Drop
+anything kept from the undone turns (D-041), including the text of each `on_compacted` node that is gone (its
+`node.session` is the tree key). exo-context drops their pins and those nodes, then writes again each handoff
+that may quote them.
+
 **Who wrote it (D-040).** Every message dict a hook receives has `author` (`principal`, `agent`, `tool`,
 `peer:<name>`, `bus:<seat>`, `job`, `delegate`, `schedule`, `system`) and user messages have `principal`. Treat
 text as the principal's only when `principal` is true; `exo.provenance.principal_view(messages)` turns every other
@@ -250,7 +257,7 @@ A seat is a TOML file in `$EXO_HOME/seats/<name>.toml`, or `<name>/seat.toml` wi
 |---|---|
 | `[seat]`, `[principal]` | Name, role, soul file, and the principal id the seat serves. |
 | `[models]` | `tier` (fast, standard, deep) and per-role router overrides. |
-| `[tools]` | `toolsets` to allow, and `env_allow`: secret-looking variables that bash and jobs may keep. Default none. |
+| `[tools]` | `toolsets` to allow, and `env_allow`: variables the scrub would drop (secrets, shell startup hooks) that bash and jobs may keep (git's `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` only as a family, through `GIT_CONFIG_COUNT`). Default none; `docs/TOOLS.md` "Environment of bash and jobs" has the startup-code caveat. |
 | `[skills]` | `folders` to search first, `load` as an allow list. |
 | `[mcp.<name>]` | An MCP server: `command` or `url`, `env`, `risk`. |
 | `[channels.<name>]` | Channels to run with the server. |
