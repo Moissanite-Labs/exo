@@ -164,6 +164,35 @@ def test_no_review_without_a_signal_or_for_unattended_sessions(make_engine):
     asyncio.run(scenario())
 
 
+def test_a_private_thread_gives_learning_nothing(make_engine):
+    """D-028: a correction said in a private thread is not captured, starts no review (which would read the
+    thread), and a review cannot be started for it; the same words in a normal thread are captured."""
+    said = "Important correction: use a table, NOT bullet lists."
+
+    async def scenario():
+        eng = make_engine()
+        lr = attach(eng, env={})
+        calls = []
+        lr._complete = lambda role, prompt, system: calls.append(prompt) or reply([])
+        sid, _ = new_session(eng, ("user", "Summarise"), ("assistant", "- a\n- b"), ("user", said), kind="private")
+        eng.plugins.hooks.fire("on_turn_start", session_id=sid)
+        eng.plugins.hooks.fire("on_turn_end", session_id=sid)
+        await asyncio.sleep(0.1)
+        kid, _ = new_session(eng, ("user", "Summarise"), ("assistant", "- a\n- b"), ("user", said), kind="subagent",
+                             parent=sid)  # its delegate child: a brief built from it
+        eng.plugins.hooks.fire("on_turn_end", session_id=kid)
+        await asyncio.sleep(0.1)
+        assert list(lr.runtime.ledger.iter(kind=("ruling", "verdict", "utterance"))) == []
+        assert calls == [] and lr.tasks == {} and lr.trigger(sid, "signal") is False
+        assert lr.trigger(kid, "signal") is False
+        normal, _ = new_session(eng, ("user", "Summarise"), ("assistant", "- a\n- b"), ("user", said))
+        eng.plugins.hooks.fire("on_turn_end", session_id=normal)
+        await asyncio.sleep(0.1)
+        assert {e["session"] for e in lr.runtime.ledger.iter(kind=("ruling", "verdict"))} == {normal}
+        assert len(calls) == 1  # the normal thread's review
+    asyncio.run(scenario())
+
+
 def test_every_n_turns_triggers_with_only_an_accept(make_engine):
     async def scenario():
         eng = make_engine()
