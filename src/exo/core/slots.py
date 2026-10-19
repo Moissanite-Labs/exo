@@ -95,14 +95,15 @@ class MemoryProvider(ABC):
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "",
                   messages: Optional[list[dict[str, Any]]] = None,
                   turn_author: Optional[dict[str, Any]] = None) -> None:
-        """Persist a completed turn without blocking."""
+        """Persist a completed turn without blocking. Never called in or under a private thread (D-028)."""
 
     @abstractmethod
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         """Function schemas ({"name", "description", "parameters"}); [] if none."""
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs) -> str:
-        """Handle one of this provider's tools; returns a JSON string."""
+        """Handle one of this provider's tools; returns a JSON string. The core passes ``session_id``, ``exo_home``,
+        ``agent_log``, and ``agent_context="private"`` in or under a private thread (D-028): write nothing then."""
         raise NotImplementedError(f"Provider {self.name} does not handle tool {tool_name}")
 
     def shutdown(self) -> None:
