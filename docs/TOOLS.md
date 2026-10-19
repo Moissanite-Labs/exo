@@ -12,6 +12,13 @@ toolset. Subagents get every low-risk tool the parent has (scout and critic) or 
 | `bash` | shell | high | Shell with timeout and output cap; `background: true` starts a job (docs/JOBS.md) |
 | `jobs`, `job_output`, `job_kill` | shell | low, low, medium | List, read and stop background jobs (D-032) |
 
+`glob` and `grep` skip `.git`, `node_modules`, virtualenvs and caches, and every secret store below the folder
+they search (`~/.ssh`, `~/.aws`, `.env`, `$EXO_HOME/keys`, `*.key`...; the list is `exo.gate.is_sensitive_path`),
+also through a link. When they skip a store they end with `[skipped N secret-store paths; read one by name to be
+asked]`. A store named as `path` is read, after the gate asks (#241, `docs/GATE.md` "What the search tools
+read"). In a repo's own `.claude` folder only `worktrees`, `commands`, `agents` and `skills` are searched. A
+search of the whole file system (`/`, or a path that resolves to it) is refused; name a folder below it.
+
 ## Environment of bash and jobs
 
 `bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,
@@ -108,7 +115,9 @@ ranked file list and verbatim excerpts. Use it for unfamiliar code and "where or
   is scrubbed from any error text. Nothing is logged.
 - **Limits:** 120 s default timeout (max 600; the process group is killed), output paged at 20,000 characters
   (`page=2` serves the rest from memory), jg itself capped at 256 KB. Read-only, so risk low, but it sends
-  eligible source files to the backend; jg skips ignored and known sensitive files.
+  eligible source files to the backend; jg skips ignored and known sensitive files. It refuses a folder that is
+  or holds one of Exo's known secret stores (the home folder, `$EXO_HOME`, `~/.config`, `/`), since jg cannot
+  leave those out (#241).
 - **Trace:** a normal tool call in `exo trace` (`tool.completed` with `duration_ms`); backend and duration are the
   first line of the result.
 - Skill: `skills/jevgrep` (adapted from dzhng/jevgrep's skill, MIT).
