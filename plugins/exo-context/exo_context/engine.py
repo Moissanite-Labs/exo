@@ -479,16 +479,19 @@ class ExoContextEngine(ContextEngine):
         call = dict(current_tokens=current_tokens, focus_topic=focus_topic, force=force,
                     memory_context=memory_context, **kwargs)
         result = self.inner.compress(messages, **_accepted_kwargs(self.inner.compress, call))
-        if signals is None or result is messages or not isinstance(result, list):
+        if result is messages or not isinstance(result, list):
             return result
         idx = self._summary_index(result)
         if idx is None:
             return result  # inner made no summary (no-op or structural skip)
+        raw, result[idx] = result[idx], self._defused(result[idx])
+        if signals is None:
+            return result
 
         path = None
         if self._x_write_handoffs:
             try:
-                summary = self._summary_body(hf.message_text(result[idx]))
+                summary = self._summary_body(hf.message_text(raw))
                 path = hf.write_handoff(focus_topic or self.topic, messages, self._x_store,
                                         self.handoff_dir, session=self._x_session_id or None,
                                         principal=self._x_principal, summary=summary, signals=signals)
@@ -524,8 +527,30 @@ class ExoContextEngine(ContextEngine):
         body = text[:cut] if cut >= 0 else text
         if body.lstrip().startswith(SUMMARY_PREFIX):
             body = body.lstrip()[len(SUMMARY_PREFIX):]
-        body = hf.strip_pinned(body)
+        body = provenance.defuse_pins(hf.strip_pinned(body))  # #279: and any other spelling of a tag is escaped
         return body.strip()[:6000]
+
+    @staticmethod
+    def _defused(msg: Any) -> Any:
+        """The inner's summary message with each pinned-block tag escaped (#279). A summary is never the principal's
+        words, but the summarizer may decode an escaped tag in its source or write one, and the next compaction carries
+        every block in a message that opens with a compaction marker. exo-context's own block is added after this;
+        the items of a block carried from the input come back in it (``sg.extract`` reads them from the input)."""
+        if not isinstance(msg, dict):
+            return msg
+        content = msg.get('content')
+        if isinstance(content, str):
+            new = provenance.defuse_pins(content)
+        elif isinstance(content, list):
+            new = [{**p, 'text': provenance.defuse_pins(p['text'])}
+                   if isinstance(p, dict) and isinstance(p.get('text'), str) else p for p in content]
+        else:
+            return msg
+        if new == content:
+            return msg
+        out = {**msg, 'content': new}
+        out.pop('api_content', None)  # a stale sidecar would resend the live tag
+        return out
 
     @staticmethod
     def _insert(text: str, block: str) -> str:
