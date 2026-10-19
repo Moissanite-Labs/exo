@@ -34,6 +34,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .. import taste
+from ..core.private import atomic_write
 from ..store import PrincipalStore
 from . import privacy
 from .pack import FORMAT, PACK_NAME, HouseItem, dumps, item_line, sha256
@@ -308,7 +309,8 @@ def export_house(store: PrincipalStore, out: str | os.PathLike, version: str, *,
             it = replace(by_id[it.id], evidence=by_id[it.id].evidence + it.evidence)
         by_id[it.id] = it
     soul_text = soul if soul is not None else HOUSE_SOUL
-    res.failures += [("soul/house.md", str(h)) for h in checker.check(soul_text, value=True)]
+    res.failures += [("soul/house.md", f"{h.label}: {h.match}") for h in checker.check(soul_text, value=True)
+                     if soul is not None or h.label != "store word"]    # the built-in soul names no one
     res.items = [by_id[k] for k in sorted(by_id)]
     res.held.sort(key=lambda x: x[0].id)
     if not res.ok:
@@ -332,9 +334,7 @@ def export_house(store: PrincipalStore, out: str | os.PathLike, version: str, *,
     for rel, data in res.files.items():
         p = outp / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(p.name + ".tmp")
-        tmp.write_bytes(data)
-        os.replace(tmp, p)
+        atomic_write(p, data, mode=None)
     res.written = True
     return res
 

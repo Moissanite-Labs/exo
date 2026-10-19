@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import sys
 
 import pytest
@@ -262,6 +263,22 @@ def test_settings_resolution(tmp_path):
     assert s.principal_store is None
 
 
+def test_settings_find_a_store_made_with_root(tmp_path):
+    """`exo init <id> --root DIR` records DIR in config `principals.<id>`: the gate reads that store's policies,
+    ledger and grants, as memory and the store commands do. Not a principal id: no store, the default policies."""
+    (tmp_path / "config.json").write_text(json.dumps({"principals": {"p1": str(tmp_path / "elsewhere")}}))
+    s = resolve_settings(env={"EXO_HOME": str(tmp_path), "EXO_PRINCIPAL": "p1"})
+    assert s.principal_store == tmp_path / "elsewhere"
+    assert s.grants_path == tmp_path / "elsewhere" / "state" / "approval-grants.json"
+    s = resolve_settings(env={"EXO_HOME": str(tmp_path), "EXO_PRINCIPAL": "../p1"})
+    assert s.principal_store is None and s.grants_path == tmp_path / "state" / "gate-grants.json"
+    # a recorded root that cannot be a store (unknown user, relative) is skipped: the default store, no crash
+    (tmp_path / "config.json").write_text(json.dumps({"principals": {"p1": "~nosuchuser-exo-test/x", "p2": "rel/x"}}))
+    for pid in ("p1", "p2"):
+        s = resolve_settings(env={"EXO_HOME": str(tmp_path), "EXO_PRINCIPAL": pid})
+        assert s.principal_store == tmp_path / "principals" / pid
+
+
 def test_plugin_entry_point_imports(monkeypatch):
     spec = importlib.util.spec_from_file_location("exo_gate_plugin", PLUGIN / "__init__.py",
                                                   submodule_search_locations=[str(PLUGIN)])
@@ -368,6 +385,22 @@ def test_fallback_route_is_recorded_when_jev_fails(keyed_store):
     ctx = gated(store, key, router)
     assert call(ctx, "read_file", {"path": "x"}) is None  # the model failed; the rule outcome stands
     assert "decision_model" not in events(store)[-1]["body"]
+
+
+def test_malformed_model_answer_keeps_the_rule_outcome_and_the_main_role_working(keyed_store):
+    from exo.core.models import FakeProvider, Router
+
+    store, key = keyed_store
+    chat = FakeProvider(["I would say ask, to be safe.", "main reply"], name="chat")
+    router = Router(roles={"aux": ["chat:small"], "main": ["chat:m"]}, env={}, instances={"chat": chat},
+                    catalog={"providers": {}})
+    ctx = gated(store, key, router)  # the decision role falls back to aux on the main credential (never main, D-081)
+    assert call(ctx, "read_file", {"path": "x"}) is None  # no JSON verdict: the rule outcome stands
+    assert len(chat.calls) == 1 and "decision function" in chat.calls[0]["messages"][0].text()
+
+    async def main_turn():
+        return [e async for e in router.stream("main", [], [])][-1]
+    assert router.cooldowns == {} and asyncio.run(main_turn()).kind == "done"
 
 
 def test_credentials_always_ask_once_only_even_in_observe_mode(keyed_store):

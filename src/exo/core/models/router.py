@@ -23,6 +23,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Mapping
+from urllib.parse import urlsplit
 
 from exo.core.models.anthropic import AnthropicProvider
 from exo.core.models.base import error_event
@@ -34,6 +35,7 @@ from exo.model_spend import SpendJournal, configured
 from exo.core.models.spend import admitted_stream
 from exo.model_spend import POLICY_ENV, required as spend_required, resolve_spend_policy
 from exo.core.models.openai_chat import OpenAIChatProvider
+from exo.core.models.urls import display_url
 from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
 
@@ -49,6 +51,7 @@ BREAKER_FAILURES = 2  # consecutive retryable failures of one route before it is
 BREAKER_COOLDOWN_S = 600.0  # first skip; doubles on each failed trial
 BREAKER_MAX_S = 3600.0
 NO_FALLBACK_STATUS = frozenset({400, 413, 422})  # the request itself is bad; another route will fail too
+REFUSED_STATUS = frozenset({401, 402, 403})  # the provider refused the key or login: waiting will not fix it
 TRANSPORTS = {"anthropic": AnthropicProvider, "openai": OpenAIChatProvider,
               "decision": DecisionProvider}
 CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": MuseCliProvider}  # keyless: the CLI's own login
@@ -57,6 +60,20 @@ CLI_TRANSPORTS: dict[str, Any] = {"claude-cli": ClaudeCliProvider, "muse-cli": M
 def load_catalog(path: Path | str = CATALOG_PATH) -> dict[str, Any]:
     with open(path, "rb") as f:
         return tomllib.load(f)
+
+
+def server_address(base_url: str | None) -> str:
+    """A server's host and port for text people or the model read. Never the netloc: it keeps any user:password@
+    in the URL. IPv6 keeps its brackets. Use the raw URL for the connection only."""
+    try:
+        u = urlsplit(base_url or "")
+        host, port = u.hostname, u.port
+    except ValueError:  # a bad IPv6 literal or port
+        return "its configured address"
+    if not host:
+        return "its configured address"
+    host = f"[{host}]" if ":" in host else host
+    return f"{host}:{port}" if port is not None else host
 
 
 @dataclass(frozen=True)
@@ -82,6 +99,7 @@ class Cooldown:
     strikes: int = 0
     reset_at: float | None = None
     status: int | None = None
+    error: str = ""  # the provider's text, so a later call that sends nothing can still say why
 
 
 @dataclass
@@ -116,11 +134,23 @@ def cooldown_until(now: float, status: int | None, strikes: int, reset_at: float
     return reset_at or now + min(SOLE_TTL * 2 ** (strikes - 1), LONG_TTL)
 
 
+def merge_provider(base: Any, spec: Any) -> Any:
+    """A provider table over the entry it overrides (the catalog's, or config.json's under a seat): the keys it sets
+    win and the rest stay. A table that sets ``base_url`` uses only the ``key_env`` and ``headers`` it sets, so a key
+    or a header token never follows a new URL. A value that is not a table replaces the entry as given."""
+    if not isinstance(spec, dict):
+        return spec
+    base = base if isinstance(base, dict) else {}
+    if "base_url" in spec:
+        base = {k: v for k, v in base.items() if k not in ("key_env", "headers")}
+    return {**base, **spec}
+
+
 class Router:
     """Resolves roles to routes and streams with fallback.
 
-    ``roles`` and ``providers`` override the catalog tables. ``instances`` maps a
-    provider name to a ready Provider object (tests, plugins, the fake provider).
+    ``roles`` override the catalog roles; each ``providers`` table merges key by key over the catalog entry of
+    its name. ``instances`` maps a provider name to a ready Provider object (tests, plugins, the fake provider).
     """
 
     def __init__(self, roles: Mapping[str, list[str]] | None = None, providers: Mapping[str, dict] | None = None,
@@ -137,7 +167,9 @@ class Router:
         self.spend = spend if spend is not None else configured(selection.config, required=selection.required)
         self._spend_required, self._spend_source = selection.required, selection.source
         cat = load_catalog() if catalog is None else catalog
-        self.providers: dict[str, dict] = {**cat.get("providers", {}), **(providers or {})}
+        self.providers: dict[str, dict] = dict(cat.get("providers", {}))
+        for name, spec in (providers or {}).items():  # a partial table keeps the catalog transport, key and roles
+            self.providers[name] = merge_provider(self.providers.get(name), spec)
         self.models: dict[str, dict] = dict(cat.get("models", {}))
         self.roles: dict[str, list[str]] = {**cat.get("roles", {}), **(roles or {})}
         self.instances = dict(instances or {})
@@ -269,7 +301,7 @@ class Router:
             exe = shutil.which(spec.get("command", cls.default_command), path=self.env.get("PATH", ""))
             if exe:
                 creds = [Credential(provider, None, cls(exe, name=provider, env=self.env, **timeout))]
-        elif spec is not None:
+        elif spec is not None and spec.get("base_url") is not None:  # no base_url: no credential, the route is skipped
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
@@ -324,12 +356,12 @@ class Router:
 
     # --- outcome bookkeeping ---------------------------------------------------
     def record_failure(self, cred_id: str, model: str, status: int | None, retry_after: float | None,
-                       sole: bool, model_only: bool = False) -> Cooldown:
+                       sole: bool, model_only: bool = False, error: str = "") -> Cooldown:
         now = self.clock()
         key = f"{cred_id}|{model}" if status == 404 or model_only else cred_id
         cd = self.cooldowns.get(key) or Cooldown()
         cd.strikes += 1
-        cd.status = status
+        cd.status, cd.error = status, error
         if retry_after:
             cd.reset_at = now + retry_after
         elif cd.reset_at is not None and cd.reset_at <= now:
@@ -370,16 +402,15 @@ class Router:
     def route_ok(self, ref: str) -> None:
         self.breakers.pop(ref, None)
 
-    def price(self, route: Route, usage: Usage | None, input_includes_cache: bool = False) -> Usage | None:
+    def price(self, route: Route, usage: Usage | None) -> Usage | None:
         """Fill ``cost_usd`` from the catalog price of the route that served the call (USD per million tokens).
-        None stays None when the route has no price (never 0). ``input_includes_cache``: the provider counts cached
-        tokens inside ``input_tokens`` (OpenAI style), so they are charged at the cache-read rate only."""
+        None stays None when the route has no price (never 0). ``input_tokens`` is the uncached input on every
+        transport (D-080); cache reads and writes are charged at their own rates on top."""
         info = self.models.get(route.ref)
         if usage is None or usage.cost_usd is not None or not info or "input" not in info:
             return usage
         inp = info["input"]
-        fresh = usage.input_tokens - (usage.cache_read_tokens if input_includes_cache else 0)
-        cost = (max(fresh, 0) * inp + usage.output_tokens * info.get("output", 0)
+        cost = (max(usage.input_tokens, 0) * inp + usage.output_tokens * info.get("output", 0)
                 + usage.cache_read_tokens * info.get("cache_read", inp * 0.1)
                 + usage.cache_write_tokens * info.get("cache_write", inp * 1.25)) / 1e6
         return Usage(**{**vars(usage), "cost_usd": round(cost, 8)})
@@ -429,7 +460,7 @@ class Router:
                 if candidate is not None:
                     if last is not None:
                         resort_notice = ProviderEvent(kind="notice", text=f"{tried[-1]} failed ({(last.error or '')[:80]}); "
-                                                       f"trying {candidate.ref} as a last resort")
+                                                       f"trying {candidate.ref} as a last resort", attempts=attempts)
                     pending_routes = [candidate]
                     skip.clear()
                     last_resort = True
@@ -478,7 +509,7 @@ class Router:
                 if nxt is not None:  # tell the user why the wait ended and where the call goes next
                     why = (f"did not answer in {getattr(getattr(cred.provider, '_timeout', None), 'read', 0):.0f} s"
                            if (last.error or "").startswith("ReadTimeout") else f"failed ({(last.error or '')[:80]})")
-                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}")
+                    yield ProviderEvent(kind="notice", text=f"{route.ref} {why}; trying {nxt.ref}", attempts=attempts)
                 if attempts and (cs := attempts[-1].get("cooldown_s")):
                     yield ProviderEvent(kind="notice", text=f"{route.ref} failed repeatedly; skipping it for {cs / 60:.0f} min")
         if attempts and attempts[-1]["outcome"] == "fallback":
@@ -489,10 +520,12 @@ class Router:
 
     async def _attempt(self, route: Route, cred: Credential, sole: bool, messages: list[Message],
                        tools: list[ToolSpec], opts: dict[str, Any], failed: list[ProviderEvent],
-                       attempts: list[dict[str, Any]] | None = None) -> AsyncIterator[ProviderEvent]:
+                       attempts: list[dict[str, Any]] | None = None,
+                       model_only: bool = False) -> AsyncIterator[ProviderEvent]:
         """One call on one credential. A failure that may fall back is swallowed and
         appended to ``failed``; anything else (including a terminal error) is yielded.
-        Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``)."""
+        Each outcome is added to ``attempts`` (a try that fell back reads ``timeout`` or ``fallback``).
+        ``model_only``: a failure cools this model on the credential, not the credential (a side call)."""
         try:
             self.check_spend_policy()
         except RuntimeError as exc:
@@ -520,8 +553,8 @@ class Router:
                 # 400, 413 and 422 do not fall back, unless the transport marked the upstream as down (retryable).
                 fallback = (ev.status not in NO_FALLBACK_STATUS or ev.retryable) if ev.status is not None else ev.retryable
                 if fallback:
-                    self.record_failure(cred.id, route.model, ev.status, retry_after, sole,
-                                        model_only=ev.status in NO_FALLBACK_STATUS)  # an upstream 400 is this model's
+                    self.record_failure(cred.id, route.model, ev.status, retry_after, sole, error=ev.error or "",
+                                        model_only=model_only or ev.status in NO_FALLBACK_STATUS)  # a 400: this model's
                     if ev.status == 429:
                         # A responding rate limiter is reachable. Retry-After belongs to the credential cooldown,
                         # not the outage breaker (including a trial lease left over from an earlier outage).
@@ -540,7 +573,7 @@ class Router:
             if ev.kind in ("text", "reasoning", "tool_call"):
                 started = True
             elif ev.kind in ("usage", "done"):
-                ev.usage = self.price(route, ev.usage, getattr(cred.provider, "input_includes_cache", False))
+                ev.usage = self.price(route, ev.usage)
                 ev.route = route.ref  # the route that served this call, after any fallback
                 if ev.kind == "done":
                     note("ok")
@@ -553,7 +586,7 @@ class Router:
 
     def _exhausted(self, role: str, tried: list[str], last: ProviderEvent | None) -> ProviderEvent:
         now = self.clock()
-        waits = [cd.until - now for cd in self.cooldowns.values() if cd.until > now]
+        waits = [until - now for until, _, _ in self._chain_cooldowns(role, now)]
         wait = min(waits) if waits else None
         if not self.chain(role):
             return error_event(f"no model configured for role {role!r}; use /providers and choose a default model",
@@ -562,10 +595,47 @@ class Router:
             return error_event(f"no credentials for role {role!r}: set the provider key_env variables, "
                                "or use /providers to add a provider and choose its model",
                                None, retryable=False)
+        if refused := self._refused(role, tried, last, now):  # no retry now, say what to fix; retry_after: it reopens
+            return error_event(refused[1], refused[0], retryable=False, retry_after=wait)
         why = f"; last error: {last.error}" if last is not None else ""
         hint = f"; next route reopens in {wait:.0f}s" if wait else ""
         return error_event(f"all routes for {role!r} failed or are cooling down{why}{hint}",
                            last.status if last is not None else 429, retryable=True, retry_after=wait)
+
+    def _chain_cooldowns(self, role: str, now: float) -> list[tuple[float, str, Cooldown]]:
+        """Live cooldowns that bear on ``role``: a credential of a chain provider, or a credential|model cooldown on a
+        model of the chain. A gate side call (D-081) cools a model this role never asks, and another provider's
+        cooldown says nothing about this role's routes, so neither moves the wait hint or the refusal."""
+        routes = {(r.provider, r.model) for r in self.chain(role)}
+        out: list[tuple[float, str, Cooldown]] = []
+        for key, cd in self.cooldowns.items():
+            cred, scoped, model = key.partition("|")
+            name = cred.partition("#")[0]
+            if cd.until > now and ((name, model) in routes if scoped else any(name == n for n, _ in routes)):
+                out.append((cd.until, name, cd))
+        return out
+
+    def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
+                 now: float) -> tuple[int | None, str] | None:
+        """Status and message when waiting cannot help: the provider refused the key or login (401, 402, 403; on a
+        later call too, while that credential, or a model of the chain on it, reopens first), or a local server is
+        not running."""
+        if last is None:  # nothing ran: the first of this chain's cooldowns to reopen holds the cause
+            cooling = self._chain_cooldowns(role, now)
+            _, name, cd = min(cooling, key=lambda c: c[0], default=(0.0, "", Cooldown()))
+            status, err = cd.status, cd.error or f"HTTP {cd.status}"
+        else:
+            name, status, err = tried[-1].partition(":")[0], last.status, last.error or ""
+        spec = self.providers.get(name) or {}
+        if status in REFUSED_STATUS:
+            envs = spec.get("key_env") or []
+            envs = [envs] if isinstance(envs, str) else envs
+            return status, (f"{name} rejected the key ({err}): fix {' or '.join(envs)} or add a key in /providers"
+                            if envs else f"{name} refused the login ({err}): log in again, then test it in /providers")
+        if last is not None and spec.get("local") and err.startswith("ConnectError"):
+            return None, (f"{name} is not running at {server_address(spec.get('base_url', ''))}: "
+                          "start it, then test it in /providers")
+        return None
 
     def provider(self, role: str = "main") -> RoleProvider:
         return RoleProvider(self, role)
@@ -583,13 +653,14 @@ class Router:
 
 
     def providers_status(self) -> list[dict[str, Any]]:
-        """Each configured provider: base URL and whether a key was found (yes/no, never the value)."""
+        """Each configured provider: display URL without userinfo and key presence (never the value)."""
         out = []
         for name, spec in sorted(self.providers.items()):
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
             found = [e for e in envs if self._key(e)]
-            out.append({"provider": name, "base_url": spec.get("base_url", ""), "transport": spec.get("transport", "openai"),
+            out.append({"provider": name, "base_url": display_url(spec.get("base_url", "")),
+                        "transport": spec.get("transport", "openai"),
                         "local": bool(spec.get("local")), "key_env": envs,
                         "key": ("n/a" if not envs else "yes" if found else "no"),
                         "roles": list(spec.get("roles") or [])})

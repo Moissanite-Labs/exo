@@ -2,6 +2,11 @@
 
 Exo works with any model provider. You choose which model serves each role.
 
+Provider status URLs in `exo models`, `/providers` and the web Providers data replace URL logins
+(`user:password@`) with `***@`. Invalid URLs show a generic label. Scheme, host and endpoint path stay visible
+for ordinary URLs. Connections and local-server probes still use the original configured endpoint. This is
+userinfo redaction, not a guarantee about secrets placed in URL paths, queries or fragments (#271, D-034).
+
 ## Set up with the app or the TUI
 
 Pick one of three places. They share one engine (`exo/providers_setup.py`, D-034), so they show the same
@@ -18,8 +23,8 @@ status and store keys the same way.
   `add` never takes the key as an argument (it would land in shell history and in `ps`) and needs a terminal.
 - **TUI:** `/providers` opens a panel with the same list. `a` adds or replaces a key in a masked field, `t`
   tests, `r` removes, `d` sets the default model. The key never enters the transcript, history or session log.
-- **Web client:** `exo web` opens the page with a one-time token in the address. The Providers tab has the same
-  list, a masked key field, Test, Remove and a default model picker.
+- **Web client:** `exo web` opens the page with a one-time launch code that the page trades for the per-launch
+  token. The Providers tab has the same list, a masked key field, Test, Remove and a default model picker.
 
 Where a new key goes: the macOS Keychain (service `exo`) on a Mac; on Linux the Secret Service through
 `secret-tool` when it is installed, else `~/.config/exo/keys.env` (written mode 0600, atomically). Choose another
@@ -42,9 +47,10 @@ Errors come back as a class: `no_key`, `auth`, `billing`, `not_found`, `rate_lim
 If no provider can serve the main role, `exo tui` and `exo web` say so and point here.
 
 The default core uses real catalog routes; it never substitutes an offline reply for missing credentials.
-Anthropic and OpenRouter use their catalog routes, and an available Claude CLI can use its catalog alias.
-For a provider without a known main model, such as OpenAI, first run opens the model chooser after the key
-is added. Choose the model you want before `/intro` runs. Explicit roles and local model settings are kept.
+Anthropic and OpenRouter use their catalog routes, and an available Claude CLI can use its catalog alias
+(see "Use your Claude Code login"). For a provider without a known main model, such as OpenAI, first run opens
+the model chooser after the key is added. Choose the model you want before `/intro` runs. Explicit roles and
+local model settings are kept.
 Orientation is remembered only after its own turn finishes with a successful, nonempty real assistant reply;
 a provider error, cancellation or deliberately configured fake reply leaves it unfinished for retry.
 
@@ -60,8 +66,9 @@ of these, or it answers 403:
    is `same-origin` or `none`;
 4. the header `X-Exo-Token` holds the per-launch token. `exo web` makes a new one each start, keeps it in memory,
    and prints it in the URL fragment (`#token=...`), which browsers never send to a server. The page moves it to
-   `sessionStorage` (gone when the tab closes) and strips it from the address bar. A custom header also forces a
-   CORS preflight, which the server never answers, so a cross-site page cannot send it.
+   `sessionStorage` (gone when the tab closes) and strips it from the address bar. The browser `exo web` opens gets
+   a one-time launch code instead, traded for the token over loopback (#166, `docs/ui/WEB.md`). A custom header
+   also forces a CORS preflight, which the server never answers, so a cross-site page cannot send it.
 
 The key travels once, in a POST body over loopback. The server does not log requests, never echoes the key and
 never returns a stored value; the page clears the field and keeps the key in no storage. What this does not stop:
@@ -73,6 +80,32 @@ output, the token is in that log until the next start.
 No tool gives the model these functions. The gate classes `exo providers add|remove|test|default`, `secret-tool`,
 any shell or code that names `/api/providers` or `providers_setup`, and every Keychain read as `credentials`,
 which always asks you and never gets a standing grant (D-033). Keys are write-only: no code path returns one.
+
+## Use your Claude Code login (`claude-cli`)
+
+If Claude Code is installed and logged in, Exo can run on that login with no API key. Each model call starts the
+`claude` command. Exo holds no key for it. `ANTHROPIC_API_KEY` and the other API credentials are removed from the
+child's environment, so the call uses the subscription, never an API account.
+
+It is automatic. When the core starts, `claude` is on your PATH, no route of the main role has what it needs (by
+default, no Anthropic or OpenRouter key), and neither `models.roles.main` in `config.json` nor the seat sets the
+main model, the core puts `claude-cli:sonnet` first for `main`. Sonnet is the first model in the catalog entry
+(`sonnet`, `opus`, `haiku`). The status line shows `claude-cli:sonnet`.
+
+- **Cost reads `unknown`.** A subscription has no per-call price in the catalog, and Exo never shows a guessed
+  `$0`. To see an estimate anyway, add a price under `models.models` (`docs/TRACE.md`, "Cost").
+- **The lists show the configured routes.** The automatic choice is not saved, so `exo models` and
+  `exo config roles` still show Anthropic first for `main`, and `exo providers` marks Anthropic as the default.
+- **To choose it yourself,** or another model, run `exo providers default claude-cli:opus` (or `/default` in the
+  terminal client). The choice is saved to `config.json`, the lists show it, and the automatic choice is off.
+- **An Anthropic or OpenRouter key added later takes over the next time the core starts.** Until then the
+  running core stays on Claude Code.
+- **Exo keeps its own tools and gate.** The CLI runs with its own tools, MCP servers, skills and settings
+  switched off. The model sees Exo's tools, and Exo runs each tool call itself, through the gate, before it calls
+  the CLI again.
+- **The login is not checked ahead of time.** `exo providers test claude-cli` only checks that the command is on
+  PATH. Run `claude` once and log in before you start Exo. On a logged-out CLI the first turn fails with the
+  CLI's error.
 
 ## Claude CLI compatibility and cleanup (`claude-cli`)
 
@@ -93,6 +126,10 @@ The fixture contract is:
 - Usage is read from the final result when reported; absent counts stay unknown. The inert MCP bridge lists
   tools but refuses to run them. Blank input is ignored, malformed JSON gets a JSON-RPC parse error, and valid
   following requests continue to work.
+- A user frame whose last text starts with a command name (`/help`) gets a local reply and a `result` with
+  `num_turns: 0`, and no model call, as the real CLI does. Exo never sends a user text that starts with `/`.
+- The fixture reads each file that an `@path` in any user frame names, as the real CLI does, and records what it
+  read. Exo never sends a user `@` that the CLI would read.
 
 The CLI-specific replay and boundary assumptions still need an opt-in, isolated real-CLI contract check against
 a mocked local endpoint before any release can be called wire-verified. Default tests never use real OAuth,
@@ -102,6 +139,36 @@ Every stream exit cancels and awaits the stderr reader. It retains a bounded, sc
 than waiting for a descendant to close stderr. The adapter stops its process group even after the leader exits,
 and finishes cleanup before returning a terminal response to the router. A cancel (Esc) while the stream is read
 stops it, even when it lands just as a line arrives (#163).
+
+**Working folder.** The CLI runs in a private folder of its own, `claude-cli-cwd-<uid>` in the temp dir (mode
+0700). It is the same folder on every call because the CLI writes its cwd into the prompt, and a changing folder
+would break prompt caching. The CLI's environment note therefore names that folder, not the thread's, and the CLI
+has no switch to drop the note when a system prompt is given. So Exo's system text names the thread's real
+working folder on every route: tools run there, and it overrides any working folder an environment note names.
+The line is fixed for the thread, so the cache holds. Running the CLI in the thread's folder was not chosen: the
+provider call does not carry the thread, and the CLI then adds its own notes about that folder, written for
+Claude Code.
+
+**Slash commands.** The CLI reads a user text that starts with `/` as its own command, even with
+`--disable-slash-commands`. On version 2.1.302 a built-in name such as `/help` gets a local "isn't available in
+this environment" reply with no model call, which Exo reads as an incomplete response and falls back. Any other
+word gets a CLI note added, and a replayed history frame is rewritten. Paths such as `/etc/hosts` pass. So the
+adapter puts a zero-width space (U+200B) in front of every user text block that starts with `/`, and the model
+reads the user's words as typed. Assistant text and tool results are never read as commands and stay unchanged.
+
+**File mentions.** The CLI also reads `@path` in user text as a file to attach, even with `--tools ""`. On
+version 2.1.302, wherever the `@` starts the text, follows whitespace (U+FEFF counts) or follows a CJK full stop,
+comma, `？` or `！`, the CLI reads the file and sends it to the model, in the latest turn and in replayed history.
+The quoted form `@"path"` works too. So `@~/.ssh/id_rsa` sent the key, past the gate, which asks before any
+credential read. The text need not be the user's: peer and bus messages, notes from other threads and delegate
+briefs reach the CLI as user text. The CLI looks the path up from its working folder, which is empty, and folds
+`..` as text. So a path reaches a file only when it leaves that folder: `@/`, `@~`, `@.`, `@"`, or a word with a
+`/..` step such as `@x/../../etc/hosts` (seen on version 2.1.303). The adapter puts the same zero-width space in
+front of each such `@` in a user text block. The model still reads the `@`. Other `@` words pass as typed: a
+decorator such as `@app.route`, CSS `@media`, a diff `@@` header and an address such as `a@example.com`. A space
+hidden in a decorator line would break the file the model copies it into. The folder stays empty because the CLI
+writes nothing there. If a file with a name not starting with `.` turns up in it, each call gets a fresh empty
+folder instead. Exo's own `@path` already adds the file as its own part.
 
 ## Use a Muse Code subscription (`muse-cli`)
 
@@ -203,7 +270,10 @@ Decision models (Jev, Laya) return probabilities, not text. They speak `POST {ba
 with `state`, `model` and typed `questions` (choice, score, noul); the reply has `answers`. Docs:
 https://docs.typesafe.ai/api.md. Code: `exo/core/models/decision.py`. Use `ask_choice_result`
 there; they go through the `decision` role. If the route is a chat model, the same call asks for a JSON
-answer and reports the pick as probability 1.0 with `source="generative"`. A decision model may only make
+answer and reports the pick as probability 1.0 with `source="generative"`. A reply that is not that JSON,
+or names an option outside the list, moves the call to the next route and cools nothing: it says nothing
+about the key, and the main role often uses the same key. A transport failure on a chat route counts as one
+strike, and one call asks each credential and model pair at most once. A decision model may only make
 a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:
 
     exo decide "Is this safe to run?" --options safe,risky --state "rm -rf build/"
@@ -211,6 +281,8 @@ a gate stricter (D-015): callers use `tighten_only(current, proposed)`. Try it:
 Jev: set `TYPESAFE_API_KEY` (`exo providers add jev`, env, macOS Keychain service `exo`, Linux Secret Service, or keys.env). It is the first default route of the
 `decision` role (`["jev:jev-latest", "laya:laya"]`, owner ruling: base Laya was poor in a live check, Jev
 answered sensibly). Without a key Jev is skipped and the role falls through to Laya, then aux, then main.
+The gate's check on each tool call stops before main (D-081): it never asks a main route, and a failure there
+cools only the model that failed, so a login or key that also serves main keeps working (`docs/GATE.md`).
 Shapes were checked live on 2026-10-11 (7 calls). Score levels count from 0; a score can fall between
 levels (1.43). Errors: 401 and 422 are not retryable; 429, 529, 5xx and network errors are.
 
@@ -227,10 +299,19 @@ Weights download from Hugging Face on first use: about 0.65 GB (`laya-multilingu
 so Apple silicon uses MPS. Model ids: `laya`, `laya-multilingual`, `laya-typed-decisions`. Base Laya is weak
 zero-shot and over-confident (research/DECISION-MODELS.md); do not gate on its raw numbers. It was not
 installed or downloaded here because torch plus weights is over 2 GB. If port 8000 clashes with vLLM,
-set `LAYA_PORT` and override `base_url` under `[models.providers.laya]`.
+set `LAYA_PORT` and override only `base_url` under `[models.providers.laya]`.
 
 Add or change a provider in config under `[models.providers.NAME]` with `transport`, `base_url`,
-`key_env`.
+`key_env`. A table for a catalog provider merges over the catalog entry key by key: the keys you set win and
+the rest stay. So `base_url` alone keeps Laya's `decision` transport, `local` flag and decision-only `roles`,
+and `read_timeout` alone keeps Anthropic's URL and key. A table that sets `base_url` uses only the `key_env`
+and `headers` it sets, never the catalog's. With only `base_url = "http://127.0.0.1:1234/v1"` under
+`[models.providers.openai]` (a LAN vLLM or LM Studio behind the `openai` name), the endpoint is keyless and no
+OpenAI key is ever sent to it. To send a key along with your `base_url`, set `key_env` in the same table: the
+catalog's variable or one of your own. A new provider needs a `base_url` (a CLI transport needs none). Without
+one it gets no credential, its routes are skipped and the providers list shows it as `no base_url`, even when
+its key is found. A seat's `[models.providers.NAME]` merges over config.json's table first, by the same rule,
+and the result merges over the catalog (`docs/SEATS.md`).
 
 ## Roles
 
@@ -242,7 +323,7 @@ Override any role in `[models.roles]` in your config.
 A route that keeps failing is skipped instead of costing every turn a failed try. After `failures` consecutive
 retryable failures (429, 5xx, timeouts, or an upstream-unavailable 400) the route is skipped for `cooldown_s`.
 Then one trial call is allowed: success clears the route, failure skips it again for twice as long, up to
-`max_cooldown_s`. State is in memory, per process, and `exo providers` key changes reset it. If every route
+`max_cooldown_s`. State is in memory, per process. Key changes and a passing test reset it. If every route
 of a role is skipped, they are all tried anyway. The trip is logged once: the attempt that opened the breaker
 carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Config, in `[models.breaker]`:
 
@@ -255,9 +336,38 @@ carries `cooldown_s` in the `model.call` event, and the TUI shows a notice. Conf
 |---|---|---|
 | main | Anthropic Opus 5.5, then OpenRouter | none |
 | aux | Haiku 5.5 | main |
-| decision | Jev (`jev:jev-latest`), then local Laya (`laya:laya`) | aux, then main |
+| decision | Jev (`jev:jev-latest`), then local Laya (`laya:laya`) | aux, then main (the gate: aux only, D-081) |
 | eval | empty, which means the `main` route | main |
 | fast, standard, deep | Haiku, Sonnet, Opus | standard, then main |
+
+### When every route fails
+
+The error says why. When waiting cannot fix the cause, it also says what will, and the turn is not retried:
+
+- The last route tried refused its key (HTTP 401, 402 or 403): `anthropic rejected the key (HTTP 401: invalid
+  x-api-key): fix ANTHROPIC_API_KEY or add a key in /providers`. A provider with no key, such as `claude-cli`,
+  asks you to log in again instead. Some providers also send 403 for a refused request, such as flagged input.
+  The provider's text in the parentheses says which. The key stays benched for its cooldown (5 minutes after a
+  401). Calls in that time repeat the cause and that text, not a wait, unless another route of the role reopens
+  sooner. Only the role's own routes count. A refusal on a model the role never asks, such as the gate's aux
+  model (D-081), is not named in a main-role error.
+- A local provider's server refused the connection: `ollama is not running at 127.0.0.1:11434: start it, then
+  test it in /providers`. The address is the host and port of `base_url` only. A user or password in the URL is
+  never shown, so it stays out of the session store. With no usable host the error says "its configured
+  address".
+
+Other failures (429, 5xx, timeouts, a remote network error) stay retryable and say when the next route reopens.
+That time, and `retry_after`, come only from the role's own routes: a cooldown on another provider, or on a model the
+role never asks (the gate's aux model, D-081), does not shorten the hint.
+Only the last route tried decides. When an earlier route was down and the last one refused its key, the error
+names the key and not the outage.
+The two errors above still carry `retry_after`, the time the route reopens. A background summary that failed on
+one tries again then instead of giving up on the span (`docs/MEMORY-MODEL.md`).
+A passing test in `/providers` (`t`) or in the web Providers tab tells the running core to reload that provider.
+Its cooldown and breaker clear, so the next message reaches it at once. An environment variable still wins over a
+saved key: change it in the shell that starts Exo, then restart Exo. If no provider can serve the main role, the
+terminal client's first run says what the default needs. A keyed provider needs a key. A local server must be
+started, and a CLI must be installed and logged in.
 
 ## See what is set
 

@@ -46,7 +46,8 @@ tried as one whole-file object first, then line by line.
   Reordering, extra keys, and unknown keys are rejections
   (`additionalProperties: false` on the envelope).
 - Grammar: `ID := [a-z][a-z0-9_-]{0,31}`; `REF := ID [":v" [1-9][0-9]*]`.
-  A version never hides inside the identifier.
+  A version never hides inside the identifier, and nothing may follow a value: an id,
+  ref, hash or timestamp with a trailing newline is `ERR:SYN`.
 - Enums are fixed and source-verbatim:
   acts `assign assert question answer propose accept reject challenge verify update escalate done`;
   requests `ack upd ver rev exec src exp full decide`;

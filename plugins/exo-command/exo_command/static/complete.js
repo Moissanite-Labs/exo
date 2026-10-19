@@ -34,26 +34,36 @@ export function rank(query, items, limit = 40) {
   return out.slice(0, limit).map((x) => x[2]);
 }
 
-function edits(a, b) {
-  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
-  for (let j = 1; j <= b.length; j++) d[0][j] = j;
-  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
-    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-  return d[a.length][b.length];
+// difflib.SequenceMatcher(None, a, b).ratio(): twice the letters in the matching blocks over both lengths.
+function ratio(a, b) {
+  const matched = (alo, ahi, blo, bhi) => {   // the longest match (earliest in a, then in b), then each side of it
+    let bi = alo, bj = blo, k = 0;
+    for (let i = alo; i < ahi; i++) for (let j = blo; j < bhi; j++) {
+      let n = 0;
+      while (i + n < ahi && j + n < bhi && a[i + n] === b[j + n]) n++;
+      if (n > k) { bi = i; bj = j; k = n; }
+    }
+    return k ? k + matched(alo, bi, blo, bj) + matched(bi + k, ahi, bj + k, bhi) : 0;
+  };
+  return a.length + b.length ? 2 * matched(0, a.length, 0, b.length) / (a.length + b.length) : 1;
 }
 
-// The command a mistyped /name most likely meant, or null.
+// The command a mistyped /name most likely meant, or null: cm.closest, so the page and the TUI hold the same lines.
+// A prefix, else difflib.get_close_matches(name, names, 1, 0.6), else the one name that contains it.
 export function closest(name, names) {
+  const pool = [...new Set(names)].sort();
   name = name.toLowerCase();
-  if (!name || names.includes(name)) return null;
-  const pre = names.filter((n) => n.startsWith(name)).sort((a, b) => a.length - b.length);
+  if (!name || pool.includes(name)) return null;
+  const pre = pool.filter((n) => n.startsWith(name)).sort((a, b) => a.length - b.length);
   if (pre.length) return pre[0];
-  let best = null, bestD = 99;
-  for (const n of names) {
-    const d = edits(name, n);
-    if (d < bestD) { best = n; bestD = d; }
+  let best = null, bestR = 0.6;
+  for (const n of pool) {
+    const r = ratio(n, name);
+    if (r > bestR || (r === bestR && (best === null || n > best))) { best = n; bestR = r; }
   }
-  return best && bestD <= Math.max(1, Math.ceil(Math.max(name.length, best.length) / 3)) ? best : null;
+  if (best) return best;
+  const sub = pool.filter((n) => name.length >= 3 && score(name, n) !== null && score(name, n) < 1000);
+  return sub.length === 1 ? sub[0] : null;
 }
 
 // What to show for composer text. cmds = [{name, description, args, choices:[{value, meta}]}].

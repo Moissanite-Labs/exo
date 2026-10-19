@@ -81,3 +81,68 @@ def test_context_only_patch_rejected(run, tmp_path):
     (tmp_path / "a.txt").write_text("x\n")
     res = run("apply_patch", patch=P("*** Update File: a.txt", " x"))
     assert res.is_error and "no changes" in res.text()
+
+
+def _apply(run, tmp_path, text, *body):
+    f = tmp_path / "c.py"
+    f.write_text(text)
+    return f, run("apply_patch", patch=P("*** Update File: c.py", *body))
+
+
+def test_changed_minus_line_is_refused(run, tmp_path):
+    f, res = _apply(run, tmp_path, "TIMEOUT = 45\nRETRIES = 3\n",
+                    "-TIMEOUT = 30", "+TIMEOUT = 60", " RETRIES = 3")
+    assert res.is_error and "'-' line 'TIMEOUT = 30'" in res.text() and "'TIMEOUT = 45'" in res.text()
+    assert f.read_text() == "TIMEOUT = 45\nRETRIES = 3\n"
+
+
+def test_changed_minus_line_in_longer_block_is_refused(run, tmp_path):
+    src = "def f():\n    a = 1\n    b = 45\n    return a + b\n"
+    f, res = _apply(run, tmp_path, src, " def f():", "     a = 1", "-    b = 30", "+    b = 60",
+                    "     return a + b")
+    assert res.is_error and "'-' line 'b = 30'" in res.text()
+    assert f.read_text() == src
+
+
+def test_exact_minus_line_still_applies(run, tmp_path):
+    f, res = _apply(run, tmp_path, "TIMEOUT = 45\nRETRIES = 3\n",
+                    "-TIMEOUT = 45", "+TIMEOUT = 60", " RETRIES = 3")
+    assert not res.is_error, res.text()
+    assert f.read_text() == "TIMEOUT = 60\nRETRIES = 3\n"
+
+
+def test_context_shift_still_places_by_similarity(run, tmp_path):
+    # The first context line is stale (file says "# limits:", hunk "# limits"); the '-' line is exact.
+    src = "# limits:\nTIMEOUT = 45\nRETRIES = 3\n"
+    f, res = _apply(run, tmp_path, src, " # limits", "-TIMEOUT = 45", "+TIMEOUT = 60", " RETRIES = 3")
+    assert not res.is_error, res.text()
+    # Placement is by similarity; the matched block takes the hunk's text (context lines as sent).
+    assert f.read_text() == "# limits\nTIMEOUT = 60\nRETRIES = 3\n"
+
+
+def test_minus_line_whitespace_and_unicode_rules_unchanged(run, tmp_path):
+    src = "\tx  =   'a'\nnote = “hi”\nz = 3\n"
+    f, res = _apply(run, tmp_path, src, "-x = 'a'", "+x = 'b'", ' note = "hi"', "-z = 3", "+z = 4")
+    assert not res.is_error, res.text()
+    assert f.read_text().splitlines()[0].strip() == "x = 'b'" and f.read_text().endswith("z = 4\n")
+
+
+def test_changed_lone_minus_line_is_refused(run, tmp_path):
+    f, res = _apply(run, tmp_path, "TIMEOUT = 45\nRETRIES = 3\n", "-TIMEOUT = 30", "+TIMEOUT = 60")
+    assert res.is_error
+    assert f.read_text() == "TIMEOUT = 45\nRETRIES = 3\n"
+
+
+def test_stale_one_line_hunk_changes_nothing(run, tmp_path):
+    # The file's line changed since the hunk was written: '-MAX_RETRIES = 3' must not rewrite 'MAX_RETRIES = 7',
+    # with or without a blank context line, a context hint, or a second file in the patch.
+    f, other = tmp_path / "r.py", tmp_path / "o.txt"
+    other.write_text("keep\n")
+    for body in (["-MAX_RETRIES = 3", "+MAX_RETRIES = 5"],
+                 [" ", "-MAX_RETRIES = 3", "+MAX_RETRIES = 5"],
+                 ["@@ import os @@", "-MAX_RETRIES = 3", "+MAX_RETRIES = 5"]):
+        f.write_text("import os\n\nMAX_RETRIES = 7\n")
+        res = run("apply_patch", patch=P("*** Update File: o.txt", "-keep", "+changed", "*** Update File: r.py", *body))
+        assert res.is_error and "not found" in res.text() and "no files changed" in res.text(), res.text()
+        assert "MAX_RETRIES = 7" in res.text()
+        assert f.read_text() == "import os\n\nMAX_RETRIES = 7\n" and other.read_text() == "keep\n"

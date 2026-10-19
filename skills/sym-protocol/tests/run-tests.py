@@ -39,6 +39,7 @@ CASES = [
     ("truncated JSON", [I("syntax-truncated.jsonl")], 1, "ERR:SYN"),
     ("duplicate keys", [I("duplicate-keys.json")], 1, "ERR:SYN"),
     ("id grammar violated", [I("bad-id-grammar.json")], 1, "ERR:SYN"),
+    ("id/ref with trailing newline", [I("id-trailing-newline.json")], 1, "ERR:SYN"),
     ("float where integer required", [I("float-score.json")], 1, "ERR:SYN"),
     ("unknown act enum", [I("unknown-act.json")], 1, "ERR:SYN"),
     ("extra property (additionalProperties=false)", [I("extra-property.json")], 1, "ERR:SYN"),

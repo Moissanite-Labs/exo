@@ -54,7 +54,9 @@ but has not run it against models yet, and says so.
 ### 1.1 How current Exo's copy is
 
 Exo vendored the library in phase 4 (`src/exo/protocols/sym2p/`, NOTICE pins commit `2d93ed6`). That commit
-is still upstream `main` today, and the registries match byte for byte. So the copy is current. It holds
+is still upstream `main` today, and the registries match byte for byte. So the copy is current. One local
+change: the grammar patterns end in `\Z`, not `$`, because `$` also matches before a final newline and let an
+id, ref or hash such as `"builder\n"` pass. It holds
 the normative 1.0 JSON profile (`v1.py`) and the 2.0 draft dense lines with the v2.1 reasoning extension and
 the -rcp edition (`v2.py`). Before this work, only the bus used it, as an optional message body
 (`exo.bus.client.post_sym2p`, `exo-bus` plugin). Nothing in the standalone core used it.
@@ -222,7 +224,12 @@ tools, accept). For each task the delegator:
 2. records a `tasks` row (status queued) and publishes `task.updated`;
 3. waits for a slot, creates a child session (`parent` set to the parent session), and runs a child `Loop` on
    the same store, hub, router and tool runner, so approvals and plugin hooks (exo-gate) apply to the child's
-   tool calls exactly as to the parent's;
+   tool calls exactly as to the parent's. The child loop also shares the engine's per-session state, so the
+   engine sees the child's turn running. `session.list` shows it `live`, and `session.resume` leaves its open tool
+   call alone. The principal typing into the child's session (`turn.send`, any mode) steers it (D-070). Any other
+   caller gets `forbidden` there (D-052): the parent uses `subagent send`. While the child starts or finishes, no
+   round can take a steer, so `turn.send` fails with `conflict` and never starts a turn in the child.
+   An unaddressed peer message never picks a child;
 4. gives the child a focused system prompt (lifted from Hermes) and the brief in English as its first message;
 5. builds the `Receipt` from what the harness measured, signs it if a signer is set, stores it, publishes
    `task.updated`, and returns the English receipt to the parent model. Several tasks are labelled
@@ -237,14 +244,18 @@ tool outside its list gets an error result.
 **Limits** (config `delegation` in `config.json`; defaults in brackets): depth [1, flat, as in Hermes],
 tasks per call [10, Hermes's default], concurrent children per depth level [4], tool rounds per child [24],
 tokens per child [200,000], wall time per child [900 s], summary length [6,000 characters]. A separate
-slot pool per depth level means a parent waiting on its children can never starve them of slots.
+slot pool per depth level means a parent waiting on its children can never starve them of slots. The token
+budget counts what the child's calls newly process: uncached input, cache writes and output. Cache reads do not
+count, so re-reading a cached context each round does not spend it, on any provider (D-080). The receipt's
+tokens in are the same count: uncached input plus cache writes.
 
 **Cancel.** Interrupting the parent's turn cancels its `delegate` call, which interrupts every child loop and
 waits for it to stop cleanly; a child's own `delegate` call is cancelled the same way, so the whole tree
 stops. `turn.interrupt` on a child session stops just that child, and the parent gets a cancelled receipt.
 
 **Outcomes.** done; failed with a reason code (`timeout`, `turns`, `budget`, `error`); cancelled (`cancelled`
-by the parent, `interrupted` by a client). After a restart, tasks left queued or running are marked failed.
+by the parent, `interrupted` by a client). After a restart, the agent's own tasks left queued or running are
+marked failed once its core holds the writer lock (`run/agent-<id>.lock`).
 
 **Protocol.** `tasks.list` now works (rows with English `detail`, the brief and receipt lines, signature).
 `exo chat` prints `[task running]` and `[task done]` lines.
