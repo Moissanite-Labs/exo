@@ -121,8 +121,8 @@ def test_channel_routes_inbox_to_turns_and_replies_signed(bus, tmp_path):
     bus.post("delta", "team:core", "to the core team")
     bus.post("beta", "group", "my own message")
     extra = {"url": bus.url, "seat": "beta", "keys_dir": str(keys), "state_dir": str(tmp_path / "state")}
+    load_plugin()  # registers exo_bus_plugin, so the import below works when this test runs alone
     from exo_bus_plugin.exo_bus_hermes.adapter import BusChannel, route
-    load_plugin()
 
     async def main():
         link = StubLink()
