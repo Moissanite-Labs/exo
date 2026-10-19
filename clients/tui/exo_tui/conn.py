@@ -72,9 +72,7 @@ class LocalClient:
     async def aclose(self) -> None:
         if self._server is not None:
             await self._server.close()
-            self._server = None
-            if self.serve_path is not None:
-                self.serve_path.unlink(missing_ok=True)
+            self._server = None  # close() removed the socket and the lock, in that order
         self.dispatcher.hub.close()
         close = getattr(self.engine, "close", None)
         if close:

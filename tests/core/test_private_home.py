@@ -92,10 +92,10 @@ def test_spawn_log_and_pid_are_private(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ensure_core.subprocess, "Popen", popen)
     assert ensure_core._spawn(home).pid == 12345
-    assert mode(home) == mode(home / "logs") == mode(home / "run") == 0o700
-    assert mode(ensure_core.log_path(home)) == mode(ensure_core.pid_path(home)) == 0o600
+    assert mode(home) == mode(home / "logs") == 0o700
+    assert mode(ensure_core.log_path(home)) == 0o600
     assert ensure_core.log_path(home).read_bytes() == b"startup log\n"
-    assert ensure_core.pid_path(home).read_text() == "12345\n"
+    assert not ensure_core.pid_path(home).exists()  # the core writes run/exod.pid itself, under the socket's lock
 
 
 @pytest.mark.parametrize("dangling", [False, True])
