@@ -430,9 +430,8 @@ not read.
 - Options of trusted programs whose value is a command are followed as a nested command, like
   `find -exec` (#154): `tar --to-command`, `-I`, `--use-compress-program`, `--rsh-command`,
   `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
-  --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `mosh --ssh`
-  (#232; its option names are read in any case and after `-` or `+`, as Perl's Getopt::Long reads
-  them: `--SSH=`, `-Ssh`, `+ssh=`); `scp` and `sftp -S`, `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`,
+  --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp` and `sftp -S`,
+  `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`,
   `LocalCommand`, `RemoteCommand` (with the `remote host` exposure) and `KnownHostsCommand`; `git
   rebase -x`/`--exec`, `git bisect run`, `git submodule foreach` (also after `-q`, `--quiet`),
   `--upload-pack` (`clone`, `fetch`, `pull`, `ls-remote`, and its hidden synonym `git ls-remote

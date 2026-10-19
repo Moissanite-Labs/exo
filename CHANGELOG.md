@@ -12,8 +12,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   hidden synonym of `--upload-pack`, is followed; an environment dump behind a `NAME+=value` or `NAME[i]=value`
   assignment (`FOO+=1 printenv GITHUB_TOKEN`, `sudo FOO+=1 printenv X`, `env FOO[0]=1`) is `credentials`; tar takes
   any abbreviation of `--checkpoint-action` longer than `--checkpoint` (`--checkpoint-a=exec=cmd`, `--checkpoint-ac
-  'exec=cmd'`), and those are followed as the full name was; and `mosh --ssh=cmd` (also `--ssh cmd` and `-ssh=`) in
-  any case or after `+` (`--SSH=`, `-Ssh`, `+ssh=`), as Perl's Getopt::Long reads it, is followed like `rsync -e`. Two
+  'exec=cmd'`), and those are followed as the full name was (`mosh --ssh=cmd` in any case or after `+` is read by
+  D-075's mosh reading, #126). Two
   asks #164 added are allowed again, exactly as before it: ssh's `none` value (`-o ProxyCommand=none`,
   `RemoteCommand`, `LocalCommand`, `KnownHostsCommand`, `PKCS11Provider` or `SecurityKeyProvider` set to `none`, any
   case), which ssh_config documents as turning the setting off; and a `psql` line starting with `system` (psql has no

@@ -810,13 +810,12 @@ _OPAQUE_PROGRAMS = {"source": "reads and runs a shell file", ".": "reads and run
 # Allowlisted programs with an option whose value is a command line the program runs (#154). The value is
 # classified as a nested command, like the command after `find -exec`. Long options match any prefix, one letter
 # or more, as getopt_long and git do (`--to-com=`, `psql --o`). Short options are read as getopt reads them (see
-# _option_values): the value is the rest of the word or the next word (`-Izstd`, `-xIzstd`, `-avze ssh`). mosh
-# reads `--ssh` with Perl's Getopt::Long, which ignores case and takes it after `-` or `+` too (#232).
+# _option_values): the value is the rest of the word or the next word (`-Izstd`, `-xIzstd`, `-avze ssh`).
 _EXEC_OPTS = {
     "tar": ("--to-command", "-I", "--use-compress-program", "--rsh-command", "--rmt-command", "--set-mtime-command"),
     "split": ("--filter",), "sort": ("--compress-program",), "man": ("-P", "--pager"),
     "rsync": ("-e", "--rsh", "--rsync-path"), "scp": ("-S", "-D"), "sftp": ("-S", "-D"), "rg": ("--pre",),
-    "zip": ("-TT", "--unzip-command"), "mosh": ("--ssh",),
+    "zip": ("-TT", "--unzip-command"),
 }
 # git subcommand -> options whose value git runs (locally, or on the remote for a local-path remote). ls-remote
 # takes a hidden `--exec` for `--upload-pack` (#230); it rejects `-u`, which is still read so that no line asks less.
@@ -1790,8 +1789,6 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             if ch in takes and vals:
                 opts.append(vals.pop(0))
         argv = [argv[0], *opts, *vals]
-    if prog == "mosh":                               # `--SSH=`, `-Ssh`, `+ssh` are `--ssh` (#232)
-        argv = [re.sub(r"^(--?|\+)ssh(?==|$)", "--ssh", a, flags=re.I) for a in argv]
 
     # words that may expand to no word or several: ssh's destination and remote command cannot be counted past one
     wild = frozenset(i for i, w in enumerate(words) if w.dynamic or (not w.quoted and (

@@ -942,8 +942,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `git ls-remote --exec`, a hidden synonym of `--upload-pack`, is followed (ls-remote rejects `-u`, which is still
   read: reading more than git is fail closed). An assignment before a command is any form bash takes (`NAME+=value`,
   `NAME[i]=value`), so a dump behind one is credentials. tar's `--checkpoint-action` is read in any abbreviation
-  longer than `--checkpoint` (an option of its own, whose optional value must not swallow the next word), and `mosh
-  --ssh` is followed like `rsync -e` in any case and after `+`, as Getopt::Long reads it. Two asks the first change
+  longer than `--checkpoint` (an option of its own, whose optional value must not swallow the next word); `mosh
+  --ssh` in any case and after `+` is read by D-075's mosh reading (#126). Two asks the first change
   added are dropped, and those lines classify exactly as before it: ssh's `none` value for a command or library
   setting, which ssh_config documents as switching the setting off (CLEAR_ON_NONE, any case, the bare word only), and
   a `psql` line starting with `system`, which is mysql's command and SQL in psql.

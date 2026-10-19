@@ -473,7 +473,7 @@ FOLLOW_UPS = [
     (f"git ls-remote --exec='{RM}' /tmp/r", "delete"),
     (f"git ls-remote --exec '{RM}' /tmp/r", "delete"),
     (f"git ls-remote --exe='{RM}' /tmp/r", "delete"),
-    # mosh --ssh is the command mosh runs to reach the host, like rsync -e
+    # mosh --ssh is the command mosh runs to reach the host; D-075's mosh reading (#126) covers every spelling
     (f"mosh --ssh='{RM}' h", "delete"),
     (f"mosh --ssh=\"ssh -oProxyCommand='{RM}'\" h", "delete"),
     (f"mosh --ssh '{RM}' h", "delete"),
@@ -548,8 +548,6 @@ FOLLOW_UP_ORDINARY = [
     ("ssh -o SecurityKeyProvider=none h", "shell"),
     ("psql <<EOF\nsystem text from t;\nEOF", "shell"),
     ("psql -c 'system text from t'", "shell"),
-    ("mosh --ssh='ssh -p 2222' h", "shell"),
-    ("mosh --SSH='ssh -p 2222' h", "shell"),
     ("mosh --ssh-pty h", "shell"),
     ("mosh h", "shell"),
     ("ssh -o \"ServerAliveInterval=$N\" h", "shell"),
@@ -563,6 +561,12 @@ def test_follow_up_ordinary_lines_stay_allow(cmd, category):
     c = classify(sh(cmd))
     assert c.category == category, c
     assert decide(c).outcome == "allow", c
+
+
+@pytest.mark.parametrize("cmd", ["mosh --ssh='ssh -p 2222' h", "mosh --SSH='ssh -p 2222' h"])
+def test_any_mosh_ssh_helper_asks(cmd):
+    # D-075 (#126) reads every `mosh --ssh` value as a command and asks, even a plain ssh with a port.
+    assert decide(classify(sh(cmd))).outcome == "ask"
 
 
 @pytest.mark.parametrize("cmd", [
