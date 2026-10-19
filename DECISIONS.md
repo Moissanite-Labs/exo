@@ -963,6 +963,32 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   quotes hides the next character, so `a[\$(cmd)]` reads no command, as bash runs none. In a nested subscript
   bash before 5.2 runs a `\$( )` again, so the gate reads it there. Past the depth cap a command there is
   `opaque_exec`, as an unquoted `$( )` is.
+  *Amendment 2026-10-17 (issue #188):* `declare`, `typeset`, `local`, `readonly` and `export` evaluate the value of
+  a `NAME=VALUE` operand again: with `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted
+  (the gate reads it with or without them, which is only stricter), and for the first three a `-i` value is
+  arithmetic and a `-n` value is a name whose subscript bash evaluates when used. So `declare -a 'b=($(gh ...))'`,
+  `export -a 'b=(<(gh ...))'` and `declare -i x='a[$(gh ...)]'` were `read` (allow). Those values are now read with
+  the subscript scan: each `$( )`, backticks or `<( )` in them is classified like a `$( )` and added after the
+  line's own parts, as the line parse adds an unquoted one (so it does not take a tie from a redirection), a
+  `[key]=` is read as a subscript, and a quoted operand after one or more unquoted compound ones is read too. A
+  backslash-newline is dropped from a compound value before it is read, as bash drops it first (an `-i` or `-n`
+  value keeps it, as bash does), and a `$( )` the line's own parse read is not read again, also when it holds a
+  backslash-newline. A body that holds a single quote or a here-document marker (`<<`) anywhere is compared as
+  written: bash keeps a backslash-newline in single quotes or a quoted here-document but not in the value it reads
+  again, and the gate does not track where it is, so with a backslash-newline such a body is read again and asks
+  (`declare -a "b=($(ls 'x' \<newline> -l))"`, only stricter: bash runs the same command). A command the
+  line runs only because bash reads a value again also asks through `indirection`, as does an expansion in a `-i` or
+  `-n` value, in a `-i` element, or in a compound value the line itself expanded. So when such a command outranks
+  the line's own category, a deny on that category becomes ask, never allow or log
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`); D-075 (#126) keeps the deny
+  for the `deny:` list form (#191 tracks the `categories` form). That command also carries the `reread` signal,
+  and naming `opaque_exec` does not lower its ask, which stands in for the line's own deny:
+  `{local_write: deny, opaque_exec: allow}` asks too. Past the
+  depth limit such a command, or one in a subscript, is an `opaque_exec` part, as on the line itself, with `reread`.
+  A plain expansion in a compound element without `-i` (`'b=("$@")'`) is expanded once and asks nothing, and the
+  unquoted compound form keeps the line parse's reading. readonly and export never evaluate a name's subscript, so
+  their names are not read. A later plain assignment to a `-i` or `-n` variable and values that come whole from a
+  variable stay a known limit (GATE.md).
   *Amendment 2026-10-17 (issue #160):* wrappers that run a command were unknown or opaque programs, so the command
   was never classified and a deny on its category asked (`setsid git push origin main`, `flock /tmp/l git push`,
   `watch git push`, `script -qc '...'`, `tmux new-session -d '...'`, `screen -dm ...`, `parallel git push :::
