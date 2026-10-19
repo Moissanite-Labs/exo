@@ -21,7 +21,6 @@ process that is not a descendant of the core; ``channel`` for the channels exod 
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import hmac
 import json
 import os
@@ -30,7 +29,6 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs, urlsplit
 
-from exo.core.private import private_file
 from exo.core.types import to_dict
 from exo.protocol import schema as s
 from exo import principal as pr
@@ -105,6 +103,10 @@ class Dispatcher:
 # ---------------------------------------------------------------- HTTP + SSE
 
 
+class SocketBusy(ValueError):
+    """Another core owns, or is starting on, the socket. The only start failure `exo serve` reports as a plain line."""
+
+
 def _lock_path(sock: Path) -> Path:
     return sock.with_name(sock.name + ".lock")
 
@@ -113,20 +115,21 @@ def _take_start_lock(sock: Path) -> int:
     """Exclusive, non-blocking ``flock`` on ``<sock>.lock`` (owner-only), with this pid written in it. A dead
     holder's lock is gone with its fd, so a crash never blocks a start. The file is unlinked by its holder at
     close, so a lock taken on an unlinked file is not the lock: re-open until the file we hold is the one named."""
+    import fcntl  # POSIX only: imported here so the module still loads where the lock is never taken
+
     lock = _lock_path(sock)
-    while True:
+    while True:  # the folder is start_unix's; no private_dir here, which refuses a symlinked folder (macOS /tmp)
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
-            fd = os.open(private_file(lock), os.O_RDWR | os.O_NOFOLLOW)
-        except FileNotFoundError:  # the holder unlinked it after private_file made it: make it again
-            continue
-        try:
+            if os.fstat(fd).st_mode & 0o077:
+                os.fchmod(fd, 0o600)
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             try:
                 who = os.pread(fd, 32, 0).decode("ascii", "replace").strip()
             finally:
                 os.close(fd)
-            raise ValueError(f"another exo core is starting or running on {sock}"
+            raise SocketBusy(f"another exo core is starting or running on {sock}"
                              f"{f' (pid {who})' if who.isdigit() else ''}; stop it, or give this one its own "
                              "--socket") from None
         except BaseException:
@@ -174,7 +177,7 @@ class HttpServer:
         self._unix_path = path
         try:
             if probe(path) == "alive":
-                raise ValueError(f"another server is listening on {path}; stop it, or give this one its own --socket")
+                raise SocketBusy(f"another server is listening on {path}; stop it, or give this one its own --socket")
             if claimed is not None:
                 claimed()
             if path.exists():

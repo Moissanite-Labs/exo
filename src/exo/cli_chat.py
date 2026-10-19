@@ -73,7 +73,7 @@ def cmd_serve(a: Any, store: Any = None) -> int:
         print(stop_core())
         return 0
     from exo.core.tools.builtin.shell import raise_nofile_limit
-    from exo.server.app import load_engine, serve
+    from exo.server.app import SocketBusy, load_engine, serve
 
     raise_nofile_limit()  # tools inherit this; macOS defaults to 256 open files
     if a.seat:
@@ -118,7 +118,7 @@ def cmd_serve(a: Any, store: Any = None) -> int:
 
     try:
         asyncio.run(main())
-    except ValueError as exc:  # a second core on the socket: the start lock, or a live server, names the first
+    except SocketBusy as exc:  # a second core on the socket: the start lock, or a live server, names the first
         print(f"exod: {exc}", file=sys.stderr)
         return 1
     finally:

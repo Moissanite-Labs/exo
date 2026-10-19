@@ -12,7 +12,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   core that starts next is never unlinked by the one before it). The loser exits 1 naming the running core's pid, and
   only the lock holder writes `run/exod.pid`. A crashed core's lock is dropped by the OS. The lock covers all four
   `start_unix` callers (`exo serve`, peers, the TUI window server, the exo-bus plugin); TCP needed none, since a
-  taken port fails at bind.
+  taken port fails at bind. `exo web`'s starter no longer removes a stale socket or writes the pid file (the core does
+  both under the lock), `exo stop` leaves a starting core's files alone, only the lock refusals are reported as a
+  plain line (any other error keeps its traceback in `exod.log`), and a socket in a symlinked folder (macOS `/tmp`)
+  still binds.
 
 ### Security
 - A pinned block in text the principal did not write no longer reads as one to the model (#279, D-040 amendment).

@@ -373,6 +373,151 @@ def test_close_does_not_unlink_a_socket_a_new_core_bound_after_it(home):
     _run(main())
 
 
+def test_a_socket_in_a_symlinked_folder_still_binds(home):
+    """macOS /tmp is a symlink; main binds there, so the lock file must not go through private_dir."""
+    (home / "real").mkdir()
+    (home / "link").symlink_to(home / "real")
+    sock = home / "link" / "x.sock"
+
+    async def main():
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(sock)
+        try:
+            assert ensure.probe(sock) == "alive"
+            assert (home / "real" / "x.sock.lock").stat().st_mode & 0o777 == 0o600
+        finally:
+            await srv.close()
+
+    _run(main())
+
+
+def test_serve_teardown_does_not_unlink_a_socket_a_new_core_bound_after_close(home, monkeypatch):
+    """serve() once unlinked the socket after closing its server, which could delete the next core's."""
+    import exo.server.app as app
+    sock = home / "exod.sock"
+    successors: list[HttpServer] = []
+    real_close = app.HttpServer.close
+
+    async def close(self):
+        await real_close(self)
+        if not successors:  # the lock is free and the socket gone: a new core binds at once
+            nxt = HttpServer(Dispatcher(EchoEngine()))
+            await nxt.start_unix(sock)
+            successors.append(nxt)
+
+    monkeypatch.setattr(app.HttpServer, "close", close)
+
+    async def main():
+        task = asyncio.create_task(app.serve(EchoEngine(), socket=sock))
+        while ensure.probe(sock) != "alive":
+            await asyncio.sleep(0.05)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        try:
+            assert ensure.probe(sock) == "alive"
+        finally:
+            monkeypatch.undo()
+            for nxt in successors:
+                await nxt.close()
+
+    _run(main())
+
+
+def test_a_waiter_that_locked_an_unlinked_file_does_not_hold_the_lock(home, monkeypatch):
+    """The holder lets go between a waiter's open and its flock, and a third start takes the new file."""
+    import fcntl
+    from exo.server import app
+    sock = home / "exod.sock"
+    first = app._take_start_lock(sock)
+    real = fcntl.flock
+    state: dict = {}
+
+    def flock(fd, op):
+        if "third" not in state:
+            state["third"] = None
+            sock.with_name("exod.sock.lock").unlink()  # the holder's release
+            os.close(first)
+            state["third"] = app._take_start_lock(sock)  # a third start, on a new file
+        return real(fd, op)
+
+    monkeypatch.setattr(fcntl, "flock", flock)
+    try:
+        with pytest.raises(app.SocketBusy):  # the waiter's lock was on the old file, so it must retry and lose
+            app._take_start_lock(sock)
+    finally:
+        os.close(state["third"])
+
+
+def test_close_removes_the_socket_before_the_lock_file(home, monkeypatch):
+    """Once the lock file is gone a waiter takes a new one, so the socket must already be gone by then."""
+    import exo.server.app as app
+    sock = home / "exod.sock"
+    order: list[str] = []
+    real_lock_path = app._lock_path
+
+    def recording(name):
+        class P(type(Path())):
+            def unlink(self, missing_ok=False):
+                order.append(name)
+                return super().unlink(missing_ok=missing_ok)
+        return P
+
+    monkeypatch.setattr(app, "_lock_path", lambda p: recording("lock")(real_lock_path(p)))
+
+    async def main():
+        srv = HttpServer(Dispatcher(EchoEngine()))
+        await srv.start_unix(sock)
+        srv._unix_path = recording("socket")(srv._unix_path)
+        await srv.close()
+
+    _run(main())
+    assert order == ["socket", "lock"]
+
+
+def test_only_a_socket_refusal_is_a_plain_exit_line(serve_env, monkeypatch):
+    import json
+    monkeypatch.setattr("exo.server.app.load_engine", lambda spec: object())
+
+    async def boom(engine, **kw):
+        json.loads("{not json")  # a ValueError that is a real bug keeps its traceback
+
+    monkeypatch.setattr("exo.server.app.serve", boom)
+    with pytest.raises(json.JSONDecodeError):
+        cli_chat.cmd_serve(_args())
+
+
+def test_stop_core_says_a_core_is_starting_and_removes_nothing(home):
+    from exo.server.app import _take_start_lock
+    sock, pid = ensure.exod_socket(home), ensure.pid_path(home)
+    (home / "run").mkdir(mode=0o700)
+    pid.write_text("4242\n")
+    fd = _take_start_lock(sock)  # a core between claimed() and bind
+    try:
+        msg = ensure.stop_core(home)
+    finally:
+        os.close(fd)
+    assert f"is starting (pid {os.getpid()})" in msg and "nothing was removed" in msg
+    assert pid.read_text() == "4242\n"
+
+
+def test_stop_core_with_no_core_clears_the_stale_files(home):
+    sock, pid = ensure.exod_socket(home), ensure.pid_path(home)
+    (home / "run").mkdir(mode=0o700)
+    listener(sock).close()
+    pid.write_text("4242\n")
+    assert ensure.stop_core(home) == "Exo core (exod) is not running."
+    assert not sock.exists() and not pid.exists()
+
+
+def test_ensure_core_leaves_a_stale_socket_for_the_core_to_replace(home):
+    sock = ensure.exod_socket(home)
+    listener(sock).close()
+    dead = SimpleNamespace(poll=lambda: 1, gone=True)
+    with pytest.raises(ensure.CoreUnavailable):
+        ensure.ensure_core(home, agent="nobody", timeout=2, spawn=lambda h: dead)
+    assert sock.exists()
+
+
 # ---------------------------------------------------------------- real processes
 
 

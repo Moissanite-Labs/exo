@@ -300,7 +300,7 @@ messages already recorded with the wrong author.
 
 - One process writes an agent's log and tree: it holds `$EXO_HOME/run/agent-<id>.lock` (an OS file lock,
   released when the process dies). `exo serve` takes it; a second `exo serve` for the same agent refuses
-  to start. Starting at the same instant is settled one step earlier, by the socket's own lock (`run/exod.sock.lock`).
+  to start. Two starts at the same instant for one agent are settled by this writer lock, which `exo serve` takes before it reaches the socket. The socket's own lock (`run/exod.sock.lock`) settles two seats, or the echo engine, on one socket.
 - The TUI with no daemon runs the core in process, takes the lock and serves `run/agent-<id>.sock`. A second
   window for the same seat connects to that socket instead of starting a second core. If the holding
   window closes, the other windows reconnect and one of them takes over.
