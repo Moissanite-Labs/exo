@@ -2,6 +2,11 @@
 
 Exo works with any model provider. You choose which model serves each role.
 
+Provider status URLs in `exo models`, `/providers` and the web Providers data replace URL logins
+(`user:password@`) with `***@`. Invalid URLs show a generic label. Scheme, host and endpoint path stay visible
+for ordinary URLs. Connections and local-server probes still use the original configured endpoint. This is
+userinfo redaction, not a guarantee about secrets placed in URL paths, queries or fragments (#271, D-034).
+
 ## Set up with the app or the TUI
 
 Pick one of three places. They share one engine (`exo/providers_setup.py`, D-034), so they show the same

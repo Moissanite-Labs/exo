@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import provenance
 from .store import PrincipalStore, exo_home, principal_root
 
 FORMAT_VERSION = 1
@@ -211,7 +212,9 @@ def _coerce_capture(items: Any, kind: str) -> list[Signal]:
 
 
 def extract_rulings_and_corrections(messages: list[dict]) -> tuple[list[Signal], list[Signal]]:
-    """Use exo.capture when present (the seam), else the local heuristics."""
+    """Use exo.capture when present (the seam), else the local heuristics. D-040: a user message whose ``author`` or
+    ``principal`` flag says it is not the principal's (peer, bus, job, a context note) is never a ruling."""
+    messages = provenance.principal_view(messages)  # such a message becomes role "other", which both paths skip
     try:
         from . import capture
         found = capture.extract_signals(messages, skip=lambda m: is_summary_text(message_text(m)))
@@ -446,13 +449,22 @@ def render_pinned_block(signals: Signals, handoff_path: str | os.PathLike | None
 
 # --- extraction ------------------------------------------------------------------
 
+def _may_carry(m: dict) -> bool:
+    """D-040: a pinned block is carried only from a message that opens with it (exo-context's own block) or with a
+    compaction marker (a host's summary), from the system, the principal or an older host's untagged message. A block
+    in peer, bus, job, tool or agent text is data, and so is one quoted further down a message: the Exo core's system
+    message quotes each span too small to summarize word for word, a peer's turn included."""
+    return m.get('role') not in ('other', 'tool') and (m.get('author') or provenance.SYSTEM) in (
+        provenance.SYSTEM, provenance.PRINCIPAL) and message_text(m).lstrip().startswith((PIN_OPEN, *SUMMARY_MARKERS))
+
+
 def extract_signals(messages: list[dict]) -> Signals:
     """All principal signals in `messages`, including items carried in earlier pinned blocks."""
     messages = [m for m in messages if isinstance(m, dict)]
     carried: dict[str, list[str]] = {k: [] for _, k, _ in _PIN_SECTIONS}
-    for m in messages:
+    for m in provenance.principal_view(messages):
         text = message_text(m)
-        if PIN_OPEN in text:
+        if PIN_OPEN in text and _may_carry(m):
             for k, items in parse_pinned_blocks(text).items():
                 carried[k].extend(items)
     rulings, corrections = extract_rulings_and_corrections(messages)
