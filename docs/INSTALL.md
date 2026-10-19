@@ -31,7 +31,8 @@ export PATH="$HOME/.local/bin:$PATH"   # zsh: ~/.zshrc, bash: ~/.bashrc, fish: f
 writes model keys; the first `exo` run with no working provider opens the providers panel (`/providers`).
 
 `exo update` checks the checkout for tracked changes, untracked files and ignored source files before pulling with
-`--ff-only`. Commit, stash (including untracked files), or remove local changes before updating. It
+`--ff-only`. When it stops, it names up to five of the paths that block it. Commit, stash (including untracked
+files), or remove local changes before updating. It
 checks the target Python for pip first; when pip is absent (for example after `uv sync`), it uses
 `uv pip --python` for that same environment. If neither installer is available, it stops before the
 pull. Installer-managed installs also refresh their plugins with `install.sh --no-pip --no-interview`.
