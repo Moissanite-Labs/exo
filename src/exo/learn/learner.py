@@ -107,6 +107,17 @@ class Learner:
         except Exception:
             return None
 
+    def private(self, session: str | None) -> bool:
+        """A private thread is not remembered (D-028): learning neither reads it nor records a signal from it, nor
+        from a session under it (its delegate child, which holds a brief built from it, at any depth)."""
+        store = getattr(self.engine, "store", None)
+        if not session or store is None:
+            return False
+        try:
+            return bool(store.private(session))
+        except Exception:
+            return True  # it cannot tell: keep out, as if private
+
     # -- triggers and hooks --------------------------------------------------
 
     def trigger(self, session: str | None, reason: str = "signal") -> bool:
@@ -115,7 +126,7 @@ class Learner:
         from .review import is_unattended, run_review
         if not self.on or not self.settings["fast_loop"].get("enabled", True):
             return False
-        if session and is_unattended(self, session):
+        if session and (is_unattended(self, session) or self.private(session)):
             return False
         try:
             loop = asyncio.get_running_loop()
@@ -144,7 +155,7 @@ class Learner:
         from .review import is_unattended, needs_review, new_signals
         from .signals import record_chat_signals
         sid = kw.get("session_id") or None
-        if not sid or not self.on or is_unattended(self, sid):
+        if not sid or not self.on or is_unattended(self, sid) or self.private(sid):
             return
         try:
             record_chat_signals(self, sid, kw.get("messages"))
