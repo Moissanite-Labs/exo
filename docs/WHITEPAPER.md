@@ -280,9 +280,10 @@ from where something came from, never from what it says about itself.
   or `pytest`, and none is hidden. What it marks as unreadable asks, once, for that exact command. This is an
   *allowlist*: a list of what is allowed, where everything else is not, the safer of the two ways to write such
   a list. The parser does not read every shell form yet: a command inside a parameter expansion such as
-  `${x:-$(...)}`, is never found, so it runs without asking (#143). A command in a single-quoted array subscript such as `printf -v 'a[$(...)]'` is
-  read since #189 (for #179), and so is the command behind a wrapper such as `setsid` or `flock` since #196 (for
-  #160), so a deny on either holds. Past four levels of nesting, such as `bash -c` inside `bash -c` or an `ssh`
+  `${x:-$(...)}` is never found, so it runs without asking (#143). A command in a single-quoted array subscript
+  such as `printf -v 'a[$(...)]'` is read since #189 (for #179), so is one in a quoted value given to `declare`
+  since #194 (for #188), and so is the command behind a wrapper such as `setsid` or `flock` since #196 (for
+  #160), so a deny on any of them holds. Past four levels of nesting, such as `bash -c` inside `bash -c` or an `ssh`
   chain, the line asks, but a denied act only asks too (#137, #153). A deny entry is checked against every
   command the gate reads on a line, so a denied push joined to another command by `&&` is denied too (D-075,
   #126). Options of trusted programs whose value is a command (`tar --to-command`, `rsync -e`) are read as
