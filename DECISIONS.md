@@ -1275,6 +1275,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-19 (#276):** the terminal serializes approval-card removal with thread switching and restoration,
+  and waits for removal before mounting the next card under the same widget id. A close or answer names its request,
+  so a stale event cannot remove its replacement. Threadless requests still survive thread switches. The response
+  worker starts after the answered card's removal. No command, key, setting or approval authority changes.
 - **Why:** the principal reported an approval card stuck on screen in the terminal and on the web with nothing pending in
   the core, a card the terminal could not answer, a web chat that stopped responding, and wanted to cancel a queued steer.
 - **Stuck card, core:** `CoreEngine.ask` published `approval.resolved` only from the respond path. A turn stopped or
