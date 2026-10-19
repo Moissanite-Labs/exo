@@ -15,7 +15,7 @@ from exo.core.models.fake import FakeProvider
 from exo.core.models.router import Router
 from exo.core.sessions import SessionStore
 from exo.core.trace import Call, TaskRow, Thresholds, ToolRow, TurnTrace
-from exo.core.types import ProviderEvent, ToolCall, Usage
+from exo.core.types import Message, ProviderEvent, ToolCall, Usage
 from exo.protocol import schema as s
 
 TH = Thresholds()
@@ -737,6 +737,29 @@ def test_principal_reject_files_a_finding_and_accept_does_not(tmp_path):
     run(d.run(s.Command.of(s.FeedbackSend(session=sid, verdict="should_have_been", text="use X"))))
     rows = eng.findings.list()
     assert len(rows) == 2 and {r["source"] for r in rows} == {"principal"}
+
+
+def test_principal_reject_in_a_private_thread_files_no_finding(tmp_path):
+    """D-028: findings are global (exo_trace in every thread, /findings, /handoff), so a verdict on a private
+    thread's answer files none: its note would carry the private thread into the others. The same holds for its
+    delegate child and that child's child, which a client opens with /tasks and /open."""
+    eng = engine(tmp_path)
+    from exo.server.app import Dispatcher
+    d = Dispatcher(eng, caller="principal:tui")
+    priv = run(d.run(s.Command.of(s.SessionCreate(kind="private")))).result["session"]["id"]
+    normal = run(d.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
+    kid = eng.store.create_session(title="researcher: zebracorn", parent=priv, agent=eng.agent, kind="subagent").id
+    grandkid = eng.store.create_session(title="checker: zebracorn", parent=kid, agent=eng.agent, kind="subagent").id
+    assert eng.store.thread(priv)[1] == "private"
+    for sid in (priv, kid, grandkid):
+        eng.store.append_message(sid, Message.assistant("Zebracorn: $40M, closes Friday."))
+        for verdict in ("reject", "should_have_been"):
+            out = run(d.run(s.Command.of(s.FeedbackSend(session=sid, verdict=verdict, text="zebracorn is $50M"))))
+            assert out.ok and out.result["recorded"] is False
+    assert eng.findings.list() == []
+    assert "zebracorn" not in call(eng, "exo_trace", {}, normal).text()
+    run(d.run(s.Command.of(s.FeedbackSend(session=normal, verdict="reject", text="wrong file"))))
+    assert [r["session"] for r in eng.findings.list()] == [normal]  # a normal thread still files one
 
 
 def test_trace_and_findings_commands_and_client_error_report(tmp_path):

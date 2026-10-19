@@ -208,7 +208,9 @@ longer holds never stays on screen. If you answer a web card that was already cl
 What the gate asks about, and why:
 
 - **Credentials always ask.** Anything that reads or fills a password, token or key asks every time. An "always"
-  answer is never stored for credentials.
+  answer is never stored for credentials. A `grep` or `glob` over a folder leaves out the secret stores in it
+  (`~/.ssh`, `~/.aws`, `.env`, Exo's keys) and says how many it skipped; the agent must name one to read it,
+  which asks.
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another.

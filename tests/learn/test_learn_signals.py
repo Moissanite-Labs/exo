@@ -66,6 +66,69 @@ def test_same_edit_twice_makes_one_pair(engine, learner):
     assert len(verdicts(learner)) == 2 and len(pairs(learner)) == 2  # distinct verdict events, distinct evidence
 
 
+def test_feedback_on_a_private_thread_is_not_remembered(engine, learner):
+    """D-028: a verdict on a private thread's answer would put that answer and the question before it in the
+    ledger and the preference pairs, so it is not recorded and says why."""
+    sid, _ = new_session(engine, ("user", "Plan the zebracorn launch"), ("assistant", "Zebracorn ships Friday."),
+                         kind="private")
+    for verdict, text in (("accept", ""), ("edit", "Zebracorn ships Monday."), ("reject", "wrong day")):
+        out = handle_feedback(engine, feedback(sid, verdict, text))
+        assert out["recorded"] is False and "private" in out["reason"]
+    assert list(learner.runtime.ledger.iter()) == [] and pairs(learner) == [] and learner.tasks == {}
+
+
+def test_feedback_under_a_private_thread_is_not_remembered(engine, learner):
+    """D-028: a private thread's delegate child holds the brief built from it and the child's result, and a client
+    can open it (/tasks, /open) and send a verdict. Neither it nor its own child records one. A normal thread's
+    child still does."""
+    priv, _ = new_session(engine, ("user", "Plan the zebracorn deal"), ("assistant", "Delegating."), kind="private")
+    kid, _ = new_session(engine, ("user", "Dig into zebracorn"), ("assistant", "Zebracorn: $40M, closes Friday."),
+                         kind="subagent", parent=priv)
+    grandkid, _ = new_session(engine, ("user", "Check the zebracorn terms"), ("assistant", "Zebracorn terms hold."),
+                              kind="subagent", parent=kid)
+    for sid in (kid, grandkid):
+        for verdict, text in (("accept", ""), ("edit", "Zebracorn: $50M"), ("reject", "zebracorn is $50M")):
+            out = handle_feedback(engine, feedback(sid, verdict, text))
+            assert out["recorded"] is False and "private" in out["reason"]
+    assert list(learner.runtime.ledger.iter()) == [] and pairs(learner) == [] and learner.tasks == {}
+    normal, _ = new_session(engine, ("user", "Plan the trip"), ("assistant", "Delegating."), kind="thread")
+    child, _ = new_session(engine, ("user", "Check the ferry"), ("assistant", "Ferry: nine."), kind="subagent",
+                           parent=normal)
+    assert handle_feedback(engine, feedback(child, "edit", "Ferry: ten."))["recorded"] is True
+
+
+def test_ui_respond_on_a_private_threads_panel_is_not_remembered(engine, learner):
+    """D-028: what the user does with a panel a private thread opened (a choice, a comment) stays out of the
+    ledger; a panel from a normal thread, or one the event log does not know, is still noted."""
+    priv, _ = new_session(engine, ("user", "Compare the zebracorn offers"), kind="private")
+    normal, _ = new_session(engine, ("user", "Compare the ferries"), kind="thread")
+    engine.hub.publish(s.UiPanel(panel_id="p_priv", action="open", kind="choice", text="Zebracorn: A or B?"), priv)
+    engine.hub.publish(s.UiPanel(panel_id="p_norm", action="open", kind="choice", text="Ferry: A or B?"), normal)
+    out = handle_ui_respond(engine, s.UiRespond(panel_id="p_priv", action="acted",
+                                                value={"choice": "b", "comment": "zebracorn at $50M"}))
+    assert out["recorded"] is False and "private" in out["reason"]
+    for pid in ("p_norm", "p_unknown"):
+        assert handle_ui_respond(engine, s.UiRespond(panel_id=pid, action="acted", value={"choice": "a"}))["recorded"]
+    notes = [e["body"] for e in learner.runtime.ledger.iter(kind="note") if e["body"]["type"] == "ui_signal"]
+    assert [n["panel_id"] for n in notes] == ["p_norm", "p_unknown"]
+    assert "zebracorn" not in json.dumps(list(learner.runtime.ledger.iter())).lower()
+
+
+def test_ui_respond_on_a_panel_a_private_thread_updated_is_not_remembered(engine, learner):
+    """D-028: `ui update` takes a known panel id from any thread. A panel a normal thread opened and a private
+    thread (or its child) then updated may show the private thread's words, so a response to it is not noted."""
+    normal, _ = new_session(engine, ("user", "Compare the ferries"), kind="thread")
+    priv, _ = new_session(engine, ("user", "Compare the zebracorn offers"), kind="private")
+    kid, _ = new_session(engine, ("user", "Check zebracorn"), kind="subagent", parent=priv)
+    for pid, by in (("p_shared", priv), ("p_kid", kid)):
+        engine.hub.publish(s.UiPanel(panel_id=pid, action="open", kind="choice", text="Ferry: A or B?"), normal)
+        engine.hub.publish(s.UiPanel(panel_id=pid, action="update", kind="choice", text="Zebracorn: A or B?"), by)
+        out = handle_ui_respond(engine, s.UiRespond(panel_id=pid, action="acted",
+                                                    value={"choice": "b", "comment": "zebracorn at $50M"}))
+        assert out["recorded"] is False and "private" in out["reason"], pid
+    assert "zebracorn" not in json.dumps(list(learner.runtime.ledger.iter())).lower()
+
+
 def test_ui_respond_logs_a_note(engine, learner):
     out = handle_ui_respond(engine, s.UiRespond(panel_id="p1", action="dismissed", value={"why": "noise"}))
     assert out["recorded"]

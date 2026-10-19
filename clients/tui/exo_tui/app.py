@@ -214,6 +214,7 @@ class ExoApp(App):
         self.approvals: list[s.ApprovalRequested] = []
         self.threadless: set[str] = set()  # requests of no thread (a held peer message): every thread shows them
         self.card: ApprovalCard | None = None
+        self._card_transition = asyncio.Lock()  # the shared widget id is reusable only after removal finishes
         self.reconcile_every = 3.0  # how often an open card is checked against the core's own list (D-045)
         self._reconciled = 0.0
         self.pending_steers: list[tuple[str, Block]] = []  # (message id, its transcript line) not yet delivered
@@ -628,7 +629,7 @@ class ExoApp(App):
             self.approvals = [a for a in self.approvals if a.request_id != b.request_id]
             self.threadless.discard(b.request_id)
             if self.card is not None and self.card.req.request_id == b.request_id:
-                self.close_card()
+                self.run_worker(self.close_card(b.request_id), exit_on_error=False)
         elif isinstance(b, s.SteerCancelled):
             if self.intro_pending and b.text == INTRO_PROMPT:
                 self.intro_pending, self.intro_turn, self.intro_reply = "", "", False
@@ -724,10 +725,11 @@ class ExoApp(App):
         counts wait for a return to it: the core's session_total keeps counting the whole thread, so the '+' for an
         unpriced call must stay with it (D-032). `to` gets back what this window last saw of it, if anything.
         A request of no thread stays: it is every thread's."""
-        if self.card is not None and self.card.req.request_id not in self.threadless:
-            await self.card.remove()  # it keeps its slot until gone (a new card reuses its id); no await after this one
-            self.card = None
-        self.approvals = [a for a in self.approvals if a.request_id in self.threadless]
+        async with self._card_transition:
+            if self.card is not None and self.card.req.request_id not in self.threadless:
+                await self.card.remove()  # keep its slot until gone; close/restore use the same transition
+                self.card = None
+            self.approvals = [a for a in self.approvals if a.request_id in self.threadless]
         self.busy, self.turn_t0, self.running_tools, self.cur_id, self.question = False, 0.0, 0, None, None
         self.pending_steers.clear()
         self.agents.clear()
@@ -1709,7 +1711,7 @@ class ExoApp(App):
         self.approvals = [a for a in self.approvals if a.request_id not in gone]
         self.threadless -= gone
         if self.card is not None and self.card.req.request_id in gone:
-            self.close_card()
+            await self.close_card(self.card.req.request_id)
 
     async def restore_approvals(self) -> None:
         """After an answer whose reply was lost: the core's list is the truth, so a request it still holds gets its
@@ -1720,31 +1722,34 @@ class ExoApp(App):
             return
         if not resp.ok:
             return
-        shown = {a.request_id for a in self.approvals} | ({self.card.req.request_id} if self.card else set())
-        for a in resp.result.get("approvals", []):
-            if a.get("session") not in (None, self.session) or a.get("request_id") in shown:
-                continue
-            if a.get("session") is None:
-                self.threadless.add(a.get("request_id", ""))
-            self.approvals.append(from_dict(s.ApprovalRequested, a, strict=False))
-        if self.card is None:  # the answered card may still be on its way out, and the new one reuses its id
-            for old in self.query(ApprovalCard):
-                await old.remove()
-        self.show_approval()
+        async with self._card_transition:
+            shown = {a.request_id for a in self.approvals} | ({self.card.req.request_id} if self.card else set())
+            for a in resp.result.get("approvals", []):
+                if a.get("session") not in (None, self.session) or a.get("request_id") in shown:
+                    continue
+                if a.get("session") is None:
+                    self.threadless.add(a.get("request_id", ""))
+                self.approvals.append(from_dict(s.ApprovalRequested, a, strict=False))
+            self.show_approval()
 
-    def close_card(self) -> None:
-        restore = self.card is not None and (self.focused is self.card or self.card.has_focus_within)
-        if self.card is not None:
-            self.card.remove()
+    async def close_card(self, request_id: str) -> None:
+        async with self._card_transition:
+            card = self.card
+            if card is None or card.req.request_id != request_id:
+                return  # a resolved event or another closer already replaced this request's card
+            focused = self.focused
+            restore = focused is card or card.has_focus_within
+            await card.remove()
             self.card = None
-        self.show_approval()
-        if restore:
-            self.query_one(Composer).focus()
+            self.show_approval()
+            if restore and (self.focused is None or self.focused is focused) and not self.modal_open():
+                self.query_one(Composer).focus()
 
-    def on_approval_card_answered(self, msg: ApprovalCard.Answered) -> None:
+    async def on_approval_card_answered(self, msg: ApprovalCard.Answered) -> None:
         self.approvals = [a for a in self.approvals if a.request_id != msg.request_id]
         self.note(f"approval: {msg.decision}" + (f" ({msg.note})" if msg.note else ""))
-        self.close_card()
+        # A queued click still answers its own request after a switch; it must never close the replacement card.
+        await self.close_card(msg.request_id)
         self.run_worker(self.answer_approval(s.ApprovalRespond(request_id=msg.request_id, decision=msg.decision,
                                                                note=msg.note, client=CLIENT_ID)), exit_on_error=False)
 

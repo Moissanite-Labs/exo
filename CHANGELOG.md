@@ -6,6 +6,36 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Search tools skip secret stores (#241, D-038). The gate checks only the path a `grep` or `glob` call names, and the
+  tools walked everything below it, so `grep {pattern: "key", path: HOME}` (or the same search with no path from a cwd
+  of HOME, or of `$EXO_HOME`) returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and `$EXO_HOME/run/exod.principal.key`
+  as an allowed read. Both tools now leave out every folder and file below the root that `is_sensitive_path` matches,
+  as found or through a link (`notes.txt` pointing into `~/.ssh`), do not enter a store folder, and end with `[skipped
+  N secret-store paths; read one by name to be asked]`. A store named as `path` still asks and, once approved, is
+  read; `~/.ssh/..` is not a store for that and walks HOME with its stores left out, and a store-named link to an
+  ordinary folder (`backup.key` to HOME) returns nothing. A root whose real path is `/` (`/`, `/proc/self/root`, a
+  link to `/`) is refused, and stores are matched under the root's real path without a doubled `/`, so a custom
+  `$EXO_HOME` stays out there too. In a repo's own `.claude` folder (beside a `.git`) the `worktrees`, `commands`,
+  `agents` and `skills` folders are searched, so a `.claude/worktrees` checkout is not hidden; `~/.claude`, the rest
+  of a repo's `.claude` and any `.claude` that holds a Claude login, transcripts or shell snapshots (another home that
+  is a git checkout) stay out. `code_find` refuses a folder that is or holds a known store (the home folder,
+  `$EXO_HOME`, `~/.config`, `/`), since `jg` walks it itself. About 0.2 to 0.4 s more CPU on a 20,000-file tree.
+- Gate (#230, #232, D-038): follow-ups to the exec-option and environment-dump coverage of #164. These were allowed
+  and now ask: an `ssh`/`scp -o` setting whose keyword the gate cannot read (`ssh -o "$OPT" h`, `-o $OPT`, a glob, an
+  unclosed quote that the expansion may close: `-o '"'"$OPT"`) is `opaque_exec`; `git ls-remote --exec=cmd`, git's
+  hidden synonym of `--upload-pack`, is followed; an environment dump behind a `NAME+=value` or `NAME[i]=value`
+  assignment (`FOO+=1 printenv GITHUB_TOKEN`, `sudo FOO+=1 printenv X`, `env FOO[0]=1`) is `credentials`; tar takes
+  any abbreviation of `--checkpoint-action` longer than `--checkpoint` (`--checkpoint-a=exec=cmd`, `--checkpoint-ac
+  'exec=cmd'`), and those are followed as the full name was (`mosh --ssh=cmd` in any case or after `+` is read by
+  D-075's mosh reading, #126). Two
+  asks #164 added are allowed again, exactly as before it: ssh's `none` value (`-o ProxyCommand=none`,
+  `RemoteCommand`, `LocalCommand`, `KnownHostsCommand`, `PKCS11Provider` or `SecurityKeyProvider` set to `none`, any
+  case), which ssh_config documents as turning the setting off; and a `psql` line starting with `system` (psql has no
+  `system` command; `mysql` keeps it, and both keep `\!`). A card no longer says "runs runs", `ssh {,} host -o ...`
+  has a test, and GATE.md names the compressors the gate knows and `ssh -F` as a known limit.
+- Provider status rows and `exo models` redact URL userinfo (#271). Basic-auth logins no longer appear in
+  these displays or client status payloads. Connection endpoints remain unchanged. Invalid URLs produce a
+  generic label; secrets in URL paths, queries or fragments remain outside this redaction's scope.
 - Tool subprocesses (bash, background jobs, `code_find`) drop inherited shell startup hooks (#135, D-039
   amendment): bash itself acts on `BASH_ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS` and
   `BASHOPTS` at startup; `ENV` is read by interactive POSIX shells a command starts; `PS4` matters once xtrace is
@@ -35,8 +65,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `POSIXLY_CORRECT` set mosh runs them as the command). A `--` right after the `ssh` or `mosh` host ends the options,
   and the command after it is read.
   `Decision.reserved` lists each hit once, and its ledger view redacts URL userinfo. Where the gate cannot read a
-  command (for example a heredoc after a `coproc` block,
-  nesting past the depth cap, `eval $(...)`, a command on stdin, `watch`/`tmux`-style wrappers) the line asks as opaque
+  command (for example nesting past the depth cap, `eval $(...)`, a command on stdin, `watch`/`tmux`-style
+  wrappers) the line asks as opaque
   rather than denying, and so does an `ssh` chain past the hop cap (#153). `${...}` bodies are still `allow` even
   under `deny` (#143); `docs/GATE.md` lists the open paths.
 - The gate reads the command behind wrappers that run one (#160, D-038): `setsid`, `flock`, `chroot`, `unshare`,
@@ -111,6 +141,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- Terminal approval cards wait for removal before the next queued card mounts (#276). Answering a card or
+  reconciling a closed request no longer mounts two widgets under the same approval id. Close, restore and
+  thread-switch transitions share a lock, and stale answers or close events cannot remove the next request's card.
+- `exo update` names up to five of the files that block it when the checkout has local changes or untracked
+  files, instead of only saying that some exist.
 - `edit_file` after whitespace drift: when only the whitespace-normalized strategy matched (one stray double
   space in the file), the span could start inside the indentation before the match and the reindented replacement
   shifted every following line by one column, leaving code that no longer parsed. The span now starts at the
@@ -252,6 +287,42 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   that this call skips them (D-081), not that credentials are missing (`docs/GATE.md`, `docs/PROVIDERS.md`).
 - Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`) classify as reads in the gate, so a new
   user's first screen is no longer an approval card for loading the intro skill (`docs/GATE.md`).
+- Private threads are not remembered again (D-028). Their turns no longer reach exo-memory's signed ledger: the
+  loop skips `on_turn_start`, `sync_turn` and `checkpoint` for them. `exo_note` and `exo_should_have_been` refuse
+  in them. The learning loop and `feedback.send` ignore them: a reject or should_have_been on one files no finding.
+  The context plugin never sees them, so no exo-context handoff or pin carries them. The tree's hooks never name
+  them, and `/compact` no longer offers a private reply as the output a correction in another thread judges.
+  `memory_zoom(subagent=)` opens a private thread's delegate children only from that thread or a fork of it, and
+  of two matching children made in the same millisecond it opens the later one. All of this holds for those
+  children too, at any depth: feedback on a child's answer records nothing and files no finding. A response to a panel a private thread opened or updated is no longer noted in the ledger.
+- Undo in one thread no longer loses other threads' news: the context note stored during the undone turn stays,
+  and undo deletes only the summaries that hold an undone entry and the merges above them, not every later one.
+- A forked thread no longer resends its parent's whole transcript on every model call: the fork's copies count at
+  their original's log position, so the fork opens with its parent's tail, and `/compact` shrinks a fork's tail too.
+  A private thread's fork summarizes its copies in its own tree. Known limit: a copy of an entry the parent undid
+  after the fork counts nowhere, so it stays in the tail only until the fork's own later entries are summarized.
+- A private thread no longer forgets its own start (D-028). Its entries stay out of the agent tree, but its tail was
+  still cut at the agent's frontier, so once another thread's leaves were summarized only its last 12 messages were
+  left. It now keeps a summary tree of its own, and its tail starts at that tree's last summary, so spans too small
+  to summarize stay whole. Plugin hooks never see that tree, and no other thread, agent summary or search sees it
+  either. A fork made after an undo copies only the summaries that still match its renumbered messages. A long
+  private thread from before this fix gets its leaves on its next turn, and that turn waits up to
+  `overflow_settle` for them, as the agent tree's turns do. With a slow summarizer its first calls can still carry
+  most of the thread.
+- exo-context no longer pins peer, bus or job text as the principal's words (D-040). `select_context` now gets each
+  message's author, and handoff extraction skips every user message that is not the principal's. A peer message or
+  a job notice that said "From now on ..." was put back into the system message as a principal ruling once it left
+  the tail, and written to handoffs. The recalled-memory block is now authored `system`. A handoff now carries a
+  pinned block only from a message that opens with it (exo-context's own block) or with a compaction marker (a
+  host's summary). A block in peer, bus, job, tool or agent text is not carried, and neither is one quoted further
+  down a message. The core's system message quotes a span too small to summarize word for word, so a peer's block
+  in such a span was carried as a principal ruling. A fork's copy of a message stored before D-040 has no author,
+  so it is not pinned.
+- `/undo` now reaches exo-context (D-041): the pins of the undone turns are dropped, so an undone ruling no longer
+  comes back on the next turn as the principal's verbatim words. The summaries the undo deleted leave exo-context's
+  handoffs too, and each handoff that may quote them is written again at once, including another thread's on an
+  agent tree. The pinned block no longer links a handoff written before the undo. A ruling that was only summarized
+  stays pinned.
 - Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
   with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
   it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
@@ -441,6 +512,26 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
   stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
   call the rules allow into an ask (`docs/GATE.md`).
+- Gate: a heredoc or here-string after a compound command's closing `}`, `)`, `done`, `fi` or `esac`, and text piped
+  into a compound, now reach the commands inside it (#161). `{ bash; } <<'EOF'` with `git push origin main` in the
+  body was `opaque_exec` (ask) and slipped past `deny: [vcs_push]`; it is now `vcs_push`, as `bash <<'EOF'` is.
+  Commands that do not run their input (`{ cat; } <<EOF`) keep their class, and a command whose stdin is already
+  set (its own heredoc, here-string or `<`, a pipe inside: `{ curl ... | bash; } <<< 'ls'`, or an earlier
+  `exec < file` however spelled, or an eval, source, `.`, variable program or function that may run one) is not
+  fed and stays `opaque_exec`, as is the whole compound when its closer has its own `<`. Past a closer heredoc on
+  another fd (`3<<EOF`, read as stdin), text piped in reaches only the first command inside. Each fed text is read
+  once per line, also by the `sqlite3`, `psql` and `mysql` clients in a group (#154), yet still counts for every
+  command it reaches, so a later client or interpreter whose argument is a store folder stays `store_write` (which
+  outranks `delete`; `deny: [delete]` still denies it through its delete part, D-075). The parser stays linear in
+  the length of an unbroken word (base64, a long path).
+  For fed shells and interpreters, a `deny: [opaque_exec]` entry still denies these compound lines
+  (D-075). Under `categories: {opaque_exec: deny}` or a rule they now ask where they were denied,
+  as `bash <<EOF` already does, until #191. The #178 floor keeps those lines at ask when
+  `opaque_exec` is named at `ask` or `deny`, rather than falling to the push's own `log`.
+  Fed SQL clients follow their plain-input classification, without that floor. A compound feeding
+  `\! git push origin main` to `psql` can change from ask to the push's `log`. D-075 `deny` and
+  `reserved` entries still match every retained part. Category overrides and ordinary rules use
+  the combined classification (`docs/GATE.md` "Shell commands: an allowlist").
 - Unix peer authentication (#175, D-060): principal clients ask the kernel who serves the socket before the
   credential moves, and the core asks who connected before it stamps the principal. The credential file
   (`run/<socket>.principal.key`) is now a JSON launch record, so restart the core and every running `exo`, `exo web`
