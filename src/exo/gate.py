@@ -947,6 +947,20 @@ project cache ruleset org config attestation completion discussion help version 
 """.split())
 _DATA_FLAGS = ("-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form",
                "--json", "-T", "--upload-file", "--form-string")
+# #208: where a post's text comes from somewhere the line does not show. gh builds the body itself (--fill, a
+# template, the editor, generated notes); the HTTP clients read a file, stdin or a config file.
+_GH_UNSEEN_FLAGS = {
+    ("pr", "create"): ("-f", "--fill", "--fill-first", "--fill-verbose", "-e", "--editor", "-T", "--template",
+                       "--recover"),
+    ("issue", "create"): ("-e", "--editor", "-T", "--template", "--recover"),
+    ("pr", "comment"): ("-e", "--editor"), ("issue", "comment"): ("-e", "--editor"),
+    ("release", "create"): ("--generate-notes", "--notes-from-tag"), ("release", "edit"): ("--generate-notes",),
+}
+_GH_API_FIELDS = ("-f", "--raw-field", "-F", "--field")
+# Option values that are not the request body, so a variable there (a token in a header) leaves it readable.
+_HTTP_META = {"curl": ("-H", "--header", "-u", "--user", "-A", "--user-agent", "--oauth2-bearer"),
+              "wget": ("--header", "--user", "--password", "--http-user", "--http-password"),
+              "http": ("-a", "--auth"), "https": ("-a", "--auth"), "xh": ("-a", "--auth"), "httpie": ("-a", "--auth")}
 _SQL_DESTRUCTIVE = re.compile(r"\b(drop\s+(table|database|schema|trigger|view|index)|truncate\s+|delete\s+from)\b",
                               re.I)
 _URL = re.compile(r"https?://[^\s'\"<>]+")
@@ -1071,26 +1085,70 @@ def _gh_target(argv: list[str]) -> tuple[str, str]:
     return target, link
 
 
-def _classify_gh(argv: list[str], cmd: str, bodies: list[str]) -> Classification:
+def _gh_text_options(group: str) -> tuple:
+    """The options that carry a gh post's text: body (or release notes), its file, and the title."""
+    if group == "release":
+        return ("--notes", "-n"), ("--notes-file", "-F"), ("--title", "-t")
+    return ("--body", "-b"), ("--body-file", "-F"), ("--title", "-t")
+
+
+def _gh_unseen(argv: list[str], stdin: str | None, dynamic: frozenset) -> bool:
+    """Whether a gh post's text is not all on the line as the gate read it (#208): a word from an expansion
+    (any word can be an option, `--body-file=f` included), a text option the gate's reading and gh's disagree
+    on (gh takes the last of a repeated option, and short options cluster: `-db text`), a body file `-` with no
+    literal stdin, a body gh builds itself (`--fill`, a template, the editor, generated notes), a gist's files,
+    or a `gh api` request body or field read from a file (`--input`, `field=@path`)."""
+    group, verb = (argv + ["", ""])[1:3]
+    if any(i in dynamic for i in range(1, len(argv))) or group == "gist":
+        return True
+    if group == "api":
+        fields = _option_values(argv, _GH_API_FIELDS, takes="XHpqt", least=99)
+        return _opt(argv, "--input") is not None or any(f.partition("=")[2].startswith("@") for f in fields)
+    body, body_file, title = _gh_text_options(group)
+    for names in (body, body_file, title):
+        got = _opt(argv, *names)
+        if _option_values(argv, names, least=99) != ([] if got is None else [got]):
+            return True
+    if _opt(argv, *body_file) == "-" and stdin is None:
+        return True
+    flags = _GH_UNSEEN_FLAGS.get((group, verb), ())
+    return _has(argv, *flags) or any(a.startswith(f + "=") for a in argv for f in flags if f.startswith("--"))
+
+
+def _classify_gh(argv: list[str], cmd: str, stdin: str | None = None,
+                 dynamic: frozenset = frozenset()) -> Classification:
+    """A gh command. ``stdin`` is its stdin when the line spells it out (`_literal_stdin`), ``dynamic`` the
+    indexes of words that come from an expansion. An outbound post whose text the gate cannot fully read
+    carries the ``unseen_body`` signal (#208)."""
+    c = _gh_kind(argv, cmd, stdin)
+    gist = c.category == "remote_write" and argv[1:2] == ["gist"]          # a secret gist's create or edit
+    if (c.category in OUTBOUND or gist) and _gh_unseen(argv, stdin, dynamic):
+        c.signals.append("unseen_body")
+    return c
+
+
+def _gh_kind(argv: list[str], cmd: str, stdin: str | None) -> Classification:
     group = argv[1] if len(argv) > 1 else ""
     verb = argv[2] if len(argv) > 2 else ""
     if group and group not in _GH_GROUPS:
         return _opaque(f"gh {group} (an alias or extension the gate cannot see)", cmd)
     target, link = _gh_target(argv)
-    body = _opt(argv, "--body", "-b") or ""
-    title = _opt(argv, "--title", "-t") or ""
-    body_file = (_opt(argv, "--body-file", "-F") or "") if group != "api" else ""
+    body_opt, file_opt, title_opt = _gh_text_options(group)
+    body = _opt(argv, *body_opt) or ""
+    title = _opt(argv, *title_opt) or ""
+    body_file = (_opt(argv, *file_opt) or "") if group != "api" else ""
     if body_file == "-":
         body_file = ""
-        if bodies and not body:
-            body = bodies[0]
+        if stdin is not None and not body:
+            body = stdin
     kw = dict(target=target, link=link, text=body, title=title, text_file=body_file, command=cmd)
     where = f" on {target}" if target else ""
     if group == "auth" or group == "secret" or (group == "ssh-key" and verb in ("add", "delete")):
         return _make("credentials", summary=f"gh {group} {verb}", **kw)
     if group == "api":
         method = (_opt(argv, "-X", "--method") or "").upper()
-        fields = _opts(argv, "-f", "--raw-field", "-F", "--field")
+        # Read as gh reads them, so an attached value (`-fbody=x`) makes it a POST too (#208).
+        fields = _option_values(argv, _GH_API_FIELDS, takes="XHpqt", least=99)
         if not method:
             method = "POST" if fields or _opt(argv, "--input") else "GET"
         endpoint = next((a for a in argv[2:] if not a.startswith("-") and "/" in a and "=" not in a), "")
@@ -1147,7 +1205,35 @@ def _classify_gh(argv: list[str], cmd: str, bodies: list[str]) -> Classification
     return _make("read", summary=f"gh {group} {verb}".strip(), **kw)
 
 
-def _classify_http(argv: list[str], cmd: str) -> Classification:
+def _http_unseen(prog: str, argv: list[str], dynamic: frozenset, fed: bool) -> bool:
+    """Whether an HTTP client's request body is not all on the line (#208): a word from an expansion other than
+    a header or login value, a body read from a file or stdin (curl `-d @f`, `-F k=@f`, `-F k=<f`, `-T`, `-K`;
+    wget `--post-file`; httpie `k=@f`, `k:=@f`, `k@f` or a fed stdin)."""
+    meta = _HTTP_META.get(prog, ())
+    exempt = {i + 1 for i, a in enumerate(argv) if a in meta}
+    exempt |= {i for i, a in enumerate(argv) if any(a.startswith(m + "=") for m in meta if m.startswith("--"))}
+    if any(i in dynamic and i not in exempt for i in range(1, len(argv))):
+        return True
+    if prog == "curl":
+        values = lambda *names: _option_values(argv, names, least=99)  # noqa: E731
+        return bool(values("-T", "--upload-file") or values("-K", "--config")
+                    or any(v.startswith("@") for v in values("-d", "--data", "--data-binary", "--json"))
+                    or any(re.match(r"[^=]*@", v) for v in values("--data-urlencode"))
+                    or any(re.match(r"[^=]*=[@<]", v) for v in values("-F", "--form")))
+    if prog == "wget":
+        return _opt(argv, "--post-file", "--body-file", "--config", "--execute", "-e") is not None
+    return (fed and not _has(argv, "--ignore-stdin", "-I")) or any(re.match(r"[\w.-]+(=@|:=@|@)", a) for a in argv[1:])
+
+
+def _classify_http(argv: list[str], cmd: str, dynamic: frozenset = frozenset(), fed: bool = False) -> Classification:
+    """curl, wget or httpie. A post whose body the gate cannot fully read carries ``unseen_body`` (#208)."""
+    c = _http_kind(argv, cmd)
+    if c.category == "web_post" and _http_unseen(argv[0], argv, dynamic, fed):
+        c.signals.append("unseen_body")
+    return c
+
+
+def _http_kind(argv: list[str], cmd: str) -> Classification:
     prog = argv[0]
     urls = [a for a in argv[1:] if _URL.match(a)]
     if not urls:
@@ -1157,7 +1243,7 @@ def _classify_http(argv: list[str], cmd: str) -> Classification:
     method, data = "GET", ""
     if prog == "curl":
         method = (_opt(argv, "-X", "--request") or "").upper()
-        datas = _opts(argv, *_DATA_FLAGS)
+        datas = _option_values(argv, _DATA_FLAGS, least=99)   # an attached value (`-d@f`) is a POST too (#208)
         data = " ".join(datas)
         if not method:
             method = "POST" if datas or _has(argv, "-T", "--upload-file") else "GET"
@@ -1334,6 +1420,21 @@ def _trusted_path(prog: str) -> bool:
     if _ENV_BIN.search(p):
         return True
     return p.startswith("/") and os.path.dirname(os.path.normpath(p)) in _SYSTEM_BIN
+
+
+def _literal_stdin(k: _Cmd, piped: str | None) -> str | None:
+    """A command's stdin when the line spells it out and bash changes nothing in it (#208): its one heredoc
+    with a quoted delimiter or no `$` or backtick in the body, its one here-string with no expansion, or the
+    text piped in from `echo`, `printf` or `cat <<EOF` with no `$` or backtick. None for a `<` redirection,
+    more than one source, or a stdin the gate cannot see (a compound's, `exec <`, the tool's own)."""
+    if any(op in _READ_REDIRS for op, _ in k.redirs) or len(k.heredocs) + len(k.herestrings) > 1:
+        return None
+    if k.heredocs:
+        h = k.heredocs[0]
+        return h.body if not h.ambiguous and (h.quoted or not re.search(r"[$`]", h.body)) else None
+    if k.herestrings:
+        return None if k.herestrings[0].dynamic else k.herestrings[0].text
+    return piped if piped is not None and not re.search(r"[$`]", piped) else None
 
 
 def _stdin_texts(k: _Cmd, piped: str | None) -> list[str]:
@@ -1742,9 +1843,10 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog == "exo":
         return [_classify_exo(argv, cmd)]
     if prog == "gh":
-        return [_classify_gh(argv, cmd, [h.body for h in k.heredocs[:1]])]
+        return [_classify_gh(argv, cmd, _literal_stdin(k, piped), frozenset(i for i, w in enumerate(words) if w.dynamic))]
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
-        return [_classify_http(argv, cmd)]
+        return [_classify_http(argv, cmd, frozenset(i for i, w in enumerate(words) if w.dynamic),
+                               k.piped_in or _own_stdin(k))]
     if prog in ("ssh", "mosh"):
         rest, i, moved, runs, here = argv[1:], 0, "", [], False
         # The host and command as the gate read them before D-075, for both programs.
@@ -2787,9 +2889,10 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         _policy_command_view(cmd),
         *(view for part in parts for view in part._command_views),
     ]))
-    # Outbound text: if several gh segments post text, keep the most severe one's text.
+    # Outbound text: if several gh segments post text, keep the most severe one's text. Never for a post whose
+    # body is a file: another command's heredoc is not that file, and the caller reads the file (#208).
     body = next((h.body for k in cmds for h in k.heredocs), None)
-    if not c.text and c.category in OUTBOUND and body is not None and c.category != "web_post":
+    if not c.text and not c.text_file and c.category in OUTBOUND and body is not None and c.category != "web_post":
         c.text = body
     return c
 
@@ -3882,12 +3985,8 @@ def _each_part(c: Classification) -> Iterator[Classification]:
         yield from _each_part(p)
 
 
-def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classification, str]]:
-    """Each part of the classification (the combined result first, then every simple command it was built
-    from) with the reserved or deny entry that matches it (D-075): a compound line is denied when any simple
-    command on it is. A `command` pattern matches a part on the part's own text or on any decoded view of the
-    line (#136); each pattern is run over the line's views once, not once per part."""
-    entries = list(entries)
+def _line_matcher(c: Classification) -> Callable[[str], bool]:
+    """Whether a `command` pattern matches any decoded view of the line (#136), each pattern run once."""
     views = list(dict.fromkeys(v for p in _each_part(c) for v in p._command_views))
     seen: dict[str, bool] = {}
 
@@ -3896,7 +3995,40 @@ def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classificatio
             regex = re.compile(pattern)
             seen[pattern] = any(regex.search(v) for v in views)
         return seen[pattern]
+    return line
+
+
+def _part_hits(entries: Iterable, c: Classification) -> list[tuple[Classification, str]]:
+    """Each part of the classification (the combined result first, then every simple command it was built
+    from) with the reserved or deny entry that matches it (D-075): a compound line is denied when any simple
+    command on it is. A `command` pattern matches a part on the part's own text or on any decoded view of the
+    line (#136); each pattern is run over the line's views once, not once per part."""
+    entries = list(entries)
+    line = _line_matcher(c)
     return [(p, hit) for p in _each_part(c) if (hit := _list_matches(entries, p, line))]
+
+
+def _override_deny(c: Classification, gates: Mapping) -> tuple[Classification, str, str] | None:
+    """The first part of the line, below the combined result, that a category line or rule denies as it would
+    deny that command alone (#191): its category's line, then the first rule that matches it; or a deny rule
+    whose `command` regex matches only a decoded view of the line (#136). ``(part, why, step)`` or None."""
+    cats, rules = gates.get("categories") or {}, gates.get("rules") or []
+    if not (cats or rules):
+        return None
+    line = _line_matcher(c)
+    for p in list(_each_part(c))[1:]:
+        out, why, step = cats.get(p.category), f"category {p.category}", "category"
+        first = next((r for r in rules if _rule_matches(r["match"], p)), None)
+        if first is not None:
+            out, why, step = first["decision"], first["reason"], "rule"
+        if out != "deny":
+            veto = next((r for r in rules if r["decision"] == "deny" and "command" in r["match"]
+                         and _rule_matches(r["match"], p, veto=True, line=line)), None)
+            if veto is None:
+                continue
+            why, step = veto["reason"], "rule"
+        return p, why, step
+    return None
 
 
 def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
@@ -3914,6 +4046,18 @@ def apply_scopes(c: Classification, scopes: Mapping) -> tuple[str, bool]:
         if _glob_any(repo, scopes.get("internal") or []):
             return ("internal" if c.exposure == "public" else c.exposure), False
     return c.exposure, c.third_party
+
+
+UNSEEN_BODY = ("the gate cannot read the body (stdin, a file it did not read, $(..) or a variable); "
+               "pass the text inline or as an absolute --body-file path")
+
+
+def body_unseen(c: Classification) -> bool:
+    """Whether an outbound body, title or field on the line is out of the gate's sight (#208): a part with the
+    ``unseen_body`` signal, or a post's body file nobody read into its text. Such a post asks under the posting
+    rules, never gets a standing grant, and a required executor refuses it."""
+    return any("unseen_body" in p.signals or (p.text_file and not p.text and p.category in OUTBOUND)
+               for p in _each_part(c))
 
 
 def check_post(text: str, posting: Mapping, *, title: str = "", agents: Iterable[str] = (),
@@ -3950,8 +4094,9 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     Order: matrix cell, then a category override, then the first matching rule (each may lower
     or raise). Then only raises: a deny or ask rule whose `command` regex matches the literal-word
     view but not the text, reserved actions, escalations (budget, third party, listed categories),
-    posting violations and the operator floor. A deny entry wins over everything. A line with a
-    `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
+    posting violations (a body the gate cannot read is one) and the operator floor. A deny entry wins
+    over everything, and so does a category line or rule that denies any part of a compound line. A line
+    with a `$".."` word is also decided as opaque_exec, and the stricter outcome stands.
     `context` may carry `spent_today` for the daily budget.
     """
     pol = policies if (policies and policies.get("_normalized")) else normalize_policies(policies)
@@ -4018,10 +4163,13 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
         bump("ask", f"{eff.category} always asks", "escalate")
 
     violations: list[str] = []
-    if eff.category in (posting.get("applies_to") or POSTING_DEFAULT) and (eff.text or eff.title):
+    unseen = body_unseen(eff)
+    if eff.category in (posting.get("applies_to") or POSTING_DEFAULT) and (eff.text or eff.title or unseen):
         violations = check_post(eff.text, posting, title=eff.title, agents=pol.get("agents") or [],
                                 exposure=eff.exposure)
         violations += check_scrub(eff.text, pol.get("scrub"), title=eff.title, exposure=eff.exposure)  # D-033
+        if unseen:  # #208: the checks above saw only part of the post, so they cannot pass it
+            violations.append(UNSEEN_BODY)
         if violations:
             bump("ask", "posting rules: " + "; ".join(violations), "posting")
 
@@ -4037,6 +4185,10 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
     if eff.category == "store_write":
         bump("ask", "writes to the Exo store; only the principal approves, every time", "floor")
 
+    # #191: a category line or rule that would deny a part alone denies the line, as a deny entry does (D-075).
+    if outcome != "deny" and (part := _override_deny(eff, gates)):
+        p, why, step = part
+        outcome, reason, rule = "deny", f"denied by policy ({why}: {p.summary or p.category})", step
     if (denied := _part_hits(gates.get("deny") or [], eff)):
         outcome, reason, rule = "deny", f"denied by policy ({denied[0][1]})", "deny"
     d = Decision(outcome=outcome, reason=reason, rule=rule, violations=violations,
@@ -4495,6 +4647,17 @@ def approvers_for(category: str, approvals: Mapping | None) -> list[str]:
             if m not in out:
                 out.append(m)
     return out
+
+
+def strictest_approvers(category: str, pinned: Mapping | None, changed: Mapping | None = None) -> list[str]:
+    """Who may answer while a changed ``approvals.yaml`` waits for ``/gate accept`` (D-038, #211): the approvers
+    both the pinned and the changed table allow, in the pinned order. The principal is first in both, so the
+    list is never empty. With no change pending it is ``approvers_for(category, pinned)``."""
+    first = approvers_for(category, pinned)
+    if changed is None:
+        return first
+    second = set(approvers_for(category, changed))
+    return [a for a in first if a in second]
 
 
 def approver_identity(client: str) -> str:

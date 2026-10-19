@@ -6,6 +6,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Gate policy (#191, #211, #208). A `categories: {X: deny}` line or a rule with `decision: deny` now denies a line
+  when any part of it is X, as a `deny:` entry has since D-075: `echo $(git push origin main) > /tmp/f` was `log`
+  under `categories: {local_write: deny}`, and a wrapped or fed-shell line asked under `categories: {opaque_exec:
+  deny}`. Only a deny reaches the parts, and the reason names the part (D-075 amendment). A changed
+  `approvals.yaml` now narrows who may answer at once and shortens new grants (`gate.strictest_approvers`, the
+  shorter `always` value), where a seat the principal had just removed could still approve and `days: 0` still
+  wrote a 7-day grant; a wider file still waits for `/gate accept` (D-038 amendment). A post whose body the gate
+  cannot read asks: stdin (`--body-file -` with a pipe or `<`), `gh api` `@file` fields and `--input`, `--fill`,
+  templates, gist files, curl/wget/httpie file and stdin bodies, `$( )`, backticks or a variable in the text, a
+  repeated or clustered text option, and a body file the hook did not read. The hook reads a body file only by an
+  absolute path (it read a relative one from exod's own folder, so `cd docs && gh ... --body-file notes.md` passed),
+  and a missing, oversized or unread file asks. Such a post gets no "always", no standing grant matches it, and a
+  required executor refuses it as a recorded deny instead of an internal error. An unrelated heredoc no longer
+  fills in a body file's text, and `curl -d@f` and `gh api -fbody=x` are posts (D-033 amendment).
 - Search tools skip secret stores (#241, D-038). The gate checks only the path a `grep` or `glob` call names, and the
   tools walked everything below it, so `grep {pattern: "key", path: HOME}` (or the same search with no path from a cwd
   of HOME, or of `$EXO_HOME`) returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and `$EXO_HOME/run/exod.principal.key`
