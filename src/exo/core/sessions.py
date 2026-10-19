@@ -17,6 +17,7 @@ import os
 import secrets
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -136,15 +137,31 @@ class SessionStore:
         self._db.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         with self._lock:
-            self._db.execute("PRAGMA journal_mode=WAL")
+            deadline = time.monotonic() + 2  # a new file's switch to WAL can be busy without waiting (#246)
+            while True:
+                try:
+                    self._db.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    if "locked" not in str(exc) or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.05)
             self._db.execute("PRAGMA foreign_keys=ON")
-            self._db.executescript(SCHEMA)
-            for table, col, decl in UPGRADES:
-                have = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}
-                if col not in have:
-                    self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
-            self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS messages_log ON messages (agent, pos)"
-                             " WHERE pos IS NOT NULL")
+            # One write transaction: two processes opening the file at once cannot both add a column (#246).
+            # BEGIN goes inside the script because executescript commits a pending transaction first.
+            try:
+                self._db.executescript("BEGIN IMMEDIATE;" + SCHEMA)
+                for table, col, decl in UPGRADES:
+                    have = {r[1] for r in self._db.execute(f"PRAGMA table_info({table})")}
+                    if col not in have:
+                        self._db.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+                self._db.execute("CREATE UNIQUE INDEX IF NOT EXISTS messages_log ON messages (agent, pos)"
+                                 " WHERE pos IS NOT NULL")
+            except BaseException:
+                if self._db.in_transaction:
+                    self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
         if migrate:
             self.migrate_agents()
 
@@ -505,8 +522,9 @@ class SessionStore:
         return ev
 
     def write_event(self, ev: Event) -> None:
-        """Store an event the server Hub numbered. Seats of one home each run a Hub on this file, so the seq is
-        raised past the table's highest inside the write transaction; ``Hub.publish`` then takes ``ev.seq``."""
+        """Store an event the server Hub numbered. Seats of one home each run a Hub on this file, and ``append_event``
+        lets SQLite pick the seq (#237), so the seq is raised past the table's highest inside the write transaction;
+        ``Hub.publish`` then takes ``ev.seq``."""
         def write(db: sqlite3.Connection) -> None:
             ev.seq = max(ev.seq, db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0] + 1)
             db.execute("INSERT INTO events (seq, id, session, type, ts, body) VALUES (?,?,?,?,?,?)",

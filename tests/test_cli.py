@@ -46,7 +46,8 @@ def test_keygen_and_log(tmp_path, monkeypatch, capsys):
                  "--body", json.dumps({"verdict": "accept", "target": first})]) == 0
     capsys.readouterr()
     assert main(["log", "verify"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"ok": True, "checked": 2, "head": _head(tmp_path), "anchored": True}
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "checked": 2, "head": _head(tmp_path), "anchored": True,
+                                                  "anchored_seq": 2}
     assert main(["log", "tail", "-n", "1"]) == 0
     assert "verdict" in capsys.readouterr().out
 

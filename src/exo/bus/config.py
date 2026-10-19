@@ -57,6 +57,7 @@ class RelayConfig:
     bind: str = DEFAULT_BIND
     title: str = "Exo Bus"
     mcp: bool = True
+    web_bodies: bool = False  # the unauthenticated web view at / shows plaintext bodies only when this is set
 
     @classmethod
     def from_env(cls, environ=None) -> "RelayConfig":
@@ -71,4 +72,5 @@ class RelayConfig:
             bind=env("BIND", DEFAULT_BIND, environ),
             title=env("TITLE", "Exo Bus", environ),
             mcp=env("MCP", "1", environ) not in ("0", "false", "no"),
+            web_bodies=(env("WEB_BODIES", "", environ) or "").lower() in ("1", "true", "yes"),
         )

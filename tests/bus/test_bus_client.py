@@ -90,5 +90,6 @@ def test_sym2p_body_rides_inside_the_envelope(bus):
     human = bus.client("gamma").text(env)
     assert human != env["body"] and "{" not in human[:1]
     assert bus.client("gamma").text(env, render=False) == env["body"]
+    bus.relay.config.web_bodies = True  # the web view hides bodies unless the operator opts in
     page = __import__("urllib.request").request.urlopen(bus.url + "/").read().decode()
-    assert '"fmt"' not in page  # the web view shows the plain-English rendering
+    assert '"fmt"' not in page and __import__("html").escape(human) in page  # the plain-English rendering
