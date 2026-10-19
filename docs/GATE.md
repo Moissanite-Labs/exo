@@ -268,10 +268,11 @@ Tests: `tests/security/test_gate_brace_sets.py`.
 A path can reach a store without spelling the store's name. The gate reads four such spellings the way the file
 system or bash will.
 
-- **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder and from
-  the folder the tool runs in: the core passes the session's working folder to tool hooks as `cwd`, and the bash
-  tool's `cwd` argument is joined to it. When a link led somewhere else, the resolved path is matched against the
-  store list too. So `notes.txt` pointing at `~/.ssh/id_rsa`, `aws.txt` at `~/.aws/credentials`, `app.cfg` at a
+- **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder, from
+  the session's working folder (the core passes it to tool hooks as `cwd`), and, for a shell tool, from that folder
+  joined with the call's own `cwd` argument, the folder a shell runs in. A `cwd` argument on a file tool changes
+  nothing: `read_file`, `write_file` and `grep` take unknown arguments and read from the session's folder. When a
+  link led somewhere else, the resolved path is matched against the store list too. So `notes.txt` pointing at `~/.ssh/id_rsa`, `aws.txt` at `~/.aws/credentials`, `app.cfg` at a
   project `.env`, and a folder link `cfg` to `~/.ssh` (`cat cfg/config`) ask in every form: `read_file notes.txt`,
   `cat notes.txt` and the absolute paths. A relative path that lands below the folder it was read from is matched
   by its part below that folder. That way a session inside a folder that looks like a store by name (a repo's
@@ -310,13 +311,18 @@ to 312 ms before.
 Known limits. A link made on the same line (`tar xf v.tar && cat notes.txt`) does not exist yet when the gate
 classifies the line; `ln -s ~/.ssh/id_rsa n` itself asks, since it names the store. Programs that follow links
 while they walk (`grep -r`, `rg -L`, `cp -rL`) are checked by their arguments only. In executor or broker mode the
-gate's view of the file system may differ from the worker's. A relative name read from a session folder inside a
-store (`cat config` with `~/.aws` as the folder) is matched by the name as written, as before; a `cd` on the line
-is tracked (#192). An expansion at the end of a store name is read as empty only, so `cat .env.$(hostname)` stays a
-read, as does the glob `cat .env.*`: the glob samples have no `.env.<suffix>`. A name built whole inside a
-substitution (`cat $(printf '.e%sv' n)`) is not read. The Exo-store write checks (`is_store_path`, "The store is
-credentials" below) read the `${VAR:-word}` value but neither the tool's folder nor expansions inside a name:
-`cp x ~/.exo/polic$(:)ies/gates.yaml` is still a shell command. A write redirection to a path with `$` already asks as `opaque_exec`.
+gate's view of the file system may differ from the worker's. A name built whole inside a substitution
+(`cat $(printf '.e%sv' n)`) is not read. Open issues:
+  - #309: the Exo-store write checks (`is_store_path`, "The store is credentials" below) read the `${VAR:-word}`
+    value but not expansions inside a name, so `cp x ~/.exo/polic$(:)ies/gates.yaml` is still a shell command (a
+    write redirection to a path with `$` already asks as `opaque_exec`);
+  - #310: an expansion at the end of a store name is read as empty only, so `cat .env.$(hostname)` stays a read, as
+    does the glob `cat .env.*` (the glob samples have no `.env.<suffix>`);
+  - #311: a relative name read in a shell's `cwd` inside a store (`{"command": "cat config", "cwd": "~/.kube"}`) is
+    matched by the name as written; a `cd` on the line is tracked (#192);
+  - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved;
+  - #313: a thread's `/proc/<pid>/task/<tid>/environ` is not a store.
+
 Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
 `test_gate_expansions_in_names.py`, `test_gate_bash_glob_classes.py`, and
 `plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.

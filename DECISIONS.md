@@ -1060,8 +1060,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   Rejected: keeping them as fail-safe asks, since they are ordinary spellings and the gate's docs never claimed them.
   *Amendment 2026-10-19 (issues #209, #202, #225, #199):* four spellings reached a secret store without its name,
   and the gate read them as plain reads. A link is judged by where it leads: a path is resolved from the gate's own
-  folder and from the tool's (the core passes the session's working folder to tool hooks as `cwd`, and the bash
-  tool's `cwd` argument is joined to it), and a resolved path a link led to is matched by name; a relative path that
+  folder, from the session's working folder (the core passes it to tool hooks as `cwd`; each hook gets only the
+  keywords it declares) and, for a shell tool, from that folder joined with the call's own `cwd` argument (a file
+  tool ignores that argument, so the gate does too), and a resolved path a link led to is matched by name; a relative path that
   stays below its folder is matched by its part there, so a session in a repo's `.claude/worktrees` checkout is not
   asked about every link. A `.pub` name exempts only a path that resolves to one. `${VAR:-word}` and the other
   operators of `HOME`, `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the
