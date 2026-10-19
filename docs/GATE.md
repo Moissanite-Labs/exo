@@ -707,7 +707,14 @@ gate does not read:
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
-  skipped; before a simple command (`coproc w echo hi`) the first word is the program.
+  skipped; before a simple command (`coproc w echo hi`) the first word is the program. bash takes
+  the opener as a reserved word only right after `coproc` and the name, so a redirection, heredoc
+  or here-string between them (`coproc rm >/dev/null { -rf x`, `coproc 2>/dev/null rm { ...`,
+  `coproc rm <<<x while ...`) gives a simple command that runs the name. The gate then reads the
+  name as the program too, and keeps the skipped reading beside it (#207). A redirection after the
+  opener, in the body or after the closing `}`, changes nothing. Such a line now takes the name's
+  category (`delete` for `rm`), so, as for wrappers, `categories: {opaque_exec: deny}` asks there
+  where main denied; `deny: [opaque_exec]` still denies through the coproc part (D-075).
   `function NAME { ...; }` is read the same way. An environment dump inside (`coproc env`,
   `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Before D-075, a coproc was denied
   only when its inner command outranked `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
@@ -790,10 +797,6 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   allowed under `command:gh pr comment`. The known forms:
   - `${...}` bodies are skipped by the lexer, so `echo ${X:-$(gh pr comment 3 --body hi)}` is
     `read` and allowed (#143; open PR #158).
-  - Text piped or fed by heredoc to `ssh` with no remote command runs in the remote login shell,
-    but the line reads as a plain `ssh`: `echo 'gh pr comment 3 --body hi' | ssh host` and
-    `ssh host <<EOF` are `shell` and allowed under every category deny; a `target:` entry for the
-    host still denies them (#240).
   - `git clone -c` (or `--config`) with a command-running key is not checked as `git -c` is:
     `git clone -c core.sshCommand='gh pr comment 3 --body hi' git@host:x/y` is `local_write` and
     allowed (open PR #231 reads it).
@@ -945,6 +948,28 @@ such lines used to ask on the program the gate misread. Wherever the gate now re
 as the host than it used to, the line asks and the parts of both readings are matched. A `--`
 right after the host ends `ssh`'s options, and the command after it is read (`ssh host -- rm -rf
 /data`).
+
+With no remote command, `ssh host` starts the login shell on the host, and that shell runs what
+ssh's stdin carries (#240). When the line gives ssh a stdin (a pipe, a heredoc, a here-string, or
+a `<` from anything but `/dev/null`), the gate reads that text as shell, as it reads `bash -s`:
+the line asks as `opaque_exec` at least, and each command in the text is a part, `internal` like
+the rest of the line. So `echo 'rm -rf /data' | ssh prod-db`, and `ssh prod-db <<'EOF'` with
+`rm -rf /data` in the body, deny under `deny: [delete]`, and text the gate cannot read (`ssh host
+< script.sh`, `generate | ssh host`) asks. As for `ssh host 'rm -rf /data'`, the most severe
+command in the text sets the line's category and target. `deny` and `reserved` entries see every
+part, so a `target:<host>` entry still matches through the hop part; a setting that sees only that
+command (`categories: {shell: deny}`, a rule keyed on the host as `target`) no longer reaches these
+lines, which ask where main denied them. ssh reads options after the host too, up to the
+remote command, so `ssh host -T` and `ssh host --` have no command, and an empty word (`ssh host
+''`) is none either. `-n`, `-N` and `-f` keep ssh from running its stdin, and a remote command
+takes the stdin as its own input; those lines keep their reading. A word that may expand to no
+word or several among the options and the host, or as every word of the command (`ssh $OPTS
+host`, `ssh "$HOST"`, `ssh host $CMD`), leaves them uncountable, as for the option reader above,
+so the stdin is read then too (`echo data | ssh "$HOST" 'cat > f'` asks). Known limits: the `-o`
+forms of those three flags (`StdinNull`, `SessionType=none`, `ForkAfterAuthentication`) are not
+honored, so such a line reads its stdin anyway; text fed to a remote shell (`ssh host bash -s
+<<EOF`) is not read yet, and the line asks as `opaque_exec` as before; a stdin set earlier by
+`exec < file` (`exec < f; ssh host`) is not seen. `mosh` lines are unchanged.
 
 `mosh` reads its options with Perl's Getopt::Long in its default mode, and the gate reads them the
 same way, against mosh's own option list: `--`, `-` or `+` before the name, any case, a unique
