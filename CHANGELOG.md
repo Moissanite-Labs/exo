@@ -184,6 +184,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- A held answer key on a focused terminal approval card sends one answer (#297). Repeats of the key, posted before
+  the first was handled, each wrote `approval: allow` to the transcript and sent `ApprovalRespond` again; only the
+  call that closes the request's card now notes and sends, so a repeat is dropped and the next queued request is
+  not answered by it.
 - Terminal approval cards wait for removal before the next queued card mounts (#276). Answering a card or
   reconciling a closed request no longer mounts two widgets under the same approval id. Close, restore and
   thread-switch transitions share a lock, and stale answers or close events cannot remove the next request's card.

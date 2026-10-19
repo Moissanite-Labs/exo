@@ -215,3 +215,27 @@ def test_a_send_the_core_steers_shows_pending_and_up_pulls_it_back(tmp_path):
         assert app.composer.text == "note for the child"
 
     run(tmp_path, sc)
+
+
+def test_a_key_repeat_on_a_focused_card_answers_once(tmp_path):
+    """#297: three answer keys posted before the first is handled (a held key) send one ApprovalRespond for the
+    request, write one note, and leave the request queued behind it unanswered."""
+    from textual import events
+
+    async def sc(app, pilot, client, eng):
+        for rid in ("r1", "r2"):
+            pending_approval(eng, app.session, s.ApprovalRequested(request_id=rid, summary=rid,
+                                                                  options=["allow", "deny"]))
+        await until(lambda: len(app.approvals) == 2 and app.card is not None, pilot)
+        assert app.card.req.request_id == "r1"
+        await pilot.press("ctrl+f")
+        await until(lambda: app.card.has_focus, pilot)
+        for _ in range(3):
+            app.card.post_message(events.Key("o", "o"))
+        await until(lambda: app.card is not None and app.card.req.request_id == "r2", pilot)
+        await pilot.pause(0.3)
+        assert [b.request_id for b in responds(app)] == ["r1"]
+        assert app.transcript_text().count("approval: allow") == 1
+        assert app.card is not None and app.card.req.request_id == "r2"
+
+    run(tmp_path, sc)
