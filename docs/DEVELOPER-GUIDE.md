@@ -297,6 +297,8 @@ the text. A new ledger writer that records the principal's words writes them und
 agent decides on its own is written under the agent's name. New code that prints a stored message's text where the
 model reads it (a view, a note, a summarizer's source) uses `exo.core.context.render_message`, or passes text whose
 author is not `principal` through `exo.provenance.defuse_pins`, so it cannot carry a live `<exo-pinned>` block (#279).
+A summarizer's output is model text, never the principal's: pass it through `defuse_pins` where it is made, before
+anything adds a real block to it.
 
 ## 5. Add a seat
 

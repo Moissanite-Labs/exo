@@ -11,9 +11,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   notice's or tool result's copy of exo-context's `<exo-pinned>` block sat there looking like the principal's pinned
   rulings (#216 had already kept it out of handoffs). Wherever the harness prints a message for the model (verbatim
   spans, the summarizer's source, the note on other threads' turns, recalled memory), text by any author but the
-  principal has the tags escaped as `&lt;exo-pinned&gt;`. Nothing is removed. The principal's own words keep their
-  tags, and exo-context's own block is unchanged. The note on other threads now labels a bus seat's turn `bus:`
-  instead of `user:`.
+  principal has the tags escaped as `&lt;exo-pinned&gt;`. So does every summary as it is made (the core's summary
+  nodes, and exo-context's `[CONTEXT COMPACTION]` message before it adds its own block), since a summarizer can
+  decode the escaped tag or write one, and so does the handoff `/exo resume` puts into the system message. The match
+  takes any case, any spaces, punctuation or invisible characters in or around the name, and a tag with no `>`.
+  Nothing is removed. The principal's own words keep their tags, and exo-context's own block is unchanged. The note
+  on other threads now labels a bus seat's turn `bus:` instead of `user:`.
 - Search tools skip secret stores (#241, D-038). The gate checks only the path a `grep` or `glob` call names, and the
   tools walked everything below it, so `grep {pattern: "key", path: HOME}` (or the same search with no path from a cwd
   of HOME, or of `$EXO_HOME`) returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and `$EXO_HOME/run/exod.principal.key`

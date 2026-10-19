@@ -257,8 +257,23 @@ What uses it:
   escaped: `<exo-pinned>` becomes `&lt;exo-pinned&gt;`, and the closing tag likewise (#279). That covers the
   verbatim spans and the summarizer's source (`render_message`), the note on other threads' turns, and recalled
   memory. So a peer's, bus seat's, job notice's, tool result's or the agent's copy of a block is still there word
-  for word, but it no longer reads as one. The live block in a system message is exo-context's own, and the
-  principal's own words keep their tags. The note names a bus seat's turn `bus:`, not `user:`.
+  for word, but it no longer reads as one. The principal's own words keep their tags. The note names a bus seat's
+  turn `bus:`, not `user:`.
+- A summary is never the principal's words, so its tags are escaped too, whoever wrote what it summarizes. A
+  summarizer reads the escaped source, but it is a model: it may decode `&lt;exo-pinned&gt;` back into a tag, or
+  write one fresh. The core escapes each summary node's text as it is made (`TreeContext._run`, before the node is
+  shown, merged, or passed to `on_compacted`), the directives it restores into a leaf included. exo-context escapes
+  the summary in its `[CONTEXT COMPACTION]` message, its own compressor's or a host's, before it adds its own block.
+  The items of a block carried from an earlier compaction come back in that new block. `/exo resume` escapes the
+  whole handoff it puts into the system message: the file records the principal's rulings and corrections as
+  quoted items under their own headings, never as a pinned block, so nothing of theirs is lost. The live block in a
+  system message is then exo-context's own.
+- `exo.provenance.defuse_pins` matches any spelling a model may read as either tag: a `<`, then the letters of
+  `exo` and `pinned` in any case, with any run of characters that are not an ASCII letter, a digit or an angle
+  bracket around or inside them (spaces, `-`, `_`, `/`, zero-width and other invisible characters), and a `>` on
+  the same line or none. Only the brackets change: the `<` always, the `>` when it closes the tag. A blockquote `>`
+  on the next line is left alone, `&` is not escaped, and escaping twice changes nothing. Not matched: full-width
+  brackets and look-alike letters from other scripts.
 - Peer, bus and job text enters the context inside its own tag (`[peer message from ...]`, `[bus message from
   ...]`, `[job notice ...]`), with a closing line that says it is not the user.
 

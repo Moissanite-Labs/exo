@@ -1228,12 +1228,19 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - *Amendment 2026-10-19 (#279):* PR #216 stopped a block quoted further down a message from being carried into a
   handoff, but the model still read it as one: the core's system message printed a peer's, bus seat's, job's or
   tool's `<exo-pinned>` block word for word. Where the harness prints a message for the model, text whose author is
-  not `principal` now has each pinned-block tag escaped (`exo.provenance.defuse_pins`: `&lt;exo-pinned&gt;`, in any
-  case or spacing). That is `render_message` (the verbatim spans and the summarizer's source), the note on other
-  threads' turns, and recalled memory. The tags are escaped, not removed, so nothing anyone wrote vanishes. The
-  principal's own words keep them. exo-context's inner compressor keeps each message's author on its way to the
-  summarizer, and the note names a bus seat's turn `bus`, not `user`. Not covered: the verbatim tail, where each turn
-  reaches the model as its own message inside its ingress tag, and a summary that restates a block in other words.
+  not `principal` now has each pinned-block tag escaped (`exo.provenance.defuse_pins`: `&lt;exo-pinned&gt;`). That
+  is `render_message` (the verbatim spans and the summarizer's source), the note on other threads' turns, and
+  recalled memory. Every summary is escaped as it is made, whatever it summarizes, since a summarizer can decode the
+  escaped tag or write one: the core's summary nodes (`TreeContext._run`) and the summary in exo-context's
+  `[CONTEXT COMPACTION]` message, its own compressor's or a host's, before exo-context adds its own block. So is the
+  handoff that `/exo resume` puts into the system message (`exo.handoff.resume_text`); the handoff records the
+  principal's rulings as quoted items, never as a pinned block. The match takes any case, any run of spaces,
+  punctuation or invisible characters before, between or inside the letters of the name, and a missing `>`. The
+  tags are escaped, not removed, so nothing anyone wrote vanishes. The principal's own words keep them outside a
+  summary. exo-context's inner compressor keeps each message's author on its way to the summarizer, and the note
+  names a bus seat's turn `bus`, not `user`. Not covered: the verbatim tail, where each turn reaches the model as its
+  own message inside its ingress tag; a summary that restates a block in other words; full-width brackets and
+  look-alike letters from other scripts.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.

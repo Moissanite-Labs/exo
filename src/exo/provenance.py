@@ -17,7 +17,7 @@ Only ``principal`` is the principal's voice. Capture, consolidation and learning
 correction or an answer from the principal only when its author is the principal; everything else is data.
 Where the harness prints a message for the model (the core's view, a context note, a summarizer's source), text by
 any other author has its pinned-block tags escaped (``defuse_pins``), so it cannot pose as exo-context's block of
-the principal's words.
+the principal's words. A summary is model text whatever it summarizes, so it is escaped as it is made.
 
 Ledger events carry the author as written by whoever recorded them. ``principal_names`` says which ledger
 authors are the principal for a store: ``principal``, the store's own id, and any principal id pinned in the key
@@ -43,9 +43,11 @@ PRINCIPAL_VOICE_KINDS = frozenset({"ruling", "answer", "verdict"})
 
 # The tags of exo-context's pinned block (exo.handoff): the principal's rulings and corrections, word for word.
 PIN_OPEN, PIN_CLOSE = "<exo-pinned>", "</exo-pinned>"
-# Either tag as a model may read it: any case, with spaces, "_" or invisible characters around or inside the name,
-# or with attributes.
-_PIN_TAG = re.compile(r"<((?:[^\w<>]|_){0,4}exo(?:[^\w<>]|_){0,3}pinned\b[^<>]*)>", re.I)
+# Either tag as a model may read it: a "<", then the letters of "exo" and "pinned" in any case, with any run of
+# characters that are not an ASCII letter, a digit or an angle bracket before, between or inside them (spaces, "-",
+# "_", "/", invisible characters), then the rest of the line up to an optional ">".
+_GAP = r"[^a-z0-9<>]*"
+_PIN_TAG = re.compile("<(" + _GAP + _GAP.join("exopinned") + r"(?![a-z0-9])[^<>\n]*)(>?)", re.I)
 
 
 def peer(name: str) -> str:
@@ -100,10 +102,11 @@ def is_principal_author(author: Any) -> bool:
 
 
 def defuse_pins(text: str) -> str:
-    """``text`` with each pinned-block tag escaped, ``<exo-pinned>`` as ``&lt;exo-pinned&gt;``. Nothing else changes
-    and nothing is removed: the words stay readable, but they no longer open or close a block of the principal's
-    words (#279). For text that is not the principal's, printed where the model reads it."""
-    return _PIN_TAG.sub(r"&lt;\1&gt;", text)
+    """``text`` with each pinned-block tag escaped, ``<exo-pinned>`` as ``&lt;exo-pinned&gt;``: the tag's ``<``
+    always, its ``>`` when it closes the tag on the same line. Nothing else changes and nothing is removed: the words
+    stay readable, but they no longer open or close a block of the principal's words (#279). Escaping again changes
+    nothing. For text that is not the principal's, printed where the model reads it."""
+    return _PIN_TAG.sub(lambda m: "&lt;" + m[1] + ("&gt;" if m[2] else ""), text)
 
 
 def flat(msg: Any) -> dict[str, Any]:
