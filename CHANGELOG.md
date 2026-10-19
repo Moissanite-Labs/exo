@@ -158,6 +158,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- `apply_patch` no longer replaces a changed `-` line by similarity (#236). A hunk with context, such as
+  `-TIMEOUT = 30` over `TIMEOUT = 45` plus `RETRIES = 3`, passed the two-line rule through its context line and
+  silently overwrote the 45. Each `-` line must now match its file line up to whitespace, Unicode or a literal `\t`;
+  similarity places only the context lines. A hunk that fails names both lines and no file changes. See docs/TOOLS.md
+  "Edit matching".
 - Terminal approval cards wait for removal before the next queued card mounts (#276). Answering a card or
   reconciling a closed request no longer mounts two widgets under the same approval id. Close, restore and
   thread-switch transitions share a lock, and stale answers or close events cannot remove the next request's card.

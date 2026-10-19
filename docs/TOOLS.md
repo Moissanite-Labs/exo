@@ -19,6 +19,15 @@ asked]`. A store named as `path` is read, after the gate asks (#241, `docs/GATE.
 read"). In a repo's own `.claude` folder only `worktrees`, `commands`, `agents` and `skills` are searched. A
 search of the whole file system (`/`, or a path that resolves to it) is refused; name a folder below it.
 
+## Edit matching
+
+`edit_file` and `apply_patch` try matching strategies in order: exact, then up to whitespace, escaping and Unicode,
+then two similarity strategies (`block_anchor`, `context_aware`) for blocks of two or more non-blank lines. In an
+`apply_patch` hunk similarity may place only the context lines: every `-` line must match its file line exactly, up
+to indentation, runs of blanks, Unicode punctuation and a literal `\t`. A hunk whose `-` line differs fails, names
+the hunk's line and the file's line, and changes no file (#236). The context lines of a similarity match are
+replaced by the hunk's text as sent.
+
 ## Environment of bash and jobs
 
 `bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,

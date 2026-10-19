@@ -150,6 +150,8 @@ def _update(content: str, op: PatchOperation) -> tuple[str, list[str]]:
             continue
         changed = True
         pattern, replacement = "\n".join(search), "\n".join(replace)
+        # Similarity may place the context lines; every '-' line must match its file line.
+        minus = frozenset(j for j, x in enumerate(x for x in h.lines if x.prefix != "+") if x.prefix == "-")
         if not search:
             new, err = _insert_addition_only(content, h, replacement)
             if err:
@@ -157,10 +159,11 @@ def _update(content: str, op: PatchOperation) -> tuple[str, list[str]]:
             else:
                 content = new
             continue
-        new, count, _s, err = fuzzy_find_and_replace(content, pattern, replacement)
+        new, count, _s, err = fuzzy_find_and_replace(content, pattern, replacement, exact_lines=minus)
         if not count and h.context_hint and (pos := content.find(h.context_hint)) != -1:
             lo, hi = max(0, pos - 500), min(len(content), pos + 2000)
-            win, count, _s, err = fuzzy_find_and_replace(content[lo:hi], pattern, replacement)
+            win, count, _s, err = fuzzy_find_and_replace(content[lo:hi], pattern, replacement,
+                                                  exact_lines=minus)
             if count:
                 new = content[:lo] + win + content[hi:]
         if count:
