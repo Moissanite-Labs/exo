@@ -332,9 +332,11 @@ class CoreRuntime:
         await self.jobs.close()  # jobs end with exod
         if self.scheduler is not None:
             await self.scheduler.stop()
+            self.scheduler.close()
         if self._started is not None:
             await self.mcp.close()
             self._started = None
+        self.store.close()  # last: the hub is closed before this (serve), so nothing writes events after it
 
     def _main_ref(self) -> str:
         chain = self.router.chain("main")

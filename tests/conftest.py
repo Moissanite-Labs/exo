@@ -5,6 +5,19 @@ from exo import crypto
 from exo.store import PrincipalStore
 
 
+def pytest_configure(config):
+    """Raise the soft open-file limit: macOS Terminal sessions start at 256, and the suite opens many
+    SQLite files (sessions, schedule, ledger) across thousands of tests."""
+    try:
+        import resource
+    except ImportError:  # not on Windows
+        return
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    want = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
+    if soft != resource.RLIM_INFINITY and soft < want:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+
+
 @pytest.fixture
 def signer():
     return crypto.Signer("tester", crypto.keygen())

@@ -294,6 +294,10 @@ class Scheduler:
         await asyncio.gather(*tasks, return_exceptions=True)
         self.running.clear()
 
+    def close(self) -> None:
+        """Close schedule.sqlite. Call after stop(); a closed scheduler cannot start again."""
+        self.db.close()
+
     async def wait(self) -> None:
         """Wait for runs in flight (tests, shutdown)."""
         await asyncio.gather(*list(self.running.values()), return_exceptions=True)
