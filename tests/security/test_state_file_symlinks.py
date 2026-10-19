@@ -141,3 +141,67 @@ def test_a_symlink_at_the_path_itself_is_replaced_not_followed(victim, tmp_path)
     atomic_write(link, b"{}", mode=0o640)
     assert victim.read_text() == VICTIM and not link.is_symlink() and link.read_bytes() == b"{}"
     assert stat.S_IMODE(link.stat().st_mode) == 0o640
+
+
+def test_the_public_key_file(victim, tmp_path):
+    """`save_key` wrote `<name>.pub` with `write_text`, which follows a symlink at that final name. It is replaced
+    through mkstemp now, so the link is replaced, not followed."""
+    from exo import crypto
+    key, path = crypto.keygen(), tmp_path / "keys" / "pat.key"
+    planted = _plant(path.with_suffix(".pub"), victim)
+    crypto.save_key(key, path)
+    assert planted.read_text() == crypto.pubkey_b64(key) + "\n"
+    _check(planted, victim, _umask_default(), None)
+
+
+def test_a_file_name_of_255_bytes(tmp_path):
+    """The temporary name keeps at most 60 characters of the file's name, so any name the folder allows fits."""
+    from exo.core.private import atomic_write
+    from exo.core.tools.builtin.patch import write_atomic
+    for name in ("n" * 255, "é" * 127):
+        write_atomic(tmp_path / name, "x\n")
+        assert (tmp_path / name).read_text() == "x\n"
+        atomic_write(tmp_path / name, b"y")
+        assert (tmp_path / name).read_bytes() == b"y"
+
+
+def test_a_filesystem_without_unix_modes(tmp_path, monkeypatch):
+    """vfat refuses a chmod it cannot represent. A write with the umask default keeps the filesystem's own mode, as
+    the plain open it replaced did. A write that asks for a mode still fails, and leaves no temporary file."""
+    from exo.core.private import atomic_write
+
+    def refuse(fd, mode):
+        raise PermissionError(1, "Operation not permitted")
+    monkeypatch.setattr(os, "fchmod", refuse)
+    atomic_write(tmp_path / "export.json", "{}", mode=None)
+    assert (tmp_path / "export.json").read_text() == "{}"
+    with pytest.raises(PermissionError):
+        atomic_write(tmp_path / "grants.json", "[]")
+    assert [p.name for p in tmp_path.iterdir()] == ["export.json"]
+
+
+def test_the_umask_is_read_without_proc(monkeypatch):
+    """Elsewhere than Linux there is no /proc: the probe gives the same umask and puts it back."""
+    from exo.core import private
+
+    def no_proc(*a, **k):
+        raise FileNotFoundError("/proc/self/status")
+    old = os.umask(0o027)
+    try:
+        assert private._umask() == 0o027
+        monkeypatch.setattr(private, "open", no_proc, raising=False)
+        assert private._umask() == 0o027 and os.umask(0o027) == 0o027
+    finally:
+        os.umask(old)
+
+
+def test_sync_fsyncs_the_file_and_the_folder(tmp_path, monkeypatch):
+    """The default fsyncs both. `sync=False`, for the ledger anchors, the bus cursor and the episodic view cache,
+    which are written often, fsyncs neither."""
+    from exo.core.private import atomic_write
+    calls: list = []
+    monkeypatch.setattr(os, "fsync", lambda fd: calls.append(fd))
+    atomic_write(tmp_path / "a.json", "{}")
+    assert len(calls) == 2
+    atomic_write(tmp_path / "b.json", "{}", sync=False)
+    assert len(calls) == 2

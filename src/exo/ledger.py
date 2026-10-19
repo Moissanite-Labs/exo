@@ -613,11 +613,12 @@ def _open_symlinked(path: Path) -> sqlite3.Connection:
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
-    """Write an anchor (0600) through `atomic_write`: a symlink planted in the folder cannot redirect it."""
+    """Write an anchor (0600) through `atomic_write`: a symlink planted in the folder cannot redirect it. No fsync,
+    as before #273, so an append, which writes two anchors, costs what it did."""
     if not path.parent.exists():  # keys/heads under $EXO_HOME: private like the rest of keys/
         path.parent.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         path.parent.mkdir(mode=0o700, exist_ok=True)
-    atomic_write(path, data)
+    atomic_write(path, data, sync=False)
 
 
 def _bad(ev: dict, reason: str, checked: int) -> dict:

@@ -51,4 +51,5 @@ class Cursor:
 
     def set(self, seq: int) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(self.path, json.dumps({"since": int(seq)}), mode=None)
+        # set once per message, inside the gateway's event loop: no fsync, as before #273
+        atomic_write(self.path, json.dumps({"since": int(seq)}), mode=None, sync=False)
