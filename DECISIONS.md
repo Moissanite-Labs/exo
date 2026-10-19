@@ -894,14 +894,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the gate reads since D-075, so it denies that line; a `coproc` or `function NAME {` block whose inner command ranks
   at or below `opaque_exec` splits the same way (denied under `deny: [web_read]`, asked under
   `categories: {web_read: deny}`). The known unread forms below are allowed outright on main, not asked, and no entry
-  for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158), a quoted array, `-i` or `-n`
-  value given to `declare` (#188, open PR #194), text piped or fed by heredoc to `ssh` with no remote command (#240),
-  and `git clone -c` with a command-running key (open PR #231). A `command:` regex reaches them on the raw text
-  only: the literal-word view (#136) is built from text the gate reads, so quoting still evades the regex inside these
-  forms, while it no longer does inside an array subscript (read since #189) or a command-valued option (read since
-  #164 and #288). The other deny-to-ask paths (`eval $(...)`, stdin-fed `xargs -I{} sh -c '{}'`, the body of
-  `time { ...; }`, and the wrapper forms #160 left unread, such as `su -c`, `bwrap` and tmux `if-shell`) are listed in
-  `docs/GATE.md` "Known limits".
+  for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158), text piped or fed by heredoc
+  to `ssh` with no remote command (#240), and `git clone -c` with a command-running key (open PR #231). A `command:`
+  regex reaches them on the raw text only: the literal-word view (#136) is built from text the gate reads, so quoting
+  still evades the regex inside these forms, while it no longer does inside an array subscript (read since #189), a
+  value given to `declare` (read since #194, for #188) or a command-valued option (read since #164 and #288). The
+  other deny-to-ask paths (`eval $(...)`, stdin-fed `xargs -I{} sh -c '{}'`, the body of `time { ...; }`, and the
+  wrapper forms #160 left unread, such as `su -c`, `bwrap` and tmux `if-shell`) are listed in `docs/GATE.md` "Known
+  limits".
   Rejected: raising `_DEPTH` (each level re-lexes the inner text, and five hand-nested wrappers are not a workflow,
   only a probe); naming the hidden command on the card (the gate did not read it). This records the limit of the
   existing decision; the pinning test is `test_shell_inspection_depth_limit`.

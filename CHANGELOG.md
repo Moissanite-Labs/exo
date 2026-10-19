@@ -258,7 +258,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   depth and what the card says at the cap; that a deny under `categories:` fires only on the category a compound
   line ends up with, so approving the card can run the denied part (#191), while a `deny:` entry matches every part
   (D-075); and, in one list each, the paths where a deny becomes an ask and the forms still allowed outright on
-  main (`${...}` bodies, quoted `declare` values, text fed to `ssh` on stdin, `git clone -c`; each with its issue
+  main (`${...}` bodies, text fed to `ssh` on stdin, `git clone -c`; each with its issue
   and any open PR), with where a `command:` regex still sees only raw text. The two lists D-075 added are folded into
   these. "What the search tools read" adds that a search rooted at `~/.config/gh` is allowed and leaves out its
   `hosts.yml` (#241). The template's `deny:` comment says a deny entry is checked against every command on the line
