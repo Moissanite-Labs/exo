@@ -336,6 +336,7 @@ class _Word:
     raw: str = ""              # the source text of the word, quotes kept
     locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
+    fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
 
 
 @dataclass
@@ -370,12 +371,14 @@ class _Lexer:
         s, toks = self.s, []
         state = {"w": _Word(), "delim": None}
         depth, start = 0, -1              # start: where the current word's source text begins
+        fd = ""                           # the fd number of the redirection whose target comes next (`3< f`)
 
         def flush():
-            nonlocal start
+            nonlocal start, fd
             w = state["w"]
             w.raw, start = s[start:self.i], -1
             if w.started:
+                w.fd, fd = fd, ""
                 if state["delim"] is not None:
                     hd = _Heredoc(w.text, state["delim"], w.quoted, w.dollar_quote)
                     self.pending.append(hd)
@@ -428,7 +431,7 @@ class _Lexer:
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 if w.started and w.text.isdigit() and not w.quoted:
-                    state["w"], start = _Word(), -1    # an fd number belongs to the operator
+                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text    # an fd number belongs to the operator
                 else:
                     flush()
                 op = next(o for o in _REDIR_OPS if s.startswith(o, self.i))
@@ -2266,9 +2269,14 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     """What in a simple command writes to the Exo store, or ''. Reads of the store are fine."""
     seen = ctx.setdefault("store_braces", {})
     for op, t in k.redirs:
-        if op in _WRITE_REDIRS:
+        # #217: a store file read on a numbered descriptor (`3< f`, `exec 2< f`) is reopened for writing by a
+        # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. On 1
+        # or 2 a target from a variable counts too: a write to stdout or stderr is not itself a store write.
+        n = t.fd.lstrip("0") if t.fd.isascii() else ""     # compared as text: any length, never int()
+        held = op == "<" and n != ""
+        if op in _WRITE_REDIRS or held:
             targets = _shell_words(t, seen, "target")
-            if targets is None or any(_store_word(x) for x in targets):
+            if targets is None or any(_store_word(x) for x in targets) or held and t.dynamic and n in ("1", "2"):
                 return t.text
     if all(p.category == "read" for p in parts):
         return ""
@@ -2338,7 +2346,9 @@ def _store_hints() -> tuple[set, dict, set]:
     """(store folder names, {(parent, folder): its sample path}, store file names) from the sample store paths. A
     dot folder (`.kube`) or `Netlify` is a store folder by its name; a plain one only below its parent (`.config/gh`,
     `.config/exo`, `.exo/keys`, `/proc`), so a checkout called exo or gh is not. Folders below home count from home
-    ("~") down, one outside home (EXO_HOME, its keys) by its last part. HOME and EXO_HOME apply per call."""
+    ("~") down, one outside home (EXO_HOME, its keys) by its last part. HOME and EXO_HOME apply per call. The run
+    folder's secrets are store file names too (#269: `cd ~/.exo/run/jobs && cat ../exod*`), but `run` is not a
+    store folder here: that would make job output in run/jobs a secret (`cat 1.log` there stays a read)."""
     home = os.path.normpath(_home())
     root = home.rstrip("/") + "/"                   # HOME=/ too
     singles, pairs, names = {"Netlify"}, {}, set(_STORE_FILES)
@@ -2361,7 +2371,7 @@ def _store_hints() -> tuple[set, dict, set]:
             elif parts[k]:
                 pairs[parts[k - 1], parts[k]] = "/".join(parts[:k + 1])
         names.add(name)
-    return singles, pairs, names - {""}
+    return singles, pairs, (names | set(_run_secrets())) - {""}
 
 
 def _brace_glob(text: str) -> str:
@@ -2726,7 +2736,7 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                 fp = f"{path}/{'/'.join(rest)}".rstrip("/").split("/")
                 if parts[-1] in names or is_store("/".join(fp[:last_store_folder(fp) + 1])):
                     return q
-        return ""
+        return _exo_relative(split, max(ups), candidates)
     nxt = {b for b in kin if into([b])}             # `cd ~/.config && cat gh/hosts.yml`: for a glob piece
     # Is a target itself a store? One full test per store folder it is in (`cd ~/.kube/a1; cd ~/.kube/a2`: one).
     roots = dict.fromkeys("/".join(parts[:k + 1]) for _, parts, k in entered)
@@ -2743,7 +2753,62 @@ def _cd_store_read(cmds: list, subs: list) -> str:
                 not pairs.keys().isdisjoint(zip(inner, inner[1:])) or globbed and any(
                     _could_name(s, hints) for s in parts if _GLOBBY.search(s)):
             return q
-    return ""
+    return _exo_relative(split, max(ups), candidates)
+
+
+def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]]) -> str:
+    """#269: on a line that reaches a folder in `$EXO_HOME` (or any `.exo`), that folder and each relative name read
+    from it are checked as the paths they are, as the kernel resolves them, `..` included, so `cd ~/.exo/run/jobs &&
+    grep -r . ..`, `cat ../exod*` there, `cd ~/.exo/run/jobs && cd .. && ls` and `tar -C ~/.exo -czf - run` reach the
+    run folder and its secrets as the absolute path would (is_sensitive_path, a glob in it). The folders are the
+    targets (``split``, as _cd_store_read reads them; one with a glob is left to the store-folder check), each
+    relative target joined to each of them, and every folder up to ``up`` levels above them (`cd ..`); an absolute
+    target is also resolved (a link into the store). From a folder outside the store only a name that spells the
+    store's folder name (`.exo`, `exo-home`) is joined, so `cd /srv && tar cf - exo-home/run` counts. Past 64 store
+    folders or 16,384 store paths on one line, the line counts (fails closed). The name or folder, or ''."""
+    home = os.path.normpath(_home())
+    exo = os.path.normpath(_exo_home())
+    roots = _path_forms(exo)
+    marks = {".exo", os.path.basename(exo)} - {""}
+
+    def inside(b: str, real: bool = False) -> bool:
+        return any(re.search(r"(^|/)\.exo(/|$)", f) or any(f == r or f.startswith(r.rstrip("/") + "/") for r in roots)
+                   for f in (_path_forms(b) if real else {os.path.normpath(b)}))
+
+    def near(q: str) -> bool:                       # a relative path that can lead into the store from above it
+        return any(m in q for m in marks)
+
+    folders = []
+    for p, _, _ in split:
+        if not (_GLOBBY.search(p) or "$" in p):
+            folders.append(os.path.join(home, p[2:]) if p.startswith("~/") else home if p == "~" else p)
+    relative = [r for r in dict.fromkeys(folders) if not r.startswith("/")]
+    bases = {b for b in folders if inside(b, b.startswith("/"))}
+    bases |= {j for b in folders for r in relative if b != r and near(r)
+              for j in [os.path.normpath(os.path.join(b, r))] if inside(j)}
+    if len(bases) > 64:
+        return "a folder in the Exo store (too many to resolve)"
+    bases |= {os.path.normpath(j) for b in list(bases) for r in relative for j in [os.path.join(b, r)] if inside(j)}
+    for b in list(bases):
+        for _ in range(min(up, 64)):
+            b = os.path.dirname(b)
+            if not b or not inside(b):
+                break
+            bases.add(b)
+    if len(bases) > 64:
+        return "a folder in the Exo store (too many to resolve)"
+    hit = next((b for b in sorted(bases) if _sensitive_words([b])), "")
+    if hit:
+        return hit
+    names = list(dict.fromkeys(q for q, _, _ in candidates()))
+    words = [(q, os.path.join(b, q)) for b in sorted(bases) for q in names]
+    words += [(q, w) for b in dict.fromkeys(folders) if b not in bases for q in names if near(q)
+              for w in [os.path.join(b, q)] if inside(w)]
+    if len(words) > 16384:
+        return "a path in the Exo store (too many to resolve)"
+    if not words or not (_sensitive_words([w for _, w in words]) or _glob_words([w for _, w in words])):
+        return ""
+    return next((q for q, w in words if _sensitive_words([w]) or _glob_words([w])), words[0][0])
 
 
 def classify_shell(cmd: str, depth: int = 0) -> Classification:
@@ -2943,16 +3008,22 @@ def _run_secrets() -> list[str]:
     """The credential files a run folder can hold: the core's, and the principal key of each agent that may serve
     there, run/agent-<seat>.principal.key (`default`, $EXO_SEAT and up to 64 seats under $EXO_HOME/seats, named
     as internal_names does: filtered, then sorted, then capped, so other files there take no place; the scan reads
-    at most 4,096 entries)."""
+    at most 4,096 entries, once per classify call: every glob word and the cd check share it, #269)."""
+    memo = _call_memo.get()
+    if memo is not None and "run_secrets" in memo:
+        return memo["run_secrets"]
     names = ["default", os.environ.get("EXO_SEAT") or ""]
     try:
-        with os.scandir(os.path.join(_exo_home(), "seats")) as it:   # bounded: this runs for every glob word
+        with os.scandir(os.path.join(_exo_home(), "seats")) as it:   # bounded: outside classify, once per glob word
             seats = {e.name if e.is_dir() else os.path.splitext(e.name)[0] for e in itertools.islice(it, 4096)
                      if not e.name.startswith((".", "_")) and (e.is_dir() or e.name.endswith((".toml", ".json")))}
             names += sorted(seats)[:64]
     except OSError:
         pass
-    return ["exod.principal.key", "exod.token"] + [f"agent-{n}.principal.key" for n in dict.fromkeys(names) if n]
+    out = ["exod.principal.key", "exod.token"] + [f"agent-{n}.principal.key" for n in dict.fromkeys(names) if n]
+    if memo is not None:
+        memo["run_secrets"] = out
+    return out
 
 
 _BRACE_CAP = 1024
@@ -2960,6 +3031,7 @@ _BRACE_BUDGET = 4096   # words one classify call may expand in all (see _brace_c
                        # and once for the Exo-store checks (#224)
 _BRACE_SEQ = re.compile(r"([-+]?\d+)\.\.([-+]?\d+)(?:\.\.([-+]?\d+))?|([A-Za-z])\.\.([A-Za-z])(?:\.\.([-+]?\d+))?")
 _brace_left: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("exo_gate_brace_left", default=None)
+_call_memo: contextvars.ContextVar[dict | None] = contextvars.ContextVar("exo_gate_call_memo", default=None)
 _F = TypeVar("_F", bound=Callable[..., Any])
 
 
@@ -2973,16 +3045,18 @@ def _brace_cost(word: str) -> int:
 
 
 def _brace_budget(fn: _F) -> _F:
-    """Give ``fn`` one _BRACE_BUDGET shared by every word it brace-expands, nested calls included."""
+    """Give ``fn`` one _BRACE_BUDGET shared by every word it brace-expands, nested calls included, and one memo
+    (_call_memo) for what a call reads from disk once (_run_secrets)."""
     @functools.wraps(fn)
     def run(*a: Any, **kw: Any) -> Any:
         if _brace_left.get() is not None:
             return fn(*a, **kw)
-        token = _brace_left.set([_BRACE_BUDGET, _BRACE_BUDGET])
+        token, memo = _brace_left.set([_BRACE_BUDGET, _BRACE_BUDGET]), _call_memo.set({})
         try:
             return fn(*a, **kw)
         finally:
             _brace_left.reset(token)
+            _call_memo.reset(memo)
     return cast(_F, run)
 
 
@@ -3309,19 +3383,35 @@ def _glob_rx(tok: str) -> re.Pattern[str]:
     return re.compile(("" if tok.startswith("/") else r"(?s:.*/)?") + fnmatch.translate(tok))
 
 
-# D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files and
-# the core sockets steer the gate itself, so a write to them always asks the principal. Names that are
-# distinctive match anywhere (a relative `policies/gates.yaml` may sit in the tool's working folder);
-# absolute paths are also checked against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE and every
-# store root recorded in config `principals` (`exo init --root`, `exo import-store --root`).
+# D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files,
+# the core sockets and the bus folder (the seat registry signed answers trust and the relay database, #210)
+# steer the gate itself, so a write to them always asks the principal. Names that are distinctive match
+# anywhere (a relative `policies/gates.yaml` may sit in the tool's working folder); absolute paths are also
+# checked against EXO_HOME, its principal stores, EXO_PRINCIPAL_STORE, every store root recorded in config
+# `principals` (`exo init --root`, `exo import-store --root`) and the bus folder and files (_bus_paths).
 _STORE_NAMES = re.compile(
     r"(^|/)(\.exo/(principals/[^/]+/)?(policies|state|keys|run|seats)(/|$)|\.exo/(principals/[^/]+/)?ledger\.sqlite|"
+    r"\.exo/bus(/|$)|bus/registry\.json$|bus/relay\.sqlite(-wal|-shm|-journal)?$|"
     r"policies/(gates|budget|interruptions|approvals|posting|brief|consolidate)\.(ya?ml|md)$|"
     r"policies/internal-names\.txt$|state/(approval|gate)-grants\.json$|"
     r"(ledger|schedule)\.sqlite(-wal|-shm|-journal)?$|"
     r"seat\.(toml|json)$|(exod|agent-[^/]*)\.sock$)")
 _HOME_PROTECTED = ("policies", "state", "keys", "run", "seats")
 _STORE_PROTECTED = ("policies", "state", "keys")
+# #210: $EXO_HOME/bus, and the bus settings that move a file the gate trusts out of it: the registry, the relay
+# database and its sidecars, and the seat keys folder. Each name is read as EXO_BUS_<NAME> and as the legacy
+# DIVAN_<NAME>, both when both are set (exo.bus.config takes the first; approvals.seat_pubkeys reads EXO_BUS_REGISTRY
+# alone).
+_BUS_FILES = (("REGISTRY", ("",)), ("DB", ("", "-wal", "-shm", "-journal")), ("KEYS_DIR", ("",)))
+# #217: a descriptor or process folder names whatever the writing process holds there (`/dev/fd/3` after
+# `exec 3< f`, `/proc/self/cwd`), which the gate cannot resolve from its own process, so a write through one is
+# a store write. It matches anywhere in a path as written, so a relative `dev/fd/3` after `cd /` counts; a
+# resolved spelling is not tested (the gate's own realpath of /dev/stdout runs through its own descriptors). The
+# writer's stdout and stderr (`/dev/fd/1`, `/proc/self/fd/2`) are left out: a store file opened on them is caught
+# where it is opened (_store_touch).
+_FD_PATH = re.compile(r"(^|/)(dev/(fd|stdin)|proc/(self|thread-self|\d+|\$[^/]*)(/task/[^/]+)?/(fd|cwd|root|map_files))(/|$)")
+_STD_FD = re.compile(r"(^|/)(dev/fd|proc/(self|thread-self)(/task/[^/]+)?/fd)/0*[12]$")
+_FD_DIR = re.compile(r"/+(dev|proc(/[^/]+(/task(/[^/]+)?)?)?)")      # cd here, then `> fd/3` or `> self/fd/3`
 
 
 def _store_roots() -> list[tuple[str, tuple, bool]]:
@@ -3332,6 +3422,23 @@ def _store_roots() -> list[tuple[str, tuple, bool]]:
                       False))
     from .store import explicit_roots  # stores made with --root (config `principals`): live, outside the home
     return roots + [(os.path.abspath(r), _STORE_PROTECTED, False) for r in explicit_roots(_exo_home()).values()]
+
+
+def _bus_paths() -> list[tuple[str, tuple]]:
+    """(folder, protected names in it): the bus folder in EXO_HOME, and each bus file the environment sets."""
+    out: list[tuple[str, tuple]] = [(_exo_home(), ("bus",))]
+    for name, ends in _BUS_FILES:
+        for value in filter(None, (os.environ.get(f"EXO_BUS_{name}"), os.environ.get(f"DIVAN_{name}"))):
+            folder, base = os.path.split(os.path.abspath(os.path.expanduser(value)))
+            out.append((folder, tuple(base + e for e in ends)))
+    return out
+
+
+def _fd_path(p: str) -> bool:
+    """A descriptor or process-folder path (_FD_PATH), as written or normalised, other than stdout or stderr spelt
+    plainly. As written counts too: the kernel resolves `/dev/fd/3/../..` from descriptor 3's folder."""
+    return bool(p) and any(_FD_PATH.search(f) for f in (p, os.path.normpath(p))) and \
+        not _STD_FD.search(p.rstrip("/") or p)
 
 
 def _protected_rel(parts: list[str], names: tuple) -> bool:
@@ -3361,8 +3468,8 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
     p = _expand_text(path).strip().replace("\\", "/")
     if not p:
         return False
-    if _STORE_NAMES.search(p):
-        return True
+    if _STORE_NAMES.search(p) or _fd_path(p) or ancestors and _FD_DIR.fullmatch(os.path.normpath(p)):
+        return True                      # with ancestors: `ln -s /dev x` makes x/fd/3 a descriptor path
     if not p.startswith("/"):
         return False                     # relative: names only; the tool's working folder is not known here
     # Resolve the original spelling: normpath first would erase symlink/.. traversal.
@@ -3371,6 +3478,7 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
     if any(_STORE_NAMES.search(c) for c in candidates):
         return True
     roots = [(r, names, principals) for root, names, principals in _store_roots() for r in _path_forms(root)]
+    roots += [(r, names, False) for root, names in _bus_paths() for r in _path_forms(root)]
     for candidate in candidates:
         for r, names, principals in roots:
             if ancestors and (r == candidate or r.startswith(candidate.rstrip("/") + "/")):
@@ -3389,8 +3497,11 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
 
 
 def _in_store_dir(path: str) -> bool:
-    """A `cd` target inside EXO_HOME or the principal store: relative names after it may be the store."""
+    """A `cd` target inside EXO_HOME or the principal store: relative names after it may be the store. So is a
+    descriptor or process folder, or a folder above one (`/dev`, `/proc/self`), where `> fd/3` is one (#217)."""
     p = _expand_text(path).strip()
+    if _fd_path(p) or _FD_DIR.fullmatch(os.path.normpath(p or ".")):
+        return True
     if not p.startswith("/"):
         return bool(re.search(r"(^|/)\.exo(/|$)", p))
     roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
