@@ -250,6 +250,57 @@ def test_rerun_keeps_a_skill_you_copied_from_the_pack(box):
     assert (skills / "my-intro" / "SKILL.md").read_text().endswith("my intro\n")
 
 
+def test_rerun_warns_when_it_replaces_an_edited_pack_skill(box):
+    """abu-aska's review of #213: an edit inside a pack skill folder was replaced with no word. The folder is Exo's
+    and is still replaced, as INSTALL step 5 says, but the marker records the SKILL.md Exo wrote, so a re-run says
+    so first. An upstream change alone does not warn."""
+    src = checkout_copy(box)
+    args = ("--no-pip", "--no-interview", "--yes", "--exo-source", str(src))
+    assert run(box, *args).returncode == 0
+    skills = box / "exo" / "skills"
+    with open(skills / "council" / "SKILL.md", "a") as f:
+        f.write("\nmy edit\n")
+    with open(src / "skills" / "exo-intro" / "SKILL.md", "a") as f:  # the pack changed, you did not
+        f.write("\n## New fact\n")
+    r = run(box, *args)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert r.stderr.count("was edited since Exo installed it") == 1
+    assert f"{skills / 'council' / 'SKILL.md'} was edited since Exo installed it" in r.stderr
+    assert "my edit" not in (skills / "council" / "SKILL.md").read_text()  # replaced, as documented
+    assert (skills / "exo-intro" / "SKILL.md").read_text().endswith("## New fact\n")
+    r = run(box, *args)
+    assert r.returncode == 0 and "was edited" not in r.stderr
+    with open(src / "skills" / "council" / "SKILL.md", "a") as f:  # the pack changes and you copy it over by hand
+        f.write("\n## Synced\n")
+    shutil.copy2(src / "skills" / "council" / "SKILL.md", skills / "council" / "SKILL.md")
+    assert run(box, *args).returncode == 0  # up to date: the marker takes the new SKILL.md
+    with open(src / "skills" / "council" / "SKILL.md", "a") as f:
+        f.write("\n## Later\n")
+    r = run(box, *args)
+    assert r.returncode == 0 and "was edited" not in r.stderr, r.stderr
+
+
+def test_a_changed_pack_skill_needs_a_new_folder_and_a_new_name(box):
+    """INSTALL step 5: the skill index is first-wins by frontmatter name over sorted folders, so a copy that keeps
+    the pack's name is hidden behind the pack's skill (or hides it). A copy with a new name shows beside it."""
+    from exo.core.skills import SkillIndex
+    src = checkout_copy(box)
+    args = ("--no-pip", "--no-interview", "--yes", "--exo-source", str(src))
+    assert run(box, *args).returncode == 0
+    skills = box / "exo" / "skills"
+    shutil.copytree(skills / "council", skills / "my-council")
+    with open(skills / "my-council" / "SKILL.md", "a") as f:
+        f.write("\nmy change\n")
+    idx = SkillIndex.discover([skills])
+    assert idx.skills["council"].path == skills / "council" / "SKILL.md" and "my-council" not in idx.skills
+    text = (skills / "my-council" / "SKILL.md").read_text()
+    (skills / "my-council" / "SKILL.md").write_text(text.replace("name: council", "name: my-council", 1))
+    assert run(box, *args).returncode == 0
+    idx = SkillIndex.discover([skills])
+    assert idx.skills["council"].path == skills / "council" / "SKILL.md"
+    assert "my change" in idx.load("my-council")
+
+
 def test_skill_pack_leaves_folders_it_did_not_install(box):
     skills = box / "exo" / "skills"
     (skills / "exo-intro").mkdir(parents=True)
@@ -529,6 +580,45 @@ def test_a_list_removes_the_plugins_an_earlier_run_installed(box):
     assert installed(plugins) == {"exo-gate", "mine", "linked"}  # a narrower list leaves no stale copy behind
     assert update_step(box).returncode == 0
     assert installed(plugins) == {"exo-gate", "mine", "linked"}
+
+
+def test_rerun_keeps_a_plugin_you_copied(box):
+    """#268: `cp -r` copies the hidden marker, so a copy of an installed plugin looked like one Exo installed, and a
+    re-run with a recorded --plugins list (the one `exo update` makes) deleted it with exit 0. Exo now removes a
+    plugin folder only when its marker names that folder, as it does for pack skills."""
+    args = ("--no-pip", "--no-interview", "--yes")
+    assert run(box, *args, "--plugins", "exo-gate,exo-memory,exo-bus").returncode == 0
+    plugins = box / "exo" / "plugins"
+    shutil.copytree(plugins / "exo-bus", plugins / "my-bus")  # a copy to change, marker and all
+    (plugins / "my-bus" / "notes.txt").write_text("mine\n")
+    kept = snapshot(plugins / "my-bus")
+    r = run(box, *args)  # no --plugins: the recorded list, as `exo update` re-runs it
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "keeping the --plugins selection" in r.stdout and "rm -rf" not in r.stdout
+    assert f"{plugins / 'my-bus'} was not installed by Exo under this name" in r.stderr
+    assert snapshot(plugins / "my-bus") == kept
+    r = run(box, *args, "--plugins", "exo-gate,exo-memory")  # exo-bus leaves the list: Exo's copy goes
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert installed(plugins) == {"exo-gate", "exo-memory", "my-bus"}
+    assert snapshot(plugins / "my-bus") == kept
+
+
+def test_a_plugin_marker_without_a_name_is_kept_with_a_warning(box):
+    """A marker from an install before markers named their folder cannot tell Exo's plugin from a copy, so a list that
+    leaves the plugin out keeps the folder and names it in a warning, never deletes it. A selected plugin with such a
+    marker is refreshed as before and its marker gains the name."""
+    args = ("--no-pip", "--no-interview", "--yes")
+    assert run(box, *args, "--plugins", "exo-gate,exo-memory,exo-bus").returncode == 0
+    plugins = box / "exo" / "plugins"
+    for name in ("exo-bus", "exo-memory"):
+        (plugins / name / ".exo-managed").write_text("installed by exo scripts/install.sh from /old/checkout\n")
+    kept = snapshot(plugins / "exo-bus")
+    r = run(box, *args, "--plugins", "exo-gate,exo-memory")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "rm -rf" not in r.stdout and snapshot(plugins / "exo-bus") == kept
+    assert f"{plugins / 'exo-bus'} has a .exo-managed from an older install that does not name the folder" in r.stderr
+    assert "name: exo-memory" in (plugins / "exo-memory" / ".exo-managed").read_text().splitlines()
+    assert installed(plugins) == {"exo-gate", "exo-memory", "exo-bus"}
 
 
 @pytest.mark.parametrize("spaced", ["exo-gate, exo-memory", " exo-memory ,exo-gate "])
