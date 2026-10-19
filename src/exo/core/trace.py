@@ -20,6 +20,7 @@ import os
 import re
 import subprocess
 import traceback
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -45,16 +46,35 @@ def scrub(text: Any, limit: int = 400) -> str:
 
 # ---------------------------------------------------------------- caught errors
 
-_sinks: list[Callable[[Any, str | None], None]] = []  # engines register one: publish(body, session)
+Sink = Callable[[Any, str | None], None]
+# Engines register one: publish(body, session). A bound method is held weakly, so an engine nobody closed can
+# still be collected (with its open databases) instead of living, and receiving every report, until exit.
+_sinks: list[Callable[[], Sink | None]] = []
 
 
-def add_sink(fn: Callable[[Any, str | None], None]) -> None:
-    _sinks.append(fn)
+def add_sink(fn: Sink) -> None:
+    if hasattr(fn, "__self__") and hasattr(fn, "__func__"):
+        _sinks.append(weakref.WeakMethod(fn))  # type: ignore[arg-type]
+    else:
+        _sinks.append(lambda fn=fn: fn)
 
 
-def remove_sink(fn: Callable[[Any, str | None], None]) -> None:
-    if fn in _sinks:
-        _sinks.remove(fn)
+def remove_sink(fn: Sink) -> None:
+    for ref in list(_sinks):
+        if ref() == fn:  # bound methods compare equal when they wrap the same function and object
+            _sinks.remove(ref)
+
+
+def _live_sinks() -> list[Sink]:
+    live = []
+    for ref in list(_sinks):
+        fn = ref()
+        if fn is None:
+            if ref in _sinks:
+                _sinks.remove(ref)
+        else:
+            live.append(fn)
+    return live
 
 
 def error_body(where: str, exc: BaseException | str, error_type: str = "", tb: str = "") -> ev.HarnessError:
@@ -72,7 +92,7 @@ def report(where: str, exc: BaseException | str, session: str | None = None, **k
     """Record a caught exception as a ``harness.error`` event (and in the log). Safe to call from any hook."""
     body = error_body(where, exc, **kw)
     logger.warning("harness error in %s: %s: %s", body.where, body.error_type, body.message)
-    for fn in list(_sinks):
+    for fn in _live_sinks():
         try:
             fn(body, session)
         except Exception:  # the reporter itself must never raise into the code it is watching
