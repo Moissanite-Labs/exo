@@ -39,7 +39,7 @@ from exo.core.peer_target import EngineTarget
 from exo.core.ingress import STANDING_LINE, PeerConfig
 from exo.core.plugins import PluginManager, call_plugin, safe_plugin_call
 from exo.config import Config, ConfigError, check_not_secret, redact
-from exo.principal import current_caller, ingress_author, is_principal, require_principal
+from exo.principal import CHANNEL, current_caller, ingress_author, is_principal, require_principal
 from exo.core.approvals import ApprovalDesk
 from exo.core.seats import Seat, list_seats
 from exo.core.sessions import SessionLocked, SessionStore
@@ -295,7 +295,7 @@ class CoreRuntime:
         await self.mcp.start(self.registry)
 
     async def start_channels(self, link: Any) -> dict[str, str | None]:
-        """Run ``factory(link, **config)`` for each channel the seat enables; ``link`` is a protocol Client
+        """Run ``factory(link, **config)`` for each channel the seat enables; ``link`` is exod's ``ChannelLink``
         (or any object with ``call`` and ``events``). Returns name -> error (None when running)."""
         out: dict[str, str | None] = {}
         for name, cfg in self._channel_cfg.items():
@@ -621,6 +621,8 @@ class CoreRuntime:
 
     async def _peers(self, b: s.Peers) -> dict[str, Any]:
         if b.action == "bus":  # D-040: the bus channel's inbound path, whether or not peers are on
+            if current_caller() != CHANNEL:  # it pins a seat's key on first sight: never from a socket client
+                raise CommandFailed("forbidden", "only a channel the core runs can hand in a bus message")
             from exo.bus.ingress import bus_ingress
             try:
                 return await bus_ingress(self, b)
