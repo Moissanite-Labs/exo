@@ -227,6 +227,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- The core releases its SQLite handles (#281). `CoreRuntime.close()` closes the session store and schedule.sqlite, the
+  spend journal closes the connection that creates it, and the harness-error sink list holds engines weakly, so an
+  engine nobody closed can be collected; the sink list is copy-on-write and no sink runs under a lock, so a
+  garbage-collector finalizer that reports or adds a sink cannot hang the thread. `close()` still closes the scheduler
+  and the store when the peers or jobs step raises, then raises the first error. The root suite no longer climbs to
+  about 930 open files, and runs in a macOS Terminal at its default 256. A closed session store reopens on its next use,
+  and `Scheduler.close()` is final (`stop()` stays restartable).
 - The router's wait hint and `retry_after` count only the role's own routes (#239). They took the earliest reopening
   over every cooldown, so a cooldown on another provider, or on a model outside the chain (the gate's aux side call,
   D-081), could make a main call say "next route reopens in 20s" while main's own key reopened later, and the loop

@@ -39,15 +39,19 @@ class SpendJournal:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         identity = str(uuid.uuid4())
-        with sqlite3.connect(path) as db:
-            db.executescript('''
-                CREATE TABLE identity (id TEXT NOT NULL, principal TEXT NOT NULL, blocked TEXT NOT NULL,
-                    observed REAL NOT NULL);
-                CREATE TABLE calls (id TEXT PRIMARY KEY, day TEXT NOT NULL, month TEXT NOT NULL,
-                    route TEXT NOT NULL, session TEXT NOT NULL, reserved INTEGER NOT NULL,
-                    actual INTEGER, pricing TEXT NOT NULL, completed_day TEXT, completed_month TEXT);
-            ''')
-            db.execute("INSERT INTO identity VALUES (?, ?, '', 0)", (identity, principal))
+        db = sqlite3.connect(path)
+        try:
+            with db:  # commits; the connection itself is closed below
+                db.executescript('''
+                    CREATE TABLE identity (id TEXT NOT NULL, principal TEXT NOT NULL, blocked TEXT NOT NULL,
+                        observed REAL NOT NULL);
+                    CREATE TABLE calls (id TEXT PRIMARY KEY, day TEXT NOT NULL, month TEXT NOT NULL,
+                        route TEXT NOT NULL, session TEXT NOT NULL, reserved INTEGER NOT NULL,
+                        actual INTEGER, pricing TEXT NOT NULL, completed_day TEXT, completed_month TEXT);
+                ''')
+                db.execute("INSERT INTO identity VALUES (?, ?, '', 0)", (identity, principal))
+        finally:
+            db.close()
         return identity
 
     @contextmanager
