@@ -302,6 +302,7 @@ def test_concurrent_add_remove_report_and_gc_have_no_errors():
         def on(self, body, session):
             pass
 
+    baseline = len(trace._live_sinks())  # other tests may leave sinks of their own
     keep = [Persistent() for _ in range(3)]
     for k in keep:
         trace.add_sink(k.on)
@@ -353,4 +354,5 @@ def test_concurrent_add_remove_report_and_gc_have_no_errors():
     trace.report("drain", "prune")
     assert errors == []
     assert all(k.n >= reports[0] for k in keep)
-    assert trace._sinks == ()
+    assert len(trace._live_sinks()) == baseline
+    assert len(trace._sinks) == baseline  # the drain pruned every dead entry
