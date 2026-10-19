@@ -141,6 +141,9 @@ def test_an_unseen_body_gets_no_standing_grant(store, work):
     "gh api repos/myorg/app/issues/5/comments -F body=@notes.md",
     "gh api repos/myorg/app/issues/5/comments --input notes.json",
     f"gh pr comment 5 {R} --body-file {{work}}/clean.md",
+    f"(cat notes.md; echo; echo 'F') | gh pr comment 5 {R} --body-file -",
+    f"printf 'Zo\\x72k\nF' | gh pr comment 5 {R} --body-file -",
+    f"gh pr comment 5 {R} --body-file - <<EOF\nZo\\\nrk\nF\nEOF",
 ])
 def test_a_required_executor_refuses_every_unseen_body(store, work, line):
     root, _ = store

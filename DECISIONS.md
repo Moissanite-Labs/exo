@@ -673,7 +673,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   a violation that names the cause; in every category it gets `once` (no "always") and no grant matches it; a
   required executor refuses it as a recorded `deny`. The exo-gate hook reads a body file only by an absolute path:
   it does not know the command's folder (`cd docs && gh ... --body-file notes.md`). An unrelated heredoc on the
-  line no longer fills in a body file's text, and curl's `-d@f` and gh api's `-fbody=x` are posts. Rejected:
+  line no longer fills in a body file's text, and curl's `-d@f` and gh api's `-fbody=x` are posts. Stdin is read only
+  where bash and the writer change nothing: a literal heredoc (no `$`, backtick or backslash unless the delimiter is
+  quoted), a plain here-string, or a pipe from one simple command (`cat` with such a heredoc, `echo` with no option or
+  backslash, `printf` with one plain format); a subshell or group before the pipe, `printf` formats and `echo -e` are
+  unseen. gh text options are read with gh's own table of options that take a value (`-t -b -b x`), `--attach` is
+  unseen, and curl's `--data-ascii`, `-K` and a host it cannot read (`-d x "$URL"`) are posts, not reads or local
+  writes. Rejected:
   resolving a relative path against the tool's `cwd` (the hook receives no cwd, and a `cd` on the line moves it);
   reading the stdin source file in the gate (the same folder problem, and a host read before a required worker).
   Limits: `docs/GATE.md` "What an approval covers".

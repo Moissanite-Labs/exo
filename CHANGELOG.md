@@ -19,7 +19,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   absolute path (it read a relative one from exod's own folder, so `cd docs && gh ... --body-file notes.md` passed),
   and a missing, oversized or unread file asks. Such a post gets no "always", no standing grant matches it, and a
   required executor refuses it as a recorded deny instead of an internal error. An unrelated heredoc no longer
-  fills in a body file's text, and `curl -d@f` and `gh api -fbody=x` are posts (D-033 amendment).
+  fills in a body file's text, and `curl -d@f` and `gh api -fbody=x` are posts (D-033 amendment). Piped stdin
+  counts only from one simple command whose output bash does not rewrite: `(cat f; echo F) | gh ... --body-file -`,
+  `printf 'Zo\x72k' |`, `echo -e` and an unquoted heredoc with a backslash ask. gh text options follow gh's own
+  list of options that take a value (`gh issue create -t -b -b x`), `--attach` asks, and `curl --data-ascii @f`,
+  `curl -K cfg URL` and `curl -d x "$URL"` are posts where they were a read or a local write.
 - Search tools skip secret stores (#241, D-038). The gate checks only the path a `grep` or `glob` call names, and the
   tools walked everything below it, so `grep {pattern: "key", path: HOME}` (or the same search with no path from a cwd
   of HOME, or of `$EXO_HOME`) returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and `$EXO_HOME/run/exod.principal.key`

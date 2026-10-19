@@ -355,6 +355,7 @@ class _Cmd:
     herestrings: list = field(default_factory=list)  # _Word
     piped_in: bool = False
     operands: list = field(default_factory=list)     # _Word after an unquoted NAME=(..): more of its operands
+    piped_group: bool = False    # piped from a compound (`( .. )`, `{ ..; }`, a loop), not from one simple command
 
 
 class _Lexer:
@@ -626,7 +627,7 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
             _feed_compound(cmds, shut[1], cur, shut[2], taken, fnames)
         if cur.words or cur.redirs or cur.heredocs or cur.herestrings:
             cmds.append(cur)
-        cur, shut, lead = _Cmd(piped_in=piped), None, True
+        cur, shut, lead = _Cmd(piped_in=piped, piped_group=piped and shut is not None), None, True
 
     def push(entry: tuple) -> None:
         tops.setdefault(entry[0], []).append(len(opened))
@@ -946,17 +947,36 @@ pr issue repo api auth release gist workflow run label secret variable ssh-key g
 project cache ruleset org config attestation completion discussion help version --version --help
 """.split())
 _DATA_FLAGS = ("-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form",
-               "--json", "-T", "--upload-file", "--form-string")
+               "--json", "-T", "--upload-file", "--form-string", "--data-ascii", "--expand-data")
 # #208: where a post's text comes from somewhere the line does not show. gh builds the body itself (--fill, a
 # template, the editor, generated notes); the HTTP clients read a file, stdin or a config file.
 _GH_UNSEEN_FLAGS = {
     ("pr", "create"): ("-f", "--fill", "--fill-first", "--fill-verbose", "-e", "--editor", "-T", "--template",
-                       "--recover"),
-    ("issue", "create"): ("-e", "--editor", "-T", "--template", "--recover"),
-    ("pr", "comment"): ("-e", "--editor"), ("issue", "comment"): ("-e", "--editor"),
+                       "--recover", "--attach"),
+    ("issue", "create"): ("-e", "--editor", "-T", "--template", "--recover", "--attach"),
+    ("pr", "comment"): ("-e", "--editor", "--attach"), ("issue", "comment"): ("-e", "--editor", "--attach"),
+    ("pr", "edit"): ("--attach",), ("issue", "edit"): ("--attach",),
     ("release", "create"): ("--generate-notes", "--notes-from-tag"), ("release", "edit"): ("--generate-notes",),
 }
+# gh's options that take a value, per command (gh 2.102 `--help`; `-R`/`--repo` is inherited), so the gate reads
+# a line as gh does: in `gh issue create -t -b -b x` the title is `-b` and the body `x` (#208).
+_GH_TAKES = {
+    ("pr", "create"): ("aBbFHlmprTtR", "--assignee --attach --base --head --label --milestone --project --recover "
+                                       "--reviewer --template --repo"),
+    ("pr", "comment"): ("bFR", "--attach --repo"), ("pr", "review"): ("bFR", "--repo"),
+    ("pr", "edit"): ("BbFmtR", "--add-assignee --add-label --add-project --add-reviewer --attach --base --milestone "
+                               "--remove-assignee --remove-label --remove-project --remove-reviewer --repo"),
+    ("issue", "create"): ("abFlmpTtR", "--assignee --attach --blocked-by --blocking --label --milestone --parent "
+                                       "--project --recover --template --type --repo"),
+    ("issue", "comment"): ("bFR", "--attach --repo"),
+    ("issue", "edit"): ("bFmtR", "--add-assignee --add-blocked-by --add-blocking --add-label --add-project "
+                                 "--add-sub-issue --attach --milestone --parent --remove-assignee --remove-blocked-by "
+                                 "--remove-blocking --remove-label --remove-project --remove-sub-issue --type --repo"),
+    ("release", "create"): ("nFtR", "--discussion-category --notes-start-tag --target --repo"),
+    ("release", "edit"): ("nFtR", "--discussion-category --tag --target --repo"),
+}
 _GH_API_FIELDS = ("-f", "--raw-field", "-F", "--field")
+_GH_API_TAKES = "FHqXpft"      # gh api's short options that take a value
 # Option values that are not the request body, so a variable there (a token in a header) leaves it readable.
 _HTTP_META = {"curl": ("-H", "--header", "-u", "--user", "-A", "--user-agent", "--oauth2-bearer"),
               "wget": ("--header", "--user", "--password", "--http-user", "--http-password"),
@@ -1102,12 +1122,14 @@ def _gh_unseen(argv: list[str], stdin: str | None, dynamic: frozenset) -> bool:
     if any(i in dynamic for i in range(1, len(argv))) or group == "gist":
         return True
     if group == "api":
-        fields = _option_values(argv, _GH_API_FIELDS, takes="XHpqt", least=99)
+        fields = _option_values(argv, _GH_API_FIELDS, takes=_GH_API_TAKES, least=99)
         return _opt(argv, "--input") is not None or any(f.partition("=")[2].startswith("@") for f in fields)
+    takes, longs = _GH_TAKES.get((group, verb), ("", ""))
     body, body_file, title = _gh_text_options(group)
     for names in (body, body_file, title):
         got = _opt(argv, *names)
-        if _option_values(argv, names, least=99) != ([] if got is None else [got]):
+        if _option_values(argv, names, takes=takes, longs=tuple(longs.split()), least=99) != ([] if got is None
+                                                                                              else [got]):
             return True
     if _opt(argv, *body_file) == "-" and stdin is None:
         return True
@@ -1148,7 +1170,7 @@ def _gh_kind(argv: list[str], cmd: str, stdin: str | None) -> Classification:
     if group == "api":
         method = (_opt(argv, "-X", "--method") or "").upper()
         # Read as gh reads them, so an attached value (`-fbody=x`) makes it a POST too (#208).
-        fields = _option_values(argv, _GH_API_FIELDS, takes="XHpqt", least=99)
+        fields = _option_values(argv, _GH_API_FIELDS, takes=_GH_API_TAKES, least=99)
         if not method:
             method = "POST" if fields or _opt(argv, "--input") else "GET"
         endpoint = next((a for a in argv[2:] if not a.startswith("-") and "/" in a and "=" not in a), "")
@@ -1216,8 +1238,8 @@ def _http_unseen(prog: str, argv: list[str], dynamic: frozenset, fed: bool) -> b
         return True
     if prog == "curl":
         values = lambda *names: _option_values(argv, names, least=99)  # noqa: E731
-        return bool(values("-T", "--upload-file") or values("-K", "--config")
-                    or any(v.startswith("@") for v in values("-d", "--data", "--data-binary", "--json"))
+        return bool(values("-T", "--upload-file") or values("-K", "--config") or values("--expand-data")
+                    or any(v.startswith("@") for v in values("-d", "--data", "--data-binary", "--data-ascii", "--json"))
                     or any(re.match(r"[^=]*@", v) for v in values("--data-urlencode"))
                     or any(re.match(r"[^=]*=[@<]", v) for v in values("-F", "--form")))
     if prog == "wget":
@@ -1237,10 +1259,13 @@ def _http_kind(argv: list[str], cmd: str) -> Classification:
     prog = argv[0]
     urls = [a for a in argv[1:] if _URL.match(a)]
     if not urls:
-        urls = [a for a in argv[1:] if not a.startswith("-") and "." in a and "=" not in a][:1]
+        urls = [a for a in argv[1:] if not a.startswith("-") and "=" not in a
+                and ("." in a or re.match(r"(localhost|\[::1\])(:\d+)?(/|$)", a))][:1]
     url = urls[0] if urls else ""
     host = _host_of(url) if url else ""
     method, data = "GET", ""
+    # curl -K reads options, data and URLs from a file the gate does not read: a request it cannot see (#208).
+    config = prog == "curl" and bool(_option_values(argv, ("-K", "--config"), least=99))
     if prog == "curl":
         method = (_opt(argv, "-X", "--request") or "").upper()
         datas = _option_values(argv, _DATA_FLAGS, least=99)   # an attached value (`-d@f`) is a POST too (#208)
@@ -1249,6 +1274,8 @@ def _http_kind(argv: list[str], cmd: str) -> Classification:
             method = "POST" if datas or _has(argv, "-T", "--upload-file") else "GET"
         if _has(argv, "-I", "--head"):
             method = "HEAD"
+        if config and method in ("GET", "HEAD", "OPTIONS"):
+            method = "POST"
     elif prog == "wget":
         method = (_opt(argv, "--method") or "").upper() or ("POST" if _opt(argv, "--post-data", "--post-file") else "GET")
         data = _opt(argv, "--post-data") or ""
@@ -1260,7 +1287,7 @@ def _http_kind(argv: list[str], cmd: str) -> Classification:
     kw = dict(target=host, link=url, command=cmd, text=data)
     if method in ("GET", "HEAD", "OPTIONS"):
         return _make("web_read", summary=f"{method} {host or url}", **kw)
-    if _is_local_host(host):
+    if host and _is_local_host(host) and not config:   # a host the gate cannot read is not local (#208)
         return _make("local_write", summary=f"{method} to local service {host or url}", **kw)
     return _make("web_post", summary=f"{method} to {host}", **kw)
 
@@ -1423,18 +1450,38 @@ def _trusted_path(prog: str) -> bool:
 
 
 def _literal_stdin(k: _Cmd, piped: str | None) -> str | None:
-    """A command's stdin when the line spells it out and bash changes nothing in it (#208): its one heredoc
-    with a quoted delimiter or no `$` or backtick in the body, its one here-string with no expansion, or the
-    text piped in from `echo`, `printf` or `cat <<EOF` with no `$` or backtick. None for a `<` redirection,
-    more than one source, or a stdin the gate cannot see (a compound's, `exec <`, the tool's own)."""
+    """A command's stdin when the line spells it out and bash changes nothing in it (#208): its one heredoc with
+    a quoted delimiter, or with no `$`, backtick or backslash in the body (bash expands those and joins a line
+    ending in `\\`); its one here-string with no expansion; or ``piped``, what `_literal_pipe` read from the one
+    simple command writing the pipe. None for a `<` redirection, more than one source, or a stdin the gate
+    cannot see (a compound's, `exec <`, the tool's own)."""
     if any(op in _READ_REDIRS for op, _ in k.redirs) or len(k.heredocs) + len(k.herestrings) > 1:
         return None
     if k.heredocs:
         h = k.heredocs[0]
-        return h.body if not h.ambiguous and (h.quoted or not re.search(r"[$`]", h.body)) else None
+        return h.body if not h.ambiguous and (h.quoted or not re.search(r"[$`\\]", h.body)) else None
     if k.herestrings:
         return None if k.herestrings[0].dynamic else k.herestrings[0].text
-    return piped if piped is not None and not re.search(r"[$`]", piped) else None
+    return piped
+
+
+def _literal_pipe(w: _Cmd | None) -> str | None:
+    """What one simple command writes to a pipe, when bash and the program change nothing in it (#208): `cat`
+    with no arguments and a literal heredoc or here-string (`_literal_stdin`), `echo` with no option word and
+    no backslash, or `printf` with one format and no `%` or backslash in it. Anything else (escapes, formats,
+    options, a redirection, an expansion, another program) is None: the gate cannot tell what the pipe carries."""
+    if w is None or w.redirs or not w.words or any(x.dynamic for x in w.words):
+        return None
+    prog, args = w.words[0].text, [x.text for x in w.words[1:]]
+    if prog == "cat" and not args:
+        return _literal_stdin(w, None)
+    if w.heredocs or w.herestrings or "\\" in "".join(args):
+        return None
+    if prog == "echo" and not any(a.startswith("-") for a in args):
+        return " ".join(args)
+    if prog == "printf" and len(args) == 1 and "%" not in args[0] and not args[0].startswith("-"):
+        return args[0]
+    return None
 
 
 def _stdin_texts(k: _Cmd, piped: str | None) -> list[str]:
@@ -1843,7 +1890,7 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog == "exo":
         return [_classify_exo(argv, cmd)]
     if prog == "gh":
-        return [_classify_gh(argv, cmd, _literal_stdin(k, piped), frozenset(i for i, w in enumerate(words) if w.dynamic))]
+        return [_classify_gh(argv, cmd, ctx.get("post_stdin"), frozenset(i for i, w in enumerate(words) if w.dynamic))]
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
         return [_classify_http(argv, cmd, frozenset(i for i, w in enumerate(words) if w.dynamic),
                                k.piped_in or _own_stdin(k))]
@@ -2856,6 +2903,8 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
     prev: _Cmd | None = None
     for k in cmds:
         piped = _piped_text(prev, ctx.setdefault("piped", {})) if (k.piped_in and prev is not None) else None
+        # A post's body from stdin (#208): only what one simple command writes, never a compound's last command.
+        ctx["post_stdin"] = _literal_stdin(k, _literal_pipe(prev) if k.piped_in and not k.piped_group else None)
         parts += _classify_simple(k, cmd, depth, ctx, piped)
         prev = k
     for sub in subs:
