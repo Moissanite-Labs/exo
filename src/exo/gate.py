@@ -1965,6 +1965,40 @@ def _classify_exo(argv: list[str], cmd: str) -> Classification:
     return _opaque(f"exo {sub} starts, stops or changes Exo itself", cmd)
 
 
+def _ln_targets(argv: list[str]) -> list[str]:
+    """Each relative `ln` target read against the link's folder: `-t DIR`, the last operand (an existing folder)
+    or its parent. getopt permutes, so options may follow operands. Option values count as targets too. Only the
+    last `-t` is kept (GNU ln rejects a second one), so the result stays linear in argv."""
+    operands, values, tdir, i = [], [], "", 1
+    while i < len(argv):
+        a, i = argv[i], i + 1
+        if a == "--":
+            operands += argv[i:]
+            break
+        if not a.startswith("-") or a == "-":
+            operands.append(a)
+            continue
+        if a.startswith("--"):           # unique prefixes: --t is --target-directory, --su is --suffix (--s is ambiguous)
+            name, eq, val = a.partition("=")
+            opt = "t" if "--target-directory".startswith(name) else "S" if len(name) > 3 and "--suffix".startswith(name) else ""
+        else:                            # a cluster: -st DIR, -stDIR, -S SUFFIX
+            m = re.match(r"-[^tS]*([tS])(.*)", a, re.S)
+            opt, eq = (m.group(1), m.group(2)) if m else ("", "")
+            val = eq
+        if not opt:
+            continue
+        if not eq and i < len(argv):
+            val, i = argv[i], i + 1
+        values.append(val)
+        if opt == "t":
+            tdir = val
+    dirs = [tdir]
+    if len(operands) > 1:
+        last = _expand_text(operands[-1])
+        dirs += [last, os.path.dirname(last)]
+    bases = [d for d in dict.fromkeys(map(_expand_text, dirs)) if d.startswith("/")]
+    return [os.path.join(b, t) for t in dict.fromkeys(operands + values) if not _expand_text(t).startswith("/")
+            for b in bases]
 # A store check on a spelling makes the checks it covers redundant: a word checked with its ancestors and pieces
 # ("wide") was also checked without ancestors ("narrow"), and that covers a whole-word check ("target").
 _COVERS = {"target": {"target", "narrow", "wide"}, "narrow": {"narrow", "wide"}, "wide": {"wide"}, "dir": {"dir"}}
@@ -2007,9 +2041,10 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     prog = words[0].text.rsplit("/", 1)[-1] if words else ""
     argv = [w.text for w in words]
     wide = prog in ("rm", "rmdir", "mv", "chmod", "chown", "chflags", "rsync", "shred", "unlink", "ln") or any(
-        p.category == "delete" for p in parts) or (prog == "cp" and _has(argv, "-s", "-l", "--symbolic-link", "--link"))
-    if prog == "ln" and len(argv) > 2 and not argv[-2].startswith(("-", "/")) and _expand_text(argv[-1]).startswith("/"):
-        words = words + [_Word(os.path.join(os.path.dirname(_expand_text(argv[-1])), argv[-2]))]  # relative link target
+        p.category == "delete" for p in parts) or (prog == "cp" and (_has(argv, "-s", "-l") or any(
+            len(a) > 2 and ("--symbolic-link".startswith(a) or "--link".startswith(a)) for a in argv)))  # --sym, --li
+    if prog == "ln":
+        words = words + [_Word(t) for t in _ln_targets(argv)]
     for i, w in enumerate(words):
         expanded = _shell_words(w, seen, "wide" if wide else "narrow")   # braces first: `of=x{a,b}` is `of=xa of=xb`
         if expanded is None:
@@ -3016,23 +3051,24 @@ def _store_word(path: str, ancestors: bool = False) -> bool:
         return False                     # relative: names only; the tool's working folder is not known here
     # Resolve the original spelling: normpath first would erase symlink/.. traversal.
     # Keep the lexical candidate too, including protected paths that link out of the store.
-    for candidate in _path_forms(p):
-        if _STORE_NAMES.search(candidate):
-            return True
-        for root, names, principals in _store_roots():
-            for r in _path_forms(root):
-                if ancestors and (r == candidate or r.startswith(candidate.rstrip("/") + "/")):
+    candidates = _path_forms(p)
+    if any(_STORE_NAMES.search(c) for c in candidates):
+        return True
+    roots = [(r, names, principals) for root, names, principals in _store_roots() for r in _path_forms(root)]
+    for candidate in candidates:
+        for r, names, principals in roots:
+            if ancestors and (r == candidate or r.startswith(candidate.rstrip("/") + "/")):
+                return True
+            if not candidate.startswith(r.rstrip("/") + "/"):
+                continue
+            parts = candidate[len(r.rstrip("/")) + 1:].split("/")
+            if _protected_rel(parts, names):
+                return True
+            if principals and parts[0] == "principals":
+                if len(parts) <= 2 and ancestors:
                     return True
-                if not candidate.startswith(r.rstrip("/") + "/"):
-                    continue
-                parts = candidate[len(r.rstrip("/")) + 1:].split("/")
-                if _protected_rel(parts, names):
+                if _protected_rel(parts[2:], _STORE_PROTECTED):
                     return True
-                if principals and parts[0] == "principals":
-                    if len(parts) <= 2 and ancestors:
-                        return True
-                    if _protected_rel(parts[2:], _STORE_PROTECTED):
-                        return True
     return False
 
 
@@ -3041,8 +3077,8 @@ def _in_store_dir(path: str) -> bool:
     p = _expand_text(path).strip()
     if not p.startswith("/"):
         return bool(re.search(r"(^|/)\.exo(/|$)", p))
-    return any(c == r or c.startswith(r.rstrip("/") + "/")
-               for c in _path_forms(p) for root, _, _ in _store_roots() for r in _path_forms(root))
+    roots = [r for root, _, _ in _store_roots() for r in _path_forms(root)]
+    return any(c == r or c.startswith(r.rstrip("/") + "/") for c in _path_forms(p) for r in roots)
 
 
 _PATCH_PATHS = re.compile(r"^\*\*\*\s*(?:Update|Add|Delete)\s+File:\s*(.+?)\s*$|^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+?)\s*$",

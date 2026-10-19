@@ -66,9 +66,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `store_write`.
 - Absolute symlink aliases into protected Exo stores retain the principal-only write approval floor (#130),
   including missing leaves, deletion of store ancestors, and `cd`, `pushd` or `git -C` into an alias of the store.
-  A path the gate cannot resolve (a NUL byte) keeps its lexical check instead of raising. `cp -s`, `cp -l` and a
-  relative `ln -s` target that alias the store ask too. `docs/GATE.md` lists what stays open (hardlinks, protected
-  entries that link out of the store, case-insensitive filesystems, glob and brace spellings).
+  A path the gate cannot resolve (a NUL byte) keeps its lexical check instead of raising. `cp -s`, `cp -l` (also
+  `--sym`, `--li`) and a relative `ln` target that alias the store ask too. The `ln` target is read against
+  `-t DIR`, the last operand and its parent, with options anywhere on the line (`ln REL LINK -s`). `docs/GATE.md`
+  lists what stays open (hardlinks, protected entries that link out of the store, case-insensitive filesystems,
+  glob and brace spellings, `/dev/fd/N` magic links, #217).
 - Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
   retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
   `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
@@ -244,6 +246,21 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   that this call skips them (D-081), not that credentials are missing (`docs/GATE.md`, `docs/PROVIDERS.md`).
 - Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`) classify as reads in the gate, so a new
   user's first screen is no longer an approval card for loading the intro skill (`docs/GATE.md`).
+- The signed ledger's head anchor (D-040) is now written after the append's COMMIT, so a writer killed in between
+  leaves it one event behind, never ahead. Before, a kill at that moment made the ledger report "events were
+  removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match, which
+  used to hide a real truncation. `exo log anchor --force` repairs a store an older version left stuck. When the
+  anchor beside the ledger cannot be written, or no anchor is at the head and none can be written, the next append
+  refuses instead of going on with the anchors frozen. The refusal says to restore write access, and
+  `exo log anchor` reports an anchor it cannot write in one line instead of a traceback. `exo log verify` reports
+  `anchored_seq`. An append costs what it did before. A ledger file swapped for a symlink to a truncated copy no
+  longer verifies clean: the anchor under `keys/heads/` keeps its name, and a symlinked ledger fails verify and is
+  refused by append and `exo log anchor`. An anchor that is a symlink is unreadable, and a symlink planted at an
+  anchor's temporary name no longer redirects the write to another file.
+- `exo import-store` of a store Exo made no longer fails partway and leaves a half-copied store. The ledger's
+  `.head` anchor is skipped with the ledger, and a stale anchor a deleted store left for the destination is dropped.
+- `exo memory verify` fails a store whose `ledger.sqlite` was deleted while a head anchor remains. It used to print
+  "nothing to verify" and exit 0.
 - Turn state (D-070, D-052): a scheduled run and a subagent now share the engine's per-session state, so a turn
   running there is a running turn everywhere. `session.list` shows it `live`. A job or peer notice is steered in,
   and a `turn.send` steer lands in that turn. Before, the engine saw these sessions as idle: a notice was stored
@@ -360,6 +377,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
   refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
   changes under `site/`.
+- Two processes opening one `sessions.sqlite` at once no longer crash (#246). The second core, seat or client
+  died with "duplicate column name" when both added a column a new or older file lacked, or with "database is
+  locked" when both switched a new file to WAL. The columns are now added in one write transaction, and a busy
+  switch to WAL is tried again for up to two seconds.
 
 ### Security
 - `exo web` no longer puts the page token in the browser launcher's argv, which other users of the host can read in
@@ -459,6 +480,27 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
   stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
   call the rules allow into an ask (`docs/GATE.md`).
+- Bus channel: a bus message steered into a turn you typed in a bus session no longer posts your answer to the
+  sending seat, and neither does your next turn after one. The channel replies only for the turn that an
+  auto-delivered message itself opened (D-040).
+- Bus channel: one sealed envelope that cannot be opened (malformed, or sealed to an old key) no longer stops a
+  seat's inbox for good. It reads as `<encrypted body could not be opened>` and the cursor moves past it.
+- Bus ingress: only a channel exod runs (the new caller `channel`, D-039) can hand the core a bus message. Before,
+  any local caller, a tool subprocess on the socket included, could pin an unseen seat's key to its own and send
+  messages as that seat.
+- Bus relay: the web view at `/`, which takes no auth, no longer shows plaintext bodies (DMs included) that the API
+  gives only to signed seats. It lists seq, sender, recipients, kind, time and thread. `EXO_BUS_WEB_BODIES=1` shows
+  bodies again, for a relay only seats can reach.
+- Bus relay: an envelope that the log would store in another form than the one signed (`v` as `true` or `1.0`, a
+  number as `thread`, a text field that is not a string) is refused with 422. Before, it was accepted and
+  `/v1/verify` failed at that row for good. Wrong types that crashed the handler with 500 get the same 422.
+- Signed updates (#42, D-073): an OpenPGP or X.509 signature on the update target was checked by gpg against the
+  local keyring and never against the pinned trust list, so a key you had only imported passed. Only SSH signatures
+  from the pin count now. A `config.json` that exists but cannot be read no longer turns `update.require_signed`
+  off: `exo update` refuses until it is fixed, and `--dry-run` says whether the check is on. `exo update
+  --pin-trust REV` no longer adopts any commit's list: once a pin exists, the commit that set the list must verify
+  against it (`docs/INSTALL.md`). A signed commit whose message is not UTF-8 is no longer refused. A trust list
+  that is not UTF-8 is refused before anything is written, and no `allowed_signers.tmp` is left behind.
 - Rebuilding the rule-of-three cache (`proposals/state.json` missing or stale) counts only your own utterances
   (D-040). Before, a rebuild also counted Hermes briefs of doubtful authorship (`hermes:unverified-user`) and peer,
   bus and job turns, so one matching sentence from you could complete a rule-of-three proposal, which promotion
