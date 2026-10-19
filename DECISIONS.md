@@ -894,9 +894,9 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the gate reads since D-075, so it denies that line; a `coproc` or `function NAME {` block whose inner command ranks
   at or below `opaque_exec` splits the same way (denied under `deny: [web_read]`, asked under
   `categories: {web_read: deny}`). The known unread forms below are allowed outright on main, not asked, and no entry
-  for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158) and text piped or fed by heredoc
-  to `ssh` with no remote command (#240). `git clone -c` with a command-running key left this list with #231, which
-  reads it as `git -c` is read. A `command:`
+  for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158). Two forms left this list on
+  2026-10-19: text piped or fed by heredoc to `ssh` with no remote command (#240), read since #303, and `git clone -c`
+  with a command-running key, read as `git -c` is since #231. A `command:`
   regex reaches them on the raw text only: the literal-word view (#136) is built from text the gate reads, so quoting
   still evades the regex inside these forms, while it no longer does inside an array subscript (read since #189), a
   value given to `declare` (read since #194, for #188), a command-valued option (read since #164 and #288) or a git
@@ -1149,6 +1149,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   expansion inside a word as opaque, which would ask on `cat notes-$(date +%F).md`; refusing links in `read_file`
   alone, which leaves the shell open. The checks of one classify call share their file-system lookups, which made a
   10 KB line several times faster. Limits in `docs/GATE.md` "Other spellings of a store path".
+  *Amendment 2026-10-19 (issues #207, #240):* two programs the gate skipped are read. bash takes a compound opener
+  after `coproc NAME` as a reserved word only when the two tokens before it are `coproc` and the name, so a
+  redirection, heredoc or here-string between them gives a simple command that runs the name (`coproc rm >/dev/null
+  { -rf x` deletes); the lexer marks a word followed by one, and the gate then reads the name as the program too,
+  beside the skipped reading, which stays so nothing it denied is lost. With no remote command, the login shell
+  `ssh host` starts runs ssh's stdin; a piped, heredoc or here-string text is read as shell, as for `bash -s`, and
+  the line asks, with the parts `internal` (D-075). ssh's options after the host are read up to the remote command;
+  `-n`, `-N`, `-f` or a remote command keep the old reading, and a word that may expand to no word or several before
+  the command, or as all of it, reads the stdin too (fail closed). As with wrappers and #191, the line takes the
+  category of what runs, so a `categories:` setting or rule written for the old dominant reading (`opaque_exec` for
+  the coproc lines, `shell` or the host as target for ssh) asks where it denied; `deny` and `reserved` entries see
+  every part and keep denying (D-075). Rejected: reading both coproc readings whenever
+  the line has any redirection (the issue's first sketch), which reads the name as a program in `coproc rm { echo
+  >/dev/null hi; }`, where bash runs a named compound.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant

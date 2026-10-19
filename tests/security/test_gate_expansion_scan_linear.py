@@ -15,7 +15,7 @@ import pytest
 from exo import gate
 
 SIZE = 100_000
-BOUND = 2.0   # seconds, for the review's three shapes; each takes under half a second here
+BOUND = 2.0   # CPU seconds, for the review's three shapes; each takes under half a second here
 SLACK = 8.0   # for the longer checks below, where most of the time is main's lexer and per-word store check (#293)
 
 
@@ -31,9 +31,9 @@ def _home(tmp_path, monkeypatch):
 
 
 def _timed(cmd: str, bound: float = BOUND):
-    t = time.perf_counter()
+    t = time.process_time()                   # CPU time, so other suites on the machine do not count (#308)
     c = gate.classify({"tool": "bash", "args": {"command": cmd}})
-    took = time.perf_counter() - t
+    took = time.process_time() - t
     assert took < bound, (took, cmd[:40])
     return c
 
