@@ -120,14 +120,31 @@ def test_claude_code_route_is_documented_as_the_core_picks_it():
 
 def test_first_run_without_a_key_is_described_as_the_terminal_client_does():
     """A keyless first run gets a note and the providers panel, or the model picker when one provider is set up and
-    no main model is chosen (tests/clients/tui/test_providers.py runs it). The docs say so, and how to reopen it."""
+    no main model is chosen (tests/clients/tui/test_providers.py runs it). The note is conditional: a keyless
+    default (local server or CLI) gets start/login advice instead of "add a key". The docs say so, and how to
+    reopen the panel."""
+    from exo_tui.providers import setup_advice
+
     app = _read("clients/tui/exo_tui/app.py")
     m = re.search(r"\n    async def first_run_providers\(.*?(?=\n    (?:async )?def )", app, re.S)
     assert m, "first_run_providers moved: point this test at the first-run check"
     check = m.group(0)
-    assert "Type /providers to add a key." in check, "the first-run note changed"
+    assert "setup_advice(" in check, "the first-run note no longer follows the default's setup advice"
     assert "self.open_providers()" in check and "self.pick_provider_default(" in check, (
         "the first-run check no longer opens the panel or the model picker: change the docs with it")
+    # A keyless default must NOT be told to add a key: the note names what that default needs instead.
+    keyless_server = setup_advice([{"provider": "ollama", "default": True, "ready": False,
+                                     "needs": "server", "base_url": "http://127.0.0.1:11434/v1"}])
+    assert "add a key" not in keyless_server, "a stopped local server must not ask for a key"
+    assert "ollama" in keyless_server and "start it" in keyless_server
+    keyless_cli = setup_advice([{"provider": "claude-cli", "default": True, "ready": False,
+                                 "needs": "cli", "status": "not installed"}])
+    assert "add a key" not in keyless_cli, "a missing CLI must not ask for a key"
+    assert "log in" in keyless_cli
+    # The key-needed fallback still tells the user to add a key.
+    assert setup_advice([]) == "No model provider is set up yet. Type /providers to add a key."
+    assert "Type /providers to add a key." in setup_advice(
+        [{"provider": "anthropic", "default": True, "ready": False}])
     for where, text in (("README.md Quick start", _section(_read("README.md"), "Quick start")),
                         ("docs/INSTALL.md", _read("docs/INSTALL.md")),
                         ("USER-GUIDE.md §1", _section(_read("docs/USER-GUIDE.md"), "1. Install and first run"))):

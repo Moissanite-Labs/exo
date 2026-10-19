@@ -151,7 +151,7 @@ After any change to the schema, regenerate the exports and commit them:
 
 `command.run` takes `name`, `args` and `session`. The core answers a few names itself, in
 `builtin_command` in `src/exo/diagnostics.py`: `context`, `compact`, `trace`, `findings`,
-`handoff_facts`, `harness_error`, `providers` (status, or `reload [name]`, D-034), `subagent` (list, open, steer and stop a running child; the rules live in
+`handoff_facts`, `harness_error`, `memory_status`, `providers` (status, or `reload [name]`, D-034), `subagent` (list, open, steer and stop a running child; the rules live in
 `src/exo/subagents.py`, outside the counted core, D-070), `unsteer` (pull a queued steer message back; args is its id, empty means the
 newest; publishes `steer.cancelled`, D-045) and `rename` (set the session title; principal only; publishes
 `session.updated`, D-069). `builtin_command` returns `MISSING` for a name it does not know, so a plugin command

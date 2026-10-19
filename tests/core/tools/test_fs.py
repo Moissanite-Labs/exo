@@ -34,6 +34,61 @@ def test_edit_no_match_gives_hint(run, tmp_path):
     assert res.is_error and "Did you mean" in res.text() and "def hello" in res.text()
 
 
+STALE_ONE_LINERS = [  # (file, old_string, new_string): the file's line changed since old_string was read
+    ("A = 1\nTIMEOUT_SECONDS = 45\n", "TIMEOUT_SECONDS = 30", "TIMEOUT_SECONDS = 60"),
+    ("def f(uid):\n    return db.get_user(uid)\n", "    return db.get_users(uid)", "    return db.get_users(uid, 1)"),
+    ("x = compute(a, b, c)\n", "x = compute(a, b)", "x = compute(a, b, d)"),
+    ("if user.is_admin:\n    go()\n", "if not user.is_admin:", "if not user.is_admin and ok:"),
+    # One line padded with blank lines (a copied line's newline, a blank context line) is still one line.
+    ("A = 1\n\nTIMEOUT_SECONDS = 45\n\nB = 2\n", "TIMEOUT_SECONDS = 30\n", "TIMEOUT_SECONDS = 60\n"),
+    ("A = 1\n\nTIMEOUT_SECONDS = 45\n\nB = 2\n", "\nTIMEOUT_SECONDS = 30", "\nTIMEOUT_SECONDS = 60"),
+    ("A = 1\n\nTIMEOUT_SECONDS = 45\n\nB = 2\n", "\nTIMEOUT_SECONDS = 30\n", "\nTIMEOUT_SECONDS = 60\n"),
+]
+
+
+def test_edit_refuses_stale_one_line_old_string(run, tmp_path):
+    # A one-line old_string whose text differs from the file's line (not just its whitespace) used to match via
+    # context_aware or block_anchor and overwrite the newer line. It fails now, and the hint shows the current line.
+    f = tmp_path / "cfg.py"
+    for content, old, new in STALE_ONE_LINERS:
+        f.write_text(content)
+        for replace_all in (False, True):
+            res = run("edit_file", path="cfg.py", old_string=old, new_string=new, replace_all=replace_all)
+            assert res.is_error and "Could not find a match" in res.text(), (old, res.text())
+            assert "Did you mean" in res.text() and old.strip().split()[0] in res.text()
+            assert f.read_text() == content
+    f.write_text("A = 1\nTIMEOUT_SECONDS = 45\n")
+    assert "TIMEOUT_SECONDS = 45" in run("edit_file", path="cfg.py", old_string="TIMEOUT_SECONDS = 30",
+                                         new_string="TIMEOUT_SECONDS = 60").text()
+
+
+def test_fuzzy_one_line_matches_only_up_to_drift():
+    for content, old, new in STALE_ONE_LINERS:
+        assert fuzzy_find_and_replace(content, old, new) == (
+            content, 0, None, "Could not find a match for old_string in the file"), old
+    # Whitespace, indentation and Unicode drift on one line still land.
+    content = "def f():\n    TIMEOUT_SECONDS  =  45\n    say(\u201chi\u201d)\n"
+    new, n, strategy, err = fuzzy_find_and_replace(content, "TIMEOUT_SECONDS = 45\n", "TIMEOUT_SECONDS = 60\n")
+    assert err is None and n == 1 and strategy == "whitespace_normalized"
+    assert new == "def f():\n    TIMEOUT_SECONDS = 60\n    say(\u201chi\u201d)\n"
+    new, n, strategy, err = fuzzy_find_and_replace(content, 'say("hi")', 'say("bye")')
+    assert err is None and strategy == "unicode_normalized" and new.endswith("say(\u201cbye\u201d)\n")
+
+
+def test_fuzzy_multi_line_similarity_still_matches_one_place():
+    # Approximate matching stays for blocks of two or more non-blank lines (the upstream design).
+    content = "def compute_total(a):\n\n    return a + 1\n"
+    new, n, strategy, err = fuzzy_find_and_replace(
+        content, "def compute_totals(a):\n\n    return a + 1", "def compute_total(a):\n\n    return a + 2")
+    assert err is None and n == 1 and strategy == "context_aware"
+    assert new == "def compute_total(a):\n\n    return a + 2\n"
+    new, n, strategy, err = fuzzy_find_and_replace("start\nalpha one\nend\n", "start\nalpha 1\nend", "X")
+    assert err is None and n == 1 and strategy == "block_anchor" and new == "X\n"
+    # ...but blank lines are no anchor for a single changed line.
+    content = "a = 1\n\nTIMEOUT = 45\n\nb = 2\n"
+    assert fuzzy_find_and_replace(content, "\nTIMEOUT = 30\n", "\nTIMEOUT = 60\n")[1] == 0
+
+
 def test_edit_preserves_crlf(run, tmp_path):
     f = tmp_path / "w.txt"
     f.write_bytes(b"one\r\ntwo\r\n")

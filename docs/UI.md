@@ -66,7 +66,10 @@ the middle dot as separator come straight from the site.
    `scripts/idle_cpu.py`: about 1.3% of one core (0.5% without it). A plain startup prints no `new thread` line; `/new` does.
    Before that, a boot sequence (under a second, any key skips it) that marks `core`, `agent`, `memory`, `model` as
    each real step finishes, then an empty-start card with the keys. The boot screen is gone before anything opens
-   over the start (the first-run providers panel or model picker): its dismiss closes the top screen.
+   over the start (the first-run providers panel or model picker): its dismiss closes the top screen. The `memory`
+   line and the card read the core's `memory_status` built-in: `ready`, `off, no principal store` (no store yet:
+   a dim dash, not a green check, and a notice naming `exo init <id>`), `did not start` (also a dash), or `log only`
+   (no memory plugin: the agent log and summary tree still run). An older core that cannot say leaves the plain label.
 
 Where the numbers come from, all from events the core already sends: `model.call` (`requested`, `route`,
 `usage.cache_read_tokens`), `usage.updated` (context tokens, session cost), `memory.summarized`,
@@ -103,9 +106,11 @@ for a local server), where the key comes from (env, keychain, secret-service or 
 and an orange default mark. Key chips: `[a]` add or replace a key, `[t]` test, `[r]` remove (asks y or n), `[d]` pick
 the default model, `[esc]` close (leaving a panel is soft; Esc never stops a turn, ctrl+c or `/stop` does). `[a]` opens a small modal with one masked field; the key never goes through the
 composer, the transcript or any log, and a key typed after `/providers add <name>` in the composer is refused and
-not echoed. After a change the client tells a running core to read keys again. At start, if no provider is ready,
-one note says so and the panel opens. If providers are ready but no main route uses one, the panel opens too, or
-the default-model picker when only one provider is ready.
+not echoed. After a key change, or a test that passes, the client tells a running core to read keys again. That
+also clears the provider's cooldown and route breaker, so the next message reaches it. At start, if no provider is
+ready, one note says what the default needs: a key, a running local server (its host and port only, never a login
+in its URL), or a CLI that is installed and logged in, and the panel opens. If providers are ready but no main
+route uses one, the panel opens too, or the default-model picker when only one provider is ready.
 
 ## Focus, the big composer and the inverse layout (D-046)
 
