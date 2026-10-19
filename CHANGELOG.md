@@ -249,7 +249,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   them, and `/compact` no longer offers a private reply as the output a correction in another thread judges.
   `memory_zoom(subagent=)` opens a private thread's delegate children only from that thread or a fork of it, and
   of two matching children made in the same millisecond it opens the later one. All of this holds for those
-  children too, at any depth: feedback on a child's answer records nothing and files no finding. A response to a panel a private thread opened or updated is no longer noted in the ledger.
+  children too, at any depth: feedback on a child's answer records nothing and files no finding. A response to a
+  panel a private thread opened or updated is no longer noted in the ledger.
 - Undo in one thread no longer loses other threads' news: the context note stored during the undone turn stays,
   and undo deletes only the summaries that hold an undone entry and the merges above them, not every later one.
 - A forked thread no longer resends its parent's whole transcript on every model call: the fork's copies count at
