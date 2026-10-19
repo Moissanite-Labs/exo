@@ -1113,9 +1113,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   whole output crosses a cut, and the stream equals redacting the whole output with the key values known when the
   command starts. The held text stays under twice the length of all key values together. What still goes out: a key
   value learned while the command runs is cut out only inside one piece, so such a key split between two pieces goes
-  out in two parts. The result is redacted whole, with every key value known when the call returns. Only the values
-  Exo knows (`known_secret_values`) are redacted, as before. Rejected: holding all output until the command ends (no
-  live output). `docs/TOOLS.md` "Streamed output".
+  out in two parts. The result is redacted whole, with every key value known when the call returns. As before, only
+  key values Exo knows are redacted: `known_secret_values`, or the list a caller passes (claude-cli passes the
+  secret-named variables of its own environment). Rejected: holding all output until the command ends (no live
+  output). `docs/TOOLS.md` "Streamed output".
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
