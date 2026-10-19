@@ -74,6 +74,26 @@ def test_manifest_has_no_timestamps_and_hashes_every_file(principal_store, tmp_p
     assert not {"ts", "created", "date"} & set(m) and not re.search(r"\d{4}-\d{2}-\d{2}", json.dumps(m))
 
 
+def test_export_does_not_follow_a_symlink_planted_at_a_temporary_name(principal_store, tmp_path):
+    """Each file was written as `<file>.tmp` with a plain write, which follows a symlink there (#273)."""
+    import os
+    import stat
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch\n")
+    out = tmp_path / "out"
+    (out / "soul").mkdir(parents=True)
+    for rel in ("MANIFEST.json.tmp", "soul/house.md.tmp"):
+        (out / rel).symlink_to(victim)
+    assert X.export_house(principal_store, out, "1.3.0").written
+    assert victim.read_text() == "do not touch\n"
+    umask = os.umask(0o022)
+    os.umask(umask)
+    for rel in ("MANIFEST.json", "items.jsonl", "soul/house.md", "review/REVIEW.md"):  # the mode write_bytes gave
+        st = os.lstat(out / rel)
+        assert stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o666 & ~umask, rel
+    assert json.loads((out / "MANIFEST.json").read_text())["version"] == "1.3.0"
+
+
 @pytest.mark.parametrize("node_id,type_,summary,label", [
     ("mind/name", "preference", "Show drafts to Sam Rivera first.", "store name"),
     ("mind/email", "preference", "Copy reports to boss@example.net.", "email"),
