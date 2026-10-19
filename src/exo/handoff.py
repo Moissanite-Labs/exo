@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import provenance
+from .core.private import atomic_write
 from .store import PrincipalStore, exo_home, principal_root
 
 FORMAT_VERSION = 1
@@ -613,9 +614,7 @@ def write_handoff(topic: str, messages: list[dict], store: PrincipalStore | None
         principal = Path(store.root).name
     text = render_handoff(topic, sig, path=path, created=now.strftime('%Y-%m-%dT%H:%M:%SZ'),
                           session=session, principal=principal, summary=summary)
-    tmp = path.with_suffix('.md.tmp')
-    tmp.write_text(text, encoding='utf-8')
-    os.replace(tmp, path)
+    atomic_write(path, text, mode=None)
     return path
 
 

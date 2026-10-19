@@ -43,11 +43,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import Optional
+
+from exo.core.private import atomic_write  # exo: #273
 
 from .tree import SummaryTree
 
@@ -168,14 +169,8 @@ class View:
                 "parts": [[p.l, p.i] for p in self.parts],
             }
         try:
-            raw = json.dumps(data).encode("utf-8")
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(raw)
+            # exo: replace through mkstemp, so a symlink at the path is not followed (#273). A cache: no fsync.
+            atomic_write(path, json.dumps(data), sync=False)
         except OSError as exc:
             logger.warning("optchat: view save failed for %s: %s", path, exc)
 
