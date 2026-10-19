@@ -125,7 +125,9 @@ def test_first_run_without_a_key_is_described_as_the_terminal_client_does():
     m = re.search(r"\n    async def first_run_providers\(.*?(?=\n    (?:async )?def )", app, re.S)
     assert m, "first_run_providers moved: point this test at the first-run check"
     check = m.group(0)
-    assert "Type /providers to add a key." in check, "the first-run note changed"
+    advice = re.search(r"\ndef setup_advice\(.*?(?=\ndef )", _read("clients/tui/exo_tui/providers.py"), re.S)
+    assert "setup_advice(" in check and advice, "the first-run note no longer comes from setup_advice"
+    assert "Type /providers to add a key." in advice.group(0), "the first-run note for a keyed default changed"
     assert "self.open_providers()" in check and "self.pick_provider_default(" in check, (
         "the first-run check no longer opens the panel or the model picker: change the docs with it")
     for where, text in (("README.md Quick start", _section(_read("README.md"), "Quick start")),
