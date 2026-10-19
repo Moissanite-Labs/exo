@@ -387,11 +387,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `-` line) beyond whitespace, escaping or Unicode. A stale `TIMEOUT = 30` used to replace the file's newer
   `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
   closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
-  In `apply_patch` a hunk's context lines count toward the two, so a hunk with one context line can still replace a
-  changed `-` line. The rule counts lines, not exact lines: a changed line plus a lone `}` or the `def` line still
-  matches by similarity. So copy `old_string` from a fresh read (docs/TOOLS.md "Edit matching").
   In `apply_patch` a hunk's context lines count toward the two; since #236 each `-` line must also match its file
-  line, so a changed `-` line is refused there too.
+  line, so a changed `-` line is refused there too. In `edit_file` the rule counts lines, not exact lines: a changed
+  line plus a lone `}` or the `def` line still matches by similarity. So copy `old_string` from a fresh read
+  (docs/TOOLS.md "Edit matching").
 - Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
   is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
   only a string names a principal.
