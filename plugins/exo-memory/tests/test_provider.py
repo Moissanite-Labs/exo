@@ -518,3 +518,23 @@ def test_lazy_init_keeps_the_host_log(tmp_path, store):
         assert st.core_log is log and st.rt.episodic is None
     finally:
         p.shutdown()
+
+
+def test_the_episodic_view_cache_does_not_follow_a_symlink(tmp_path):
+    """`view.json` was opened with O_TRUNC at its final name and then chmodded, and both follow a symlink there. It
+    is replaced through mkstemp now (#273): the link is replaced, and the file is owner-only."""
+    import stat
+    from exo_memory.episodic.tree import SummaryTree
+    from exo_memory.episodic.view import View
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch\n")
+    path = tmp_path / "epi" / "view.json"
+    view = View(SummaryTree(tmp_path / "epi"), 100)
+    view.fold_to(2)
+    path.symlink_to(victim)
+    view.save(path)
+    assert victim.read_text() == "do not touch\n"
+    st = os.lstat(path)
+    assert stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600
+    assert json.loads(path.read_text())["folded"] == 2
+    assert sorted(p.name for p in path.parent.iterdir()) == ["tree", "view.json"]

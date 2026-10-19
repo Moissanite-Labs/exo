@@ -334,6 +334,17 @@ def test_opening_a_ledger_symlinked_to_another_database_leaves_it_as_it_was(tmp_
     assert sorted(p.name for p in tmp_path.iterdir() if p.name != "exo-home") == ["ledger.sqlite", "notes.db"]
 
 
+def test_an_append_does_not_fsync_its_anchors(tmp_path, signer, monkeypatch):
+    """An append writes two anchors. They go through mkstemp now (#273) but skip the helper's fsync, as before, so
+    an append costs what it did."""
+    calls: list = []
+    monkeypatch.setattr(os, "fsync", lambda fd: calls.append(fd))
+    with Ledger(tmp_path / "l.sqlite", signer) as led:
+        led.append("note", {"i": 0}, "agent")
+        assert all(a["seq"] == 1 for _, a in led.anchors()) and len(led.anchors()) == 2
+    assert calls == []
+
+
 def test_verify_warns_when_the_anchors_are_more_than_one_event_apart(tmp_path, signer, monkeypatch):
     """A keys/ copy that cannot be written only logs a warning per append, by design, so a frozen copy can fall far
     behind. verify says so, without failing (#277). One event apart is the accepted lag and gets no warning."""
