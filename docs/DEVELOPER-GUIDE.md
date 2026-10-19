@@ -236,7 +236,9 @@ methods matter for the principal's words:
 Do not log or print message text from these hooks. Report errors through `exo.core.trace.report` so they show as
 `harness.error` and become findings. `trace.add_sink(fn)` subscribes to those reports. A bound method is held
 weakly and does not keep its owner alive, so keep the owner referenced for as long as it should receive reports
-(the engine registers its own and removes it in `close()`).
+(the engine registers its own and removes it in `close()`). Sinks are copy-on-write and no sink runs under a lock, so
+a sink or a finalizer may call `report`, `add_sink` or `remove_sink`; a report already delivering may still call a sink
+removed after it began.
 
 **Context engine hooks.** `select_context(messages, session_id=)` gets each message with `author` and `principal`,
 like the memory hooks. After `session.undo` the core calls `on_session_switch(session, rewound=True, messages=,

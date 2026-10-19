@@ -160,7 +160,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Fixed
 - The core releases its SQLite handles (#281). `CoreRuntime.close()` closes the session store and schedule.sqlite, the
   spend journal closes the connection that creates it, and the harness-error sink list holds engines weakly, so an
-  engine nobody closed can be collected. The root suite no longer climbs to about 930 open files, and runs in a
+  engine nobody closed can be collected; the sink list is copy-on-write and no sink runs under a lock, so a garbage-
+  collector finalizer that reports or adds a sink cannot hang the thread. `close()` still closes the scheduler and
+  the store when the peers or jobs step raises, then raises the first error. The root suite no longer climbs to about 930 open files, and runs in a
   macOS Terminal at its default 256. A closed session store reopens on its next use, and `Scheduler.close()` is
   final (`stop()` stays restartable).
 - Terminal approval cards wait for removal before the next queued card mounts (#276). Answering a card or
