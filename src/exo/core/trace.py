@@ -79,13 +79,23 @@ def add_sink(fn: Sink) -> None:
             return fn
         ref = strong
     with _sinks_lock:
-        _sinks = (*_sinks, ref)
+        while True:  # a finalizer may add or remove on this thread while the tuple is built: retry, never overwrite
+            snapshot = _sinks
+            new = (*snapshot, ref)
+            if _sinks is snapshot:
+                _sinks = new
+                return
 
 
 def remove_sink(fn: Sink) -> None:
     global _sinks
     with _sinks_lock:  # bound methods compare equal when they wrap the same function and object
-        _sinks = tuple(ref for ref in _sinks if (live := ref()) is not None and live != fn)
+        while True:  # compare and retry, as in add_sink
+            snapshot = _sinks
+            new = tuple(ref for ref in snapshot if (live := ref()) is not None and live != fn)
+            if _sinks is snapshot:
+                _sinks = new
+                return
 
 
 def _live_sinks() -> list[Sink]:

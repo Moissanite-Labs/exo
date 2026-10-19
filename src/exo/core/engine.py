@@ -348,8 +348,10 @@ class CoreRuntime:
 
     async def _close_scheduler(self) -> None:
         if self.scheduler is not None:
-            await self.scheduler.stop()
-            self.scheduler.close()
+            try:
+                await self.scheduler.stop()
+            finally:  # close() is final and runs even if stop() raised
+                self.scheduler.close()
 
     async def _close_mcp(self) -> None:
         if self._started is not None:
