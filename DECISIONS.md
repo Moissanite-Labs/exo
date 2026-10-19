@@ -658,6 +658,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `binding`, or sign as a seat (left for the UI work); no client helper beyond `sign_approval` for a seat to answer.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
+  printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
+  repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
+  are not secret-scrubbed by this display helper. No command, key, setting or setup step changes.
 - **Why:** a new user had no clean way to add a model key. Keys went in by hand (env, `security`, or a 0600
   file), `exo models` only reported, and the web client had no provider settings at all.
 - **Engine:** `exo/providers_setup.py`. `rows` gives every catalog provider with status (key found and where,
