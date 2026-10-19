@@ -48,6 +48,9 @@ the middle dot as separator come straight from the site.
    finding, `/context` report and the short orientation `INTRO` shows when the `exo-intro` skill is missing
    (cold rule), peer message (double cold rule, sender and trust in the header,
    never styled as you). The side panel for `ui.panel` uses the same header and rule.
+   The terminal waits for an approval card's removal before mounting the next queued card under the same widget id.
+   Answers and close events name their request, so a late event cannot close its replacement. Thread switches and
+   restoration share this transition. A request with no thread still stays across thread switches (#276, D-045).
 4. Activity: a wire with a travelling packet and `waiting for <model> 12s`, `running tool`.
 5. Composer: block caret in the signal colour, placeholder hint, `steer ›` while busy, `answer ›` for a question. A steer sent mid-turn shows `steer queued ›` until it lands (its `message.completed`); `Up` in an empty composer or `/unsteer` sends `command.run unsteer` and puts the text back in the composer (D-045). Esc is not used for this.
    Under it, when you type `/`, `@` or `!`, the completion menu (D-037): a hairline above, mono rows, an orange rule on

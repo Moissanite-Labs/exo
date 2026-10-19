@@ -112,6 +112,73 @@ def test_memory_zoom_and_the_view_the_memory_provider_gets(tmp_path):
     assert "memory_zoom" in {sp.name for sp in eng._specs()}
 
 
+def test_memory_zoom_opens_a_private_threads_subagent_only_from_that_thread(tmp_path):
+    """D-028: a delegate child of a private thread holds the brief built from it and the child's result. Another
+    thread's memory_zoom(subagent=) skips it (and its own children), by role or by id; the private thread opens it."""
+    from exo.core.types import Message
+
+    eng = _engine(tmp_path / "home")
+
+    async def go():
+        d = Dispatcher(eng)
+        t, p = await _new(d, title="normal"), await _new(d, kind="private")
+        kids = []
+        for title, parent, text in (("researcher: check the ferry times", t["id"], "Ferry: nine."),
+                                    ("researcher: dig into zebracorn", p["id"], "Zebracorn: $40M, closes Friday."),
+                                    ("checker: zebracorn terms", None, "Zebracorn terms hold.")):
+            kid = eng.store.create_session(title=title, parent=parent or kids[-1], agent=eng.agent, kind="subagent")
+            eng.store.append_message(kid.id, Message.assistant(text))  # what DelegateRunner.run leaves behind
+            kids.append(kid.id)
+
+        async def zoom(sid, name):
+            res = await eng.registry.call(ToolCall(id="z", name="memory_zoom", arguments={"start": 1, "subagent": name}),
+                                          ToolContext(cwd=str(tmp_path), session=sid))
+            return res.text()
+        out = {"role": await zoom(t["id"], "researcher"), "child": await zoom(t["id"], kids[1]),
+               "grandchild": await zoom(t["id"], kids[2]), "own": await zoom(p["id"], "researcher"),
+               "own_grandchild": await zoom(p["id"], "checker")}
+        await eng.close()
+        return out, kids
+    out, kids = asyncio.run(go())
+    assert "Ferry: nine." in out["role"] and "zebracorn" not in out["role"].lower()  # the newest it may see
+    assert out["child"] == f"no subagent named {kids[1]!r}"
+    assert out["grandchild"] == f"no subagent named {kids[2]!r}"
+    assert "Zebracorn: $40M" in out["own"] and "Zebracorn terms hold." in out["own_grandchild"]
+
+
+def test_a_memory_tool_in_a_private_thread_is_told_so(tmp_path):
+    """D-028: the memory provider's tools get agent_context="private" in a private thread and in a session under
+    it (skip writes), and the same keywords as before anywhere else."""
+    calls = []
+
+    class Mem:
+        def initialize(self, session_id, **kw): ...
+
+        def get_tool_schemas(self):
+            return [{"name": "mem_note", "description": "keep a note", "parameters": {"type": "object"}}]
+
+        def handle_tool_call(self, name, args, **kw):
+            calls.append((kw.get("session_id"), kw.get("agent_context"), sorted(kw)))
+            return "{}"
+
+    eng = _engine(tmp_path / "home", Mem())
+
+    async def go():
+        d = Dispatcher(eng)
+        p, t = await _new(d, kind="private"), await _new(d)
+        kid = eng.store.create_session(parent=p["id"], agent=eng.agent, kind="subagent").id
+        for sid in (p["id"], kid, t["id"]):
+            res = await eng.registry.call(ToolCall(id="n", name="mem_note", arguments={}),
+                                          ToolContext(cwd=str(tmp_path), session=sid))
+            assert not res.is_error, res.text()
+        await eng.close()
+        return p["id"], kid, t["id"]
+    pid, kid, tid = asyncio.run(go())
+    assert calls == [(pid, "private", ["agent_context", "agent_log", "exo_home", "session_id"]),
+                     (kid, "private", ["agent_context", "agent_log", "exo_home", "session_id"]),
+                     (tid, None, ["agent_log", "exo_home", "session_id"])]
+
+
 def test_exo_memory_verify_and_threads(tmp_path, monkeypatch, capsys):
     from exo.cli import main
     from exo.core.sessions import SessionStore
