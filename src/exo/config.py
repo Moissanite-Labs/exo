@@ -26,10 +26,10 @@ import json
 import os
 import re
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
+from .core.private import atomic_write
 from .store import ID_RE, exo_home
 
 VERSION = 1
@@ -159,17 +159,7 @@ class Config:
         """Atomic write, mode 0600. Unknown keys written by newer tools are kept."""
         self.home.mkdir(parents=True, exist_ok=True)
         out = {'version': VERSION, **{k: v for k, v in self.data.items() if k != 'version'}}
-        fd, tmp = tempfile.mkstemp(prefix='.config.', dir=self.home)
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(out, f, indent=2, sort_keys=True)
-                f.write('\n')
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, self.path)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
-        return self.path
+        return atomic_write(self.path, json.dumps(out, indent=2, sort_keys=True) + '\n')
 
     # --- generic access --------------------------------------------------------
 

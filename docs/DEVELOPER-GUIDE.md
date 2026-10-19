@@ -300,6 +300,12 @@ author is not `principal` through `exo.provenance.defuse_pins`, so it cannot car
 A summarizer's output is model text, never the principal's: pass it through `defuse_pins` where it is made, before
 anything adds a real block to it.
 
+**State files (#273).** Write a file that replaces an earlier one with `exo.core.private.atomic_write(path, data)`.
+It writes a temporary file that `mkstemp` makes in the same folder, fsyncs it and renames it over the path. The mode
+is 0600 unless you pass `mode` (`None` gives what a plain open gives). A file written many times a minute, such as
+a cursor or a cache, can pass `sync=False` to skip the fsync. Do not write `<file>.tmp` and rename it, and do not
+open the final name for writing: a symlink planted at either name turns the write into a write to another file.
+
 ## 5. Add a seat
 
 A seat is a TOML file in `$EXO_HOME/seats/<name>.toml`, or `<name>/seat.toml` with a `SOUL.md`. The full format is
