@@ -100,6 +100,7 @@ class Scheduler:
     def __init__(self, engine: Any, clock: Callable[[], float] = time.time) -> None:
         self.engine, self.clock = engine, clock
         self.db = sqlite3.connect(str(private_file(engine.home / "schedule.sqlite")), check_same_thread=False)
+        self._closed = False
         self.db.row_factory = sqlite3.Row
         self.db.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, title TEXT NOT NULL, "when" TEXT NOT NULL,'
                         ' prompt TEXT NOT NULL, seat TEXT, tier TEXT NOT NULL, deliver TEXT NOT NULL,'
@@ -273,6 +274,8 @@ class Scheduler:
     # ------------------------------------------------------------ loop
 
     def start(self) -> None:
+        if self._closed:
+            raise RuntimeError("the scheduler is closed; make a new one to run jobs again")
         if self._main is None:
             self._main = asyncio.ensure_future(self._run_loop())
             self._main.add_done_callback(self._loop_ended)
@@ -293,6 +296,12 @@ class Scheduler:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.running.clear()
+
+    def close(self) -> None:
+        """Close schedule.sqlite. Call after stop(). It is final: start() refuses afterwards, and any other
+        call that reads or writes jobs raises sqlite3.ProgrammingError. stop() alone keeps it restartable."""
+        self._closed = True
+        self.db.close()
 
     async def wait(self) -> None:
         """Wait for runs in flight (tests, shutdown)."""
