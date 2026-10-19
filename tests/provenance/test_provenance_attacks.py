@@ -191,22 +191,102 @@ def _three(store):
             led.append("note", {"i": i}, "exo-memory")
 
 
-def test_truncating_the_tail_behind_the_triggers_fails_verify(tmp_path, capsys):
-    from exo.cli import main
-    store = _store(tmp_path)
-    _three(store)
+def _delete_last(store):
+    """Drop the delete trigger, delete the last event, put the trigger back: the shorter chain still links."""
     db = sqlite3.connect(store.ledger_path)
     db.execute("DROP TRIGGER events_no_delete")
-    db.execute("DELETE FROM events WHERE seq = 3")
+    db.execute("DELETE FROM events WHERE seq = (SELECT MAX(seq) FROM events)")
     db.execute("CREATE TRIGGER events_no_delete BEFORE DELETE ON events "
                "BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END")
     db.commit()
     db.close()
+
+
+def test_truncating_the_tail_behind_the_triggers_fails_verify(tmp_path, capsys):
+    from exo.cli import main
+    store = _store(tmp_path)
+    _three(store)
+    _delete_last(store)
     with Ledger(store.ledger_path) as led:
         res = led.verify()
     assert not res["ok"] and "anchor" in res["error"]
     assert main(["memory", "verify", "--principal", "pat"]) == 1
     assert "anchor" in capsys.readouterr().out
+
+
+def test_exo_log_anchor_does_not_cover_a_truncation_unless_forced(tmp_path, capsys):
+    import json
+    from exo.cli import main
+    from exo.ledger import LedgerError
+    store = _store(tmp_path)
+    _three(store)
+    _delete_last(store)
+    with Ledger(store.ledger_path) as led:
+        with pytest.raises(LedgerError, match="--force"):
+            led.anchor()
+        assert [a["seq"] for _, a in led.anchors()] == [3, 3]  # the evidence stays
+    assert main(["log", "anchor", "--principal", "pat"]) == 1
+    assert "events were removed" in capsys.readouterr().err
+    assert main(["log", "verify", "--principal", "pat"]) == 1
+    capsys.readouterr()
+    # --force is for a store an older Exo left with its anchor ahead after a crash; it says what it replaced
+    assert main(["log", "anchor", "--principal", "pat", "--force"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["seq"] == 2 and [r["seq"] for r in out["replaced"]] == [3, 3]
+    assert main(["log", "verify", "--principal", "pat"]) == 0
+
+
+def test_exo_log_anchor_reports_an_anchor_it_cannot_write_in_one_line(tmp_path, capsys, monkeypatch):
+    """The "cannot be written" refusal points at write access, and `exo log anchor` says the same in one line with
+    exit code 1, not a PermissionError traceback (#221 delta review)."""
+    from exo import ledger as ledger_mod
+    from exo.cli import main
+    store = _store(tmp_path)
+    _three(store)
+
+    def broken(path, data):
+        raise PermissionError(13, "read-only", str(path))
+    monkeypatch.setattr(ledger_mod, "_atomic_write", broken)
+    for force in ([], ["--force"]):
+        assert main(["log", "anchor", "--principal", "pat", *force]) == 1
+        err = capsys.readouterr().err.strip()
+        assert "cannot be written" in err and "Restore write access" in err and len(err.splitlines()) == 1
+
+
+def test_a_ledger_swapped_for_a_symlink_fails_memory_verify(tmp_path, capsys):
+    import shutil
+    from exo.cli import main
+    store = _store(tmp_path)
+    _three(store)
+    alt = store.root / "ledger.alt"
+    shutil.copy(store.ledger_path, alt)
+    store.ledger_path.unlink()
+    store.ledger_path.symlink_to(alt)
+    assert main(["memory", "verify", "--principal", "pat"]) == 1
+    assert "symbolic link" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("left", ["both anchors", "home anchor", "unreadable home anchor"])
+def test_deleting_the_ledger_fails_memory_verify(tmp_path, capsys, left):
+    from exo.cli import main
+    store = _store(tmp_path)
+    _three(store)
+    with Ledger(store.ledger_path) as led:
+        home_anchor = led.anchor_paths()[1]  # $EXO_HOME/keys/heads/<hash>.json
+    empty = PrincipalStore.create(tmp_path / "exo-home" / "principals" / "sam")
+    with Ledger(empty.ledger_path) as led:
+        led.anchor()  # an empty ledger, anchored at seq 0: deleting it loses nothing
+    for s in (store, empty):
+        for p in s.root.glob("ledger.sqlite*"):
+            if not (left == "both anchors" and p.suffix == ".head"):
+                p.unlink()
+    if left.startswith("unreadable"):
+        home_anchor.write_text("{not json")
+    assert main(["memory", "verify"]) == 1
+    out = capsys.readouterr().out
+    assert "ledger pat: BROKEN" in out and ("deleted" in out or "unreadable" in out)
+    assert "ledger sam" not in out
+    assert not store.ledger_path.exists()  # the check did not put an empty database in place of the evidence
 
 
 def test_a_dropped_trigger_fails_verify(tmp_path):
