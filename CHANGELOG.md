@@ -198,9 +198,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   live in `exo.model_spend.admit_native`.
 
 ### Fixed
-- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
-  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
-  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
   is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
   only a string names a principal.
@@ -246,6 +243,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   that this call skips them (D-081), not that credentials are missing (`docs/GATE.md`, `docs/PROVIDERS.md`).
 - Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`) classify as reads in the gate, so a new
   user's first screen is no longer an approval card for loading the intro skill (`docs/GATE.md`).
+- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
+  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
+  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - The signed ledger's head anchor (D-040) is now written after the append's COMMIT, so a writer killed in between
   leaves it one event behind, never ahead. Before, a kill at that moment made the ledger report "events were
   removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match, which
@@ -428,6 +428,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
+- The gate's decision call no longer falls back to the main model (D-081). With no decision or aux route, the rule
+  outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
+  stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
+  call the rules allow into an ask (`docs/GATE.md`).
 - Unix peer authentication (#175, D-060): principal clients ask the kernel who serves the socket before the
   credential moves, and the core asks who connected before it stamps the principal. The credential file
   (`run/<socket>.principal.key`) is now a JSON launch record, so restart the core and every running `exo`, `exo web`
@@ -476,10 +480,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
-- The gate's decision call no longer falls back to the main model (D-081). With no decision or aux route, the rule
-  outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
-  stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
-  call the rules allow into an ask (`docs/GATE.md`).
 - Bus channel: a bus message steered into a turn you typed in a bus session no longer posts your answer to the
   sending seat, and neither does your next turn after one. The channel replies only for the turn that an
   auto-delivered message itself opened (D-040).
