@@ -7,6 +7,7 @@ the app marks it, so a slow core shows a slow boot rather than a fake one.
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from rich.console import Group
@@ -29,7 +30,7 @@ class BootScreen(ModalScreen):
         super().__init__(id="boot")
         self.done: dict[str, str] = {}
         self.t0 = time.monotonic()
-        self.closed = False
+        self.closed = asyncio.Event()  # set once dismissed: off the stack, so the app may push a screen
 
     def compose(self) -> ComposeResult:
         rows = hero_rows(self.app.size.height)
@@ -70,9 +71,9 @@ class BootScreen(ModalScreen):
             self.finish()
 
     def finish(self) -> None:
-        if not self.closed:
-            self.closed = True
-            self.dismiss(None)
+        if not self.closed.is_set():
+            self.closed.set()
+            self.dismiss(None)  # pops the top screen, whichever it is: the app pushes nothing until this ran
 
     def on_key(self, event: events.Key) -> None:
         event.stop()

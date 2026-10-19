@@ -53,6 +53,21 @@ def test_index_priority_progressive_disclosure_and_plugin_skills(tmp_path):
     assert SkillIndex().prompt() == ""
 
 
+def test_a_plugin_entry_for_a_folder_skill_is_listed_once(tmp_path):
+    home = tmp_path / "home" / "skills"
+    _skill(home, "exo-intro", "orientation")
+
+    class E:
+        name, path, description, frontmatter, plugin = ("exo-orchestra:exo-intro", home / "exo-intro" / "SKILL.md",
+                                                        "orientation", {}, "exo-orchestra")
+
+    idx = SkillIndex.discover([home], [E()])
+    assert set(idx.skills) == {"exo-intro"}
+    assert idx.prompt().count("orientation") == 1
+    only_plugin = SkillIndex.discover([], [E()])  # a source checkout: the pack comes only through the plugin
+    assert "Do the thing." in only_plugin.load("exo-intro")
+
+
 def test_exo_pack_loads():
     from exo.core.skills import pack_dir
     idx = SkillIndex.discover([pack_dir({})])
