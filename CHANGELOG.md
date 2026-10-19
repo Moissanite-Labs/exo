@@ -110,6 +110,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `-t DIR`, the last operand and its parent, with options anywhere on the line (`ln REL LINK -s`). `docs/GATE.md`
   lists what stays open (hardlinks, protected entries that link out of the store, case-insensitive filesystems,
   glob and brace spellings, `/dev/fd/N` magic links, #217).
+- State files are written through a temporary file from `mkstemp`, never through a fixed temporary name (#273). The
+  key registry, the `exo update` pin, the composer history, `exo taste export-house`, handoffs, the agent's file
+  tools (`write_file`, `edit_file`, `patch`), the gate's grants and the bus cursor and session map each wrote
+  `<file>.tmp` (or a name with the pid in it) with a plain open and renamed it. A process that could create a file in
+  the folder could plant a symlink at that name and turn the next write into a write to any file the user can write.
+  One helper, `exo.core.private.atomic_write`, now does these writes. It removes the temporary file when a write
+  fails, and each file keeps its mode. The principal token, `config.json`, provider state, peer presence and the
+  ledger anchors were not open to this and use the same helper now.
 - Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
   retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
   `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;

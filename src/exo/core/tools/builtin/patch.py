@@ -13,13 +13,13 @@ operation simulated cleanly, so a bad hunk never leaves a half-applied patch.
 from __future__ import annotations
 
 import difflib
-import os
 import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Callable
 
+from exo.core.private import atomic_write
 from exo.core.tools.builtin.fuzzy import (
     format_no_match_hint,
     fuzzy_find_and_replace,
@@ -188,14 +188,9 @@ def read_text(p: Path) -> str:
 
 
 def write_atomic(p: Path, text: str) -> None:
-    """Write UTF-8 text via a temp file and rename, keeping line endings as given."""
+    """Write UTF-8 text through `atomic_write` (#273), keeping line endings as given and the file's mode."""
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f".{p.name}.exo-tmp")
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
-    if p.exists():
-        os.chmod(tmp, p.stat().st_mode & 0o7777)
-    os.replace(tmp, p)
+    atomic_write(p, text, p.stat().st_mode & 0o7777 if p.exists() else None)
 
 
 def apply_patch(text: str, resolve: Callable[[str], Path]) -> tuple[bool, str]:

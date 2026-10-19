@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from exo import gate
+from exo.core.private import atomic_write
 from exo.principal import require_principal
 from exo.store import principal_root
 
@@ -152,11 +153,7 @@ class GrantStore:
     def _write(self, rows: list) -> None:
         assert self.path is not None
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        tmp = self.path.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(rows, f, indent=1, sort_keys=True)
-        os.replace(tmp, self.path)
+        atomic_write(self.path, json.dumps(rows, indent=1, sort_keys=True))
 
     def match(self, category: str, target: str, binding: str, outward: bool) -> Optional[dict]:
         if category in gate.NO_GRANT:
