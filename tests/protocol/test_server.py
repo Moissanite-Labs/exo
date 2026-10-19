@@ -329,6 +329,32 @@ def test_a_replay_fault_over_http_is_a_typed_reply(sock_dir):
     assert hello["protocol"] == s.PROTOCOL_VERSION
 
 
+def test_hello_names_a_heartbeat_only_where_the_transport_pings(sock_dir):
+    """D-060: ``GET /events`` pings at the server's own interval, and hello says that interval. Stdio and an
+    in-process caller get no pings, so their hello claims no heartbeat (#226)."""
+    async def main():
+        srv, where = await _start(sock_dir)  # heartbeat=0.2
+        try:
+            async with Client(**where) as c:
+                http = await c.call(s.Hello(client="t"))
+        finally:
+            await srv.close()
+        d = Dispatcher(EchoEngine())
+        lines, out = [s.Command.of(s.Hello(), id="h").to_json()], []
+
+        async def read():
+            return lines.pop(0) if lines else None
+
+        await serve_lines(d, read, out.append)
+        return http, json.loads(out[0])["result"], (await d.run(s.Command.of(s.Hello()))).result
+
+    http, stdio, in_process = _run(main())
+    assert http["heartbeat"] == 0.2 and "heartbeat" in http["capabilities"]
+    for hello in (stdio, in_process):
+        assert "heartbeat" not in hello and "heartbeat" not in hello["capabilities"]
+        assert hello["instance"] and "seq" in hello  # the rest of the recovery fields stay
+
+
 def test_unix_socket_path_too_long_is_a_clear_error(tmp_path):
     srv = HttpServer(None)
     long_path = tmp_path / ("d" * 120) / "exod.sock"
