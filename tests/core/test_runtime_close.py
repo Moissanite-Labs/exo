@@ -356,3 +356,49 @@ def test_concurrent_add_remove_report_and_gc_have_no_errors():
     assert all(k.n >= reports[0] for k in keep)
     assert len(trace._live_sinks()) == baseline
     assert len(trace._sinks) == baseline  # the drain pruned every dead entry
+
+
+def test_a_sink_added_by_a_finalizer_while_remove_sink_builds_is_not_lost():
+    import subprocess
+    import sys
+
+    code = '''
+import logging
+logging.disable(logging.CRITICAL)
+from exo.core import trace
+class Owner:
+    def on(self, b, s): pass
+a, late = Owner(), Owner()
+trace.add_sink(a.on)
+real = tuple
+fired = []
+def hook(*args):
+    if not fired:
+        fired.append(1); trace.add_sink(late.on)
+    return real(*args)
+trace.__dict__["tuple"] = hook
+try:
+    trace.remove_sink(a.on)
+finally:
+    del trace.__dict__["tuple"]
+print("PRESENT" if any(r() == late.on for r in trace._sinks) else "LOST")
+'''
+    try:
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        pytest.fail("remove_sink hung")
+    assert out.stdout.strip() == "PRESENT", out.stderr[-500:]
+
+
+def test_close_closes_the_scheduler_and_store_when_scheduler_stop_raises(tmp_path):
+    eng = _engine(tmp_path / "home", tmp_path)
+
+    async def bad_stop():
+        raise RuntimeError("stop boom")
+
+    eng.scheduler.stop = bad_stop
+    with pytest.raises(RuntimeError, match="stop boom"):
+        asyncio.run(eng.close())
+    assert eng.store._conn is None
+    with pytest.raises(sqlite3.ProgrammingError):
+        eng.scheduler.db.execute("SELECT 1")
