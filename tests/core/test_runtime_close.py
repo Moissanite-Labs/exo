@@ -99,3 +99,87 @@ def test_a_plain_function_sink_is_kept_and_removable():
         trace.remove_sink(sink)
     trace.report("gone", "boom")
     assert seen == ["here"]
+
+
+def test_reports_from_many_threads_prune_dead_sinks_without_raising():
+    import sys
+    import threading
+    from exo.core import trace
+
+    class Owner:
+        def on(self, body, session):
+            pass
+
+    live = [Owner() for _ in range(3)]
+    for owner in live:
+        trace.add_sink(owner.on)
+    for _ in range(400):
+        trace.add_sink(Owner().on)  # dead at once: nothing else holds the owner
+    errors = []
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-7)
+    try:
+        for _ in range(40):
+            barrier = threading.Barrier(16)
+
+            def go():
+                barrier.wait()
+                try:
+                    trace.report("race", "boom")
+                except Exception as exc:  # noqa: BLE001 - any raise is the failure
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=go) for _ in range(16)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            for _ in range(400):
+                trace.add_sink(Owner().on)
+    finally:
+        sys.setswitchinterval(old)
+        for owner in live:
+            trace.remove_sink(owner.on)
+    assert errors == []
+
+
+def test_a_method_whose_owner_cannot_be_weakly_referenced_is_held_strongly():
+    from exo.core import trace
+
+    class Slotted:
+        __slots__ = ("seen",)
+
+        def __init__(self):
+            self.seen = []
+
+        def on(self, body, session):
+            self.seen.append(body.where)
+
+    owner = Slotted()
+    trace.add_sink(owner.on)
+    try:
+        trace.report("slotted", "boom")
+    finally:
+        trace.remove_sink(owner.on)
+    trace.report("after", "boom")
+    assert owner.seen == ["slotted"]
+
+
+def test_a_store_reopened_after_its_file_was_removed_is_owner_only(tmp_path):
+    from exo.core.sessions import SessionStore
+    path = tmp_path / "sessions.sqlite"
+    store = SessionStore(path)
+    store.close()
+    for suffix in ("", "-wal", "-shm"):
+        (tmp_path / f"sessions.sqlite{suffix}").unlink(missing_ok=True)
+    with pytest.raises(sqlite3.OperationalError):
+        store._q("SELECT * FROM sessions")  # a removed store does not come back with its tables
+    assert path.stat().st_mode & 0o777 == 0o600
+    store.close()
+
+
+def test_a_closed_scheduler_refuses_to_start(tmp_path):
+    eng = _engine(tmp_path / "home", tmp_path)
+    asyncio.run(eng.close())
+    with pytest.raises(RuntimeError, match="closed"):
+        eng.scheduler.start()

@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import traceback
 import weakref
 from dataclasses import dataclass, field
@@ -49,34 +50,42 @@ def scrub(text: Any, limit: int = 400) -> str:
 Sink = Callable[[Any, str | None], None]
 # Engines register one: publish(body, session). A bound method is held weakly, so an engine nobody closed can
 # still be collected (with its open databases) instead of living, and receiving every report, until exit.
+# The lock keeps two threads that report at once from pruning the same dead entry.
 _sinks: list[Callable[[], Sink | None]] = []
+_sinks_lock = threading.Lock()
 
 
 def add_sink(fn: Sink) -> None:
+    """Send every later report to ``fn(body, session)`` until ``remove_sink(fn)``.
+
+    A bound method is held weakly and does not keep its owner alive: once nothing else holds the owner, its
+    reports stop. A plain function, or a method whose owner cannot be weakly referenced (a ``__slots__`` class
+    without ``__weakref__``), is held strongly.
+    """
+    ref: Callable[[], Sink | None] | None = None
     if hasattr(fn, "__self__") and hasattr(fn, "__func__"):
-        _sinks.append(weakref.WeakMethod(fn))  # type: ignore[arg-type]
-    else:
+        try:
+            ref = weakref.WeakMethod(fn)  # type: ignore[arg-type]
+        except TypeError:
+            ref = None
+    if ref is None:
         def strong() -> Sink | None:
             return fn
-        _sinks.append(strong)
+        ref = strong
+    with _sinks_lock:
+        _sinks.append(ref)
 
 
 def remove_sink(fn: Sink) -> None:
-    for ref in list(_sinks):
-        if ref() == fn:  # bound methods compare equal when they wrap the same function and object
-            _sinks.remove(ref)
+    with _sinks_lock:  # bound methods compare equal when they wrap the same function and object
+        _sinks[:] = [ref for ref in _sinks if (live := ref()) is not None and live != fn]
 
 
 def _live_sinks() -> list[Sink]:
-    live = []
-    for ref in list(_sinks):
-        fn = ref()
-        if fn is None:
-            if ref in _sinks:
-                _sinks.remove(ref)
-        else:
-            live.append(fn)
-    return live
+    with _sinks_lock:
+        pairs = [(ref, ref()) for ref in _sinks]
+        _sinks[:] = [ref for ref, fn in pairs if fn is not None]
+    return [fn for _, fn in pairs if fn is not None]
 
 
 def error_body(where: str, exc: BaseException | str, error_type: str = "", tb: str = "") -> ev.HarnessError:
