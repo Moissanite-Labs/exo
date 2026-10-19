@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Provider status rows and `exo models` redact URL userinfo (#271). Basic-auth logins no longer appear in
+  these displays or client status payloads. Connection endpoints remain unchanged. Invalid URLs produce a
+  generic label; secrets in URL paths, queries or fragments remain outside this redaction's scope.
 - Tool subprocesses (bash, background jobs, `code_find`) drop inherited shell startup hooks (#135, D-039
   amendment): bash itself acts on `BASH_ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS` and
   `BASHOPTS` at startup; `ENV` is read by interactive POSIX shells a command starts; `PS4` matters once xtrace is
@@ -111,6 +114,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- Terminal approval cards wait for removal before the next queued card mounts (#276). Answering a card or
+  reconciling a closed request no longer mounts two widgets under the same approval id. Close, restore and
+  thread-switch transitions share a lock, and stale answers or close events cannot remove the next request's card.
+- `exo update` names up to five of the files that block it when the checkout has local changes or untracked
+  files, instead of only saying that some exist.
 - `edit_file` after whitespace drift: when only the whitespace-normalized strategy matched (one stray double
   space in the file), the span could start inside the indentation before the match and the reindented replacement
   shifted every following line by one column, leaving code that no longer parsed. The span now starts at the

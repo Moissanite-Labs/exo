@@ -658,6 +658,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `binding`, or sign as a seat (left for the UI work); no client helper beyond `sign_approval` for a seat to answer.
 
 ## D-034 (2026-10-12) Providers setup: one engine, three surfaces, keys write-only
+- **Amendment 2026-10-19 (#271):** provider status rows replace URL userinfo with `***@`, including the rows
+  printed by `exo models` and sent to `/providers` and the web. Invalid URLs produce a generic label without
+  repeating the input. Actual connections and probes keep the configured endpoint. Paths, queries and fragments
+  are not secret-scrubbed by this display helper. No command, key, setting or setup step changes.
 - **Why:** a new user had no clean way to add a model key. Keys went in by hand (env, `security`, or a 0600
   file), `exo models` only reported, and the web client had no provider settings at all.
 - **Engine:** `exo/providers_setup.py`. `rows` gives every catalog provider with status (key found and where,
@@ -1275,6 +1279,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Contested questions:** answered by ruling 4 (above): reasoning style only.
 
 ## D-045 (2026-10-12) Approval cards never outlive their request; the web stream resumes; a queued steer can be pulled back
+- **Amendment 2026-10-19 (#276):** the terminal serializes approval-card removal with thread switching and restoration,
+  and waits for removal before mounting the next card under the same widget id. A close or answer names its request,
+  so a stale event cannot remove its replacement. Threadless requests still survive thread switches. The response
+  worker starts after the answered card's removal. No command, key, setting or approval authority changes.
 - **Why:** the principal reported an approval card stuck on screen in the terminal and on the web with nothing pending in
   the core, a card the terminal could not answer, a web chat that stopped responding, and wanted to cancel a queued steer.
 - **Stuck card, core:** `CoreEngine.ask` published `approval.resolved` only from the respond path. A turn stopped or

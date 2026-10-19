@@ -39,6 +39,7 @@ from .core.models import keys as keys_mod
 from .core.models import muse_cli
 from .core.models.keys import KEYCHAIN_SERVICE, keys_file_path, redact_secrets, remember_secret
 from .core.models.router import Router
+from .core.models.urls import display_url
 from .core.private import private_dir
 
 STORES = ("keychain", "secret-service", "file")
@@ -353,7 +354,7 @@ def _model_count(home: Path, provider: str, spec: Mapping[str, Any]) -> int | No
 
 def rows(router: Router | None = None, home: str | os.PathLike | None = None, *,
          probe_local: bool = True, prober: Callable[[str], bool] = probe) -> list[dict[str, Any]]:
-    """Every catalog provider with its status. Never a key value."""
+    """Every catalog provider with its status. No key value or URL userinfo."""
     router = router or build_router(home)
     h = Path(home or exo_home())
     state = load_state(home)
@@ -392,7 +393,7 @@ def rows(router: Router | None = None, home: str | os.PathLike | None = None, *,
         else:
             status = "running" if has else ("not running" if reachable is False else "local")
         out.append({
-            "provider": name, "transport": transport, "base_url": spec.get("base_url", ""), "local": local,
+            "provider": name, "transport": transport, "base_url": display_url(spec.get("base_url", "")), "local": local,
             "key_env": names, "needs": needs, "key": ("n/a" if not names else "found" if where else "missing"),
             "source": where, "reachable": reachable, "installed": installed, "ready": has,
             "verified": bool(last and last.get("ok") and has), "last_test": last, "status": status,
