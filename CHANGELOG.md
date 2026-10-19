@@ -242,6 +242,37 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   live in `exo.model_spend.admit_native`.
 
 ### Fixed
+- First run (user-readiness audit, blocker 1): the installer now copies the skill pack (`skills/` with
+  `MANIFEST.json`) into `$EXO_HOME/skills`, so `/intro` loads its `exo-intro` skill and exo-orchestra stops warning
+  "no skill manifest" at launch. Each pack skill is a marked folder that a re-run or `exo update` refreshes, and
+  skills you add there are kept. So is a copy of a pack skill made to change it: its marker names the skill it came
+  from, so the installer keeps it with a warning. A skills folder or skill that links into the checkout is left
+  alone. When the skill is still missing, the terminal client shows a short orientation instead of sending a model
+  turn that could only improvise. A first intro that started but failed or got no reply is no longer sent again
+  at every launch: the composer offers `/intro` instead, and the one that completes still turns tutorial mode on.
+- The terminal client no longer freezes on the boot screen when first run opens the model picker (the claude CLI
+  on PATH and a configured main route that is down). The boot screen's dismiss closed the picker in its place, and
+  only ctrl+c got out. It now closes before the first-run check opens anything, so a first run with no provider also
+  opens the providers panel, as the docs say (`docs/UI.md`).
+- `exo --resume` and `exo resume` continue the newest thread with messages. Each launch opens a thread, so a
+  launch you only looked at, or an unused `/new`, made resume open an empty thread (`docs/USER-GUIDE.md`).
+- Claude Code route (`claude-cli`): the agent no longer says it works in `/tmp/claude-cli-cwd-<uid>`. Exo's system
+  text now names the thread's real working folder on every route, as the value that overrides any environment note.
+  A message that starts with `/` (such as `/help`) now reaches the model. Before, the claude CLI answered it itself,
+  the turn failed and the route cooled down. An `@path` in a message, including a peer or bus message, no longer
+  makes the claude CLI read that file and send it to the model past the gate, `~/.ssh` keys included. Found in the
+  readiness audit and its review. #146 tracks the web composer side.
+- Docs for a first user. The README now opens with what Exo is today: a coding agent for the terminal and the
+  browser that runs on your Claude Code login or an API key. The Quick start, `docs/INSTALL.md` and the site's
+  install step say the repository is a private preview with access on request.
+- The automatic Claude Code route is documented (`docs/PROVIDERS.md` "Use your Claude Code login", user guide
+  §1): it uses `claude-cli:sonnet`, cost reads `unknown`, and `exo models` does not list it. The user guide no
+  longer offers Muse as the keyless main model, because Muse serves only the `aux` role.
+- The README and the site's web app page send you to the full link `exo web` prints, with `#token=`, not the
+  bare address. `docs/INSTALL.md` names the README's real `## Quick start` section. The README and the intro
+  skill say `exo`, not the `exo-tui` command the installer does not provide. The user guide's screenshot paths
+  exist, and it gains a glossary (principal, store, ledger, seat, thread, gate, grant, finding, wave, D-number)
+  that the README links before those words appear. `tests/docs/test_first_user_docs.py` keeps these true.
 - Private threads are not remembered again (D-028). Their turns no longer reach exo-memory's signed ledger: the
   loop skips `on_turn_start`, `sync_turn` and `checkpoint` for them. `exo_note` and `exo_should_have_been` refuse
   in them. The learning loop and `feedback.send` ignore them: a reject or should_have_been on one files no finding.
