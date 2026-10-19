@@ -56,8 +56,7 @@ async def admitted_stream(journal: SpendJournal, route: str, provider: Any,
             if event.kind == "done":
                 if event.usage is None:
                     raise SpendDenied("missing final usage; reservation retained")
-                actual = price.actual(event.usage, output, provider.input_includes_cache
-                                      if hasattr(provider, "input_includes_cache") else False)
+                actual = price.actual(event.usage, output, False)  # D-080: input_tokens is uncached on every transport
                 journal.settle(token, actual)
                 settled = True
                 event.usage.cost_usd = actual / SCALE
