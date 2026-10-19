@@ -15,6 +15,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   as shell, as for `bash -s`: the line asks, a denied command in it is denied, and its parts stay `internal`. `-n`,
   `-N`, `-f` and a remote command keep the old reading; options after the host (`ssh host -T`) are read as ssh reads
   them.
+- Gate (#209, #202, #225, #199, D-038): four spellings of a secret-store path were allowed reads and now ask. A
+  harmlessly named link into a store (`notes.txt` to `~/.ssh/id_rsa`, `cfg` to `~/.ssh`, `app.cfg` to a project
+  `.env`) is judged by where it leads, resolved from the session's working folder (the core now passes it to tool
+  hooks as `cwd`), from the gate's own and, for a shell tool, from the call's own `cwd` argument; a `cwd` argument on
+  a file tool, which the tool ignores, changes nothing. Each hook callback now gets only the keyword arguments it
+  declares (all of them with `**kwargs`), so a callback without `cwd` keeps working. A `.pub` name exempts
+  only a path that resolves to one. `${EXO_HOME:-$HOME/.exo}/keys` and the other `${VAR<op>word}` forms of `HOME`,
+  `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the default. An
+  expansion inside a store name (`cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc`, `cat ${x}.env`) is read as
+  empty, and as any text between two literal parts (`cat .e$(echo n)v`). A glob in bash's bracket syntax
+  (`~/.kube/[^x]onfig`, `[[:alpha:]]onfig`) is read as bash reads it, and `/proc/<pid>/<glob>` is matched against
+  `environ`. One classify call now shares its file-system lookups across the line's words, so a 10 KB line
+  classifies several times faster. Limits in GATE.md "Other spellings of a store path".
 - A pinned block in text the principal did not write no longer reads as one to the model (#279, D-040 amendment).
   The core's system message quotes each span too small to summarize word for word, so a peer's, bus seat's, job
   notice's or tool result's copy of exo-context's `<exo-pinned>` block sat there looking like the principal's pinned
@@ -397,7 +410,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
   closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
   In `apply_patch` a hunk's context lines count toward the two; since #236 each `-` line must also match its file
-  line, so a changed `-` line is refused there too.
+  line, so a changed `-` line is refused there too. In `edit_file` the rule counts lines, not exact lines: a changed
+  line plus a lone `}` or the `def` line still matches by similarity. So copy `old_string` from a fresh read
+  (docs/TOOLS.md "Edit matching").
 - Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
   is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
   only a string names a principal.
@@ -742,10 +757,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   halves. A read now holds back an ending that could start a key until the next read. Key redaction now finds every
   key in the text itself and puts the `[redacted]` markers in after, so a key no longer matches across a marker.
   Output changes only for a key value that holds `[` or `]` or is part of the word "redacted". The stream is cut
-  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output
-  for any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or
-  `]`. A key value learned while the command runs is cut out only inside one piece. The stream and the result also
-  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
+  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output for
+  any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or `]`. A
+  key value learned while the command runs is cut out only inside one piece. The stream and the result also decode a
+  character split between reads (non-ASCII output got U+FFFD there). The result is still redacted after a tool cuts its
+  output, so a key split by that cut (for example, `bash` keeps 15,000 characters at each end) leaves a part in the
+  result, as before. See docs/TOOLS.md "Streamed output". A background job's completion notice had no key redaction. It
+  now cuts known key values out of its command and its whole log before it cuts them to size (docs/JOBS.md).
 - The gate's decision call no longer falls back to the main model (D-081). With no decision or aux route, the rule
   outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
   stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
