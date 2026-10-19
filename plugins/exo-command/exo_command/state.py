@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime
-from typing import Any, Deque, Dict, Iterable, List, Optional
+from typing import Any, Deque, Dict, Iterable, List, Optional, Set
 
 OUTPUT_CAP = 1200
 PROBE_TAIL = 6
@@ -60,6 +60,7 @@ class State:
         self.notices: Deque[Dict[str, Any]] = deque(maxlen=20)
         self.compactions = 0
         self.probe_tail = probe_tail
+        self.rolling: Dict[str, Set[str]] = {}  # parent -> finished children its next session_total includes
 
     # ------------------------------------------------------------ bootstrap from queries
 
@@ -71,7 +72,8 @@ class State:
                 "started_at": None, "last_activity_at": None, "message_count": 0, "tool_call_count": 0,
                 "running": False, "turn_id": None, "turn_model": None, "tool": None, "output": "",
                 "pending_approvals": 0, "stop_reason": None, "usage": {k: 0 for k in USAGE_KEYS},
-                "cost_usd": 0.0, "priced": False, "head": None, "tail": deque(maxlen=self.probe_tail),
+                "cost_usd": 0.0, "priced": False, "rolled_up": False, "head": None,
+                "tail": deque(maxlen=self.probe_tail),
             }
         return s
 
@@ -200,6 +202,8 @@ class State:
         t["events"] += 1
         if t["status"] in TERMINAL_TASK:
             t["finished_at"] = ts
+            if sid and t.get("child_session"):  # the core adds a finished child's total to its parent's
+                self.rolling.setdefault(sid, set()).add(t["child_session"])
         self._flag_child(t)
 
     def _on_usage_updated(self, sid, b, ts):
@@ -217,6 +221,8 @@ class State:
         if cost is not None:
             s["cost_usd"] = float(cost)
             s["priced"] = s["priced"] or float(cost) > 0
+        for child in self.rolling.pop(sid, ()):
+            self._session(child)["rolled_up"] = True  # its spend is inside this session_total now
 
     def _on_context_compacted(self, sid, b, ts):
         self.compactions += 1

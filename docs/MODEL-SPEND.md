@@ -149,8 +149,10 @@ invalidates accounting, including when a valid delta follows it. This deliberate
 usage shapes rather than guessing zero, including shapes from compatible proxies.
 See Anthropic's [cache accounting](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 and [cumulative streaming usage](https://platform.claude.com/docs/en/build-with-claude/streaming).
-OpenAI cached input is subtracted from fresh input. Anthropic cache counters are
-additional. Reasoning cannot exceed the output total. Tool-use chunks cannot run
+The OpenAI transport reports `prompt_tokens` minus `cached_tokens` as fresh input
+and the cached tokens as cache reads (D-080). A cached count above the prompt count,
+negative or not an integer is incomplete usage and is refused. Anthropic cache
+counters are already additional. Reasoning cannot exceed the output total. Tool-use chunks cannot run
 until final usage settles successfully.
 
 An unresolved reservation counts in every subsequent day and month until explicit
