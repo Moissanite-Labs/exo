@@ -106,9 +106,10 @@ back, and the shorter chain still links. So each append also writes the head (se
   read-only (#277), and only when it is a regular file, so opening it writes nothing through the link: no WAL
   switch, no tables, no file made at a dangling target. SQLite's `immutable` flag keeps it from making `-wal` and
   `-shm` files beside a target in WAL mode. The one exception is a target that already has a `-wal` file (another
-  process has it open, or one crashed): SQLite reads it and may add a `-shm` file. A target that is missing, is not
-  a regular file (a FIFO would block the open) or holds no ledger reads as empty. An authority-mode ledger trusts
-  its signed checkpoints: its appends skip the symlink refusal and write the projection through the link.
+  process has it open, or one crashed): SQLite reads it and may add or rewrite a `-shm` file. A target that is
+  missing, is not a regular file (a FIFO would block the open) or holds no ledger reads as empty. An authority-mode
+  ledger trusts its signed checkpoints: its appends skip the symlink refusal and write the projection through the
+  link.
 - An anchor is read only as a regular file: a symlink in its place is unreadable. Anchors are written through a
   fresh temporary file (`mkstemp`, with `O_EXCL` and `O_NOFOLLOW`), so a symlink planted in the anchor's folder
   cannot redirect the write.
