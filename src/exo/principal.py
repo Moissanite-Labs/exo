@@ -6,9 +6,12 @@ The core never takes the answerer of an approval from the command body. The tran
   client's in-process dispatcher) by construction; over the Unix socket only with the per-launch principal
   credential in ``X-Exo-Principal`` and only when the connecting process is not a descendant of the core (a tool
   subprocess is one).
-- ``local``: anything else that reaches the socket (a tool subprocess, a channel link, another daemon), and every
-  stdio or TCP connection. A local caller drives turns but answers approvals only as a seat, with a D-033
-  signature. A local turn is authored as local, never as the principal.
+- ``local``: anything else that reaches the socket (a tool subprocess, another daemon), and every stdio or TCP
+  connection. A local caller drives turns but answers approvals only as a seat, with a D-033 signature. A local
+  turn is authored as local, never as the principal.
+- ``channel``: a channel exod runs in its own process (``exo.server.app.ChannelLink``). It has a local caller's
+  standing, and it alone may hand the core a bus message (``peers`` action ``bus``), which pins a seat's key on
+  first sight. No transport ever stamps it, so no socket, stdio or TCP client can claim it.
 
 The credential is a random token in a launch record written per launch beside the socket (``run/exod.sock``
 gives ``run/exod.principal.key``; mode 0600, in the 0700 run folder). The ``.key`` name puts it under the gate's
@@ -50,6 +53,7 @@ from pathlib import Path
 HEADER = "X-Exo-Principal"
 PRINCIPAL = "principal"
 LOCAL = "local"
+CHANNEL = "channel"
 
 
 @dataclass
@@ -254,7 +258,10 @@ def _demote(peer: Peer, why: str) -> str:
     DEMOTED.set(why)
     if (key := f"{peer.pid}:{why}") not in _SAID and len(_SAID) < 256:
         _SAID.add(key)
-        print(f"exod: the principal credential from pid {peer.pid} is taken as local: {why}", file=sys.stderr)
+        try:  # a closed or broken stderr must not change the answer
+            print(f"exod: the principal credential from pid {peer.pid} is taken as local: {why}", file=sys.stderr)
+        except (OSError, ValueError):
+            pass
     return LOCAL
 
 
@@ -276,8 +283,8 @@ def stamp(sent: str | None, token: str | None, peer: Peer | object, label: str =
         return _demote(peer, "the process that connected is gone or its pid was reused")
     if descends_from(peer.pid, os.getpid()):  # a tool subprocess of this core holds no consent
         return _demote(peer, "it runs under this core (a tool process)" if lineage(peer.pid) is not None else
-                       "an ancestor of it cannot be read (/proc hidden by hidepid or ProtectProc?), so it is "
-                       "treated as a tool process")
+                       "an ancestor of it cannot be read (on Linux, /proc hidden by hidepid or ProtectProc; on "
+                       "macOS, ps could not read it), so it is treated as a tool process")
     return principal_as(label)
 
 
@@ -347,14 +354,6 @@ def read_record(sock: str | os.PathLike) -> dict:
             and isinstance(rec.get("instance", ""), str)):
         raise PeerRefused("launch record is not a v1 record (a core from before peer authentication?)")
     return rec
-
-
-def read(sock: str | os.PathLike) -> str | None:
-    """The token of a well-formed launch record, or None. Disclosing it needs ``verify_daemon`` first."""
-    try:
-        return read_record(sock)["token"]
-    except PeerRefused:
-        return None
 
 
 def revoke(sock: str | os.PathLike, token: str) -> None:

@@ -14,7 +14,8 @@ and Events (have ``seq``). ``events.subscribe`` starts the event feed.
 
 Every command runs with a caller the transport stamps (D-039, ``exo.principal``): ``principal`` only for an
 in-process client or a Unix socket request that carries the per-launch credential in ``X-Exo-Principal`` from a
-process that is not a descendant of the core; ``local`` for everything else, including stdio and TCP.
+process that is not a descendant of the core; ``channel`` for the channels exod runs (``ChannelLink``, in process);
+``local`` for everything else, including stdio and TCP.
 """
 
 from __future__ import annotations
@@ -365,6 +366,29 @@ def load_engine(spec: str = DEFAULT_ENGINE) -> Engine:
     return engine
 
 
+class ChannelLink:
+    """The link exod gives the channels it runs: the same commands in process, as the caller ``channel``, which no
+    transport stamps. Only this caller may hand the core a bus message, which pins a seat's key (D-040)."""
+
+    def __init__(self, dispatcher: Dispatcher):
+        self.d = dispatcher
+
+    async def call(self, body: Any) -> dict[str, Any]:
+        resp = await self.d.run(s.Command.of(body), pr.CHANNEL)
+        if not resp.ok:
+            from exo.protocol.client import ClientError
+            raise ClientError(resp.error)
+        return resp.result
+
+    async def events(self, since: int = 0, session: str | None = None) -> Any:
+        sub = self.d.hub.subscribe(since, session)
+        try:
+            async for ev in sub:
+                yield ev
+        finally:
+            sub.close()
+
+
 async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tuple[str, int] | None = None,
                 token: str | None = None, stdio: bool = False, hub: Hub | None = None,
                 ready: Callable[[str], None] | None = None) -> None:
@@ -394,12 +418,9 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
             ready(f"http://{tcp[0]}:{port}")
     if not servers:
         raise ValueError("nothing to serve: give a socket, tcp or stdio")
-    link = None
     try:
-        if getattr(engine, "_channel_cfg", None):  # channels talk to the server over a real protocol Client
-            from exo.protocol.client import Client
-            link = Client(socket=str(socket)) if socket else Client(url=f"http://{tcp[0]}:{port}", token=token)
-            for name, err in (await engine.start_channels(link)).items():
+        if getattr(engine, "_channel_cfg", None):
+            for name, err in (await engine.start_channels(ChannelLink(dispatcher))).items():
                 if err:
                     print(f"exod: channel {name}: {err}", file=sys.stderr)
         await asyncio.gather(*(srv.serve_forever() for srv in servers))
@@ -407,8 +428,6 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
         dispatcher.hub.close()
         if (close := getattr(engine, "close", None)) is not None:
             await close()
-        if link is not None:
-            await link.aclose()
         for srv in servers:
             await srv.close()
         if socket:

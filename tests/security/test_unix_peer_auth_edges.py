@@ -3,6 +3,7 @@ unreadable parent chain, and the reasons a refused or demoted connection is give
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ import httpx
 import pytest
 
 from exo import principal as pr
+from exo.peerauth import FrameTooLarge
 from exo.protocol import schema as s
 from exo.protocol.client import Client
 from exo.server.app import MAX_BODY, Dispatcher, HttpServer
@@ -101,6 +103,29 @@ def test_a_frame_too_large_that_comes_again_ends_the_stream():
     asked: list[int] = []
     assert asyncio.run(asyncio.wait_for(main(asked), 15)) == []
     assert asked == [0, 2]
+
+
+def test_a_frame_too_large_with_no_id_ends_the_stream():
+    """With no seq to resume past, reconnecting would replay the frame forever: the stream ends with the error."""
+    async def main(asked):
+        def handler(request: httpx.Request) -> httpx.Response:
+            asked.append(int(request.url.params["since"]))
+            if len(asked) > 5:
+                raise RuntimeError(f"the stream kept asking for the same frame: asked since={asked}")
+            frame = f"event: notice\ndata: {_notice(2, 'x' * (FRAME + 10))}\n\n".encode()
+            return httpx.Response(200, headers={"Content-Type": "text/event-stream"},
+                                  content=b": exod instance=i_1 heartbeat=15\n\n" + frame)
+        c = Client(url="http://exod")
+        c._http = httpx.AsyncClient(base_url="http://exod", transport=httpx.MockTransport(handler))
+        try:
+            with pytest.raises(FrameTooLarge):
+                async for _ in c.events(0, reconnect=True, backoff=0.01):
+                    pass
+        finally:
+            await c.aclose()
+    asked: list[int] = []
+    asyncio.run(asyncio.wait_for(main(asked), 15))
+    assert asked == [0]
 
 
 def test_joined_window_stream_moves_past_a_frame_too_large_to_read(monkeypatch):
@@ -252,7 +277,7 @@ def test_pid_zero_names_the_pid_namespace(monkeypatch, sock_dir):
     assert pr.stamp(tok, tok, pr.Peer(0, os.geteuid(), time.time()), "tui") == "local"
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="SO_PEERCRED on a socketpair")
+@pytest.mark.skipif(not sys.platform.startswith(("linux", "darwin")), reason="kernel peer credentials on a socketpair")
 def test_pid_that_names_another_process_by_stamp_time_is_local(monkeypatch):
     """The start identity read at accept must still be the pid's when the request is stamped; a process started
     within the clock slack of the accept, under a reused pid, is not the one that connected."""
@@ -326,38 +351,82 @@ from exo.protocol import schema as s
 from exo.protocol.client import Client, ClientError
 
 async def main():
+    body = s.CommandRun(**json.loads(sys.argv[2])) if len(sys.argv) > 2 else s.SessionList()
     async with Client(socket=sys.argv[1], principal="tui") as c:
         try:
-            print(json.dumps((await c.call(s.SessionList()))["caller"]))
+            print(json.dumps((await c.call(body)).get("caller")))
         except ClientError as exc:
             print(json.dumps(exc.message))
 asyncio.run(main())
 '''
 
 
-@pytest.mark.parametrize("hidden,why", [(False, "a tool process"), (True, "an ancestor of it cannot be read")])
-def test_demoted_credential_is_logged_and_named_in_the_refusal(sock_dir, monkeypatch, capsys, hidden, why):
-    """A principal client the core takes as local learns why, and the core's log says it once."""
-    sock = sock_dir / "exod.sock"
-    if hidden:  # the core cannot read the child's parent link, as under hidepid
-        real = pr._ppid
-        monkeypatch.setattr(pr, "_ppid", lambda pid: None if pid != os.getpid() else real(pid))
-
+def _from_tool_child(sock: Path, dispatcher: Dispatcher, *args: str) -> object:
+    """What a principal client started by this process (so in the core's tool tree, and demoted) is told."""
     async def main():
-        srv = HttpServer(Dispatcher(_Strict()), principal=True)
+        srv = HttpServer(dispatcher, principal=True)
         await srv.start_unix(sock)
         task = asyncio.create_task(srv.serve_forever())
         try:
-            child = await asyncio.create_subprocess_exec(sys.executable, "-c", CHILD, str(sock), env=ENV,
+            child = await asyncio.create_subprocess_exec(sys.executable, "-c", CHILD, str(sock), *args, env=ENV,
                                                          stdout=asyncio.subprocess.PIPE)
             return json.loads((await asyncio.wait_for(child.communicate(), 30))[0])
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             await srv.close()
-    msg = asyncio.run(main())
+    return asyncio.run(main())
+
+
+@pytest.mark.parametrize("hidden,why", [(False, "a tool process"), (True, "an ancestor of it cannot be read")])
+def test_demoted_credential_is_logged_and_named_in_the_refusal(sock_dir, monkeypatch, capsys, hidden, why):
+    """A principal client the core takes as local learns why, and the core's log says it once."""
+    monkeypatch.setattr(pr, "_SAID", set())
+    sock = sock_dir / "exod.sock"
+    if hidden:  # the core cannot read the child's parent link, as under hidepid
+        real = pr._ppid
+        monkeypatch.setattr(pr, "_ppid", lambda pid: None if pid != os.getpid() else real(pid))
+    msg = _from_tool_child(sock, Dispatcher(_Strict()))
     assert "only the principal can do this" in msg and why in msg
     assert why in capsys.readouterr().err
+
+
+class _BrokenStream:
+    def write(self, text):
+        raise OSError(5, "Input/output error")
+
+    def flush(self):
+        raise OSError(5, "Input/output error")
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_closed_or_broken_stderr_does_not_change_the_refusal(sock_dir, monkeypatch, broken):
+    """The core's log line is a diagnostic: a stderr that cannot be written still gives the client its answer."""
+    monkeypatch.setattr(pr, "_SAID", set())   # a reason already logged once would skip the print under test
+    err = _BrokenStream() if broken else io.StringIO()
+    if not broken:
+        err.close()  # writing to it raises ValueError
+    monkeypatch.setattr(sys, "stderr", err)
+    msg = _from_tool_child(sock_dir / "exod.sock", Dispatcher(_Strict()))
+    assert "only the principal can do this" in msg and "a tool process" in msg
+
+
+@pytest.mark.parametrize("name,args,refusal", [
+    ("rename", "Billing refactor", "only the principal can rename a session"),
+    ("subagent", "send t1 change course", "only the principal or the parent session can steer a subagent")],
+    ids=["rename", "subagent"])
+def test_principal_only_commands_name_why_the_credential_was_local(sock_dir, tmp_path, monkeypatch, name, args,
+                                                                   refusal):
+    """Every principal-only refusal a demoted connection gets names the reason, not only ``require_principal``'s."""
+    from exo.core.engine import CoreEngine
+
+    eng = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path),
+                     env={})
+    row = {"task_id": "t1", "parent": "s_parent", "child_session": "s_child", "status": "running", "title": "child"}
+    monkeypatch.setattr(eng.agents, "list", lambda session=None: [row])  # a running subagent to refuse
+    msg = _from_tool_child(sock_dir / "exod.sock", Dispatcher(eng),
+                           json.dumps({"name": name, "args": args, "session": "s_parent"}))
+    assert msg.startswith(refusal) and "carried the principal credential but is local: it runs under this core" in msg
 
 
 def test_core_that_cannot_read_its_own_identity_is_named_and_revoked(sock_dir, monkeypatch, capsys):
@@ -397,6 +466,23 @@ def test_launch_record_is_in_place_before_the_socket_accepts(sock_dir, monkeypat
         await srv.close()
     asyncio.run(main())
     assert seen == [os.getpid()]
+
+
+def test_launch_record_is_revoked_when_the_listen_fails(sock_dir, monkeypatch):
+    """A core that issued its record but could not listen leaves no record for a client to trust."""
+    sock = sock_dir / "exod.sock"
+    issued = []
+
+    async def refuse(*args, **kwargs):
+        issued.append(pr.token_path(sock).exists())
+        raise OSError(98, "Address already in use")
+    monkeypatch.setattr(asyncio, "start_unix_server", refuse)
+
+    async def main():
+        with pytest.raises(OSError, match="in use"):
+            await HttpServer(Dispatcher(_Probe()), principal=True).start_unix(sock)
+    asyncio.run(main())
+    assert issued == [True] and not pr.token_path(sock).exists()
 
 
 def test_refused_principal_is_a_connect_error_subclass(sock_dir):

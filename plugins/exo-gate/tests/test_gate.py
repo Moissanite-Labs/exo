@@ -161,7 +161,9 @@ EXAMPLE_DECIDE = [
     (sh(f"gh pr comment 3 -R other/repo --body 'Suggest a fix.\n{FOOT}'"), "ask", "escalate"),
     (sh("gh issue close 9 -R acme-org/app"), "ask", "reserved"),
     (sh("git push --force origin main"), "deny", "deny"),
+    (sh("git push --force origin main && rm -rf build"), "deny", "deny"),   # D-075: any part on the line
     (sh("git push --force origin dev"), "ask", "reserved"),
+    (sh("ls && gh issue close 9 -R acme-org/app"), "ask", "reserved"),
     (("send_message", {"target": "telegram:own-home", "message": "done"}), "allow", "rule"),
     (("send_message", {"target": "telegram:someone", "message": "hi"}), "ask", "escalate"),
     (sh("curl -X POST https://api.example.com/x -d a=1"), "ask", "escalate"),

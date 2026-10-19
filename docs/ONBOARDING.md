@@ -162,11 +162,13 @@ exo import-store ~/hafiz --id a --include-private --root /path/to/fresh/dir
 - Copies, never moves. The source is only read.
 - Needs `INDEX.md` and `nodes/` in the source.
 - Skips `.git`, caches, `_drafts`, `*.key` files and symlinks (listed, not followed). Skips
-  `corpus/private` and `ledger.sqlite` unless `--include-private`.
+  `corpus/private` and the ledger (`ledger.sqlite`, its `-wal` and `-shm` files and its `.head` anchor)
+  unless `--include-private`.
 - Fills in what the template has and the source lacks (`policies/`, `agents/`, ...) and merges
   `.gitignore`.
 - Creates `corpus/private/` (0700) and the ledger, and appends one `ingest` event that records
-  the source, counts and skips.
+  the source, counts and skips. That event anchors the ledger. An anchor in `$EXO_HOME/keys/heads` left by a
+  store deleted from the destination path is dropped first, as `exo init` does (D-040).
 - Refuses a destination that exists and is not empty.
 - Prints the lint summary. This is how A's `~/hafiz` becomes principal store #1 (migration M1).
 
