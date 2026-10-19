@@ -6,6 +6,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Gate (#207, #240, D-038): two shell forms ran a program the gate did not read. A redirection, heredoc or
+  here-string between `coproc`, its name and a compound opener (`coproc rm >/dev/null { -rf x`, `coproc 2>/dev/null
+  rm { ...`) makes bash run the name as a simple command; the gate skipped it as a name, so such a line asked under
+  `deny: [delete]`. It now reads the name as the program too, and the line is denied. With no remote command, `ssh
+  host` runs its stdin in the login shell on the host; text piped or fed by heredoc or here-string (`echo 'rm -rf
+  /data' | ssh prod-db`, `ssh prod-db <<EOF`) was a plain `ssh` and allowed even under category denies. It is now read
+  as shell, as for `bash -s`: the line asks, a denied command in it is denied, and its parts stay `internal`. `-n`,
+  `-N`, `-f` and a remote command keep the old reading; options after the host (`ssh host -T`) are read as ssh reads
+  them.
 - Gate (#209, #202, #225, #199, D-038): four spellings of a secret-store path were allowed reads and now ask. A
   harmlessly named link into a store (`notes.txt` to `~/.ssh/id_rsa`, `cfg` to `~/.ssh`, `app.cfg` to a project
   `.env`) is judged by where it leads, resolved from the session's working folder (the core now passes it to tool
@@ -258,6 +267,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   by `src`.
 
 ### Changed
+- Gate timing tests (#308): the linear-time checks in `tests/security` and `plugins/exo-gate/tests` measure process CPU time
+  (`time.process_time`) instead of wall time, and the scaling checks retry up to three times before they fail, so a
+  suite running beside other suites no longer trips them. A quadratic step still fails every attempt. Test-only.
 - Web `/model` and `/default` (#146): the composer opens a model picker or sets the route without starting a model
   turn, and a failed change keeps the line in the box. `/model` goes through the core's principal-only `models.set`
   (`POST /api/chat/sessions/<id>/model`); `/default` saves through the loopback-only provider routes. A command the
