@@ -607,7 +607,7 @@ gate does not read:
   and `~/.exo`), `XDG_CONFIG_HOME`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
   `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `PYTHONSTARTUP`, `PYTHONPATH`,
   `PYTHONHOME`, `PYTHONUSERBASE`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`, `RUBYOPT`, `RUBYLIB`,
-  `NODE_OPTIONS`, `NODE_PATH`, `PSQLRC`, the option variables `MANOPT`, `ZIPOPT` and
+  `NODE_OPTIONS`, `NODE_PATH`, `PSQLRC`, `GIT_ALLOW_PROTOCOL`, the option variables `MANOPT`, `ZIPOPT` and
   `RIPGREP_CONFIG_PATH` (their command-line forms `man -P`, `zip -TT` and `rg --pre` already
   count), `LESS` when it holds a `+` command (`LESS=-R` stays `allow`), and a non-empty `CDPATH`,
   which moves a relative `cd` into the Exo store unseen (`CDPATH= cd src` stays `allow`). The
@@ -635,13 +635,26 @@ gate does not read:
   `read -r "$v"`, `declare -n r=$X`, a nameref with no target, or a glob the shell expands
   first such as `export PAT?=.` or `read HOM[E]`) is opaque too.
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
-  --config` or `-c`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`)
-  takes the `git -c` exec-key check, and the value of an exec key is classified as a command too,
-  so a `deny: [delete]` fires on `core.sshCommand='rm -rf ...'`. A key that loads another config
-  file or a template (`include.path`, `includeIf.<condition>.path`, `init.templateDir`) is
-  opaque, also through `git config`: the included file can set any exec key, and the hooks in a
-  template run. A key the gate cannot read, a `--config-env` value (it comes from a variable) for
-  an exec key, and `git clone --template` are opaque. `env` and `sudo` read `NAME=VALUE` from their
+  --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
+  `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
+  as a command too, so a `deny: [delete]` fires on `core.sshCommand='rm -rf ...'`. An exec key
+  is an alias, the pager, the editor, `core.sshCommand`, a hook path, a filter or diff driver, a
+  credential helper, `interactive.diffFilter`, `remote.<name>.uploadpack` or `receivepack`, the
+  `.path` of a difftool, mergetool, man or browser tool, any key whose last part ends in
+  `command` or `cmd` (`gpg.ssh.defaultKeyCommand`, `core.alternateRefsCommand`,
+  `sendemail.sendmailCmd`), or any key with a `!` value. A key that loads another config file or
+  a template (`include.path`, `includeIf.<condition>.path`, `init.templateDir`) is opaque: the
+  included file can set any exec key, and the hooks in a template run. So is a switch that lets
+  git reach a remote through `ext::`, whose URL is a command git runs: `protocol.allow`,
+  `protocol.ext.allow`, a `url.ext::<...>.insteadOf` or `pushInsteadOf` rewrite, a remote `url`
+  or `pushurl` that starts with `ext::`, and the `GIT_ALLOW_PROTOCOL` variable.
+  `git config` is read as git reads it: the subcommand (`set`, `get`, `unset`...) and the values
+  of `-f`, `--file`, `--blob`, `--type`, `--default`, `--comment`, `--value` and `--url` are not
+  the key, so `git config set include.path x` and `git config -f .git/config core.fsmonitor x`
+  ask as `git config include.path x` does, and `git config rename-section x include` asks too:
+  it can turn `x.path` into `include.path`. A key the gate cannot read, a `--config-env` value
+  (it comes from a variable) for an exec key, and `git clone --template` or `git init
+  --template` are opaque. `env` and `sudo` read `NAME=VALUE` from their
   own argv, so a quoted one after them (`env 'LD_PRELOAD=x' ls`) is an assignment. `IFS` is left
   out: it does not change how literal words split, and `while IFS= read -r line` is everyday.
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):

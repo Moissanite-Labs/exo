@@ -590,3 +590,89 @@ def test_a_quoted_pytest_node_id_is_never_read_as_an_assignment(request):
     for nid in ids:
         c = classify(sh("pytest -q '" + nid.replace("'", "'\\''") + "'"))
         assert "indirection" not in c.signals and (c.category, decide(c).outcome) in ON_164, (nid, c)
+
+
+# --- review of e7f7b19: `git config` reads its subcommand and option values as git does --------------
+
+@pytest.mark.parametrize("cmd,mention", [
+    ("git config set include.path /tmp/c", "include.path"),
+    ("git config -f .git/config include.path /tmp/c", "include.path"),
+    ("git config --file .git/config --add include.path /tmp/c", "include.path"),
+    ("git config --type bool includeIf.gitdir:/.path /tmp/c", "includeIf.gitdir:/.path"),
+    ("git config --default x include.path /tmp/c", "include.path"),
+    ("git config set --comment hi core.editor vim", "core.editor"),
+    ("git config -zf .git/config core.pager less", "core.pager"),
+    ("git config rename-section x include", "include"),     # x.path becomes include.path
+    ("git config --rename-section x alias", "alias"),
+    ("git init --template=/tmp/t", "template /tmp/t"),       # the hooks in a template run, as for clone
+    ("git init --template /tmp/t repo", "template /tmp/t"),
+])
+def test_git_config_subcommand_and_option_values_do_not_hide_the_key(cmd, mention):
+    asks(cmd, mention)
+
+
+@pytest.mark.parametrize("cmd", [
+    f"git config set core.pager '{RM}'",
+    f"git config -f .git/config core.fsmonitor '{RM}'",
+    f"git config --type bool core.pager '{RM}'",
+    f"git config --type=bool core.pager '{RM}'",
+    f"git config --file=.git/config set alias.x '!{RM}'",
+    f"git config --replace-all core.sshCommand '{RM}'",
+])
+def test_git_config_command_value_is_classified_so_a_deny_fires(cmd):
+    c = classify(sh(cmd))
+    assert c.category == "delete", c
+    assert decide(c).outcome == "ask" and decide(c, DENY).outcome == "deny", c
+
+
+# --- review of e7f7b19: more keys that run a command, and the switches for ext:: URLs ---------------
+
+@pytest.mark.parametrize("cmd", [
+    f"git -c gpg.format=ssh -c gpg.ssh.defaultKeyCommand='{RM}' commit -S -m x",
+    f"git -c interactive.diffFilter='{RM}' add -p",
+    f"git -c core.alternateRefsCommand='{RM}' fetch origin",
+    f"git -c remote.origin.uploadpack='{RM}' fetch origin",
+    f"git -c remote.origin.receivepack='{RM}' push origin HEAD",
+    f"git -c sendemail.sendmailCmd='{RM}' send-email x.patch",
+    f"git clone -c mergetool.x.path='{RM}' https://h/r",
+    f"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=difftool.x.path 'GIT_CONFIG_VALUE_0={RM}' git difftool",
+])
+def test_more_exec_keys_are_read_as_commands(cmd):
+    c = classify(sh(cmd))
+    assert c.category == "delete", c
+    assert decide(c).outcome == "ask" and decide(c, DENY).outcome == "deny", c
+
+
+@pytest.mark.parametrize("cmd,mention", [
+    ("git -c protocol.ext.allow=always clone 'ext::sh -c touch% /tmp/p' x", "protocol.ext.allow"),
+    ("git -c protocol.allow=always clone 'ext::sh -c touch% /tmp/p' x", "protocol.allow"),
+    ("GIT_ALLOW_PROTOCOL=ext git clone 'ext::sh -c touch% /tmp/p' y", "GIT_ALLOW_PROTOCOL"),
+    ("export GIT_ALLOW_PROTOCOL=ext:https; git fetch", "GIT_ALLOW_PROTOCOL"),
+    ("git -c 'url.ext::sh -c touch% /tmp/p.insteadOf=https://h/' clone https://h/r", "url.ext::"),
+    ("git config url.ext::x.pushInsteadOf https://h/", "url.ext::x.pushInsteadOf"),
+    ("git config remote.origin.url 'ext::sh -c touch% /tmp/p'", "remote.origin.url"),
+    ("git -c remote.origin.pushurl='ext::sh -c x' push origin HEAD", "remote.origin.pushurl"),
+])
+def test_ext_transport_switches_ask(cmd, mention):
+    asks(cmd, mention)
+
+
+@pytest.mark.parametrize("cmd,category,outcome", [
+    ("git config user.name Bob", "local_write", "allow"),
+    ("git config set user.name Bob", "local_write", "allow"),
+    ("git config --global user.email bob@example.com", "local_write", "allow"),
+    ("git config get core.pager", "local_write", "allow"),
+    ("git config --get core.editor", "local_write", "allow"),
+    ("git config -l", "local_write", "allow"),
+    ("git config --list --show-origin", "local_write", "allow"),
+    ("git config unset core.pager", "local_write", "allow"),
+    ("git config --unset alias.st", "local_write", "allow"),
+    ("git config -f .gitmodules submodule.x.url https://h/r", "local_write", "allow"),
+    ("git config remote.origin.url https://github.com/x/y", "local_write", "allow"),
+    ("git config remove-section alias", "local_write", "allow"),
+    ("git -c protocol.file.allow=always submodule update --init", "local_write", "allow"),
+    ("git -c url.https://github.com/.insteadOf=git@github.com: fetch", "read", "allow"),
+])
+def test_git_config_that_runs_nothing_is_unchanged(cmd, category, outcome):
+    c = classify(sh(cmd))
+    assert (c.category, decide(c).outcome) == (category, outcome), c
