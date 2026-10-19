@@ -1765,12 +1765,13 @@ class ExoApp(App):
             card = self.card
             if card is None or card.req.request_id != request_id:
                 return  # a resolved event or another closer already replaced this request's card
-            focused = self.focused
-            restore = focused is card or card.has_focus_within
-            await card.remove()
+            restore = self.focused is card or card.has_focus_within
+            removal = card.remove()
+            moved = self.focused  # removal hands the focus to a neighbour at once; only a later move is the user's
+            await removal
             self.card = None
             self.show_approval()
-            if restore and (self.focused is None or self.focused is focused) and not self.modal_open():
+            if restore and self.focused is moved and not self.modal_open():
                 self.query_one(Composer).focus()
 
     async def on_approval_card_answered(self, msg: ApprovalCard.Answered) -> None:
