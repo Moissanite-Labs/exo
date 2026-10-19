@@ -20,6 +20,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   of a repo's `.claude` and any `.claude` that holds a Claude login, transcripts or shell snapshots (another home that
   is a git checkout) stay out. `code_find` refuses a folder that is or holds a known store (the home folder,
   `$EXO_HOME`, `~/.config`, `/`), since `jg` walks it itself. About 0.2 to 0.4 s more CPU on a 20,000-file tree.
+- Gate (#230, #232, D-038): follow-ups to the exec-option and environment-dump coverage of #164. These were allowed
+  and now ask: an `ssh`/`scp -o` setting whose keyword the gate cannot read (`ssh -o "$OPT" h`, `-o $OPT`, a glob, an
+  unclosed quote that the expansion may close: `-o '"'"$OPT"`) is `opaque_exec`; `git ls-remote --exec=cmd`, git's
+  hidden synonym of `--upload-pack`, is followed; an environment dump behind a `NAME+=value` or `NAME[i]=value`
+  assignment (`FOO+=1 printenv GITHUB_TOKEN`, `sudo FOO+=1 printenv X`, `env FOO[0]=1`) is `credentials`; tar takes
+  any abbreviation of `--checkpoint-action` longer than `--checkpoint` (`--checkpoint-a=exec=cmd`, `--checkpoint-ac
+  'exec=cmd'`), and those are followed as the full name was (`mosh --ssh=cmd` in any case or after `+` is read by
+  D-075's mosh reading, #126). Two
+  asks #164 added are allowed again, exactly as before it: ssh's `none` value (`-o ProxyCommand=none`,
+  `RemoteCommand`, `LocalCommand`, `KnownHostsCommand`, `PKCS11Provider` or `SecurityKeyProvider` set to `none`, any
+  case), which ssh_config documents as turning the setting off; and a `psql` line starting with `system` (psql has no
+  `system` command; `mysql` keeps it, and both keep `\!`). A card no longer says "runs runs", `ssh {,} host -o ...`
+  has a test, and GATE.md names the compressors the gate knows and `ssh -F` as a known limit.
 - Provider status rows and `exo models` redact URL userinfo (#271). Basic-auth logins no longer appear in
   these displays or client status payloads. Connection endpoints remain unchanged. Invalid URLs produce a
   generic label; secrets in URL paths, queries or fragments remain outside this redaction's scope.
