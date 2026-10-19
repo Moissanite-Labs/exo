@@ -35,8 +35,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `POSIXLY_CORRECT` set mosh runs them as the command). A `--` right after the `ssh` or `mosh` host ends the options,
   and the command after it is read.
   `Decision.reserved` lists each hit once, and its ledger view redacts URL userinfo. Where the gate cannot read a
-  command (for example a heredoc after a `coproc` block,
-  nesting past the depth cap, `eval $(...)`, a command on stdin, `watch`/`tmux`-style wrappers) the line asks as opaque
+  command (for example nesting past the depth cap, `eval $(...)`, a command on stdin, `watch`/`tmux`-style
+  wrappers) the line asks as opaque
   rather than denying, and so does an `ssh` chain past the hop cap (#153). `${...}` bodies are still `allow` even
   under `deny` (#143); `docs/GATE.md` lists the open paths.
 - The gate reads the command behind wrappers that run one (#160, D-038): `setsid`, `flock`, `chroot`, `unshare`,
@@ -428,6 +428,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
+- Gate: a heredoc or here-string after a compound command's closing `}`, `)`, `done`, `fi` or `esac`, and text piped
+  into a compound, now reach the commands inside it (#161). `{ bash; } <<'EOF'` with `git push origin main` in the
+  body was `opaque_exec` (ask) and slipped past `deny: [vcs_push]`; it is now `vcs_push`, as `bash <<'EOF'` is.
+  Commands that do not run their input (`{ cat; } <<EOF`) keep their class, and a command whose stdin is already
+  set (its own heredoc, here-string or `<`, a pipe inside: `{ curl ... | bash; } <<< 'ls'`, or an earlier
+  `exec < file` however spelled, or an eval, source, `.`, variable program or function that may run one) is not
+  fed and stays `opaque_exec`, as is the whole compound when its closer has its own `<`. Past a closer heredoc on
+  another fd (`3<<EOF`, read as stdin), text piped in reaches only the first command inside. Each fed text is read
+  once per line, also by the `sqlite3`, `psql` and `mysql` clients in a group (#154), yet still counts for every
+  command it reaches, so a later client or interpreter whose argument is a store folder stays `store_write` (which
+  outranks `delete`; `deny: [delete]` still denies it through its delete part, D-075). The parser stays linear in
+  the length of an unbroken word (base64, a long path).
+  A `deny: [opaque_exec]` entry still denies these compound lines (D-075); under `categories: {opaque_exec: deny}`
+  or a rule they now ask where they were denied, as `bash <<EOF` already does, until #191. It carries the #178
+  floor change (naming `opaque_exec` at `ask` or `deny` keeps the indirection floor), so they ask rather than
+  falling to the push's own `log` (`docs/GATE.md` "Shell commands: an allowlist").
 - Unix peer authentication (#175, D-060): principal clients ask the kernel who serves the socket before the
   credential moves, and the core asks who connected before it stamps the principal. The credential file
   (`run/<socket>.principal.key`) is now a JSON launch record, so restart the core and every running `exo`, `exo web`
