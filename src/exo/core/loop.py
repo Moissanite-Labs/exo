@@ -16,7 +16,8 @@ Memory call sites (all optional, sync or async): ``system_prompt_block()``,
 ``author`` is the turn message's author (exo.provenance, D-040); each message dict carries ``author`` and,
 for user messages, ``principal``. Keywords a provider does not declare are dropped.
 Context call sites: ``note(session_id)``, ``await build(session_id, system)``,
-optional ``on_turn_complete(session_id, usage)`` and an ``on_event`` attribute.
+optional ``on_turn_complete(session_id, usage)`` with the usage of the turn's last model call (its prompt size, not
+the turn's sum) and an ``on_event`` attribute.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ class TurnResult:
     message: Message | None = None
     usage: Usage = field(default_factory=Usage)
     error: str | None = None
+    last_usage: Usage = field(default_factory=Usage)  # the turn's last model call that reported usage: its prompt
 
 
 class _Interrupted(Exception):
@@ -267,7 +269,7 @@ class Loop:
             recent = [provenance.flat(m) for m in self.store.messages(session)[-40:]]  # D-040: author per message
             await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
         if hasattr(self.context, "on_turn_complete"):
-            await maybe_await(self.context.on_turn_complete(session, result.usage))
+            await maybe_await(self.context.on_turn_complete(session, result.last_usage))  # the last prompt's size
         info = self.store.update_session(session, **({"model": self.model} if self.model else {}))
         await self._emit(ev.SessionUpdated(session=info), session)
         if self.on_turn_end is not None:
@@ -380,7 +382,7 @@ class Loop:
         by attempt outcome and set result.error; True then (the caller sets stop_reason)."""
         await self._record_call(session, stream, iteration, st)
         if stream.usage is not None:
-            result.usage = result.usage + stream.usage
+            result.usage, result.last_usage = result.usage + stream.usage, stream.usage
             st.total = st.total + stream.usage
             await self._emit(ev.UsageUpdated(usage=stream.usage, session_total=st.total, model=stream.route or self.model or ""), session)
         if stream.error is None:
