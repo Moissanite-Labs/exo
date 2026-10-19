@@ -803,8 +803,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   from the environment (`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`), `git
   --config-env` in both forms and `git clone --config`/`-c` take the `git -c` exec-key check, and the value of
   an exec key is classified as a command, `git -c` included, so a `deny: [delete]` fires on it. A key that loads
-  another config file or a template (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as does `git
-  clone --template`. A quoted `NAME=VALUE` after `env` or `sudo` is the assignment those programs read it as.
+  another config file or a template (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as do `git
+  clone --template` and `git init --template`. `git config set`, `-f FILE`, `--type X` and `--default X` no longer
+  hide the key, `git config rename-section` asks, and a value `git config` sets for an exec key is read as the
+  command it is. More keys run a command: any whose last part ends in `command` or `cmd`
+  (`gpg.ssh.defaultKeyCommand`, `core.alternateRefsCommand`), `interactive.diffFilter`,
+  `remote.<name>.uploadpack`/`receivepack` and a tool's `.path`; `protocol.allow`, `protocol.ext.allow`, an
+  `ext::` URL rewrite or remote URL and `GIT_ALLOW_PROTOCOL` ask, since an `ext::` URL is a command git runs. A quoted `NAME=VALUE` after `env` or `sudo` is the assignment those programs read it as.
   `IFS=`, `CDPATH=`, `LESS=-R`, `PAGER=cat` and other harmless assignments are unchanged, and so is text bash
   does not expand: single-quoted text (also inside an unquoted `${a:-'...'}`), a quoted here-doc and a bracket
   outside a subscript, so `git commit -m 'read ${PATH:=.}'`, `pytest -q 'test_x[HOME=/tmp]'` and `echo [HOME=x]`

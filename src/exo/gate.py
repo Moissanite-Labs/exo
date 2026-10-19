@@ -1020,6 +1020,7 @@ _EXEC_ENV_OPAQUE = {
         GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE PERL5LIB PERLLIB
         RUBYLIB NODE_PATH PSQLRC""".split(), "changes which programs, modules or startup and config files are used"),
     "CDPATH": "moves cd, so the gate cannot tell whether writes land in the Exo store",
+    "GIT_ALLOW_PROTOCOL": "lets git use transports such as ext::, whose URL is a command git runs",
 }
 # git config from the environment, `git -c` by another name: GIT_CONFIG_KEY_<n> with GIT_CONFIG_VALUE_<n>
 # (GIT_CONFIG_COUNT alone sets nothing), and GIT_CONFIG_PARAMETERS. The pairs take _git_config_kind.
@@ -1196,11 +1197,17 @@ symbolic-ref update-ref ls-remote ls-tree show-ref version help range-diff whatc
 maintenance count-objects verify-commit verify-tag merge-base name-rev check-ignore check-attr var
 """.split())
 _GIT_EXEC_KEY = re.compile(r"^(alias\..+|core\.(pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy)|"
-                           r"sequence\.editor|diff\.external|.+\.(command|cmd|textconv|clean|smudge|process|"
-                           r"driver|program|helper)|credential\..*|pager\..+|filter\..+|uploadpack\..+)$", re.I)
+                           r"sequence\.editor|diff\.external|interactive\.difffilter|.+\.[\w-]*(command|cmd)|"
+                           r".+\.(textconv|clean|smudge|process|driver|program|helper)|credential\..*|pager\..+|"
+                           r"filter\..+|uploadpack\..+|remote\..+\.(uploadpack|receivepack)|"
+                           r"(difftool|mergetool|man|browser)\..+\.path)$", re.I)
 # git config keys that load more config or a template the gate does not read: an included file can set any
 # exec key, and the hooks in a template run (init.templateDir is git clone --template by another name).
 _GIT_LOAD_KEY = re.compile(r"^(include\.path|includeif\..+\.path|init\.templatedir)$", re.I)
+# git config that lets git reach a remote through `ext::`, whose URL is a command git runs: the switches that
+# allow the transport (it is off by default), a URL rewrite to an ext:: base, and a remote whose URL is one.
+_GIT_EXT_ALLOW = re.compile(r"^protocol\.(ext\.)?allow$", re.I)
+_GIT_EXT_URL_KEY = re.compile(r"^(url\.ext::.*\.(push)?insteadof|remote\..+\.(push)?url)$", re.I | re.S)
 _GH_GROUPS = frozenset("""
 pr issue repo api auth release gist workflow run label secret variable ssh-key gpg-key search browse status
 project cache ruleset org config attestation completion discussion help version --version --help
@@ -1256,12 +1263,60 @@ def _opaque(summary: str, cmd: str, target: str = "", signal: str = "indirection
 
 def _git_config_kind(key: str, value: str) -> str:
     """What a git config pair makes git do: "exec" for an exec key (an alias, the pager, the editor,
-    core.sshCommand, a hook path, a filter...) or a `!shell` value, "load" for a key that loads another
-    config file or a template, "" otherwise. One check for `git -c`, `git config`, `git clone --config`
-    and the GIT_CONFIG_* variables."""
+    core.sshCommand, a hook path, a filter, any key whose last part ends in `command` or `cmd`...) or a
+    `!shell` value, "load" for a key that loads another config file or a template, "ext" for one that lets
+    git run an `ext::` URL, "" otherwise. One check for `git -c`, `git config`, `git clone --config` and the
+    GIT_CONFIG_* variables."""
     if _GIT_EXEC_KEY.match(key) or value.startswith("!"):
         return "exec"
-    return "load" if _GIT_LOAD_KEY.match(key) else ""
+    if _GIT_LOAD_KEY.match(key):
+        return "load"
+    m = _GIT_EXT_URL_KEY.match(key)
+    ext = _GIT_EXT_ALLOW.match(key) or m and (m.group(1).lower().startswith("url.") or
+                                              value.lower().startswith("ext::"))
+    return "ext" if ext else ""
+
+
+_GIT_CONFIG_DOES = {"exec": "runs a configured command", "load": "loads a config file or template the gate does not read",
+                    "ext": "lets git run the command in an ext:: URL"}
+# `git config` (old and new forms): the subcommands, the old mode options, and the options that take a value
+_GIT_CONFIG_SUBS = frozenset("list get set unset rename-section remove-section edit".split())
+_GIT_CONFIG_VALUE_OPTS = ("--file", "--blob", "--type", "--default", "--comment", "--value", "--url")
+
+
+def _git_config_args(rest: list[str]) -> tuple[str, list[str]]:
+    """`git config`'s words after `config` as git reads them: (the subcommand, or the old form's mode option
+    without its dashes, "" for none; the names and values left). The values of `-f`, `--file`, `--type`,
+    `--default` and the like are skipped, so neither they nor `set` is read as the key."""
+    mode, pos, i = "", [], 0
+    while i < len(rest):
+        a, i = rest[i], i + 1
+        if a == "--":
+            pos += rest[i:]
+            break
+        if a.startswith("--"):
+            name, eq, _ = a.partition("=")
+            if name in _GIT_CONFIG_VALUE_OPTS and not eq:
+                i += 1
+            elif name in ("--add", "--replace-all", "--get", "--get-all", "--get-regexp", "--get-urlmatch",
+                          "--unset", "--unset-all", "--rename-section", "--remove-section", "--list", "--edit",
+                          "--get-color", "--get-colorbool"):
+                mode = mode or name[2:]
+        elif a.startswith("-") and len(a) > 1:          # -f FILE, -fFILE, -l, -e, -z, clustered
+            flags, _, attached = a[1:].partition("f")
+            i += 1 if "f" in a[1:] and not attached else 0
+            mode = mode or ("list" if "l" in flags else "edit" if "e" in flags else "")
+        elif not mode and not pos and a in _GIT_CONFIG_SUBS:
+            mode = a
+        else:
+            pos.append(a)
+    return mode, pos
+
+
+def _git_config_sets(rest: list[str]) -> list[str]:
+    """The KEY=VALUE pairs `git config ...` writes (`set`, `--add`, `--replace-all`, or a name and a value)."""
+    mode, pos = _git_config_args(rest)
+    return [f"{pos[0]}={pos[1]}"] if mode in ("", "set", "add", "replace-all") and len(pos) > 1 else []
 
 
 def _git_config_env(spec: str) -> str:
@@ -1295,17 +1350,19 @@ def _classify_git(argv: list[str], cmd: str) -> Classification:
     for kv in config:
         k, _, v = kv.partition("=")
         if kind := _git_config_kind(k, v):
-            return _opaque(f"git -c {k} " + ("runs a configured command" if kind == "exec" else
-                                             "loads a config file or template the gate does not read"), cmd)
+            return _opaque(f"git -c {k} {_GIT_CONFIG_DOES[kind]}"[:120], cmd)
     sub, rest = (argv[i] if i < len(argv) else ""), argv[i + 1:]
     if sub and sub not in _GIT_SUBS:
         return _opaque(f"git {sub} (an alias or extension the gate cannot see)", cmd)
     if sub == "config":
-        names = [a for a in rest if not a.startswith("-")]
-        kind = _git_config_kind(names[0], "") if names else ""
-        if kind and (len(names) > 1 or _has(rest, "--add", "--replace-all")):
-            return _opaque(f"git config {names[0]} " + ("sets a command git will run" if kind == "exec" else
-                                                        "sets a config file or template git will load"), cmd)
+        mode, names = _git_config_args(rest)
+        if mode == "rename-section" and len(names) > 1:   # moves every key of a section under a new name
+            return _opaque(f"git config renames a section to {names[1]}, which can make its keys run a command"[:120],
+                           cmd)
+        for kv in _git_config_sets(rest) or ([f"{names[0]}="] if names and mode in ("add", "replace-all") else []):
+            k, _, v = kv.partition("=")
+            if kind := _git_config_kind(k, v):
+                return _opaque(f"git config sets {k}, which {_GIT_CONFIG_DOES[kind]}"[:120], cmd)
     if sub == "push":
         remote = next((a for a in rest if not a.startswith("-")), "")
         if _has(rest, "-f", "--force", "--force-with-lease", "--force-if-includes", "--mirror") or \
@@ -2375,8 +2432,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             elif kind == "exec":
                 parts.append(_opaque(f"{what} sets {key}, which makes git run a command"[:120], cmd))
                 nested(value.removeprefix("!"), f"{what} {key}")
-            elif kind == "load":
-                parts.append(_opaque(f"{what} sets {key}, which loads a config file or template"[:120], cmd))
+            elif kind:
+                parts.append(_opaque(f"{what} sets {key}, which {_GIT_CONFIG_DOES[kind]}"[:120], cmd))
 
     # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env, sudo or timeout; a partly
     # quoted one is left in `words`), export's arguments, a bare assignment the rest of the line inherits, and
@@ -2432,11 +2489,14 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
         sub, rest = (argv[i] if i < len(argv) else ""), argv[i + 1:]
         sub_takes = _GIT_VALUE_OPTS.get(sub, "")
         git_config(config, "git -c")
-        if sub == "clone":                               # clone's own config, and a template whose hooks run
+        if sub == "clone":                               # clone's own config
             git_config(values(("--config", "-c"), start=i + 1, sub_takes=sub_takes), "git clone --config")
+        if sub == "config":                              # a command value set for later is read now
+            git_config(_git_config_sets(rest), "git config")
+        if sub in ("clone", "init"):                     # a template whose hooks run
             for v in values(("--template",), start=i + 1, sub_takes=sub_takes):
                 if v:
-                    parts.append(_opaque(f"git clone runs the hooks in the template {v}"[:120], cmd))
+                    parts.append(_opaque(f"git {sub} runs the hooks in the template {v}"[:120], cmd))
         for v in values(_GIT_EXEC_OPTS.get(sub, ()), start=i + 1, sub_takes=sub_takes):
             nested(v, f"git {sub} option")
         if sub == "bisect" and rest[:1] == ["run"] and len(rest) > 1 and depth < _DEPTH:

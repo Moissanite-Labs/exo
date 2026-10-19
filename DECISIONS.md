@@ -1111,7 +1111,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `--config`, `git --config-env` (attached or not), `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` and
   `GIT_CONFIG_PARAMETERS`. The value of an exec key is classified as a command, so a category deny fires on it
   (`git clone -c core.sshCommand='rm -rf ...'` is `delete`); a key that loads another config file or a template
-  (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as does `git clone --template`. *env and sudo.*
+  (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as do `git clone --template` and `git init
+  --template`. `git config` is read as git reads it: its subcommand (`set`, `get`...) and the values of `-f`,
+  `--file`, `--blob`, `--type`, `--default`, `--comment`, `--value` and `--url` are not the key, a value set for an
+  exec key is classified as the command it is, and `rename-section` asks (it can turn `x.path` into
+  `include.path`). The exec keys also cover any key whose last part ends in `command` or `cmd`,
+  `interactive.diffFilter`, `remote.<name>.uploadpack`/`receivepack` and a difftool, mergetool, man or browser
+  `.path`; and a switch that lets git run an `ext::` URL asks (`protocol.allow`, `protocol.ext.allow`, an `ext::`
+  `insteadOf` rewrite, a remote URL that starts with `ext::`, `GIT_ALLOW_PROTOCOL`). *env and sudo.*
   Both read `NAME=VALUE` from their own argv, quoted or not, so a quoted one after them is read as the assignment it
   is: the variable is checked, and the rest is the command it is (`env 'FOO=a b' ls` is `ls`, where it was an
   unknown program; `env 'X=1' rm -rf /srv/data` is `delete`). After `nice`, `timeout` and the other prefixes a
