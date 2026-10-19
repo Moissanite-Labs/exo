@@ -361,7 +361,7 @@ copy_managed() {
   local src="$1" dst="$2" label="$3" skip=tests
   [ "${4:-}" = keep-tests ] && skip=.pytest_cache
   if [ -f "$dst/$MARK" ] && diff -rq -x "$MARK" -x "$skip" -x __pycache__ -x .pytest_cache "$src" "$dst" >/dev/null 2>&1; then
-    marked_now "$dst" || mark_managed "$dst" "$src"  # an adopted copy, or a marker from an older install
+    { marked_now "$dst" && ! edited "$dst"; } || mark_managed "$dst" "$src"  # adopted, older or synced by hand
     [ -z "$label" ] || say "$label is up to date"
     return 0
   fi

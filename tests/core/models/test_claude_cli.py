@@ -477,7 +477,8 @@ def test_build_frames_guards_each_user_slash_block_and_nothing_else():
     ("mail a@example.com, (@/a), x:@/a @/b", "mail a@example.com, (@/a), x:@/a \u200b@/b")])  # only token starts
 def test_build_frames_guards_each_user_at_mention(text, sent):
     """The real CLI (2.1.302) reads "@path" where it starts a token (the text start, JS whitespace, U+FEFF) or follows
-    a CJK full stop, comma, ? or !, and attaches the file. Only those spots get the zero-width space."""
+    a CJK full stop, comma, ? or !, and attaches the file. Only a path-form @ at those spots gets the zero-width
+    space; a bare @word there passes unchanged."""
     assert claude_cli.build_frames([Message.user(text)], set())[1][0]["message"]["content"][0]["text"] == sent
 
 
