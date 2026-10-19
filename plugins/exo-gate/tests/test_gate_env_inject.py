@@ -671,7 +671,7 @@ def test_ext_transport_switches_ask(cmd, mention):
     ("git config remote.origin.url https://github.com/x/y", "local_write", "allow"),
     ("git config remove-section alias", "local_write", "allow"),
     ("git -c protocol.file.allow=always submodule update --init", "local_write", "allow"),
-    ("git -c url.https://github.com/.insteadOf=git@github.com: fetch", "read", "allow"),
+    ("git -c url.https://example.com/.insteadOf=ex: fetch", "read", "allow"),
 ])
 def test_git_config_that_runs_nothing_is_unchanged(cmd, category, outcome):
     c = classify(sh(cmd))
