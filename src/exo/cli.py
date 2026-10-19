@@ -30,7 +30,7 @@
   exo index                                refresh the node table in INDEX.md
   exo log append <kind> ...                append a signed event
   exo log verify                           check chain, signatures against pinned keys, head anchor (D-040)
-  exo log anchor                           anchor the current head (a store made before D-040)
+  exo log anchor [--force]                 anchor the current head (a store made before D-040)
   exo log tail [-n 10] [--kind K]          last events
   exo keygen <name> [--out PATH]           create an Ed25519 key (0600); pinned when made in $EXO_HOME/keys
   exo keys [list|pin NAME PUB|principal ID] the key registry: pinned signers, bus seats, principal ids (D-040)
@@ -227,7 +227,11 @@ def cmd_log(a, store) -> int:
             print(json.dumps(res))
             return 0 if res['ok'] else 1
         if a.log_cmd == 'anchor':
-            print(json.dumps(led.anchor()))
+            try:
+                print(json.dumps(led.anchor(force=a.force)))
+            except LedgerError as e:
+                print(e, file=sys.stderr)
+                return 1
             return 0
         events = list(led.iter(kind=a.kind))[-a.n:]
         for ev in events:
@@ -311,7 +315,8 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument('--session')
     q.add_argument('--ref', action='append', help='referenced event id (repeatable)')
     lp.add_parser('verify', parents=[common])
-    lp.add_parser('anchor', parents=[common], help='write the current head to its anchor files (a store from before D-040)')
+    q = lp.add_parser('anchor', parents=[common], help='write the current head to its anchor files (a store from before D-040)')
+    q.add_argument('--force', action='store_true', help='replace an anchor that disagrees with the ledger')
     q = lp.add_parser('tail', parents=[common])
     q.add_argument('-n', type=int, default=10)
     q.add_argument('--kind')

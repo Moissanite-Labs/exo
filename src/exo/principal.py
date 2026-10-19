@@ -6,9 +6,12 @@ The core never takes the answerer of an approval from the command body. The tran
   client's in-process dispatcher) by construction; over the Unix socket only with the per-launch principal
   credential in ``X-Exo-Principal`` and only when the connecting process is not a descendant of the core (a tool
   subprocess is one).
-- ``local``: anything else that reaches the socket (a tool subprocess, a channel link, another daemon), and every
-  stdio or TCP connection. A local caller drives turns but answers approvals only as a seat, with a D-033
-  signature. A local turn is authored as local, never as the principal.
+- ``local``: anything else that reaches the socket (a tool subprocess, another daemon), and every stdio or TCP
+  connection. A local caller drives turns but answers approvals only as a seat, with a D-033 signature. A local
+  turn is authored as local, never as the principal.
+- ``channel``: a channel exod runs in its own process (``exo.server.app.ChannelLink``). It has a local caller's
+  standing, and it alone may hand the core a bus message (``peers`` action ``bus``), which pins a seat's key on
+  first sight. No transport ever stamps it, so no socket, stdio or TCP client can claim it.
 
 The credential is a random token in a launch record written per launch beside the socket (``run/exod.sock``
 gives ``run/exod.principal.key``; mode 0600, in the 0700 run folder). The ``.key`` name puts it under the gate's
@@ -50,6 +53,7 @@ from pathlib import Path
 HEADER = "X-Exo-Principal"
 PRINCIPAL = "principal"
 LOCAL = "local"
+CHANNEL = "channel"
 
 
 @dataclass
