@@ -34,6 +34,7 @@ from exo.model_spend import SpendJournal, configured
 from exo.core.models.spend import admitted_stream
 from exo.model_spend import POLICY_ENV, required as spend_required, resolve_spend_policy
 from exo.core.models.openai_chat import OpenAIChatProvider
+from exo.core.models.urls import display_url
 from exo.core.trace import scrub
 from exo.core.types import Message, Provider, ProviderEvent, ToolSpec, Usage
 
@@ -583,13 +584,14 @@ class Router:
 
 
     def providers_status(self) -> list[dict[str, Any]]:
-        """Each configured provider: base URL and whether a key was found (yes/no, never the value)."""
+        """Each configured provider: display URL without userinfo and key presence (never the value)."""
         out = []
         for name, spec in sorted(self.providers.items()):
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
             found = [e for e in envs if self._key(e)]
-            out.append({"provider": name, "base_url": spec.get("base_url", ""), "transport": spec.get("transport", "openai"),
+            out.append({"provider": name, "base_url": display_url(spec.get("base_url", "")),
+                        "transport": spec.get("transport", "openai"),
                         "local": bool(spec.get("local")), "key_env": envs,
                         "key": ("n/a" if not envs else "yes" if found else "no"),
                         "roles": list(spec.get("roles") or [])})
