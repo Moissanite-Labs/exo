@@ -33,7 +33,8 @@ roles = { fast = ["local:qwen"] }   # optional router overrides; also providers,
 
 [tools]
 toolsets = ["fs", "search", "skills", "mcp"]   # omit for all. "mcp" matches every mcp:<server>; "skills" is always kept
-env_allow = ["GH_TOKEN"]     # secret-looking variables bash and jobs may keep (default none, see docs/TOOLS.md)
+env_allow = ["GH_TOKEN"]     # variables the scrub would drop (secrets, shell startup hooks) that bash and jobs keep
+                             # (default none; docs/TOOLS.md "Environment of bash and jobs" has the startup-code caveat)
 env_deny = ["COMPANY_*"]     # more names or patterns bash, jobs and code_find never see (D-039)
 
 [skills]

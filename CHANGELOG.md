@@ -6,6 +6,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Tool subprocesses (bash, background jobs, `code_find`) drop inherited shell startup hooks (#135, D-039
+  amendment): bash itself acts on `BASH_ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS` and
+  `BASHOPTS` at startup; `ENV` is read by interactive POSIX shells a command starts; `PS4` matters once xtrace is
+  on. They match by exact name and are not secret names: `ENV` itself is dropped (keep it with
+  `env_allow = ["ENV"]`), while `DEPLOY_ENV`, lowercase `env`, a `?env=` URL query and claude-cli diagnostics are
+  unaffected. Exact `env_allow` entries restore them; `env_deny` wins. The bash tool and background jobs start
+  bash with `--norc`, so `SSH_CLIENT` or `SSH2_CLIENT` with `SHLVL` unset or 0 no longer makes every call source
+  `~/.bashrc` and skip an allowed `BASH_ENV`. Loader and interpreter hooks (`LD_PRELOAD`, `PYTHONPATH`,
+  `NODE_OPTIONS`, ...) are documented as not scrubbed.
 - A `deny` or `reserved` entry in `gates.yaml` now matches any simple command on a compound line, nested ones included
   (D-075). Before, only the most severe part was checked, so `git push origin main && rm -rf build` asked about the
   delete and ran the denied push on approval. Each part carries the tool of its call (`tool:execute_code` no longer
