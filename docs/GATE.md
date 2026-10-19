@@ -52,19 +52,29 @@ The hash covers only text the gate can see, so a body it cannot read asks (#208)
 marks such a post with the `unseen_body` signal, and `gate.body_unseen` also counts a body file
 nobody read:
 
-- `gh`: `--body-file -` (or `-F -`, `--notes-file -`) unless the line spells out stdin (one heredoc
-  with a quoted delimiter or no `$` or backtick, one plain here-string, or a pipe from `echo`,
-  `printf` or `cat <<EOF` with no `$` or backtick); `gh api` fields with `@` and `--input`; `--fill`,
-  `--template`, `--editor`, `--recover` and generated release notes, which gh writes itself; a
-  gist's files; any word from an expansion (`$X`, `$( )`, backticks), since any word can be an
-  option such as `--body-file=f`. A `$(cat <<'EOF' ... EOF)` body is plain text and is read. Text
-  options are read as gh reads them: when a repeated option (gh keeps the last) or a short-option
-  cluster (`-db text`) gives another value than the gate's reading, the post is unseen. `gh
-  release` reads `--notes` and `--notes-file` as its text.
-- `curl`: `-d @f`, `--data-binary @-`, `--json @f`, `--data-urlencode name@f`, `-F k=@f` or
-  `k=<f`, `-T`, `-K`, and a word from an expansion other than the value of `-H`, `-u`, `-A` or
-  `--oauth2-bearer` (a token in a header leaves the body readable). An attached value (`-d@f`)
-  makes the call a POST, as a spaced one does. `wget`: `--post-file`, `--body-file`, `-e`,
+- `gh`: `--body-file -` (or `-F -`, `--notes-file -`) unless the line spells out stdin and bash
+  changes nothing in it: one heredoc with a quoted delimiter, or with no `$`, backtick or backslash
+  in the body (bash expands those and joins a line that ends in `\`); one here-string with no
+  expansion; or a pipe from one simple command: `cat` with such a heredoc or here-string, `echo`
+  with no option word and no backslash, or `printf` with one format that has no `%` or backslash.
+  `printf` formats, `echo -e` and `-n`, a subshell or group before the pipe
+  (`(cat notes.md; echo F) |`, `{ ...; } |`, a loop) and any other writer are unseen, because
+  only one simple command's output can be read whole. Also unseen: `gh api` fields with `@` and
+  `--input`; `--fill`, `--template`, `--editor`, `--recover` and generated release notes, which gh
+  writes itself; `--attach`, which uploads a file; a gist's files; any word from an expansion
+  (`$X`, `$( )`, backticks), since any word can be an option such as `--body-file=f`. A
+  `$(cat <<'EOF' ... EOF)` body is plain text and is read. Text options are read as gh reads them,
+  with gh's own list of options that take a value for each posting command (gh 2.102): when a
+  repeated option (gh keeps the last), a short-option cluster (`-db text`) or an option's value
+  (`-t -b -b text`: the title is `-b`) gives another value than the gate's reading, the post is
+  unseen. `gh release` reads `--notes` and `--notes-file` as its text.
+- `curl`: `-d @f`, `--data-binary @-`, `--data-ascii @f`, `--json @f`, `--data-urlencode name@f`,
+  `-F k=@f` or `k=<f`, `-T`, `--expand-data`, and a word from an expansion other than the value of
+  `-H`, `-u`, `-A` or `--oauth2-bearer` (a token in a header leaves the body readable). An attached
+  value (`-d@f`) makes the call a POST, as a spaced one does, and so does `--data-ascii`. `-K` reads
+  options, data and URLs from a file, so the call counts as a POST whose body is unseen, never as a
+  local one. A POST whose host the gate cannot read (`curl -d x "$URL"`) is not a local write
+  either. `wget`: `--post-file`, `--body-file`, `-e`,
   `--config`, or an expansion outside `--header` and the login options. httpie: `k=@f`, `k:=@f`,
   `k@f`, a pipe or `<` into it, or an expansion outside `-a`.
 - The exo-gate hook reads a body file only by an absolute path, up to 256 KiB, with
@@ -734,19 +744,18 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   first host as its target, so a `target:` deny on that host still denies it (#153, fixed by
   #164). Past the cap the line asks unless the principal has set a policy for `opaque_exec` (a
   `command:` deny entry or a deny rule that matches the text still denies it).
-- **`categories:` sees the part the line ends up with (#191).** `classify_shell` keeps the most
-  severe part of a compound line, and a `categories:` line or a rule applies to that category
-  only. With `categories: {github_post: deny}`, `gh pr comment 3 --body hi && rm -rf build` is
-  fully inspected, but it is `delete`, the card reads `rm build`, the line asks, and approving
-  it sends the denied post. The `deny:` and `reserved:` lists do not have this gap: since D-075
-  an entry there matches every part the gate reads, nested ones included, so the same line is
-  denied under `deny: [github_post]` (see above). A `coproc` or `function NAME {` block splits
-  the same way: its inner command is a part, but the block is `opaque_exec`, so
+- **Only a deny reaches every part of a line.** `classify_shell` keeps the most severe part of
+  a compound line, which sets the card. A deny reaches every part the gate reads, nested ones
+  included: a `deny:` entry since D-075, and a `categories:` line or rule that denies a part
+  since #191. So `gh pr comment 3 --body hi && rm -rf build` is denied under
+  `categories: {github_post: deny}` as under `deny: [github_post]`, and
   `coproc w { curl https://example.com; }` (and `function f { curl https://example.com; }`) is
-  denied under `deny: [web_read]` and asks under `categories: {web_read: deny}`, since
-  `web_read` ranks below `opaque_exec`. Under either form the four-wrapper example above is
-  denied and the five-wrapper example asks as `opaque_exec`. So approving an opaque card or a
-  compound line can run an action that would be denied on its own. Read the whole command
+  denied under `categories: {web_read: deny}`, though the block is `opaque_exec`. An allow, log
+  or ask line or rule applies to the line's own category only: under
+  `categories: {github_post: ask}` the line above asks for the delete, and approving it sends
+  the post too. Use `reserved:` to ask on any part. Under either deny form the four-wrapper
+  example above is denied and the five-wrapper example asks as `opaque_exec`. So approving an
+  opaque card or a compound line can run an action the gate did not show. Read the whole command
   before approving it: an approval does not vouch for what the gate did not classify.
 - **Deny becomes ask.** Where the gate cannot read the command it files the line as
   `opaque_exec`, which asks, so a `deny:` or `categories:` entry for the hidden action becomes
