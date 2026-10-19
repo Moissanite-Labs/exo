@@ -1087,6 +1087,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   setting, which ssh_config documents as switching the setting off (CLEAR_ON_NONE, any case, the bare word only), and
   a `psql` line starting with `system`, which is mysql's command and SQL in psql.
   Rejected: keeping them as fail-safe asks, since they are ordinary spellings and the gate's docs never claimed them.
+  *Amendment 2026-10-19 (issues #209, #202, #225, #199):* four spellings reached a secret store without its name,
+  and the gate read them as plain reads. A link is judged by where it leads: a path is resolved from the gate's own
+  folder, from the session's working folder (the core passes it to tool hooks as `cwd`; each hook gets only the
+  keywords it declares) and, for a shell tool, from that folder joined with the call's own `cwd` argument (a file
+  tool ignores that argument, so the gate does too), and a resolved path a link led to is matched by name; a relative path that
+  stays below its folder is matched by its part there, so a session in a repo's `.claude/worktrees` checkout is not
+  asked about every link. A `.pub` name exempts only a path that resolves to one. `${VAR:-word}` and the other
+  operators of `HOME`, `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the
+  default; both count. A shell word with a `$( )`, a backtick pair or an unknown variable is also matched with each
+  one empty, and with each one between two literal parts read as `*`. A glob is read in bash's bracket syntax
+  (`[^x]`, POSIX classes), and `/proc/<pid>/<glob>` is matched against `environ`. Rejected: treating every
+  expansion inside a word as opaque, which would ask on `cat notes-$(date +%F).md`; refusing links in `read_file`
+  alone, which leaves the shell open. The checks of one classify call share their file-system lookups, which made a
+  10 KB line several times faster. Limits in `docs/GATE.md` "Other spellings of a store path".
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
