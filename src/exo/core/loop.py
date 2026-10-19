@@ -300,7 +300,8 @@ class Loop:
         """(system text, recall). Recall is folded into the system text unless the context engine takes it."""
         base = await self.base_system(session)
         parts = [base]
-        recall = await self._memory("prefetch", query, session_id=session) or ""
+        # recalled memory is data (D-040): it may quote a peer, so its pinned-block tags are escaped (#279)
+        recall = provenance.defuse_pins(await self._memory("prefetch", query, session_id=session) or "")
         if recall and not self._takes_recall():
             parts.append("# Recalled memory\n" + recall)
             recall = ""
