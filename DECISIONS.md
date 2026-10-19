@@ -462,6 +462,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (77% against 79% with recall).
 - **Not done:** a live 20-turn cache measurement on the fixed code; importing exo-memory's old episodic log (it
   holds copies of the same sessions); summaries for imports are slow on glm-5.3-flash (about 75 s per leaf).
+  *Amendment 2026-10-18 (PR #216):* a private thread wrote to the ledger and lost its own start. Now nothing in or
+  under a private thread is remembered: `SessionStore.private` walks up the parents, the loop skips the memory
+  writes, memory tools get `agent_context="private"`, and learning, findings, panel responses and the context
+  plugin record nothing from it. Its entries still stay out of the agent tree, so it keeps a summary tree of its
+  own (key: its session id). Its tail starts at that tree's last summary, and its turn waits for that tree as D-068
+  says. Its delegate children open with `memory_zoom(subagent=)` only from it or a fork of it. A fork's copies count
+  at their original's log position, so a fork opens with its parent's tail. Details in docs/MEMORY-MODEL.md
+  "Private threads".
 
 ## D-029 (2026-10-12) jevgrep as code_find; native port later if the measured win holds
 - **Why:** "where is X decided" questions cost an agent many grep and read rounds. dzhng/jevgrep (MIT, `jg`
@@ -1085,6 +1093,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   registry, or sends `turn.send` on the seat's socket (that counts as the principal until approval identity is
   bound to the connection, a separate change). The gate is what asks before writes to `keys/` and the store; the
   registry, the anchors and `ledger.sqlite.head` belong on its sensitive-path list.
+  *Amendment 2026-10-18 (PR #216):* exo-context pinned peer, bus and job text as the principal's words. Its
+  `select_context` now gets each message's author, and it pins only the principal's. A handoff carries a pinned
+  block only from a message that opens with it (exo-context's own block) or with a compaction marker (a host's
+  summary). A block quoted further down a message is data: the core's system message quotes small spans word for
+  word, peer turns included.
 - *Amendment 2026-10-18 (fix sweep, #221):* the anchors are written after the append's COMMIT, from the committed
   head, so a writer killed in between leaves them one event behind, never ahead. That lag of one event is accepted.
   The copy under `keys/heads/` is written even when the anchor beside the ledger fails. Before it writes, an append
@@ -1118,6 +1131,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   refused, not replaced; remote descriptions are marked untrusted third-party text.
 - **Not done:** terminal event-loop blocking and approval focus (another branch); gate, approvals, capture and
   ledger items (other branches).
+  *Amendment 2026-10-18 (PR #216):* undo deleted every later agent-tree summary and the thread's context notes, so
+  other threads' news was lost. It now deletes only the nodes that hold an undone entry and the merges above them,
+  and keeps context notes. It also reaches the context plugin: `on_session_switch(rewound=True, messages=,
+  summaries=)`. exo-context then drops the undone turns' pins and the deleted nodes, and writes again each
+  automatic handoff that may quote them.
 
 ## D-042 (2026-10-12) Repo hygiene: privacy, licensing, CI
 - **Why:** an outside audit found that D-004 (nothing in the package names the principal) was not met, that no CI
