@@ -19,7 +19,9 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import traceback
+import weakref
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -46,16 +48,68 @@ def scrub(text: Any, limit: int = 400) -> str:
 
 # ---------------------------------------------------------------- caught errors
 
-_sinks: list[Callable[[Any, str | None], None]] = []  # engines register one: publish(body, session)
+Sink = Callable[[Any, str | None], None]
+# Engines register one: publish(body, session). A bound method is held weakly, so an engine nobody closed can
+# still be collected (with its open databases) instead of living, and receiving every report, until exit.
+# The list is an immutable tuple replaced whole (copy on write): add_sink and remove_sink build a new one under the
+# lock, and report reads it once with no lock. A garbage-collector finalizer can run inside any allocation and call
+# report, add_sink or remove_sink on the thread that holds the lock, so the lock is re-entrant and nothing waits on
+# it inside report. No sink callback ever runs under the lock.
+_sinks: tuple[Callable[[], Sink | None], ...] = ()
+_sinks_lock = threading.RLock()
 
 
-def add_sink(fn: Callable[[Any, str | None], None]) -> None:
-    _sinks.append(fn)
+def add_sink(fn: Sink) -> None:
+    """Send every later report to ``fn(body, session)`` until ``remove_sink(fn)``.
+
+    A bound method is held weakly and does not keep its owner alive: once nothing else holds the owner, its
+    reports stop. A plain function, or a method whose owner cannot be weakly referenced (a ``__slots__`` class
+    without ``__weakref__``), is held strongly. A report already delivering may still call a sink removed after
+    it began.
+    """
+    global _sinks
+    ref: Callable[[], Sink | None] | None = None
+    if hasattr(fn, "__self__") and hasattr(fn, "__func__"):
+        try:
+            ref = weakref.WeakMethod(fn)  # type: ignore[arg-type]
+        except TypeError:
+            ref = None
+    if ref is None:
+        def strong() -> Sink | None:
+            return fn
+        ref = strong
+    with _sinks_lock:
+        while True:  # a finalizer may add or remove on this thread while the tuple is built: retry, never overwrite
+            snapshot = _sinks
+            new = (*snapshot, ref)
+            if _sinks is snapshot:
+                _sinks = new
+                return
 
 
-def remove_sink(fn: Callable[[Any, str | None], None]) -> None:
-    if fn in _sinks:
-        _sinks.remove(fn)
+def remove_sink(fn: Sink) -> None:
+    global _sinks
+    with _sinks_lock:  # bound methods compare equal when they wrap the same function and object
+        while True:  # compare and retry, as in add_sink
+            snapshot = _sinks
+            new = tuple(ref for ref in snapshot if (live := ref()) is not None and live != fn)
+            if _sinks is snapshot:
+                _sinks = new
+                return
+
+
+def _live_sinks() -> list[Sink]:
+    global _sinks
+    snapshot = _sinks  # one atomic read, no lock
+    live = [(ref, ref()) for ref in snapshot]
+    if any(fn is None for _, fn in live) and _sinks_lock.acquire(blocking=False):
+        try:  # prune dead weak refs only if nobody else holds the lock; a re-entrant add or remove is never lost
+            pruned = tuple(ref for ref, fn in live if fn is not None)
+            if _sinks is snapshot:
+                _sinks = pruned
+        finally:
+            _sinks_lock.release()
+    return [fn for _, fn in live if fn is not None]
 
 
 def error_body(where: str, exc: BaseException | str, error_type: str = "", tb: str = "") -> ev.HarnessError:
@@ -77,7 +131,7 @@ def report(where: str, exc: BaseException | str, session: str | None = None, **k
         logger.info("%s is off until set up: %s", body.where, body.message)
         return body
     logger.warning("harness error in %s: %s: %s", body.where, body.error_type, body.message)
-    for fn in list(_sinks):
+    for fn in _live_sinks():
         try:
             fn(body, session)
         except Exception:  # the reporter itself must never raise into the code it is watching
