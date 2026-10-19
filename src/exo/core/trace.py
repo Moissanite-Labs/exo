@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from exo.core.slots import NotConfigured
 from exo.protocol import schema as ev
 
 logger = logging.getLogger(__name__)
@@ -100,8 +101,12 @@ def error_body(where: str, exc: BaseException | str, error_type: str = "", tb: s
 
 
 def report(where: str, exc: BaseException | str, session: str | None = None, **kw: Any) -> ev.HarnessError:
-    """Record a caught exception as a ``harness.error`` event (and in the log). Safe to call from any hook."""
+    """Record a caught exception as a ``harness.error`` event (and in the log). Safe to call from any hook.
+    A ``NotConfigured`` (a setup step not taken) is logged at info only: no event, no finding and no notice."""
     body = error_body(where, exc, **kw)
+    if isinstance(exc, NotConfigured):
+        logger.info("%s is off until set up: %s", body.where, body.message)
+        return body
     logger.warning("harness error in %s: %s: %s", body.where, body.error_type, body.message)
     for fn in _live_sinks():
         try:
