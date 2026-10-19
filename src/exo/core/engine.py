@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import inspect
 import os
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
@@ -31,7 +32,7 @@ from exo.core.findings import Findings
 from exo.core.loop import Loop
 from exo.core.mcp_client import McpManager
 from exo.core.models.fake import RuleFake
-from exo.core.models.router import Router
+from exo.core.models.router import Router, merge_provider
 from exo.model_spend import resolve_spend_policy
 from exo.core import jobs as jobs_mod
 from exo.core.peer_target import EngineTarget
@@ -158,7 +159,12 @@ class CoreRuntime:
         if seat and seat.principal and os.environ.get("EXO_PRINCIPAL") not in (None, "", seat.principal):
             raise ValueError("seat principal conflicts with EXO_PRINCIPAL")
         selection = resolve_spend_policy(principal_spend, principal=active_principal)
-        models = {**(models or {}), **(seat.models if seat else {})}
+        over, models = (seat.models if seat else {}), dict(models or {})  # the seat's tables win entry by entry, like [trace]
+        for k, v in over.items():  # a provider entry merges key by key with the router's rule, so it keeps config's URL
+            old = models.get(k)
+            if isinstance(v, dict) and isinstance(old, dict):
+                v = {**old, **({n: merge_provider(old.get(n), p) for n, p in v.items()} if k == "providers" else v)}
+            models[k] = v
         if principal_spend is not None:
             models["spend"] = principal_spend
         elif seat and "spend" in seat.models and selection.source is None:
@@ -446,6 +452,16 @@ class CoreRuntime:
         sid = lctx.get("session")
         info = self.store.get_session(sid) if sid else None
         loop = asyncio.get_running_loop()
+        # Chunks a tool thread queues between two loop turns go out as one tool.output: one publish (and one
+        # sessions.sqlite write) per turn instead of thousands, so a reader that keeps up never nears MAX_LAG (D-079).
+        pending: list[str] = []
+        lock = threading.Lock()
+
+        def flush() -> None:
+            with lock:
+                text = "".join(pending)
+                pending.clear()
+            self.hub.publish(s.ToolOutput(call_id=call.id, text=text), sid)
 
         def emit(text: str) -> None:  # tool threads call this; publish on the event loop
             try:
@@ -453,7 +469,11 @@ class CoreRuntime:
                 text = redact_secrets(text, keep_markers=True)  # bash already redacted it across reads
             except Exception:
                 pass
-            loop.call_soon_threadsafe(self.hub.publish, s.ToolOutput(call_id=call.id, text=text), sid)
+            with lock:
+                pending.append(text)
+                if len(pending) > 1:  # a flush is already queued and takes this chunk too
+                    return
+            loop.call_soon_threadsafe(flush)
 
         self.jobs.loop = loop
         if call.name == "bash" and sid:

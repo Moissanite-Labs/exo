@@ -15,7 +15,8 @@ additively (new optional fields with defaults). Ask the lead before changing any
   Assistant messages carry `tool_calls`; `tool` messages carry one or more `tool_results`; system prompts
   are `role="system"` messages. Helpers `Message.system/user/assistant/tool(...)`, `.text()`.
 - `Usage`: input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens (all 0),
-  cost_usd?. Supports `+`.
+  cost_usd?. Supports `+`. input_tokens is the uncached input on every transport. Cache reads and writes are
+  counted apart, so the prompt is the sum of the three (D-080).
 - `ToolSpec`: name, description, parameters: JSON Schema dict = empty object, risk `low/medium/high` =
   low, toolset = "core".
 - `ProviderEvent` (tagged by `kind`): kind `text/reasoning/tool_call/usage/done/error`, text = "",
@@ -49,7 +50,10 @@ ends the turn `interrupted`. The call is one more model call and spend-journal e
 
 Codec: `to_dict(obj)` and `from_dict(cls, data, strict=True)` work for every dataclass here and in the
 protocol. Nested dataclasses, lists, optionals and Literals are decoded and checked. `strict=True`
-rejects unknown fields; `strict=False` drops them. Use these for sessions.sqlite rows too.
+rejects unknown fields and wrong-typed `int`, `float`, `str` and `bool` fields: a bool is not an int, an
+int is a float, and null fits a primitive field only when it is optional. `strict=False` drops unknown fields
+and takes primitive values as stored. The core reads sessions.sqlite messages and events with `strict=False`,
+so a row an older core wrote still loads.
 
 Under `strict=False` a Literal value the codec does not know is kept as sent, because a newer peer may add one.
 `strict=True` rejects it.
@@ -58,7 +62,12 @@ Under `strict=False` a Literal value the codec does not know is kept as sent, be
 
 Envelopes:
 - `Command`: id (auto `c_...`), type, body. Build with `Command.of(body)`. `to_json()`, `from_json()`.
-  Always strict: unknown type is `unknown_command`; unknown or missing body fields are `bad_body`.
+  Always strict. An unknown type is `unknown_command`, and so is a type that is not a string. Unknown,
+  missing or wrong-typed body fields are `bad_body`. A malformed command never ends the connection or the
+  stdio transport: the server answers it with an error `Response` and keeps serving. Over HTTP every
+  `Response` comes back with status 200, an error one too. A fault the server did not classify, in the
+  decoder, the replay or the engine, is `internal`: an `events.subscribe` `since` past SQLite's 64-bit range
+  is one.
 - `Response`: id (the command's), ok = True, result: dict = {}, error: ErrorInfo?. Results are
   untyped JSON for now; reuse `SessionInfo` and core types inside them via `to_dict`.
 - `Event`: id (auto `e_...`), seq, session?, type, ts (ISO 8601 UTC, auto), body. JSON key order is
@@ -98,7 +107,10 @@ Commands (25): the 20 from STANDALONE.md 5.2 plus `session.undo`, `commands.list
 - `question.answer` QuestionAnswer: question_id, answer
 - `command.run` CommandRun: name, args = "", session?. Built-ins: trace, findings, context, compact (the cap is full; new commands go here)
 - `commands.list` CommandsList: session?
-- `events.subscribe` EventsSubscribe: since = 0 (events with seq > since), session? (None = all)
+- `events.subscribe` EventsSubscribe: since = 0 (events with seq > since), session? (None = all). A live
+  subscriber 4,096 unread events behind (`MAX_LAG` in `exo.server.engine`) has stalled: the core ends its stream
+  after the last event it read, and the client resumes with `since` and misses nothing (D-079). In process, the
+  terminal window and stdio subscribe again on their own, and their stream ends only when the core shuts down.
 - `search` Search: query, scope `sessions/store/all` = all, limit = 20
 - `config.get` ConfigGet: key? (None = whole config)
 - `config.set` ConfigSet: key, value: Any
@@ -120,7 +132,7 @@ Events (21): the 20 from 5.2 plus `taste.updated` (D-012 inline taste).
 - `message.completed` MessageCompleted: message: Message
 - `reasoning.delta` ReasoningDelta: message_id, text
 - `tool.started` ToolStarted: call: ToolCall, risk = "low"
-- `tool.output` ToolOutput: call_id, text (partial output)
+- `tool.output` ToolOutput: call_id, text (partial output: what a tool printed since the last loop turn, D-079)
 - `tool.completed` ToolCompleted: result: ToolResult, duration_ms = 0
 - `approval.requested` ApprovalRequested: request_id, summary, risk = "medium", call?, options =
   [allow, deny, allow_always], approvers: list[str] = [] (`principal`, `seat:<name>`; empty = any local
