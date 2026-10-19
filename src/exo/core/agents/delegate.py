@@ -101,7 +101,7 @@ class Limits:
     max_children: int = 10      # tasks per delegate call
     max_concurrent: int = 4     # running children per depth level, engine-wide
     max_turns: int = 24         # tool rounds per child
-    max_tokens: int = 200_000   # input plus output tokens per child
+    max_tokens: int = 200_000   # new tokens per child: uncached input, cache writes, output; not cache reads (D-080)
     timeout_s: int = 900        # wall time per child
     max_summary_chars: int = 6000
 
@@ -122,7 +122,7 @@ class _Bus:
         lim = self.d.limits.max_tokens
         if isinstance(body, s.UsageUpdated) and session in self.d.loops and lim:
             tot = body.session_total or body.usage
-            if tot.input_tokens + tot.output_tokens > lim and session not in self.d.over:
+            if tot.input_tokens + tot.cache_write_tokens + tot.output_tokens > lim and session not in self.d.over:
                 self.d.over.add(session)
                 self.d.loops[session].interrupt(session)
         return ev
@@ -421,7 +421,7 @@ class Delegator:
         text += "".join(f"\n[{m}]" for m in self.marks.pop(sid, []))
         total = loop.state(sid).total if loop is not None and sid else Usage()
         return Receipt(id="r" + b.id[1:], thread=b.thread, brief=b.id, status=status, role=b.role, summary=text,
-                       input_tokens=total.input_tokens, output_tokens=total.output_tokens,
+                       input_tokens=total.input_tokens + total.cache_write_tokens, output_tokens=total.output_tokens,
                        cost_usd=total.cost_usd or 0.0, duration_ms=int((time.monotonic() - t0) * 1000),
                        rounds=sum(1 for m in msgs if m.role == "assistant" and m.tool_calls), tool_calls=len(calls),
                        files=sorted(files), error_code=code, error=why, child_session=sid, tier=b.tier)

@@ -4,7 +4,7 @@ import json
 import sqlite3
 
 from exo.core.sessions import SessionStore
-from exo.core.types import Message
+from exo.core.types import Message, from_dict
 
 
 def test_threads_share_one_log_in_order():
@@ -59,6 +59,18 @@ def test_undo_hides_log_entries_and_keeps_the_chain():
     assert st.search("dropped", agent="razi") == []
     nxt = st.append_message(a.id, Message.user("next"))
     assert nxt.meta["seq"] == 5 and nxt.meta["pos"] == 5
+
+
+def test_a_wrong_typed_part_an_older_core_stored_still_loads():
+    # Before strict command decoding, turn.send stored parts as the client sent them, so a row can hold an int
+    # where a str belongs. Reading it back must not make the session or the agent log unreadable.
+    st = SessionStore()
+    a = st.create_session(agent="helper")
+    old = from_dict(Message, {"role": "user", "content": [{"type": "image", "data": 5, "mime": "image/png"}]},
+                    strict=False)
+    st.append_message(a.id, old)
+    assert st.messages(a.id)[0].content[0].data == 5
+    assert st.log("helper")[0].message.content[0].data == 5
 
 
 def test_fork_copies_stay_out_of_the_log():
