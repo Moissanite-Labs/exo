@@ -354,6 +354,7 @@ class _Cmd:
     heredocs: list = field(default_factory=list)     # _Heredoc
     herestrings: list = field(default_factory=list)  # _Word
     piped_in: bool = False
+    operands: list = field(default_factory=list)     # _Word after an unquoted NAME=(..): more of its operands
 
 
 class _Lexer:
@@ -499,6 +500,15 @@ class _Lexer:
                 w.text += ch
                 self.i += 1
 
+    def _procsub(self, w: _Word) -> None:
+        """<( ) or >( ) at i, as run() reads one at the start of a word (for the scans that read text again)."""
+        self.i += 2
+        start = self.i
+        self.run(closer=True)
+        self.subs.append(self.s[start:max(start, self.i - 1)])
+        w.text += "<(..)"
+        w.dynamic = w.started = True
+
     def _backtick(self, w: _Word) -> None:
         s, j, out = self.s, self.i + 1, []
         while j < len(s) and s[j] != "`":
@@ -601,6 +611,8 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
     cur = _Cmd()
     func = False
     i = 0
+    owners: list = []       # per open `(`: the command whose unquoted NAME=( it opens, or None
+    after = None            # the command whose next words follow its NAME=(..) as more operands (#188)
     opened: list = []       # compounds still open: (opener, index of their first command, command piped in)
     tops: dict = {}         # opener -> its indexes in opened, so a closer finds its opener without a scan
     shut = None             # the open compound the current command closes
@@ -631,11 +643,17 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
     while i < len(toks):
         kind, v = toks[i]
         if kind == "op":
+            last = cur.words[-1] if cur.words else None
+            # a NAME=( after an earlier NAME=(..) is still an operand of that earlier command
+            opens = (after if after is not None else cur) if last and not last.quoted and last.text.endswith("=") else None
             if v == "(" and cur.words and toks[i + 1:i + 2] == [("op", ")")]:
                 func = True
                 i += 2
                 end()
+                after = opens
                 continue
+            after = owners.pop() if v == ")" and owners else None
+            owners += [opens] if v == "(" else []
             into = cmds[-1] if v == "(" and cur.piped_in and cmds else None
             end(piped=v in ("|", "|&"))
             if v == "(":
@@ -662,6 +680,8 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
                         close(j)
             lead = lead and not v.quoted and v.text in _OPENERS
             cur.words.append(v)
+            if after is not None:
+                after.operands.append(v)
         i += 1
     end()
     return cmds, lx.subs, func
@@ -853,10 +873,11 @@ _EXEC_OPTS = {
     "rsync": ("-e", "--rsh", "--rsync-path"), "scp": ("-S", "-D"), "sftp": ("-S", "-D"), "rg": ("--pre",),
     "zip": ("-TT", "--unzip-command"),
 }
-# git subcommand -> options whose value git runs (locally, or on the remote for a local-path remote).
+# git subcommand -> options whose value git runs (locally, or on the remote for a local-path remote). ls-remote
+# takes a hidden `--exec` for `--upload-pack` (#230); it rejects `-u`, which is still read so that no line asks less.
 _GIT_EXEC_OPTS = {"rebase": ("-x", "--exec"), "push": ("--receive-pack", "--exec"), "archive": ("--exec",),
                   "fetch": ("--upload-pack",), "clone": ("--upload-pack", "-u"), "pull": ("--upload-pack",),
-                  "ls-remote": ("--upload-pack", "-u")}
+                  "ls-remote": ("--upload-pack", "--exec", "-u")}
 # Options whose value is a script file or option text the gate cannot read: opaque.
 _EXEC_FILE_OPTS = {"tar": ("-F", "--info-script", "--new-volume-script"), "sqlite3": ("-init",), "duckdb": ("-init",)}
 # The short options that take a value (the letters before `:` in the program's getopt string) and long options
@@ -893,13 +914,15 @@ _EXEC_ENV_OPAQUE = frozenset(["TAR_OPTIONS"])
 # command, .once/.output/.import/.read run one when an argument starts with `|` (after options too:
 # `.import --csv '|cmd' t`), .once/.output/.read/.load otherwise use a file or library the gate does not see
 # (.import FILE is a plain data load). psql runs `\!`, and `\o`, `\out`, `\g`, `\gx`, `\w`, `\write` with a
-# `|command` (also quoted, or after `\g (options)`), wherever they appear on a line; mysql runs `system` at the
-# start of one. Line starts are matched with `[ \t]*`, not `\s*`, so a long heredoc stays linear.
+# `|command` (also quoted, or after `\g (options)`), wherever they appear on a line; mysql runs `\!` and, at the
+# start of one, `system` (psql has no `system`: a line starting `system` is SQL there). Line starts are matched
+# with `[ \t]*`, not `\s*`, so a long heredoc stays linear.
 _DOT_RUN, _DOT_PIPE = ("shell", "system"), ("once", "output", "import", "read")
 _DOT_FILE = ("once", "output", "read", "load")
 _DOT_COMMAND = re.compile(r"^[ \t]*\.([a-z]+)[ \t]*([^\n]*)", re.M)
 _DOT_PIPE_ARG = re.compile(r"""(?:^|[ \t])(?:(['"])\|(.*?)\1|\|(.*))""", re.S)
-_SQL_SHELL = re.compile(r"(?:^[ \t]*system[ \t]+|\\![ \t]*)([^\n]*)", re.M | re.I)
+_SQL_SHELL = {"mysql": re.compile(r"(?:^[ \t]*system[ \t]+|\\![ \t]*)([^\n]*)", re.M | re.I),
+              "psql": re.compile(r"\\![ \t]*([^\n]*)")}
 # The pipe after `\o`, `\g (options)`... is found in one pass over these tokens, so many on one line stay linear.
 _SQL_PIPE = re.compile(r"\\(?:o|out|w|write|gx?)(?![a-z])|[|\n]", re.I)
 # psql runs backquoted text in a meta-command's arguments (`\set x `cmd``, `\echo `cmd``)
@@ -1413,66 +1436,134 @@ def _copy(c: Classification) -> Classification:
 # $( ) or ` ` there (#179): program -> (options whose value is a name, options with another value, operands are names).
 _NAME_BUILTINS = {"printf": ("v", "", False), "read": ("a", "dinNptu", True), "declare": ("", "", True),
                   "typeset": ("", "", True), "local": ("", "", True), "unset": ("", "", True),
-                  "wait": ("p", "", False), "test": ("v", "", False), "[": ("v", "", False)}
+                  "wait": ("p", "", False), "test": ("v", "", False), "[": ("v", "", False),
+                  "readonly": ("", "", True), "export": ("", "", True)}
+# Those that also evaluate the value of a NAME=VALUE operand again (#188): a compound value `(..)` is parsed again
+# as words even when quoted, and for the first three a -i value is arithmetic, a -n value a name. readonly and
+# export never evaluate a name's subscript (`not a valid identifier`), have no -i, and their -n removes an attribute.
+_DECLARES = ("declare", "typeset", "local", "readonly", "export")
+_SCANS = {"$": _Lexer._dollar, "`": _Lexer._backtick}   # else <( ) or >( )
 
 
-def _subscript_parts(prog: str, args: list[str], cmd: str, depth: int, done: list[str]) -> list[Classification]:
+def _arith_scan(text: str, i: int, nested: bool = True, procsub: bool = False) -> tuple[int, list[str], bool]:
+    """Read text from i as bash reads an arithmetic subscript: to the ] that ends it (a quote or \\ hides a ]), or
+    to the end when not `nested`, outside any subscript. (end, the $( ) and ` ` bodies in it, and the <( ) ones
+    with `procsub`, any expansion or quoting there.)"""
+    lx, level, other, q, inner = _Lexer(text), 1 if nested else 0, False, "", 0
+    lx.i = i
+    while lx.i < len(text) and (level or not nested):
+        ch = text[lx.i]
+        if ch == "`" or text.startswith(("$(", "${") + (("<(", ">(") if procsub else ()), lx.i):   # in any quoting
+            _SCANS.get(ch, _Lexer._procsub)(lx, _Word())
+            other = True
+            continue
+        if ch == "\\" and q != "'":   # a top-level \$ or \` is literal; bash < 5.2 expands a nested [ ] again
+            lx.i += 1
+            if text[lx.i:lx.i + 1] in ("$", "`") and (level > 1 or inner > 0):
+                other = True
+                continue
+        elif ch in "'\"" and q in ("", ch):
+            q, inner = ("" if q else ch), 0
+        elif not q:
+            level += {"[": 1, "]": -1}.get(ch, 0)
+        elif q == '"':   # bash 3.2 reads a [ ] in double quotes as a nested subscript
+            inner += {"[": 1, "]": -1}.get(ch, 0)
+        other = other or ch in "\\'\"$"   # quoting or a variable: bash reads it, the gate does not
+        lx.i += 1
+    return lx.i, lx.subs, other
+
+
+def _compound_scan(value: str, arith: bool) -> tuple[list[str], bool]:
+    """A compound value `(..)` that declare parses again as words: the $( ), ` ` and <( ) bodies in it, read in
+    any quoting, and whether it holds what bash evaluates again: an expansion or quoting in a `[key]=` subscript,
+    or with -i (`arith`) an expansion in an element."""
+    lx, q, start, other = _Lexer(value), "", True, False
+    lx.i = 1
+    while lx.i < len(value):
+        ch = value[lx.i]
+        if start and ch == "[":
+            lx.i, subs, odd = _arith_scan(value, lx.i + 1, procsub=True)
+            lx.subs, other = lx.subs + subs, other or odd
+        elif ch == "`" or value.startswith(("$(", "<(", ">("), lx.i):
+            _SCANS.get(ch, _Lexer._procsub)(lx, _Word())
+            other = other or arith
+        else:
+            if ch == "\\" and q != "'" and value[lx.i + 1:lx.i + 2] not in ("$", "`"):
+                lx.i += 1
+            elif ch in "'\"" and q in ("", ch):
+                q = "" if q else ch
+            other = other or (arith and ch == "$")
+            lx.i += 1
+        start = not q and ch in " \t\n"
+    return lx.subs, other
+
+
+def _subscript_parts(prog: str, words: list[_Word], cmd: str, depth: int, done: list[str],
+                     late: list[Classification]) -> list[Classification]:
     """The commands inside the array subscripts of a name-taking builtin's name arguments, whatever their quoting
-    (`done`: bodies the line's own parse already classified). Any expansion there also asks: bash evaluates its
-    value (a variable's, or a $( )'s output) as arithmetic too, and a value such as `b[$(cmd)]` runs cmd."""
+    (`done`: bodies the line's own parse already classified), and in the values declare evaluates again (into
+    `late`, which the line adds after its own $( ) bodies, as it would for the same value unquoted). Any
+    expansion there also asks: bash evaluates its value (a variable's, or a $( )'s output) as arithmetic or code
+    too, and a value such as `b[$(cmd)]` runs cmd."""
     named, valued, operands = _NAME_BUILTINS[prog]
+    args = [w.text for w in words]
     names, i, opts = [], 0, True
+    attrs: set[str] = set()
     while i < len(args):
         a, i = args[i], i + 1
         if prog in ("test", "["):
             if a == "-v" and i < len(args):
-                names.append(args[i])
+                names.append((args[i], False))
             continue
         if opts and a == "--":
             opts = False
         elif opts and len(a) > 1 and a[0] in "-+":
+            if prog in _DECLARES[:3]:
+                attrs = attrs | set(a[1:]) if a[0] == "-" else attrs - set(a[1:])
             for n, letter in enumerate(a[1:], 2):
                 if letter in named + valued:
                     val = a[n:] or (args[i] if i < len(args) else "")
                     i += 0 if a[n:] else 1
-                    names += [val] if letter in named else []
+                    names += [(val, False)] if letter in named else []
                     break
         elif operands:
-            names.append(a)
+            names.append((a, words[i - 1].dynamic))
             opts = False
         else:
             break
     parts: list[Classification] = []
-    for name in names:
-        m = re.match(r"[^=\[]*\[", name)
-        if not m:
-            continue
-        lx, level, other, q, inner = _Lexer(name), 1, False, "", 0
-        lx.i = m.end()
-        while lx.i < len(name) and level:     # to the ] that ends it as bash finds it: a quote or \ hides a ]
-            ch = name[lx.i]
-            if ch == "`" or name.startswith(("$(", "${"), lx.i):   # read in any quoting, as bash does
-                (lx._dollar if ch == "$" else lx._backtick)(_Word())
-                other = True
-                continue
-            if ch == "\\" and q != "'":   # a top-level \$ or \` is literal; bash < 5.2 expands a nested [ ] again
-                lx.i += 1
-                if name[lx.i:lx.i + 1] in ("$", "`") and (level > 1 or inner > 0):
-                    other = True
-                    continue
-            elif ch in "'\"" and q in ("", ch):
-                q, inner = ("" if q else ch), 0
-            elif not q:
-                level += {"[": 1, "]": -1}.get(ch, 0)
-            elif q == '"':   # bash 3.2 reads a [ ] in double quotes as a nested subscript
-                inner += {"[": 1, "]": -1}.get(ch, 0)
-            other = other or ch in "\\'\"$"   # quoting or a variable: bash reads it, the gate does not
-            lx.i += 1
-        parts += [classify_shell(sub, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd)
-                  for sub in lx.subs if sub not in done]
-        if other:   # a signal, not an opaque part, so a deny on another part of the line still wins
-            why = f"{prog} evaluates an array subscript the gate cannot read ({name[:40]})"
-            parts.append(_make("read", summary=why[:120], command=cmd, signals=["indirection"]))
+    # a body the line ran loses its \newlines too in a value bash reads again, but one that holds a single quote or
+    # a here-document marker is compared as written (bash may keep its \newline), so a copy of it is read again
+    done_set = set(done)
+    bare = done_set | {re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", d) for d in done
+                       if "\\\n" in d and not re.search("'|<<", d)}
+    for name, dynamic in names:
+        m = re.match(r"[^=\[]*\[", name) if prog not in _DECLARES[3:] else None
+        end, subs, other = _arith_scan(name, m.end()) if m else (name.find("="), [], False)
+        value = re.match(r"\+?=(.*)", name[end:], re.S) if prog in _DECLARES and end >= 0 else None
+        raw = value.group(1) if value else ""
+        # a compound value is parsed again as words, and bash drops each \newline first (not an escaped
+        # `\\<newline>`); an -i or -n value keeps it
+        v, odd = re.sub(r"(?<!\\)((?:\\\\)*)\\\n", r"\1", raw) if raw.startswith("(") else raw, False
+        more: list[str] = []
+        if v.startswith("("):         # a compound value; one the line expanded is parsed again as code
+            more, odd = _compound_scan(v, "i" in attrs)
+            odd = odd or dynamic
+        elif value and attrs & {"i", "n"}:   # arithmetic, or a name whose subscript runs when the nameref is used
+            _, more, odd = _arith_scan(v, 0, nested=False)
+        seen = bare if v != raw else done_set
+        more = [sub for sub in more if sub not in seen]   # a command bash runs only as it reads the value again
+        parts += [classify_shell(sub, depth + 1) for sub in subs if depth < _DEPTH and sub not in done_set]
+        late += [classify_shell(sub, depth + 1) for sub in more if depth < _DEPTH]
+        fresh = bool(more or set(subs) - done_set)   # commands the line's own parse did not see
+        parts += [_opaque("nested too deep to read", cmd)] if fresh and depth >= _DEPTH else []
+        if other or odd or more:   # a signal, not an opaque part, so a deny on another part of the line still wins
+            what = ("evaluates an array subscript the gate cannot read" if other else
+                    "evaluates a value the gate cannot read" if odd else "runs a command in a value again")
+            why = f"{prog} {what} ({name[:40]})"
+            # `reread`: a command here may outrank a deny on the line, so naming opaque_exec does not lower this ask
+            parts.append(_make("read", summary=why[:120], command=cmd,
+                               signals=["indirection"] + (["reread"] if fresh else [])))
     return parts
 
 
@@ -1494,7 +1585,8 @@ def _classify_simple(k: _Cmd, cmd: str, depth: int, ctx: dict, piped: str | None
     elif words:
         parts += _classify_program(words, k, cmd, depth, ctx, piped)
         if words[0].text in _NAME_BUILTINS and not words[0].dynamic:
-            parts += _subscript_parts(words[0].text, [w.text for w in words[1:]], cmd, depth, ctx.get("subs", []))
+            parts += _subscript_parts(words[0].text, words[1:] + k.operands, cmd, depth, ctx.get("subs", []),
+                                      ctx.setdefault("late", []))
         parts += _exec_options(before, words, k, cmd, depth, ctx, piped)
     else:
         parts.append(_make("read", summary="shell assignment", command=cmd))
@@ -1805,15 +1897,16 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
 
 
 def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "", longs: tuple = (),
-                   operands: int | None = None, exact: bool = False, wild: frozenset = frozenset()) -> list[str]:
+                   operands: int | None = None, least: int = 3, wild: frozenset = frozenset()) -> list[str]:
     """The values given to the options `names` in argv[start:], read as getopt reads them (#154). In a short
     option cluster the first letter that takes a value (one of `names`, or a letter in `takes`) ends the word:
     its value is the rest of the word or the next word (`-xIzstd`, `-avze ssh`, `-oProxyCommand=cmd`). A long
-    option takes `=value`, or the next word when it is in `longs`, is one of `names` or abbreviates one
-    (`--to-com cmd`, unless `exact`). A name of more than one letter after one dash (`-TT`, `-cmd`) is a whole
-    word. Options end at `--`, and with `operands` at the operand after that many: ssh reads options before and
-    after its destination, and the remote command follows. An operand at an index in `wild` may expand to no
-    word or several (`$A`, `"$@"`, a glob), so the operands cannot be counted and every word is read."""
+    option takes `=value`, or the next word when it is in `longs`, is one of `names` or abbreviates one in
+    `least` characters or more (`--to-com cmd`). A name of more than one letter after one dash (`-TT`, `-cmd`)
+    is a whole word. Options end at `--`, and with `operands` at the operand after that many: ssh reads options
+    before and after its destination, and the remote command follows. An operand at an index in `wild` may
+    expand to no word or several (`$A`, `"$@"`, a glob), so the operands cannot be counted and every word is
+    read."""
     shorts = "".join(n[1] for n in names if len(n) == 2)
     whole = [n for n in names if len(n) > 2 and not n.startswith("--")]
     long_names = [n for n in names if n.startswith("--")]
@@ -1830,7 +1923,7 @@ def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "
                 out.append(val if eq else argv[i])
                 i += 0 if eq else 1
         elif a.startswith("--"):
-            hit = any(n == key or (not exact and len(key) >= 3 and n.startswith(key)) for n in long_names)
+            hit = any(n == key or (len(key) >= least and n.startswith(key)) for n in long_names)
             if eq and hit:
                 out.append(val)
             elif not eq and (hit or key in longs) and i < len(argv):
@@ -1895,7 +1988,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             c = _opaque("nested too deep to read", cmd)
         else:
             c = classify_shell(text, depth + 1)
-            c.summary = f"{what} runs {c.summary}"[:120]
+            c.summary = f"{what} {'' if c.summary.startswith('runs ') else 'runs '}{c.summary}"[:120]
         parts.append(c)
         return c
 
@@ -1916,9 +2009,9 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     wild = frozenset(i for i, w in enumerate(words) if w.dynamic or (not w.quoted and (
         w.glob or re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
 
-    def values(names: tuple, exact: bool = False, start: int = 1, sub_takes: str | None = None) -> list[str]:
+    def values(names: tuple, least: int = 3, start: int = 1, sub_takes: str | None = None) -> list[str]:
         return _option_values(argv, names, start, takes if sub_takes is None else sub_takes, longs,
-                              1 if prog == "ssh" else None, exact, wild)
+                              1 if prog == "ssh" else None, least, wild)
 
     # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env; a partly quoted one is
     # left in `words`) and export's arguments, never an argument that merely looks like one (`grep EDITOR=x`)
@@ -1940,7 +2033,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     for v in values(_EXEC_FILE_OPTS.get(prog, ())):
         parts.append(_opaque(f"{prog} runs the script {v}"[:120], cmd))
     if prog == "tar":
-        for v in values(("--checkpoint-action",), exact=True):
+        # any abbreviation longer than `--checkpoint`, which takes an optional value of its own
+        for v in values(("--checkpoint-action",), least=len("--checkpoint-")):
             if v.startswith("exec="):
                 nested(v[5:], "tar --checkpoint-action")
     if prog == "git":
@@ -1962,9 +2056,15 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
                     run = run[1:]                    # `foreach --recursive -q`
                 nested(" ".join(run), "git submodule foreach")
     if prog in ("ssh", "scp", "sftp"):
+        # `none` turns a command or library setting off (#232); a keyword the gate cannot read (`$OPT`, a glob, an
+        # unclosed quote that an expansion may close) asks
         for v in values(("-o",)):
             key, value = _ssh_setting(v)
-            if key in _SSH_EXEC_SETTINGS:
+            if value.strip(" \t\r\n").lower() == "none" and (key in _SSH_EXEC_SETTINGS or key in _SSH_LIB_SETTINGS):
+                continue
+            if v.strip() and not key.isalnum():
+                parts.append(_opaque(f"ssh -o {v} is a setting the gate cannot read"[:120], cmd))
+            elif key in _SSH_EXEC_SETTINGS:
                 c = nested(value, f"ssh {_SSH_EXEC_SETTINGS[key]}")
                 if c is not None and key == "remotecommand":
                     if EXPOSURE.index(c.exposure) < 1:
@@ -2016,7 +2116,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
                     elif arg and not pipe and any(n.startswith(name) for n in _DOT_FILE):
                         parts.append(_opaque(f"{prog} .{name} reads or writes a file the gate does not see", cmd))
             else:
-                for m in _SQL_SHELL.finditer(text):
+                for m in _SQL_SHELL[prog].finditer(text):
                     nested(m.group(1), f"{prog} shell command")
                 pending, skip = False, 0             # a `|` after an output command on its line, as in `\o '|cmd'`
                 for m in _SQL_PIPE.finditer(text):
@@ -2658,6 +2758,7 @@ def classify_shell(cmd: str, depth: int = 0) -> Classification:
         prev = k
     for sub in subs:
         parts.append(classify_shell(sub, depth + 1) if depth < _DEPTH else _opaque("nested too deep to read", cmd))
+    parts += ctx.get("late", [])
     if func:
         parts.append(_opaque("defines a shell function", cmd))
     c = _combine(parts, cmd)
@@ -2745,7 +2846,8 @@ TOOLS: dict[str, str] = {
         "read_file", "search_files", "web_search", "session_search", "skills_list", "skill_view",
         "vision_analyze", "video_analyze", "read_terminal", "read_window_below", "x_search", "clarify",
         "show_tip", "gui_tour", "focus_pane", "desktop_preview", "drive_preview", "feishu_doc_read",
-        "setup_choose", "browser_vault_list", "todo_list", "list_dir", "grep", "glob")},
+        "setup_choose", "browser_vault_list", "todo_list", "list_dir", "grep", "glob",
+        "skill", "memory_zoom", "exo_trace", "ui")},  # Exo's own read-only tools: load a skill, zoom, trace, a panel
     **{t: "local_write" for t in ("write_file", "patch", "apply_patch", "memory", "skill_manage", "apply_layout",
                                     "annotate_preview", "desktop_project", "edit_file")},
     **{t: "generate" for t in ("image_generate", "video_generate", "text_to_speech")},
@@ -3073,6 +3175,82 @@ def _sensitive_words(words: list[str]) -> bool:
     return False
 
 
+class StoreSkip:
+    """For a tool that walks a folder (grep, glob): which entries below ``root`` it leaves out as secret stores
+    (#241). An entry is left out when is_sensitive_path matches it as found or as resolved, so a plainly named
+    link into ~/.ssh is left out too. When the path the caller ``named`` is itself a store, as spelled, normalised
+    and resolved, the gate asked about it, so what sits below it is read, except a link out of it into another
+    store. The root is never left out.
+    In a repo's own `.claude` folder (its parent holds `.git`; not HOME's, not CLAUDE_CONFIG_DIR, and no Claude login,
+    transcripts or shell snapshots in it) the worktrees, commands, agents and skills subfolders are searched, so a
+    worktree checkout under `.claude/worktrees` is too; the rest of it (settings.local.json) stays out.
+    Call it on each folder and file as the walk finds it; ``skipped`` counts what it left out. Folders below the
+    root are not links (the walk does not follow them), so the file system cost is one lstat per entry, plus a few
+    cached existence checks per `.claude` folder."""
+
+    _ODD = re.compile(r"[{}$~\\]|\s$")   # spellings is_sensitive_path expands or trims: ask it directly
+    _NO_CLAUDE = re.compile(_SENSITIVE_PATH.pattern.replace(r"\.claude(/[^/]*)*|", ""))
+    _CLAUDE_OK = ("worktrees", "commands", "agents", "skills")   # what a repo's .claude holds besides settings
+    _CLAUDE_CONF = (".credentials.json", "projects", "shell-snapshots", "history.jsonl")   # a Claude config folder
+
+    def __init__(self, root: str, named: str = "") -> None:
+        self.root, self.abs, self.real = root, os.path.abspath(root), os.path.realpath(root)
+        # A named store counts only when the folder walked is one: `~/.ssh/..` or a link `x.key` to HOME is not.
+        self.whole = bool(named) and all(map(is_sensitive_path, (named, self.abs, self.real)))
+        self.roots = {r for x in _dynamic_secret_paths() for r in (os.path.abspath(x), os.path.realpath(x))}
+        self.below = tuple(r + os.sep for r in self.roots)
+        self.skipped = 0
+        self._repo = {os.path.abspath(_home()): False, os.path.realpath(_home()): False}   # folder -> holds .git
+
+    def _hit(self, path: str) -> bool:
+        p = path.replace("\\", "/")
+        m = _SENSITIVE_PATH.search(p)
+        if m and m.group(2).startswith(".claude") and self._project_claude(p):
+            m = self._NO_CLAUDE.search(p)
+        return not path.endswith(".pub") and (   # public keys are meant to be shared, as in is_sensitive_path
+            bool(m) or path in self.roots or path.startswith(self.below))
+
+    def _project_claude(self, p: str) -> bool:
+        """Every `.claude` in ``p`` is a repo's, and ``p`` is that folder or in one of its _CLAUDE_OK subfolders."""
+        parts = p.split("/")
+        for i in (i for i, x in enumerate(parts) if x == ".claude"):
+            top = "/".join(parts[:i]) or "/"
+            if top not in self._repo:   # another home that is a git checkout still holds a config folder: not a repo's
+                d = os.path.join(top, ".claude")
+                self._repo[top] = os.path.lexists(os.path.join(top, ".git")) and not any(
+                    os.path.lexists(os.path.join(d, x)) for x in self._CLAUDE_CONF)
+            if not self._repo[top] or (parts[i + 1] not in self._CLAUDE_OK if i + 1 < len(parts)
+                                       else not os.path.isdir(p)):   # a file called .claude stays out
+                return False
+        return True
+
+    def __call__(self, path: str) -> bool:
+        # rel never starts with a separator, so a root whose real path is `/` gives `/srv/x`, not `//srv/x`.
+        rel, link = path[len(self.root):].lstrip(os.sep), os.path.islink(path)
+        full, real = os.path.join(self.abs, rel), os.path.realpath(path) if link else os.path.join(self.real, rel)
+        if self.whole:
+            hit = link and not real.startswith(self.real.rstrip(os.sep) + os.sep) and self._hit(real)
+        else:
+            hit = (self._hit(full) or (real != full and self._hit(real))
+                   or bool(self._ODD.search(rel)) and is_sensitive_path(full))
+        self.skipped += hit
+        return hit
+
+    def note(self) -> str:
+        """The line a tool appends when it left anything out, so a search is never silently incomplete."""
+        return f"[skipped {self.skipped} secret-store paths; read one by name to be asked]" if self.skipped else ""
+
+
+def holds_secret_store(folder: str) -> bool:
+    """True when ``folder`` is a secret store or holds a known one (the home folder, EXO_HOME, ``~/.config``...).
+    For a tool that hands a whole folder to another program, which cannot leave stores out as StoreSkip does."""
+    home = _home()
+    stores = [os.path.join(home, s) for s in _SENSITIVE_SAMPLES] + [_exo_home(), *_dynamic_secret_paths()]
+    forms = _path_forms(os.path.abspath(folder))
+    return is_sensitive_path(folder) or any(s == f or s.startswith(f.rstrip("/") + "/")
+                                            for f in forms for x in stores for s in _path_forms(x))
+
+
 def _glob_hits_secret(tok: str) -> bool:
     """A shell glob that could expand to a secret store. Bare `*` or `*.json` do not count; the last
     component needs three literal characters, or the directory must itself be a secret store. Brace sets
@@ -3257,7 +3435,7 @@ def _env_dump(argv: list[str]) -> bool:
         return False
     prog, rest = argv[0].rsplit("/", 1)[-1], argv[1:]
     if prog == "env":
-        rest = [a for a in rest if not re.fullmatch(r"[A-Za-z_]\w*=.*", a)]
+        rest = [a for a in rest if not _ASSIGN.fullmatch(a)]
         return not [a for a in rest if not a.startswith("-")]
     if prog == "printenv":
         return not rest or any(re.search(r"KEY|TOKEN|SECRET|PASS", a, re.I) for a in rest)
@@ -3326,10 +3504,9 @@ def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
     """The simple command behind its assignments, prefixes (sudo, nice, timeout, env with a command...),
     `coproc`, compound openers (then, do...) and run wrappers (uv run, poetry run...), so the environment-dump
     check sees `uv run printenv X` as `printenv X` (#155). A bare `env` (or `env` with assignments only) is kept: it is the dump."""
-    assign = re.compile(r"[A-Za-z_]\w*=.*")
     while argv:
         base = argv[0].rsplit("/", 1)[-1]
-        if assign.fullmatch(argv[0]) or base in _OPENERS or base in ("coproc", "("):
+        if _ASSIGN.fullmatch(argv[0]) or base in _OPENERS or base in ("coproc", "("):
             argv = argv[1:]
         elif base in _PREFIXES and not (base == "command" and argv[1:2] and argv[1] in ("-v", "-V")):
             rest, takes = argv[1:], _PREFIXES[base]
@@ -3341,7 +3518,7 @@ def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
                     rest = rest[1:]
             if base == "timeout" and rest and re.fullmatch(r"[\d.]+[smhd]?", rest[0]):
                 rest = rest[1:]
-            if base == "env" and all(assign.fullmatch(a) for a in rest):
+            if base == "env" and all(_ASSIGN.fullmatch(a) for a in rest):
                 break
             argv = rest
         elif (base, argv[1] if len(argv) > 1 else "") in _RUN_WRAPPERS:
@@ -3816,7 +3993,10 @@ def decide(c: Classification, policies: Mapping | None = None, context: Mapping 
                 and not _rule_matches(r["match"], eff) and _rule_matches(r["match"], eff, veto=True):
             bump(r["decision"], r["reason"], "rule")
 
-    if (eff.category == "opaque_exec" or "indirection" in eff.signals) and not opaque_named:
+    # #188: a command bash runs only as it reads a value again may outrank a deny on the line; naming opaque_exec
+    # does not lower that ask.
+    reread = "reread" in eff.signals
+    if (eff.category == "opaque_exec" or "indirection" in eff.signals) and (reread or not opaque_named):
         bump("ask", "runs code the gate cannot fully see (" + (c.summary or "indirection") + ")", "opaque")
     reserved = _part_hits(gates.get("reserved") or [], eff)
     if reserved:

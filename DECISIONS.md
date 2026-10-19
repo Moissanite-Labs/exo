@@ -462,6 +462,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (77% against 79% with recall).
 - **Not done:** a live 20-turn cache measurement on the fixed code; importing exo-memory's old episodic log (it
   holds copies of the same sessions); summaries for imports are slow on glm-5.3-flash (about 75 s per leaf).
+  *Amendment 2026-10-18 (PR #213):* the system message now names the thread's working folder, after the memory
+  block and before the tree. The claude CLI runs in a private folder and names that folder in its own environment
+  note, so the agent said it worked there. The new line names the session's stored cwd and overrides any folder a
+  note names. Subagents get the same line in place of their own "Working directory" line. The line is fixed per
+  thread, so each thread's prefix still caches. The cost: the byte-stable prefix is now shared only by threads in
+  the same folder. Anthropic routes put one cache breakpoint at the end of the system message, so an agent with
+  threads in two folders caches its tree once per folder.
   *Amendment 2026-10-18 (PR #216):* a private thread wrote to the ledger and lost its own start. Now nothing in or
   under a private thread is remembered: `SessionStore.private` walks up the parents, the loop skips the memory
   writes, memory tools get `agent_context="private"`, and learning, findings, panel responses and the context
@@ -718,6 +725,23 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the user's shell); a top-level `--seat` or `--resume` on the main parser (clashes with subcommand flags).
 - **Not done:** Windows; a published package on PyPI (the git URL is the source until then); an
   `exo uninstall`.
+  *Amendment 2026-10-18 (PR #213):* the installer also installs the skill pack into `$EXO_HOME/skills`, where the
+  core's skill index and exo-orchestra read it. Each pack skill is its own folder with a `.exo-managed` marker, as
+  plugins are, and the marker names the folder. A re-run, and so `exo update`, replaces or removes a folder only
+  when its marker names it. `cp -r` copies the hidden marker, so a copy of a pack skill under a new name, or a
+  renamed one, carries a marker for another name. That folder is the user's and is kept with a warning. A folder
+  without a marker that differs from the pack's skill is left alone, and an exact copy is adopted. A link is never
+  adopted, replaced or removed. Rejected: one marked `$EXO_HOME/skills` folder, because a refresh would delete the
+  skills users add there. Rejected: removing every marked folder the pack lacks, because that deleted copies made to
+  change a skill. Rejected: shipping the pack as package data, because exo-orchestra and the documented search
+  order read `$EXO_HOME/skills`.
+  *Amendment 2026-10-19 (#268):* plugins follow the same rule. A `--plugins` list removes a marked plugin folder it
+  leaves out only when the marker names that folder, so a `cp -r` copy of a plugin is kept with a warning. A marker
+  with no name line comes from an install before markers named their folder. Exo cannot tell that folder from a
+  copy, so it is kept too, and a warning names it. A selected plugin with such a marker is refreshed and its marker
+  gains the name. Rejected: treating a marker with no name as Exo's, because that deletes copies made before this
+  change. Rejected: comparing the folder with the checkout's plugin, because an older install of a plugin that has
+  changed since differs from it as much as an edited copy does.
 
 ## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
 - **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
@@ -817,6 +841,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   written. A hit on any expanded word counts, and a word past the brace limits counts as the store. The store
   checks have their own 4,096-word budget per tool call. `echo x > ~/.exo/polic{i..i}es/default.yaml` was an
   allowed local write.
+  *Amendment 2026-10-18 (issue #241):* the store-read guarantee covers the search tools. The gate checks only the
+  `path` a `grep` or `glob` call names, and the tools walked everything below it, so `grep {pattern: "key", path:
+  HOME}` returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and the principal credential as an allowed read. The tools
+  now leave out every folder and file below the root that `is_sensitive_path` matches, as found and as resolved (a
+  link into `~/.ssh` by any name), do not enter a store folder, and end with `[skipped N secret-store paths; read one
+  by name to be asked]`. A store the call names is read after the gate asks; a link out of it into another store is
+  still left out. `~/.ssh/..` only looks like a store: it walks the home folder with the stores left out. A
+  store-named link to an ordinary folder (`x.key` to the home folder) returns nothing, since every path below it still
+  looks like a store (fail closed). A root whose real path is `/` is refused (the walk takes minutes). In a repo's own
+  `.claude` folder (beside a `.git`, not `~/.claude` or `CLAUDE_CONFIG_DIR`, holding no Claude login, transcripts or
+  shell snapshots) only `worktrees`, `commands`, `agents` and `skills` are searched, so a `.claude/worktrees` checkout
+  is searchable and another home's config folder is not. `code_find`, whose `jg` walks the folder itself, refuses a
+  folder that is or holds a known store. Chosen over a gate-side ask for every broad search because a search of a
+  project or the home folder stays an allowed read and only the stores drop out; the count keeps the result honest.
   *Amendment 2026-10-18 (issue #169):* the run folder is a secret store (D-039 limits, `docs/GATE.md` "Who
   answered"), and a secret wins over the store rule, as for `keys/`. So a write, delete, move or replacement that
   touches the folder itself or a credential file in it is `credentials`, not `store_write`: `rm -rf ~/.exo/run`,
@@ -932,6 +970,32 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   quotes hides the next character, so `a[\$(cmd)]` reads no command, as bash runs none. In a nested subscript
   bash before 5.2 runs a `\$( )` again, so the gate reads it there. Past the depth cap a command there is
   `opaque_exec`, as an unquoted `$( )` is.
+  *Amendment 2026-10-17 (issue #188):* `declare`, `typeset`, `local`, `readonly` and `export` evaluate the value of
+  a `NAME=VALUE` operand again: with `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted
+  (the gate reads it with or without them, which is only stricter), and for the first three a `-i` value is
+  arithmetic and a `-n` value is a name whose subscript bash evaluates when used. So `declare -a 'b=($(gh ...))'`,
+  `export -a 'b=(<(gh ...))'` and `declare -i x='a[$(gh ...)]'` were `read` (allow). Those values are now read with
+  the subscript scan: each `$( )`, backticks or `<( )` in them is classified like a `$( )` and added after the
+  line's own parts, as the line parse adds an unquoted one (so it does not take a tie from a redirection), a
+  `[key]=` is read as a subscript, and a quoted operand after one or more unquoted compound ones is read too. A
+  backslash-newline is dropped from a compound value before it is read, as bash drops it first (an `-i` or `-n`
+  value keeps it, as bash does), and a `$( )` the line's own parse read is not read again, also when it holds a
+  backslash-newline. A body that holds a single quote or a here-document marker (`<<`) anywhere is compared as
+  written: bash keeps a backslash-newline in single quotes or a quoted here-document but not in the value it reads
+  again, and the gate does not track where it is, so with a backslash-newline such a body is read again and asks
+  (`declare -a "b=($(ls 'x' \<newline> -l))"`, only stricter: bash runs the same command). A command the
+  line runs only because bash reads a value again also asks through `indirection`, as does an expansion in a `-i` or
+  `-n` value, in a `-i` element, or in a compound value the line itself expanded. So when such a command outranks
+  the line's own category, a deny on that category becomes ask, never allow or log
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`); D-075 (#126) keeps the deny
+  for the `deny:` list form (#191 tracks the `categories` form). That command also carries the `reread` signal,
+  and naming `opaque_exec` does not lower its ask, which stands in for the line's own deny:
+  `{local_write: deny, opaque_exec: allow}` asks too. Past the
+  depth limit such a command, or one in a subscript, is an `opaque_exec` part, as on the line itself, with `reread`.
+  A plain expansion in a compound element without `-i` (`'b=("$@")'`) is expanded once and asks nothing, and the
+  unquoted compound form keeps the line parse's reading. readonly and export never evaluate a name's subscript, so
+  their names are not read. A later plain assignment to a `-i` or `-n` variable and values that come whole from a
+  variable stay a known limit (GATE.md).
   *Amendment 2026-10-17 (issue #160):* wrappers that run a command were unknown or opaque programs, so the command
   was never classified and a deny on its category asked (`setsid git push origin main`, `flock /tmp/l git push`,
   `watch git push`, `script -qc '...'`, `tmux new-session -d '...'`, `screen -dm ...`, `parallel git push :::
@@ -983,6 +1047,17 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   of value-taking options lists only options known to take one. Rejected: scanning every word for option
   letters (the earlier form of this change), which lost `-oProxyCommand` to a later `o` and asked on `ssh host
   curl -I URL`. Environment dumps are credentials behind runners and prefixes too (`uv run printenv X`).
+  *Amendment 2026-10-18 (issues #230, #232):* follow-ups to the above. An ssh `-o` keyword the gate cannot read (`-o
+  "$OPT"`, a glob, an unclosed quote an expansion may close) asks as opaque_exec, like any other value in a variable.
+  `git ls-remote --exec`, a hidden synonym of `--upload-pack`, is followed (ls-remote rejects `-u`, which is still
+  read: reading more than git is fail closed). An assignment before a command is any form bash takes (`NAME+=value`,
+  `NAME[i]=value`), so a dump behind one is credentials. tar's `--checkpoint-action` is read in any abbreviation
+  longer than `--checkpoint` (an option of its own, whose optional value must not swallow the next word); `mosh
+  --ssh` in any case and after `+` is read by D-075's mosh reading (#126). Two asks the first change
+  added are dropped, and those lines classify exactly as before it: ssh's `none` value for a command or library
+  setting, which ssh_config documents as switching the setting off (CLEAR_ON_NONE, any case, the bare word only), and
+  a `psql` line starting with `system`, which is mysql's command and SQL in psql.
+  Rejected: keeping them as fail-safe asks, since they are ordinary spellings and the gate's docs never claimed them.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -1779,3 +1854,31 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** the budget test, `tests/docs`, `tests/test_privacy.py`, `tests/test_versioning.py`, `ruff check`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
+
+## D-081 (2026-10-17) The gate's decision call never uses the main model
+- **Status:** Accepted 2026-10-17 by the lead (reversible). It amends D-019 for the gate only. The gate's chain is
+  Jev, then local Laya, then `aux`. `exo decide` and the baseline export's judge keep the full chain, `main` last.
+- **Why:** a user-readiness audit of main 35b7de8 found that with only the claude CLI on PATH (the route Exo picks
+  for anyone with Claude Code and no key), every tool call the rules allowed started a hidden main-model call. Each
+  one added 2 to 10 s and was missing from `/trace` and cost. When one failed, the router cooled the one CLI login,
+  and the user's next turn failed with "all routes for 'main' failed or are cooling down" for about 60 s. D-015
+  already rejected "a frontier model for every small decision (cost, latency)". The fallback to `main` made it the
+  default on the CLI route.
+- **Decision:** `ask_choice_result(..., spare="main")` skips every route in the `main` chain, including one also
+  listed under `aux`. A failure on that call cools only the model that failed (`credential|model`), never the
+  credential. The gate passes it on every call. With no decision or aux route the gate keeps the rule outcome, as
+  it already did on a failure or a timeout. Exo's own read-only tools (`skill`, `memory_zoom`, `exo_trace`, `ui`)
+  are `read` in `gate.TOOLS`.
+- **Rejected:**
+  - Dropping `main` from `ROLE_FALLBACK["decision"]` for every caller. It changes `exo decide` and the baseline
+    judge, which run once per command, not once per tool call.
+  - Skipping the decision call for `read` tools only. Writes, shell and web calls would still wait on the main
+    model and could still cool its login.
+  - Keeping `main` and only cooling per model. Every tool call would still pay for a main-model call.
+  - No cooling at all on a side call. A failing aux model would be retried on every tool call.
+- **Revisit if:** a local decision model ships by default (exo-decide, or Laya from the installer), or a principal
+  wants the main model's second opinion on the gate. That would be an explicit setting, not the fallback.
+- **Validation:** `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/test_decision_spare.py`,
+  and a first launch from a clean home with the claude CLI: no approval card for the intro skill, no decision
+  call to the CLI, and read-only tool calls at 0.0 s.
+- **Docs:** `docs/GATE.md` "The decision model's second opinion", `docs/PROVIDERS.md` "Roles", `CHANGELOG.md`.
