@@ -261,10 +261,9 @@ in code is read as a shell command, so compact JSON with 11 or more objects in o
 (`'[{"a":1,"b":2},...]'`) goes past the cap the same way.
 A relative name read in a store folder a `cd` entered counts too, since #192 also for stores matched only by
 sample paths (`cd ~/.config/gh && cat hosts.yml` asks; see "The working folder" below).
-Known limit: a file tool's path is checked, not what the tool reaches below it. The built-in `grep` and `glob`
-tools walk every file under their path (the working folder when none is given), so a search rooted above a
-store, such as the home folder or `$EXO_HOME`, is `read` and allowed: `grep` returns matching lines from the
-store's files and `glob` lists them (#241).
+A file tool's path is checked, not each file the tool reaches below it: the built-in `grep` and `glob` tools
+walk every file under their path, and since #241 they leave the stores below it out themselves (see "What the
+search tools read" below).
 Tests: `tests/security/test_gate_brace_sets.py`.
 
 ### What the search tools read (#241)
@@ -279,7 +278,10 @@ paths; read one by name to be asked]` whenever anything was left out, so a searc
 root itself is never left out. When the path the call names is a store (`path: "~/.aws"`), the call is `credentials`
 and asks, and once approved the tool reads that store; a link out of it into another store is still left out. That
 holds only when the folder walked is the store, as normalised and as resolved: `path: "~/.ssh/.."` also asks, but
-walks the home folder, so its stores are left out as in any other search. A store-named link to an ordinary folder
+walks the home folder, so its stores are left out as in any other search. A folder that is not a store but holds
+files a store's sample paths name is searched like any other: `path: "~/.config/gh"` is `read` and allowed, and the
+walk leaves out `hosts.yml` and searches the rest of the folder (`config.yml`), while `path: "~/.aws"` or
+`$EXO_HOME/keys` is `credentials` and asks. A store-named link to an ordinary folder
 (`backup.key` pointing at the home folder or a project) also asks, then returns nothing at all, since every path
 below it still looks like a store (fail closed). A cwd inside a store with no path reads nothing, since the gate saw
 no store. A root whose real path is `/` (`/`, `/proc/self/root`, a link to `/`) is refused with "is the whole file
@@ -619,56 +621,52 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   first host as its target, so a `target:` deny on that host still denies it (#153, fixed by
   #164). Past the cap the line asks unless the principal has set a policy for `opaque_exec` (a
   `command:` deny entry or a deny rule that matches the text still denies it).
-- **A category deny fires on the category the line ends up with.** `classify_shell` keeps the
-  most severe part of a compound line, and `categories:` applies to that category only. With
-  `github_post: deny`, the four-wrapper example is denied and the five-wrapper example asks as
-  `opaque_exec`. On a compound line a more severe part can take over and the line asks:
-  `gh pr comment 3 --body hi && rm -rf build` is fully inspected, but it is `delete`, the card
-  reads `rm build`, and approving it sends the denied post. A category name in the `deny:` list
-  behaves the same today (a `command:` regex entry is matched against the whole line). D-075
-  (#126, in review) makes a `deny:` or `reserved:` entry match every part of the line within the
-  inspection depth; `categories:` keeps matching the dominant part (#191). So approving an opaque
-  card or a compound line can run an action that would be denied on its own. Read the whole
-  command before approving it: an approval does not vouch for what the gate did not classify.
-- **Hidden text that is allowed outright.** Some unread execution does not even ask today. An
-  entry for the hidden action's category (`github_post`, `delete`...) does not reach it, in
-  `categories:`, `deny:` or `reserved:`. An entry that matches the command text does (a
-  `command:` regex, or a rule with a `command` match). Since #136 that regex also sees the
-  literal-word view of the text the gate reads, so quoting no longer evades it there. Inside a
-  `${...}` body, a quoted subscript or value, stdin sent to `ssh`, or a command-valued option the
-  gate does not read (the forms below), the regex sees only the raw text, so quoting still evades
-  it there until each form's fix lands:
-  `echo ${X:-$(g'h' pr comment 3 --body hi)}` is allowed under `command:gh pr comment`. The
-  command-valued options listed above have been read since #164, so their values are in the view
-  (`tar --to-command='g"h" pr comment 3 --body hi'` is denied); the ones #164 left unread are in
-  #230 and #232. The known forms:
+- **`categories:` sees the part the line ends up with (#191).** `classify_shell` keeps the most
+  severe part of a compound line, and a `categories:` line or a rule applies to that category
+  only. With `categories: {github_post: deny}`, `gh pr comment 3 --body hi && rm -rf build` is
+  fully inspected, but it is `delete`, the card reads `rm build`, the line asks, and approving
+  it sends the denied post. The `deny:` and `reserved:` lists do not have this gap: since D-075
+  an entry there matches every part the gate reads, nested ones included, so the same line is
+  denied under `deny: [github_post]` (see above). A `coproc` or `function NAME {` block splits
+  the same way: its inner command is a part, but the block is `opaque_exec`, so
+  `coproc w { curl https://example.com; }` (and `function f { curl https://example.com; }`) is
+  denied under `deny: [web_read]` and asks under `categories: {web_read: deny}`, since
+  `web_read` ranks below `opaque_exec`. Under either form the four-wrapper example above is
+  denied and the five-wrapper example asks as `opaque_exec`. So approving an opaque card or a
+  compound line can run an action that would be denied on its own. Read the whole command
+  before approving it: an approval does not vouch for what the gate did not classify.
+- **Deny becomes ask.** Where the gate cannot read the command it files the line as
+  `opaque_exec`, which asks, so a `deny:` or `categories:` entry for the hidden action becomes
+  an ask, and the card names the wrapper rather than the action. For example: nesting past the
+  inspection depth (above); `eval $(...)` and `eval "$(...)"`; a command arriving on stdin,
+  `echo '...' | xargs -I{} sh -c '{}'` (while
+  `echo 3 | xargs -I{} sh -c 'gh pr comment {} --body hi'` is read and denied); the body of
+  `time { ...; }`; and the wrapper forms #160 left unread, such as `su -c`, `runuser`, `bwrap`,
+  tmux's `if-shell` and `send-keys`, and `parallel` with no template ("Known limit (#160)" below
+  lists more of them). These are examples, not a complete list.
+- **Deny becomes allow.** Some unread execution does not even ask. An entry for the hidden
+  action's category (`github_post`, `delete`...) does not reach it, in `categories:`, `deny:`
+  or `reserved:`. An entry that matches the command text does (a `command:` regex, or a rule
+  with a `command` match). Since #136 that regex also sees the literal-word view of the text
+  the gate reads, so quoting does not evade it there: the command-valued options read since
+  #164 and #288 and the array subscripts read since #189 are denied under
+  `command:gh pr comment` (`tar --to-command='g"h" pr comment 3 --body hi'`,
+  `git ls-remote --exec='g"h" pr comment 3 --body hi' origin`,
+  `printf -v 'a[$(g"h" pr comment 3 --body hi)]' %s x`). In the forms below the regex sees only
+  the raw text, so quoting still evades it: `echo ${X:-$(g'h' pr comment 3 --body hi)}` is
+  allowed under `command:gh pr comment`. The known forms:
   - `${...}` bodies are skipped by the lexer, so `echo ${X:-$(gh pr comment 3 --body hi)}` is
-    `read` and allowed (#143; fix in review in #158).
-  - A `$( )` inside a quoted array subscript given to a builtin that takes a variable name
-    (`printf -v`, `read`, `declare`/`typeset`, `unset`, `test -v` and `[ -v`, `wait -p`) is run
-    by bash, but the gate reads the quoted word as plain text, so
-    `printf -v 'a[$(gh pr comment 3 --body hi)]' %s x` is `read` and allowed (#179; fix in review
-    in #189).
+    `read` and allowed (#143; open PR #158).
   - A quoted array, `-i` or `-n` value given to `declare` or `typeset` is expanded again by bash,
     so its `$( )` runs: `declare -a 'b=($(gh pr comment 3 --body hi))'` is `read` and allowed
-    (#188; fix in review in #194, stacked on #189).
+    (#188; open PR #194).
   - Text piped or fed by heredoc to `ssh` with no remote command runs in the remote login shell,
     but the line reads as a plain `ssh`: `echo 'gh pr comment 3 --body hi' | ssh host` and
     `ssh host <<EOF` are `shell` and allowed under every category deny; a `target:` entry for the
     host still denies them (#240).
-  - Forms next to #164's coverage: a dynamic `ssh -o "$OPT"`, `git ls-remote --exec=...`, and an
-    environment dump behind a `NAME+=value` prefix (#230); the rest are listed in #232 (part of
-    which, `git clone -c`, is in review in #231).
-- **Other deny-to-ask paths.** Where the gate cannot read the command it files the line as
-  `opaque_exec`, which asks, and the card names the wrapper rather than the action: `eval $(...)`
-  and `eval "$(...)"`; a command arriving on stdin, `echo '...' | xargs -I{} sh -c '{}'` (while
-  `echo 3 | xargs -I{} sh -c 'gh pr comment {} --body hi'` is read and denied); the wrappers
-  `watch`, `parallel`, `tmux`, `screen` and `setsid` (#160; fix in review in #196); a `coproc` or
-  `function NAME {` whose inner command ties with `opaque_exec` or ranks below it, such as
-  `coproc w { curl https://example.com; }` under a `web_read` deny (the inner command is read, see
-  above, and its category deny applies when it outranks `opaque_exec`, as `github_post` does;
-  the rest is tracked in #126 for the `deny:` list and #191 for `categories:`); a heredoc after a
-  compound command's closing token, `{ bash; } <<EOF` (#161; fix in review in #198).
+  - `git clone -c` (or `--config`) with a command-running key is not checked as `git -c` is:
+    `git clone -c core.sshCommand='gh pr comment 3 --body hi' git@host:x/y` is `local_write` and
+    allowed (open PR #231 reads it).
 - **Project code.** A trusted program that runs project code (pytest runs conftest.py, git runs
   hooks, `npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
   `~/.ssh/config` with a `ProxyCommand`) can run code the agent wrote earlier with a local write.
@@ -799,16 +797,8 @@ it asks as `opaque_exec`. As on main, text piped into a command is read even whe
 `<` wins (`echo ... | bash < f`), and so is the pipe into the first command of `echo ... | { bash; }
 < f`.
 
-Known limit: `deny` → `ask` (D-075). Where the gate cannot read a command it files the line as
-`opaque_exec`, which asks, so a `deny` entry on the hidden action becomes an `ask`. For example:
-nesting past the depth cap (#137, #141); `eval $(...)`; a command arriving on stdin (`echo ... |
-xargs -I{} sh -c '{}'`); the wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`. These
-are examples, not a complete list.
-
-Known limit: `deny` → `allow`. The fallback has gaps. On these paths the line is `allow` outright,
-even with the hidden action in `deny`:
-
-- `${...}` bodies, which the lexer does not read (#143; open PR #158).
+Known limits: the paths where a `deny` entry still becomes an `ask`, or where the line is
+`allow` outright, are listed once, under "Known limits" above.
 
 Since #164, an `ssh` or `mosh` chain with more hops than the gate reads asks (#153), and the
 command-valued options of allowlisted programs (`tar --to-command`, `split --filter`, `rsync -e`,
