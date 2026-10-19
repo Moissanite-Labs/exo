@@ -280,8 +280,7 @@ from where something came from, never from what it says about itself.
   or `pytest`, and none is hidden. What it marks as unreadable asks, once, for that exact command. This is an
   *allowlist*: a list of what is allowed, where everything else is not, the safer of the two ways to write such
   a list. The parser does not read every shell form yet: a command inside a parameter expansion such as
-  `${x:-$(...)}`, or inside a quoted compound, `-i` or `-n` value given to `declare`, is never found, so it runs
-  without asking (#143, #188). A command in a single-quoted array subscript such as `printf -v 'a[$(...)]'` is
+  `${x:-$(...)}`, is never found, so it runs without asking (#143). A command in a single-quoted array subscript such as `printf -v 'a[$(...)]'` is
   read since #189 (for #179), and so is the command behind a wrapper such as `setsid` or `flock` since #196 (for
   #160), so a deny on either holds. Past four levels of nesting, such as `bash -c` inside `bash -c` or an `ssh`
   chain, the line asks, but a denied act only asks too (#137, #153). A deny entry is checked against every
@@ -1008,7 +1007,8 @@ inside a single-quoted array subscript given to a builtin that takes a variable 
 runs it (#179). Since #189 the gate reads those subscripts and classifies each command in them, so
 `printf -v 'a[$(git push origin main)]' x` is a push and a deny on pushes holds. A `$( )` in a quoted
 compound, `-i` or `-n` value given to `declare`, `typeset` or `local` (`declare -a 'b=($(...))'`), which
-bash expands again, is still read as plain text and allowed (#188, fix in review in #194).
+bash expands again, was read as plain text and allowed too (#188). Since #194 the gate reads those values and
+classifies each command in them, so `declare -a 'b=($(rm -rf foo))'` is a delete.
 
 Nesting has a depth cap. A `bash -c` inside `bash -c`, and so on, is read four levels deep. Past that the
 rest is opaque, so it asks, but a deny written for the deeper command only asks too (#137). An `ssh` or
@@ -2307,7 +2307,8 @@ an `ssh` chain past the hop cap asking and an environment dump behind a runner r
 authentication, in which both ends of a principal connection ask the kernel who is on the other end before the
 credential moves (D-060, #175, which replaces #109); the browser opened on a one-time launch code rather than the
 page token (#177, for #166); Exo's run folder, which holds the principal credential, read as a secret store (#185,
-for #169); commands in array subscripts of variable names read (#189, for #179); commands behind wrappers such as
+for #169); commands in array subscripts of variable names read (#189, for #179); a `$( )` in a quoted compound,
+`-i` or `-n` value given to `declare`, `typeset` or `local` read (#194, for #188); commands behind wrappers such as
 `setsid`, `flock` and `watch` read (#196, for #160); a deny or reserved entry checked against every part of a
 line, while a category setting or a rule still sees only the most severe part (D-075, #126; #191 is open); a
 compound's heredoc, here-string or pipe fed to the commands inside it (#198, for #161); shell startup hooks
@@ -2329,8 +2330,6 @@ and they may change before they land.
   protected list, so a write asks the principal every time, as section 15.4 describes for the store.
 - **Reading parameter expansions** (#158, for #143). The lexer reads a `${...}` word as bash does and
   classifies every command inside it, which closes the `${...}` gap of section 15.4.
-- **Reading values given to `declare`** (#194, for #188). The gate reads a `$( )` in a quoted compound, `-i`
-  or `-n` value given to `declare`, `typeset` or `local`, which closes that gap of section 15.4.
 - **A permissionless mode.** A mode, switched on only by the principal, in which the gate allows what it
   would have asked about, so a long task does not stop at every unknown program. Writes to Exo's own records,
   anything touching credentials, and the operator floor (an irreversible public act that touches a third
