@@ -85,8 +85,13 @@ The core never takes the answerer from the `approval.respond` body. The transpor
   when it stops. A credential sent from a process that is a child, grandchild and so on of the
   core (a bash tool call or a background job) does not count, and neither does one from another
   user or from a process the kernel cannot name (see "Unix peer authentication" below).
-- **local**: everything else on the socket (a tool subprocess, a channel, another daemon), and
-  every stdio or TCP connection.
+- **local**: everything else on the socket (a tool subprocess, another daemon), and every stdio or
+  TCP connection.
+- **channel**: a channel exod runs in its own process (the exo-bus channel), through
+  `ChannelLink` in `src/exo/server/app.py`. It has the standing of a local caller, and only it may
+  hand the core a bus message (`docs/PEERS.md` "Bus seats"). No transport stamps it: a socket
+  client that names itself `channel` with the credential is `principal:channel`, and without it is
+  local.
 
 A principal connection answers as the principal; `client` is only a label (`principal:tui`,
 `principal:web`). A local connection can answer only as a seat, with the signature above. An
