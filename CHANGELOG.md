@@ -111,6 +111,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- `exo update` names up to five of the files that block it when the checkout has local changes or untracked
+  files, instead of only saying that some exist.
 - `edit_file` after whitespace drift: when only the whitespace-normalized strategy matched (one stray double
   space in the file), the span could start inside the indentation before the match and the reindented replacement
   shifted every following line by one column, leaving code that no longer parsed. The span now starts at the
