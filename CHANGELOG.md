@@ -526,9 +526,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output for
   any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or `]`. A
   key value learned while the command runs is cut out only inside one piece. The stream and the result also decode a
-  character split between reads (non-ASCII output got U+FFFD there). The result is still redacted after a tool cuts
-  its output, so a key split by that cut (`bash` keeps 15,000 characters at each end) leaves a part in the result,
-  as before. See docs/TOOLS.md "Streamed output".
+  character split between reads (non-ASCII output got U+FFFD there). The result is still redacted after a tool cuts its
+  output, so a key split by that cut (for example, `bash` keeps 15,000 characters at each end) leaves a part in the
+  result, as before. See docs/TOOLS.md "Streamed output". A background job's completion notice had no key redaction. It
+  now cuts known key values out of its command and output before it cuts them (docs/JOBS.md).
 - Gate: a heredoc or here-string after a compound command's closing `}`, `)`, `done`, `fi` or `esac`, and text piped
   into a compound, now reach the commands inside it (#161). `{ bash; } <<'EOF'` with `git push origin main` in the
   body was `opaque_exec` (ask) and slipped past `deny: [vcs_push]`; it is now `vcs_push`, as `bash <<'EOF'` is.

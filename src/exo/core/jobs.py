@@ -21,7 +21,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from exo.core.ingress import Ingress, IngressPath, Receipt
 from exo.core.peer_target import EngineTarget
@@ -86,10 +86,12 @@ def fmt_elapsed(sec: float) -> str:
     return f"{sec // 3600}h{sec % 3600 // 60:02d}m"
 
 
-def tail_text(path: Path, lines: int, chars: int) -> str:
-    """The last ``lines`` lines of a log, at most ``chars`` characters (the end is kept)."""
+def tail_text(path: Path, lines: int, chars: int, values: Sequence[str] = ()) -> str:
+    """The last ``lines`` lines of a log, at most ``chars`` characters (the end is kept). The key ``values`` are
+    cut out as ``[redacted]`` before the lines and characters are cut, so those cuts split no key."""
+    from exo.core.models.keys import redact_secrets
     try:
-        data = path.read_bytes()[-chars * 4:].decode("utf-8", errors="replace")
+        data = redact_secrets(path.read_bytes()[-chars * 4:].decode("utf-8", errors="replace"), values)
     except OSError:
         return ""
     out = "\n".join(data.rstrip("\n").splitlines()[-lines:])
@@ -299,8 +301,12 @@ class JobManager:
         head = {"done": "finished, exit 0", "failed": f"failed, exit {code}", "timeout": "timed out and was killed",
                 "killed": "was killed", "lost": "lost"}.get(state, state)
         head += f", {fmt_elapsed(_elapsed(started, ended))}"
-        out = tail_text(self.log_path(job_id), self.cfg.notice_lines, self.cfg.notice_chars)
-        body = (f"command: {command[:300]}\n" + (f"{detail}\n" if detail else "")
+        from exo.core.models.keys import known_secret_values, redact_secrets
+        vals: list[str] = []
+        with contextlib.suppress(Exception):  # redaction never loses a notice
+            vals = known_secret_values()  # cut out before each cut below (D-039)
+        out = tail_text(self.log_path(job_id), self.cfg.notice_lines, self.cfg.notice_chars, vals)
+        body = (f"command: {redact_secrets(command, vals)[:300]}\n" + (f"{detail}\n" if detail else "")
                 + (f"last output:\n{out}\n" if out else "no output\n") + f"full log: {self.log_path(job_id)} "
                 f"(job_output {job_id})")
         return Ingress("job", "harness", "local", body, session=session, id=new_id("jn"),

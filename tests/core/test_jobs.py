@@ -166,6 +166,21 @@ async def test_completion_notice_is_queued_for_an_idle_thread(tmp_path):
 
 
 @aio
+async def test_the_notice_cuts_known_key_values_out_before_it_cuts_the_output(tmp_path, monkeypatch):
+    key = "sk-fake-QWERTYUIOPASDFGHJKLZX"
+    monkeypatch.setenv("EXO_NOTICE_TEST_API_KEY", key)
+    eng = engine(tmp_path, jobs={"notice_chars": 20})  # a cut before redaction would keep the key's last 16
+    sid = (await eng.loop.create_session(agent="tester")).id
+    job = eng.jobs.start(f"printf 'Authorization: Bearer %s\\nend\\n' {key}", str(tmp_path), sid)
+    await until(lambda: any(e.state == "done" and "queued" in e.detail for e in events(eng)))
+    text = next(m for m in eng.store.messages(sid) if m.meta.get("job")).text()
+    assert f"id {job['id']}" in text and "last output:\n...earer [redacted]\nend" in text
+    assert "command: printf 'Authorization: Bearer %s\\nend\\n' [redacted]" in text
+    assert not any(key[i:i + 6] in text for i in range(len(key) - 5))
+    await eng.close()
+
+
+@aio
 async def test_completion_notice_is_steered_into_a_running_turn(tmp_path):
     eng = engine(tmp_path, first=tool_turn("wait"))
     sid = (await eng.loop.create_session(agent="tester")).id
