@@ -262,6 +262,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
+- Gate docs (#137, #141, D-038 amendment): `docs/GATE.md` "Known limits" records the four-level shell inspection
+  depth and what the card says at the cap; that a deny under `categories:` fires only on the category a compound
+  line ends up with, so approving the card can run the denied part (#191), while a `deny:` entry matches every part
+  (D-075); and, in one list each, the paths where a deny becomes an ask and the forms still allowed outright on
+  main (`${...}` bodies, text fed to `ssh` on stdin, `git clone -c`; each with its issue
+  and any open PR), with where a `command:` regex still sees only raw text. The two lists D-075 added are folded into
+  these. "What the search tools read" adds that a search rooted at `~/.config/gh` is allowed and leaves out its
+  `hosts.yml` (#241). The template's `deny:` comment says a deny entry is checked against every command on the line
+  and a `categories:` line only against the most severe part, and the user guide says that a few forms run without
+  asking and to read the whole command before allowing it. No behaviour change; the test pins the boundary and the
+  compound-line case under both policy forms.
 - A core that `exo web` (or any client) starts is no longer that client's child (refs #145, D-036): a short helper
   starts a new session, forks the core and exits, so init (or the nearest subreaper) adopts the core. Process
   ancestry changed; the principal and tool checks did not. `exo stop` from another terminal now stops a core whose

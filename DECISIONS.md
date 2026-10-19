@@ -876,9 +876,38 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (`pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test`...). New asks a user will see:
   `make`, `npm run`/`npm test`, scripts, `python -c`, unknown programs such as `kill` or `open`, and any write to the
   store. Each opaque ask is bound to the exact command.
-- **Not done:** the known limit stays. A trusted program that runs project code (pytest and conftest.py, git hooks,
-  package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes through
-  `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
+- *Amendment 2026-10-18 (issue #137):* `_DEPTH = 4` bounds recursive shell inspection, for a `bash -c`, `sh -c` or
+  `eval` chain called from the bash tool. A GitHub comment inside four nested wrappers remains `github_post`; at five
+  it becomes `opaque_exec` and asks by default. A command inside a code string (`python -c`, `execute_code`) gets one
+  more level wherever the code sits (`classify_code` starts again at `_DEPTH - 1`), so a chain that mixes wrappers and
+  code strings can be read deeper than four; nested `$( )` is flattened and not capped, while nested backticks are
+  (five levels are `opaque_exec`, "nested too deep to read"). Past the cap the line asks; an ssh/mosh chain past it
+  asks too, with the first host as target (#153, fixed by #164). The card at the cap names the outermost
+  wrapper (`bash runs shell commands`), the same card as `bash -c 'foo'`. Why not name the cap (#137's second remedy):
+  `_combine` keeps the first of equally severe parts, so the `nested too deep to read` part that `xargs`,
+  `find -exec`, `uv run` and `$( )` add at the cap reaches the card only when the outer part is benign; adding the
+  same part at the `bash -c` cap would change nothing the principal sees. Showing the cap means letting an inner
+  summary win ties in `_combine`, a classifier change for its own PR, so that remedy stays open. A category deny under
+  `categories:` fires only when the denied category is the line's most severe part: on a compound line a more severe
+  part takes over and the line asks, and approving it runs the denied action
+  (`gh pr comment 3 --body hi && rm -rf build` is `delete`; #191). An entry in the `deny:` list has matched every part
+  the gate reads since D-075, so it denies that line; a `coproc` or `function NAME {` block whose inner command ranks
+  at or below `opaque_exec` splits the same way (denied under `deny: [web_read]`, asked under
+  `categories: {web_read: deny}`). The known unread forms below are allowed outright on main, not asked, and no entry
+  for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158), text piped or fed by heredoc
+  to `ssh` with no remote command (#240), and `git clone -c` with a command-running key (open PR #231). A `command:`
+  regex reaches them on the raw text only: the literal-word view (#136) is built from text the gate reads, so quoting
+  still evades the regex inside these forms, while it no longer does inside an array subscript (read since #189), a
+  value given to `declare` (read since #194, for #188) or a command-valued option (read since #164 and #288). The
+  other deny-to-ask paths (`eval $(...)`, stdin-fed `xargs -I{} sh -c '{}'`, the body of `time { ...; }`, and the
+  wrapper forms #160 left unread, such as `su -c`, `bwrap` and tmux `if-shell`) are listed in `docs/GATE.md` "Known
+  limits".
+  Rejected: raising `_DEPTH` (each level re-lexes the inner text, and five hand-nested wrappers are not a workflow,
+  only a probe); naming the hidden command on the card (the gate did not read it). This records the limit of the
+  existing decision; the pinning test is `test_shell_inspection_depth_limit`.
+- **Not done:** the project-code limit stays. A trusted program that runs project code (pytest and conftest.py, git
+  hooks, package install scripts) can run code the agent wrote earlier. A sandbox is the fix. `/gate accept` goes
+  through `command.run`; binding who may call it to the connection is the server identity work (audit priority 3).
   *Amendment 2026-10-17 (issue #161):* the lexer attached a heredoc to the command whose line held the `<<`, which
   for `{ bash; } <<EOF`, `( bash ) <<EOF` and `while ...; do bash; done <<EOF` is the closing token, so the shell
   inside ran a body the gate never read (ask, where `bash <<EOF` with the same body is denied by a category deny).
