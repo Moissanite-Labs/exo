@@ -37,7 +37,6 @@ class LocalClient:
 
         self._server = HttpServer(self.dispatcher, principal=True)  # joining windows prove themselves (D-039)
         self.serve_path.parent.mkdir(parents=True, exist_ok=True)
-        self.serve_path.unlink(missing_ok=True)  # this process holds the writer lock, so any old socket is stale
         try:
             await self._server.start_unix(self.serve_path)
         except Exception:  # joining is a convenience; this window works without it

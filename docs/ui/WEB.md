@@ -11,7 +11,7 @@ or file from outside.
 `exo web` needs one core for the agent. It looks for `$EXO_HOME/run/exod.sock` (`exo serve`), then
 `run/agent-<seat>.sock` (a terminal window running the core in process, D-028), and joins whichever answers. If
 neither does it starts `exo serve` detached (log `$EXO_HOME/logs/exod.log`, pid `run/exod.pid`), under a start lock so
-two clients never start two. A short helper (`python -P`, so the current folder is not on the import path) starts a
+two clients never start two (and a core that starts anyway, from a terminal, loses to the one holding the socket's lock `run/exod.sock.lock`). A short helper (`python -P`, so the current folder is not on the import path) starts a
 new session, forks the core and exits, so the core is a child of init (or the nearest subreaper), not of `exo web`
 (unless `exo web` is PID 1 or a subreaper; it then reaps a core that exits at its next start); it passes the core's pid
 back on the last line of its output. If the core exits while starting, the page says so at once, with its exit code

@@ -69,14 +69,12 @@ def test_serve_pid_is_private_before_server_runs(tmp_path, monkeypatch):
     private_dir(home / "run")
     pid = ensure_core.pid_path(home)
 
-    def run(main):
-        try:
-            assert pid.read_text() == f"{os.getpid()}\n"
-            assert mode(pid) == 0o600
-        finally:
-            main.close()
+    async def serve(engine, claimed=None, **kw):  # the pid is written once the socket's start lock is held
+        claimed()
+        assert pid.read_text() == f"{os.getpid()}\n"
+        assert mode(pid) == 0o600
 
-    monkeypatch.setattr(cli_chat.asyncio, "run", run)
+    monkeypatch.setattr("exo.server.app.serve", serve)
     args = SimpleNamespace(seat=None, engine="echo", stdio=False, tcp=None, socket=None)
     assert cli_chat.cmd_serve(args) == 0
     assert not pid.exists()
