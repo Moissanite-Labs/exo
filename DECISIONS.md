@@ -914,6 +914,19 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `\U` value that is no character is written as bash's u32toutf8 writes it (up to six bytes that are not ASCII,
   nothing from 0x80000000 on), so every `$'..'` word is read. Category and target vetoes see the decoded word; a
   `command:` regex still sees the raw line until the literal-word view (#187) uses the same decoder.
+  *Amendment 2026-10-18 (issue #130):* the store floor resolved the store roots but matched only the lexical
+  normpath of the path written, so a symlink alias into the store (`ln -s ~/.exo/state /tmp/s`, then a write to
+  `/tmp/s/approval-grants.json`) was a local write. `is_store_path` and the `cd` check now compare the union of two
+  spellings, the lexical normpath and the realpath, of both the candidate and each store root. Resolving the
+  original spelling keeps `symlink/..` in filesystem order, and the lexical form keeps a protected entry that links
+  out of the store protected. A path that cannot be resolved (a NUL byte, an unencodable character, a loop) keeps
+  its lexical form, so a resolution failure never weakens a check. `cd`, `pushd` and `git -C` into an alias of the
+  store count as being in the store. Links planted in the same command count as writes to what they alias: `cp -s`
+  and `cp -l` (and their long-option prefixes), and a relative `ln` target read against each absolute folder the
+  link can land in (the last `-t DIR`, the last operand and its parent, with options anywhere on the line). Not
+  done, listed in `docs/GATE.md`: TOCTOU, earlier hardlinks, a protected entry that links out of the store,
+  case-insensitive filesystems, glob spellings, relative link chains and folders, the bash tool's `cwd` argument,
+  and file-descriptor magic links (#217).
   *Amendment 2026-10-18 (issues #153, #154, #155):* an `ssh`/`mosh` chain past the four-level cap asks as
   opaque_exec and keeps the first host as target. Options of allowlisted programs whose value is a command
   (`tar -I`, `rsync -e`, `ssh -o ProxyCommand`, `git rebase -x`, `less +!`, sqlite3 and psql shell escapes,
@@ -941,6 +954,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   in `<socket stem>.principal.key` beside the socket (0600, in the 0700 run folder), new per launch, deleted on
   stop, never in an environment variable. Clients that are the principal (`exo`, joined windows, `exo chat`, the
   web) read it per request, so they re-join a restarted core.
+  *Amendment 2026-10-17 (bus ingress):* a third caller, `channel`, for the channels exod runs. `serve()` hands them
+  `ChannelLink`, which runs their commands in process and stamps `channel`. No transport ever stamps it. `peers`
+  action `bus` (D-040) pins a seat's key on first sight, and it now takes only this caller, so a tool subprocess on
+  the socket cannot pin an unseen seat to its own key and speak as that seat. Rejected: requiring the principal.
+  The channel was a local socket client, so every first message from a new seat would be refused and trust on
+  first use would end. Also rejected: a leader-signed pin, which needs a leader key the principal pinned, and no
+  home has one by default. A same-user process that writes `keys/registry.json` directly stays out of scope (D-040
+  "Not covered"). The bus seat registry, `$EXO_HOME/bus/registry.json`, is not yet a store path, so a plain `cp` to
+  it is not asked about (#210).
 - **Decision, approvals:** a principal connection answers as the principal (`client` is a label: `by` is
   `principal:tui`). A local connection answers only as `seat:<name>` with the D-033 signature, and never with
   `allow_always`. `approver_identity` returns `unknown` for an empty or unrecognised name, and `unknown` may not
@@ -1044,6 +1066,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   registry, or sends `turn.send` on the seat's socket (that counts as the principal until approval identity is
   bound to the connection, a separate change). The gate is what asks before writes to `keys/` and the store; the
   registry, the anchors and `ledger.sqlite.head` belong on its sensitive-path list.
+- *Amendment 2026-10-18 (fix sweep, #221):* the anchors are written after the append's COMMIT, from the committed
+  head, so a writer killed in between leaves them one event behind, never ahead. That lag of one event is accepted.
+  The copy under `keys/heads/` is written even when the anchor beside the ledger fails. Before it writes, an append
+  catches the anchors up when the one beside the ledger trails the head or no anchor is at the head. It refuses
+  ("cannot be written") when the one beside the ledger trails and cannot be written, or when no anchor is at the head
+  and none can be written. So appends never go on more than one event past every anchor. The refusal says to restore
+  write access. `verify` reports `anchored_seq`. The `keys/heads/` anchor is named after the ledger's path with its
+  folder resolved but not the file, so a ledger file swapped for a symlink keeps its anchor. A ledger file that is a
+  symlink fails verify, and append and `exo log anchor` refuse it. An anchor is read only as a regular file, and it
+  is written through a fresh temporary file (`mkstemp`) that a symlink planted in the folder cannot redirect.
+  `exo log anchor` refuses to replace an anchor that does not match. `--force` does, for a store an older Exo left
+  one event ahead. `exo import-store` skips `.head` with the ledger and drops a stale anchor a deleted store left for
+  the destination. Not covered: a store folder deleted whole. `exo memory verify` lists only the stores that exist,
+  so the deleted store's `keys/heads/` anchor is read only with `--principal <id>`.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
@@ -1568,6 +1604,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   every later key change visible. Opt-in because the project does not sign releases yet.
 - **Limits:** trust on first use of the pin; SSH signatures only; commit signatures, not tags; `uv tool` installs
   cannot be verified. A key compromise needs the pin edited by hand.
+- **Amended 2026-10-17:** three gaps closed. git chooses the verify backend from the signature's armor, not from
+  `gpg.format`, so an OpenPGP or X.509 signature went to the local gpg keyring and never read the pin. The check now
+  switches both backends off and requires an SSH signature header. A `config.json` that exists but cannot be read,
+  or a `require_signed` that is not a boolean, refuses the update instead of reading as off. Once a pin exists,
+  `--pin-trust REV` takes a different list only if the commit that last changed it in REV's first-parent history
+  verifies against the current pin. The commit that set the list is checked, not REV, because the documented
+  rotation pins `@{u}` when later commits are signed only by the new key. No override flag: the hand edit above is
+  the override. A list a pinned key signed earlier can still be pinned again (no rollback protection). The pin,
+  `$EXO_HOME/update/allowed_signers`, and `config.json` are not yet store paths, so a plain `cp` or redirect to
+  them is not asked about. D-074 (#125) adds them. A commit message need not be UTF-8: only the header is read.
 - **Docs:** `docs/INSTALL.md` "Signed updates", `docs/DEVELOPER-GUIDE.md` "Cutting a release", `CHANGELOG.md`.
 
 ## D-075 (2026-10-13) A deny or reserved entry matches any simple command on a line
