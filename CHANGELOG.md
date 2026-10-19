@@ -110,6 +110,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `-t DIR`, the last operand and its parent, with options anywhere on the line (`ln REL LINK -s`). `docs/GATE.md`
   lists what stays open (hardlinks, protected entries that link out of the store, case-insensitive filesystems,
   glob and brace spellings, `/dev/fd/N` magic links, #217).
+- State files are written through a temporary file from `mkstemp`, never through a fixed temporary name (#273). The
+  key registry, the `exo update` pin, the composer history, `exo taste export-house`, handoffs, the agent's file
+  tools (`write_file`, `edit_file`, `patch`), the gate's grants and the bus cursor and session map each wrote
+  `<file>.tmp` (or a name like it) with a plain open and renamed it. A process that could create a file in the
+  folder could plant a symlink at that name and turn the next write into a write to any file the user can write.
+  One helper, `exo.core.private.atomic_write`, now does these writes. It removes the temporary file when a write
+  fails, and each file keeps its mode. The `.pub` file `exo keygen` writes and the episodic view cache were written
+  straight to their final names. They are replaced the same way now. The principal token, `config.json`, provider
+  state, peer presence and the ledger anchors were not open to this and use the same helper now. The helper fsyncs
+  the file and its folder, so these writes take a millisecond or two more on a disk. The ledger anchors, the bus
+  cursor and the view cache are written often and skip the fsync, as before, so an append costs what it did.
 - Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
   retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
   `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
@@ -187,6 +198,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   over every cooldown, so a cooldown on another provider, or on a model outside the chain (the gate's aux side call,
   D-081), could make a main call say "next route reopens in 20s" while main's own key reopened later, and the loop
   retried early. The same scope now decides the "no credentials" error.
+- `apply_patch` no longer replaces a changed `-` line by similarity (#236). A hunk with context, such as
+  `-TIMEOUT = 30` over `TIMEOUT = 45` plus `RETRIES = 3`, passed the two-line rule through its context line and
+  silently overwrote the 45. Each `-` line must now match its file line up to whitespace, Unicode or a literal `\t`;
+  similarity places only the context lines. A hunk that fails names both lines and no file changes. See docs/TOOLS.md
+  "Edit matching".
 - A held answer key on a focused terminal approval card sends one answer (#297). Repeats of the key, posted before
   the first was handled, each wrote `approval: allow` to the transcript and sent `ApprovalRespond` again; only the
   call that closes the request's card now notes and sends, so a repeat is dropped and the next queued request is
@@ -261,6 +277,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
+- Gate docs (#137, #141, D-038 amendment): `docs/GATE.md` "Known limits" records the four-level shell inspection
+  depth and what the card says at the cap; that a deny under `categories:` fires only on the category a compound
+  line ends up with, so approving the card can run the denied part (#191), while a `deny:` entry matches every part
+  (D-075); and, in one list each, the paths where a deny becomes an ask and the forms still allowed outright on
+  main (`${...}` bodies, text fed to `ssh` on stdin, `git clone -c`; each with its issue
+  and any open PR), with where a `command:` regex still sees only raw text. The two lists D-075 added are folded into
+  these. "What the search tools read" adds that a search rooted at `~/.config/gh` is allowed and leaves out its
+  `hosts.yml` (#241). The template's `deny:` comment says a deny entry is checked against every command on the line
+  and a `categories:` line only against the most severe part, and the user guide says that a few forms run without
+  asking and to read the whole command before allowing it. No behaviour change; the test pins the boundary and the
+  compound-line case under both policy forms.
 - A core that `exo web` (or any client) starts is no longer that client's child (refs #145, D-036): a short helper
   starts a new session, forks the core and exits, so init (or the nearest subreaper) adopts the core. Process
   ancestry changed; the principal and tool checks did not. `exo stop` from another terminal now stops a core whose
@@ -301,8 +328,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `-` line) beyond whitespace, escaping or Unicode. A stale `TIMEOUT = 30` used to replace the file's newer
   `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
   closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
-  In `apply_patch` a hunk's context lines count toward the two, so a hunk with one context line can still replace a
-  changed `-` line.
+  In `apply_patch` a hunk's context lines count toward the two; since #236 each `-` line must also match its file
+  line, so a changed `-` line is refused there too.
 - Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
   is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
   only a string names a principal.
@@ -437,8 +464,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `exo log anchor` reports an anchor it cannot write in one line instead of a traceback. `exo log verify` reports
   `anchored_seq`. An append costs what it did before. A ledger file swapped for a symlink to a truncated copy no
   longer verifies clean: the anchor under `keys/heads/` keeps its name, and a symlinked ledger fails verify and is
-  refused by append and `exo log anchor`. An anchor that is a symlink is unreadable, and a symlink planted at an
-  anchor's temporary name no longer redirects the write to another file.
+  refused by `exo log anchor`. Append refuses it too for a direct-key ledger (an authority-mode ledger trusts its
+  signed checkpoints). An anchor that is a symlink is unreadable, and a symlink planted at an anchor's temporary
+  name no longer redirects the write to another file.
+- Opening a direct-key ledger whose `ledger.sqlite` is a symlink no longer writes through the link (#277). Before
+  verify and append refused it, the open switched the target to WAL mode and added the ledger's tables, and a
+  dangling link made the file it pointed at. The file is now opened read-only, and only when it is a regular file. A
+  target that is missing, is not a regular file or holds no ledger reads as empty. SQLite adds no `-wal` or `-shm`
+  file beside the target, except that it may add or rewrite a `-shm` file beside a target that already has a `-wal`
+  file. `exo log verify` and `exo memory verify` also warn, without failing, when the two head anchors are more than
+  one event apart. The copy under `keys/heads/` is best effort, so appends go on when it cannot be written. A store
+  folder replaced by a symlink to another folder is listed as not covered in `docs/CORE.md` and D-040.
 - `exo import-store` of a store Exo made no longer fails partway and leaves a half-copied store. The ledger's
   `.head` anchor is skipped with the ledger, and a stale anchor a deleted store left for the destination is dropped.
 - `exo memory verify` fails a store whose `ledger.sqlite` was deleted while a head anchor remains. It used to print

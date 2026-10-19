@@ -34,6 +34,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .. import taste
+from ..core.private import atomic_write
 from ..store import PrincipalStore
 from . import privacy
 from .pack import FORMAT, PACK_NAME, HouseItem, dumps, item_line, sha256
@@ -333,9 +334,7 @@ def export_house(store: PrincipalStore, out: str | os.PathLike, version: str, *,
     for rel, data in res.files.items():
         p = outp / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(p.name + ".tmp")
-        tmp.write_bytes(data)
-        os.replace(tmp, p)
+        atomic_write(p, data, mode=None)
     res.written = True
     return res
 

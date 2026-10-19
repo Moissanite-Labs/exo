@@ -19,6 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .core.private import atomic_write
 from .store import exo_home
 
 TRUST_PATH = 'trust/allowed_signers'  # in the repo; only ever a source for --pin-trust
@@ -88,9 +89,7 @@ def pin_trust(root, rev: str = 'HEAD', read=_out) -> int:
                   f'compromised, edit {p} by hand (D-073).', file=sys.stderr)
             return 1
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + '.tmp')
-    tmp.write_text(r.stdout)
-    tmp.replace(p)
+    atomic_write(p, r.stdout, mode=None)
     print(f'pinned {TRUST_PATH} from {rev} to {p}:\n{r.stdout.rstrip()}')
     return 0
 
