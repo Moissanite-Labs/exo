@@ -334,6 +334,56 @@ def test_opening_a_ledger_symlinked_to_another_database_leaves_it_as_it_was(tmp_
     assert sorted(p.name for p in tmp_path.iterdir() if p.name != "exo-home") == ["ledger.sqlite", "notes.db"]
 
 
+@pytest.mark.parametrize("kind", ["fifo", "folder", "loop"])
+def test_opening_a_ledger_symlinked_to_a_fifo_or_folder_does_not_hang(tmp_path, signer, kind):
+    """A read-only open of a FIFO blocks until a writer comes, so `exo log verify` and `exo log tail` would hang
+    (#277). Only a regular file is opened. Anything else reads as an empty ledger, and verify, append and anchor
+    refuse."""
+    target = tmp_path / "target"
+    if kind == "fifo":
+        os.mkfifo(target)
+    elif kind == "folder":
+        target.mkdir()
+    path = tmp_path / "ledger.sqlite"
+    path.symlink_to(path if kind == "loop" else target)
+    opened: list = []
+    t = threading.Thread(target=lambda: opened.append(Ledger(path, signer)), daemon=True)
+    t.start()
+    t.join(10)
+    if t.is_alive():  # let the blocked open go before failing
+        os.close(os.open(target, os.O_WRONLY | os.O_NONBLOCK))
+        t.join(10)
+        pytest.fail("opening a ledger symlinked to a FIFO blocked")
+    with opened[0] as led:
+        _refuses(led)
+        assert led.head().seq == 0
+
+
+def test_opening_a_ledger_symlinked_to_another_exo_ledger_makes_no_wal_or_shm_files(tmp_path, signer):
+    """A read-only open of a WAL database still made its `-wal` and `-shm` files. Another Exo ledger is always in WAL
+    mode and is the likeliest target. `immutable=1` makes none when the target has no `-wal` file (#277). With a live
+    writer, the open reads through the writer's own files and adds none."""
+    other = tmp_path / "other" / "ledger.sqlite"
+    with Ledger(other, signer) as led:
+        for i in range(3):
+            led.append("note", {"i": i}, "agent")
+    before, beside = other.read_bytes(), sorted(p.name for p in other.parent.iterdir())
+    path = tmp_path / "ledger.sqlite"
+    path.symlink_to(other)
+    with Ledger(path, signer) as led:
+        _refuses(led)
+        assert [e["body"]["i"] for e in led.iter()] == [0, 1, 2]
+        assert sorted(p.name for p in other.parent.iterdir()) == beside
+    assert other.read_bytes() == before and sorted(p.name for p in other.parent.iterdir()) == beside
+    with Ledger(other, signer) as live:
+        live.append("note", {"i": 3}, "agent")
+        beside = sorted(p.name for p in other.parent.iterdir())
+        assert "ledger.sqlite-wal" in beside
+        with Ledger(path, signer) as led:
+            assert len(led) == 4
+        assert sorted(p.name for p in other.parent.iterdir()) == beside
+
+
 def test_an_append_does_not_fsync_its_anchors(tmp_path, signer, monkeypatch):
     """An append writes two anchors. They go through mkstemp now (#273) but skip the helper's fsync, as before, so
     an append costs what it did."""
