@@ -429,7 +429,9 @@ one per line (add `namespaces="git"` after the principal to limit the key to git
 main (`git config gpg.format ssh`, `git config user.signingkey ~/.ssh/<key>.pub`, `git config commit.gpgsign true`;
 for merges made on GitHub, use a merge you sign locally, since GitHub's web signature is not an SSH key). Also sign the
 tag, `git tag -s exo-vX.Y.Z`, for people who check it by hand. To change keys, add the new key in a commit signed by an
-old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the list. Never remove the
+old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the list. `--pin-trust`
+refuses a new list unless the commit that set it on main (the merge, if it came in through one) carries a good
+signature from a key the user already pinned. Never remove the
 old key from the list in the same commit that the old key must sign.
 
 ## 9. Recipes
@@ -548,7 +550,9 @@ cli.verify()                                  # re-check every id, signature and
 ```
 
 Message `kind` is one of `msg`, `ack`, `claim`, `notice`, `directive`, `report`, `file`. `enc_to="<seat>"` seals the
-body so only that seat reads it. `post_sym2p(to, line)` sends a structured agent-wire packet (`docs/AGENT-WIRE.md`).
+body so only that seat reads it. Every seat can read a body that is not sealed. The relay's web view (`/`, no auth)
+shows no bodies unless the relay runs with `EXO_BUS_WEB_BODIES=1`. `post_sym2p(to, line)` sends a structured
+agent-wire packet (`docs/AGENT-WIRE.md`).
 
 From an agent, the `exo-bus` plugin gives four tools: `bus_post`, `bus_inbox`, `bus_thread`, `bus_verify`. They stay
 hidden until `EXO_BUS_URL` and `EXO_BUS_SEAT` are set. The plugin's channel turns a message from another seat into

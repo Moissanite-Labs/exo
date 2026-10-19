@@ -31,7 +31,7 @@ def bash(command):
 
 # --- resolution failures ---------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("odd", ["/tmp/x\x00", "/tmp/x\udcff", "/tmp/\x00/state/custom.json"])
+@pytest.mark.parametrize("odd", ["/tmp/x\x00", "/tmp/x\ud800", "/tmp/\x00/state/custom.json"])
 def test_odd_bytes_in_a_path_never_raise(store, odd):
     assert gate.is_store_path(odd) is False
     assert outcome({"tool": "write_file", "args": {"path": odd, "content": "x"}}) == ("local_write", "allow")
@@ -114,3 +114,43 @@ def test_link_making_copies_and_relative_link_targets(store, tmp_path):
     assert outcome(bash(f"cp -a {home} {t}/backup"))[0] == "shell"             # a plain copy is not a link tree
     assert outcome(bash(f"cp -r {home}/ordinary {t}/copy"))[0] == "shell"
     assert outcome(bash(f"ln -s ordinary {t}/plain"))[0] == "shell"            # a relative link to nowhere special
+
+
+@pytest.mark.parametrize("command", [
+    "ln -s ../store {d} && printf x > {d}/store/state/custom.json",     # {d} is a folder: the link goes inside it
+    "ln -s ../store ../other {d}",
+    "ln -s -t {d} ../store",
+    "ln -st {d} ../store",
+    "ln -s -t{d} ../store",
+    "ln -s --target-directory={d} ../store",
+    "ln -s --target-directory {d} ../store",
+    "ln -s --t {d} ../store",
+    "ln ../store {d}/link -s",                                          # getopt permutes options after operands
+    "ln -s ../store {d}/link -S .bak",
+    "cp -r --sym {home} {t}/s",                                          # unique prefixes of --symbolic-link, --link
+    "cp -r --li {home} {t}/h",
+])
+def test_link_plants_through_ln_options_and_folders(store, tmp_path, command):
+    (tmp_path / "d").mkdir()
+    q = {"d": shlex.quote(str(tmp_path / "d")), "home": shlex.quote(str(store)), "t": shlex.quote(str(tmp_path))}
+    assert outcome(bash(command.format(**q))) == ("store_write", "ask")
+
+
+def test_ordinary_link_plants_stay_shell(store, tmp_path):
+    (tmp_path / "d").mkdir()
+    d, home, t = shlex.quote(str(tmp_path / "d")), shlex.quote(str(store)), shlex.quote(str(tmp_path))
+    for command in (f"ln -s ../ordinary {d}", f"ln -s -t {d} ordinary", f"ln -s ../store/ordinary {d}/o",
+                    f"cp -r --sparse=always {home}/ordinary {t}/copy"):
+        assert outcome(bash(command))[0] == "shell", command
+
+
+def test_ln_targets_stay_linear_and_never_raise(store, tmp_path):
+    n = 1000                                            # GNU ln rejects a second -t, so only the last one is a base
+    argv = ["ln", "-s"] + [x for k in range(n) for x in ("-t", f"/tmp/d{k}")] + [f"r{k}" for k in range(n)]
+    assert len(gate._ln_targets(argv)) <= 3 * len(argv)
+    assert outcome(bash(f"ln -s -t /nonexistent-exo -t {shlex.quote(str(tmp_path / 'd'))} ../store"))[1] == "ask"
+    assert "/x\ny/../store" in gate._ln_targets(["ln", "-st/x\ny", "../store"])   # an attached DIR may hold a newline
+    assert "/x/../store" in gate._ln_targets(["ln", "-s", "--s", "../store", "/x/l"])  # --s is ambiguous: no value
+    for argv in (["ln"], ["ln", "-t"], ["ln", "-S"], ["ln", "-t", ""], ["ln", "--"], ["ln", "-", "--", "-t"],
+                 ["ln", "--target-directory="], ["ln", "-s", "x" * 100000, "/tmp/" + "y" * 100000]):
+        assert isinstance(gate._ln_targets(argv), list)

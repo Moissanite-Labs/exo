@@ -10,12 +10,16 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import quote, urlencode, urlsplit
 
+from nacl.exceptions import CryptoError
 from nacl.signing import SigningKey
 
 from exo import crypto as exo_crypto
 
 from . import wire
 from .config import ClientConfig
+
+
+UNOPENED = "<encrypted body could not be opened>"
 
 
 class BusError(Exception):
@@ -164,12 +168,17 @@ class Client:
         return bool(relay_pub) and wire.relay_composed(env) and wire.verify_doc(wire.core(env), relay_pub)
 
     def decrypt(self, env: dict, reg: dict | None = None, relay_pub: str | None = None) -> str:
-        """Plaintext of an envelope encrypted to me. The sender's X25519 key is whichever key signed it."""
+        """Plaintext of an envelope encrypted to me. The sender's X25519 key is whichever key signed it. A body that
+        cannot be opened (malformed, or sealed to a key this seat no longer holds) reads as a fixed placeholder, so
+        one bad envelope never stops an inbox; a relay error (BusError) still raises and is retried."""
         reg = reg if reg is not None else self.registry()
         signer = self.signer_of(env, reg) or (relay_pub if self.relay_signed(env, relay_pub) else None)
         if not signer:
             return "<unverifiable encrypted body>"
-        return wire.decrypt_body(env["body"], env["enc"], self.key, signer)
+        try:
+            return wire.decrypt_body(env["body"], env["enc"], self.key, signer)
+        except (CryptoError, ValueError, KeyError, TypeError):  # bad box, nonce or base64; non-UTF-8 plaintext
+            return UNOPENED
 
     def text(self, env: dict, reg: dict | None = None, relay_pub: str | None = None, render: bool = True) -> str:
         """Human text of an envelope: decrypted if addressed to me, SYM-2P rendered as plain English."""
