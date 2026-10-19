@@ -56,6 +56,13 @@ main model is chosen, the model picker opens instead. The orientation waits unti
 Skip the orientation with `exo --no-intro`. Upgrade with `exo update`. `exo --version` shows what you have.
 More: `docs/ONBOARDING.md`.
 
+The installer puts Exo's skill pack in `$EXO_HOME/skills`, one folder per skill. Skills you add there are yours
+and stay. The pack's folders belong to Exo: a re-run of the installer or `exo update` replaces an edit made in one.
+It warns when it replaces an edited `SKILL.md`. To change a pack skill, copy its folder under a new folder name and
+set a new `name:` in the copy's `SKILL.md` frontmatter. Exo finds skills by that name and keeps one per name, so a
+copy that keeps the old name hides the pack's skill or is hidden by it. Then delete the copy's `.exo-managed`, or
+each re-run warns that Exo did not install it. Details: `docs/INSTALL.md` step 5.
+
 ## 2. The two clients
 
 Both clients speak the same protocol to the same core. Use either, or both at once.
@@ -315,6 +322,7 @@ Details and the cost rules: `docs/TRACE.md`.
 | `code_find` is missing | It needs Node.js 22 or newer. `exo models` says why on its `code_find:` line (`docs/TOOLS.md`). |
 | Memory or learning is off | Both need a principal store. Without one the boot line says `memory off, no principal store`. Run `exo init <id>` (any short id, such as your first name), then start Exo again. If `exo web` started the core, run `exo stop` first (`docs/LEARNING.md`). |
 | A peer message never arrived | It may be held. Look for an approval card. Held messages expire after 30 minutes (`docs/PEERS.md`). |
+| An edit to a skill in `$EXO_HOME/skills` is gone | That folder is the pack's, and the installer or `exo update` replaced it. Copy the skill under a new folder name with a new `name:` in its `SKILL.md`, and delete the copy's `.exo-managed` (section 1). |
 | Memory looks wrong | Run `/context`, then `exo memory verify` to check the log's hash chain (`docs/MEMORY-MODEL.md`). |
 | The agent seems slow | Run `/trace`. Look at the model that served and any fallbacks. |
 | The warning about "not inside a git repo" | The thread's folder is not a repo. Set `[session] cwd` in the seat, or `/cwd` to see where you are. |

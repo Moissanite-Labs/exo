@@ -325,23 +325,35 @@ elif [ -n "$CFG_HH" ] && [ -d "$CFG_HH/plugins" ]; then  # copies an earlier run
   fi
 fi
 [ -z "$HPLUG" ] || [ "$HPLUG" = "$EXO_HOME/plugins" ] || PDIRS+=("$HPLUG")
-# The core loads every folder in $EXO_HOME/plugins, so a selection removes the ones an earlier run installed (marked
-# .exo-managed) that it leaves out. Folders you added and links stay. A Hermes home is left as is: config.yaml decides.
-if [ -n "$PLUGINS" ]; then
-  for d in "$EXO_HOME"/plugins/*/; do
-    case " ${SELECTED[*]} " in *" $(basename "$d") "*) continue ;; esac
-    if [ ! -L "${d%/}" ] && [ -f "$d.exo-managed" ]; then run rm -rf "${d%/}"; fi
-  done
-fi
 MARK=".exo-managed"
 foreign() { [ -e "$1" ] && [ ! -f "$1/$MARK" ]; }  # something is at $1 and Exo did not install it
 # Exo installed $1 under this name: its marker names it. cp -r copies the hidden marker too, so a copy or a renamed
 # folder still names the folder it came from, and it is yours.
 managed_as() { [ -f "$1/$MARK" ] && grep -qxF "name: $(basename "$1")" "$1/$MARK"; }
+# remove_managed DIR: remove a marked folder Exo no longer ships or selects, only when Exo installed it under this
+# name. A marker that names another folder came with a copy. One with no name line comes from an install before
+# markers named their folder, so Exo cannot tell it from a copy. Either way the folder stays, with a warning.
+remove_managed() {
+  if managed_as "$1"; then
+    run rm -rf "$1"
+  elif grep -q '^name: ' "$1/$MARK"; then
+    warn "$1 was not installed by Exo under this name (its $MARK came with a copy); left alone. Delete $1/$MARK to stop this warning."
+  else
+    warn "$1 has a $MARK from an older install that does not name the folder, so it may be a copy: left alone, and still loaded. Delete $1 if Exo installed it, or delete $1/$MARK to keep it."
+  fi
+}
+# A pack skill's marker also records the checksum of the SKILL.md Exo wrote, so a refresh can say it replaces an edit.
 mark_managed() {  # mark_managed DST SRC
   if [ "$DRY" -eq 1 ]; then echo "+ write $1/$MARK"; else
     printf 'installed by exo scripts/install.sh from %s\nname: %s\n' "$2" "$(basename "$1")" > "$1/$MARK"
+    [ ! -f "$1/SKILL.md" ] || printf 'skill_md: %s\n' "$(cksum < "$1/SKILL.md")" >> "$1/$MARK"
   fi
+}
+marked_now() { managed_as "$1" && { [ ! -f "$1/SKILL.md" ] || grep -q '^skill_md: ' "$1/$MARK"; }; }
+edited() {  # edited DST: its SKILL.md is not the one Exo wrote
+  local was
+  was="$(sed -n 's/^skill_md: //p' "$1/$MARK" 2>/dev/null)"
+  [ -f "$1/SKILL.md" ] && [ -n "$was" ] && [ "$was" != "$(cksum < "$1/SKILL.md")" ]
 }
 # copy_managed SRC DST LABEL [keep-tests]: copy a folder Exo ships to DST without caches (and without tests/ unless
 # keep-tests), then mark DST as Exo's. Says LABEL is up to date when nothing changed. Check foreign() first.
@@ -349,9 +361,12 @@ copy_managed() {
   local src="$1" dst="$2" label="$3" skip=tests
   [ "${4:-}" = keep-tests ] && skip=.pytest_cache
   if [ -f "$dst/$MARK" ] && diff -rq -x "$MARK" -x "$skip" -x __pycache__ -x .pytest_cache "$src" "$dst" >/dev/null 2>&1; then
-    managed_as "$dst" || mark_managed "$dst" "$src"  # an adopted copy, or a marker from before markers named it
+    { marked_now "$dst" && ! edited "$dst"; } || mark_managed "$dst" "$src"  # adopted, older or synced by hand
     [ -z "$label" ] || say "$label is up to date"
     return 0
+  fi
+  if [ -e "$dst" ] && edited "$dst"; then
+    warn "$dst/SKILL.md was edited since Exo installed it, and the pack's copy replaces it. To change a pack skill, copy it to a new folder and set a new name: in its SKILL.md (docs/INSTALL.md step 5)."
   fi
   [ -e "$dst" ] && run rm -rf "$dst"
   run mkdir -p "$dst"
@@ -366,6 +381,17 @@ copy_managed() {
   fi
   mark_managed "$dst" "$src"
 }
+# The core loads every folder in $EXO_HOME/plugins, so a selection removes the ones an earlier run installed that it
+# leaves out (remove_managed: a copy of a plugin is kept, #268). Folders you added and links stay. A Hermes home is
+# left as is: config.yaml decides.
+if [ -n "$PLUGINS" ]; then
+  for d in "$EXO_HOME"/plugins/*/; do
+    d="${d%/}"
+    case " ${SELECTED[*]} " in *" $(basename "$d") "*) continue ;; esac
+    [ ! -L "$d" ] && [ -f "$d/$MARK" ] || continue
+    remove_managed "$d"
+  done
+fi
 for PDIR in "${PDIRS[@]}"; do
   [ -d "$PDIR" ] || run mkdir -p "$PDIR"
   for name in "${SELECTED[@]}"; do
@@ -409,11 +435,7 @@ elif [ -f "$SKMAN" ]; then
   for d in "$SKDIR"/*/; do
     d="${d%/}"
     [ ! -L "$d" ] && [ -f "$d/$MARK" ] && [ ! -d "$EXO_SRC/skills/$(basename "$d")" ] || continue
-    if managed_as "$d"; then
-      run rm -rf "$d"
-    else
-      warn "$d was not installed by Exo under this name (its $MARK came with a copy); left alone. Delete $d/$MARK to stop this warning."
-    fi
+    remove_managed "$d"
   done
   man="$SKDIR/MANIFEST.json"
   if [ -L "$man" ] || { [ -e "$man" ] && [ ! -f "$SKDIR/$MARK" ] && ! cmp -s "$SKMAN" "$man"; }; then

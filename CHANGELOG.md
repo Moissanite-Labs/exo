@@ -314,6 +314,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   alone. When the skill is still missing, the terminal client shows a short orientation instead of sending a model
   turn that could only improvise. A first intro that started but failed or got no reply is no longer sent again
   at every launch: the composer offers `/intro` instead, and the one that completes still turns tutorial mode on.
+- The skill pack's folders in `$EXO_HOME/skills` belong to Exo, and the docs now say so (`docs/INSTALL.md` step 5,
+  user guide §1). A re-run or `exo update` replaces an edit made in one, and now warns first when it replaces an
+  edited `SKILL.md`. To change a pack skill, copy its folder under a new folder name and set a new `name:` in its
+  `SKILL.md`. The skill index keeps one skill per name, so a copy that keeps the old name is hidden or hides the
+  pack's skill.
 - The terminal client no longer freezes on the boot screen when first run opens the model picker (the claude CLI
   on PATH and a configured main route that is down). The boot screen's dismiss closed the picker in its place, and
   only ctrl+c got out. It now closes before the first-run check opens anything, so a first run with no provider also
@@ -324,8 +329,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   text now names the thread's real working folder on every route, as the value that overrides any environment note.
   A message that starts with `/` (such as `/help`) now reaches the model. Before, the claude CLI answered it itself,
   the turn failed and the route cooled down. An `@path` in a message, including a peer or bus message, no longer
-  makes the claude CLI read that file and send it to the model past the gate, `~/.ssh` keys included. Found in the
-  readiness audit and its review. #146 tracks the web composer side.
+  makes the claude CLI read that file and send it to the model past the gate, `~/.ssh` keys included. Only an `@`
+  whose path can leave the CLI's empty folder is marked: `@/`, `@~`, `@.`, `@"` and a word with a `/..` step
+  (`@x/../../etc/hosts` reaches the file too). A decorator, CSS `@media`, a diff `@@` header and an address reach
+  the model as typed, so code it copies from them carries no hidden character. If a file turns up in the CLI's
+  folder, the call runs in a fresh empty one. Found in the readiness audit and its review. #146 tracks the web
+  composer side.
 - Docs for a first user. The README now opens with what Exo is today: a coding agent for the terminal and the
   browser that runs on your Claude Code login or an API key. The Quick start, `docs/INSTALL.md` and the site's
   install step say the repository is a private preview with access on request.
@@ -504,6 +513,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and always keeps `exo-gate`, since without it the core refuses every tool call. A name given with `--plugins` that
   matches no plugin stops the installer before it removes a plugin or writes config.json. A remembered name only
   warns.
+- A `--plugins` list, or the one `exo update` keeps, no longer deletes your copy of an installed plugin (#268).
+  `cp -r` copies the hidden `.exo-managed` marker, so a copy such as `my-bus` made from `exo-bus` looked like a
+  plugin Exo installed and was removed with exit 0. A plugin folder is now removed only when its marker names that
+  folder, as for pack skills, and a copy is kept with a warning. A marker from an install before markers named
+  their folder cannot tell Exo's plugin from a copy. That folder is kept too, still loads, and a warning names it:
+  delete it yourself if Exo installed it. A plugin still in the list gets a named marker on that run.
 - `scripts/deploy-site.sh` no longer tags and pushes a version after a failed deploy, which burned the version and
   exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
   refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
