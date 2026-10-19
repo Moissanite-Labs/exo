@@ -20,50 +20,109 @@ cannot end the word early and hide a following command. `$( )` and backticks ins
 quotes are still scanned, because bash expands them in `:-` and `:+` words, but only up to the
 closing quote: an expansion opened inside the span and still open there makes the line opaque, and
 cannot take the commands after the quote (`echo "${x#'${y'}" ; cmd ; echo "'}"` still reaches
-`cmd`). A single-quoted expansion word outside double quotes stays literal, as does `\$(`. `$((`
-is arithmetic only when bash reads it as arithmetic (the first group's `)` is followed by
-another); `$((cmd) )` and `$((a);(b))` are command substitutions and are classified as such.
-Quoted and escaped parentheses are text, not structure, when the group is matched, and a `$((`
-whose group never closes is read as an unclosed `$(`: the commands after it are classified and the
-line asks. `$'` directly inside double
-quotes is a literal `$` and a quote, not ANSI-C quoting (`echo "$'" ; rm -rf ./work # '"` is a
-delete). Inside a `${...}` word, `$'..'` ends where bash's parser ends it, with `\'` escaped, so
-`"${x#$'\''}" ; cmd` still reaches `cmd`; under double quotes the `$( )` and backticks inside it are
-scanned too, since bash expands them in `:-` words. A heredoc opened inside `$( )` or `<( )`
-belongs to that substitution, as in bash's parser, so a newline inside the substitution does not
-read the outer line's heredoc. When the substitution ends with its heredoc still unread, bash 5.2
-warns and reads the body from the lines after the outer line; the gate instead marks the line
-opaque and classifies those lines as commands.
+`cmd`). A single-quoted expansion word outside double quotes stays literal, as does `\$(`. A
+`${...}` word that never closes makes the line opaque, and the text after its first `}` is
+classified as commands too, as the rest of the word (inside double quotes, both inside and outside
+them): bash rejects the line, but a flat match ends the word at that `}`, so `echo ${x:-<(}) ; cmd`
+and `echo ${x:-'} ; cmd` still reach `cmd`. A word that closes past its first `}` (a nested word, a
+quoted `}`, a `$( )` or `<( )` holding one) is read the flat way too, once per level: the line with
+the word ended at its first `}` is classified beside bash's reading, and the stricter holds. Dash,
+the `/bin/sh` fallback, ends a word there when it does not pair what carries bash past that `}`, a
+`<( )` or a `'` inside `"${x:-..}"` (`echo "${x:-'}" ; cmd ; echo "'}"` runs `cmd` in dash), and the
+gate read every word that way before #143, so the new pairing allows no line it denied or asked
+about then (`echo ${x:-${x}&cmd}` still asks, though neither shell runs `cmd`). A word inside `$( )`
+or `<( )` is read the flat way in that substitution's own source; one in a heredoc body or other
+text the gate only scans for substitutions is not. `$'` directly inside double quotes is a literal
+`$` and a quote, not ANSI-C quoting (`echo "$'" ; rm -rf ./work # '"` is a delete). Inside a
+`${...}` word, `$'..'` ends where bash's parser ends it, with `\'` escaped, so `"${x#$'\''}" ; cmd`
+still reaches `cmd`; under double quotes the `$( )` and backticks inside it are scanned too, since
+bash expands them in `:-` words. A `<( )` in a `${...}` word is a command source. A
+backslash-newline right after a `$` is dropped before the `$` is read, as bash and dash drop it,
+also in double quotes, `${...}` words and heredoc bodies (`"$\`, a newline and `(cmd)"` runs `cmd`).
+Bash 5.3 runs `${ cmd; }` and `${| cmd; }` (a blank, a newline or `|` after the `${`) as a command
+substitution in the current shell, where bash 5.2 reports a bad substitution: the gate classifies
+the text up to the word's first `}` outside quotes as commands, goes on reading after it, and asks.
+
+A heredoc opened inside `$( )` or `<( )` belongs to that substitution, as in bash's parser, so a
+newline inside the substitution does not read the outer line's heredoc; that newline makes the line
+opaque, since the gate's earlier reading took the body from there. When the substitution ends with
+its heredoc still unread, bash 5.2 warns and reads the body from the lines after the outer line; the
+gate instead marks the line opaque and classifies those lines as commands. A delimiter followed by
+`)` on its line (`EOF)`, or `EOF) ; cmd`) ends the body and the substitution, as in bash 5.2, and
+what follows the `)` is read as commands.
+
+`$((` is arithmetic only when bash reads it as arithmetic; `$((cmd) )` and `$((a);(b))` are command
+substitutions and are classified as such. Bash first matches the group's parentheses with quotes,
+escapes, `$'..'` (with `\'` escaped), backticks and nested `$( )` (its `#` comments too) stepped
+over. The gate reads them with the same lexer, so a parenthesis inside them is text, not structure
+(`echo $(( "$(: "((" ; echo 1)" )) ; cmd # ))` still reaches `cmd`). A `${` outside quotes is plain
+text to bash there, so the group can end inside it (`echo $(( ${x:-))`, a newline, `cmd`, a newline
+and `} ))` runs `cmd`); inside `".."` it is matched. When the group's `)` is followed by another,
+the word is `$((..))`, and it is arithmetic only if its parentheses also balance when only quotes
+and escapes are skipped (bash has made `$'..'` a quoted string by then, `\'` escaped in it), so `))`
+inside backticks makes it a command substitution (``echo $(( `echo ))` ; cmd ; echo ))`` runs
+`cmd`), and only if bash's second read of the word when it expands it, which takes a `#` after a
+blank as a comment and `${ }` as plain text, ends at the same `)` (`echo $(( x #(` then a newline
+and `) ; cmd ; (echo) ))` runs `cmd`). Bash checks a nested `$( )` as it prints it back, without its
+comments and with its heredocs rewritten. The gate does not model that text, so a group whose nested
+`$( )` holds a comment or a heredoc is read as a `$(` (`echo $(( $(echo 1 # c` then a newline and
+`) + 1 ))` asks, where bash reads arithmetic). Any other `$((` is read as a `$(`, so the commands in
+it are classified. Bash ends that word where it matches the parentheses again, now with a `#` after
+a blank starting a comment and a `#` right after `)` plain text; when the gate's own `$(` read ends
+elsewhere, both texts are classified, lexing goes on where bash ends the word and the line asks
+(`echo $(( )#( )) ; cmd` then a newline and `) ))` reaches `cmd`). A `$((` that bash never closes
+makes the line opaque and is read as an unclosed `$(`. Wherever a flat count of the group's
+parentheses (every parenthesis counted and nothing else, the gate's reading before it modelled
+bash's parser) ends the group elsewhere than the gate's reading, that count is classified too, once
+per level: its body is scanned for `$( )` and backticks, and the text after its `))` is read as
+commands, as the rest of the word (`echo $(( ${x:-'))`, a newline, `cmd`, a newline and `'} ))` is
+classified as `cmd`, though bash runs nothing there).
 
 Scanning has a 32-level expansion nesting limit, separate from the classification depth. A word
 nested deeper than that is skipped unread with a flat match of `${ }`, `$( )`, `<( )` and `(( ))`
 that keeps quotes, `$'..'` and escapes and treats a bare `(` in a `${ }` word or a bare `{` in a
-`$( )` as the literal text bash sees. The word adds opaque execution (ask under the default policy)
-and lexing resumes after it, so the commands that follow on the line are still classified and a
-deny on them still holds. Unclosed expansions, substitutions, backticks and top-level quotes add
-opaque execution too. The limit covers `${ }`, `$( )`, `<( )`, `$(( ))` and heredoc bodies alike,
-and the flag reaches the top level from any of them.
+`$( )` as the literal text bash sees. In a `$( )` or `<( )` it also takes a `#` that starts a word
+as a comment to the newline and a heredoc body as text up to its delimiter line, so a quote in
+either does not carry the match past the word's end. The word adds opaque execution (ask under the
+default policy) and lexing resumes after it, so the commands that follow on the line are still
+classified and a deny on them still holds. Unclosed expansions, substitutions, backticks and
+top-level quotes add opaque execution too. The limit covers `${ }`, `$( )`, `<( )`, `$(( ))` and
+heredoc bodies alike, and the flag reaches the top level from any of them.
 
 Nested command sources are classified once per level up to the classification depth (4). Deeper
 sources are not read in full: each remaining level, up to the scan limit, is lexed on its own and
-its programs are classified without recursion, so the category of an innermost command still
-counts (`echo $(a $(a $(a $(a $(git push --force origin main)))))` is `force_push`) and the cost
-stays linear in the input. The classifier does not evaluate variables or choose which conditional
-branch runs; it checks every executable branch it can read.
+its programs are classified without recursion, so the category of an innermost command still counts
+(`echo $(a $(a $(a $(a $(git push --force origin main)))))` is `force_push`). Each source is read
+once for a line, at the shallowest depth it is met: the two readings of a word or group left open
+both hold the rest of the line and meet the same sources again at every level, so reading every path
+would cost two to the power of the levels, and the cost stays in proportion to the input. A line may
+also have nested text read up to 32 times its own length (plus 4,096 characters); past that, the
+sources left are not read and the line asks. A substitution left open is a source up to the end of
+the line. The classifier does not evaluate variables or choose which conditional branch runs; it
+checks every executable branch it can read.
 
 Known limits. `${name@P}` (prompt expansion) and the indirection `${!name}` run code held in the
 variable's value, so they ask, as do `${@@P}` and `${*@P}` (each positional parameter is prompt
-expanded) and `${!@}` and `${!*}` (their value is used as a variable name, and `a[$(cmd)]` runs); the listing forms `${!prefix*}`, `${!prefix@}`, `${!arr[@]}` and
-`${!arr[*]}` do not. Arithmetic on a bare name (`$((x))`, `${s:x}`) also evaluates the value and is
-not flagged: a value assigned from a visible `$( )` on the same line is classified where it is
-assigned, one set earlier or read from a file is not. When bash is absent exo falls back to
-`/bin/sh` (dash), which pairs single quotes inside `"${...}"` for `#` and `%` but not for `:-` and
-`:+`, and has no `$'..'`. The gate reads the line as bash does. A line the two shells split
-differently leaves a quote or brace unclosed under one of the readings and asks when bash's
-reading is the unclosed one (`echo "${x:-'}"; rm -rf ./work; echo '}"'`); a line that both shells
-close, but at different places, is classified as bash runs it. The pairing modelled is that of
-bash 5.2 and 5.3. The bash 3.2 that macOS ships pairs some quotes inside `"${...}"` differently,
-and the gate does not model that reading.
+expanded) and every other indirect form of a name, `@` or `*`, with or without an operator (`${!@}`,
+`${!*}`, `${!@@}`, `${!x@Q}`, `${!@@P}`, `${!1:-y}`): the value is used as a variable name, and
+`a[$(cmd)]` runs, for `${!@@}` before bash reports the bad substitution. Only the listing forms of a
+name, `${!prefix*}`, `${!prefix@}`, `${!arr[@]}` and `${!arr[*]}`, which end the word there, do not
+ask. A `$"..."` inside `${...}` does not carry the locale-translation signal (see "Shell commands:
+an allowlist"). Arithmetic on a bare name (`$((x))`, `${s:x}`) also evaluates the value and is not
+flagged: a value assigned from a visible `$( )` on the same line is classified where it is assigned,
+one set earlier or read from a file is not. When bash is absent exo falls back to `/bin/sh` (dash),
+which pairs single quotes inside `"${...}"` for `#` and `%` but not for `:-` and `:+`, and has no
+`$'..'` and no `<( )`. The gate reads a `${...}` word as bash does and also ended at its first `}`,
+which is where dash ends the words it pairs differently, and the stricter reading holds; a line that
+leaves a quote or brace unclosed under bash's reading asks
+(`echo "${x:-'}"; rm -rf ./work; echo '}"'` is a delete that asks, and a deny on `delete` holds).
+Dash's other differences, such as `$'..'` outside a `${...}` word, are not modelled. The pairing
+modelled is that of bash 5.2 and 5.3, `${ cmd; }` being 5.3's. The bash 3.2 that macOS ships pairs
+some quotes inside `"${...}"` differently, and the gate does not model that reading. A command that
+a word hid from earlier releases can now outrank a visible one on its line:
+`echo ${X:-$(git push --force origin main)} && rm -rf ./work` is `force_push`, so `deny: [delete]`
+asks there, as it does on `git push --force origin main && rm -rf ./work`. A deny that matches any
+part of a line is D-075 (#126).
 
 ## Required executor audit
 
@@ -281,8 +340,8 @@ literal word renders to and no regex naming letters or operators matches, so a v
 `exo` does not fire on `ls $HOME`. It does not expand variables or run a shell. A `$"..."` inside
 `${...}` is read by the parameter-expansion scan (#143, #158; "Shell parameter expansion"): the
 `$( )` and backticks in it are classified and the whole expansion is a placeholder in the view, but
-it does not carry the locale-translation signal. Nested views come from the text the
-classifier already reads: command substitutions and backticks, `bash -c`, `eval`, shell stdin and
+it does not carry the locale-translation signal. Nested views come from the text the classifier
+already reads: command substitutions and backticks, `bash -c`, `eval`, shell stdin and
 every string literal of code (`python -c`, `execute_code`), with the existing depth limit of
 four. The gate can only guess which literals in code are commands, so each literal is matched as
 a command even when the code merely prints it: `python3 -c "print('rm -rf build')"` is denied under

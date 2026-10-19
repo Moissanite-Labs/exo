@@ -810,14 +810,35 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   nothing from 0x80000000 on), so every `$'..'` word is read. Category and target vetoes see the decoded word; a
   `command:` regex still sees the raw line until the literal-word view (#187) uses the same decoder.
   *Amendment 2026-10-18 (issues #143, #144, PR #158):* the lexer balances `${...}` words as bash 5.2 and 5.3 do in
-  their default mode and classifies every command source nested in them (`$( )`, backticks, `<( )`, `$((cmd) )`).
-  It never lets a nested scan hide a command that follows on the line: a scan inside a quoted span of the word stops
-  at the closing quote, quoted and escaped parentheses are not arithmetic structure, an unclosed `$((` is read as an
-  unclosed `$(`, and a heredoc opened inside a substitution stays with that substitution. Whatever bash would leave
-  unclosed there makes the line opaque (ask), and the commands after it are still classified. `${!name}`, `${!@}`,
-  `${!*}` and the `@P` transformation, of a name or of `@` and `*`, run code held in a value and carry the
-  `indirection` signal. Chosen over a full bash grammar: a small fail-closed lexer whose limits (dash's and bash
-  3.2's different pairing, arithmetic on a bare name) are listed in `docs/GATE.md` "Shell parameter expansion".
+  their default mode and classifies every command source nested in them (`$( )`, backticks, `<( )`, `$((cmd) )`). It
+  ends a nested construct where bash's parser ends it as far as it models that parser, and where the two can differ
+  (listed below) it classifies the text both ways and the line asks. A scan inside a quoted span of the word stops
+  at the closing quote. The `$((` group is matched as bash matches it, with quotes, escapes, `$'..'`, backticks and
+  nested `$( )` (with its comments) stepped over and a `${` outside quotes left as plain text; it is arithmetic only
+  if the group's `)` is followed by another, its parentheses also balance with only quotes skipped (bash's
+  `chk_arithsub`, with `$'..'` a quoted string) and the second read at expansion (`extract_delimited_string`, which
+  takes `#` comments) ends at the same `)`. Any other `$((` is read as `$(`; where bash, matching its parentheses
+  again as a command substitution (a `#` after a blank is a comment there, one right after `)` is not), ends the
+  word elsewhere than the gate's `$(` read, both are classified and lexing goes on where bash ends it. A heredoc
+  opened inside a substitution stays with that substitution. Where the gate does not model bash's text it fails
+  closed: a `$((` group whose nested `$( )` holds a comment or a heredoc (bash checks the `$( )` as it prints it
+  back) is read as `$(`, and a `${...}` word that never closes also hands the text after its first `}` to the
+  classifier, as the rest of the word. The flat reading the gate had before this amendment is kept beside bash's: a
+  `${...}` word that closes past its first `}` is also read ended there, and a `$((` group that a count of every
+  parenthesis ends elsewhere is also read that way, and the stricter reading holds. So the new pairing allows no
+  line the earlier gate denied or asked about, and the words dash (the `/bin/sh` fallback) ends at that `}`, where
+  it does not pair a `<( )` or a `'` inside `"${x:-..}"`, are classified as dash runs them. Whatever bash would
+  leave unclosed makes the line opaque (ask); past the 32-level scan limit the over-deep word is skipped with a flat
+  match (comments and heredoc bodies in it read as text) and asks. A backslash-newline after `$` is dropped first,
+  as bash drops it, and bash 5.3's `${ cmd; }` and `${| cmd; }` are read as commands and ask. Each nested source is
+  classified once per line, at its shallowest depth: the readings of a word left open hold the rest of the line, and
+  reading each path again would cost two to the power of the levels; past 32 times the line's length of nested text
+  the rest is opaque. Every indirect expansion of a name, `@` or `*` (`${!name}`, `${!@}`, `${!@@}`, `${!x@Q}`,
+  `${!@@P}`) and the `@P` transformation run code held in a value and carry the `indirection` signal; only the
+  listing forms `${!prefix*}`, `${!prefix@}`, `${!arr[@]}` and `${!arr[*]}` of a name do not. Chosen over a full
+  bash grammar: a small fail-closed lexer whose limits (dash's other differences, bash 3.2's pairing, arithmetic on
+  a bare name, and one category per line until D-075, #126, so a push a word hid now outranks a visible delete
+  beside it) are listed in `docs/GATE.md` "Shell parameter expansion".
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
