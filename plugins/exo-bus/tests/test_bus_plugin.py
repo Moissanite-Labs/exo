@@ -39,6 +39,29 @@ def test_cursor_round_trip_and_bad_file(tmp_path):
     assert cur.get() == 0
 
 
+def test_cursor_and_session_map_do_not_follow_a_symlink_at_the_old_temporary_name(tmp_path):
+    """Both were written as `<name>.tmp` with `write_text`, which follows a symlink there (#273)."""
+    import os
+    import stat
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch\n")
+    cur = settings.Cursor("beta", {"state_dir": str(tmp_path / "s")})
+    chan = adapter.BusChannel(object(), {}, client=object())
+    chan._map_path, chan._by_chat = cur.path.with_name("sessions-beta.json"), {"chat": "s1"}
+    cur.path.parent.mkdir()
+    for p in (cur.path, chan._map_path):
+        p.with_suffix(".tmp").symlink_to(victim)
+    cur.set(7)
+    chan._save_map()
+    assert victim.read_text() == "do not touch\n"
+    umask = os.umask(0o022)
+    os.umask(umask)
+    for p, want in ((cur.path, {"since": 7}), (chan._map_path, {"chat": "s1"})):
+        st = os.lstat(p)
+        assert stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o666 & ~umask  # what write_text gave
+        assert json.loads(p.read_text()) == want
+
+
 # ---- sign, verify, round trip
 
 def test_post_signs_and_relay_accepts(relay, client_for):

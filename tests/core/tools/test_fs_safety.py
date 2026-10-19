@@ -51,7 +51,7 @@ WRITES = {
 
 @needs_links
 @pytest.mark.parametrize("how", WRITES)
-def test_write_never_follows_a_link_at_the_temp_name(run, tmp_path, tmp_path_factory, how):
+def test_write_never_follows_a_link_at_the_old_temp_name(run, tmp_path, tmp_path_factory, how):
     victim = tmp_path_factory.mktemp("outside") / "victim.txt"
     victim.write_text("precious\n")
     victim.chmod(0o600)
@@ -63,16 +63,25 @@ def test_write_never_follows_a_link_at_the_temp_name(run, tmp_path, tmp_path_fac
     res = WRITES[how](run)
     assert not res.is_error, res.text()
     assert victim.read_text() == "precious\n" and stat.S_IMODE(victim.stat().st_mode) == 0o600
-    assert not notes.is_symlink() and notes.read_text().strip() == "new" and not os.path.lexists(tmp)
+    assert not notes.is_symlink() and notes.read_text().strip() == "new"
+    assert os.path.islink(tmp) and os.readlink(tmp) == str(victim)  # the old fixed name is never used (#273)
+    assert sorted(f.name for f in victim.parent.iterdir()) == ["victim.txt"]  # nothing new beside the victim
+
+    def leftovers():  # a temp file left beside the target by a write
+        return [f.name for f in tmp_path.iterdir()
+                if f != tmp and (f.name.endswith(".tmp") or f.name.startswith(".notes.txt."))]
+    assert leftovers() == []
     if how != "apply_patch add":
         assert stat.S_IMODE(notes.stat().st_mode) == 0o750  # the file's own mode is kept
-    # A leftover regular temp file from a crash does not block the next write; one that cannot be cleared
-    # (a folder) fails the write and leaves the file as it was.
+    # Writes go through a fresh mkstemp name, so a leftover file or a folder at the old name changes nothing.
+    os.unlink(tmp)
     tmp.write_text("leftover")
     assert not run("write_file", path="notes.txt", content="again\n").is_error
-    assert notes.read_text() == "again\n" and not tmp.exists()
+    assert notes.read_text() == "again\n" and tmp.read_text() == "leftover" and leftovers() == []
+    tmp.unlink()
     tmp.mkdir()
-    assert run("write_file", path="notes.txt", content="lost\n").is_error and notes.read_text() == "again\n"
+    assert not run("write_file", path="notes.txt", content="later\n").is_error and notes.read_text() == "later\n"
+    assert leftovers() == [] and sorted(f.name for f in victim.parent.iterdir()) == ["victim.txt"]
 
 
 @needs_links
