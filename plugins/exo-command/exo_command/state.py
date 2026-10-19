@@ -55,6 +55,7 @@ class State:
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.tasks: Dict[str, Dict[str, Any]] = {}
         self.approvals: Dict[str, Dict[str, Any]] = {}
+        self.resolved_ids: Deque = deque(maxlen=1024)  # (seq, request_id) of every resolution applied
         self.resolved: Deque[Dict[str, Any]] = deque(maxlen=20)
         self.decisions: Dict[str, Dict[str, Any]] = {}
         self.notices: Deque[Dict[str, Any]] = deque(maxlen=20)
@@ -178,6 +179,7 @@ class State:
             self._session(sid)["pending_approvals"] += 1
 
     def _on_approval_resolved(self, sid, b, ts):
+        self.resolved_ids.append((self.seq, b.get("request_id")))
         a = self.approvals.pop(b.get("request_id"), None)
         if a is None:
             return
@@ -185,6 +187,10 @@ class State:
         if a.get("session") and a["session"] in self.sessions:
             s = self.sessions[a["session"]]
             s["pending_approvals"] = max(0, s["pending_approvals"] - 1)
+
+    def resolved_since(self, seq: int) -> set:
+        """Request ids whose resolution was applied after ``seq``."""
+        return {rid for at, rid in self.resolved_ids if at > seq}
 
     def add_open_approval(self, a: Dict[str, Any]) -> bool:
         """An open request the core lists but this page never saw asked (it fell out of the replay window).

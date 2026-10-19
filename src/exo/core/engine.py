@@ -449,7 +449,7 @@ class CoreRuntime:
         def emit(text: str) -> None:  # tool threads call this; publish on the event loop
             try:
                 from exo.core.models.keys import redact_secrets
-                text = redact_secrets(text)
+                text = redact_secrets(text, keep_markers=True)  # bash already redacted it across reads
             except Exception:
                 pass
             loop.call_soon_threadsafe(self.hub.publish, s.ToolOutput(call_id=call.id, text=text), sid)

@@ -103,6 +103,17 @@ def test_a_replayed_request_is_not_counted_twice():
     assert c.state.sessions["s1"]["pending_approvals"] == 1
 
 
+def test_reconcile_does_not_re_add_a_request_resolved_while_the_list_was_in_flight():
+    async def go():
+        resolve = ev(9, "approval.resolved", {"request_id": "old", "decision": "allow"}, "s1")
+        c = CommandCentre(load_settings({}), Listing(open_ids=["old", "kept"], before=lambda: c.state.apply(resolve)))
+        await c.reconcile_approvals()
+        assert pending(c) == ["kept"]  # "old" was open when the core listed it, resolved before the page applied it
+        assert c.state.sessions["s1"]["pending_approvals"] == 1
+
+    asyncio.run(go())
+
+
 async def http(port, path, headers=None, method="GET", body=None, read=True):
     r, w = await asyncio.open_connection("127.0.0.1", port)
     data = json.dumps(body).encode() if body is not None else b""
