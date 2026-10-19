@@ -645,17 +645,23 @@ bash`. So `echo 'rm -rf build' | { bash; } 3<<EOF` is a `delete` whichever text 
 body only. A shell read that way still asks at least, as `bash 3<<EOF` does (main asks for these
 lines too). Outside these cases, every command inside gets all of the compound's stdin. That
 over-approximates, and the fed text can change the line's category and the summary shown when it
-asks: only shells, interpreters and gh act on it, so `{ cat; } <<EOF` stays `read`, while `{ bash; }
+asks: shells, interpreters, gh and SQL clients act on it, so `{ cat; } <<EOF` stays `read`, while
+`{ bash; }
 <<EOF` with `rm -rf build` in the body is `delete`. Each text is read once per line, however many
 commands it reaches, and so is a body after `<<$'EOF'`, which is also read as commands, and the
 stdin of a `sqlite3`, `psql` or `mysql` client. Every command it reaches still counts what that
 reading found, so a later client whose argument is a store folder is still a `store_write` when the
-text deletes. Such a line was `opaque_exec` before; it now takes the inner category, and the floor
-above keeps it at ask at least under a policy that names `opaque_exec` at `ask` or `deny`. A `deny:
-[opaque_exec]` entry still denies these lines, since the shell inside is an `opaque_exec` part
-(D-075); under `categories: {opaque_exec: deny}` or a rule they now ask where they were denied, as
-`bash <<EOF` already does, until #191. Likewise a line whose later command takes a store folder is
-`store_write`, which outranks `delete` (D-038): `deny: [delete]` still denies it through its delete
+text deletes. For fed shells and interpreters, a line that was `opaque_exec` now takes the inner
+category. The floor above keeps it at ask at least under a policy that names `opaque_exec` at `ask`
+or `deny`. A `deny: [opaque_exec]` entry still denies these shell and interpreter lines, since the
+shell or interpreter inside is an `opaque_exec` part (D-075). Under
+`categories: {opaque_exec: deny}` or a rule they now ask where they were denied, as
+`bash <<EOF` already does, until #191. Fed SQL clients follow their plain-input classification,
+without that floor. A compound feeding `\! git push origin main` to `psql` can therefore change
+from ask to the push's `log`. D-075 `deny` and `reserved` entries still match every retained part.
+Category overrides and ordinary rules use the combined classification. Likewise a line whose later
+command takes a store folder is `store_write`, which outranks `delete` (D-038):
+`deny: [delete]` still denies it through its delete
 part (D-075), while `categories: {delete: deny}` asks where main denied it (#191). Known limits:
 the body of `time {
 ...; }` is not read at all (`{` is an unknown program there), so a heredoc after it changes nothing;
