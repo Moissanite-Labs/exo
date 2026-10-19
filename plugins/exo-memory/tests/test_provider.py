@@ -28,7 +28,7 @@ def body_types(p, kind="note"):
 def test_unavailable_without_principal(tmp_path):
     p = ExoMemoryProvider()
     assert not p.is_available()
-    assert "EXO_PRINCIPAL" in p.unavailable_reason()
+    assert "exo init" in p.unavailable_reason()  # the one command a first user needs, not the env variables
     p = ExoMemoryProvider({"principal": "nobody"})
     assert "exo init" in p.unavailable_reason()
 
