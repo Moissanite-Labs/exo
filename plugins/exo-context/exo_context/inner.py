@@ -109,7 +109,9 @@ class CoreInner(ContextEngine):
             else:
                 body.append(render_message(_msg(m)))
         extra = (f'Focus topic: {focus_topic}\n' if focus_topic else '') + (memory_context or '')
-        text = self._summarize('\n\n'.join(body), previous, extra)
+        # #279: the summary is never the principal's words, so a pinned-block tag the summarizer decoded or wrote is
+        # escaped; exo-context adds its own block afterwards
+        text = provenance.defuse_pins(self._summarize('\n\n'.join(body), previous, extra))
         self.compression_count += 1
         summary = {'role': 'user', 'content': SUMMARY_PREFIX + text + '\n\n' + END_LINE, SUMMARY_FLAG: True}
         return list(messages[:head]) + [summary] + list(messages[len(messages) - tail:])

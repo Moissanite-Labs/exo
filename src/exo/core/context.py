@@ -448,6 +448,8 @@ class TreeContext:
                     source = left + right
                     text = "" if estimate_tokens(source) < self.min_compact_tokens else \
                         await self._summarize(node.session, right, previous=left)
+                # #279: a summary is never the principal's words; a summarizer may decode an escaped tag or write one
+                text = provenance.defuse_pins(text)
                 # compact only when it shrinks: a too-small span or a summary not smaller than its source stays verbatim
                 node.text, node.status = (text, "done") if text and estimate_tokens(text) < estimate_tokens(source) \
                     else ("", "skipped")

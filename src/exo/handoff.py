@@ -659,7 +659,9 @@ def load_handoff(path: str | os.PathLike) -> Handoff:
 
 
 def resume_text(handoff: Handoff, store: PrincipalStore | None = None, budget: int = 1500) -> str:
-    """Working context for a fresh session: the handoff plus a retrieval pass over the store."""
+    """Working context for a fresh session: the handoff plus a retrieval pass over the store. It goes into the
+    system message, so every pinned-block tag in it is escaped (#279): the file quotes the agent's report and a
+    summary, and records the principal's words as quoted items under their own headings, never as a pinned block."""
     parts = [f'Resuming "{handoff.topic}" from the handoff at {handoff.path}. The quoted rulings and '
              'corrections are the principal\'s own words; follow them.', '', handoff.text.strip()]
     if store is not None and store.exists():
@@ -671,4 +673,4 @@ def resume_text(handoff: Handoff, store: PrincipalStore | None = None, budget: i
                 parts += ['', '## Retrieved from the principal store', got.text.strip()]
         except Exception as e:  # retrieval is a bonus; the handoff stands alone
             parts += ['', f'(Retrieval pass skipped: {e})']
-    return '\n'.join(parts).rstrip() + '\n'
+    return provenance.defuse_pins('\n'.join(parts).rstrip() + '\n')
