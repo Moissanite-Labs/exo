@@ -26,8 +26,8 @@ exo serve                      # the core, in one terminal
 exo web                        # the web client: prints http://127.0.0.1:7342/#token=... and opens the page
 ```
 
-The page needs the token in that link for every request (D-039): `exo web` prints the link and opens the page in
-your browser with a one-time code that the page trades for the token (#166), so the token never sits in the browser
+Every route except `POST /api/launch` needs the token in that link (D-039); `POST /api/launch` is served without it, because it trades a one-time launch code for the token (#177).
+`exo web` prints the link and opens the page in your browser with a one-time code that the page trades for the token (#166), so the token never sits in the browser
 launcher's argv; open the latest complete printed link yourself after `--no-open`, a restart or a
 non-loopback `--host` (no browser is opened then).
 The bare URL has no token. Each web launch creates a new token; old links expire. The tab keeps it in
