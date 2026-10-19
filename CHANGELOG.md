@@ -194,6 +194,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- The router's wait hint and `retry_after` count only the role's own routes (#239). They took the earliest reopening
+  over every cooldown, so a cooldown on another provider, or on a model outside the chain (the gate's aux side call,
+  D-081), could make a main call say "next route reopens in 20s" while main's own key reopened later, and the loop
+  retried early. The same scope now decides the "no credentials" error.
 - exo web shows an open approval that was asked before its replay window (#234). `reconcile_approvals` only dropped
   cards the core no longer held, so a request older than the newest 5,000 events (first start, or a reconnect after a
   gap above `RESUME_GAP`) never showed, though the terminal client could answer it. It now also adds each open request
