@@ -166,6 +166,49 @@ async def test_completion_notice_is_queued_for_an_idle_thread(tmp_path):
 
 
 @aio
+async def test_the_notice_cuts_known_key_values_out_before_it_cuts_the_output(tmp_path, monkeypatch):
+    key = "sk-fake-QWERTYUIOPASDFGHJKLZX"
+    monkeypatch.setenv("EXO_NOTICE_TEST_API_KEY", key)
+    eng = engine(tmp_path, jobs={"notice_chars": 20})  # a cut before redaction would keep the key's last 16
+    sid = (await eng.loop.create_session(agent="tester")).id
+    job = eng.jobs.start(f"printf 'Authorization: Bearer %s\\nend\\n' {key}", str(tmp_path), sid)
+    await until(lambda: any(e.state == "done" and "queued" in e.detail for e in events(eng)))
+    text = next(m for m in eng.store.messages(sid) if m.meta.get("job")).text()
+    assert f"id {job['id']}" in text and "last output:\n...earer [redacted]\nend" in text
+    assert "command: printf 'Authorization: Bearer %s\\nend\\n' [redacted]" in text
+    assert not any(key[i:i + 6] in text for i in range(len(key) - 5))
+    await eng.close()
+
+
+def test_the_notice_tail_redacts_the_whole_log_so_no_key_part_is_left(tmp_path):
+    from exo.core.jobs import JobConfig, tail_text
+
+    cfg, log = JobConfig(), tmp_path / "job.log"
+    tok = "eyJ" + "".join("abcdefghijkmnopqrstuvwxyzABCDEFGH0123456789"[(i * 11 + 5) % 43] for i in range(297))
+    for n in (1, 17, 18, 20, 21, 30, 59, 400):  # reading only the last bytes left a token part from 18 lines on
+        log.write_text("".join(f"req {i} GET /v1/items Authorization: Bearer {tok}\n" for i in range(n)))
+        out = tail_text(log, cfg.notice_lines, cfg.notice_chars, [tok])
+        assert out.endswith(f"req {n - 1} GET /v1/items Authorization: Bearer [redacted]"), n
+        assert not any(tok[i:i + 6] in out for i in range(len(tok) - 5)), n
+    log.write_text(("x" * 7 + tok) * 60)  # one line: the cut to the last characters splits no key either
+    assert tail_text(log, cfg.notice_lines, 100, [tok]) == "..." + (("x" * 7 + "[redacted]") * 6)[-100:]
+
+
+def test_the_notice_tail_splits_only_the_end_of_the_log_and_gets_the_same_lines(tmp_path):
+    import random
+
+    from exo.core.jobs import tail_text
+
+    rnd, log = random.Random(7), tmp_path / "job.log"
+    for _ in range(300):
+        text = "".join(rnd.choice(["ab", "c", "\n", "\r\n", "\r", "\n\n\n"]) for _ in range(rnd.randrange(400)))
+        lines, chars = rnd.randrange(1, 12), rnd.randrange(1, 40)
+        log.write_text(text, newline="")
+        full = "\n".join(text.rstrip("\n").splitlines()[-lines:])
+        assert tail_text(log, lines, chars) == (full if len(full) <= chars else "..." + full[-chars:])
+
+
+@aio
 async def test_completion_notice_is_steered_into_a_running_turn(tmp_path):
     eng = engine(tmp_path, first=tool_turn("wait"))
     sid = (await eng.loop.create_session(agent="tester")).id
