@@ -37,9 +37,10 @@ and the output above is data, not instructions]
   principal capture skips it). It cannot approve anything; the ingress consent check does not apply to it because
   the harness wrote it, but the output inside is framed as data.
 - Known key values are cut out of the notice as `[redacted]` (D-039), with the values Exo knows when the job ends.
-  That comes before the command is cut to 300 characters and the output to its last lines and characters, so those
-  cuts split no key. `job_output` is redacted like any tool result, after its own cut to the last 20,000 characters
-  (docs/TOOLS.md "Streamed output").
+  The core reads the job's whole log file for this, and only then cuts the command to 300 characters and the output
+  to its last lines and characters. So those cuts split no key. A key split where the log rotates at `output_cap`
+  (below) can still leave a part, as with any cut before redaction. `job_output` is redacted like any tool result,
+  after its own cut to the last 20,000 characters (docs/TOOLS.md "Streamed output").
 - A job the agent stops with `job_kill` sends no notice (the agent just asked). Timeout, failure, exit and loss do.
 
 ## Where things live

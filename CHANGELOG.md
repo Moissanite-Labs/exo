@@ -609,7 +609,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   character split between reads (non-ASCII output got U+FFFD there). The result is still redacted after a tool cuts its
   output, so a key split by that cut (for example, `bash` keeps 15,000 characters at each end) leaves a part in the
   result, as before. See docs/TOOLS.md "Streamed output". A background job's completion notice had no key redaction. It
-  now cuts known key values out of its command and output before it cuts them (docs/JOBS.md).
+  now cuts known key values out of its command and its whole log before it cuts them to size (docs/JOBS.md).
 - The gate's decision call no longer falls back to the main model (D-081). With no decision or aux route, the rule
   outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
   stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
