@@ -734,10 +734,6 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   allowed under `command:gh pr comment`. The known forms:
   - `${...}` bodies are skipped by the lexer, so `echo ${X:-$(gh pr comment 3 --body hi)}` is
     `read` and allowed (#143; open PR #158).
-  - Text piped or fed by heredoc to `ssh` with no remote command runs in the remote login shell,
-    but the line reads as a plain `ssh`: `echo 'gh pr comment 3 --body hi' | ssh host` and
-    `ssh host <<EOF` are `shell` and allowed under every category deny; a `target:` entry for the
-    host still denies them (#240).
   - `git clone -c` (or `--config`) with a command-running key is not checked as `git -c` is:
     `git clone -c core.sshCommand='gh pr comment 3 --body hi' git@host:x/y` is `local_write` and
     allowed (open PR #231 reads it).
