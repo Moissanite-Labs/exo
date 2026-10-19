@@ -901,8 +901,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   line runs only because bash reads a value again also asks through `indirection`, as does an expansion in a `-i` or
   `-n` value, in a `-i` element, or in a compound value the line itself expanded. So when such a command outranks
   the line's own category, a deny on that category becomes ask, never allow or log
-  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `deny: [local_write]`); D-075 (#126) keeps the deny for
-  the `deny:` list form only (#191 tracks the `categories` form). That command also carries the `reread` signal,
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`); D-075 (#126) keeps the deny
+  for the `deny:` list form (#191 tracks the `categories` form). That command also carries the `reread` signal,
   and naming `opaque_exec` does not lower its ask, which stands in for the line's own deny:
   `{local_write: deny, opaque_exec: allow}` asks too. Past the
   depth limit such a command, or one in a subscript, is an `opaque_exec` part, as on the line itself, with `reread`.

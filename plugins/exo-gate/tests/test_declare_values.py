@@ -196,8 +196,8 @@ def test_value_command_keeps_the_line_deny(category, line):
 # A command bash runs only as it reads a quoted value (or subscript) again asks through `indirection` and `reread`,
 # so when it outranks the line's own category the line asks under a deny on that category (on ba4b616 each value
 # form was `local_write`, denied): deny becomes ask, never allow or log, also when the policy names opaque_exec
-# (which lowers only the `indirection` ask). A deny on the command's own category still denies. D-075 (#126)
-# restores the deny for the `deny:` list form.
+# (which lowers only the `indirection` ask). A deny on the command's own category still denies. Since D-075 (#126)
+# a `deny:` list entry matches the line's own `local_write` part and denies; a category line or a rule asks (#191).
 OUTRANKS = [
     ("read", "declare -a 'b=($(sudo ls))' > /tmp/f"),
     ("read", "declare -a 'b=($(ssh host ls))' > /tmp/f"),
@@ -217,7 +217,8 @@ def test_value_command_outranking_a_deny_asks(body, line):
     assert c.category != "local_write", c
     assert "indirection" in c.signals and "reread" in c.signals, c
     for policies in [None] + denies("local_write") + named_denies("local_write"):
-        assert decide(c, policies).outcome == "ask", (policies, c)
+        listed = bool(policies) and "local_write" in policies["gates"].get("deny", ())
+        assert decide(c, policies).outcome == ("deny" if listed else "ask"), (policies, c)
     if body != "read":
         for policies in denies(body) + named_denies(body):
             assert decide(c, policies).outcome == "deny", (policies, c)

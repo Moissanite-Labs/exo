@@ -92,8 +92,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `declare -n r='a[$(gh ...)]'` were allowed and are now a `github_post`. A command there, and an expansion bash
   evaluates again, also asks (`declare -a 'b=($(date))'`, `local -i n=$1`, `local -n ref=$1`,
   `declare -a 'a=([$i]=1)'` and `declare -a "b=($x)"` were allowed and now ask). When such a command outranks the
-  line's own category, a deny on that category becomes ask (`declare -a 'b=($(sudo ls))' > /tmp/f` under
-  `deny: [local_write]`), never allow or log, also when the policy names `opaque_exec`. A command nested deeper
+  line's own category, a category line or rule that denies the line's category asks, never allow or log, also when
+  the policy names `opaque_exec` (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`,
+  until #191); a `deny:` list entry still denies it (D-075). A command nested deeper
   than the gate reads asks. A backslash-newline in a compound value is dropped before it is read, as bash drops
   it (`declare -a 'b=($\<newline>(gh ...))'` was allowed and is now a `github_post`; a `$( )` the line itself runs
   in a double-quoted value is still read once, unless a backslash-newline in its single quotes or a here-document
