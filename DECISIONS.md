@@ -914,6 +914,19 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `\U` value that is no character is written as bash's u32toutf8 writes it (up to six bytes that are not ASCII,
   nothing from 0x80000000 on), so every `$'..'` word is read. Category and target vetoes see the decoded word; a
   `command:` regex still sees the raw line until the literal-word view (#187) uses the same decoder.
+  *Amendment 2026-10-18 (issue #130):* the store floor resolved the store roots but matched only the lexical
+  normpath of the path written, so a symlink alias into the store (`ln -s ~/.exo/state /tmp/s`, then a write to
+  `/tmp/s/approval-grants.json`) was a local write. `is_store_path` and the `cd` check now compare the union of two
+  spellings, the lexical normpath and the realpath, of both the candidate and each store root. Resolving the
+  original spelling keeps `symlink/..` in filesystem order, and the lexical form keeps a protected entry that links
+  out of the store protected. A path that cannot be resolved (a NUL byte, an unencodable character, a loop) keeps
+  its lexical form, so a resolution failure never weakens a check. `cd`, `pushd` and `git -C` into an alias of the
+  store count as being in the store. Links planted in the same command count as writes to what they alias: `cp -s`
+  and `cp -l` (and their long-option prefixes), and a relative `ln` target read against each absolute folder the
+  link can land in (the last `-t DIR`, the last operand and its parent, with options anywhere on the line). Not
+  done, listed in `docs/GATE.md`: TOCTOU, earlier hardlinks, a protected entry that links out of the store,
+  case-insensitive filesystems, glob spellings, relative link chains and folders, the bash tool's `cwd` argument,
+  and file-descriptor magic links (#217).
   *Amendment 2026-10-18 (issues #153, #154, #155):* an `ssh`/`mosh` chain past the four-level cap asks as
   opaque_exec and keeps the first host as target. Options of allowlisted programs whose value is a command
   (`tar -I`, `rsync -e`, `ssh -o ProxyCommand`, `git rebase -x`, `less +!`, sqlite3 and psql shell escapes,
