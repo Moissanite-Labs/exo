@@ -100,7 +100,7 @@ History is per seat in `$EXO_HOME/history/<seat>.jsonl`, mode 0600, the newest 5
 key or password is never kept.
 
 Guidance. With the composer empty, one dim line may suggest a next step, chosen by local rules: first run (`/intro`),
-a failed model call (`/providers` to check keys), a finished job (ask for its `job_output`), open findings
+a failed model call (`/providers` to check the provider), a finished job (ask for its `job_output`), open findings
 (`/findings`), a slow turn (`/trace`), a long thread (`/context`). At most one new line per 25 seconds, each rule twice
 a session, none while a turn runs, and a rule stops once you run its command. Tab fills the line in. Turn it off with
 `/tutorial off` (this also sets `guidance.enabled` to `false`; `/tutorial on` sets it back) or set that config key. It
@@ -124,9 +124,10 @@ All in `builtin_command`, `src/exo/diagnostics.py` (called from `CoreEngine._com
 | `handoff_facts` | The facts the agent needs to write a handoff: thread, git state of the folder, open findings and tasks, recent summaries, last turns. Reads only. | optional path | dict (`handoff_facts`) |
 | `subagent` | Inspect, steer and stop a subagent a session handed work to (D-070). The verb is the first word of the arguments; the task is a task id, a unique prefix of it, or the child's session id. Only the principal or the task's parent session may steer or stop; any other caller gets `forbidden`. A finished child answers `conflict`. No protocol command or event was added. | `list` (this session's tasks), `open <task>`, `send <task> <text>`, `stop <task>` | dict: `list` gives `{"tasks": [{task_id, parent, child_session, status, title, live}]}`; `open` gives the task row, `steerable`, the child's session and the tail of its messages; `send` gives `{steered, author}`; `stop` gives `{stopped}` |
 | `harness_error` | A client reports an exception it caught, so the core files a finding. Not for people. | JSON with `where`, `message`, `error_type`, `traceback`. Plain text also works. | nothing |
+| `memory_status` | The memory slot's state, for a client's boot line: `on`, `off` until a setup step (no principal store, and `text` is the notice naming `exo init <id>`), `failed` (an error at start) or `none` (no memory plugin). | none | dict `{state, provider, text}` |
 
-Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `handoff_facts`, `harness_error` and `subagent` are
-for clients to call (`/tasks`, `/open`, `/steer` and `/stop <task>` in the TUI, the Tasks page on the web).
+Only `context`, `compact`, `trace` and `findings` appear in `commands.list`. `handoff_facts`, `harness_error`, `memory_status` and
+`subagent` are for clients to call (`/tasks`, `/open`, `/steer` and `/stop <task>` in the TUI, the Tasks page on the web).
 
 ### Plugin commands
 
@@ -224,7 +225,7 @@ Those record the directory in config `principals.<id>`, and the id finds it from
 | `exo --version` | Package version, plus the git sha for a checkout install. | none | `version_string` in `src/exo/update_cmd.py` |
 | `exo update` | Upgrades Exo in place (installer re-run, git pull and reinstall, or `uv tool upgrade`), prints `old -> new`, then a quick self-check (import, protocol export current, `exo models`). | `--dry-run` prints the steps and changes nothing | `cmd_update` in `src/exo/update_cmd.py` |
 | `exo tui` | The terminal client. Runs the core in-process if no `exod` is running. Needs `pip install 'exo[tui]'`. | `--resume`, `--session ID`, `--seat NAME`, `--socket`, `--url`, `--token-file`, `--title`, `--no-intro` | `cmd_tui` in `src/exo/cli.py`, `clients/tui/exo_tui/__init__.py` |
-| `exo stop` | Stops the background core (exod) that `exo web` or `exo serve` started. Reads `$EXO_HOME/run/exod.pid`. | none | `stop_core` in `src/exo/ensure_core.py` |
+| `exo stop` | Stops the background core (exod) that `exo web` or `exo serve` started. Reads `$EXO_HOME/run/exod.pid`. | none (`-h` prints help and any other word is an error: neither stops the core) | `stop_core` in `src/exo/ensure_core.py` |
 | `exo web` | The command centre web client. Joins a running core (exod, or a terminal window's) or starts `exo serve` in the background (D-036). | `--socket`, `--url`, `--token-file`, `--host` (default 127.0.0.1), `--port` (default 7342) | `cmd_web` in `src/exo/cli.py`, `plugins/exo-command/exo_command/__main__.py` |
 
 ### Config, models and decisions

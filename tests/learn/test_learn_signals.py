@@ -1,10 +1,12 @@
 import json
+import logging
 
 import pytest
 
 from exo import capture
 from exo.learn import handle_feedback, handle_ui_respond
 from exo.learn.learner import Learner
+from exo.learn.runtime import resolve_store
 
 from conftest import feedback, new_session
 from exo.protocol import schema as s
@@ -157,6 +159,36 @@ def test_store_from_environment_principal(make_engine, template_store, tmp_path)
     shutil.copytree(template_store.root, eng.home / "principals" / "pat")
     lr = Learner(eng, env={"EXO_PRINCIPAL": "pat"})
     assert lr.runtime is not None and lr.runtime.root == eng.home / "principals" / "pat"
+
+
+def test_store_falls_back_to_the_active_principal_in_config(make_engine, template_store):
+    """The installer and `exo init` write only config.json `principal`; learning finds that store, as exo-memory
+    does, and the environment still wins over the file."""
+    import shutil
+    eng = make_engine(store=False)
+    shutil.copytree(template_store.root, eng.home / "principals" / "pat")
+    shutil.copytree(template_store.root, eng.home / "principals" / "env-pick")
+    (eng.home / "config.json").write_text(json.dumps({"principal": "pat"}))
+    lr = Learner(eng, env={})
+    assert lr.runtime is not None and lr.runtime.root == eng.home / "principals" / "pat"
+    assert lr.notices == []
+    assert resolve_store(eng, {"EXO_PRINCIPAL": "env-pick"}) == eng.home / "principals" / "env-pick"
+    (eng.home / "config.json").write_text(json.dumps({"principal": "../escape"}))
+    assert resolve_store(eng, {}) is None  # a bad id in the file is ignored, not joined into a path
+    shutil.copytree(template_store.root, eng.home / "principals" / "7")
+    (eng.home / "config.json").write_text(json.dumps({"principal": 7}))
+    assert resolve_store(eng, {}) is None  # only a string names a principal, as exo-memory reads it
+
+
+def test_no_principal_at_all_is_a_quiet_notice_that_names_the_fix(make_engine, caplog):
+    """No principal anywhere is a setup step, not a fault: the notice names `exo init` and is not a warning,
+    so it is not printed over the terminal before the client draws (exo-memory says it there)."""
+    eng = make_engine(store=False)
+    with caplog.at_level(logging.DEBUG, logger="exo.learn"):
+        lr = Learner(eng, env={})
+        assert lr.runtime is None
+    assert len(lr.notices) == 1 and "exo init" in lr.notices[0]
+    assert not [r for r in caplog.records if r.name == "exo.learn" and r.levelno >= logging.WARNING]
 
 
 @pytest.mark.parametrize("text,cue", [
