@@ -469,3 +469,20 @@ def test_spend_denial_never_falls_back_to_allow(keyed_store, monkeypatch):
     ctx = gated(store, key, decision_router('allow', calls))
     result = call(ctx, 'read_file', {'path': 'x'})
     assert result['action'] == 'block' and 'spend' in result['message'] and not calls
+
+
+def test_relative_paths_are_read_from_the_session_folder(keyed_store, tmp_path, monkeypatch):
+    """#209: the core passes the session's folder as ``cwd``; a harmless name there that links into ~/.ssh asks."""
+    store, key = keyed_store
+    _, ctx = make_gate(store, key)
+    home, work = tmp_path / "h", tmp_path / "w"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_rsa").write_text("fake\n")
+    work.mkdir()
+    (work / "notes.txt").symlink_to(home / ".ssh" / "id_rsa")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)                       # the gate's own folder holds no such link
+    assert call(ctx, "read_file", {"path": "notes.txt"}) is None
+    for tool, args in (("read_file", {"path": "notes.txt"}), ("terminal", {"command": "cat notes.txt"})):
+        r = call(ctx, tool, args, cwd=str(work))
+        assert r["action"] == "approve" and "notes.txt" in r["message"]
