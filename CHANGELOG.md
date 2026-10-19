@@ -397,7 +397,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
   closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
   In `apply_patch` a hunk's context lines count toward the two; since #236 each `-` line must also match its file
-  line, so a changed `-` line is refused there too.
+  line, so a changed `-` line is refused there too. In `edit_file` the rule counts lines, not exact lines: a changed
+  line plus a lone `}` or the `def` line still matches by similarity. So copy `old_string` from a fresh read
+  (docs/TOOLS.md "Edit matching").
 - Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
   is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
   only a string names a principal.
@@ -742,10 +744,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   halves. A read now holds back an ending that could start a key until the next read. Key redaction now finds every
   key in the text itself and puts the `[redacted]` markers in after, so a key no longer matches across a marker.
   Output changes only for a key value that holds `[` or `]` or is part of the word "redacted". The stream is cut
-  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output
-  for any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or
-  `]`. A key value learned while the command runs is cut out only inside one piece. The stream and the result also
-  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
+  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output for
+  any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or `]`. A
+  key value learned while the command runs is cut out only inside one piece. The stream and the result also decode a
+  character split between reads (non-ASCII output got U+FFFD there). The result is still redacted after a tool cuts its
+  output, so a key split by that cut (for example, `bash` keeps 15,000 characters at each end) leaves a part in the
+  result, as before. See docs/TOOLS.md "Streamed output". A background job's completion notice had no key redaction. It
+  now cuts known key values out of its command and its whole log before it cuts them to size (docs/JOBS.md).
 - The gate's decision call no longer falls back to the main model (D-081). With no decision or aux route, the rule
   outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
   stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a
