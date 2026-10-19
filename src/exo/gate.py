@@ -2900,8 +2900,60 @@ def _exo_home() -> str:
     return os.path.expanduser(os.environ.get("EXO_HOME") or "") or os.path.join(_home(), ".exo")
 
 
-def _expand_text(text: str) -> str:
-    """~, $HOME and $EXO_HOME (also ${...}) spelled out; nothing else is evaluated."""
+_STORE_VAR = re.compile(r"\$\{(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?=[^}\w])")
+_BRACE_EVENTS = re.compile(r"\\.|\$\{|\}|\n", re.S)
+
+
+def _store_var(name: str) -> str | None:
+    """A store variable as _expand_text spells it: HOME, EXO_HOME and CLAUDE_CONFIG_DIR as the gate reads them, set or
+    not; EXO_PRINCIPAL_STORE only when set."""
+    if name == "HOME":
+        return _home()
+    if name == "EXO_HOME":
+        return _exo_home()
+    if name == "CLAUDE_CONFIG_DIR":
+        return os.path.expanduser(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(_home(), ".claude"))
+    store = os.environ.get("EXO_PRINCIPAL_STORE")
+    return os.path.expanduser(store) if store else None
+
+
+def _store_var_ops(text: str, unset: bool, depth: int) -> str:
+    """``text`` with each `${VAR<op>word}` of a store variable spelt out (#202). `:-`, `-`, `:=` and `=` give the
+    value (_store_var), or the word when ``unset`` or the variable has none; `:+` and `+` give the word, or nothing
+    when ``unset``; `:?`, `?` and any other operator (`%/`, `#*/`, `:0`) give the value. The word is spelt out in turn,
+    its quotes dropped, to 8 levels. A form that does not close on its line, or with no value to give, stays as is."""
+    m = _STORE_VAR.search(text)
+    if not m:
+        return text
+    closes, opened = {}, []          # where each `${` closes, in one pass: a hostile line costs linear time
+    for e in _BRACE_EVENTS.finditer(text, m.start()):
+        if e[0] == "${":
+            opened.append(e.start())
+        elif e[0] == "}" and opened:
+            closes[opened.pop()] = e.start()
+        elif e[0] == "\n":
+            opened.clear()
+    out, i = [], 0
+    while m:
+        j = closes.get(m.start())
+        if j is not None:
+            op = re.match(r":?[-=?+]", text[m.end():j])
+            kind, word, rep = op[0][-1] if op else "", text[m.end() + (op.end() if op else 0):j], _store_var(m[1])
+            if kind == "+" and unset:
+                rep = ""
+            elif kind == "+" or kind in ("-", "=") and (unset or rep is None):
+                rep = _expand_text(word.replace('"', "").replace("'", ""), unset, depth + 1) if depth < 8 else None
+            if rep is not None:
+                out.append(text[i:m.start()] + rep)
+                i = j + 1
+        m = _STORE_VAR.search(text, j + 1 if j is not None else m.end())
+    return "".join(out) + text[i:]
+
+
+def _expand_text(text: str, unset: bool = False, depth: int = 0) -> str:
+    """~, $HOME and $EXO_HOME (also ${...}, and ${EXO_HOME:-word} and the other operators, see _store_var_ops) spelled
+    out; nothing else is evaluated. With ``unset``, a `${VAR:-word}` form is read as bash reads it when VAR is unset."""
+    text = _store_var_ops(text, unset, depth)
     home, exo = _home(), _exo_home()
     store = os.environ.get("EXO_PRINCIPAL_STORE")
     if store:
@@ -2983,6 +3035,51 @@ def _brace_budget(fn: _F) -> _F:
             return fn(*a, **kw)
         finally:
             _brace_left.reset(token)
+    return cast(_F, run)
+
+
+@dataclass
+class _Scope:
+    """What the secret-store checks of one classify call share: the folders the tool may read from (#209), the gate's
+    own folder, the dynamic stores' forms and _real's lookups. The call reads the file system as one snapshot."""
+    cwds: tuple[str, ...] = ()
+    here: str | None = None                      # the gate's own folder; "" when it cannot be read
+    roots: set[str] | None = None
+    real: dict[str, str] = field(default_factory=dict)
+
+
+_scope: contextvars.ContextVar[_Scope | None] = contextvars.ContextVar("exo_gate_scope", default=None)
+
+
+def _runs_shell(tool: str, args: Mapping) -> bool:
+    """A call classify reads as a shell command line. Only these run in their own `cwd` argument; the file tools
+    take unknown arguments and still read from the session's folder."""
+    return tool in ("terminal", "shell", "bash", "run_command", "exec_command") or (
+        tool not in TOOLS and isinstance(args.get("command"), str) and tool.endswith(("terminal", "shell")))
+
+
+def _in_tool_folder(fn: _F) -> _F:
+    """Run ``fn(action, cwd)`` in one _Scope that holds the folders the tool may read from (#209): ``cwd``, the
+    session's working folder as the core passes it, always; and for a shell tool, that folder joined with the
+    call's own `cwd` argument. A relative path is resolved from each of them and from the gate's own folder."""
+    @functools.wraps(fn)
+    def run(action: Any, cwd: str | None = None) -> Any:
+        folders: list[str] = []
+        try:
+            tool, args = _args_of(action)
+            base = os.path.expanduser(cwd) if isinstance(cwd, str) and cwd else ""
+            if base:
+                folders.append(os.path.abspath(base))
+            sub = args.get("cwd")
+            if isinstance(sub, str) and sub and _runs_shell(tool, args):
+                folders.append(os.path.abspath(os.path.join(base, os.path.expanduser(sub))))
+        except (TypeError, ValueError, OSError):   # an odd action: classify reports it itself
+            pass
+        token = _scope.set(_Scope(cwds=tuple(dict.fromkeys(folders))))
+        try:
+            return fn(action, cwd)
+        finally:
+            _scope.reset(token)
     return cast(_F, run)
 
 
@@ -3129,11 +3226,14 @@ def _brace_words(tok: str, pool: int = 0) -> list[str] | None:
 
 
 def _expand_words(words: list[str]) -> list[str]:
-    """_expand_text of each word, in one pass when no word holds a newline."""
+    """_expand_text of each word, in one pass when no word holds a newline. A word with a `${VAR:-word}` form of a
+    store variable is also read with VAR unset, so both its value and its default count (#202)."""
     if not any("~" in w or "$" in w for w in words):
         return words
     out = [] if any("\n" in w for w in words) else _expand_text("\n".join(words)).split("\n")
-    return out if len(out) == len(words) else [_expand_text(w) for w in words]
+    out = out if len(out) == len(words) else [_expand_text(w) for w in words]
+    unset = [_expand_text(w, unset=True) for w in words if _STORE_VAR.search(w)]
+    return out + [w for w in dict.fromkeys(unset) if w not in out] if unset else out
 
 
 def _real(path: str, memo: dict[str, str]) -> str:
@@ -3156,23 +3256,49 @@ def is_sensitive_path(path: str) -> bool:
 
 
 def _sensitive_words(words: list[str]) -> bool:
-    """is_sensitive_path for any of ``words``, which are already brace-expanded."""
-    words = [w.strip() for w in _expand_words(words)]
-    words = [w for w in words if w and not w.endswith(".pub")]   # public keys are meant to be shared
-    if any(_SENSITIVE_PATH.search(w.replace("\\", "/")) for w in words):
+    """is_sensitive_path for any of ``words``, which are already brace-expanded. A word is matched as written, and
+    as resolved from the gate's own folder and from the tool's (_Scope, #209): its absolute and real forms against
+    the dynamic stores, and, when a link led elsewhere, its real form by name too (for a relative word that lands
+    below the folder it was read from, only the part below it, so a folder like a repo's `.claude` does not count).
+    A form ending in `.pub` is a public key, meant to be shared; a link named `x.pub` is judged by where it leads."""
+    words = [w for w in (w.strip() for w in _expand_words(words)) if w]
+    if any(_SENSITIVE_PATH.search(w.replace("\\", "/")) for w in words if not w.endswith(".pub")):
         return True
-    roots = {r for root in _dynamic_secret_paths() for r in (os.path.abspath(root), os.path.realpath(root))}
-    memo: dict[str, str] = {}
-    for w in words:
+    scope = _scope.get() or _Scope()
+    if scope.roots is None:
+        scope.roots = {r for root in _dynamic_secret_paths() for r in (os.path.abspath(root), os.path.realpath(root))}
         try:
-            a = os.path.abspath(w)
-            real = os.path.realpath(w) if ".." in w.split(os.sep) or a.startswith("//") else _real(a, memo)
-            cands = {a, real}
-        except (OSError, ValueError):
-            real, cands = "", {w}
-        if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots) or _is_run_dir(w, real):
-            return True
+            scope.here = os.getcwd()
+        except OSError:
+            scope.here = ""
+    roots, memo = scope.roots, scope.real
+    for base in dict.fromkeys(("", *scope.cwds)):       # "": the gate's own folder
+        for w in words:
+            p = os.path.join(base, w)                    # an absolute word stays as it is
+            try:
+                a = os.path.normpath(os.path.join(scope.here, p)) if scope.here else os.path.abspath(p)
+                real = os.path.realpath(p) if ".." in p.split(os.sep) or a.startswith("//") else _real(a, memo)
+                cands = {a, real}
+            except (OSError, ValueError):
+                real, cands = "", {p}
+            cands = {c for c in cands if not c.endswith(".pub")}
+            if any(c == r or c.startswith(r + os.sep) for c in cands for r in roots) or _is_run_dir(p, real):
+                return True
+            if real in cands and real != a and _SENSITIVE_PATH.search(_below(real, base or scope.here, w, memo)):
+                return True
     return False
+
+
+def _below(real: str, folder: str | None, word: str, memo: dict[str, str]) -> str:
+    """A resolved path as _sensitive_words matches it by name: the part below the ``folder`` a relative ``word`` was
+    read from, when it lands there; else the whole path."""
+    if os.path.isabs(word) or not folder:
+        return real
+    try:
+        top = _real(os.path.normpath(folder), memo).rstrip(os.sep) + os.sep
+    except (OSError, ValueError):
+        return real
+    return real[len(top):] if real.startswith(top) else real
 
 
 class StoreSkip:
@@ -3272,9 +3398,15 @@ def _glob_words(words: list[str]) -> bool:
     return any(_glob_word(w, home, samples, secrets, runs) for w in words)
 
 
+_PROC_FILE = re.compile(r"/proc/[^/]+/([^/]+)")
+
+
 def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs: list[str]) -> bool:
     raw = tok.rpartition("/")[0]                         # its folder as written: a link resolves before its `..`
     tok = os.path.normpath(tok)                          # run/./*, run//* and run/jobs/../* are run/*
+    proc = _PROC_FILE.fullmatch(tok)                     # /proc/<pid>/environ of any process (#199)
+    if proc and _glob_names(proc[1], ("environ",)):
+        return True
     d, _, base = tok.rpartition("/")
     stem = re.sub(r"[*?\[\]]", "", base.rsplit(".", 1)[0] if "." in base[1:] else base)
     d_abs = os.path.normpath(d if d.startswith("/") else os.path.join(home, d)) if d and not re.search(r"[*?\[]", d) else ""
@@ -3305,8 +3437,10 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
 
 @functools.lru_cache(maxsize=4096)
 def _glob_rx(tok: str) -> re.Pattern[str]:
-    """fnmatch's pattern for ``tok``, also matching after any `/` when ``tok`` is relative."""
-    return re.compile(("" if tok.startswith("/") else r"(?s:.*/)?") + fnmatch.translate(tok))
+    """The bash glob ``tok`` as a pattern, also matching after any `/` when ``tok`` is relative. Read as bash reads it
+    (_fn_glob: `[^x]` is `[!x]`, a POSIX class is spelt out, #199); one that could match anything matches everything."""
+    pat = _fn_glob(tok)
+    return re.compile(("" if tok.startswith("/") else r"(?s:.*/)?") + (r"(?s:.*)\Z" if pat is None else fnmatch.translate(pat)))
 
 
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files and
@@ -3479,13 +3613,56 @@ def _shell_credential_hit(cmd: str, segs: list[list[str]], raws: list[str] | Non
         words = _brace_words(raw.replace("\\\n", ""))   # after line continuations are gone
         if words is None:
             return raw
-        if len(words) > 1 or '$"' in raw:
-            groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for w in words[1:] or words
-                           for d in _dequote(w)]
+        alts = words[1:] or words
+        found = [d for w in alts for d in _dequote(w)] if len(words) > 1 or '$"' in raw else []
+        found += [d for w in alts for f in _unknown_forms(w) for d in _dequote(f)]   # what an expansion may print
+        if found:
+            groups[raw] = [re.sub(r"^(\d*>>?|&>>?|<|[\w-]+=)+", "", d) for d in found]
     words = [w for ws in groups.values() for w in ws]
     if words and (_sensitive_words(words) or _glob_words(words)):
         return next((raw for raw, ws in groups.items() if _sensitive_words(ws) or _glob_words(ws)), "brace set")
     return ""
+
+
+_PARAM = re.compile(r"\$(\{[^}]*\}?|[A-Za-z_]\w*|[0-9@*#?$!-])")   # a ${..} to its first `}`, as the lexer reads it
+_KNOWN_PARAM = re.compile(r"\$\{?(HOME|EXO_HOME|EXO_PRINCIPAL_STORE|CLAUDE_CONFIG_DIR)(?!\w)")
+
+
+def _unknown_forms(src: str) -> list[str]:
+    """Spellings of a shell word whose source text ``src`` (quotes kept) holds an expansion the gate cannot spell
+    out (#225): a $( ) or ` `, or a ${..} or $name other than the store variables _expand_text spells out. Each is
+    read as empty, which joins the text around it (`.e$(:)nv` is `.env`, `${x}.env` is `.env`), and, where literal
+    text stands on both sides of it, as `*` for any output (`.e$(echo n)v` is the glob `.e*v`, which then asks where
+    that glob would). [] when the word holds none."""
+    if "$" not in src and "`" not in src:
+        return []
+    lx, q = _Lexer(src), ""
+    parts: list[str | None] = []                      # literal source text, None for an expansion
+    lit: list[str] = []
+    while lx.i < len(src):
+        ch = src[lx.i]
+        if q != "'" and (ch == "`" or src.startswith("$(", lx.i) and not src.startswith("$((", lx.i)):
+            parts += ["".join(lit), None]
+            lit = []
+            _SCANS[ch](lx, _Word())                   # past the substitution, read as the lexer reads it
+            continue
+        m = _PARAM.match(src, lx.i) if ch == "$" and q != "'" else None
+        if m and not _KNOWN_PARAM.match(m[0]):
+            parts += ["".join(lit), None]
+            lit = []
+            lx.i = m.end()
+            continue
+        step = len(m[0]) if m else 2 if ch == "\\" and q != "'" else 1
+        if ch in "'\"" and q in ("", ch):
+            q = "" if q else ch
+        lit.append(src[lx.i:lx.i + step])
+        lx.i += step
+    parts.append("".join(lit))
+    if len(parts) == 1:
+        return []
+    text = [k for k, p in enumerate(parts) if p and p.strip("'\"")]   # parts with literal text, not only quotes
+    star = "".join(p if p is not None else "*" if text and text[0] < k < text[-1] else "" for k, p in enumerate(parts))
+    return list(dict.fromkeys(["".join(p or "" for p in parts), star]))
 
 
 def _dequote(word: str) -> list[str]:
@@ -3600,11 +3777,12 @@ def _args_of(action: Any) -> tuple[str, dict]:
 
 
 @_brace_budget
-def classify(action: Any) -> Classification:
-    """Classify one tool call from its name and arguments. Pure; never raises on odd args."""
+@_in_tool_folder
+def classify(action: Any, cwd: str | None = None) -> Classification:
+    """Classify one tool call from its name and arguments. Pure; never raises on odd args. ``cwd`` is the folder the
+    tool runs in, when the caller knows it: relative paths are resolved from there too (_in_tool_folder sets it)."""
     tool, args = _args_of(action)
-    if tool in ("terminal", "shell", "bash", "run_command", "exec_command") or (
-            tool not in TOOLS and isinstance(args.get("command"), str) and tool.endswith(("terminal", "shell"))):
+    if _runs_shell(tool, args):
         c = classify_shell(str(args.get("command") or args.get("cmd") or ""))
     elif tool == "execute_code":
         c = classify_code(str(args.get("code") or ""))

@@ -222,8 +222,7 @@ the bash tool's own `cwd` argument rather than a `cd` on the line (`{"command": 
 in a folder name above a file (`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for
 the folder itself (`grep -r . ~/.exo/ru?`, `ru[n]`: the last part needs three literal
 characters, the same as for `~/.ss?`; `~/.exo/r*` asks); an upper-case spelling on a
-case-insensitive filesystem (`~/.exo/RUN/*`, as `~/.SSH/*`); `${EXO_HOME:-...}`, as for
-`$EXO_HOME/keys`; a wildcard that spells part of an agent's name that is not sampled
+case-insensitive filesystem (`~/.exo/RUN/*`, as `~/.SSH/*`); a wildcard that spells part of an agent's name that is not sampled
 (`run/agent-scout*` when `scout` is neither `$EXO_SEAT` nor among the 64 sampled seats); the
 built-in `glob` with the folder in `pattern` rather than `path` (it lists names; the same for
 `~/.ssh`); and a key beside a custom `--socket`, which is caught by name only
@@ -266,6 +265,70 @@ A file tool's path is checked, not each file the tool reaches below it: the buil
 walk every file under their path, and since #241 they leave the stores below it out themselves (see "What the
 search tools read" below).
 Tests: `tests/security/test_gate_brace_sets.py`.
+
+### Other spellings of a store path (#209, #202, #225, #199)
+
+A path can reach a store without spelling the store's name. The gate reads four such spellings the way the file
+system or bash will.
+
+- **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder, from
+  the session's working folder (the core passes it to tool hooks as `cwd`), and, for a shell tool, from that folder
+  joined with the call's own `cwd` argument, the folder a shell runs in. A `cwd` argument on a file tool changes
+  nothing: `read_file`, `write_file` and `grep` take unknown arguments and read from the session's folder. When a
+  link led somewhere else, the resolved path is matched against the store list too. So `notes.txt` pointing at `~/.ssh/id_rsa`, `aws.txt` at `~/.aws/credentials`, `app.cfg` at a
+  project `.env`, and a folder link `cfg` to `~/.ssh` (`cat cfg/config`) ask in every form: `read_file notes.txt`,
+  `cat notes.txt` and the absolute paths. A relative path that lands below the folder it was read from is matched
+  by its part below that folder. That way a session inside a folder that looks like a store by name (a repo's
+  `.claude/worktrees/x` checkout) is not asked about every read through a link that stays inside it. Both
+  folders' absolute and resolved forms are also compared with Exo's key stores and run folders, so a relative `run`
+  read in a session whose folder is `$EXO_HOME` is the run folder. A `.pub` name exempts a path only when the
+  resolved path ends in `.pub` too: `key.pub` pointing at `~/.ssh/id_rsa` asks.
+- **Defaults (#202).** `${VAR:-word}` and the other operators are read for `HOME`, `EXO_HOME`,
+  `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE`. The path is checked with the variable's value (as `$EXO_HOME`
+  reads: Exo's folder, set or not) and with the variable unset (the default word, spelt out in turn, quotes
+  dropped). Both count. `-`, `:=` and `=` take the word when unset; `:+` and `+` give the word when set and
+  nothing when unset; `:?` and any other operator (`%/`, `#*/`, `:0`) read as the value. So
+  `cat ${EXO_HOME:-$HOME/.exo}/keys/seat`, `tar czf - ${EXO_HOME:-$HOME/.exo}/keys` and
+  `ls ${EXO_HOME:-$HOME/.exo}/run` ask with `EXO_HOME` set or not, and `write_file
+  ${EXO_HOME:-$HOME/.exo}/policies/x.yaml` is a store write. A default is read to 8 levels of nesting; a deeper
+  one stays as written.
+- **Expansions inside a name (#225).** Bash drops an empty command substitution, and an unset variable expands to
+  nothing, so `cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc` and `cat ${x}.env` read the store. A shell word
+  that holds a `$( )`, a backtick pair, or a `${..}` or `$name` other than the four variables above is also
+  matched with each of them removed. Where literal text stands on both sides of one, it is also read as `*`, for
+  any output: `cat .e$(echo n)v` is the glob `.e*v`, which asks as that glob would. Single quotes keep text
+  literal (`cat '.e$(:)nv'` names a file spelt that way). Ordinary lines keep their class: `cat notes-$(date
+  +%F).md`, `ls $(pwd)/src`, `cat ${OUT}/report-${N}.txt`.
+- **Bash glob syntax (#199).** A glob is matched as bash reads it (`_fn_glob`, which the `cd` checks already
+  use): `[^x]` is `[!x]`, a `]` first in a set is a member, and a POSIX class is spelt out (`[[:alpha:]]` is
+  `[a-zA-Z]`). A class bash does not know, or more than 32 `[`, could match anything and counts as a match. So
+  `cat ~/.kube/[^x]onfig`, `cat ~/.kube/[[:alpha:]]onfig` and `cat ~/.config/gh/hosts.[^x]ml` ask.
+  `/proc/<pid>/<glob>` asks when the glob could match `environ`, for any process: `cat /proc/self/[!x]nviron`,
+  `cat /proc/*/[!x]nviron` and `cat /proc/self/*` ask, while `ls /proc/*/status` stays a read.
+
+Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and
+each folder's resolution) across all the line's words. Before, each word looked them up again. On three 10 KB
+shell lines (plain commands, expansions, globs; CPU time, median of 25 runs) classify took 30 to 82 ms, against 212
+to 312 ms before.
+
+Known limits. A link made on the same line (`tar xf v.tar && cat notes.txt`) does not exist yet when the gate
+classifies the line; `ln -s ~/.ssh/id_rsa n` itself asks, since it names the store. Programs that follow links
+while they walk (`grep -r`, `rg -L`, `cp -rL`) are checked by their arguments only. In executor or broker mode the
+gate's view of the file system may differ from the worker's. A name built whole inside a substitution
+(`cat $(printf '.e%sv' n)`) is not read. Open issues:
+  - #309: the Exo-store write checks (`is_store_path`, "The store is credentials" below) read the `${VAR:-word}`
+    value but not expansions inside a name, so `cp x ~/.exo/polic$(:)ies/gates.yaml` is still a shell command (a
+    write redirection to a path with `$` already asks as `opaque_exec`);
+  - #310: an expansion at the end of a store name is read as empty only, so `cat .env.$(hostname)` stays a read, as
+    does the glob `cat .env.*` (the glob samples have no `.env.<suffix>`);
+  - #311: a relative name read in a shell's `cwd` inside a store (`{"command": "cat config", "cwd": "~/.kube"}`) is
+    matched by the name as written; a `cd` on the line is tracked (#192);
+  - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved;
+  - #313: a thread's `/proc/<pid>/task/<tid>/environ` is not a store.
+
+Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
+`test_gate_expansions_in_names.py`, `test_gate_bash_glob_classes.py`, and
+`plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
 
 ### What the search tools read (#241)
 
@@ -969,7 +1032,7 @@ write to the outside spelling is a local write. Name and prefix checks are case-
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
-followed, and the bash tool's `cwd` argument is not read. File-descriptor magic links (`/dev/fd/N`,
+followed, and the bash tool's `cwd` argument is not read here (the secret-store checks read it, #209). File-descriptor magic links (`/dev/fd/N`,
 `/proc/self/fd/N`) name whatever an earlier redirection opened, so
 `exec 3< ~/.exo/state/gate-grants.json; printf X > /dev/fd/3` is not seen as a store write (#217).
 
