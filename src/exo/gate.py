@@ -853,10 +853,11 @@ _EXEC_OPTS = {
     "rsync": ("-e", "--rsh", "--rsync-path"), "scp": ("-S", "-D"), "sftp": ("-S", "-D"), "rg": ("--pre",),
     "zip": ("-TT", "--unzip-command"),
 }
-# git subcommand -> options whose value git runs (locally, or on the remote for a local-path remote).
+# git subcommand -> options whose value git runs (locally, or on the remote for a local-path remote). ls-remote
+# takes a hidden `--exec` for `--upload-pack` (#230); it rejects `-u`, which is still read so that no line asks less.
 _GIT_EXEC_OPTS = {"rebase": ("-x", "--exec"), "push": ("--receive-pack", "--exec"), "archive": ("--exec",),
                   "fetch": ("--upload-pack",), "clone": ("--upload-pack", "-u"), "pull": ("--upload-pack",),
-                  "ls-remote": ("--upload-pack", "-u")}
+                  "ls-remote": ("--upload-pack", "--exec", "-u")}
 # Options whose value is a script file or option text the gate cannot read: opaque.
 _EXEC_FILE_OPTS = {"tar": ("-F", "--info-script", "--new-volume-script"), "sqlite3": ("-init",), "duckdb": ("-init",)}
 # The short options that take a value (the letters before `:` in the program's getopt string) and long options
@@ -893,13 +894,15 @@ _EXEC_ENV_OPAQUE = frozenset(["TAR_OPTIONS"])
 # command, .once/.output/.import/.read run one when an argument starts with `|` (after options too:
 # `.import --csv '|cmd' t`), .once/.output/.read/.load otherwise use a file or library the gate does not see
 # (.import FILE is a plain data load). psql runs `\!`, and `\o`, `\out`, `\g`, `\gx`, `\w`, `\write` with a
-# `|command` (also quoted, or after `\g (options)`), wherever they appear on a line; mysql runs `system` at the
-# start of one. Line starts are matched with `[ \t]*`, not `\s*`, so a long heredoc stays linear.
+# `|command` (also quoted, or after `\g (options)`), wherever they appear on a line; mysql runs `\!` and, at the
+# start of one, `system` (psql has no `system`: a line starting `system` is SQL there). Line starts are matched
+# with `[ \t]*`, not `\s*`, so a long heredoc stays linear.
 _DOT_RUN, _DOT_PIPE = ("shell", "system"), ("once", "output", "import", "read")
 _DOT_FILE = ("once", "output", "read", "load")
 _DOT_COMMAND = re.compile(r"^[ \t]*\.([a-z]+)[ \t]*([^\n]*)", re.M)
 _DOT_PIPE_ARG = re.compile(r"""(?:^|[ \t])(?:(['"])\|(.*?)\1|\|(.*))""", re.S)
-_SQL_SHELL = re.compile(r"(?:^[ \t]*system[ \t]+|\\![ \t]*)([^\n]*)", re.M | re.I)
+_SQL_SHELL = {"mysql": re.compile(r"(?:^[ \t]*system[ \t]+|\\![ \t]*)([^\n]*)", re.M | re.I),
+              "psql": re.compile(r"\\![ \t]*([^\n]*)")}
 # The pipe after `\o`, `\g (options)`... is found in one pass over these tokens, so many on one line stay linear.
 _SQL_PIPE = re.compile(r"\\(?:o|out|w|write|gx?)(?![a-z])|[|\n]", re.I)
 # psql runs backquoted text in a meta-command's arguments (`\set x `cmd``, `\echo `cmd``)
@@ -1805,15 +1808,16 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
 
 
 def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "", longs: tuple = (),
-                   operands: int | None = None, exact: bool = False, wild: frozenset = frozenset()) -> list[str]:
+                   operands: int | None = None, least: int = 3, wild: frozenset = frozenset()) -> list[str]:
     """The values given to the options `names` in argv[start:], read as getopt reads them (#154). In a short
     option cluster the first letter that takes a value (one of `names`, or a letter in `takes`) ends the word:
     its value is the rest of the word or the next word (`-xIzstd`, `-avze ssh`, `-oProxyCommand=cmd`). A long
-    option takes `=value`, or the next word when it is in `longs`, is one of `names` or abbreviates one
-    (`--to-com cmd`, unless `exact`). A name of more than one letter after one dash (`-TT`, `-cmd`) is a whole
-    word. Options end at `--`, and with `operands` at the operand after that many: ssh reads options before and
-    after its destination, and the remote command follows. An operand at an index in `wild` may expand to no
-    word or several (`$A`, `"$@"`, a glob), so the operands cannot be counted and every word is read."""
+    option takes `=value`, or the next word when it is in `longs`, is one of `names` or abbreviates one in
+    `least` characters or more (`--to-com cmd`). A name of more than one letter after one dash (`-TT`, `-cmd`)
+    is a whole word. Options end at `--`, and with `operands` at the operand after that many: ssh reads options
+    before and after its destination, and the remote command follows. An operand at an index in `wild` may
+    expand to no word or several (`$A`, `"$@"`, a glob), so the operands cannot be counted and every word is
+    read."""
     shorts = "".join(n[1] for n in names if len(n) == 2)
     whole = [n for n in names if len(n) > 2 and not n.startswith("--")]
     long_names = [n for n in names if n.startswith("--")]
@@ -1830,7 +1834,7 @@ def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "
                 out.append(val if eq else argv[i])
                 i += 0 if eq else 1
         elif a.startswith("--"):
-            hit = any(n == key or (not exact and len(key) >= 3 and n.startswith(key)) for n in long_names)
+            hit = any(n == key or (len(key) >= least and n.startswith(key)) for n in long_names)
             if eq and hit:
                 out.append(val)
             elif not eq and (hit or key in longs) and i < len(argv):
@@ -1895,7 +1899,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
             c = _opaque("nested too deep to read", cmd)
         else:
             c = classify_shell(text, depth + 1)
-            c.summary = f"{what} runs {c.summary}"[:120]
+            c.summary = f"{what} {'' if c.summary.startswith('runs ') else 'runs '}{c.summary}"[:120]
         parts.append(c)
         return c
 
@@ -1916,9 +1920,9 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     wild = frozenset(i for i, w in enumerate(words) if w.dynamic or (not w.quoted and (
         w.glob or re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
 
-    def values(names: tuple, exact: bool = False, start: int = 1, sub_takes: str | None = None) -> list[str]:
+    def values(names: tuple, least: int = 3, start: int = 1, sub_takes: str | None = None) -> list[str]:
         return _option_values(argv, names, start, takes if sub_takes is None else sub_takes, longs,
-                              1 if prog == "ssh" else None, exact, wild)
+                              1 if prog == "ssh" else None, least, wild)
 
     # assignments before the program (`GIT_SSH_COMMAND=x git ...`, also through env; a partly quoted one is
     # left in `words`) and export's arguments, never an argument that merely looks like one (`grep EDITOR=x`)
@@ -1940,7 +1944,8 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
     for v in values(_EXEC_FILE_OPTS.get(prog, ())):
         parts.append(_opaque(f"{prog} runs the script {v}"[:120], cmd))
     if prog == "tar":
-        for v in values(("--checkpoint-action",), exact=True):
+        # any abbreviation longer than `--checkpoint`, which takes an optional value of its own
+        for v in values(("--checkpoint-action",), least=len("--checkpoint-")):
             if v.startswith("exec="):
                 nested(v[5:], "tar --checkpoint-action")
     if prog == "git":
@@ -1962,9 +1967,15 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
                     run = run[1:]                    # `foreach --recursive -q`
                 nested(" ".join(run), "git submodule foreach")
     if prog in ("ssh", "scp", "sftp"):
+        # `none` turns a command or library setting off (#232); a keyword the gate cannot read (`$OPT`, a glob, an
+        # unclosed quote that an expansion may close) asks
         for v in values(("-o",)):
             key, value = _ssh_setting(v)
-            if key in _SSH_EXEC_SETTINGS:
+            if value.strip(" \t\r\n").lower() == "none" and (key in _SSH_EXEC_SETTINGS or key in _SSH_LIB_SETTINGS):
+                continue
+            if v.strip() and not key.isalnum():
+                parts.append(_opaque(f"ssh -o {v} is a setting the gate cannot read"[:120], cmd))
+            elif key in _SSH_EXEC_SETTINGS:
                 c = nested(value, f"ssh {_SSH_EXEC_SETTINGS[key]}")
                 if c is not None and key == "remotecommand":
                     if EXPOSURE.index(c.exposure) < 1:
@@ -2016,7 +2027,7 @@ def _exec_options(before: list, words: list, k: _Cmd, cmd: str, depth: int, ctx:
                     elif arg and not pipe and any(n.startswith(name) for n in _DOT_FILE):
                         parts.append(_opaque(f"{prog} .{name} reads or writes a file the gate does not see", cmd))
             else:
-                for m in _SQL_SHELL.finditer(text):
+                for m in _SQL_SHELL[prog].finditer(text):
                     nested(m.group(1), f"{prog} shell command")
                 pending, skip = False, 0             # a `|` after an output command on its line, as in `\o '|cmd'`
                 for m in _SQL_PIPE.finditer(text):
@@ -3333,7 +3344,7 @@ def _env_dump(argv: list[str]) -> bool:
         return False
     prog, rest = argv[0].rsplit("/", 1)[-1], argv[1:]
     if prog == "env":
-        rest = [a for a in rest if not re.fullmatch(r"[A-Za-z_]\w*=.*", a)]
+        rest = [a for a in rest if not _ASSIGN.fullmatch(a)]
         return not [a for a in rest if not a.startswith("-")]
     if prog == "printenv":
         return not rest or any(re.search(r"KEY|TOKEN|SECRET|PASS", a, re.I) for a in rest)
@@ -3402,10 +3413,9 @@ def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
     """The simple command behind its assignments, prefixes (sudo, nice, timeout, env with a command...),
     `coproc`, compound openers (then, do...) and run wrappers (uv run, poetry run...), so the environment-dump
     check sees `uv run printenv X` as `printenv X` (#155). A bare `env` (or `env` with assignments only) is kept: it is the dump."""
-    assign = re.compile(r"[A-Za-z_]\w*=.*")
     while argv:
         base = argv[0].rsplit("/", 1)[-1]
-        if assign.fullmatch(argv[0]) or base in _OPENERS or base in ("coproc", "("):
+        if _ASSIGN.fullmatch(argv[0]) or base in _OPENERS or base in ("coproc", "("):
             argv = argv[1:]
         elif base in _PREFIXES and not (base == "command" and argv[1:2] and argv[1] in ("-v", "-V")):
             rest, takes = argv[1:], _PREFIXES[base]
@@ -3417,7 +3427,7 @@ def _strip_prefixes_keep_env(argv: list[str]) -> tuple[list[str], bool]:
                     rest = rest[1:]
             if base == "timeout" and rest and re.fullmatch(r"[\d.]+[smhd]?", rest[0]):
                 rest = rest[1:]
-            if base == "env" and all(assign.fullmatch(a) for a in rest):
+            if base == "env" and all(_ASSIGN.fullmatch(a) for a in rest):
                 break
             argv = rest
         elif (base, argv[1] if len(argv) > 1 else "") in _RUN_WRAPPERS:
