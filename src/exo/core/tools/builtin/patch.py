@@ -21,6 +21,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable
 
+from exo.core.private import atomic_write
 from exo.core.tools.builtin.fuzzy import (
     format_no_match_hint,
     fuzzy_find_and_replace,
@@ -154,6 +155,8 @@ def _update(content: str, op: PatchOperation) -> tuple[str, list[str]]:
             continue
         changed = True
         pattern, replacement = "\n".join(search), "\n".join(replace)
+        # Similarity may place the context lines; every '-' line must match its file line.
+        minus = frozenset(j for j, x in enumerate(x for x in h.lines if x.prefix != "+") if x.prefix == "-")
         if not search:
             new, err = _insert_addition_only(content, h, replacement)
             if err:
@@ -161,10 +164,11 @@ def _update(content: str, op: PatchOperation) -> tuple[str, list[str]]:
             else:
                 content = new
             continue
-        new, count, _s, err = fuzzy_find_and_replace(content, pattern, replacement)
+        new, count, _s, err = fuzzy_find_and_replace(content, pattern, replacement, exact_lines=minus)
         if not count and h.context_hint and (pos := content.find(h.context_hint)) != -1:
             lo, hi = max(0, pos - 500), min(len(content), pos + 2000)
-            win, count, _s, err = fuzzy_find_and_replace(content[lo:hi], pattern, replacement)
+            win, count, _s, err = fuzzy_find_and_replace(content[lo:hi], pattern, replacement,
+                                                  exact_lines=minus)
             if count:
                 new = content[:lo] + win + content[hi:]
         if count:
@@ -203,15 +207,9 @@ def read_regular(p: Path, cap: int) -> bytes:
 
 
 def write_atomic(p: Path, text: str) -> None:
-    """Write UTF-8 text via a fresh temp file and rename, keeping line endings as given."""
+    """Write UTF-8 text through `atomic_write` (#273), keeping line endings as given and the file's mode."""
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f".{p.name}.exo-tmp")
-    tmp.unlink(missing_ok=True)  # a leftover, or a planted link: never write through it; O_EXCL fails on a race
-    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666), "w", encoding="utf-8", newline="") as f:
-        f.write(text)
-    if p.exists():
-        os.chmod(tmp, p.stat().st_mode & 0o7777)
-    os.replace(tmp, p)
+    atomic_write(p, text, p.stat().st_mode & 0o7777 if p.exists() else None)
 
 
 def apply_patch(text: str, resolve: Callable[[str], Path]) -> tuple[bool, str]:
