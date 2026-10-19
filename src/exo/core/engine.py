@@ -398,7 +398,8 @@ class CoreRuntime:
     def _hook_kw(self, call: ToolCall, ctx: ToolContext) -> dict[str, Any]:
         return {"tool_name": call.name, "args": call.arguments, "session_id": ctx.session or "",
                 "task_id": ctx.session or "", "tool_call_id": call.id, "turn_id": ctx.meta.get("turn_id", ""),
-                "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low"}
+                "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low",
+                "cwd": str(ctx.cwd or "")}   # the folder relative paths resolve from (the gate reads them there, #209)
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
         bound_mode = self.registry.executor_required

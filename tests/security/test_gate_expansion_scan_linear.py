@@ -4,7 +4,8 @@ classify runs inside the gate hook, on the core's event loop, so one long tool c
 first #231 head the review's three shapes of 100 KB took from seconds to minutes: every unclosed `${NAME:=`
 read to the end of the line again, every `${a[` looked for its `]` again, and a closed nest copied each value
 again for each level. The brace, bracket and paren pairs are now each found in one pass. The `${a[` run also
-reached fnmatch.translate, which is quadratic on a `[` that opens no set (on main too).
+reached fnmatch.translate, which is quadratic on a `[` that opens no set; since #307 the secret-store glob check
+reads a word with more than 32 `[` as one that could match anything, without fnmatch.
 
 Every command string here is data for exo.gate.classify/decide; none is run."""
 import time
@@ -66,8 +67,11 @@ def test_closed_assignment_nest_is_linear():
 ], ids=["deep-param", "deep-subscript", "long-arith", "sq-in-dq"])
 def test_a_listed_variable_deep_in_a_long_line_is_still_found(cmd):
     c = _timed(cmd, SLACK)
-    assert c.category == "opaque_exec" and "PATH" in c.summary, c
-    assert gate.decide(c).outcome == "ask", c
+    assert "indirection" in c.signals and gate.decide(c).outcome == "ask", c
+    # the card may name a stronger part (since #307 the `${a[` run reads as a glob that could match a secret store),
+    # so the scan itself is asked what it found
+    cmds, _, _ = gate._parse(cmd)
+    assert any(name == "PATH" for name, _ in gate._hidden_sets(cmds[0], [])), cmd[:40]
 
 
 def test_a_command_value_nest_reads_each_value_once():

@@ -6,6 +6,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Gate (#209, #202, #225, #199, D-038): four spellings of a secret-store path were allowed reads and now ask. A
+  harmlessly named link into a store (`notes.txt` to `~/.ssh/id_rsa`, `cfg` to `~/.ssh`, `app.cfg` to a project
+  `.env`) is judged by where it leads, resolved from the session's working folder (the core now passes it to tool
+  hooks as `cwd`), from the gate's own and, for a shell tool, from the call's own `cwd` argument; a `cwd` argument on
+  a file tool, which the tool ignores, changes nothing. Each hook callback now gets only the keyword arguments it
+  declares (all of them with `**kwargs`), so a callback without `cwd` keeps working. A `.pub` name exempts
+  only a path that resolves to one. `${EXO_HOME:-$HOME/.exo}/keys` and the other `${VAR<op>word}` forms of `HOME`,
+  `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the default. An
+  expansion inside a store name (`cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc`, `cat ${x}.env`) is read as
+  empty, and as any text between two literal parts (`cat .e$(echo n)v`). A glob in bash's bracket syntax
+  (`~/.kube/[^x]onfig`, `[[:alpha:]]onfig`) is read as bash reads it, and `/proc/<pid>/<glob>` is matched against
+  `environ`. One classify call now shares its file-system lookups across the line's words, so a 10 KB line
+  classifies several times faster. Limits in GATE.md "Other spellings of a store path".
 - A pinned block in text the principal did not write no longer reads as one to the model (#279, D-040 amendment).
   The core's system message quotes each span too small to summarize word for word, so a peer's, bus seat's, job
   notice's or tool result's copy of exo-context's `<exo-pinned>` block sat there looking like the principal's pinned
@@ -891,9 +904,7 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   outside a subscript, so `git commit -m 'read ${PATH:=.}'`, `pytest -q 'test_x[HOME=/tmp]'` and `echo [HOME=x]`
   stay `allow`. A
   partly quoted value loses its quotes as bash removes them (`${GIT_SSH_COMMAND:=rm' -rf x'}` is `rm -rf x`).
-  The scan is linear in the line, so a long run of unclosed or nested expansions cannot stall the gate hook, and a
-  run of `[` that open no set no longer makes the secret-store glob check quadratic (100 KB of `${a[${b[...` took
-  two minutes on main).
+  The scan is linear in the line, so a long run of unclosed or nested expansions cannot stall the gate hook.
   The rarer expansion forms that can still set a variable unseen are listed in `docs/GATE.md`. This is the inline
   form, distinct from #135, which drops `BASH_ENV` inherited from the parent environment (builds on #154,
   D-038).
