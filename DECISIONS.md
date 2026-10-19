@@ -1099,6 +1099,23 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `GIT_CONFIG_COUNT`, and dropped whole when `env_deny` or the token-format value check drops any member. So an exact
   `env_allow` of a single `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` no longer keeps it, an exception to
   "`env_allow` keeps a name". Documented in `docs/TOOLS.md`.
+  *Amendment 2026-10-19 (PR #222):* redacting key values out of text has one match model too, `keys.secret_spans`.
+  `keys.redact_secrets` uses it for every caller: tool results in the registry, the engine's `tool.output` pieces,
+  the claude-cli provider, provider test and setup errors, and the `bash` stream. The values go longest first. Each
+  value's matches are found from the left, as `str.replace` finds them, and a match that overlaps a span taken before
+  is skipped. All matches are found in the text itself. Then one `[redacted]` marker goes in per span, in one pass.
+  So no value can match across a marker. Before, each value replaced its matches in turn, and a later value could
+  match text that held an earlier marker. Output changes only for a key value that holds `[` or `]` or is part of the
+  word "redacted". `keep_markers` takes each `[redacted]` already in the text first. The engine's second pass over a
+  streamed piece uses it. So that pass leaves the stream's redaction as it is and cuts out only a key learned since.
+  The `bash` stream holds back the longest end of a read that could start a key. Then, value by value in redaction
+  order, a value's first match that would cross the cut moves the cut back to that match's start. So no span of the
+  whole output crosses a cut, and the stream equals redacting the whole output with the key values known when the
+  command starts. The held text stays under twice the length of all key values together. What still goes out: a key
+  value learned while the command runs is cut out only inside one piece, so such a key split between two pieces goes
+  out in two parts. The result is redacted whole, with every key value known when the call returns. Only the values
+  Exo knows (`known_secret_values`) are redacted, as before. Rejected: holding all output until the command ends (no
+  live output). `docs/TOOLS.md` "Streamed output".
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
