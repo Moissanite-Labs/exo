@@ -6,6 +6,7 @@ import stat
 import subprocess
 import signal
 import sys
+import tempfile
 import time
 
 import pytest
@@ -51,15 +52,18 @@ for line in sys.stdin:
     frames.append(f)
     if f.get("shouldQuery") is False:
         out({{"type": "result", "subtype": "success", "num_turns": 0, "is_error": False}})
-def mentions(t):  # as the real CLI (2.1.302) reads "@path": a whitespace-split token that starts with "@" or has it
-    # right after a CJK full stop, comma, ? or !, and @"a quoted path" after the start or JS whitespace
+def mentions(t):  # as the real CLI (2.1.303) reads "@path": the first "@" in a whitespace-split token that starts it
+    # or follows a CJK full stop, comma, ? or !, up to the token's last word character; and @"a quoted path"
     got = re.findall(r'(?:^|(?<=[\\s\\ufeff\\u3002\\u3001\\uff1f\\uff01]))@"([^"]+)"', t)
     for tok in re.split(r"[\\s\\ufeff]+", t):
         at = [i for i, c in enumerate(tok) if c == "@" and (i == 0 or tok[i - 1] in "\\u3002\\u3001\\uff1f\\uff01")]
-        got += [tok[at[0] + 1:]] if at and len(tok) > at[0] + 1 else []
+        name = re.sub(r"[^A-Za-z0-9_]+$", "", tok[at[0] + 1:]) if at else ""
+        got += [name] if name and not name.startswith('"') else []
     return got
+def resolve(p):  # "~" and "~/" from HOME, the rest from the cwd with ".." folded as text, as Node's path.resolve
+    return os.path.normpath(os.path.join(os.getcwd(), os.path.expanduser(p) if p == "~" or p[:2] == "~/" else p))
 read = [open(p).read() for f in frames if f["type"] == "user" for b in f["message"]["content"]
-        for p in map(os.path.expanduser, mentions(b.get("text", ""))) if os.path.isfile(p)]  # sent to the model
+        for p in map(resolve, mentions(b.get("text", ""))) if os.path.isfile(p)]  # sent to the model
 settings = json.load(open(sys.argv[sys.argv.index("--settings") + 1]))
 json.dump({{"argv": sys.argv[1:], "frames": frames, "cwd": os.getcwd(), "env": dict(os.environ), "read": read,
            "system": open(sys.argv[sys.argv.index("--system-prompt-file") + 1]).read(),
@@ -465,15 +469,80 @@ def test_build_frames_guards_each_user_slash_block_and_nothing_else():
 
 
 @pytest.mark.parametrize("text, sent", [
-    ("@a b", "\u200b@a b"), ("x @a\t@b\n@c", "x \u200b@a\t\u200b@b\n\u200b@c"),
+    ("@/a b", "\u200b@/a b"), ("x @/a\t@~/b\n@./c", "x \u200b@/a\t\u200b@~/b\n\u200b@./c"),
     ('read @"/p q"', 'read \u200b@"/p q"'),
-    ("x\u00a0@a x\ufeff@a x\u3000@a", "x\u00a0\u200b@a x\ufeff\u200b@a x\u3000\u200b@a"),
-    ("\u770b\u3002@a \u5417\uff1f@a", "\u770b\u3002\u200b@a \u5417\uff1f\u200b@a"), ("@@a", "\u200b@@a"),
-    ("mail a@example.com, (@a), x:@a @b", "mail a@example.com, (@a), x:@a \u200b@b")])  # only token starts
+    ("x\u00a0@/a x\ufeff@~/a x\u3000@../a", "x\u00a0\u200b@/a x\ufeff\u200b@~/a x\u3000\u200b@../a"),
+    ("\u770b\u3002@/a \u5417\uff1f@a/../b", "\u770b\u3002\u200b@/a \u5417\uff1f\u200b@a/../b"),
+    ('@"a b"', '\u200b@"a b"'),
+    ("mail a@example.com, (@/a), x:@/a @/b", "mail a@example.com, (@/a), x:@/a \u200b@/b")])  # only token starts
 def test_build_frames_guards_each_user_at_mention(text, sent):
     """The real CLI (2.1.302) reads "@path" where it starts a token (the text start, JS whitespace, U+FEFF) or follows
-    a CJK full stop, comma, ? or !, and attaches the file. Only those spots get the zero-width space."""
+    a CJK full stop, comma, ? or !, and attaches the file. Only a path-form @ at those spots gets the zero-width
+    space; a bare @word there passes unchanged."""
     assert claude_cli.build_frames([Message.user(text)], set())[1][0]["message"]["content"][0]["text"] == sent
+
+
+def as_sent(text):  # one user text block as Exo hands it to the CLI
+    return claude_cli.build_frames([Message.user(text)], set())[1][0]["message"]["content"][0]["text"]
+
+
+PATHS = ("/etc/x", "~/x", "./x", "../x", '"x y"', "x/../../etc/x")
+
+
+@pytest.mark.parametrize("start", ["", "x ", "x\t", "x\n", "x\u00a0", "x\ufeff", "x\u3000", "x\u2028", "\u770b\u3002",
+                                   "\u770b\u3001", "\u5417\uff1f", "\u5417\uff01"])
+def test_every_path_mention_is_guarded_at_every_token_start(start):
+    """The forms that reach a file outside the CLI's empty folder: absolute, home, "./", "../", quoted, and a word
+    with a "/.." step (on 2.1.303 an unguarded "@x/../../<path>" sent the file)."""
+    for p in PATHS:
+        assert as_sent(f"{start}@{p} end") == f"{start}\u200b@{p} end"
+
+
+@pytest.mark.parametrize("text", [
+    "fix this:\n" "@app.route('/x')\n@login_required\ndef f(): ...", "@media (max-width: 600px) { a { color: red } }",
+    "@@ -1,3 +1,4 @@\n-a\n+b", "write to a@b.c", "@p, see @peer-bot", "@@a", "@import url(x.css);",
+    "(@/p)", '"@/p"', "x:@/p", "a@/p", "x\uff0c@/p", "x\uff1b@/p", "x\uff1a@/p", "\u300c@/p", "x\u200b@/p"])
+def test_code_mail_and_non_token_at_signs_pass_as_typed(text):
+    """abu-aska's review of #213: a U+200B before "@app.route" or "@login_required" lands in a file the model writes
+    from it, a SyntaxError in Python. A bare word resolves inside the CLI's empty folder and reaches nothing. An "@"
+    after "(", a quote, ":", a letter, a fullwidth comma, semicolon, colon or corner bracket, or U+200B starts no
+    mention on the real CLI."""
+    assert as_sent(text) == text
+
+
+def test_a_dotdot_path_is_guarded_and_code_reaches_the_model_as_typed(tmp_path, monkeypatch):
+    """Real CLI 2.1.303 against a fake API: an unguarded "@x/../../<path>" attached the file, because the CLI folds
+    ".." as text from its cwd. A decorator, "@media", a hunk header and an address attached nothing. The fake reads
+    the same way: with the guard switched off it reads the canary, with it on it reads nothing."""
+    canary = tmp_path / "canary.txt"
+    canary.write_text("CANARY")
+    up = f"look at @x{'/..' * 40}{canary}"
+    code = ["fix this:\n" "@app.route('/x')\n@login_required\ndef f(): ...", "@media print { a { color: red } }",
+            "@@ -1,3 +1,4 @@\n-a\n+b", "write to a@b.c", "@p, see @peer-bot"]
+    r = router(tmp_path)
+    with monkeypatch.context() as m:
+        m.setattr(claude_cli, "TEXT_GUARD", "")
+        run(r, [Message.user(up)])
+    assert seen(tmp_path)["read"] == ["CANARY"]
+    hist = [x for t in [up, *code] for x in (Message.user(t), Message.assistant("ok"))][:-1]
+    assert run(r, hist)[-1].kind == "done"
+    got = seen(tmp_path)
+    assert got["read"] == []
+    sent = [b["text"] for f in got["frames"] if f["type"] == "user" for b in f["message"]["content"]]
+    assert sent == [up.replace("@", "\u200b@"), *code]
+
+
+def test_the_cli_folder_holds_no_name_a_bare_mention_reaches(tmp_path, monkeypatch):
+    """guard_text lets "@word" through because the CLI resolves it in its own empty folder. A name there without a
+    leading "." would be reachable, so that folder is not used: the call gets a fresh empty one."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    stable = tmp_path / f"claude-cli-cwd-{os.getuid()}"
+    assert claude_cli.workdir() == str(stable)
+    (stable / ".cache").mkdir()  # "@.cache" is guarded, so a dot name is out of reach
+    assert claude_cli.workdir() == str(stable)
+    (stable / "notes.txt").write_text("mine")
+    fresh = claude_cli.workdir()
+    assert fresh != str(stable) and os.path.dirname(fresh) == str(tmp_path) and os.listdir(fresh) == []
 
 
 def test_user_at_path_is_never_read_by_the_cli(tmp_path):
