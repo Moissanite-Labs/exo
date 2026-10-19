@@ -816,9 +816,10 @@ climb; an absolute target is also resolved, so a link into `run/jobs` counts. Fr
 the store, a name that spells the store's folder name is joined too (`cd /srv && tar czf -
 exo-home/run` with `EXO_HOME=/srv/exo-home`). The run folder's credential file names are store file
 names as well (`exod.principal.key`, `exod.token`, the sampled `agent-<seat>.principal.key`), so
-`cat ../exod*` asks on any line that enters a store folder. Past 64 such folders or 16,384 such paths
-on one line, the line asks (fails closed). A folder spelt with a wildcard is left to the store-folder
-check above.
+`cat ../exod*` asks on any line that enters a store folder. Each join of a folder with a target or
+name, and each level up, is charged to one budget of 16,384 per line as it is made, so the work stays
+linear in the line; past it, or past 64 such folders, the line asks (fails closed). A line that names
+no store folder makes no join. A folder spelt with a wildcard is left to the store-folder check above.
 
 A line that enters no store folder, and names none, is classified as before. The work is linear
 in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64
@@ -1012,13 +1013,22 @@ to it (`ln -s /proc/self/fd/3 x`), a file tool's path, `//dev/fd/3`, `/dev/fd/$f
 stderr stay ordinary (`> /dev/fd/1`, `> /proc/self/fd/2`, `> /dev/stdout`). A store path opened for
 reading on a descriptor other than stdin (`3< f`, `exec 2< f`, `{ ...; } 1< f`) is a `store_write`
 too, because `> /dev/fd/3` or `> /dev/stdout` later on the line, or in a later call of a persistent
-shell, writes it back; on stdout or stderr a target from a variable counts as well. `cat < f` and
-`cat 0< f` stay reads. Known limits: a descriptor path is matched as written, not resolved (the gate's
-own realpath would run through its own descriptors), so a link to one made where the gate does not
-see it is not caught (`ln -s` of one, or of `/dev` or `/proc/self`, on a shell line is a store write);
-a store file opened on a numbered descriptor from a path the gate cannot read (`exec 3< "$f"`) is
-caught only by its write back through a descriptor path; and a named descriptor (`exec {fd}< f`) is
-not read as one, though its write back through `/dev/fd/$fd` is caught.
+shell, writes it back. On stdout or stderr, where the write back is an ordinary write, any target the
+gate cannot pin to a path counts as well: a variable (`1< "$f"`), a substitution, a glob
+(`2< ~/.exo/sta*/gate-grants.json`) or a relative name (`exec 1< gate-grants.json`). `cat < f`,
+`cat 0< f`, `exec 3< "$f"` and `exec 2< /dev/null` stay reads.
+
+Known limits. A descriptor path is matched as written, not resolved (the gate's own realpath would run
+through its own descriptors). A link to one, or to `/dev` or `/proc/self`, is a store write when a shell
+line or code makes it (`ln -s /proc/self/fd/3 x`), but one made where the gate does not see it, or
+already there, is followed by nothing: a store file opened on descriptor 3 or above through a spelling
+the gate cannot read (a variable, a glob in a folder part, a named `{fd}`) and written back through
+that link passes (`exec 3< "$f"; printf X > /tmp/link-to-dev/fd/3`). So does a store file reached through
+a hardlink and opened on stdout (`exec 1< /tmp/hardlink; printf X > /dev/stdout`), as for any hardlink
+above. Known friction (fails closed, no grant): a descriptor path used as an input of a command that
+writes asks too, since the words of a writing command are not told apart (`jq . /dev/stdin > out.json`,
+`cat /dev/stdin > f`, `patch -i /dev/stdin`, `diff /proc/self/fd/3 x > out`); `jq . < /dev/stdin >
+out.json` does not.
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,

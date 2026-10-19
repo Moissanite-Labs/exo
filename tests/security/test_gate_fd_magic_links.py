@@ -86,6 +86,13 @@ def _decided(action):
     f"exec 3< {GRANTS}",
     f"while read -u 3 l; do echo $l; done 3< {GRANTS}",
     '{ printf FORGED > /dev/stdout; } 1< "$F"',     # stdout or stderr from a path in a variable
+    # ... or a glob, a substitution or a relative name: any target the gate cannot pin to a path
+    "{ printf FORGED > /dev/stdout; } 1< ~/.exo/sta*/gate-grants.json",
+    "{ printf FORGED > /dev/stderr; } 2< ~/.exo/s[t]ate/gate-grants.json",
+    "{ printf FORGED > /dev/stdout; } 1< $(echo ~/.exo/state/gate-grants.json)",
+    "exec 2< ~/.exo/sta*/gate-grants.json",
+    "exec 1< gate-grants.json",
+    "cd ~/.exo/state && { printf FORGED > /dev/stdout; } 1< gate-grants.json",
 ])
 def test_a_write_through_a_descriptor_path_is_a_store_write(cmd):
     assert _decided(_sh(cmd)) == ("store_write", "ask", True), cmd
@@ -113,6 +120,9 @@ def test_a_file_tool_write_through_a_descriptor_path_is_a_store_write(path):
     ("ls -la /proc/self/fd/", "read"),
     ("exec 3< /tmp/x; cat <&3", "read"),
     ('exec 3< "$F"', "read"),
+    ("exec 3< x.txt", "read"),
+    ("exec 2< /dev/null", "read"),                  # an absolute path on stderr is checked as written
+    ("ls 2>&1", "read"),
     (f"cat < {GRANTS}", "read"),                    # stdin from the store is a plain read
     (f"cat 0< {GRANTS}", "read"),
     (f"jq . {GRANTS} > /dev/stdout", "read"),

@@ -663,3 +663,60 @@ def test_work_is_linear(line, monkeypatch):
     assert with_check["filter"] <= 2 * sum(map(line.count, "*?[{")), (with_check, calls)
     assert took < 3 * base + 2, (took, base)
     assert gate.decide(c).outcome in ("ask", "allow")
+
+
+def _fill(head: str, unit, size: int, tail: str = "") -> str:
+    """``head``, then ``unit(0)``, ``unit(1)``... until the line is about ``size`` bytes, then ``tail``."""
+    parts, n, i = [head], len(head) + len(tail), 0
+    while n < size:
+        parts.append(unit(i))
+        n, i = n + len(parts[-1]), i + 1
+    return "".join(parts) + tail
+
+
+_DEEP = "/".join(f"d{j}" for j in range(30))
+EXO_SHAPES = {   # #269's resolution in $EXO_HOME: each made its joins in full before its caps, quadratic in the line
+    "run-jobs-then-exo-cds": lambda n: _fill("cd ~/.exo/run/jobs; ", lambda i: f"cd .exo/r{i}; ", n),
+    "cds-then-exo-names": lambda n: _fill("", lambda i: f"cd /a{i}; ", n // 2) + _fill("cat", lambda i: f" .exo/x{i}", n // 2),
+    "64-store-cds-then-cds": lambda n: _fill("".join(f"cd ~/.exo/a{j}; " for j in range(64)), lambda i: f"cd r{i}; ", n),
+    "deep-store-cds-and-ups": lambda n: _fill("".join(f"cd ~/.exo/a{j}/{_DEEP}; " for j in range(64)) + "cd "
+                                              + "/".join([".."] * 64) + "; ", lambda i: f"cd r{i}; ", n),
+    "plain-cds": lambda n: _fill("", lambda i: f"cd /a{i}; ", n, "cat x"),
+    "plain-relative-cds": lambda n: _fill("cd /srv; ", lambda i: f"cd r{i}; cd ..; ", n, "cat x"),
+    "store-cd-many-names": lambda n: _fill("cd ~/.exo/run/jobs && cat", lambda i: f" f{i}.log", n),
+}
+
+
+@pytest.mark.parametrize("shape", list(EXO_SHAPES), ids=list(EXO_SHAPES))
+def test_exo_store_resolution_is_linear(shape):
+    """Every join `_exo_relative` makes is charged to one budget as it is made, so the cd check on a line four times
+    longer takes about four times the CPU, not sixteen (10.8x to 18.3x before), and its memory stays small (62 MB at
+    10 KB before, 8.6 GB for the whole call at 100 KB). The check is timed alone, the line parsed outside the timer;
+    CPU time, the best of three, and a ratio rather than a limit, because suites run side by side on one machine."""
+    make = EXO_SHAPES[shape]
+    parsed = [gate._parse(make(n))[:2] for n in (20_000, 80_000)]
+    tracemalloc.start()
+    try:
+        gate._cd_store_read(*parsed[0])
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 8 * 2**20, peak
+    took = []
+    for cmds, subs in parsed:
+        runs = []
+        for _ in range(3):
+            start = time.process_time()
+            gate._cd_store_read(cmds, subs)
+            runs.append(time.process_time() - start)
+        took.append(min(runs))
+    assert took[1] < 7 * took[0] + 0.05, took
+
+
+def test_a_spent_join_budget_asks(monkeypatch):
+    """Past the budget the line counts as reaching the store (fails closed); under it the line is read as before."""
+    line = "cd ~/.exo/run/jobs && cat " + " ".join(f"f{i}.log" for i in range(300))
+    assert _bash(line).category == "read"
+    monkeypatch.setattr(gate, "_EXO_JOINS", 100)
+    c = _bash(line)
+    assert c.category == "credentials" and "too many to resolve" in c.summary

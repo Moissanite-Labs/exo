@@ -2270,13 +2270,15 @@ def _store_touch(k: _Cmd, words: list, parts: list[Classification], ctx: dict) -
     seen = ctx.setdefault("store_braces", {})
     for op, t in k.redirs:
         # #217: a store file read on a numbered descriptor (`3< f`, `exec 2< f`) is reopened for writing by a
-        # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. On 1
-        # or 2 a target from a variable counts too: a write to stdout or stderr is not itself a store write.
+        # later `> /dev/fd/3` or `> /dev/stderr` on Linux, in this line or a later call of a persistent shell. A
+        # write to stdout or stderr is not itself a store write, so on 1 or 2 any target the gate cannot pin to a
+        # path counts too: one from a variable, a glob (`~/.exo/sta*/x`) or a relative name (the tool's folder).
         n = t.fd.lstrip("0") if t.fd.isascii() else ""     # compared as text: any length, never int()
         held = op == "<" and n != ""
         if op in _WRITE_REDIRS or held:
             targets = _shell_words(t, seen, "target")
-            if targets is None or any(_store_word(x) for x in targets) or held and t.dynamic and n in ("1", "2"):
+            if targets is None or any(_store_word(x) for x in targets) or held and n in ("1", "2") and (
+                    t.dynamic or t.glob or not _expand_text(t.text).startswith("/")):
                 return t.text
     if all(p.category == "read" for p in parts):
         return ""
@@ -2756,6 +2758,13 @@ def _cd_store_read(cmds: list, subs: list) -> str:
     return _exo_relative(split, max(ups), candidates)
 
 
+_EXO_JOINS = 16384   # joins of a folder with a name, and levels up, one line may make in _exo_relative (#269)
+
+
+class _Spent(Exception):
+    pass
+
+
 def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]]) -> str:
     """#269: on a line that reaches a folder in `$EXO_HOME` (or any `.exo`), that folder and each relative name read
     from it are checked as the paths they are, as the kernel resolves them, `..` included, so `cd ~/.exo/run/jobs &&
@@ -2763,48 +2772,79 @@ def _exo_relative(split: list, up: int, candidates: Callable[[], Iterable[tuple]
     run folder and its secrets as the absolute path would (is_sensitive_path, a glob in it). The folders are the
     targets (``split``, as _cd_store_read reads them; one with a glob is left to the store-folder check), each
     relative target joined to each of them, and every folder up to ``up`` levels above them (`cd ..`); an absolute
-    target is also resolved (a link into the store). From a folder outside the store only a name that spells the
-    store's folder name (`.exo`, `exo-home`) is joined, so `cd /srv && tar cf - exo-home/run` counts. Past 64 store
-    folders or 16,384 store paths on one line, the line counts (fails closed). The name or folder, or ''."""
+    target is also resolved (a link into the store). From a folder above the store only a target or name with the
+    store's folder name as a part (`.exo`, `exo-home`) is joined, so `cd /srv && tar cf -
+    exo-home/run` counts and a line that names no store folder joins nothing. Each join and each level up is charged
+    to one budget of _EXO_JOINS as it is made, so the work stays linear in the line; past it, or past 64 store
+    folders, the line counts (fails closed). The name or folder, or ''."""
     home = os.path.normpath(_home())
     exo = os.path.normpath(_exo_home())
     roots = _path_forms(exo)
     marks = {".exo", os.path.basename(exo)} - {""}
+    left = [_EXO_JOINS]
 
     def inside(b: str, real: bool = False) -> bool:
         return any(re.search(r"(^|/)\.exo(/|$)", f) or any(f == r or f.startswith(r.rstrip("/") + "/") for r in roots)
                    for f in (_path_forms(b) if real else {os.path.normpath(b)}))
 
     def near(q: str) -> bool:                       # a relative path that can lead into the store from above it
-        return any(m in q for m in marks)
+        return not marks.isdisjoint(q.split("/"))
+
+    def charge() -> None:                           # one join or level up, as it is made
+        left[0] -= 1
+        if left[0] < 0:
+            raise _Spent
+
+    def join(b: str, q: str) -> str:
+        charge()
+        return os.path.join(b, q)
+
+    def grow(bases: set, more: str) -> None:
+        bases.add(more)
+        if len(bases) > 64:
+            raise _Spent
 
     folders = []
     for p, _, _ in split:
         if not (_GLOBBY.search(p) or "$" in p):
             folders.append(os.path.join(home, p[2:]) if p.startswith("~/") else home if p == "~" else p)
-    relative = [r for r in dict.fromkeys(folders) if not r.startswith("/")]
-    bases = {b for b in folders if inside(b, b.startswith("/"))}
-    bases |= {j for b in folders for r in relative if b != r and near(r)
-              for j in [os.path.normpath(os.path.join(b, r))] if inside(j)}
-    if len(bases) > 64:
-        return "a folder in the Exo store (too many to resolve)"
-    bases |= {os.path.normpath(j) for b in list(bases) for r in relative for j in [os.path.join(b, r)] if inside(j)}
-    for b in list(bases):
-        for _ in range(min(up, 64)):
-            b = os.path.dirname(b)
-            if not b or not inside(b):
-                break
-            bases.add(b)
-    if len(bases) > 64:
-        return "a folder in the Exo store (too many to resolve)"
-    hit = next((b for b in sorted(bases) if _sensitive_words([b])), "")
-    if hit:
-        return hit
-    names = list(dict.fromkeys(q for q, _, _ in candidates()))
-    words = [(q, os.path.join(b, q)) for b in sorted(bases) for q in names]
-    words += [(q, w) for b in dict.fromkeys(folders) if b not in bases for q in names if near(q)
-              for w in [os.path.join(b, q)] if inside(w)]
-    if len(words) > 16384:
+    folders = list(dict.fromkeys(folders))
+    relative = [r for r in folders if not r.startswith("/")]
+    try:
+        bases: set = set()
+        for b in folders:
+            if inside(b, b.startswith("/")):
+                grow(bases, b)
+        # a folder outside the store that a name can lead into it from: one above it (a relative folder adds nothing
+        # a name with `.exo` in it does not already spell)
+        outer = [b for b in folders if b.startswith("/") and b not in bases and any(
+            r.startswith(b.rstrip("/") + "/") for r in roots)]
+        toward = [r for r in relative if near(r)]
+        for b in outer:
+            for r in toward:
+                j = os.path.normpath(join(b, r))
+                if inside(j):
+                    grow(bases, j)
+        for b in list(bases):
+            for r in relative:
+                j = os.path.normpath(join(b, r))
+                if inside(j):
+                    grow(bases, j)
+        for b in list(bases):
+            for _ in range(min(up, 64)):
+                charge()
+                b = os.path.dirname(b)
+                if not b or not inside(b):
+                    break
+                grow(bases, b)
+        hit = next((b for b in sorted(bases) if _sensitive_words([b])), "")
+        if hit:
+            return hit
+        names = list(dict.fromkeys(q for q, _, _ in candidates()))
+        words = [(q, join(b, q)) for b in sorted(bases) for q in names]
+        toward = [q for q in names if near(q)]
+        words += [(q, w) for b in outer for q in toward for w in [join(b, q)] if inside(w)]
+    except _Spent:
         return "a path in the Exo store (too many to resolve)"
     if not words or not (_sensitive_words([w for _, w in words]) or _glob_words([w for _, w in words])):
         return ""
