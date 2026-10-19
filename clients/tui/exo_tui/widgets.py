@@ -44,11 +44,12 @@ def reveal(widget: Widget) -> None:
 class Block(Static):
     """One transcript entry. ``text`` is the truth; ``flush`` paints it.
 
-    Kinds: user, assistant, error, warn, note, hint (a tip), memory (a cold one-liner), peer, taste, finding.
-    peer, taste and finding are panels: a coloured left rule (CSS) and a header line drawn here."""
+    Kinds: user, assistant, error, warn, note, hint (a tip), memory (a cold one-liner), peer, taste, finding, intro.
+    peer, taste, finding and intro (the short orientation) are panels: a coloured left rule (CSS) and a header line
+    drawn here."""
 
     PANELS = {"peer": ("cold", "PEER"), "taste": ("cold", "TASTE"), "finding": ("cold", "FINDING"),
-              "report": ("cold", "")}
+              "report": ("cold", ""), "intro": ("cold", "INTRO")}
     ROW = re.compile(r"^(\s+)(\S.*?)(\s{2,})(\d+)(\s*)(.*)$")  # `  recent tail   29   2 messages`
 
     def __init__(self, text: str = "", kind: str = "assistant", head: str = "", meta: str = "",
