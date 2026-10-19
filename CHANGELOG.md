@@ -183,6 +183,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- `apply_patch` no longer replaces a changed `-` line by similarity (#236). A hunk with context, such as
+  `-TIMEOUT = 30` over `TIMEOUT = 45` plus `RETRIES = 3`, passed the two-line rule through its context line and
+  silently overwrote the 45. Each `-` line must now match its file line up to whitespace, Unicode or a literal `\t`;
+  similarity places only the context lines. A hunk that fails names both lines and no file changes. See docs/TOOLS.md
+  "Edit matching".
 - A held answer key on a focused terminal approval card sends one answer (#297). Repeats of the key, posted before
   the first was handled, each wrote `approval: allow` to the transcript and sent `ApprovalRespond` again; only the
   call that closes the request's card now notes and sends, so a repeat is dropped and the next queued request is
@@ -297,8 +302,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `-` line) beyond whitespace, escaping or Unicode. A stale `TIMEOUT = 30` used to replace the file's newer
   `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
   closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
-  In `apply_patch` a hunk's context lines count toward the two, so a hunk with one context line can still replace a
-  changed `-` line.
+  In `apply_patch` a hunk's context lines count toward the two; since #236 each `-` line must also match its file
+  line, so a changed `-` line is refused there too.
 - Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
   is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
   only a string names a principal.
