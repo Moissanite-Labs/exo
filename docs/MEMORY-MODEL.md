@@ -70,10 +70,11 @@ built from it and their results (the core checks `SessionStore.private`, which w
 
 Each model call is built fresh, in this order:
 
-1. **System message** (stable prefix): system prompt, memory provider block, then the agent's tree view
-   (all threads, oldest first). The view ends at the last summarized node: small spans after it (too
-   small to summarize, or a summary still running) stay in the recent part below. So the system message is
-   byte-identical for every thread of the agent until a real summary lands.
+1. **System message** (stable prefix): system prompt, memory provider block, the thread's working folder,
+   then the agent's tree view (all threads, oldest first). The view ends at the last summarized node: small
+   spans after it (too small to summarize, or a summary still running) stay in the recent part below. So the
+   system message is byte-identical for every thread of the agent in the same folder until a real summary
+   lands.
 2. **This thread's verbatim tail**: every message of the thread after the tree frontier, and at least its last
    `tail_messages`, widened back so it never starts with an orphan tool result. Context notes stored in the
    thread are part of it. A fork's copies count at their original's log position, so a fork opens with its

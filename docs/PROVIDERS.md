@@ -47,9 +47,10 @@ Errors come back as a class: `no_key`, `auth`, `billing`, `not_found`, `rate_lim
 If no provider can serve the main role, `exo tui` and `exo web` say so and point here.
 
 The default core uses real catalog routes; it never substitutes an offline reply for missing credentials.
-Anthropic and OpenRouter use their catalog routes, and an available Claude CLI can use its catalog alias.
-For a provider without a known main model, such as OpenAI, first run opens the model chooser after the key
-is added. Choose the model you want before `/intro` runs. Explicit roles and local model settings are kept.
+Anthropic and OpenRouter use their catalog routes, and an available Claude CLI can use its catalog alias
+(see "Use your Claude Code login"). For a provider without a known main model, such as OpenAI, first run opens
+the model chooser after the key is added. Choose the model you want before `/intro` runs. Explicit roles and
+local model settings are kept.
 Orientation is remembered only after its own turn finishes with a successful, nonempty real assistant reply;
 a provider error, cancellation or deliberately configured fake reply leaves it unfinished for retry.
 
@@ -80,6 +81,32 @@ No tool gives the model these functions. The gate classes `exo providers add|rem
 any shell or code that names `/api/providers` or `providers_setup`, and every Keychain read as `credentials`,
 which always asks you and never gets a standing grant (D-033). Keys are write-only: no code path returns one.
 
+## Use your Claude Code login (`claude-cli`)
+
+If Claude Code is installed and logged in, Exo can run on that login with no API key. Each model call starts the
+`claude` command. Exo holds no key for it. `ANTHROPIC_API_KEY` and the other API credentials are removed from the
+child's environment, so the call uses the subscription, never an API account.
+
+It is automatic. When the core starts, `claude` is on your PATH, no route of the main role has what it needs (by
+default, no Anthropic or OpenRouter key), and neither `models.roles.main` in `config.json` nor the seat sets the
+main model, the core puts `claude-cli:sonnet` first for `main`. Sonnet is the first model in the catalog entry
+(`sonnet`, `opus`, `haiku`). The status line shows `claude-cli:sonnet`.
+
+- **Cost reads `unknown`.** A subscription has no per-call price in the catalog, and Exo never shows a guessed
+  `$0`. To see an estimate anyway, add a price under `models.models` (`docs/TRACE.md`, "Cost").
+- **The lists show the configured routes.** The automatic choice is not saved, so `exo models` and
+  `exo config roles` still show Anthropic first for `main`, and `exo providers` marks Anthropic as the default.
+- **To choose it yourself,** or another model, run `exo providers default claude-cli:opus` (or `/default` in the
+  terminal client). The choice is saved to `config.json`, the lists show it, and the automatic choice is off.
+- **An Anthropic or OpenRouter key added later takes over the next time the core starts.** Until then the
+  running core stays on Claude Code.
+- **Exo keeps its own tools and gate.** The CLI runs with its own tools, MCP servers, skills and settings
+  switched off. The model sees Exo's tools, and Exo runs each tool call itself, through the gate, before it calls
+  the CLI again.
+- **The login is not checked ahead of time.** `exo providers test claude-cli` only checks that the command is on
+  PATH. Run `claude` once and log in before you start Exo. On a logged-out CLI the first turn fails with the
+  CLI's error.
+
 ## Claude CLI compatibility and cleanup (`claude-cli`)
 
 Exo's adapter assumes the stream-json envelopes pinned by the **synthetic fixture contract v1** in
@@ -99,6 +126,10 @@ The fixture contract is:
 - Usage is read from the final result when reported; absent counts stay unknown. The inert MCP bridge lists
   tools but refuses to run them. Blank input is ignored, malformed JSON gets a JSON-RPC parse error, and valid
   following requests continue to work.
+- A user frame whose last text starts with a command name (`/help`) gets a local reply and a `result` with
+  `num_turns: 0`, and no model call, as the real CLI does. Exo never sends a user text that starts with `/`.
+- The fixture reads each file that an `@path` in any user frame names, as the real CLI does, and records what it
+  read. Exo never sends a user `@` that the CLI would read.
 
 The CLI-specific replay and boundary assumptions still need an opt-in, isolated real-CLI contract check against
 a mocked local endpoint before any release can be called wire-verified. Default tests never use real OAuth,
@@ -108,6 +139,31 @@ Every stream exit cancels and awaits the stderr reader. It retains a bounded, sc
 than waiting for a descendant to close stderr. The adapter stops its process group even after the leader exits,
 and finishes cleanup before returning a terminal response to the router. A cancel (Esc) while the stream is read
 stops it, even when it lands just as a line arrives (#163).
+
+**Working folder.** The CLI runs in a private folder of its own, `claude-cli-cwd-<uid>` in the temp dir (mode
+0700). It is the same folder on every call because the CLI writes its cwd into the prompt, and a changing folder
+would break prompt caching. The CLI's environment note therefore names that folder, not the thread's, and the CLI
+has no switch to drop the note when a system prompt is given. So Exo's system text names the thread's real
+working folder on every route: tools run there, and it overrides any working folder an environment note names.
+The line is fixed for the thread, so the cache holds. Running the CLI in the thread's folder was not chosen: the
+provider call does not carry the thread, and the CLI then adds its own notes about that folder, written for
+Claude Code.
+
+**Slash commands.** The CLI reads a user text that starts with `/` as its own command, even with
+`--disable-slash-commands`. On version 2.1.302 a built-in name such as `/help` gets a local "isn't available in
+this environment" reply with no model call, which Exo reads as an incomplete response and falls back. Any other
+word gets a CLI note added, and a replayed history frame is rewritten. Paths such as `/etc/hosts` pass. So the
+adapter puts a zero-width space (U+200B) in front of every user text block that starts with `/`, and the model
+reads the user's words as typed. Assistant text and tool results are never read as commands and stay unchanged.
+
+**File mentions.** The CLI also reads `@path` in user text as a file to attach, even with `--tools ""`. On
+version 2.1.302, wherever the `@` starts the text, follows whitespace (U+FEFF counts) or follows a CJK full stop,
+comma, `？` or `！`, the CLI reads the file and sends it to the model, in the latest turn and in replayed history.
+The quoted form `@"path"` works too. So `@~/.ssh/id_rsa` sent the key, past the gate, which asks before any
+credential read. The text need not be the user's: peer and bus messages, notes from other threads and delegate
+briefs reach the CLI as user text. So the adapter puts the same zero-width space in front of each such `@` in a
+user text block. The model still reads the `@`. A decorator at the start of a pasted code line gets the space
+too. An address such as `a@example.com` stays as it is. Exo's own `@path` already adds the file as its own part.
 
 ## Use a Muse Code subscription (`muse-cli`)
 

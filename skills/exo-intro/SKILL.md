@@ -82,7 +82,7 @@ the macOS Keychain, or `~/.config/exo/keys.env`, and are never printed.
 ## Seats and SOUL.md
 A seat is one named agent: its models, tools, skills, plugins and MCP servers. It lives under
 `$EXO_HOME/seats/`. A `SOUL.md` beside the seat file is text added to the agent's system prompt: who it
-is, what it owns, how it should behave. Run one with `exo serve --seat <name>` or `exo-tui --seat <name>`.
+is, what it owns, how it should behave. Run one with `exo serve --seat <name>` or `exo --seat <name>`.
 
 ## Peers and the bus
 `/peers` lists other live sessions you can message (other Exo seats and Hermes agents). `/send <peer>

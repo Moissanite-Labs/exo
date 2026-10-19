@@ -22,7 +22,7 @@ from exo.core.types import ContentPart, from_dict
 from exo.core.trace import money
 from exo import complete as cm
 from exo.protocol import schema as s
-from exo_tui.onboarding import INTRO_PROMPT, Onboarding, load_catalog
+from exo_tui.onboarding import INTRO_PROMPT, INTRO_SKILL, ORIENTATION, ORIENTATION_NOTE, Onboarding, load_catalog
 from exo_tui.prefs import LAYOUTS, Prefs
 from exo_tui import theme as th
 from exo_tui.hero import Hero, hero_rows
@@ -100,7 +100,8 @@ class ExoApp(App):
                   scrollbar-color-active: $accent; }
     .block { margin: 0; }
     .user, .assistant, .error, .hint { margin: 1 0; }
-    .peer, .taste, .finding, .report { margin: 1 0; background: $surface; padding: 0 1; border-left: outer $cold; }
+    .peer, .taste, .finding, .report, .intro { margin: 1 0; background: $surface; padding: 0 1;
+                                               border-left: outer $cold; }
     #welcome { margin: 1 0; }
     .peer { border-left: double $cold; }
     #activity { height: 1; color: $fg-3; padding: 0 2; background: $deep; }
@@ -313,6 +314,13 @@ class ExoApp(App):
             for step, _ in BOOT_STEPS:
                 self.boot_screen.mark(step, "-")
 
+    async def boot_over(self) -> None:
+        """End the boot sequence and wait until it is off the stack. Its dismiss pops the top screen, so a screen
+        pushed while it runs (the first-run model picker or providers panel) would close in its place."""
+        self.boot_end()
+        if self.boot_screen is not None:
+            await self.boot_screen.closed.wait()
+
     # ------------------------------------------------------------ helpers
     @property
     def transcript(self) -> VerticalScroll:
@@ -461,8 +469,9 @@ class ExoApp(App):
             except Exception:
                 self.memory = ""
             if self.resume and not self.session:
-                rows = (await self.client.call(s.SessionList(limit=20, seat=self.seat)))["sessions"]
-                rows = [r for r in rows if r.get("kind") != "subagent"]  # resume a thread, not a child's log
+                rows = (await self.client.call(s.SessionList(limit=50, seat=self.seat)))["sessions"]
+                # a thread, not a child's log, with something in it: every launch opens one, used or not
+                rows = [r for r in rows if r.get("kind") != "subagent" and r.get("message_count")]
                 self.session = rows[0]["id"] if rows else None
             if self.session:
                 await self.resume_or_new(self.session)
@@ -471,7 +480,8 @@ class ExoApp(App):
             self.boot_mark("agent", self.seat or "main")
             self.boot_mark("memory", MEMORY_WORDS.get(self.memory, ""), ok=self.memory not in MEMORY_SHORT)
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
-            want_intro = self.auto_intro and not self.resume and not self.onb.onboarded
+            await self.boot_over()  # the provider check below may push a screen
+            want_intro = self.auto_intro and not self.resume and self.onb.intro_due
             # A first run with no working provider goes to /providers first; the intro waits for a key,
             # because the orientation is an agent turn and would only fail without one.
             ready = await self.first_run_providers() if self.provider_check else True
@@ -576,6 +586,8 @@ class ExoApp(App):
                     and m.meta.get("author") == "principal"):
                 self.intro_turn = m.meta.get("turn_id") or ""
                 self.intro_reply = False
+                if self.intro_pending == "first":  # it started: a failure or no reply does not resend it every launch
+                    self.onb.mark_intro_started()
             elif self.intro_turn and m.role == "assistant" and m.meta.get("turn_id") == self.intro_turn:
                 route = str(m.meta.get("model") or "")
                 provider, sep, model = route.partition(":")
@@ -1383,11 +1395,19 @@ class ExoApp(App):
         """Send the orientation as a normal user turn. It shows as "/intro"; the agent gets the longer prompt."""
         if self.intro_pending:
             return
+        if not self.onb.onboarded:  # until an intro completes, /intro (the composer offers it) is still the first run
+            kind = "first"
         if self.provider_check and not await self.first_run_providers():
-            self.intro_after_providers = kind == "first" or not self.onb.onboarded
+            self.intro_after_providers = kind == "first"
             return
         self.add(Block("/intro", "user"))
         self.close_cur()
+        if await self.intro_skill_missing():  # the turn could only improvise: show the short version instead
+            self.add(Block(ORIENTATION, "intro", head="Exo in brief", meta=ORIENTATION_NOTE))
+            self.onb.mark_onboarded()
+            if kind == "first":
+                self.run_worker(self.set_tutorial(True, quiet=True), exit_on_error=False)
+            return
         self.intro_pending = kind
         self.intro_turn, self.intro_reply = "", False
         try:
@@ -1401,6 +1421,14 @@ class ExoApp(App):
             return
         if not resp.ok:
             self.intro_pending = ""  # the turn never started, so a first run stays un-onboarded
+
+    async def intro_skill_missing(self) -> bool:
+        """The core listed its skills and none is exo-intro (a pip install without the installer's skill pack)."""
+        try:
+            rows = (await self.client.call(s.SkillsList())).get("skills", [])
+        except Exception:
+            return False  # cannot tell: send the turn as before
+        return not any(str(r.get("name", "")).split(":")[-1].lower() == INTRO_SKILL for r in rows)
 
     def intro_completed(self, stop_reason: str) -> None:
         """Only a successful real reply from this exact intro turn completes orientation."""
