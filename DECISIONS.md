@@ -1581,7 +1581,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   (the kernel names pid 0), and a core that cannot read its own process entry warns and serves no principal. A pid
   reused between connect and accept is not detected (that window is the accept latency; Linux `SO_PEERPIDFD` would
   pin the process). The browser-to-web hop (the `exo web` page to its own server, over TCP) is not peer-checked;
-  the page token protects it and, once #177 lands, the one-time launch code (D-039, #166).
+  the page token protects it and, since #177, the one-time launch code (D-039, #166).
 - **Validation:** `tests/security/test_unix_peer_auth.py`: a replaced socket gets zero bytes; stale, symlinked,
   shared, old-format and missing records refuse before any byte; an unsupported platform fails closed both ways; a
   mismatched kernel uid is local; a tool child through the real client, and the orphan of one that exited, are

@@ -67,7 +67,10 @@ Set `EXO_REDUCED_MOTION=1` to turn motion off. `NO_COLOR` turns colour off.
 
 **Web (`exo web`).** Run `exo web` in a terminal. It opens the page in your browser for you. If it does not (no
 browser, `--no-open`, or a `--host` other than `127.0.0.1`, `localhost`, `::1` or a wildcard bind), open the link it prints: `http://127.0.0.1:7342/#token=...`. The part after `#token=` is a
-key for this launch only; the page needs it for everything and refuses requests without it. After you restart
+key for this launch only. The page sends it with every data request (every `/api` route except `POST /api/launch`,
+and both event streams), and the server refuses those without it; only the page itself, its static files and the
+launch route load without it. The browser `exo web` opens gets a one-time code (`#code=...`) instead of the key: it
+works once, within 120 seconds, and the page trades it for the key at the launch route. After you restart
 `exo web`, use the new link: the old one stops working. Run `exo` and `exo web` in either order: both
 see the same agent and threads. `exo web` joins a terminal window's core, or `exo serve`, if one is running; if
 none is, it starts `exo serve` in the background (log `$EXO_HOME/logs/exod.log`). That background core keeps running
@@ -263,12 +266,13 @@ longer holds never stays on screen. If you answer a web card that was already cl
 What the gate asks about, and why:
 
 - **Credentials always ask.** Anything the gate sees reading or filling a password, token or key asks every time.
-  An "always" answer is never stored for credentials. The gate judges a read by the path it names, so on main a
-  wildcard or a folder walk of the folder that holds Exo's own connection secret (`run/`) is not yet seen as a
-  credentials read (#169, fix in review). Nor is a harmlessly named symbolic link to a key file, read by its own
-  name (#209).
-  A `grep` or `glob` over a folder leaves out the secret stores in it (`~/.ssh`, `~/.aws`, `.env`, Exo's keys)
-  and says how many it skipped; the agent must name one to read it, which asks.
+  An "always" answer is never stored for credentials. The folder that holds Exo's own connection secret (`run/`)
+  is a secret store: a read of it or of a wildcard in it (`cat ~/.exo/run/*`, `grep -r token ~/.exo/run`) asks
+  (#169, fixed in #185). A `grep` or `glob` over a folder leaves out the secret stores in it (`~/.ssh`, `~/.aws`,
+  `.env`, Exo's keys and `run/`) and says how many it skipped; the agent must name one to read it, which asks
+  (#241). The gate judges a read by the path it names, so a shell walk from a folder above (`grep -r token
+  ~/.exo`) is still an ordinary read, and so is a harmlessly named symbolic link to a key file, read by its own
+  name (#209). `docs/GATE.md` lists the other spellings it misses.
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another.
@@ -282,14 +286,19 @@ What the gate asks about, and why:
   runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like. These are
   trusted by name, so a test runner still runs your project's files. Options of trusted programs that run a
   command (`tar --to-command`, `rsync -e`, `ssh -o ProxyCommand` and the like) are read as the command they run
-  (#164). The gate finds programs only in the shell forms its parser reads. A command inside a parameter expansion
-  such as `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in #158). Nor is a `$( )`
-  inside a single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the like
-  (`printf -v 'a[$(...)]'`; #179, fix in review in #189), or in a quoted compound, `-i` or `-n` value given to
-  `declare`, `typeset` or `local` (`declare -a 'b=($(...))'`; #188, fix in review in #194). A command nested more
-  than four levels deep (`bash -c` inside `bash -c` and so on), an `ssh` or `mosh` chain more than four hops deep
-  (#153), or a command run behind a wrapper such as `setsid` or `flock` (#160, fix in review in #196), asks, even
+  (#164). A `$( )` inside a single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the
+  like (`printf -v 'a[$(...)]'`) is read (#179, fixed in #189), and so is a command run behind a wrapper such as
+  `setsid`, `flock` or `watch` (#160, fixed in #196), and a heredoc or pipe into a group such as `{ bash; }`
+  (#161, fixed in #198). The gate finds programs only in the shell forms its parser reads. A command inside a
+  parameter expansion such as `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in
+  #158), and nor is one in a quoted compound, `-i` or `-n` value given to `declare`, `typeset` or `local`
+  (`declare -a 'b=($(...))'`; #188, fix in review in #194). A command nested more than four levels deep
+  (`bash -c` inside `bash -c` and so on) or an `ssh` or `mosh` chain more than four hops deep (#153) asks, even
   when your policy denies it (#137).
+- **A deny holds for every command on a line (D-075).** A `deny:` or `reserved` entry in your policy is checked
+  against each command the gate reads on a line, so with pushes denied `git push origin main && rm -rf build` is
+  denied, not asked about the delete. A `categories:` setting or a rule still sees only the line's most severe
+  command, so it can ask where a `deny:` entry would deny (#191).
 - **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
   standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
   covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,
@@ -308,9 +317,13 @@ roles approve some kinds of act, and they must sign. A peer never can. A message
 something is refused and shown to you. The agent cannot answer its own approvals: a command it runs that talks to
 Exo is not you, whatever it claims, and only you can answer "always". The check has limits. A program running as
 you that obtains your window's secret and detaches from Exo can pass (`docs/GATE.md` "Who answered"). The web
-page's link carries its own secret, so a program that reads the link can answer from the page too: the link stays
-in your browser's history, and while `exo web` opens the browser it is on the launcher's command line, which other
-programs on the machine can read (#166, fix in review in #177).
+page's link carries its own secret, so a program that reads the link can answer from the page too, and the link
+stays in your browser's history once you open it. When `exo web` opens the browser itself, the launcher's command
+line, which other programs on the machine can read, holds only the one-time code, never the key (#166, fixed in
+#177). If a used code comes back, `exo web` replaces the key, closes the page's connections and prints a warning
+with a new link: paste it into the browser that is already open. A program that uses the code before your browser
+does gets the key without a sound; only your browser's later use of the code replaces the key and warns. A browser
+that never runs the page's script never uses its code, so then nothing warns (`docs/ui/WEB.md`).
 
 "Always" answers become standing grants. They expire (7 days for outward acts, 30 days for others) and an outward
 grant covers one exact text. `/grants` lists them. `/grants revoke <id>` removes one.
