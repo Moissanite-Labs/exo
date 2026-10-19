@@ -12,7 +12,9 @@ Vendored files:
 Changes: CLIs and module globals removed; `now`, `verify_hashes` and `roles` became
 parameters; encode, decode, render and bus helpers added in __init__.py and bus.py; bus.py also
 routes Exo-profile lines (string atoms, opcodes 100+) to exo.wire (docs/AGENT-WIRE.md).
-Validation rules and the wire grammar are unchanged. Normative text: SPEC.md and
+Validation rules and the wire grammar are unchanged, except that the grammar patterns end
+in \Z instead of $, so an id, ref or hash with a trailing newline no longer passes.
+Normative text: SPEC.md and
 SPEC-V2-DRAFT.md in the source repo.
 
 MIT License
