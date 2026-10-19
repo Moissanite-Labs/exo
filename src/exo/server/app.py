@@ -34,7 +34,7 @@ from exo.protocol import schema as s
 from exo import principal as pr
 from exo.server.engine import Closed, CommandFailed, Engine, Hub
 
-SERVER_CAPABILITIES = ["sse", "replay", "stdio", "heartbeat"]
+SERVER_CAPABILITIES = ["sse", "replay", "stdio"]  # hello adds "heartbeat" only on a transport that pings
 HEARTBEAT = 15.0
 MAX_BODY = 8 * 1024 * 1024
 
@@ -61,33 +61,40 @@ class Dispatcher:
         self.hub = hub or getattr(engine, "hub", None) or Hub()
         self.caller = caller  # D-039: who an in-process user of this dispatcher is; transports pass their own
 
-    async def dispatch(self, raw: str | bytes, caller: str | None = None) -> tuple[s.Command | None, s.Response]:
+    async def dispatch(self, raw: str | bytes, caller: str | None = None,
+                       heartbeat: float | None = None) -> tuple[s.Command | None, s.Response]:
         try:
             cmd = s.Command.from_json(raw)
         except s.ProtocolError as exc:
             return None, _fail(_raw_id(raw), exc.code, exc.message)
         except Exception as exc:  # a decoder bug must not kill the connection or the stdio transport
             return None, _fail(_raw_id(raw), "internal", f"{type(exc).__name__}: {exc}")
-        return cmd, await self.run(cmd, caller)
+        return cmd, await self.run(cmd, caller, heartbeat)
 
-    async def run(self, cmd: s.Command, caller: str | None = None) -> s.Response:
+    async def run(self, cmd: s.Command, caller: str | None = None, heartbeat: float | None = None) -> s.Response:
+        """``heartbeat``: seconds between the transport's ``: ping`` comments, for ``hello``; None where it sends
+        none (stdio, in process)."""
         who = pr.Caller(caller or self.caller)
         tok = pr.CALLER.set(who)
         try:
-            return await self._run(cmd)
+            return await self._run(cmd, heartbeat)
         finally:
             who.live = False  # a task the command started does not keep the caller's standing
             pr.CALLER.reset(tok)
 
-    async def _run(self, cmd: s.Command) -> s.Response:
+    async def _run(self, cmd: s.Command, heartbeat: float | None = None) -> s.Response:
         body = cmd.body
         try:
             if isinstance(body, s.Hello):
                 if body.protocol != s.PROTOCOL_VERSION:
                     return _fail(cmd.id, "protocol_mismatch", f"server speaks {s.PROTOCOL_VERSION}, client {body.protocol}")
-                result = {"protocol": s.PROTOCOL_VERSION, "server": "exod", "capabilities": SERVER_CAPABILITIES,
-                          "seq": self.hub.head(), "instance": self.hub.instance, "heartbeat": HEARTBEAT}
-                return s.Response(id=cmd.id, result=result)
+                # D-060: only a transport that pings names a heartbeat, with its own interval
+                hello: dict[str, Any] = {"protocol": s.PROTOCOL_VERSION, "server": "exod",
+                                         "capabilities": SERVER_CAPABILITIES + ["heartbeat"] * bool(heartbeat),
+                                         "seq": self.hub.head(), "instance": self.hub.instance}
+                if heartbeat:
+                    hello["heartbeat"] = heartbeat
+                return s.Response(id=cmd.id, result=hello)
             if isinstance(body, s.EventsSubscribe):
                 # Without a stream, subscribe is a one-shot replay; HTTP clients stream from GET /events.
                 events = self.hub.since(body.since, body.session)
@@ -227,7 +234,7 @@ class HttpServer:
             if n > MAX_BODY:
                 return await self._json(writer, 413, {"error": "body too large"})
             raw = await reader.readexactly(n)
-            _cmd, resp = await self.dispatcher.dispatch(raw, self._caller(headers, peer))
+            _cmd, resp = await self.dispatcher.dispatch(raw, self._caller(headers, peer), self.heartbeat)
             return await self._send(writer, 200, resp.to_json().encode())
         if url.path == "/events" and method == "GET":
             q = parse_qs(url.query)

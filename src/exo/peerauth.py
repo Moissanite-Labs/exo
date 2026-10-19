@@ -8,13 +8,15 @@ an unauthenticated principal and no check-one-socket, send-on-another.
 ``sse_frames`` reads complete Server-Sent Events frames under an absolute idle deadline that only a complete
 frame (an event or the core's heartbeat comment) resets. Partial bytes do not keep a dead feed alive. A frame over
 the bound is ``FrameTooLarge`` with the seq the core named for it, so a reader resumes past it instead of
-replaying it forever.
+replaying it forever. ``bounded_lines`` splits the stream into lines without holding more than the bound of one
+line, so a frame over it is refused before the rest of it is read (httpx's ``aiter_lines`` holds a whole line).
 
 This module sits outside the counted core folders, as ``exo.principal`` does.
 """
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any, AsyncIterator
 
 import httpcore
@@ -22,8 +24,9 @@ import httpx
 
 from exo import principal as pr
 
-MAX_FRAME = 16 * 1024 * 1024  # one SSE frame, in characters; a bound, not a format limit
+MAX_FRAME = 16 * 1024 * 1024  # one SSE frame, in characters: what the client delivers and what it holds of one line
 _OURS = (pr.HEADER.lower().encode(), b"x-exo-client")
+_EOL = re.compile(r"\r\n|\r|\n")  # SSE line ends; not the other str.splitlines breaks, which JSON may hold raw
 
 
 def _mapped(exc: Exception) -> Exception:
@@ -42,6 +45,10 @@ class FrameTooLarge(httpx.RemoteProtocolError):
     def __init__(self, seq: int | None):
         super().__init__("event frame too large" + (f" (seq {seq})" if seq is not None else ""))
         self.seq = seq
+
+
+class LineTooLong(Exception):
+    """A line passed the bound before its end arrived (``bounded_lines``); ``sse_frames`` makes it FrameTooLarge."""
 
 
 class _Body(httpx.AsyncByteStream):
@@ -98,6 +105,31 @@ class PrincipalTransport(httpx.AsyncBaseTransport):
                               extensions=resp.extensions)
 
 
+async def bounded_lines(chunks: AsyncIterator[str], limit: int = MAX_FRAME) -> AsyncIterator[str]:
+    """Lines of an event stream, split at CRLF, LF or CR as SSE defines them, holding at most ``limit`` characters of
+    one line: a longer line raises ``LineTooLong`` as it passes the bound, before the rest of it is read."""
+    held: list[str] = []
+    size, cr = 0, False
+    async for chunk in chunks:
+        if not chunk:
+            continue
+        if cr and chunk[0] == "\n":  # the LF of a CRLF split across two chunks
+            chunk = chunk[1:]
+        cr = chunk[-1:] == "\r"
+        start = 0
+        for m in _EOL.finditer(chunk):
+            held.append(chunk[start:m.start()])
+            yield "".join(held)
+            held, size, start = [], 0, m.end()
+        if start < len(chunk):
+            size += len(chunk) - start
+            if size > limit:
+                raise LineTooLong
+            held.append(chunk[start:])
+    if held:
+        yield "".join(held)
+
+
 async def sse_frames(lines: AsyncIterator[str], idle: float | None,
                      limit: int = MAX_FRAME) -> AsyncIterator[tuple[list[str], list[str]]]:
     """``(comments, data lines)`` per complete frame. Raises ``httpx.ReadTimeout`` when no complete frame arrives
@@ -118,6 +150,8 @@ async def sse_frames(lines: AsyncIterator[str], idle: float | None,
                 line = await asyncio.wait_for(anext(it), left)
             except StopAsyncIteration:
                 return
+            except LineTooLong:
+                raise FrameTooLarge(int(ident) if ident.isascii() and ident.isdigit() else None) from None
             except TimeoutError:
                 raise httpx.ReadTimeout(f"no event or heartbeat from the core in {idle:g}s") from None
             size += len(line) + 1

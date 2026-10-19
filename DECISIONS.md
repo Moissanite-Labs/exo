@@ -1665,6 +1665,26 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   reused between connect and accept is not detected (that window is the accept latency; Linux `SO_PEERPIDFD` would
   pin the process). The browser-to-web hop (the `exo web` page to its own server, over TCP) is not peer-checked;
   the page token protects it and, since #177, the one-time launch code (D-039, #166).
+- **Amendment 2026-10-19 (issue #226):** the follow-ups from the #175 reviews. No change to who is the principal.
+  - `hello` names a heartbeat only where the transport sends one. Over HTTP it is that server's own interval (it
+    was the module default even for a server that pinged at another rate). Stdio and in-process callers get no
+    pings, so their `hello` has no `heartbeat` key or capability. The key shipped in no release.
+  - The Python client splits the event stream into lines itself, at CRLF, LF or CR as SSE defines them, and holds
+    at most 16 Mi characters of one line. A longer frame is refused before the rest of it is read, then skipped by
+    its seq as before. httpx's line reader held the whole line first, so a 40 MiB line was read in full. The other
+    `str.splitlines` breaks (U+0085, U+2028, U+2029, VT, FF) no longer end a line; the core escapes the three that
+    JSON can hold raw, so the core's frames read the same.
+  - The parent walk reads one stat line per ancestor; it read the boot id and all of `/proc/stat` per ancestor, on
+    the event loop. The boot id is read once per process. btime is still read for each start and not cached:
+    Linux moves it when the wall clock steps, and the start is compared with the wall clock at accept.
+  - The terminal says `not sent: <reason>` for a command whose connection never opened (a `ConnectError`, which
+    a refused peer check is), instead of "may not have been delivered". The text goes back to the composer.
+  - A core that cannot read its own start identity names its platform's cause (hidepid on Linux, libproc on
+    macOS, no lookup elsewhere), in its log and in the client's refusal, instead of a hidden `/proc`. The unused
+    `principal.peer_pid` is removed.
+  - The macOS branches ran on a Mac: `LOCAL_PEERCRED` and `LOCAL_PEERPID` parsing and libproc's `proc_bsdinfo`
+    parsing are tested on every platform, and a test with no mocks runs the kernel calls and the parent walk on
+    Linux and macOS. A hosted Mac runner is still #145.
 - **Validation:** `tests/security/test_unix_peer_auth.py`: a replaced socket gets zero bytes; stale, symlinked,
   shared, old-format and missing records refuse before any byte; an unsupported platform fails closed both ways; a
   mismatched kernel uid is local; a tool child through the real client, and the orphan of one that exited, are
@@ -1681,7 +1701,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   approval answer, `question.answer` or unsteer) and the web's
   `test_refused_principal_names_the_reason_and_the_restart`. A skipped frame that comes again ends the stream
   (`test_unix_peer_auth_edges.py`), and the exo-bus channel's event loop reads past one
-  (`plugins/exo-bus/tests/test_bus_plugin.py`).
+  (`plugins/exo-bus/tests/test_bus_plugin.py`). #226: a line over the bound is not read in full, line ends follow
+  SSE, one stat read per ancestor, the platform cause, the darwin parsing and the no-mock kernel test
+  (`test_unix_peer_auth_edges.py`); the per-transport `hello` (`tests/protocol/test_server.py`); the terminal's
+  `not sent` reason (`tests/clients/tui/test_lost_reply.py`).
 - **Docs:** `docs/GATE.md` "Unix peer authentication", `docs/ui/WEB.md`, `docs/DEVELOPER-GUIDE.md`.
 
 ## D-061 (2026-10-13) Web sub-pages to the site v2 standard
