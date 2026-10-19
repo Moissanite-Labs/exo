@@ -1,6 +1,14 @@
 # Project Exo: technical whitepaper
 
-Version 0.2, October 2026. Aska Digital.
+Version 0.3, October 2026. Aska Digital.
+
+Version 0.3 adds the security wave that followed an outside audit (who may act, who wrote what, and what a
+shell command really runs), the principal's authority over learning and settings, a required execution
+broker and a protected ledger for Exo OS with an opt-in transport for an independent witness, spend
+ceilings for model calls, the composer and screen layouts, the first part of the house taste, the engine
+split so far and the core's line budget, and version numbers. Section 35 lists what changed, section by
+section. Section 30.1 lists work that is in progress but not yet part of Exo, including open changes that
+will alter statements made here. Where one does, the section says so and names it.
 
 Exo is early and in active build. This paper keeps a strict line between what exists and what is planned.
 Anything marked **[designed, not built]** is a design that has been written down and reviewed, but has no
@@ -46,6 +54,7 @@ today. Part III lists both in full.
   - [32. Open questions](#32-open-questions)
 - [33. Related work and acknowledgements](#33-related-work-and-acknowledgements)
 - [34. Glossary](#34-glossary)
+- [35. Version history](#35-version-history)
 
 ---
 
@@ -170,9 +179,11 @@ it last looked. So a fact you tell the agent in one window is known in a second 
 Opening a new window starts a new topic, not a new mind. A thread can be marked private, and then it is
 logged but never shared.
 
-Before Exo builds the request for a new turn, it waits for any pending summaries to finish, so the view
-always covers everything that came before. Every original message stays in a local database with full-text
-search, so a detail that was summarized away can always be found again.
+A turn does not wait for this upkeep. Exo builds the request from the summaries that are ready and sends
+anything not yet summarized word for word, so the view still covers everything that came before. Only when
+that view would be over its size budget does the turn wait, for at most five seconds, for a summary that is
+nearly done. Every original message stays in a local database with full-text search, so a detail that was
+summarized away can always be found again.
 
 Summaries lose detail by design. The one thing they must never lose is what you told the agent. So capture
 of your words is a mechanism, not a habit the model is asked to keep. The summary format has a section for
@@ -215,6 +226,20 @@ that evaluates selected changes against held-out cases. Principal-confirmed less
 high-confidence taste or fact lessons can promote through separate rules. What is not yet built is the trigger
 that runs the climb every night by itself.
 
+A learning loop has a cold start. A new user's Exo knows nothing about how they like work done, and it would
+take months of corrections to learn what one person already spent months teaching. So Exo is designed to
+ship a *house taste*: a starting set of taste items, such as "lead with the result" or "check the work before
+calling it done", drawn from a store that was tuned by hand over a long time, with every personal detail
+removed. Then it moves toward the new user the way a person changes: slowly, and only when the change lasts.
+A bad week or a mood does not count. A habit kept for weeks does. Values are the exception. A companion whose
+values grate is the most off-putting kind, so a house value that meets clear disagreement steps back to
+neutral at once, and the user's own view is taken on only after they have stated it and held it. Safety
+settings, such as what needs approval, are product policy, not taste, and never ship or drift this way.
+The first part is built: the layers that put the user's own items ahead of house items, a tag on every item
+that says where it came from, and the export that builds a house pack and refuses to write it if any check
+for personal names fails. The pack that ships today is an empty placeholder until the first one is reviewed
+and released. The slow adaptation itself is designed, not built (section 22.7).
+
 ### 7. Acting safely without asking about everything
 
 An assistant that asks before every step is useless. People cannot watch a quiet system all day. They start
@@ -224,8 +249,8 @@ Exo sorts actions by consequence, not by count. It asks whether the action can b
 whether it costs money, and whether it affects someone else. Editing a file on your machine runs at once and
 is logged. Pushing to a public repository, posting, paying, or sending an email to another person waits for
 you, with a one-line summary and a sensible default. Some rules protect other people, and your own settings
-cannot lower them. Anything that touches credentials, such as a login, a key file or a password store,
-always asks you, and no rule can change that.
+cannot lower them. Anything the gate sees touching credentials, such as a login, a key file or a password store,
+asks you every time, and no rule can change that (section 12.5 and 15.4 say what it does not see yet).
 
 Asking is only half of the job. An approval is consent, and consent has to be about something exact. So
 for anything that leaves your machine, Exo takes a fingerprint (a hash) of the exact text, target and
@@ -239,10 +264,64 @@ kind of act, for example public posts, and then that agent's answer must carry i
 answer cannot be forged or replayed for a different text. A message from another agent is input, never
 consent: if it tries to approve something, it is refused and shown to you. Exo knows an answer is yours by
 the connection it came from, your window or your web page, never by what the answer claims, so a command the
-agent runs cannot approve the agent's own request. And before a post goes to a
+agent runs cannot approve the agent's own request (the list below gives the limits). And before a post goes to a
 public place, Exo sweeps it for internal names, home folder paths, model names and internal ids, and holds
 it if any appear. A false alarm costs one extra question. A leaked name in a public repository cannot be
 taken back.
+
+An outside audit in October 2026 tested these promises by trying to break them, and found ways around
+several. Each one was fixed with a test that reproduces the attack. The fixes share one idea: trust comes
+from where something came from, never from what it says about itself.
+
+- **Read the command, not just its name.** The gate used to judge a shell command by the program it named. A
+  command that hid its real work (a script, `python -c "..."`, a variable in the program's place) walked past
+  it. Now the gate reads the line and finds the program in each command its parser recognizes, and the command
+  runs without asking only when each one is on a list of trusted everyday programs, such as `ls`, `git status`
+  or `pytest`, and none is hidden. What it marks as unreadable asks, once, for that exact command. This is an
+  *allowlist*: a list of what is allowed, where everything else is not, the safer of the two ways to write such
+  a list. The parser does not read every shell form yet: a command inside a parameter expansion such as
+  `${x:-$(...)}`, or inside a quoted compound, `-i` or `-n` value given to `declare`, is never found, so it runs
+  without asking (#143, #188). A command in a single-quoted array subscript such as `printf -v 'a[$(...)]'` is
+  read since #189 (for #179), and so is the command behind a wrapper such as `setsid` or `flock` since #196 (for
+  #160), so a deny on either holds. Past four levels of nesting, such as `bash -c` inside `bash -c` or an `ssh`
+  chain, the line asks, but a denied act only asks too (#137, #153). A deny entry is checked against every
+  command the gate reads on a line, so a denied push joined to another command by `&&` is denied too (D-075,
+  #126). Options of trusted programs whose value is a command (`tar --to-command`, `rsync -e`) are read as
+  nested commands (#164, for #154). Programs on the list are still trusted by name, and some can run other code:
+  a test runner runs project files. Section 15.4 names these gaps and the changes in review that narrow them.
+- **The store is like a key.** The agent could once rewrite its own policy files and grants with an ordinary
+  allowed write. Now a write the gate sees going to the principal store's policies, grants, ledger or keys
+  asks you every time, like a password would. The gate resolves symbolic links in an absolute path (#130), but
+  it does not know the tool's working folder, so a relative name such as `gates.yaml` written from inside the
+  policies folder is an ordinary write on main. So is a store file opened on a numbered file descriptor and
+  written back through `/dev/fd/3` (#217). Section 15.4 names the rest. And a policy file that
+  changes during a session can only make the gate stricter until you accept the change.
+- **Who answered is the connection.** Your window and your web page carry a secret that is new each time the
+  core starts. A command the agent runs is refused even with it while it runs under the core, so it cannot
+  answer the agent's own approval cards, whatever it puts in its message. Both ends of a connection to the
+  core's socket also ask the operating system who is on the other end: the client before it sends the secret,
+  the core before it accepts it (D-060, #175). Reading the secret's file, its folder or a wildcard in that
+  folder asks you (#169, fixed in #185), but the gate does not see every read: a folder walk from above (`grep
+  -r token ~/.exo`), a few other spellings (section 15.4), or code the agent wrote that a trusted program runs
+  (a test runner, for example), reads it without asking. A program that gets the secret that way and detaches
+  from the core can still pass (section 12.5). The web page needs its own secret on every data request, so
+  another web site in your browser cannot drive it. That secret travels in the link `exo web` prints, which sits
+  in the browser's history once opened. When `exo web` opens the browser itself, the launcher's command line,
+  which other programs on the machine can read, holds only a one-time code that works once, within 120 seconds,
+  and a code that comes back after use replaces the secret and warns in the terminal (#166, fixed in #177).
+  Section 12.5 gives the limits.
+- **Who wrote it is recorded.** Every message carries its author, stamped by the way it came in: you, the
+  agent, a tool, a peer, a scheduled job. Only messages that came from you count as your words. An agent's
+  note that looks like a rule is kept as the agent's note, so it cannot become one of your rulings.
+- **Your authority covers more than approvals.** Through Exo's own commands, learning from feedback,
+  changing settings, choosing models and accepting a looser policy all need a live connection that is you.
+  Other programs may still drive the agent, but what they say is recorded as theirs. The settings file on
+  disk is not covered yet: a tool can change it with an ordinary file write, and the change takes effect at
+  the next start. A change in review makes that file ask like the store does (section 30.1).
+
+These checks are in the application. A program running as your own user can still do anything you can.
+The real fix for that is an operating-system sandbox, which Exo does not have yet. Sections 15.4, 15.6, 20.1
+and 26 have the detail.
 
 Many small choices in this process (which tool, whether a panel should open, which model fits a task) do not
 need a large model at all. A *decision model* answers a fixed question with probabilities over fixed options
@@ -266,6 +345,11 @@ The screen itself feels like a terminal: a prompt and a transcript, with three p
 palette. Richer elements, such as a diff viewer, an approval card or a task board, are panels that the model
 opens when they help, and that each client draws as well as it can. A terminal client, a web client and a
 plain line client are built.
+
+The box you type into, the *composer*, helps you along: it completes commands and file names as you type,
+suggests a next step when the box is empty, and grows into a full editor for a long prompt. One rule is
+fixed: no single habitual key can stop the agent's work or answer an approval by accident. Section 24 has
+the detail.
 
 Your keyboard is not the only way in. Another agent may send a message. A long shell command may finish
 while the agent does other work. Such inputs enter through one door, and the door asks the same three
@@ -295,8 +379,9 @@ a shown model that differs from the one that served.
 
 A finding has a stable name, so the same problem counts up instead of piling up. When a developer marks a
 finding fixed in a given version of the code, Exo keeps watching. If the problem comes back on that version
-or a later one, the finding reopens. If it stays quiet for 20 turns or 3 days, it is marked verified. A fix
-is a claim, and the trace is the test of it.
+or a later one, the finding reopens. If it stays quiet for 20 turns that could have shown it, or for 3 days
+that had such turns, it is marked verified. Turns that could not have tripped it, and idle days, do not
+count: silence proves nothing when nothing was tested. A fix is a claim, and the trace is the test of it.
 
 Cost follows one rule of honesty: a price Exo does not know is shown as unknown, never as zero. A zero would
 look like a free call and hide real spend. All of this is built.
@@ -346,29 +431,52 @@ to model providers). The HTTP server inside `exod` is written on the standard li
 no web framework. Storage is SQLite files and plain Markdown files.
 
 The core has a line budget. A test counts the lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`
-and two command-line modules. Wave 1 shipped under 8,000. The plan allowed 15,000 by the end of wave 3. The budget
-rose to 16,000 during the security wave. Engine split step 4 (D-067) cut the count to about 14,800 by deleting
-unused code and moving the peer transport and the scheduler out of the core.
+and two command-line modules. Wave 1 shipped under 8,000, and the plan allowed 15,000 by the end of wave 3. The cap
+was raised to 16,000 during the security wave, then set back to 15,000 when step 4 of the engine split (D-067) cut
+the count by 1,174 lines, to about 14,800, by deleting unused code and moving the peer transport and the scheduler
+out of the core.
 
-The budget is now a ratchet with headroom (D-077). The test records a floor, the count after the last real
-reduction, and allows 1,000 lines above it. Each real reduction lowers the floor, and the floor never rises. Fixes
-and features fit inside the headroom with no ceremony, and a security or robustness fix is never blocked by the
-budget. A feature that would cross the ceiling waits for a reduction or carries a recorded decision.
+Since then the budget is a ratchet with headroom (D-077), not a fixed cap. The test records a *floor*, the count
+right after the last real reduction, and fails when the count reaches the floor plus a fixed headroom of 1,000
+lines. A reduction that ends below the floor sets the floor to its new count, and the floor never rises, so such
+a reduction lowers the ceiling. When this version was written the floor was 14,813, the ceiling 15,813 and the
+count 14,999. Fixes and features fit inside the headroom with no ceremony. A security or robustness fix is never
+blocked: if one would cross the ceiling, it raises the headroom by the least it needs and a reduction follows. A
+feature that would cross the ceiling waits for a reduction or carries a recorded decision.
 
 The reason is a ruling that the core should be lean and optimized, but not at the cost of functionality, robustness
 and product-market fit. The count is only a signal. The goal is structure: no module reads another's private state,
 no product code is imported into the engine, each module has one job. Growth stays visible, and the core can later
 shrink onto a small device (section 27).
 
+**The engine split.** The audit also found that the engine class did too many jobs: it built the
+application, ran turns, answered protocol commands and drew diagnostic reports. A split has started, one
+change at a time, each checked to change no behaviour. The plan has four steps: public queries in place of
+reads of other parts' private state (step 1), protocol handling in an adapter (step 2), building the
+application in a composition layer that hands the engine narrow interfaces instead of the product's own
+modules (step 3), and removing unused obligations and duplicates (step 4). A first pass moved the reports
+behind `/context`, `/compact`, `/trace`, `/findings` and handoffs to a diagnostics module outside the core,
+and moved building the engine (reading the config and the seat, loading the executor and plugins) to a
+*composition* module, `exo.compose`, the start of step 3. Step 4 then deleted unused code and duplicates,
+gave open approvals one record per request (the *approval desk*), and took two more parts of step 3: the
+peer transport moved to `exo.peers` and the scheduler to `exo.scheduler`, both attached by the composition
+module. Steps 1 and 2 and the rest of step 3 are still to come: some modules still read the engine's
+private state, and the engine still imports a few product modules. The rule for new work follows from
+this: new wiring and product features built on the engine go in the composition module, new read-only
+views in diagnostics, and a new protocol feature becomes a named `command.run` built-in, as `/rename` and
+the subagent controls did.
+
 Repository layout, in short:
 
 | Path | Holds |
 |---|---|
-| `src/exo/core/` | types, turn loop, context, the agent log and threads, model router and transports, tool registry and built-in tools, background jobs, delegation, ingress and peers, approvals, scheduler, trace and findings, hooks, plugins, slots, seats, skills, an MCP client |
+| `src/exo/core/` | types, turn loop, context, the agent log and threads, model router and transports, tool registry and built-in tools, background jobs, delegation, ingress, the approval desk, trace and findings, hooks, plugins, slots, seats, skills, an MCP client |
 | `src/exo/protocol/` | the protocol schema, a client, and generated JSON Schema and TypeScript types |
 | `src/exo/server/` | `exod`: the dispatcher, the event hub, three transports |
-| `src/exo/*.py` | generic modules: ledger, store, retrieval, gate, capture, consolidate, taste, ask, eval, brief, onboard, handoff, upstream |
+| `src/exo/*.py` | generic modules: ledger, store, retrieval, gate, capture, consolidate, taste, ask, eval, brief, onboard, handoff, upstream, model spend, plus `compose` (builds the engine and attaches what follows), `peers` (the peer transport), `scheduler` (scheduled jobs), `diagnostics` (reports and built-in commands), `subagents` (section 16.1), `turn_settle` (section 17.3) |
 | `src/exo/learn/`, `src/exo/wire/` | the learning loop, and the agent wire codec (section 16) |
+| `src/exo/baseline/` | the house taste: pack loader, layers, export and privacy checks (section 22.7) |
+| `src/exo/ledger_authority/` | the optional protected ledger service, its independent verifier and the opt-in witness transport (section 20.2) |
 | `clients/tui/` | the terminal client |
 | `plugins/` | six plugins: memory, context, gate, bus, command centre (which holds the web client), orchestra |
 | `templates/` | an empty principal store with a generic prior |
@@ -402,9 +510,12 @@ event types, and tests enforce it. For contrast, the terminal gateway of the har
 has 257 methods. When a feature needs more, it adds fields or event types, not one-off methods. The cap is
 now tight, and it has shaped the design: peers got one command with four actions instead of four commands,
 and features such as `/trace`, `/context`, `/compact`, `/handoff` and `/grants` are named commands run
-through the generic `command.run`, with no new protocol type.
+through the generic `command.run`, with no new protocol type. Later features followed the same path:
+pulling back a queued steer message (`unsteer`), renaming a thread (`rename`) and inspecting, steering and
+stopping a running subagent (`subagent`) are all named built-ins, and each checks who is asking before it
+acts.
 
-Today the schema defines 30 commands and 28 events:
+Today the schema defines 30 commands and 29 events:
 
 | Group | Commands |
 |---|---|
@@ -420,7 +531,7 @@ Today the schema defines 30 commands and 28 events:
 | Group | Events |
 |---|---|
 | Sessions | `session.created`, `session.updated` |
-| Turns | `turn.started`, `turn.completed` |
+| Turns | `turn.started`, `turn.completed`, `steer.cancelled` |
 | Model output | `message.delta`, `message.completed`, `reasoning.delta`, `usage.updated`, `model.call` |
 | Tools and jobs | `tool.started`, `tool.output`, `tool.completed`, `job.updated` |
 | Approvals and questions | `approval.requested`, `approval.resolved`, `question.asked` |
@@ -470,7 +581,52 @@ and uses the same envelopes **[designed, not built]**.
 - **Unix socket.** A Unix socket is a file-like endpoint on the local disk. The server creates its directory
   with owner-only permissions, binds the socket under a restrictive file-creation mask so there is no moment
   when it is open to others, and then sets it to mode `0600`. Only the same operating-system user can
-  connect, so the socket needs no token.
+  connect, so the socket needs no token to connect. Being able to connect is not the same as being the
+  principal, though (next item).
+- **Who is calling.** A tool the agent runs is the same operating-system user, so it can reach the socket
+  too. So the transport stamps every command with a caller, and the engine reads that stamp, never a field
+  in the body. A caller is the principal in two cases: the client runs the core inside its own process (the
+  terminal window's own core), or the request carries the *principal credential*, a random secret the core
+  writes to an owner-only file beside the socket when it starts, replaces on every start and deletes on
+  stop, and the process on the other end is not a descendant of the core. Both ends ask the operating system
+  who is on the other end of that one connection (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` and
+  `LOCAL_PEERPID` on macOS; D-060, #175). The client checks that the process serving the socket is the
+  user's own core, the one that wrote the credential file, before the credential leaves it. The core takes
+  the caller as the principal only when the credential matches, the caller is the same user, the process is
+  still the one that connected, and its parents reach the system's first process without passing the core.
+  A tool's shell and anything it starts are descendants of the core, so they are refused even with the
+  credential. On a system with none of these calls, no socket client is the principal. Every other caller,
+  on standard input and output or TCP too, is `local`: it may drive turns, but it is never the principal.
+- **The limit of that check.** It walks only live parent links. A process running as the same user that
+  obtains the credential and then detaches from the core (its parent exits before it sends its request,
+  and the operating system adopts it) is no longer a descendant, and it passes (#31). A read that names
+  the credential file, its folder (`run/`) or a wildcard in that folder is a credentials act that asks (#169,
+  fixed in #185), and the built-in grep and glob tools leave secret stores out of a folder walk (#241, fixed
+  in #287). But the gate judges a read by the path it can see, so a shell walk from a folder above
+  (`grep -r token ~/.exo`), a relative name under a tool's working-folder argument, or a wildcard in a folder
+  name above the file is an ordinary read (`docs/GATE.md` lists these). Code the agent wrote can also read
+  it when a trusted program runs that code, such as a test runner loading a `conftest.py`. The remedy is an
+  operating-system sandbox for tool processes, which Exo does not have yet (section 26, #31). The kernel
+  checks narrow the gap, but a tool runs as the same user, so they do not close it.
+- **The web page.** `exo web` makes a second secret per launch, the *page token*, and puts it in the part
+  of the link after `#`, which browsers never send to a server. The server refuses any request whose `Host`
+  is not a loopback name (`127.0.0.1`, `localhost` or `[::1]` with the port), or a specific address given
+  with `--host` (a wildcard bind adds none). Every `/api` route except `POST /api/launch`, and both event
+  streams, also need the token, and refuse a request that a browser marks as coming from another site. The
+  page shell, its static files and the launch route are served without the token. The shell and files are
+  code, not data. The launch route takes a one-time launch code instead, and answers only a loopback peer
+  with a loopback `Host`. When the browser sends an `Origin`, it must be the same host, and a request the
+  browser marks as cross-site is refused. This blocks *DNS rebinding*, a trick in which a hostile web site
+  makes your browser talk to a server on your own machine.
+  The token's own weak point is the link that carries it. `exo web` prints a `#token=` link, which stays in
+  the browser's history once opened. It opens the browser on a `#code=` link instead, so the launcher's
+  command line, which other programs on the machine can read, holds a code that works once, for at most
+  120 seconds, and never the token (#166, fixed in #177). A code that comes back after it was used replaces
+  the token, ends every other connection to the page's server and prints a warning and the new link in the
+  terminal. With a `--host` that is neither loopback nor a wildcard, no browser is opened. The limits: the
+  hop from the browser to the page's server is not checked by user, so a process that has the token, or
+  wins the race for an unused code within its 120 seconds, is the page. The first redemption is silent, and
+  a browser that never runs the page's script never redeems its code, so then nothing warns.
 - **TCP.** The server refuses to start a TCP listener without a bearer token. The token is 32 random bytes,
   URL-safe encoded, written to a file created exclusively with mode `0600`, or taken from an environment
   variable. Every HTTP request must carry `Authorization: Bearer <token>`. The comparison is constant-time
@@ -514,10 +670,23 @@ signed part, so the receiver can check the signature, the age and that it is not
 | a bad or missing signature | deny, and this cannot be changed |
 
 The receiver sees the text framed as a message from a teammate, never as the user. A peer cannot approve a
-gate, change settings or speak for the principal. A message that tries (it names an open approval or asks
+gate or change settings. A message that tries (it names an open approval or asks
 to approve one) is refused and shown to the principal, and `approval.respond` from a peer client is refused.
 The `exo-bus` plugin carries the same module for Hermes Agent sessions, so a Hermes agent and an Exo agent
 can message each other. Held messages live in memory today, so a restart drops them.
+
+Messages from the bus, the relay that links agents on different machines, now take the same path. The core
+checks each one against the key it pinned for that seat the first time it saw it (a changed key is refused),
+marks the message as written by `bus:<seat>`, and holds it for the principal by default. On the sending side,
+a peer message that claims to be typed by a person is sent as typed by an agent unless it came over a
+principal connection, so a program cannot use its own core to send a message as the principal. The
+receiving side does not check this yet (#132). It verifies a peer's signature against the key in the
+sender's presence file, and it takes the sender's principal from that same file and "typed by a person"
+from the signed message. Presence files are owner-only, but any program running as the same user can write
+one. Such a program can sign with its own key a message that the receiver labels as the principal typing in
+another client, or as another session of the principal, and either is delivered at once. Checking the
+signature against the seat key pinned in the principal's key folder would close this, and no change for it
+is in review yet.
 
 The second source is the end notice of a background shell job (section 15.5). Chat channels, the scheduler
 and external event feeds are meant to plug into the same path, each bringing only its transport.
@@ -541,6 +710,13 @@ A third kind of provider is a vendor's own command-line tool, run as a subproces
 It exists for subscriptions that can only be used through the vendor's login. The login token stays with the
 vendor's program, in the OS keychain, and Exo never touches it. The price is honest: one process per turn, no
 token stream, and for `muse-cli` no tool calls, so the router skips it when a turn needs tools.
+
+**Setting up a provider.** A new user's first obstacle is a key. One engine does the setup, and three screens
+show it: `exo providers` in a shell, a panel in the terminal client, and a page in the web client. Each lists
+the providers with their status and where a key was found, takes a new key in a masked field, runs one tiny
+test call, and sets the default model. Keys only go in. They are stored in the operating system's keychain
+(or an owner-only file where there is none), never through the settings command, never through the
+protocol, and never shown again, only their status. A key typed into a chat message is never the way.
 
 #### 13.2 Roles
 
@@ -604,6 +780,17 @@ session total, and each call's cost goes into the trace (section 23).
 A route with no known price costs *unknown*, never `$0`. A turn with some unpriced calls shows the sum of the
 priced ones followed by a plus sign. Subscription plans with no per-token price read unknown until the user
 sets one. The reason is simple: a zero looks like a free call, and a wrong zero hides spend that is real.
+
+**Spend ceilings.** An opt-in admission check holds model calls under daily and monthly dollar ceilings, set by
+the principal or, on Exo OS, fixed by a protected policy file. Before a call it reserves the most the call could
+cost under prices pinned in the policy, and after the call it settles the reservation from the reported usage.
+While ceilings are on, a route with no pinned price, a vendor's command-line tool and a custom provider type are
+refused, not guessed. A call whose cost is uncertain keeps its full reservation, which counts against every
+later day and month until an operator reconciles it with the engines stopped. When the failure handler records a
+stop, admission ends until then, but abrupt process death can prevent that record, and a surviving reservation
+alone does not stop new calls while the ceilings have room (MODEL-SPEND.md). It meters model calls only, not tools
+or other services, and a record kept under the user's own account is not protected from other programs running
+as that user. It is off by default **[built]**.
 
 ### 14. Decision models
 
@@ -710,8 +897,15 @@ Built-in tools today **[built]**:
 
 The risk hint is information, not a decision. Deciding is the gate's job.
 
-Shell commands run with a filtered environment: provider keys, Exo's own keys and any variable whose name
-ends in `_TOKEN`, `_SECRET`, `_PASSWORD` or `_API_KEY` are removed unless the seat lets a named one through.
+Shell commands run with a filtered environment. One function does the filtering for the shell, background
+jobs and `code_find`: it removes provider keys, Exo's own keys and socket credentials, cloud and GitHub
+tokens, database addresses, and any variable whose name looks like a secret (ends in `_TOKEN`, `_SECRET`,
+`_PASSWORD`, `_API_KEY` and similar). It also drops the hooks a shell acts on when it starts (`BASH_ENV`,
+`ENV`, exported shell functions and a few more), and bash is started without the user's `~/.bashrc` (#135,
+fixed in #168). Hooks for the program loader and for interpreters (`LD_PRELOAD`, `PYTHONPATH`) pass, since
+they have everyday uses. A seat can name more variables to remove, or one to let through, and removal wins.
+A vendor's command-line tool run as a model provider gets only a minimal environment. The filter works on
+names, so it is a heuristic, not a guarantee.
 A shell reports only the exit code of a pipeline's last stage, so `false | head -1` looks like success. Exo
 notices when an earlier stage failed and says so in the result.
 
@@ -759,8 +953,9 @@ whichever the person has at hand. Four rules make the answer mean what it says:
 3. **Signed seat answers.** A seat answers as itself and must sign the answer with its Ed25519 key. The
    signature covers the request id, the decision, the binding hash and the seat name, so it cannot be reused
    for another request, decision or text. An unsigned seat answer is refused. A principal answer is not
-   signed: it is as strong as the socket's file permissions, which admit only the same operating-system
-   user.
+   signed. It is the principal because of the connection it arrived on (section 12.5), not because of
+   anything in the answer, so a program the agent runs, while it stays under the core, cannot answer as the
+   principal. Section 12.5 gives the limit: a same-user process that detaches from the core can.
 4. **Scoped, expiring grants.** `allow_always` becomes a *grant*. Its scope is the kind of act and the exact
    target, and for an outward act also the exact text hash, so one approval can never cover a later, different
    text. It expires (30 days by default, 7 for outward acts), each use is logged, and creating or revoking it
@@ -769,17 +964,106 @@ whichever the person has at hand. Four rules make the answer mean what it says:
    `allow_always` is refused. `/grants` lists them and `/grants revoke` removes one. Credentials never get a
    grant.
 
+A card must also go away when its question does. Early on, a card could stay on screen after the core had
+closed its request, for example when the person stopped the turn that was waiting. Now the core announces
+every close, however it happened (answered, expired, or cancelled), and each client checks its open cards
+against the core's list every few seconds and drops any the core no longer holds.
+
 #### 15.4 The gate
 
-The gate (`exo.gate`, about 1,300 lines, stdlib only) is two pure steps. `classify` looks at a tool name and
-its arguments and places the action on four axes: reversibility, exposure, cost, and effect on third parties.
-It parses shell commands into their parts (pipes, `&&`, heredocs, `sudo` and `env` prefixes) and knows the
+The gate (`exo.gate`, stdlib only) is two pure steps. `classify` looks at a tool name and its arguments and
+places the action on four axes: reversibility, exposure, cost, and effect on third parties. It knows the
 common cases, for example that `git push` to a shared remote is public, that `gh pr comment` writes where
 others read, and that an HTTP POST to a non-local host leaves the machine. `decide` then maps that cell
 through the person's policies: a gate matrix, scopes, overrides, reserved and denied actions, budget and
 posting checks. The outcome is allow, log, ask or deny.
 
-Under the person's policy sit two *floors* that no policy, rule, grant or scope can lower. The operator
+**Shell commands: an allowlist.** A shell line can hide what it runs. `G=gh; $G pr comment` runs `gh`, but
+no word in it says so, and the same goes for a heredoc fed to a shell, `python -c`, a shell function or an
+alias. An early gate judged by the program name it could see, and the audit walked past it this way. Now a
+small *lexer* (a program that splits text into its pieces, as a compiler's first stage does) splits the line
+into simple commands and finds the program in each. The command is allowed only when every program it found
+is on the gate's list and none is hidden in a program's place. What it marks as unreadable falls into a
+category called `opaque_exec` and asks:
+variables or `$( )` in a program's place, script files, interpreters given text to run, `make`, `npm run`,
+`npx`, `xargs`, `find -exec`, `eval`, `source`, functions and aliases, and unknown programs. Where the gate can
+see inside (a `bash -c` with plain text, or a heredoc or pipe fed to a shell, also through a group such as
+`{ bash; } <<EOF`, #198 for #161), it classifies the inner command too and keeps the stricter answer.
+A line of several commands is decided by its most severe part, which sets the card. A deny or reserved entry
+is checked against every part, nested ones included, so with pushes denied `git push origin main && rm -rf
+build` is denied, where before it asked about the delete and ran the push once approved (D-075, #126). A
+category setting or a rule still sees only the most severe part, so it can ask where a deny entry would deny
+(#191).
+An "always" on opaque code covers that exact command only. About 70 everyday commands (`pytest`, `git
+status`, `ls`, `rg`, `npm install`, `cargo test` and so on) are pinned by a test to run without asking, so
+the gate stays usable.
+
+The lexer does not read every shell form yet. It copies a parameter expansion, `${...}`, as one word up to
+the first `}` without looking inside it, so a command substitution there (`echo ${x:-$(git push --force)}`,
+or an array subscript such as `${a[$(...)]}`) is never classified, and a quoted `}` inside it can hide the
+commands after it on the line. Such a line is read as `echo` and allowed, and a deny does not hold (#143).
+A change in review (#158) reads these words as bash does and classifies every command inside them. A `$( )`
+inside a single-quoted array subscript given to a builtin that takes a variable name (`printf -v 'a[$(...)]'`,
+`unset`, `declare`, `typeset`, `local`, `read`, `test -v`, `wait -p`) was read as plain text too, though bash
+runs it (#179). Since #189 the gate reads those subscripts and classifies each command in them, so
+`printf -v 'a[$(git push origin main)]' x` is a push and a deny on pushes holds. A `$( )` in a quoted
+compound, `-i` or `-n` value given to `declare`, `typeset` or `local` (`declare -a 'b=($(...))'`), which
+bash expands again, is still read as plain text and allowed (#188, fix in review in #194).
+
+Nesting has a depth cap. A `bash -c` inside `bash -c`, and so on, is read four levels deep. Past that the
+rest is opaque, so it asks, but a deny written for the deeper command only asks too (#137). An `ssh` or
+`mosh` chain is read four hops deep, and past that the line is opaque and asks, keeping the first host as
+its target, so a deny on what the deeper hops run only asks too (#153, fixed in #164). A wrapper program
+such as `setsid`, `flock` or `watch` used to hide the command it runs in the same way, so a deny on the
+wrapped command only asked (#160). Since #196 the gate reads the command behind `setsid`, `flock`, `watch`,
+`script -c`, `tmux`, `screen`, `parallel` and similar wrappers, so `setsid git push origin main` is a push
+and a deny on pushes holds. A wrapper form it cannot read (a program from a variable, `su -c`) stays opaque
+and asks.
+
+The known gap is honest. Programs on the list are trusted by name, and some of them can run other code. A
+test runner runs project files (`pytest` runs `conftest.py`), git runs hooks and `npm install` runs package
+scripts, so code the agent wrote earlier with an ordinary local write can run under a trusted name. Options
+of trusted programs whose value is itself a command (`tar --to-command`, `split --filter`, `rsync -e`, `ssh -o
+ProxyCommand`, the `.shell` command of `sqlite3` and the `\!` command of `psql`, among others) are followed as
+nested commands, as for `find -exec`, and read as each program's `getopt` reads them, abbreviated or packed into
+a cluster; a value the gate cannot read asks (#164, for #154). An environment dump behind a runner (`uv run
+printenv`) is a credentials act, as on its own (#155). Code a trusted program runs from a file stays the gap.
+Reads are judged by the path text too: a read that names a key file is a credentials act, and so is a read by a
+relative name on a line that enters a store folder (`cd ~/.config/gh && cat hosts.yml`, #192, fixed in #201).
+Exo's own run folder, which holds the principal credential, is a secret store too, so a read of the folder
+or of a wildcard in it (`cat ~/.exo/run/*`, `grep -r token ~/.exo/run`) asks (#169, fixed in #185). The
+built-in `grep` and `glob` tools leave every secret store out of a folder walk and say how many they skipped,
+and `code_find` refuses a folder that holds one (#241, fixed in #287). A shell walk from a folder above
+(`grep -r token ~/.exo`), a relative name under the tool's working-folder argument, or a wildcard in a folder
+name above the file (`~/.exo/principals/*/run/*`) is still an ordinary read, and so is a harmlessly named
+symbolic link to a key file, read by its own name (#209). Only a sandbox closes the rest.
+
+**The store is a credential.** The principal store's policy files, its standing grants, the ledger, the key
+folder, seat files and the core's sockets are on a protected list. Any write there is `store_write`: it asks
+the principal every time, no grant covers it, and a seat cannot be named to approve it. Reading stays a
+plain read, except the keys, which stay credentials. An absolute path is checked against the store's
+folders both as written and with its symbolic links resolved, and so is the folder a `cd`, `pushd` or
+`git -C` enters, so a write through a link elsewhere that points into the store asks too (#130). A relative
+path is checked only by its distinctive names (`policies/gates.yaml`), because the gate does not use the
+tool's working folder: `printf x > gates.yaml` run with its working folder in the policies folder is an
+ordinary local write. Brace sets are expanded as bash does before a write is matched against the store, so
+`echo x > ~/.exo/polic{i..i}es/default.yaml` asks (#224, fixed in #228). Some spellings still pass as ordinary
+writes: a hard link made earlier, a protected entry that itself links out of the store, another letter case
+on a case-insensitive filesystem, and a glob spelling such as `sta*/gate-grants.json` (`docs/GATE.md` lists
+them). So does a store file opened on a numbered file descriptor and written back through it
+(`exec 3< state/gate-grants.json`, then `printf x > /dev/fd/3`, or `/proc/self/fd/3`), which is an ordinary
+local write (#217). No change for that is in review yet.
+
+**Policy changes only tighten during a session.** The gate fixes the policy it loaded at start. If a policy
+file changes while Exo runs, the change is logged with the files' hashes and each call is decided under both
+the old and the new policy, and the stricter answer wins. A loosening takes effect only after the principal
+runs `/gate accept`, or on restart. So no write by a tool, seen by the gate or not, can loosen the policy
+during a session, while the principal's own tightening takes effect at once. At the next start the gate loads
+whatever is on disk, so a write it did not see (the gaps above) would take effect then, with nobody
+reviewing it.
+
+Under the person's policy sit two *floors* that no policy, rule, grant or scope can lower. They apply to
+what the gate classifies, so an act hidden from it, as in the gaps above, never reaches them. The operator
 floor: an irreversible public act that touches a third party always asks. Amplifying a person is neutral. It
 would amplify a bad actor too, so rules that protect other people sit outside the model of the person. The
 credentials floor: logins, key files, password stores and anything else that handles secrets always ask the
@@ -793,7 +1077,9 @@ word, so a seat called "scout" does not hold every post that mentions a scout. A
 hyphen, underscore or digit, also matches inside longer words and with any separator. The sweep leans toward
 holding, because the costs are lopsided: a false hit costs one question, a miss leaks a name for good. The
 rule came from a real slip, when a public repository shipped with task ids, profile names, model strings and
-a home path in it.
+a home path in it. The scrub and the exact-text binding see only the text the gate can read: a post whose body
+comes from standard input, a command or a file the gate cannot load is not swept, and a standing grant for
+that post can cover a later body it never saw (#208).
 
 The gate is built and tested as a library and as the `exo-gate` plugin, which runs it on every tool call on
 the core and, when a principal store with a signing key is attached, writes each decision to the signed
@@ -814,6 +1100,44 @@ Limits are per agent: 4 jobs at once, 2 hours of wall time, 5 MB of output. Jobs
 because an operating system can reuse a process id, and killing by a stale id could hit an unrelated
 program. A background command is gated exactly like a foreground one, and a test compares the two.
 Subagents cannot start jobs, since their threads end with their report.
+
+#### 15.6 Required executor mode
+
+Everything above runs tools inside the core's own process, as the person's user. For Exo OS (section 27),
+that is not enough: the operating system should decide, in a separate and isolated place, whether a tool
+may touch the machine at all. So Exo now has a seam for an *execution broker*: an installed component that
+receives every tool call after the gate has passed it, and either runs it in an isolated worker, runs it
+through a narrow trusted path it has audited, or refuses it. A normal install has no broker and runs tools
+directly, as before.
+
+When a broker is configured as *required*, Exo refuses to start without it, and a set of stricter rules
+switch on:
+
+- **One path for every call.** Calls from the main turn, from subagents and from scheduled runs all pass
+  through the same registry: lookup, the gate's hooks (including approvals), a check of the arguments
+  against the tool's schema, the broker, then post-processing. Unknown tools, blocked calls and bad
+  arguments never reach the broker. The registry freezes the call before any hook runs, and each plugin
+  hook gets its own copy, so no hook can change what the gate checks or what the broker runs. A broker's
+  default for a tool it does not support is to refuse.
+- **Evidence before action.** The gate must write its decision to the signed ledger before it allows a call
+  or asks for approval, and must write the approval before the call runs. If it cannot (no store, an
+  unusable key, a failed write), the call does not run. A grant is recorded as authorized before its file is
+  replaced, and a policy acceptance is recorded before the new policy takes effect.
+- **Each approval is its own.** Every approval carries a unique internal token, so two identical calls
+  waiting at once each get their own answer.
+- **No surprise code.** Plugins load only from folders the broker vouches for. The user's plugin folders
+  and plugins that installed packages advertise are not loaded at all. The gate plugin is always required:
+  Exo refuses to start if it is missing, disabled or fails to register, if it comes from an installed
+  package instead of a vouched folder, or if it is not in the broker's inventory. If the gate's own check
+  fails, the call does not run. External tool servers (MCP) are refused unless the broker says it can isolate
+  them.
+  Even read-only git commands are kept out of the handoff report, because git can run a helper program named
+  in the repository's own settings. Background shell jobs and cross-machine delegation are refused until the
+  broker supports them.
+
+This is a contract for the operating system to keep, and the Exo side of it is built and tested. It is not
+a sandbox by itself: Python plugins loaded into the core still run as trusted code. The broker and its
+isolated worker belong to Exo OS, in its own repository, and this paper makes no claim that they are built.
 
 ### 16. The agent loop
 
@@ -838,8 +1162,9 @@ alone.
 
 Limits and edge cases:
 
-- **Iteration cap.** At most 24 tool rounds per turn by default. After that, the loop emits a
-  `notice` and stops.
+- **Iteration cap.** At most 24 tool rounds per turn by default. A turn that reaches the cap ends with a
+  short report (done, still open, next step) from one more model call with tool use off, instead of a
+  dangling tool round (#92, #93).
 - **Retries.** A retryable model error is retried up to 3 times with exponential backoff, but only while
   nothing has been shown. Once text has streamed, retrying would show the person a different answer on top
   of the first.
@@ -848,7 +1173,9 @@ Limits and edge cases:
   model sees next time is well formed.
 - **Steer and queue.** While a turn runs, `turn.send` with `mode: steer` slips the new message in between
   tool rounds. A steer that lands while the final reply is being written gets its own model call in the same
-  turn, so it is never dropped. `queue` waits for the turn to end.
+  turn, so it is never dropped. `queue` waits for the turn to end. A steer that has not landed yet can be
+  pulled back into the composer to edit (`unsteer`, announced as `steer.cancelled`). A caller that is not the
+  principal can pull back any steer the principal did not write, never the principal's words.
 - **Fail soft.** A memory provider or context plugin that throws is ignored for that call, and a
   `harness.error` event records it. An unexpected error inside the loop ends the turn with `error` and a
   clean `turn.completed`, never a hung session.
@@ -863,6 +1190,18 @@ nesting, 10 tasks per call, 4 children at once per level, 24 tool rounds, 200,00
 child. Each level has its own pool of slots, so a parent waiting on its children can never starve them.
 Interrupting the parent cancels every child below it. The parent gets back a *receipt* in plain English:
 outcome, what was done, the model that ran it, and why it failed if it did.
+
+**Watching and steering a child.** A child is a real session with its own loop, so a person can look into
+it while it works. `/tasks` lists the children of a session, `/open` shows one child's session, `/steer`
+sends it a note that lands at its next tool step, and `/stop` ends it, without stopping the parent. The web
+page's task cards have the same controls. Through these controls only the principal may steer or stop a
+child, and a note the principal types is recorded as the principal's. The rules also let the parent session act,
+with its note recorded as written by the delegating agent, but nothing on main gives the parent that path yet,
+so today every steer or stop through the controls is the principal's. A child that has finished is locked, and
+the receipt says it was steered or stopped, and by whom ("stopped by principal"). All of this is one
+`command.run` built-in, so the protocol did not grow. The controls are not the only way in: like any session,
+a running child takes `turn.send` and `turn.interrupt` from any local caller that names its session. A note
+sent that way is recorded as that caller's, never the principal's, and leaves no mark on the receipt.
 
 **Cheapest model that can do the job.** Each child gets a tier: a scout (reading, searching) runs `fast`, a
 builder or verifier `standard`, a critic `deep`. The parent may set a tier per task. A child never runs above
@@ -951,9 +1290,12 @@ The rules, with today's defaults **[built]**:
 
 Summaries run in parallel in two *lanes* with separate limits: live chat (8 at once) and imported history (2
 at once). A large import, such as a year of past chats, therefore never starves the live conversation, and
-imports can be paused and resumed. Before building a turn, the context engine *settles*: it waits, up to 60
-seconds, until no live summary is pending. On timeout it proceeds, using verbatim text for the unfinished
-part. Interrupted summary jobs are retried when the session is next touched, including after a
+imports can be paused and resumed. A turn does not wait for this work. It is built from the summaries that
+are ready, and a span whose summary is still running goes to the model word for word, so nothing is missing.
+Only when that view would be over its budget does the turn wait, for at most 5 seconds, for summaries that are
+nearly done, and then it proceeds with what is ready. A summary turns finished in one step, so a turn sees
+either the old text or the finished summary, never half of a merge. Interrupted summary jobs are retried when
+the session is next touched, including after a
 restart. A failed job is retried with backoff, at most three times; then its span stays verbatim and one finding
 is recorded (D-041). Each finished node is reported as a `memory.summarized` event. It is upkeep of the long-term memory,
 not a compaction of the live context, so it is kept apart from `context.compacted`.
@@ -1128,6 +1470,72 @@ Version 2 plans more kinds **[designed, not built]**: `item`, `retrieval` (which
 into a prompt, which feeds use counts and evaluation), `decision` (section 14), and `state` and `lease` for
 shared team state with revision checks, so two writers cannot overwrite each other.
 
+#### 20.1 Who wrote it: authors, pinned keys and the head anchor
+
+A signature proves which key signed an entry. It does not prove that the key belongs to who the entry says,
+or that the text is the principal's words. The audit found three gaps of this kind, and each is now closed.
+
+**Authors from the way in.** The core stamps an author on every message from the path it arrived by:
+`principal` (a client's turn on a principal connection), `agent`, `tool`, `peer:<name>`, `bus:<seat>`, `job`,
+`delegate`, `schedule` or `system`. It never reads the author from the text. Capture, consolidation, the
+learning loop and handoff notes treat text as the principal's only when the author says so. Before this,
+an agent could write a note of kind `ruling`, and a later step that checked the kind but not the author
+could have turned it into a lesson. An agent's note is now always the agent's. The principal's words are
+signed by the agent's seat key, because the seat records them. A separate principal key was rejected: it
+would sign whatever the seat handed it, and so prove nothing more than the author stamp already says.
+
+**Pinned keys.** A *key registry* in the core's home folder pins the public keys Exo trusts: its own
+signing keys, each bus seat's key as first seen, and which ledger authors are the principal. Verification
+checks every entry's key against it. A key that is not pinned fails, and so does a key that signs under
+another pinned name.
+
+**The head anchor.** A hash chain shows that nothing in the middle changed. It cannot show that the end was
+cut off, because a shortened chain is still a valid chain. So every append also writes the chain's head
+(its last position, count and chain hash) to two small owner-only files, one beside the ledger and one in
+the key folder. Verification fails if the ledger no longer reaches the recorded head, or if the database's
+append-only triggers were missing when it was opened. An append refuses to write past a broken anchor. The
+anchors are written after each append is committed, so a writer stopped in between leaves them one event
+behind, never ahead, and an append that cannot bring them up to date refuses to go further. A ledger file
+that is a symbolic link fails the check (#221).
+`exo log verify` and `exo memory verify` run all of these checks.
+
+A process running as the same user can still rewrite the database and both anchors, or edit the registry.
+That is what the next part addresses, for installs that need it.
+
+#### 20.2 Ledger authority
+
+For Exo OS, the ledger needs a keeper that the agent's own process cannot overrule. The *ledger authority*
+is an optional service, run under a separate operating-system account, that alone holds the signing keys
+and the authoritative copy of the ledger. Exo's local ledger becomes a *projection*: a copy the service
+fills, which can be checked and repaired from it. A normal install keeps the local keys and behaves as
+before. When the authority is required, a missing or unknown service makes Exo refuse to write rather than
+fall back to local keys.
+
+The append contract is built so that a lost reply can never cause a double action. Every append carries an
+*operation id* and the head the caller expects. The service writes the event, a signed checkpoint and the id
+together in one transaction before it answers. Repeating the same id returns the original record, and
+reusing an id for different content is refused. If the reply is lost, the caller looks the id up instead of
+writing again, and never repeats the outside action the entry described. Each writer (the gate, the memory
+plugin, the learning loop, the command-line tools) has a named alias, and each alias lists the authors it may
+attribute. The agent's key may record a principal utterance as the principal's words without claiming the
+principal's key signed it.
+
+Anyone can check a copy of the ledger with a separate verifier that opens it read-only, given an identity and
+signed checkpoints obtained independently. It reports whether the copy matches a verified prefix, is missing
+its tail, has diverged, or has extra rows the service never confirmed, and it always says that a past
+checkpoint alone does not prove the copy is current.
+
+What this does not do: it cannot stop an authorized but compromised core from submitting invented events,
+leaving actions out, or ceasing to send checkpoints. It does stop anyone from extracting the protected keys
+or creating two conflicting histories through the service. An independent witness can expose a rollback or a
+fork of what it has seen. Its transport is built and opt-in: the `exo-witness` command, which runs only when an
+administrator starts it, keeps a durable journal of checkpoints and talks to the publisher over TLS in which each
+side pins the other's exact certificate. It is off by default. Core startup creates no witness key, certificate or
+endpoint, no witness is run for you, and Exo OS does not yet deliver checkpoints to one. A witness protects only
+when someone other than the ledger's administrator runs it, with its own key and its own backups. The service and
+the transport are built and tested in this repository with disposable stores. Running the service under its own
+account is the operating system's job, and running a witness is deployment work (section 30).
+
 ### 21. Retrieval
 
 **Status.** Keyword ranking with a budgeted pack is **[built]** (`exo.retrieve.assemble`, with a `Ranker`
@@ -1259,7 +1667,7 @@ strength). Read it as "the chance that at least one piece of evidence is real". 
 weight toward 1, and silence lets it fall. Weight of 0.75 or more is labelled high, and 0.45 or more medium
 **[built]**, in `exo.taste`.
 
-Promotion, in order:
+Promotion rules (the numbers are rule ids, not the order they run in, which the paragraph after the list gives):
 
 1. The person said it (a rule, an answer, or accepting the proposal): promote now.
 2. Guarded (irreversible, public, financial, third-party): never auto-promote. Exo asks or waits.
@@ -1271,6 +1679,13 @@ Promotion, in order:
 5. Skill changes: only through the eval gate below, because skills change behaviour most.
 6. Everything else waits. A medium-weight lesson may enter the pack as a hint. A stale one becomes a question
    if asking is worth it, or fades away.
+
+The order of these rules matters, and an audit showed how. Rule 1 used to run first, so a reviewer could cite
+a real but unrelated thing the person once said and slip a skill change or a guarded lesson past rules 2 and
+5. Now the guarded, conflict and evaluation checks run before the shortcut. Skills always need the
+evaluation, and a missing held-out case cannot pass. Citing a ruling is not the same as the person accepting
+a proposal: acceptance stays a separate act that only the person can do. Only signals the person wrote count
+here at all (section 20.1).
 
 High-weight taste is enforced. Medium is a hint. Low is not shown. Learned taste appears inline in the chat
 with a link to the plain file that holds it, so the person can edit or delete it.
@@ -1337,6 +1752,48 @@ capped at 10 candidates and 3 judge samples per item by default, under a monthly
 Exo reports cost per accepted lesson. Every stage has a rules-only fallback, so the loop runs, more weakly,
 with no model at all.
 
+#### 22.7 The house taste
+
+**Status.** Layers, source tags, the export and its checks, review and release, and the taste block in the
+prompt are **[built]**. The shipped pack is an empty placeholder (version 0.0.0) until the first one is
+reviewed and released, so the house layer is off everywhere today. The slow adaptation rules below, the
+ask or silent choice and the `/taste` view are **[designed, not built]**.
+
+Section 6 gave the idea: ship a tuned starting taste, then fit the new user at the pace people actually
+change. Here is how.
+
+**What ships.** A *house pack* is exported from the principal's own store by one command. It holds method
+items (how answers are written, how work is checked), value and worldview items stated as reasoning style
+with no faith, nation, party or place named, a house voice with no values or safety rules in it, and the list
+of shipped skills. People, clients, history, quotes and evidence never ship. The export normalizes what it
+can and refuses to write anything if a check for personal or internal names fails. Every value item must be
+ticked by the principal before release, and a pack without a valid release record is never used.
+
+**Layers.** For each item, the lookup goes ruling, pinned item, learned item, then house item, and shows the
+source next to the item: `[house 1.3]`, `[learned 0.72, 5 weeks]`, `[you said, <date>]`, `[pinned]`. The
+user's own items always win. House items lose precedence slowly: their base weight starts at 0.7, halves each
+year, and never falls below 0.3, so they never vanish.
+
+**Change only when it lasts.** The design counts episodes, not signals: all of a user's signals about one
+item in a session or a day count once. A week counts when its episodes mostly agree. An item becomes
+*armed* after three net weeks of contrary signals within eight, then fades week by week while the change
+holds, and swaps for the user's own version only when the user's version is clearly ahead. A full swap takes
+two to three months of sustained change. A mood disarms with no trace, a habit tied to one place or task
+becomes a scoped item, and a pattern tied to one period, such as a deadline week, makes nothing.
+
+**Values: retreat fast, adopt slow.** On a fresh install, house values start at half weight and step back
+to neutral on one clear signal. Later, one strong signal or a stated opposing view steps a value back at
+once. Neutral never needs a yes. The user's own view is adopted only after they state it and hold it for
+four net weeks.
+
+**Ask or silent.** Each user chooses whether an inferred change waits for a yes or happens quietly and
+shows afterwards, where it can be undone. New users start silent, because swaps are rare and visible and
+early questions cost more than they save.
+
+**What is not taste.** Approval rules, budgets and posting rules are product policy. They ship as policy
+files, change only by a code change or the user's own edit, and are never exported, weighted or decayed. A
+decision model may help classify a signal, but it never swaps, adopts or steps back an item itself.
+
 ### 23. Trace, findings and re-verification
 
 **Status.** **[built]**: the events, the trace reader, the rules, the findings table and its life cycle,
@@ -1395,8 +1852,10 @@ caused them.
 
 **Verify.** A finding is `open` until someone marks it `fixed` in a given commit. Then Exo keeps measuring.
 The same signature on a harness built from that commit or a later one *reopens* it. On an older harness it
-only counts, because the fix was not there yet. Twenty quiet turns or three days on a fixed harness mark it
-`verified`. "At or after the commit" is a git ancestry check on the source tree.
+only counts, because the fix was not there yet. Twenty quiet turns that could have tripped the rule, or three
+days that had such turns, on a fixed harness mark it `verified`. A turn that could not have shown the problem
+(a turn that never called a tool cannot show that tool's error) and a day with no activity do not count. "At or after the
+commit" is a git ancestry check on the source tree.
 
 This is the harness's version of the held-out test in section 22.5. A fix is a claim about the future, and
 only later behaviour can confirm it. The status line of each client shows the serving route and the count of
@@ -1405,7 +1864,8 @@ open findings, so a regression is visible without asking.
 ### 24. One surface
 
 **Status.** **[built]**: a terminal client (`exo tui`, written with Textual), a web client served by the
-command-centre plugin (`exo web`), a plain line client (`exo chat`), the `ui` tool and the `ui.panel` event.
+command-centre plugin (`exo web`), a plain line client (`exo chat`), the `ui` tool and the `ui.panel` event,
+completion and guidance in the composer, the composer pane, and the two layouts.
 **[designed, not built]**: a device client, and decision-model choice of when to offer a panel.
 
 Exo ships one surface instead of a command-line tool plus a separate app. The base is a terminal-like prompt
@@ -1438,6 +1898,56 @@ first memory summary, the first fallback, the first peer message), each shown on
 Tips cost no model tokens and never enter the transcript, so they cannot pollute memory. While tutorial mode is
 on, the core adds one line to the system message. Turned off, the system message is byte-identical to
 before, so the toggle costs one cache miss and nothing more.
+
+**Typing help.** The composer completes as you type. `/` opens a menu of every command with its arguments
+and one line of description, narrowed by a forgiving match (`/cmp` finds `/compact`). After a command it offers
+that command's arguments: models, recent threads by title, grant ids, provider names. `@` lists files in the
+working folder by name only: it never reads them, never leaves the folder, and leaves out anything the gate
+treats as a secret. As you type, the rest of an earlier line you sent shows dim, like a shell's
+autosuggestion, and one key takes it. A mistyped command is not sent: "did you mean /compact?" and the
+corrected line waits in the box. With the box empty, one dim line may suggest a next step from plain local
+rules (open providers after a failed model call, `/trace` after a slow turn, `/context` in a long thread), at
+most one new line every 25 seconds and never while a turn runs. None of this calls a model. One engine, with
+no screen code, ranks for both clients, so the terminal and the web page cannot drift apart. A test runs the
+web copy against the Python one. The idea of a `/` menu and history ghost text comes from the Hermes command
+line; the code is Exo's own.
+
+**Keys that cannot hurt you.** A key you press by habit should not throw work away. So Esc never stops a
+turn: it closes a menu, dismisses ghost text or a tip, or leaves a panel, and otherwise does nothing. A turn
+stops with ctrl+c, `/stop` or the web Stop button, and the draft in the box stays. In the same spirit, an
+approval card never takes the focus by itself. A version that grabbed focus once the box was empty let
+ordinary typing answer a card: after a send, "ok" allowed once. Now the card is reached deliberately (Tab, a
+click, or ctrl+f), its keys act only there, and "always" needs a second confirmation. Typing while a turn
+runs steers it, and Up in an empty box pulls a queued steer back to edit.
+
+**Room to write.** A click on the transcript, or any key typed while nothing else has focus, goes to the
+composer, so you never have to aim for a thin text bar. For a long prompt, ctrl+g or `/compose` grows the
+same composer to most of the screen: Enter adds a line, ctrl+s sends, Esc closes and keeps the draft, and
+`/compose task` starts with Goal, Context, Constraints and Done when headings. Because it is the same widget,
+completion works inside it and closing it cannot lose the draft.
+
+**Two layouts.** Chat programs put the newest message at the bottom and the box under it. Exo is trying the
+opposite as an experiment: in the *inverse* layout the box is at the top and the newest item sits right under
+it, so a thread opens on its latest and nothing scrolls away from the place you type. Text inside one message
+still reads top to bottom. `/layout classic` restores the usual order, and the choice is saved. Inverse is the
+default while the experiment runs.
+
+**Threads you can find again.** `/rename` gives a thread a title, which is what makes the thread list and
+`/resume` easy to scan. On the web page a double-click on a thread does the same. Only the principal can
+rename.
+
+**The web page's other pages.** Besides chat, the web client has Tasks, Schedule, Command (a digest of
+approvals, decisions, sessions, tasks and cost) and Providers. They follow the public site's design: each
+page opens with a heading that says what it is for and a short readout, an empty page says what will appear
+and how to start, status is shown by the shape of a small marker (filled, hollow, dashed, crossed) next to a
+word, not by colour alone, and every page works on a 400-pixel-wide screen. This changed presentation only,
+not behaviour.
+
+**A stream that resumes.** A browser reconnects to the event stream by itself, but it repeats the address it
+first used, and the web client once replayed the whole history on each reconnect, so text doubled. Now the
+server resumes from the later of the two positions it is given, and the page ignores an event number it has
+already handled. When the stream fails outright, the page reopens it with growing pauses, and says so plainly
+when its link has expired.
 
 **Handing off.** `/handoff` asks the agent to write a handoff note for whoever picks the work up next. The
 core supplies the facts (thread, git state, open findings, running tasks and jobs, the latest summaries), and
@@ -1514,22 +2024,54 @@ boundary on its own, which is why the gate and the operator floor sit outside it
 third-party actions wait for the person. The operator floor and the credentials floor cannot be lowered by
 the person's own policy, and a decision model can only tighten. An approval of an outward act covers its
 exact text only. Standing grants are scoped, expire and are the principal's alone. A seat that approves must
-sign. Peers and other ingress sources can never approve.
+sign. Peers and other ingress sources can never approve. Shell commands with a hidden program ask, programs on
+the allowlist are trusted by name, writes the gate sees going to the principal store ask every time, and a
+policy file changed mid-session can only tighten until the principal accepts it or Exo restarts. The floors
+apply to what the gate classifies, and section 15.4 names the main shell forms it is known to misread and
+store paths it is known to miss; the open gate issues list more.
+
+**Identity from the connection.** Whether a caller is the principal is decided by the transport: a client running
+the core in its own process, or a connection that presents the per-launch principal credential from a process that
+is not a live descendant of the core. Both ends of a socket connection ask the operating system who is on the
+other end before the credential moves (D-060, #175). The body of a request never decides it. This refuses a tool
+while it runs under the core. A same-user process that obtains the credential and detaches can still pass, and
+only an operating-system sandbox closes that (section 12.5). Through the protocol, the principal's authority
+covers approvals, learning signals, settings, model choice and accepting a looser policy. The settings file itself
+is an ordinary file that a tool can write without asking until a change in review protects it (section 30.1).
+Other local programs may drive turns, and their words are recorded as theirs (sections 12.5 and 20.1).
 
 **Outbound scrub.** Public posts are swept for internal names, home paths, model ids and internal ids before
 they leave, and held on a hit. Shell commands run without provider keys or token-like variables in their
 environment. Trace records have keys and token-like strings removed before they are written.
 
 **Integrity.** The ledger is signed and chained, append-only is enforced by database triggers, and keys sit
-in `0600` files. Signatures mean trust need not rest on whoever hosts the files.
+in `0600` files. Keys are pinned in a registry, every message carries an author stamped from its way in, and
+a head anchor catches a ledger that was cut short. Where the operating system can host it, an optional
+ledger authority keeps the keys and the authoritative copy out of the agent's reach (section 20.2).
+Signatures mean trust need not rest on whoever hosts the files.
 
-**Transport.** The Unix socket is owner-only. TCP requires a bearer token compared in constant time. TCP has
-no TLS today, so it is for localhost or a trusted network. Provider keys come from environment variables,
-the operating system's keychain or one owner-only key file, never from chat or from shared config. Peer
-messages are signed by the sending seat and checked for age and replay.
+**Updates.** `exo update` can be set to install only a signed update (`update.require_signed`, off by
+default). It then checks that the commit it would install is signed by a key on a trust list the user copied
+in by hand (`exo update --pin-trust`), never a list read from the update itself, so someone who can push to
+the repository cannot add their own key. The first pin is trust on first use, only SSH commit signatures are
+checked, and an install made with `uv tool` cannot be verified. It is opt-in because releases are not signed
+yet.
 
-**Known limits.** Privacy covers what a model can infer from text, not only what is stored, and auditing
-outbound text for inferable facts is unsolved. Hosted model providers see what is sent to them. Exo can
+**Transport.** The Unix socket is owner-only. TCP requires a bearer token compared in constant time. TCP has no
+TLS today, so it is for localhost or a trusted network. The web page needs its per-launch page token on every
+`/api` route except `POST /api/launch`, and on both event streams. The page shell, its static files and the launch
+route are served without it; the launch route trades a one-time launch code (one use, 120 seconds) for the token
+and answers loopback callers only. The page accepts only loopback host names plus a specific address given with
+`--host`. Provider keys come from environment variables, the operating system's keychain or one owner-only key
+file, never from chat or from shared config. Peer messages are signed by the sending seat and checked for age and
+replay.
+
+**Known limits.** Every check above lives in the application. A program running as the person's own user
+can read the same files, and code that the agent wrote earlier can be run by a program trusted by name, such as
+a test runner, or through an option that runs a command. The fix is an operating-system sandbox for tool
+processes, which the required executor mode of
+section 15.6 prepares for and which is not built. Privacy covers what a model can infer from text, not only
+what is stored, and auditing outbound text for inferable facts is unsolved. Hosted model providers see what is sent to them. Exo can
 choose what to send, not what they keep.
 
 ### 27. Portability toward a companion device
@@ -1539,8 +2081,9 @@ store and grows with them. The near-term design rules that keep that path open:
 
 - **The store is one folder.** Pack, nodes, items, ledger and indexes are plain files and SQLite. Copy the
   folder and the person moves.
-- **The core stays small.** About 15,000 lines today, held by a test that allows a recorded floor plus 1,000 lines
-  (section 11). The floor only goes down. Two runtime dependencies. The terminal client is Python too, so the core and its main client need no Node, no browser
+- **The core stays small.** About 15,000 counted lines today (14,999 when this version was written), under a
+  ceiling of a recorded floor plus 1,000 lines (section 11). Two runtime dependencies.
+  The terminal client is Python too, so the core and its main client need no Node, no browser
   engine and no containers. One optional tool, `code_find`, needs Node and hides itself when Node is
   missing. The planned idle memory target is under 80 MB **[not measured]**.
 - **A small-model path from day one.** The OpenAI-compatible transport already talks to local servers
@@ -1555,8 +2098,10 @@ store, and adds a thin device client **[designed, not built]**.
 
 A second, longer path starts in the same place. *Exo OS* is a design branch that asks what an operating
 system looks like when an agent like this is its foundation, not an app on top. It runs the same core and the
-same protocol, with no fork, and lives in its own repository. It is at the research and design stage:
-nothing of it is built, and no machine runs it.
+same protocol, with no fork, and lives in its own repository. It is at the research and design stage, and
+no machine runs it. Two seams for it are built on the Exo side: the required execution broker of section 15.6,
+through which every tool call must pass, and the ledger authority of section 20.2, which keeps the record's
+keys out of the agent's reach.
 
 ### 28. Walkthrough: one turn through every layer
 
@@ -1571,7 +2116,7 @@ that turn, layer by layer, with the actual protocol names. Steps that depend on 
    | <-- message.completed --  |  user message stored (seq 101)
    | <-- turn.started -------  |
    |                           |  system prompt + pack + recall
-   |                           |  context: settle, tree view + tail
+   |                           |  context: ready summaries + tail
    |                           | ---- stream ---------------------------> main role
    | <-- message.delta ...  -- | <--- text deltas, tool_call(edit_file)
    | <-- usage.updated ------  |
@@ -1606,7 +2151,7 @@ saved before it is sent.*
    messages are short. Recall goes just before the user message, not into the system message. *(The staged
    retrieval pipeline of section 21 is not built. Recall today is keyword search.)*
 4. **Context.** The context engine schedules leaf summaries for any full chunk of 8 log entries older than
-   the tail, waits for pending live summaries to settle, and builds the input: the system message with the
+   the tail and, without waiting for them, builds the input from what is ready: the system message with the
    agent's summary tree, this thread's recent messages verbatim, and a note of anything other windows of the
    same agent did since this one last looked. If a summary finishes during this, a `memory.summarized` event
    reports the token counts before and after.
@@ -1625,8 +2170,8 @@ saved before it is sent.*
 8. **The gate.** The gate splits the command at `&&`, sees `git push` to a shared remote, and classifies it
    as public. Policy says ask. The engine emits `approval.requested` with a summary ("push branch to
    origin"), the risk, the call, the binding hash of the exact command, and who may answer (here, only the
-   principal). The terminal shows an approval panel. A phone client could show a card. The person presses
-   allow. The client sends `approval.respond`. The engine emits `approval.resolved` and fires
+   principal). The terminal shows an approval card. A phone client could show one too. The person moves to
+   the card and allows once. The client sends `approval.respond`. The engine emits `approval.resolved` and fires
    `post_approval_response`, and the gate writes the decision to the signed ledger. Had the person chosen
    "always", the grant would cover this exact command to this one remote for 7 days, not every push.
 9. **Shell.** The shell tool runs with a timeout in its own process group, streaming output as
@@ -1667,6 +2212,9 @@ per plugin (see CI in `docs/DEVELOPER-GUIDE.md`). Counts change with commits, so
 | Peers (`tests/peers`) | Presence, signed messages, policy, hold and release, refusal of consent |
 | Protocol (`tests/protocol`) | Schema, caps, strict decoding, JSON Schema and TypeScript export, clients and replay |
 | Integration (`tests/integration`) | Acceptance flow, hard kill and resume, blocking hooks, exact-text approvals and system invariants |
+| Security (`tests/security`, `plugins/exo-gate/tests`) | Approval identity against a tool that steals the credential, principal authority over learning and settings, the shell allowlist and pinned everyday commands, store writes, policy pinning, required executor mode |
+| Ledger authority (`tests/test_ledger_authority.py`) | Competing writers, head conflicts, repeated operation ids, lost replies, process exits around a commit, tampered copies and independent verification, all on disposable stores |
+| House taste (`tests/baseline`) | Pack release checks, layers and source tags, the export and its privacy and value checks |
 | Bus (`tests/bus`) | Signed agent-to-agent relay, client and wire format |
 | Ledger, store, crypto, CLI | Signing, chain verification, append-only triggers, store lint and search |
 | Onboard, ingest, install, orchestra, skills | Interview, importers, installer, role templates and intro skill |
@@ -1687,8 +2235,23 @@ What that means in plain terms:
 - The learning loop captures, reviews, proposes, promotes and reverts. Selected changes use a held-out
   evaluation gate; other promotion rules include explicit principal rulings and some repeated,
   high-confidence taste or fact evidence.
-- The trace records every call and turn, files findings, and reopens or verifies them after a fix.
+- The trace records every call and turn, files findings, and reopens or verifies them after a fix, counting
+  only turns that could have shown the problem.
 - Provenance is tracked and checked. The upstream report works on a test repository.
+- The security wave: the shell allowlist, a deny checked against every command the gate reads on a line, the store
+  as a credential, policy that only tightens mid-session, approval identity from the connection with kernel peer
+  checks on the core's socket, the page token on every web data route and a one-time code for the browser launch,
+  one environment scrub, authors on every message, pinned keys and head anchors, and principal authority over
+  learning and settings.
+- A required execution broker mode, an optional ledger authority with an independent verifier, and an
+  opt-in transport for an independent witness.
+- Opt-in spend ceilings that admit model calls against daily and monthly limits.
+- The composer: completion, typo help, guidance, history, the large composer pane, two layouts, `/rename`,
+  approval cards that never take focus or outlive their request, a web stream that resumes, and controls to
+  inspect, steer and stop running subagents.
+- The first part of the house taste: layers, source tags, the export, review and release.
+- Version numbers: `exo --version` prints `exo 0.2.0 (egg)`, and a test keeps the package and the changelog
+  in step.
 
 Live acceptance runs used a real provider. In wave 2: a correction from the first turn survived compaction
 and was quoted word for word, `rm -rf` on a scratch path asked and a deny blocked it, and a bus round trip
@@ -1716,7 +2279,77 @@ their next call, and the log verified after a restart.
 | Remote transport over the bus or a tunnel, and TLS | 12, 26 | 4 to 5 |
 | Snapshot undo of files | 17 | not scheduled |
 | Device footprint audit, device client and idle memory measurement | 27 | 5 |
-| Exo OS | 27 | design only |
+| An operating-system sandbox for tool processes (#31) | 15.4, 26 | with Exo OS |
+| The rest of the engine split: public queries (step 1), a protocol adapter (step 2), narrow interfaces in place of the engine's product imports (the rest of step 3) | 11 | next |
+| House taste adaptation: sustained-change rule, value step back, ask or silent mode, `/taste` | 22.7 | on a branch, no pull request yet (30.1) |
+| Running an independent witness for the ledger authority, and delivering checkpoints to it from Exo OS | 20.2 | deployment work (the transport is built and opt-in) |
+| A composer pane on the web page | 24 | not scheduled |
+| Exo OS | 27 | design only, though the broker seam (15.6) and ledger authority (20.2) are built on the Exo side |
+
+#### 30.1 In progress
+
+Merged to the main branch since the first draft of this paper, and so no longer in progress: engine split step 4,
+which cut the counted core by 1,174 lines (D-067, #124); a reservation of the principal's model spend before a
+bounded provider call (#87); the opt-in mutually authenticated witness transport (#88); in required executor
+mode, binding each request before approval hooks, isolating hook arguments and no longer loading plugins from
+installed packages (#91); lazy start of `exo-memory` with specific errors (#114); findings
+that verify on eligible quiet turns or days of activity, with open findings listed in the trace (#115); the
+long-`HOME` socket fallback (#117); watching, opening, steering and stopping a session's subagents (#118); the
+`/rename` built-in (D-069, #119); turns that build from ready summaries and do not wait for memory upkeep (D-068,
+#120); an opt-in real-CLI contract test for the claude-cli provider (#121); the opt-in signed-update check
+against a pinned trust list (D-073, #122); store paths checked with their symbolic links resolved, also after
+`cd`, `pushd` or `git -C` (#156, for #130); brace sets expanded before a path is matched against the
+secret stores (#193, for #184) and before a write is matched against the Exo store (#228, for #224); options of
+trusted programs whose value is a command read as nested commands, as each program's `getopt` reads them, with
+an `ssh` chain past the hop cap asking and an environment dump behind a runner read as credentials (#164, for
+#154, #153 and #155); a relative read on a line that enters a secret-store folder read as credentials (#201, for
+#192); the indirection floor kept when `opaque_exec` is named at ask or deny (#186, for #178); Unix peer
+authentication, in which both ends of a principal connection ask the kernel who is on the other end before the
+credential moves (D-060, #175, which replaces #109); the browser opened on a one-time launch code rather than the
+page token (#177, for #166); Exo's run folder, which holds the principal credential, read as a secret store (#185,
+for #169); commands in array subscripts of variable names read (#189, for #179); commands behind wrappers such as
+`setsid`, `flock` and `watch` read (#196, for #160); a deny or reserved entry checked against every part of a
+line, while a category setting or a rule still sees only the most severe part (D-075, #126; #191 is open); a
+compound's heredoc, here-string or pipe fed to the commands inside it (#198, for #161); shell startup hooks
+dropped from tool environments (#168, for #135); the built-in `grep` and `glob` tools skipping secret stores and
+`code_find` refusing folders that hold them (#287, for #241); follow-ups to #164's reading of command options and
+environment dumps (#288, for #230 and #232); head anchors written after each append is committed (#221); and the
+first-run fixes of #213: the installer copies the skill pack into `$EXO_HOME/skills`, the terminal client no
+longer freezes on the boot screen, `exo --resume` continues the newest thread with messages, and on the Claude
+Code route the system message names the thread's working folder. The core budget is now a ratchet with headroom
+(D-077).
+
+The items below have an open pull request, or an open issue for the permissionless mode. None is part of Exo
+yet, and none of the sections above relies on them. They are listed so the reader knows where the work is going,
+and they may change before they land.
+
+- **Protecting the settings file** (D-074, #125). `config.json` names the plugins the core loads (the gate
+  among them), the gate's own settings and the models, and the signed-update trust list of section 26 sits
+  beside it. Today a tool can rewrite them with an ordinary local write. The change puts both on the store's
+  protected list, so a write asks the principal every time, as section 15.4 describes for the store.
+- **Reading parameter expansions** (#158, for #143). The lexer reads a `${...}` word as bash does and
+  classifies every command inside it, which closes the `${...}` gap of section 15.4.
+- **Reading values given to `declare`** (#194, for #188). The gate reads a `$( )` in a quoted compound, `-i`
+  or `-n` value given to `declare`, `typeset` or `local`, which closes that gap of section 15.4.
+- **A permissionless mode.** A mode, switched on only by the principal, in which the gate allows what it
+  would have asked about, so a long task does not stop at every unknown program. Writes to Exo's own records,
+  anything touching credentials, and the operator floor (an irreversible public act that touches a third
+  party) would still ask (#96).
+- **Event activation.** A design in which an event, such as a changed folder or a new message, can start a
+  run, the way a schedule does today, with the event's sensitive fields masked until the gate sees them.
+  It is a design only (D-057 to D-059, #107, with the community egg and the live egg on the same pull request).
+
+The items below were built on branches on October 13 and have no pull request open yet, so no one has reviewed
+them. They are listed for the same reason, and they may change more than the items above.
+
+- **A tool-round cap you can set** (branch `fix/update-and-rounds`). `/rounds` shows or changes how many tool
+  rounds one turn may take before it wraps up, with a proper final call when the cap is reached.
+- **The choice card** (branch `feat/cli-choice-selector`). When the agent offers a choice, a card in the terminal
+  is answered from the keyboard, and the answer reaches the agent as a reply.
+- **The exosphere** (branches `feat/exosphere-cli` and `feat/exosphere-web`). Exo's evolving figure, drawn in
+  the terminal client and on the web chat page, moving with the agent's activity.
+- **House taste, waves 2 and 3** (branch `feat/taste-waves-2-3`). The sustained-change rule, the value step
+  back, the ask or silent mode and the `/taste` view of section 22.7.
 
 Nothing in this paper reports a benchmark, an accuracy figure or a speed-up for Exo itself, beyond the small
 live checks named above. The numbers quoted for decision models and embedding models come from their vendors'
@@ -1736,6 +2369,21 @@ a small cycle of fix and ship, or a design item.
 | 3. UI and learning | terminal and web clients, panels, `exo.learn` with selected evaluation gates, cron, subagents and tasks | the live acceptance run above, then continual use on a canary agent; selected changes use held-out evaluation, while other lessons follow promotion rules based on principal rulings or repeated, high-confidence evidence | built, canary use under way |
 | 4. Channels and cutover | chat adapters lifted with provenance, editor adapter, history import, real users moved over one by one with rollback | each move done with a working rollback | planned |
 | 5. Device | footprint audit, local small-model defaults, core on a small board, thin device client | the core runs on the board with an empty store and with a real one, and the device client chats and approves | planned |
+
+After wave 3 came a security and correctness wave, started by an outside audit of the code. Each finding got
+a failing test first, then a fix, then a decision record: the gate's allowlist, approval identity, authors
+and pinned keys, principal authority, eight correctness bugs no test had caught, and repository hygiene
+(continuous integration on two systems and two Python versions, a lockfile, licences in the package, and a
+privacy check that keeps names out of the code).
+
+Work now follows a local-first rhythm. A change is built on its own branch. Several ready changes are
+merged into a local test build, which the principal uses on the canary seat. What holds up there goes to a
+pull request, is reviewed and merged, and the public site is deployed to a staging address before it goes
+live. Each release has a version: Exo is `0.2.0` with the codename *egg*, following semantic versioning
+(the first number for breaking changes, the second for features, the third for fixes), with a new codename
+for each first number. The site and this paper have versions of their own, and every release is tagged.
+The delivery order ahead is the core first, then the browser client's workflow, and only then a desktop app
+that packages the browser client, so that the package is not rebuilt for every change.
 
 Several of the newer mechanisms in this paper came from that daily use. The trace and findings came from
 the canary agent's failed attempt to judge its own environment. Background jobs and principal capture came
@@ -1765,7 +2413,11 @@ approval path and from the leak described in section 15.4.
    stated. Unsolved.
 10. **Weights.** When, if ever, to move taste from the pack into a per-person adapter. The ledger is kept in
     a training-ready form so this stays possible.
-11. **Cache under one memory.** Notes from other threads change the recent part of a call, which costs some
+11. **The layout.** Whether the inverse layout (newest item under the box at the top) should stay the
+    default once the experiment has run, or return to the usual order.
+12. **Beyond the application.** Which operating-system isolation the tool sandbox should use on each
+    platform, and how much of the required executor contract an ordinary install should adopt.
+13. **Cache under one memory.** Notes from other threads change the recent part of a call, which costs some
     prompt-cache reuse. On a 20-turn script with an ideal cache, prefix reuse fell from 93% to 84%. The live
     figure on the current code has not been measured.
 
@@ -1786,7 +2438,8 @@ cost, local-first storage, and learning in prompts before weights) the choice is
 lifted module recorded in `PROVENANCE.toml`: the memory and context slot interfaces, the transport base and
 message conversion, the fuzzy matcher, the patch parser, the shell runner's process-group handling and the
 summarizer prompt. Its background review of memory and skills is one of the two ideas fused into Exo's
-learning loop.
+learning loop. Its command line's completer, with a `/` menu, argument lists and ghost text from history, was
+the reference for Exo's composer, which is written from scratch.
 
 **opencode.** For showing how simple a coding agent can feel: one background server with thin clients, three
 input prefixes and a palette, and terminal preferences kept apart from project settings.
@@ -1807,8 +2460,8 @@ keeps English for models, for the measured reasons in section 16.1.
 taste inline as plain, editable rules with a confidence. The second idea fused into Exo's learning loop.
 
 **OptChat (Victor Taelin) and UniiChat (Higher Order Company).** For the context model: one continuing
-conversation over a verbatim log with a tree of summaries, a fresh model call each turn, and waiting for the
-summaries to catch up. Exo reimplements the ideas and copies no code or prompt text.
+conversation over a verbatim log with a tree of summaries, a fresh model call each turn, and summaries that
+catch up with the conversation. Exo reimplements the ideas and copies no code or prompt text.
 
 **Letta.** For memory design, including memory blocks and consolidation during idle time.
 
@@ -1848,15 +2501,23 @@ discipline, the item layer and the event-sourced team state described in section
 ## 34. Glossary
 
 - **Agent.** One configured Exo assistant, defined by a seat file. It has one log and one memory.
+- **Allowlist.** A list of what is allowed, where anything not on it is refused or, in Exo's gate, asked about.
 - **Append-only.** Data that is only ever added to, never changed or deleted.
+- **Author.** Who wrote a message, stamped by the core from the path the message came in by, never read from
+  its text.
 - **Background job.** A shell command that runs on after the tool call returns, and reports back when done.
 - **Binding.** The hash of an outward act's exact text, target and arguments. An approval covers it only.
 - **BM25.** A standard keyword ranking that favours documents sharing rare query words, with diminishing
   returns for repeats and no bonus for length.
+- **Broker (execution broker).** An installed component that receives every tool call after the gate and
+  runs it in isolation or refuses it. Required in Exo OS, absent in a normal install.
 - **Calibration.** Adjusting a model's probabilities so that "90% sure" is right about 90% of the time.
 - **Candidate / incumbent.** In the climb, a candidate is the current setup with one change. The incumbent
   is the current setup.
 - **Client.** A program that shows Exo to a person (terminal, web page, device) and talks to `exod`.
+- **Composer.** The box you type into, with completion, ghost text, tips and a large editing pane.
+- **Composition module.** The code that builds the engine from config, seat, executor and plugins
+  (`exo.compose`), kept outside the counted core.
 - **Context window.** The text a model can read in one request.
 - **Daemon.** A program that runs in the background and waits for requests. `exod` is Exo's.
 - **Decision model.** A model that answers a fixed question with probabilities over fixed options instead of
@@ -1872,17 +2533,33 @@ discipline, the item layer and the event-sourced team state described in section
 - **Hash.** A short fingerprint of data that changes completely if the data changes at all.
 - **Hash chain.** A sequence of records where each contains the hash of the one before, so tampering breaks
   the chain.
+- **Head anchor.** A record of the ledger's last position and chain hash, kept apart from it, so a ledger
+  that was cut short fails verification.
 - **Held-out set.** Test cases the learning process never sees, used only for the final keep-or-drop.
 - **Hill climbing.** Improving step by step, keeping a change only if it scores better.
 - **Hook.** A named point where a plugin can watch or change what the core is doing.
+- **House taste.** A reviewed starting set of taste items that ships with Exo, with every personal detail
+  removed, which the user's own items always override.
 - **Ingress.** The one path for input that does not come from the principal's keyboard: policy, delivery,
   receipt.
 - **Ledger.** Exo's signed, hash-chained, append-only record of events.
+- **Ledger authority.** An optional service under a separate account that alone holds the ledger's keys and
+  its authoritative copy.
 - **Noisy-or.** A way to combine evidence: one minus the product of (one minus each strength), read as the
   chance that at least one piece of evidence holds.
+- **Opaque command.** A shell command whose real program the gate cannot see, such as a script or a
+  variable in the program's place. It asks.
 - **Pack.** The one page about the person that is loaded on every request.
+- **Page token.** A secret made each time `exo web` starts, carried in the link it prints, required on every
+  data request from the page (every `/api` route except `POST /api/launch`, and both event streams). The
+  browser `exo web` opens gets a one-time launch code instead and trades it for the token at the launch route.
 - **Peer.** Another live agent session on the same machine that can send messages, but never consent.
+- **Pinned key.** A public key recorded once in the key registry. A different key under the same name is
+  refused.
 - **Principal.** The person Exo works for.
+- **Principal credential.** A secret the core writes beside its socket on each start. A client that presents
+  it from a process that is not a live descendant of the core is the principal. A same-user process that
+  obtains it and detaches from the core passes too (section 12.5).
 - **Principal store.** The folder holding everything Exo knows about one principal.
 - **Prompt cache.** A provider's discount for the part of a request that repeats a recent one byte for
   byte.
@@ -1894,6 +2571,7 @@ discipline, the item layer and the event-sourced team state described in section
 - **Server-Sent Events (SSE).** A way for a server to stream events to a client over one long HTTP response.
 - **Signature.** A code made with a secret key that proves who wrote a record and that it was not changed.
 - **Slot.** An exclusive plugin seat. Only one memory provider and one context engine can be active.
+- **Steer.** A message typed while a turn runs, which lands at the agent's next tool step.
 - **Subagent.** A child thread started by `delegate`, with fewer tools, hard limits and its own model tier.
 - **Summary tree.** Older messages summarized in leaves of 8, merged pairwise into higher levels as needed.
 - **Thread.** One window, channel, scheduled run or conversation of an agent. All threads share the
@@ -1902,4 +2580,39 @@ discipline, the item layer and the event-sourced team state described in section
 - **Token.** A piece of a word. The unit models read and are billed by, about four characters in English.
 - **Trace.** Exo's record of its own calls, timings, errors and costs, read by rules that file findings.
 - **Verbatim tail.** The most recent messages, sent to the model word for word.
+- **Version and codename.** Exo's release number, `MAJOR.MINOR.PATCH`, and a name for each first number:
+  0.x is *egg*.
 - **View.** Anything computed from the ledger that can be rebuilt from it.
+
+## 35. Version history
+
+**Version 0.3 (October 2026).** Covers everything merged to the main branch after version 0.2, up to the
+core budget ratchet (D-077) and the security changes merged up to October 19, 2026, and names the open changes
+that will alter what it says (section 30.1).
+
+- Sections 5, 17.3 and 28: a turn no longer waits for memory upkeep, except briefly when its view is over
+  budget.
+- Section 6: the house taste idea. Section 7: what the security audit found, the rule behind the fixes, and
+  their limits.
+- Section 8: the composer, in brief. Sections 9 and 23: findings verify only on turns that could have shown
+  the problem.
+- Section 11: the line budget policy and the engine split. Section 12: the 29th event, the built-in commands
+  that replaced new protocol types, the principal credential and the page token, bus messages through the
+  ingress path.
+- Section 12.5: the limit of the principal credential check. Section 13.1: setting up a provider. Section
+  13.5: spend ceilings.
+- Section 15: one environment scrub, cards that never outlive their request, the shell allowlist and its
+  known gap, the store as a credential, policy that only tightens mid-session, and a new section 15.6 on
+  required executor mode.
+- Section 16: pulling back a steer, and watching, steering and stopping subagents.
+- Section 20: new sections 20.1 (authors, pinned keys, the head anchor) and 20.2 (ledger authority and the
+  opt-in witness transport).
+- Section 22: the order of the promotion rules, and a new section 22.7 on the house taste.
+- Section 24: typing help, safe keys, the composer pane, the two layouts, `/rename`, the web sub-pages and a
+  stream that resumes.
+- Sections 26 and 27: the security model, signed updates and the Exo OS seams updated.
+- Part III: what is now built, an "In progress" section (30.1) that also names what has merged since the draft,
+  the security wave and versioning in section 31, two new open questions. Glossary entries for the new terms.
+
+**Version 0.2 (October 2026).** Brought the paper up to date with the store, one continuous memory, the
+learning loop, trace and findings, peers, background jobs and the approval rules of the first three waves.

@@ -159,6 +159,32 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
+- Whitepaper v0.3 (draft, tagged `whitepaper-v0.3` when published), covering main up to D-077 and the security
+  changes merged up to October 19, 2026: the security wave (D-038 to D-040) with its limits stated (allowlisted
+  programs are trusted by name; the principal credential check, with D-060's kernel peer checks (#175), still passes
+  a same-user process that detaches; the run folder is a secret store since #185 (for #169), but a shell walk from a
+  folder above it is an ordinary read; `config.json` is an ordinary write until D-074; a command inside `${...}` or
+  in a quoted compound, `-i` or `-n` value given to `declare` is not classified (#143, #188), while array subscripts
+  (#189, for #179), wrappers such as `setsid` (#196, for #160) and a compound's heredoc (#198, for #161) are read; a
+  deny past four `bash -c` nesting levels or `ssh` hops only asks (#137, #153); a `deny:` entry holds for every part
+  of a line while a `categories:` setting or a rule sees only the most severe one (D-075, #126; #191); a store write
+  by a relative name from the tool's working folder, by a glob or hard-link spelling (docs/GATE.md), or back through
+  `/dev/fd/N` (#217) is an ordinary write; a post body the gate cannot see is not swept (#208); a harmlessly named
+  link to a key file is a plain read (#209); the web page token is needed on every `/api` route except
+  `POST /api/launch` and on both event streams, and the browser is opened on a one-time launch code rather than the
+  token (#177, for #166), with the limits of `docs/ui/WEB.md`; and a received peer message is checked against the
+  key in a presence file any same-user program can write (#132)), shell startup hooks dropped from tool
+  environments (#168), search tools that skip secret stores (#287, for #241), head anchors written after commit
+  (#221), principal authority (D-052 to D-054), required executor mode (#70, #91), ledger authority (#80) and the
+  opt-in witness transport (#88), model-spend ceilings (#87), signed updates (D-073), the composer, keys and layouts
+  (D-037, D-043, D-045, D-046), the house taste wave 1 (D-044), the engine split and the core budget ratchet (#46,
+  D-067, D-077), turns that do not wait for memory upkeep (D-068), versioning (D-056), the web sub-pages (D-061),
+  subagent controls and `/rename` (D-069, D-070), and an "In progress" section that names the open changes and
+  issues (#96, #107, #125, #158, #194) and the work on branches with no PR yet, and names what #164, #175, #177,
+  #185, #186, #189, #196, #198, #201, #213, #228, #287 and #288 changed on main. The user guide, developer guide,
+  command reference and docs map are brought up to date with main, and the docs map has one coverage table.
+  `scripts/build_whitepaper.py` takes the version and the month from the paper's header line only, and stops with a
+  message when that line is missing or reworded.
 - Web chat: a completed reply renders as Markdown, GFM pipe tables included (#149, #152). Streaming stays plain
   text. Tables scroll sideways inside the message. A reply builds at most 10,000 table cells and a table at most 64
   columns and no more padded cells than source characters; past that, a table is shown as its source text. Quotes
