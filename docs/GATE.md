@@ -263,6 +263,44 @@ Known limit: the folder a `cd` enters is tracked for stores matched by name (`cd
 asks), not for stores matched only by sample paths (`cd ~/.config/gh && cat hosts.yml`; #192).
 Tests: `tests/security/test_gate_brace_sets.py`.
 
+### What the search tools read (#241)
+
+The gate checks the one `path` a `grep` or `glob` call names; the tools walk everything below it. So the tools leave
+out every folder and file below that root which `is_sensitive_path` matches, as found and as resolved
+(`exo.gate.StoreSkip`): `grep {pattern: "key", path: "~"}`, the same search of `$EXO_HOME`, or one with no path from
+a cwd of the home folder no longer returns `~/.aws/credentials`, `~/.config/gh/hosts.yml`, a project `.env`,
+`$EXO_HOME/keys/*` or `$EXO_HOME/run/exod.principal.key`. A link named `notes.txt` that points into `~/.ssh` is left
+out by where it leads, and a store folder is not entered at all. The output ends with `[skipped N secret-store
+paths; read one by name to be asked]` whenever anything was left out, so a search is never silently incomplete. The
+root itself is never left out. When the path the call names is a store (`path: "~/.aws"`), the call is `credentials`
+and asks, and once approved the tool reads that store; a link out of it into another store is still left out. That
+holds only when the folder walked is the store, as normalised and as resolved: `path: "~/.ssh/.."` also asks, but
+walks the home folder, so its stores are left out as in any other search. A store-named link to an ordinary folder
+(`backup.key` pointing at the home folder or a project) also asks, then returns nothing at all, since every path
+below it still looks like a store (fail closed). A cwd inside a store with no path reads nothing, since the gate saw
+no store. A root whose real path is `/` (`/`, `/proc/self/root`, a link to `/`) is refused with "is the whole file
+system; name a folder below it": that walk takes minutes and enters `/proc` and `/sys`. Entries are matched under
+the root's real path joined without a doubled `/`, so a root that resolves to `/` still sees a custom `$EXO_HOME`,
+`EXO_KEYS_FILE` or `CLAUDE_CONFIG_DIR`. In a repo's own `.claude` folder (one beside a `.git`, other than
+`~/.claude` and `CLAUDE_CONFIG_DIR`) the `worktrees`, `commands`, `agents` and `skills` folders are searched, so a
+worktree checkout under `<repo>/.claude/worktrees/` is too; everything else in it (`settings.local.json`, which can
+hold keys, `hooks/`) stays out, as do stores below those folders (`.env`). A `.claude` folder that holds a Claude
+login, transcripts or shell snapshots (`.credentials.json`, `projects/`, `shell-snapshots/`, `history.jsonl`) stays
+out whole, so another home below the searched folder that is a git checkout (dotfiles, `/home/alice`) keeps its
+config out; one with none of those files yet shows only its `commands`, `agents` and `skills`. `read_file`, the
+shell and `code_find` still treat every `.claude` path as a store. `code_find` hands its folder to `jg`, which
+cannot leave Exo's stores out, so it refuses a folder that is or holds a known store (the home folder, `$EXO_HOME`,
+`~/.config`, `/`). With these, the D-038 guarantee that a store read asks holds for `read_file`, the shell and the
+search tools alike. The cost is one `lstat` and one match per entry, plus a few cached existence checks per `.claude`
+folder: about 0.2 to 0.5 s of CPU on a 20,000-file tree (calling `is_sensitive_path` per entry would take about 3.5 s). Known limits: a hard link to a store file and a
+store spelt in another case on a case-insensitive filesystem are not seen, as for the other path checks. A store
+folder that is itself a link to an ordinary folder (`~/.aws` pointing into a dotfiles repo) is a store as named but
+not as resolved, so a search naming it asks and then returns nothing (fail closed); read its files by name
+(`read_file ~/.aws/credentials`, which asks). The reverse is not seen: with `~/.kube` pointing to `~/dotfiles/kube`,
+a search of the home folder finds `dotfiles/kube/config`, which `read_file` reads without asking too, since stores
+are matched by name and place.
+Tests: `tests/security/test_search_tools_skip_secret_stores.py`.
+
 ## Muse CLI credentials
 
 `muse login`, `muse auth` and `muse logout` are `credentials` acts, like `vercel login`: they always ask and never
