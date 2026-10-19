@@ -1089,6 +1089,35 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   setting, which ssh_config documents as switching the setting off (CLEAR_ON_NONE, any case, the bare word only), and
   a `psql` line starting with `system`, which is mysql's command and SQL in psql.
   Rejected: keeping them as fail-safe asks, since they are ordinary spellings and the gate's docs never claimed them.
+  *Amendment 2026-10-19 (#231):* a variable set on the line was read only when its value is a command (#154), so a
+  variable that loads code or moves where programs and config files are found was dropped unread: `LD_PRELOAD=/t/x.so
+  ls`, `PATH=/tmp/bin ls` and `HOME=/tmp/h git log` were `read` (allow). *Variables.* The loader variables
+  (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `GCONV_PATH`, the `DYLD_*` paths, `OPENSSL_CONF`, `OPENSSL_ENGINES`,
+  `OPENSSL_MODULES`), the lookup and startup variables (`PATH`, `HOME`, `XDG_CONFIG_HOME`, `BASH_ENV`, `ENV`,
+  `ZDOTDIR`, `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, the Python, Perl, Ruby
+  and Node module paths and startup files, `PSQLRC`), the option variables (`TAR_OPTIONS`, `NODE_OPTIONS`, `PERL5OPT`,
+  `RUBYOPT`, `MANOPT`, `ZIPOPT`, `RIPGREP_CONFIG_PATH`, `LESS` with a `+` command) and a non-empty `CDPATH` are
+  `opaque_exec`, named in the summary (`gate._EXEC_ENV_OPAQUE`; the list with reasons is in `docs/GATE.md`). That
+  holds wherever the line sets one: before a program, through `env`, `sudo`, `nice` or `timeout`, exported or bare,
+  as a parameter-expansion assignment (`${PATH:=.}`), through `read`, `printf -v`, a `for` loop or a nameref, or as an
+  integer through arithmetic, a subscript or a `{PATH}>` redirection. A name the gate cannot read asks too. More
+  command-valued variables (`GIT_PROXY_COMMAND`, `GH_PAGER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `PROMPT_COMMAND`...) are
+  read as commands under #154's rule. Only text bash expands counts: the lexer records each `${..}` and `$((..))` it
+  expands, read to the `}` bash closes it with, so single-quoted text, a quoted here-doc and a glob bracket never
+  ask. The scan is linear in the line (brace, bracket and paren pairs are each found in one pass, a nested value
+  longer than 64 characters stands in its parent's value as `${_}`), because classify runs inside the gate hook:
+  the first form re-read the line for every unclosed `${NAME:=` and took 145 s for 64 KB. *One git config check.*
+  `_git_config_kind` reads a key the same way wherever it is set: `git -c`, `git config`, `git clone -c` or
+  `--config`, `git --config-env` (attached or not), `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` and
+  `GIT_CONFIG_PARAMETERS`. The value of an exec key is classified as a command, so a category deny fires on it
+  (`git clone -c core.sshCommand='rm -rf ...'` is `delete`); a key that loads another config file or a template
+  (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as does `git clone --template`. *env and sudo.*
+  Both read `NAME=VALUE` from their own argv, quoted or not, so a quoted one after them is read as the assignment it
+  is: the variable is checked, and the rest is the command it is (`env 'FOO=a b' ls` is `ls`, where it was an
+  unknown program; `env 'X=1' rm -rf /srv/data` is `delete`). After `nice`, `timeout` and the other prefixes a
+  quoted `NAME=VALUE` is still the program, as the shell runs it. Left out: `IFS`, which does not change how
+  literal words split. Known limits (rarer expansion forms that can still set a variable unseen) are listed in
+  `docs/GATE.md`. Cost: a line that sets one of these variables asks where it was allowed.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
