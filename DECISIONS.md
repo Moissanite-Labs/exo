@@ -857,12 +857,15 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   power of depth times, n here-strings fed to n shells cost n squared, and so did n openers in a row; a body after
   `<<$'EOF'`, which is also read as commands, was read once per command it reached, so nested groups of plain commands
   took a minute for 462 bytes, and groups of `psql` fed `\!` lines took 210 s for 604 bytes nested four deep; looking
-  for `name()` from every character of an unbroken word took 26 s for one of 50,000 characters). A line read this way
-  leaves `opaque_exec` for its inner category, so it carries the issue #178 floor (only naming `opaque_exec` at `log`
-  or `allow` turns the indirection floor off): a `deny: [opaque_exec]` entry still denies these lines (D-075), and
-  under `categories: {opaque_exec: deny}` they now ask where they were denied, as `bash <<EOF` already does, until
-  #191; under `categories:
-  {opaque_exec: deny}` the floor keeps them at ask rather than falling to the push's own `log`. `coproc W { ...; }
+  for `name()` from every character of an unbroken word took 26 s for one of 50,000 characters).
+  For fed shells and interpreters, a line that was `opaque_exec` takes the inner category
+  and carries the issue #178 floor. Only naming `opaque_exec` at `log` or `allow` turns that floor off.
+  A `deny: [opaque_exec]` entry still denies these shell and interpreter lines (D-075). Under
+  `categories: {opaque_exec: deny}` or an ordinary rule they now ask where they were denied, as
+  `bash <<EOF` already does, until #191. Fed SQL clients follow their plain-input classification,
+  without that floor. A compound feeding `\! git push origin main` to `psql` can change from ask
+  to the push's `log`. D-075 `deny` and `reserved` entries still match every retained part.
+  Category overrides and ordinary rules use the combined classification. `coproc W { ...; }
   <<EOF` and `function NAME { ...; } <<EOF` are fed the same way, as #181 reads their bodies; the body of `time { ...;
   }` is not read at all, so it still asks as `opaque_exec`. A closer heredoc wins over a pipe in on stdin only; the
   lexer drops fd numbers, so one on another fd (`{ bash; } 3<<EOF`) is read as stdin: its body is fed, and text piped
