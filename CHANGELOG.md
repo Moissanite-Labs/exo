@@ -225,6 +225,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   by `src`.
 
 ### Changed
+- Gate timing tests (#308): the linear-time checks in `tests/security` and `plugins/exo-gate/tests` measure process CPU time
+  (`time.process_time`) instead of wall time, and the scaling checks retry up to three times before they fail, so a
+  suite running beside other suites no longer trips them. A quadratic step still fails every attempt. Test-only.
 - Web `/model` and `/default` (#146): the composer opens a model picker or sets the route without starting a model
   turn, and a failed change keeps the line in the box. `/model` goes through the core's principal-only `models.set`
   (`POST /api/chat/sessions/<id>/model`); `/default` saves through the loopback-only provider routes. A command the
