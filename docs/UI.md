@@ -74,6 +74,8 @@ the middle dot as separator come straight from the site.
 Where the numbers come from, all from events the core already sends: `model.call` (`requested`, `route`,
 `usage.cache_read_tokens`), `usage.updated` (context tokens, session cost), `memory.summarized`,
 `peer.message`, `taste.updated`, `tool.completed` (`duration_ms`), and the findings count the client polls.
+Context tokens are the last call's whole prompt, input plus cache read and cache write. The cache share is cache
+read over that prompt. Input is the uncached part on every provider (D-080), so the sum counts each token once.
 
 Switching threads (`/new`, `/sessions`, `/resume`, `/fork`, `/open`): the old thread's events stop reaching the
 window, so it drops that thread's turn state (`LIVE`, the activity line, steer mode, a queued steer, an open
@@ -101,7 +103,7 @@ to decode is skipped and logged under `exo.protocol.client`. If the feed itself 
 ## The /providers panel
 
 `/providers` opens a modal in the same language: a cold `PROVIDERS` header rule, then one row per provider with a
-status chip (green `verified` with latency, grey `key found`, dim `no key`, orange `failed: <class>`, cold `running`
+status chip (green `verified` with latency, grey `key found`, dim `no key` or `no base_url`, orange `failed: <class>`, cold `running`
 for a local server), where the key comes from (env, keychain, secret-service or file, never a value), the model count
 and an orange default mark. Key chips: `[a]` add or replace a key, `[t]` test, `[r]` remove (asks y or n), `[d]` pick
 the default model, `[esc]` close (leaving a panel is soft; Esc never stops a turn, ctrl+c or `/stop` does). `[a]` opens a small modal with one masked field; the key never goes through the

@@ -18,8 +18,8 @@ from exo.core.types import Message, Usage
 
 def _usage_dict(u: Usage | None) -> dict[str, int]:
     u = u or Usage()
-    return {"prompt_tokens": u.input_tokens, "completion_tokens": u.output_tokens,
-            "total_tokens": u.input_tokens + u.output_tokens}
+    prompt = u.input_tokens + u.cache_read_tokens + u.cache_write_tokens  # OpenAI style: cached tokens included
+    return {"prompt_tokens": prompt, "completion_tokens": u.output_tokens, "total_tokens": prompt + u.output_tokens}
 
 
 class ContextAdapter:
@@ -135,6 +135,8 @@ class ContextAdapter:
                          session_id=session)
 
     def on_turn_complete(self, session: str, usage: Usage) -> None:
+        """``usage`` is the turn's last model call (the loop's ``TurnResult.last_usage``), so ``prompt_tokens`` is
+        the size of the last prompt, not the sum of every call in a tool-using turn."""
         if self.plugin is not None and not self._private(session):
             safe_plugin_call(self.plugin, "update_from_response", _usage_dict(usage))
             safe_plugin_call(self.plugin, "on_turn_complete", self.transcript(session), usage=_usage_dict(usage),

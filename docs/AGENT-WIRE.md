@@ -244,7 +244,10 @@ tool outside its list gets an error result.
 **Limits** (config `delegation` in `config.json`; defaults in brackets): depth [1, flat, as in Hermes],
 tasks per call [10, Hermes's default], concurrent children per depth level [4], tool rounds per child [24],
 tokens per child [200,000], wall time per child [900 s], summary length [6,000 characters]. A separate
-slot pool per depth level means a parent waiting on its children can never starve them of slots.
+slot pool per depth level means a parent waiting on its children can never starve them of slots. The token
+budget counts what the child's calls newly process: uncached input, cache writes and output. Cache reads do not
+count, so re-reading a cached context each round does not spend it, on any provider (D-080). The receipt's
+tokens in are the same count: uncached input plus cache writes.
 
 **Cancel.** Interrupting the parent's turn cancels its `delegate` call, which interrupts every child loop and
 waits for it to stop cleanly; a child's own `delegate` call is cancelled the same way, so the whole tree

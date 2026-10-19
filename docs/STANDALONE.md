@@ -236,7 +236,8 @@ plugins in shape, so a user can still turn any of them off or replace one (D-004
   cron and channels. Clients hold no state that matters.
 - **Commands in, events out.** Clients send small JSON commands. The core publishes a single ordered event
   stream. Every event carries `seq`, so a client that drops off (a phone, a device on bad radio) resumes
-  with `since=<seq>` and misses nothing.
+  with `since=<seq>` and misses nothing. A client that stops reading has its stream ended once it is 4,096
+  events behind and resumes the same way, so it cannot grow the core's memory (D-079).
 - **Transports, one schema:**
   - HTTP + Server-Sent Events over a Unix socket by default (local-first, no open port).
   - The same over TCP on localhost or the LAN, with a token, for other devices.

@@ -540,7 +540,7 @@ class ExoApp(App):
 
     @staticmethod
     def cache_of(u: Any) -> float | None:
-        total = u.input_tokens + u.cache_read_tokens
+        total = u.input_tokens + u.cache_read_tokens + u.cache_write_tokens  # the whole prompt (D-080)
         return u.cache_read_tokens / total if total else None
 
     def handle(self, ev: s.Event) -> None:
@@ -675,8 +675,8 @@ class ExoApp(App):
                                         or b.usage.cache_write_tokens):
                 self.calls_seen += 1
                 self.unpriced += b.usage.cost_usd is None
-            if b.usage is not None and (b.usage.input_tokens or b.usage.cache_read_tokens):
-                self.cache_share = self.cache_of(b.usage)
+            if b.usage is not None and (share := self.cache_of(b.usage)) is not None:
+                self.cache_share = share
             if (b.requested and b.route and b.requested != b.route) or any(
                     a.get("outcome") == "fallback" for a in b.attempts):
                 self.hint("route_change")

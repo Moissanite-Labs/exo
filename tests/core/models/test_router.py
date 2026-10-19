@@ -482,3 +482,38 @@ def test_last_resort_does_not_resurrect_breaker_removed_during_lookup(monkeypatc
         assert events[-1].kind == "error" and not p.calls
         assert "p:m" not in r.breakers and not r._forced_probes
     asyncio.run(go())
+
+
+def test_cached_calls_have_one_usage_shape_and_unchanged_cost():
+    """D-080: one Anthropic and one OpenAI-chat call over the same prompt, 12 tokens uncached and 900 read from the
+    cache (the Anthropic call also writes 200), 30 out. Both reach the router with the uncached input in
+    input_tokens, and each is priced as before the change: uncached, cache-read and cache-write tokens once each."""
+    import json
+
+    from exo.core.types import Usage
+
+    ant = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in [
+        {"type": "message_start", "message": {"usage": {"input_tokens": 12, "cache_read_input_tokens": 900,
+                                                        "cache_creation_input_tokens": 200, "output_tokens": 1}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": "ok"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 30}},
+        {"type": "message_stop"}])
+    oai = "".join(f"data: {json.dumps(c)}\n\n" for c in [
+        {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 912, "completion_tokens": 30,
+                                  "prompt_tokens_details": {"cached_tokens": 900}}}]) + "data: [DONE]\n\n"
+    rec = Recorder((200, ant.encode(), {}), (200, oai.encode(), {}))
+    price = {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75}
+    r = Router.from_config({"roles": {"main": ["an:m"], "aux": ["oa:m"]}, "models": {"an:m": price, "oa:m": price},
+                            "providers": {"an": {"transport": "anthropic", "base_url": "https://api.anthropic.com",
+                                                 "api_key": "k"},
+                                          "oa": {"transport": "openai", "base_url": "https://api.openai.com/v1",
+                                                 "api_key": "k"}}},
+                           catalog={}, env={}, client=rec.client())
+    a, o = run(r, "main")[-1], run(r, "aux")[-1]
+    assert a.usage == Usage(input_tokens=12, output_tokens=30, cache_read_tokens=900, cache_write_tokens=200,
+                            cost_usd=pytest.approx((12 * 3.0 + 30 * 15.0 + 900 * 0.3 + 200 * 3.75) / 1e6))
+    assert o.usage == Usage(input_tokens=12, output_tokens=30, cache_read_tokens=900,
+                            cost_usd=pytest.approx((12 * 3.0 + 30 * 15.0 + 900 * 0.3) / 1e6))
+    assert (a.usage.cost_usd, o.usage.cost_usd) == (pytest.approx(0.001506), pytest.approx(0.000756))  # as on main
