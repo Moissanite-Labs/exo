@@ -10,7 +10,8 @@ from exo import handoff as hf
 
 def classified(messages: list[dict[str, Any]]) -> tuple[list[hf.Signal], list[hf.Signal]]:
     """(rulings, corrections) from principal messages, verbatim, in order. ``exo.handoff`` classifies
-    with ``exo.capture`` and keeps a short message whole, a long one as the classified sentence."""
+    with ``exo.capture`` and keeps a short message whole, a long one as the classified sentence. A user message
+    whose ``author`` or ``principal`` flag says it is not the principal's is skipped (D-040)."""
     return hf.extract_rulings_and_corrections([m for m in messages if isinstance(m, dict)])
 
 
