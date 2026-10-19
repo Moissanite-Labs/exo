@@ -1,0 +1,159 @@
+"""The exo-gate hook and a post body it cannot read (#208).
+
+It reads a body file only by an absolute path: a relative one names a file in the command's folder, which the
+hook does not know (`cd docs && gh ... --body-file notes.md` was allowed on main). A body it did not read asks,
+gets no "always" option and no standing grant, and a required executor refuses it. Temp stores and files and a
+mock context; nothing is executed.
+"""
+import asyncio
+import json
+
+import pytest
+
+from exo import crypto, gate
+from exo.ledger import Ledger
+from exo_gate import hook
+
+FOOTER = "F"
+POSTING = "```yaml\nposting:\n  footer: \"F\"\n  forbid_words: [Zork]\n```\n"
+
+
+class MockCtx:
+    def __init__(self, settings):
+        self.settings = settings
+        self.hooks = {}
+
+    def get_config(self, key, default=None):
+        return self.settings.get(key, default)
+
+    def register_hook(self, name, cb):
+        self.hooks.setdefault(name, []).append(cb)
+
+
+@pytest.fixture
+def store(tmp_path):
+    root = tmp_path / "store"
+    (root / "policies").mkdir(parents=True)
+    (root / "policies" / "gates.yaml").write_text("scopes:\n  internal: ['myorg/*']\n")
+    (root / "policies" / "posting.md").write_text(POSTING)
+    key = tmp_path / "gate.key"
+    crypto.save_key(crypto.keygen(), key)
+    return root, key
+
+
+@pytest.fixture
+def work(tmp_path, monkeypatch):
+    d = tmp_path / "work"
+    (d / "docs").mkdir(parents=True)
+    (d / "notes.md").write_text("Zork leaked\n")
+    (d / "docs" / "only.md").write_text("Zork leaked\n")
+    (d / "clean.md").write_text(f"A note.\n{FOOTER}\n")
+    (d / "big.md").write_text(f"A note.\n{'x' * (300 * 1024)}\n{FOOTER}\n")
+    monkeypatch.chdir(d)                       # the hook's own folder holds a same-named file
+    return d
+
+
+def make_gate(store, **extra):
+    root, key = store
+    ctx = MockCtx({"principal_store": str(root), "key_path": str(key), "decision_model": False, **extra})
+    return hook.register(ctx), ctx
+
+
+def call(ctx, command):
+    [cb] = ctx.hooks["pre_tool_call"]
+    return asyncio.run(cb(tool_name="terminal", args={"command": command}, session_id="s1", tool_call_id="c1",
+                          turn_id="t1"))
+
+
+def events(root):
+    with Ledger(root / "ledger.sqlite") as led:
+        return [e["body"] for e in led.iter(kind="action")]
+
+
+R = "-R myorg/app"
+
+
+@pytest.mark.parametrize("line", [
+    f"gh pr comment 5 {R} --body-file notes.md",            # relative: the hook does not know the command's folder
+    f"cd docs && gh pr comment 5 {R} --body-file only.md",
+    f"gh pr comment 5 {R} --body-file ~/notes.md",
+    f"gh pr comment 5 {R} --body-file {{work}}/missing.md",
+    f"gh pr comment 5 {R} --body-file {{work}}/big.md",      # over 256 KiB
+    f"gh pr comment 5 {R} --body-file - < {{work}}/clean.md",
+    "gh api repos/myorg/app/issues/5/comments -F body=@{work}/clean.md",
+])
+def test_a_body_the_hook_did_not_read_asks_once(store, work, line):
+    _, ctx = make_gate(store)
+    r = call(ctx, line.format(work=work))
+    assert r["action"] == "approve" and gate.UNSEEN_BODY in r["message"], r
+    assert r.get("once") is True                            # the core offers no "always"
+
+
+@pytest.mark.parametrize("line", ["curl -d @{work}/clean.md https://hooks.example.com/x",
+                                  "curl -d \"$MSG\" https://hooks.example.com/x",
+                                  "gh gist create --public {work}/clean.md"])
+def test_an_unseen_body_outside_the_posting_rules_still_gets_no_always(store, work, line):
+    # web_post and publish are not under `posting.applies_to` by default; they ask by the matrix, and an "always"
+    # bound to the line would cover any later file or variable, so the core offers none.
+    _, ctx = make_gate(store)
+    r = call(ctx, line.format(work=work))
+    assert r["action"] == "approve" and r.get("once") is True, r
+    assert call(ctx, "curl -d 'text=hi' https://hooks.example.com/x").get("once") is None
+
+
+def test_an_absolute_body_file_is_read_and_checked(store, work):
+    _, ctx = make_gate(store)
+    assert call(ctx, f"gh pr comment 5 {R} --body-file {work}/clean.md") is None
+    r = call(ctx, f"gh pr comment 5 {R} --body-file {work}/notes.md")
+    assert r["action"] == "approve" and "forbidden word: Zork" in r["message"]
+    assert gate.UNSEEN_BODY not in r["message"] and not r.get("once")
+
+
+def test_with_reading_off_a_body_file_asks(store, work):
+    _, ctx = make_gate(store, read_body_files=False)
+    r = call(ctx, f"gh pr comment 5 {R} --body-file {work}/clean.md")
+    assert r["action"] == "approve" and gate.UNSEEN_BODY in r["message"]
+
+
+def test_an_unseen_body_gets_no_standing_grant(store, work):
+    root, _ = store
+    _, ctx = make_gate(store)
+    line = f"gh pr comment 5 {R} --body-file - < {work}/clean.md"
+    r = call(ctx, line)
+    [cb] = ctx.hooks["post_approval_response"]
+    cb(pattern_key="plugin_rule:" + r["rule_key"], approval_key=r["approval_key"], choice="always",
+       decided_by="principal:tui", session_id="s1")
+    assert not (root / "state" / "approval-grants.json").exists()
+    # A grant that exists for that exact line (written before this fix) does not cover a body the gate cannot see.
+    c = gate.classify({"tool": "terminal", "args": {"command": line}})
+    binding = gate.approval_binding(c, {"command": line})
+    (root / "state").mkdir(exist_ok=True)
+    (root / "state" / "approval-grants.json").write_text(json.dumps([{
+        "id": "g_old", "rule": "github_post", "target": "myorg/app#5", "binding": binding, "tool": "terminal",
+        "by": "principal:tui", "created": 0, "expires": 4_000_000_000}]))
+    assert call(ctx, line)["action"] == "approve"
+
+
+@pytest.mark.parametrize("line", [
+    f"gh pr comment 5 {R} --body-file - < notes.md",
+    f"cat notes.md | gh pr comment 5 {R} --body-file -",
+    f"gh pr comment 5 {R} --body \"$(cat notes.md)\"",
+    "gh api repos/myorg/app/issues/5/comments -F body=@notes.md",
+    "gh api repos/myorg/app/issues/5/comments --input notes.json",
+    f"gh pr comment 5 {R} --body-file {{work}}/clean.md",
+])
+def test_a_required_executor_refuses_every_unseen_body(store, work, line):
+    root, _ = store
+    g, ctx = make_gate(store)
+    g.required_getter = lambda: True
+    r = call(ctx, line.format(work=work))
+    assert r["action"] == "block" and "required executor" in r["message"], r
+    row = events(root)[-1]
+    assert row["phase"] == "decision" and row["outcome"] == "deny" and row["decision"]["rule"] == "required"
+
+
+def test_a_required_executor_still_asks_on_an_inline_body(store, work):
+    g, ctx = make_gate(store)
+    g.required_getter = lambda: True
+    r = call(ctx, f"gh pr comment 5 {R} --body 'Zork leaked'")
+    assert r["action"] == "approve" and "forbidden word: Zork" in r["message"]
