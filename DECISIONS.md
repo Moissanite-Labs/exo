@@ -1058,6 +1058,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   setting, which ssh_config documents as switching the setting off (CLEAR_ON_NONE, any case, the bare word only), and
   a `psql` line starting with `system`, which is mysql's command and SQL in psql.
   Rejected: keeping them as fail-safe asks, since they are ordinary spellings and the gate's docs never claimed them.
+  *Amendment 2026-10-19 (issues #207, #240):* two programs the gate skipped are read. bash takes a compound opener
+  after `coproc NAME` as a reserved word only when the two tokens before it are `coproc` and the name, so a
+  redirection, heredoc or here-string between them gives a simple command that runs the name (`coproc rm >/dev/null
+  { -rf x` deletes); the lexer marks a word followed by one, and the gate then reads the name as the program too,
+  beside the skipped reading, which stays so nothing it denied is lost. With no remote command, the login shell
+  `ssh host` starts runs ssh's stdin; a piped, heredoc or here-string text is read as shell, as for `bash -s`, and
+  the line asks, with the parts `internal` (D-075). ssh's options after the host are read up to the remote command;
+  `-n`, `-N`, `-f` or a remote command keep the old reading, and a word that may expand to no word or several before
+  the command, or as all of it, reads the stdin too (fail closed). As with wrappers and #191, the line takes the
+  category of what runs, so a `categories:` setting or rule written for the old dominant reading (`opaque_exec` for
+  the coproc lines, `shell` or the host as target for ssh) asks where it denied; `deny` and `reserved` entries see
+  every part and keep denying (D-075). Rejected: reading both coproc readings whenever
+  the line has any redirection (the issue's first sketch), which reads the name as a program in `coproc rm { echo
+  >/dev/null hi; }`, where bash runs a named compound.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
