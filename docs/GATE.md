@@ -1020,12 +1020,13 @@ gate cannot pin to a path counts as well: a variable (`1< "$f"`), a substitution
 
 Known limits. A descriptor path is matched as written, not resolved (the gate's own realpath would run
 through its own descriptors). A link to one, or to `/dev` or `/proc/self`, is a store write when a shell
-line or code makes it (`ln -s /proc/self/fd/3 x`), but one made where the gate does not see it, or
-already there, is followed by nothing: a store file opened on descriptor 3 or above through a spelling
-the gate cannot read (a variable, a glob in a folder part, a named `{fd}`) and written back through
-that link passes (`exec 3< "$f"; printf X > /tmp/link-to-dev/fd/3`). So does a store file reached through
-a hardlink and opened on stdout (`exec 1< /tmp/hardlink; printf X > /dev/stdout`), as for any hardlink
-above. Known friction (fails closed, no grant): a descriptor path used as an input of a command that
+line makes it (`ln -s /dev x`), as is code that names a descriptor path, but one made where the gate
+does not see it (code linking to `/dev` is `code`, which policy may lower), or already there, is
+followed by nothing: a store file opened on descriptor 3 or above through a spelling the gate cannot
+read (a variable, a glob in a folder part, a named `{fd}`) and written back through that link passes
+(`exec 3< "$f"; printf X > /tmp/link-to-dev/fd/3`). So does a store file reached through a hardlink and
+opened on stdout (`exec 1< /tmp/hardlink; printf X > /dev/stdout`), as for any hardlink above. Both are
+tracked in #324. Known friction (fails closed, no grant): a descriptor path used as an input of a command that
 writes asks too, since the words of a writing command are not told apart (`jq . /dev/stdin > out.json`,
 `cat /dev/stdin > f`, `patch -i /dev/stdin`, `diff /proc/self/fd/3 x > out`); `jq . < /dev/stdin >
 out.json` does not.
