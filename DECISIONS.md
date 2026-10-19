@@ -679,7 +679,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   backslash, `printf` with one plain format); a subshell or group before the pipe, `printf` formats and `echo -e` are
   unseen. gh text options are read with gh's own table of options that take a value (`-t -b -b x`), `--attach` is
   unseen, and curl's `--data-ascii`, `-K` and a host it cannot read (`-d x "$URL"`) are posts, not reads or local
-  writes. Rejected:
+  writes. After a second review: a word bash may expand without `$` (brace expansion, a glob, a leading `~`) counts
+  as an expansion; only a heredoc or here-string on descriptor 0 is stdin (heredocs keep their fd number, on the
+  `_Word.fd` lexer change #305 also makes); a heredoc ended by a near match of its delimiter (`EOF `, ` EOF`, CR, a
+  tab under plain `<<`) is `ambiguous`, so its body is unseen; the long text options take a value in the gh table;
+  and the hook never reads a body file under `/dev` or `/proc`. Rejected:
   resolving a relative path against the tool's `cwd` (the hook receives no cwd, and a `cd` on the line moves it);
   reading the stdin source file in the gate (the same folder problem, and a host read before a required worker).
   Limits: `docs/GATE.md` "What an approval covers".

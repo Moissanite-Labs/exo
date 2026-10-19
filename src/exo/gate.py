@@ -336,6 +336,7 @@ class _Word:
     raw: str = ""              # the source text of the word, quotes kept
     locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
+    fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
 
 
 @dataclass
@@ -345,6 +346,7 @@ class _Heredoc:
     quoted: bool
     ambiguous: bool = False    # delimiter spelled with $'..' or $"..": bash and dash end the body on different lines
     body: str = ""
+    fd: str = ""               # the descriptor number before `<<` (`3<<EOF`); "" or 0 is stdin (#208)
 
 
 @dataclass
@@ -371,14 +373,17 @@ class _Lexer:
         s, toks = self.s, []
         state = {"w": _Word(), "delim": None}
         depth, start = 0, -1              # start: where the current word's source text begins
+        fd = ""                           # the fd number of the redirection whose target comes next (`3< f`)
 
         def flush():
-            nonlocal start
+            nonlocal start, fd
             w = state["w"]
             w.raw, start = s[start:self.i], -1
             if w.started:
+                w.fd, fd = fd, ""
                 if state["delim"] is not None:
                     hd = _Heredoc(w.text, state["delim"], w.quoted, w.dollar_quote)
+                    hd.fd = w.fd
                     self.pending.append(hd)
                     toks.append(("hd", hd))
                     state["delim"] = None
@@ -429,7 +434,7 @@ class _Lexer:
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
                 if w.started and w.text.isdigit() and not w.quoted:
-                    state["w"], start = _Word(), -1    # an fd number belongs to the operator
+                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text    # an fd number belongs to the operator
                 else:
                     flush()
                 op = next(o for o in _REDIR_OPS if s.startswith(o, self.i))
@@ -470,6 +475,9 @@ class _Lexer:
                 self.i = len(s) if j < 0 else j + 1
                 bare = line.lstrip("\t" if hd.strip else "").strip()
                 if bare == hd.delim:
+                    # bash ends a heredoc only on the exact line (leading tabs dropped for <<-): `EOF `, ` EOF` or
+                    # `EOF` and a CR does not end it, so the body bash reads is not the one read here (#208).
+                    hd.ambiguous = hd.ambiguous or (line.lstrip("\t") if hd.strip else line) != hd.delim
                     break
                 if bare.startswith(hd.delim) and bare[len(hd.delim):].strip(" )") == "":
                     self.i = start + line.index(")", line.index(hd.delim))  # `EOF)` closes a $( ) too
@@ -1126,10 +1134,11 @@ def _gh_unseen(argv: list[str], stdin: str | None, dynamic: frozenset) -> bool:
         return _opt(argv, "--input") is not None or any(f.partition("=")[2].startswith("@") for f in fields)
     takes, longs = _GH_TAKES.get((group, verb), ("", ""))
     body, body_file, title = _gh_text_options(group)
+    # The text options take a value too: in `--title --body --body x` the title is `--body` and the body `x`.
+    longs_all = tuple(longs.split()) + tuple(n for names in (body, body_file, title) for n in names if n[:2] == "--")
     for names in (body, body_file, title):
         got = _opt(argv, *names)
-        if _option_values(argv, names, takes=takes, longs=tuple(longs.split()), least=99) != ([] if got is None
-                                                                                              else [got]):
+        if _option_values(argv, names, takes=takes, longs=longs_all, least=99) != ([] if got is None else [got]):
             return True
     if _opt(argv, *body_file) == "-" and stdin is None:
         return True
@@ -1449,19 +1458,29 @@ def _trusted_path(prog: str) -> bool:
     return p.startswith("/") and os.path.dirname(os.path.normpath(p)) in _SYSTEM_BIN
 
 
+def _expands(w: _Word) -> bool:
+    """Whether bash may turn a word into other text or into several words (#208): a `$` expansion or backticks,
+    a brace expansion (`Zo{r,}k`, `{1..3}`), a glob character, or a leading `~`. `{owner}` with no comma or
+    `..` stays as it is."""
+    return (w.dynamic or w.raw.startswith("~") or (w.glob and bool(re.search(r"[*?\[]", w.text)))
+            or (w.brace and bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
+
+
 def _literal_stdin(k: _Cmd, piped: str | None) -> str | None:
     """A command's stdin when the line spells it out and bash changes nothing in it (#208): its one heredoc with
     a quoted delimiter, or with no `$`, backtick or backslash in the body (bash expands those and joins a line
     ending in `\\`); its one here-string with no expansion; or ``piped``, what `_literal_pipe` read from the one
     simple command writing the pipe. None for a `<` redirection, more than one source, or a stdin the gate
     cannot see (a compound's, `exec <`, the tool's own)."""
-    if any(op in _READ_REDIRS for op, _ in k.redirs) or len(k.heredocs) + len(k.herestrings) > 1:
+    docs = [h for h in k.heredocs if not h.fd.lstrip("0")]          # a heredoc on fd 3 is not stdin
+    strings = [w for w in k.herestrings if not w.fd.lstrip("0")]
+    if any(op in _READ_REDIRS for op, _ in k.redirs) or len(docs) + len(strings) > 1:
         return None
-    if k.heredocs:
-        h = k.heredocs[0]
+    if docs:
+        h = docs[0]
         return h.body if not h.ambiguous and (h.quoted or not re.search(r"[$`\\]", h.body)) else None
-    if k.herestrings:
-        return None if k.herestrings[0].dynamic else k.herestrings[0].text
+    if strings:
+        return None if _expands(strings[0]) else strings[0].text
     return piped
 
 
@@ -1470,7 +1489,7 @@ def _literal_pipe(w: _Cmd | None) -> str | None:
     with no arguments and a literal heredoc or here-string (`_literal_stdin`), `echo` with no option word and
     no backslash, or `printf` with one format and no `%` or backslash in it. Anything else (escapes, formats,
     options, a redirection, an expansion, another program) is None: the gate cannot tell what the pipe carries."""
-    if w is None or w.redirs or not w.words or any(x.dynamic for x in w.words):
+    if w is None or w.redirs or not w.words or any(_expands(x) for x in w.words):
         return None
     prog, args = w.words[0].text, [x.text for x in w.words[1:]]
     if prog == "cat" and not args:
@@ -1890,9 +1909,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
     if prog == "exo":
         return [_classify_exo(argv, cmd)]
     if prog == "gh":
-        return [_classify_gh(argv, cmd, ctx.get("post_stdin"), frozenset(i for i, w in enumerate(words) if w.dynamic))]
+        return [_classify_gh(argv, cmd, ctx.get("post_stdin"), frozenset(i for i, w in enumerate(words) if _expands(w)))]
     if prog in ("curl", "wget", "http", "https", "xh", "httpie"):
-        return [_classify_http(argv, cmd, frozenset(i for i, w in enumerate(words) if w.dynamic),
+        return [_classify_http(argv, cmd, frozenset(i for i, w in enumerate(words) if _expands(w)),
                                k.piped_in or _own_stdin(k))]
     if prog in ("ssh", "mosh"):
         rest, i, moved, runs, here = argv[1:], 0, "", [], False

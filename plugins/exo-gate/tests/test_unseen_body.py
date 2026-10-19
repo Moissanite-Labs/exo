@@ -160,3 +160,20 @@ def test_a_required_executor_still_asks_on_an_inline_body(store, work):
     g.required_getter = lambda: True
     r = call(ctx, f"gh pr comment 5 {R} --body 'Zork leaked'")
     assert r["action"] == "approve" and "forbidden word: Zork" in r["message"]
+
+
+def test_a_body_file_under_dev_or_proc_is_never_read(store, work, monkeypatch):
+    # /dev/stdin and /proc/self/... name what the reading process holds: read by the hook they give exod's own stdin
+    # or environment, not what gh reads. Make them look like readable files to show the hook still leaves them.
+    import os
+    from pathlib import Path
+    real_is_file, real_read = Path.is_file, Path.read_text
+    special = lambda p: str(p).startswith(("/dev/", "/proc/")) or os.path.realpath(p).startswith(("/dev/", "/proc/"))  # noqa: E731
+    monkeypatch.setattr(Path, "is_file", lambda p: True if special(p) else real_is_file(p))
+    monkeypatch.setattr(Path, "read_text", lambda p, *a, **k: f"A note.\n{FOOTER}\n" if special(p) else real_read(p, *a, **k))
+    link = work / "body.md"
+    link.symlink_to("/dev/stdin")
+    _, ctx = make_gate(store)
+    for path in ("/dev/stdin", str(link)):
+        r = call(ctx, f"gh pr comment 5 {R} --body-file {path}")
+        assert r["action"] == "approve" and gate.UNSEEN_BODY in r["message"] and r.get("once") is True, (path, r)

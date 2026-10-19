@@ -23,7 +23,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   counts only from one simple command whose output bash does not rewrite: `(cat f; echo F) | gh ... --body-file -`,
   `printf 'Zo\x72k' |`, `echo -e` and an unquoted heredoc with a backslash ask. gh text options follow gh's own
   list of options that take a value (`gh issue create -t -b -b x`), `--attach` asks, and `curl --data-ascii @f`,
-  `curl -K cfg URL` and `curl -d x "$URL"` are posts where they were a read or a local write.
+  `curl -K cfg URL` and `curl -d x "$URL"` are posts where they were a read or a local write. A word bash expands
+  without `$` (`Zo{r,}k`, a glob, a leading `~`), a heredoc or here-string on another descriptor (`3<<EOF`), a
+  heredoc whose delimiter line only nearly matches (`EOF `), `--title --body --body x`, and a body file under
+  `/dev` or `/proc` ask too.
 - Gate (#209, #202, #225, #199, D-038): four spellings of a secret-store path were allowed reads and now ask. A
   harmlessly named link into a store (`notes.txt` to `~/.ssh/id_rsa`, `cfg` to `~/.ssh`, `app.cfg` to a project
   `.env`) is judged by where it leads, resolved from the session's working folder (the core now passes it to tool

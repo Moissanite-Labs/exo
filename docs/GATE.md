@@ -53,21 +53,25 @@ marks such a post with the `unseen_body` signal, and `gate.body_unseen` also cou
 nobody read:
 
 - `gh`: `--body-file -` (or `-F -`, `--notes-file -`) unless the line spells out stdin and bash
-  changes nothing in it: one heredoc with a quoted delimiter, or with no `$`, backtick or backslash
-  in the body (bash expands those and joins a line that ends in `\`); one here-string with no
-  expansion; or a pipe from one simple command: `cat` with such a heredoc or here-string, `echo`
+  changes nothing in it: one heredoc on descriptor 0 (`<<` or `0<<`; a `3<<` heredoc is not gh's
+  stdin) with a quoted delimiter, or with no `$`, backtick or backslash in the body (bash expands
+  those and joins a line that ends in `\`), ended by the exact delimiter line (bash does not end it
+  at `EOF `, ` EOF`, `EOF` and a CR, or a tab-indented `EOF` under plain `<<`; such a body is
+  unseen); one here-string on descriptor 0 with no expansion; or a pipe from one simple command: `cat` with such a heredoc or here-string, `echo`
   with no option word and no backslash, or `printf` with one format that has no `%` or backslash.
   `printf` formats, `echo -e` and `-n`, a subshell or group before the pipe
   (`(cat notes.md; echo F) |`, `{ ...; } |`, a loop) and any other writer are unseen, because
   only one simple command's output can be read whole. Also unseen: `gh api` fields with `@` and
   `--input`; `--fill`, `--template`, `--editor`, `--recover` and generated release notes, which gh
-  writes itself; `--attach`, which uploads a file; a gist's files; any word from an expansion
-  (`$X`, `$( )`, backticks), since any word can be an option such as `--body-file=f`. A
+  writes itself; `--attach`, which uploads a file; a gist's files; any word bash may expand (`$X`,
+  `$( )`, backticks, a brace expansion such as `Zo{r,}k`, a glob character, a leading `~`), since
+  any word can be an option such as `--body-file=f`. `{owner}` with no comma or `..` is not a brace
+  expansion and stays readable. A
   `$(cat <<'EOF' ... EOF)` body is plain text and is read. Text options are read as gh reads them,
   with gh's own list of options that take a value for each posting command (gh 2.102): when a
   repeated option (gh keeps the last), a short-option cluster (`-db text`) or an option's value
-  (`-t -b -b text`: the title is `-b`) gives another value than the gate's reading, the post is
-  unseen. `gh release` reads `--notes` and `--notes-file` as its text.
+  (`-t -b -b text` or `--title --body --body text`: the title is `-b` or `--body`) gives another
+  value than the gate's reading, the post is unseen. `gh release` reads `--notes` and `--notes-file` as its text.
 - `curl`: `-d @f`, `--data-binary @-`, `--data-ascii @f`, `--json @f`, `--data-urlencode name@f`,
   `-F k=@f` or `k=<f`, `-T`, `--expand-data`, and a word from an expansion other than the value of
   `-H`, `-u`, `-A` or `--oauth2-bearer` (a token in a header leaves the body readable). An attached
@@ -79,8 +83,11 @@ nobody read:
   `k@f`, a pipe or `<` into it, or an expansion outside `-a`.
 - The exo-gate hook reads a body file only by an absolute path, up to 256 KiB, with
   `read_body_files` on. A relative or `~` path names a file in the command's folder or home, which
-  the hook does not know (`cd docs && gh ... --body-file notes.md` read `notes.md` from exod's own
-  folder before). A missing, larger or unreadable file stays unseen.
+  the hook cannot pin down: it gets the session's folder (#209), but a `cd` or `pushd` on the line,
+  or the call's `cwd` argument, moves it (`cd docs && gh ... --body-file notes.md` read `notes.md`
+  from exod's own folder before). A path under `/dev` or `/proc`, as written or resolved
+  (`/dev/stdin`, `/proc/self/fd/3`), names what the reading process holds, so the hook would read
+  exod's own; it is never read. A missing, larger or unreadable file stays unseen.
 
 Under the posting rules (`posting.applies_to`) an unseen body adds the violation "the gate cannot
 read the body ..." and asks. In any category it offers no "always" (`once`) and no standing grant

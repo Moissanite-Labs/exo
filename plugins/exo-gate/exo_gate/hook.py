@@ -387,6 +387,11 @@ class Gate:
             return
         try:
             p = Path(c.text_file)
+            # /dev and /proc name what a process holds (/dev/stdin, /proc/self/fd/3, /proc/self/environ): read here
+            # they give exod's own, not what gh will read, so they stay unseen (#208).
+            if any(str(x).startswith(("/dev/", "/proc/")) or str(x) in ("/dev", "/proc")
+                   for x in (p, Path(os.path.realpath(p)))):
+                return
             if p.is_absolute() and p.is_file() and p.stat().st_size <= _MAX_BODY_FILE:
                 c.text = p.read_text(encoding="utf-8", errors="replace")
                 if not c.link:
