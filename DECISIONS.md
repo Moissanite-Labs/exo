@@ -865,6 +865,20 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `deny: [store_write]` no longer matches it. Job output in `run/jobs/` and a socket or pid file named alone stay
   `store_write`. Chosen because one class per call keeps the read and write rules of a secret store the same;
   keeping the store part principal-only through `_combine` is a follow-up.
+  *Amendment 2026-10-19 (issues #210, #269, #217):* three gaps in what the gate guards of its own inputs. The bus
+  folder `$EXO_HOME/bus` joins the protected list, with `bus/registry.json` and `bus/relay.sqlite*` as distinctive
+  names, and so do the files `EXO_BUS_REGISTRY` and `EXO_BUS_DB` and the folder `EXO_BUS_KEYS_DIR` point to (and their
+  legacy `DIVAN_` names, both when both are set), because the registry is where signed seat answers find their keys.
+  On a line that reaches a folder in `$EXO_HOME`, a relative name is checked as the path it names, resolved as the
+  kernel resolves it from each such folder, so `..` from `run/jobs` reaches the run folder's secrets; `run` stays out
+  of the store-folder list, since that would make job output a secret. A write through a descriptor or
+  process-folder path (`/dev/fd/N`, `/dev/stdin`, `/proc/<pid>/{fd,cwd,root,map_files}`) is `store_write`, other
+  than the writer's own stdout and stderr, and so is a store path opened for reading on a numbered descriptor; the
+  lexer keeps a redirection's fd number for that. Chosen over resolving those paths, which the gate can only do in
+  its own process, and over making every write to `/dev/fd/1` ask. Left out: trusting the bus registry for seat keys
+  only when `EXO_BUS_LEADER_PUBKEY` is set (#210's defence in depth), which changes who can answer. Not done: a link
+  to a descriptor path made out of the gate's sight, a descriptor opened from a path in a variable (its write back
+  through a descriptor path is caught), a named descriptor `{fd}<`, and a walk over a folder above the run folder.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,

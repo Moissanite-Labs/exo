@@ -6,6 +6,20 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
+  ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
+  answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the
+  principal alone, no grant), as is a write to where `EXO_BUS_REGISTRY`, `EXO_BUS_DB` or `EXO_BUS_KEYS_DIR` (or the
+  legacy `DIVAN_` names) point; `cp forged.json ~/.exo/bus/registry.json` was an allowed `shell`. (2) A relative name
+  read from a folder in `$EXO_HOME` is checked as the path it names, `..` included, so `cd ~/.exo/run/jobs && cat
+  ../exod*`, `grep -r . ..` there, `cd .. && ls` from there and `tar -C ~/.exo -czf - run` are `credentials` as the
+  absolute paths are; `cat 1.log` in `run/jobs` stays a read. The run folder's file names are store file names for
+  the `cd` check, and its `seats/` scan runs once per classify call instead of once per glob word. (3) A write through
+  a descriptor or process-folder path (`/dev/fd/3`, `/dev/stdin`, `/proc/self/fd/3`, `/proc/self/cwd`,
+  `/proc/<pid>/root`, also after `cd /dev` or `cd /proc/self`) is `store_write`, and so is a store file opened for
+  reading on a numbered descriptor (`exec 3< ~/.exo/state/gate-grants.json`, `{ ...; } 1< f`), because on Linux a
+  later `> /dev/fd/3` or `> /dev/stdout` writes it back; `exec 3< grants; printf X > /dev/fd/3` rewrote the grants
+  file with no ask. Writes to the writer's own stdout and stderr (`/dev/fd/1`, `/dev/stdout`) keep their class.
 - Search tools skip secret stores (#241, D-038). The gate checks only the path a `grep` or `glob` call names, and the
   tools walked everything below it, so `grep {pattern: "key", path: HOME}` (or the same search with no path from a cwd
   of HOME, or of `$EXO_HOME`) returned `~/.aws/credentials`, `$EXO_HOME/keys/*` and `$EXO_HOME/run/exod.principal.key`
