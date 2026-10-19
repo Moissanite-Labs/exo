@@ -484,7 +484,8 @@ class Guide:
         if st.first_run:
             out.append(Tip("intro", "first time here? /intro explains what Exo is and how to use it", "/intro"))
         if st.provider_error:
-            out.append(Tip("providers", "that model call failed: /providers to check keys", "/providers"))
+            out.append(Tip("providers", "that model call failed: /providers checks keys, servers and logins",
+                           "/providers"))
         if st.job_done:
             out.append(Tip("job:" + st.job_done, f"job {st.job_done} finished: ask for its job_output",
                            f"show me the job_output for {st.job_done}"))

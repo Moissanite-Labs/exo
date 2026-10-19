@@ -33,6 +33,14 @@ A new launch makes a new token, so open the latest complete link after a restart
 rather than a usable client. Tokens are not persisted across launches. Opening a new token fragment in the same tab
 reconnects it with that token; `--no-open` prints the link without opening it.
 
+A second `exo web` on a port that is already in use exits with a message, not a raw bind error. It loads the page
+shell `/` (no token needed) to tell the two cases apart. If Exo's web client answers, it says so and how to get back
+in: an open page keeps working, the full link the first launch printed still works, Ctrl+C in that terminal stops it,
+or `--port` starts a second one on the same core. It cannot show the first link, because the token lives in that
+process only. A token in a file under `$EXO_HOME/run` was rejected: the agent's own file tools can read that folder
+(#169), and a page with the token answers approvals. If another program holds the port, the message says so and
+suggests `--port`.
+
 When run in a terminal, `exo web` also opens the browser, but not on the token link: the URL handed to the browser
 launcher sits in its argument list, which other users of the host can read in `/proc` (#166). The browser gets
 `http://127.0.0.1:7342/#code=...` instead: a one-time launch code, made fresh for each browser launch, held in
@@ -137,6 +145,9 @@ The Providers tab (D-034, demo data) is in `docs/ui/`: `web-providers.png` and `
   replies in one thread cost what their bytes cost. Quotes nest at most 8 deep and lists 9, and a deeper `>` stays
   text. In the classic layout a reply that grows when it renders (a table is taller than its pipe text) keeps the
   view at the bottom if it was there.
+  A context note (a stored user message with `meta.note`: what other threads did, D-028) is for the model, so the
+  transcript leaves it out on load and live, as the terminal client does. Its size shows on the `threads` row of the
+  memory column.
 - **Panels.** A thin outline with a 3px left rule. Approval is orange (`APPROVAL · HIGH RISK`) with key chips
   `[o] once [a] always [d] deny`; Tab, click or Ctrl+F deliberately focuses a card, and cards never claim focus
   automatically. Shortcuts act only within that card, never in editable fields. Always (including uppercase A,
@@ -262,6 +273,9 @@ need the page token: `exo web` prints a link with `#token=...`; the page moves i
 tab only), removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider
 routes also need a loopback peer). Without a token the tab only asks you to open that link. When no provider
 is ready, the Chat view shows one quiet line with a link to this tab.
+
+A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
+provider that was cooling down after a failure then takes the next message at once.
 
 ## Sub-pages (D-061)
 

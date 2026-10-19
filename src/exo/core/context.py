@@ -239,7 +239,7 @@ class DefaultCompressor:
                     elif ev.kind == "done":
                         done_text = ev.message.text() if ev.message else None
                     elif ev.kind == "error":
-                        last_error, retryable = ev.error or "provider error", ev.retryable
+                        last_error, retryable = ev.error or "provider error", ev.retryable or bool(ev.retry_after)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # transport failure: treat as retryable
