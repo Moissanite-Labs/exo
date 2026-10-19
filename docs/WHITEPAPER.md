@@ -615,8 +615,9 @@ and uses the same envelopes **[designed, not built]**.
   streams, also need the token, and refuse a request that a browser marks as coming from another site. The
   page shell, its static files and the launch route are served without the token. The shell and files are
   code, not data. The launch route takes a one-time launch code instead, and answers only a loopback peer
-  with a loopback `Host`, a same-host `Origin` and a same-origin `Sec-Fetch-Site`. This blocks *DNS
-  rebinding*, a trick in which a hostile web site makes your browser talk to a server on your own machine.
+  with a loopback `Host`. When the browser sends an `Origin`, it must be the same host, and a request the
+  browser marks as cross-site is refused. This blocks *DNS rebinding*, a trick in which a hostile web site
+  makes your browser talk to a server on your own machine.
   The token's own weak point is the link that carries it. `exo web` prints a `#token=` link, which stays in
   the browser's history once opened. It opens the browser on a `#code=` link instead, so the launcher's
   command line, which other programs on the machine can read, holds a code that works once, for at most
@@ -2583,7 +2584,8 @@ discipline, the item layer and the event-sourced team state described in section
 ## 35. Version history
 
 **Version 0.3 (October 2026).** Covers everything merged to the main branch after version 0.2, up to the
-core budget ratchet (D-077), and names the open changes that will alter what it says (section 30.1).
+core budget ratchet (D-077) and the security changes merged up to October 19, 2026, and names the open changes
+that will alter what it says (section 30.1).
 
 - Sections 5, 17.3 and 28: a turn no longer waits for memory upkeep, except briefly when its view is over
   budget.

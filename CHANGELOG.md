@@ -152,9 +152,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (D-037, D-043, D-045, D-046), the house taste wave 1 (D-044), the engine split and the core budget ratchet (#46,
   D-067, D-077), turns that do not wait for memory upkeep (D-068), versioning (D-056), the web sub-pages (D-061),
   subagent controls and `/rename` (D-069, D-070), and an "In progress" section that names the open changes and
-  issues (#96, #125, #158, #194), and names what #164, #175, #177, #185, #186, #189, #196, #198, #201, #228, #287 and
-  #288 changed on main. The user guide, developer guide, command reference and docs map are brought up to date with
-  main, and the docs map has one coverage table.
+  issues (#96, #107, #125, #158, #194) and the work on branches with no PR yet, and names what #164, #175, #177,
+  #185, #186, #189, #196, #198, #201, #228, #287 and #288 changed on main. The user guide, developer guide,
+  command reference and docs map are brought up to date with main, and the docs map has one coverage table.
   `scripts/build_whitepaper.py` takes the version and the month from the paper's header line only, and stops with a
   message when that line is missing or reworded.
 - Web chat: a completed reply renders as Markdown, GFM pipe tables included (#149, #152). Streaming stays plain
