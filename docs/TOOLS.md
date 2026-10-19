@@ -32,8 +32,10 @@ result.
 The similarity strategies need two or more non-blank lines. A one-line `old_string` (blank lines around it do not
 count) must match up to whitespace, escaping or Unicode. When the file's line has other text, for example
 `TIMEOUT = 45` where `old_string` says `TIMEOUT = 30`, the call fails and shows the closest lines. Before, such a
-stale edit overwrote the newer line. In `apply_patch` a hunk's context lines count toward the two, so a hunk with
-one context line can still replace a `-` line that changed since it was read.
+stale edit overwrote the newer line. In `apply_patch` a hunk's context lines count toward the two, but its `-` lines
+must match the file up to the same whitespace and Unicode tolerance (a literal `\t` too). Otherwise the hunk is
+refused, naming the hunk's line and the file's line, and no file changes (#236). Similarity places only the context
+lines, and a similarity match takes the hunk's text as sent.
 
 ## Environment of bash and jobs
 
