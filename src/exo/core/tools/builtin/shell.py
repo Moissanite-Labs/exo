@@ -96,9 +96,18 @@ def _safe_cut(raw: str, vals: list[str]) -> int:
 
 
 def _key_start(text: str, vals: list[str]) -> int:
-    """Length of the longest tail of ``text`` that is the start of a value in ``vals``."""
-    return max((len(text) - i for v in vals for i in range(max(len(text) - len(v) + 1, 0), len(text))
-                if v.startswith(text[i:])), default=0)
+    """Length of the longest tail of ``text`` that is the start of a value in ``vals``, and shorter than it.
+
+    Only a place that holds a value's first character can start such a tail. So ``find`` steps through those places
+    alone, and only through the ones that would give a longer tail than the best so far. A read then costs a few
+    ``find`` calls per value, not one test per place in the last ``len(v)`` characters."""
+    n, best = len(text), 0
+    for v in vals:
+        i = text.find(v[:1], max(n - len(v) + 1, 0), n - best)
+        while i >= 0 and not v.startswith(text[i:]):
+            i = text.find(v[:1], i + 1, n - best)
+        best = n - i if i >= 0 else best
+    return best
 
 
 def _wait_for_group_exit(proc: subprocess.Popen, pgid: int, timeout: float) -> bool:

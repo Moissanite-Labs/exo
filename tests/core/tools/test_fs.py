@@ -89,6 +89,20 @@ def test_fuzzy_multi_line_similarity_still_matches_one_place():
     assert fuzzy_find_and_replace(content, "\nTIMEOUT = 30\n", "\nTIMEOUT = 60\n")[1] == 0
 
 
+def test_edit_one_trivial_extra_line_still_matches_a_stale_line(run, tmp_path):
+    # docs/TOOLS.md "Edit matching": the rule counts lines, not exact lines. One stale line plus a lone brace or the
+    # def line matches by similarity and replaces the newer line, and the result names the strategy.
+    f = tmp_path / "cfg.py"
+    for old, strategy in [("    TIMEOUT = 30\n}", "context_aware"), ("def f():\n    TIMEOUT = 30", "context_aware"),
+                          ("def f():\n    TIMEOUT = 30\n}", "block_anchor")]:
+        f.write_text("def f():\n    TIMEOUT = 45\n}\n")
+        res = run("edit_file", path="cfg.py", old_string=old, new_string=old.replace("30", "60"))
+        assert not res.is_error and res.text().endswith(f"(matched via {strategy})"), (old, res.text())
+        assert f.read_text() == "def f():\n    TIMEOUT = 60\n}\n"
+    f.write_text("def f():\n    TIMEOUT = 45\n}\n")
+    assert run("edit_file", path="cfg.py", old_string="    TIMEOUT = 30", new_string="    TIMEOUT = 60").is_error
+
+
 def test_edit_preserves_crlf(run, tmp_path):
     f = tmp_path / "w.txt"
     f.write_bytes(b"one\r\ntwo\r\n")

@@ -1104,6 +1104,34 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   setting, which ssh_config documents as switching the setting off (CLEAR_ON_NONE, any case, the bare word only), and
   a `psql` line starting with `system`, which is mysql's command and SQL in psql.
   Rejected: keeping them as fail-safe asks, since they are ordinary spellings and the gate's docs never claimed them.
+  *Amendment 2026-10-19 (issues #209, #202, #225, #199):* four spellings reached a secret store without its name,
+  and the gate read them as plain reads. A link is judged by where it leads: a path is resolved from the gate's own
+  folder, from the session's working folder (the core passes it to tool hooks as `cwd`; each hook gets only the
+  keywords it declares) and, for a shell tool, from that folder joined with the call's own `cwd` argument (a file
+  tool ignores that argument, so the gate does too), and a resolved path a link led to is matched by name; a relative path that
+  stays below its folder is matched by its part there, so a session in a repo's `.claude/worktrees` checkout is not
+  asked about every link. A `.pub` name exempts only a path that resolves to one. `${VAR:-word}` and the other
+  operators of `HOME`, `EXO_HOME`, `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE` are read with the value and with the
+  default; both count. A shell word with a `$( )`, a backtick pair or an unknown variable is also matched with each
+  one empty, and with each one between two literal parts read as `*`. A glob is read in bash's bracket syntax
+  (`[^x]`, POSIX classes), and `/proc/<pid>/<glob>` is matched against `environ`. Rejected: treating every
+  expansion inside a word as opaque, which would ask on `cat notes-$(date +%F).md`; refusing links in `read_file`
+  alone, which leaves the shell open. The checks of one classify call share their file-system lookups, which made a
+  10 KB line several times faster. Limits in `docs/GATE.md` "Other spellings of a store path".
+  *Amendment 2026-10-19 (issues #207, #240):* two programs the gate skipped are read. bash takes a compound opener
+  after `coproc NAME` as a reserved word only when the two tokens before it are `coproc` and the name, so a
+  redirection, heredoc or here-string between them gives a simple command that runs the name (`coproc rm >/dev/null
+  { -rf x` deletes); the lexer marks a word followed by one, and the gate then reads the name as the program too,
+  beside the skipped reading, which stays so nothing it denied is lost. With no remote command, the login shell
+  `ssh host` starts runs ssh's stdin; a piped, heredoc or here-string text is read as shell, as for `bash -s`, and
+  the line asks, with the parts `internal` (D-075). ssh's options after the host are read up to the remote command;
+  `-n`, `-N`, `-f` or a remote command keep the old reading, and a word that may expand to no word or several before
+  the command, or as all of it, reads the stdin too (fail closed). As with wrappers and #191, the line takes the
+  category of what runs, so a `categories:` setting or rule written for the old dominant reading (`opaque_exec` for
+  the coproc lines, `shell` or the host as target for ssh) asks where it denied; `deny` and `reserved` entries see
+  every part and keep denying (D-075). Rejected: reading both coproc readings whenever
+  the line has any redirection (the issue's first sketch), which reads the name as a program in `coproc rm { echo
+  >/dev/null hi; }`, where bash runs a named compound.
 
 ## D-039 (2026-10-12) Approval identity from the connection; web token on every route; one secret scrub
 - **Why:** the 2026-10-12 audit. (a) `approval.respond` took the answerer from its body: an empty `client` meant
@@ -1178,6 +1206,32 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `GIT_CONFIG_COUNT`, and dropped whole when `env_deny` or the token-format value check drops any member. So an exact
   `env_allow` of a single `GIT_CONFIG_KEY_<n>` or `GIT_CONFIG_VALUE_<n>` no longer keeps it, an exception to
   "`env_allow` keeps a name". Documented in `docs/TOOLS.md`.
+  *Amendment 2026-10-19 (PR #222):* redacting key values out of text has one match model too, `keys.secret_spans`.
+  `keys.redact_secrets` uses it for every caller: tool results in the registry, the engine's `tool.output` pieces, the
+  claude-cli provider, provider test and setup errors, and the `bash` stream. The values go longest first. Each value's
+  matches are found from the left, as `str.replace` finds them, in the text with the spans of the values before it
+  blanked out. So no match overlaps a span taken before. All matches are found in the text itself. Then one `[redacted]`
+  marker goes in per span, in one pass. So no value can match across a marker. Before, each value replaced its matches
+  in turn, and a later value could match text that held an earlier marker. Output changes only for a key value that
+  holds `[` or `]` or is part of the word "redacted". `keep_markers` takes each `[redacted]` already in the text first.
+  The engine's second pass over a streamed piece uses it. So that pass leaves the stream's redaction as it is and cuts
+  out only a key learned since. The `bash` stream holds back the longest end of the unsent text that could start a key.
+  Then, value by value in redaction order, a value's first match that would cross the cut moves the cut back to that
+  match's start. So no span of the whole output crosses a cut, and the stream equals redacting the whole output with the
+  key values known when the command starts. The held text stays under twice the length of all key values together. What
+  still goes out: a key value learned while the command runs is cut out only inside one piece, so such a key split
+  between two pieces goes out in two parts. The result is redacted whole, with every key value known when the call
+  returns. But every cut made to a result comes before that: any cut a tool makes in its own output, and the registry's
+  100,000-character result cap. For example, `bash` keeps 15,000 characters at each end of a longer output, `job_output`
+  keeps the last 20,000, `read_file` cuts a line at 2,000 characters, `grep` cuts a line at 300 and `jobs` cuts a
+  command at 100. So a key value that such a cut splits leaves a part in the result, as it did before this PR. The
+  `bash` stream is redacted before its cut, so its pieces hold no such part. A background job's completion notice had no
+  redaction at all. It now reads the job's whole log file and cuts out the key values known when the job ends. Only then
+  does it cut its command and output to size, so those cuts split no key. A key split where that file rotates at
+  `output_cap` can still leave a part. As before, only key values Exo knows are redacted: `known_secret_values`, or the
+  list a caller passes (claude-cli passes the secret-named variables of its own environment). Rejected: holding all
+  output until the command ends (no live output). `docs/TOOLS.md` "Streamed output", `docs/JOBS.md` "The completion
+  notice".
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys

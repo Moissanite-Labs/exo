@@ -230,8 +230,7 @@ below); a `..` from a folder spelt with a wildcard (`cd ~/.e*o/run/jobs && ls ..
 in a folder name above a file (`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for
 the folder itself (`grep -r . ~/.exo/ru?`, `ru[n]`: the last part needs three literal
 characters, the same as for `~/.ss?`; `~/.exo/r*` asks); an upper-case spelling on a
-case-insensitive filesystem (`~/.exo/RUN/*`, as `~/.SSH/*`); `${EXO_HOME:-...}`, as for
-`$EXO_HOME/keys`; a wildcard that spells part of an agent's name that is not sampled
+case-insensitive filesystem (`~/.exo/RUN/*`, as `~/.SSH/*`); a wildcard that spells part of an agent's name that is not sampled
 (`run/agent-scout*` when `scout` is neither `$EXO_SEAT` nor among the 64 sampled seats); the
 built-in `glob` with the folder in `pattern` rather than `path` (it lists names; the same for
 `~/.ssh`); and a key beside a custom `--socket`, which is caught by name only
@@ -274,6 +273,70 @@ A file tool's path is checked, not each file the tool reaches below it: the buil
 walk every file under their path, and since #241 they leave the stores below it out themselves (see "What the
 search tools read" below).
 Tests: `tests/security/test_gate_brace_sets.py`.
+
+### Other spellings of a store path (#209, #202, #225, #199)
+
+A path can reach a store without spelling the store's name. The gate reads four such spellings the way the file
+system or bash will.
+
+- **Links (#209).** A link is judged by where it leads. Each path is resolved from the gate's own folder, from
+  the session's working folder (the core passes it to tool hooks as `cwd`), and, for a shell tool, from that folder
+  joined with the call's own `cwd` argument, the folder a shell runs in. A `cwd` argument on a file tool changes
+  nothing: `read_file`, `write_file` and `grep` take unknown arguments and read from the session's folder. When a
+  link led somewhere else, the resolved path is matched against the store list too. So `notes.txt` pointing at `~/.ssh/id_rsa`, `aws.txt` at `~/.aws/credentials`, `app.cfg` at a
+  project `.env`, and a folder link `cfg` to `~/.ssh` (`cat cfg/config`) ask in every form: `read_file notes.txt`,
+  `cat notes.txt` and the absolute paths. A relative path that lands below the folder it was read from is matched
+  by its part below that folder. That way a session inside a folder that looks like a store by name (a repo's
+  `.claude/worktrees/x` checkout) is not asked about every read through a link that stays inside it. Both
+  folders' absolute and resolved forms are also compared with Exo's key stores and run folders, so a relative `run`
+  read in a session whose folder is `$EXO_HOME` is the run folder. A `.pub` name exempts a path only when the
+  resolved path ends in `.pub` too: `key.pub` pointing at `~/.ssh/id_rsa` asks.
+- **Defaults (#202).** `${VAR:-word}` and the other operators are read for `HOME`, `EXO_HOME`,
+  `CLAUDE_CONFIG_DIR` and `EXO_PRINCIPAL_STORE`. The path is checked with the variable's value (as `$EXO_HOME`
+  reads: Exo's folder, set or not) and with the variable unset (the default word, spelt out in turn, quotes
+  dropped). Both count. `-`, `:=` and `=` take the word when unset; `:+` and `+` give the word when set and
+  nothing when unset; `:?` and any other operator (`%/`, `#*/`, `:0`) read as the value. So
+  `cat ${EXO_HOME:-$HOME/.exo}/keys/seat`, `tar czf - ${EXO_HOME:-$HOME/.exo}/keys` and
+  `ls ${EXO_HOME:-$HOME/.exo}/run` ask with `EXO_HOME` set or not, and `write_file
+  ${EXO_HOME:-$HOME/.exo}/policies/x.yaml` is a store write. A default is read to 8 levels of nesting; a deeper
+  one stays as written.
+- **Expansions inside a name (#225).** Bash drops an empty command substitution, and an unset variable expands to
+  nothing, so `cat .e$(:)nv`, ``cat .e``nv``, `cat ~/.n${x}etrc` and `cat ${x}.env` read the store. A shell word
+  that holds a `$( )`, a backtick pair, or a `${..}` or `$name` other than the four variables above is also
+  matched with each of them removed. Where literal text stands on both sides of one, it is also read as `*`, for
+  any output: `cat .e$(echo n)v` is the glob `.e*v`, which asks as that glob would. Single quotes keep text
+  literal (`cat '.e$(:)nv'` names a file spelt that way). Ordinary lines keep their class: `cat notes-$(date
+  +%F).md`, `ls $(pwd)/src`, `cat ${OUT}/report-${N}.txt`.
+- **Bash glob syntax (#199).** A glob is matched as bash reads it (`_fn_glob`, which the `cd` checks already
+  use): `[^x]` is `[!x]`, a `]` first in a set is a member, and a POSIX class is spelt out (`[[:alpha:]]` is
+  `[a-zA-Z]`). A class bash does not know, or more than 32 `[`, could match anything and counts as a match. So
+  `cat ~/.kube/[^x]onfig`, `cat ~/.kube/[[:alpha:]]onfig` and `cat ~/.config/gh/hosts.[^x]ml` ask.
+  `/proc/<pid>/<glob>` asks when the glob could match `environ`, for any process: `cat /proc/self/[!x]nviron`,
+  `cat /proc/*/[!x]nviron` and `cat /proc/self/*` ask, while `ls /proc/*/status` stays a read.
+
+Cost. The checks of one classify call now share their file-system lookups (the store roots, the gate's folder and
+each folder's resolution) across all the line's words. Before, each word looked them up again. On three 10 KB
+shell lines (plain commands, expansions, globs; CPU time, median of 25 runs) classify took 30 to 82 ms, against 212
+to 312 ms before.
+
+Known limits. A link made on the same line (`tar xf v.tar && cat notes.txt`) does not exist yet when the gate
+classifies the line; `ln -s ~/.ssh/id_rsa n` itself asks, since it names the store. Programs that follow links
+while they walk (`grep -r`, `rg -L`, `cp -rL`) are checked by their arguments only. In executor or broker mode the
+gate's view of the file system may differ from the worker's. A name built whole inside a substitution
+(`cat $(printf '.e%sv' n)`) is not read. Open issues:
+  - #309: the Exo-store write checks (`is_store_path`, "The store is credentials" below) read the `${VAR:-word}`
+    value but not expansions inside a name, so `cp x ~/.exo/polic$(:)ies/gates.yaml` is still a shell command (a
+    write redirection to a path with `$` already asks as `opaque_exec`);
+  - #310: an expansion at the end of a store name is read as empty only, so `cat .env.$(hostname)` stays a read, as
+    does the glob `cat .env.*` (the glob samples have no `.env.<suffix>`);
+  - #311: a relative name read in a shell's `cwd` inside a store (`{"command": "cat config", "cwd": "~/.kube"}`) is
+    matched by the name as written; a `cd` on the line is tracked (#192);
+  - #312: a link reached through a `cd` on the line, `$PWD`, `$(pwd)` or a glob (`cat note?.txt`) is not resolved;
+  - #313: a thread's `/proc/<pid>/task/<tid>/environ` is not a store.
+
+Tests: `tests/security/test_gate_secret_links.py`, `test_gate_store_var_defaults.py`,
+`test_gate_expansions_in_names.py`, `test_gate_bash_glob_classes.py`, and
+`plugins/exo-gate/tests/test_hook.py::test_relative_paths_are_read_from_the_session_folder`.
 
 ### What the search tools read (#241)
 
@@ -652,7 +715,14 @@ gate does not read:
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
-  skipped; before a simple command (`coproc w echo hi`) the first word is the program.
+  skipped; before a simple command (`coproc w echo hi`) the first word is the program. bash takes
+  the opener as a reserved word only right after `coproc` and the name, so a redirection, heredoc
+  or here-string between them (`coproc rm >/dev/null { -rf x`, `coproc 2>/dev/null rm { ...`,
+  `coproc rm <<<x while ...`) gives a simple command that runs the name. The gate then reads the
+  name as the program too, and keeps the skipped reading beside it (#207). A redirection after the
+  opener, in the body or after the closing `}`, changes nothing. Such a line now takes the name's
+  category (`delete` for `rm`), so, as for wrappers, `categories: {opaque_exec: deny}` asks there
+  where main denied; `deny: [opaque_exec]` still denies through the coproc part (D-075).
   `function NAME { ...; }` is read the same way. An environment dump inside (`coproc env`,
   `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Before D-075, a coproc was denied
   only when its inner command outranked `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
@@ -735,10 +805,6 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   allowed under `command:gh pr comment`. The known forms:
   - `${...}` bodies are skipped by the lexer, so `echo ${X:-$(gh pr comment 3 --body hi)}` is
     `read` and allowed (#143; open PR #158).
-  - Text piped or fed by heredoc to `ssh` with no remote command runs in the remote login shell,
-    but the line reads as a plain `ssh`: `echo 'gh pr comment 3 --body hi' | ssh host` and
-    `ssh host <<EOF` are `shell` and allowed under every category deny; a `target:` entry for the
-    host still denies them (#240).
   - `git clone -c` (or `--config`) with a command-running key is not checked as `git -c` is:
     `git clone -c core.sshCommand='gh pr comment 3 --body hi' git@host:x/y` is `local_write` and
     allowed (open PR #231 reads it).
@@ -908,6 +974,28 @@ as the host than it used to, the line asks and the parts of both readings are ma
 right after the host ends `ssh`'s options, and the command after it is read (`ssh host -- rm -rf
 /data`).
 
+With no remote command, `ssh host` starts the login shell on the host, and that shell runs what
+ssh's stdin carries (#240). When the line gives ssh a stdin (a pipe, a heredoc, a here-string, or
+a `<` from anything but `/dev/null`), the gate reads that text as shell, as it reads `bash -s`:
+the line asks as `opaque_exec` at least, and each command in the text is a part, `internal` like
+the rest of the line. So `echo 'rm -rf /data' | ssh prod-db`, and `ssh prod-db <<'EOF'` with
+`rm -rf /data` in the body, deny under `deny: [delete]`, and text the gate cannot read (`ssh host
+< script.sh`, `generate | ssh host`) asks. As for `ssh host 'rm -rf /data'`, the most severe
+command in the text sets the line's category and target. `deny` and `reserved` entries see every
+part, so a `target:<host>` entry still matches through the hop part; a setting that sees only that
+command (`categories: {shell: deny}`, a rule keyed on the host as `target`) no longer reaches these
+lines, which ask where main denied them. ssh reads options after the host too, up to the
+remote command, so `ssh host -T` and `ssh host --` have no command, and an empty word (`ssh host
+''`) is none either. `-n`, `-N` and `-f` keep ssh from running its stdin, and a remote command
+takes the stdin as its own input; those lines keep their reading. A word that may expand to no
+word or several among the options and the host, or as every word of the command (`ssh $OPTS
+host`, `ssh "$HOST"`, `ssh host $CMD`), leaves them uncountable, as for the option reader above,
+so the stdin is read then too (`echo data | ssh "$HOST" 'cat > f'` asks). Known limits: the `-o`
+forms of those three flags (`StdinNull`, `SessionType=none`, `ForkAfterAuthentication`) are not
+honored, so such a line reads its stdin anyway; text fed to a remote shell (`ssh host bash -s
+<<EOF`) is not read yet, and the line asks as `opaque_exec` as before; a stdin set earlier by
+`exec < file` (`exec < f; ssh host`) is not seen. `mosh` lines are unchanged.
+
 `mosh` reads its options with Perl's Getopt::Long in its default mode, and the gate reads them the
 same way, against mosh's own option list: `--`, `-` or `+` before the name, any case, a unique
 prefix of the name (`--serv`, `-ssh`, `--SERVER`), the value after `=` or in the next word, and
@@ -999,7 +1087,7 @@ write to the outside spelling is a local write. Name and prefix checks are case-
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
-followed, and the bash tool's `cwd` argument is not read.
+followed, and the bash tool's `cwd` argument is not read here (the secret-store checks read it, #209).
 
 Descriptor paths (#217). `/dev/fd/N`, `/dev/stdin`, `/proc/<pid>/fd/N`, `/proc/<pid>/cwd`,
 `/proc/<pid>/root` and `/proc/<pid>/map_files` (`<pid>` also `self`, `thread-self` or `$$`, with or
