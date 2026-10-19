@@ -161,9 +161,14 @@ version 2.1.302, wherever the `@` starts the text, follows whitespace (U+FEFF co
 comma, `？` or `！`, the CLI reads the file and sends it to the model, in the latest turn and in replayed history.
 The quoted form `@"path"` works too. So `@~/.ssh/id_rsa` sent the key, past the gate, which asks before any
 credential read. The text need not be the user's: peer and bus messages, notes from other threads and delegate
-briefs reach the CLI as user text. So the adapter puts the same zero-width space in front of each such `@` in a
-user text block. The model still reads the `@`. A decorator at the start of a pasted code line gets the space
-too. An address such as `a@example.com` stays as it is. Exo's own `@path` already adds the file as its own part.
+briefs reach the CLI as user text. The CLI looks the path up from its working folder, which is empty, and folds
+`..` as text. So a path reaches a file only when it leaves that folder: `@/`, `@~`, `@.`, `@"`, or a word with a
+`/..` step such as `@x/../../etc/hosts` (seen on version 2.1.303). The adapter puts the same zero-width space in
+front of each such `@` in a user text block. The model still reads the `@`. Other `@` words pass as typed: a
+decorator such as `@app.route`, CSS `@media`, a diff `@@` header and an address such as `a@example.com`. A space
+hidden in a decorator line would break the file the model copies it into. The folder stays empty because the CLI
+writes nothing there. If a file with a name not starting with `.` turns up in it, each call gets a fresh empty
+folder instead. Exo's own `@path` already adds the file as its own part.
 
 ## Use a Muse Code subscription (`muse-cli`)
 

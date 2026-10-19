@@ -260,8 +260,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   text now names the thread's real working folder on every route, as the value that overrides any environment note.
   A message that starts with `/` (such as `/help`) now reaches the model. Before, the claude CLI answered it itself,
   the turn failed and the route cooled down. An `@path` in a message, including a peer or bus message, no longer
-  makes the claude CLI read that file and send it to the model past the gate, `~/.ssh` keys included. Found in the
-  readiness audit and its review. #146 tracks the web composer side.
+  makes the claude CLI read that file and send it to the model past the gate, `~/.ssh` keys included. Only an `@`
+  whose path can leave the CLI's empty folder is marked: `@/`, `@~`, `@.`, `@"` and a word with a `/..` step
+  (`@x/../../etc/hosts` reaches the file too). A decorator, CSS `@media`, a diff `@@` header and an address reach
+  the model as typed, so code it copies from them carries no hidden character. If a file turns up in the CLI's
+  folder, the call runs in a fresh empty one. Found in the readiness audit and its review. #146 tracks the web
+  composer side.
 - Docs for a first user. The README now opens with what Exo is today: a coding agent for the terminal and the
   browser that runs on your Claude Code login or an API key. The Quick start, `docs/INSTALL.md` and the site's
   install step say the repository is a private preview with access on request.
