@@ -956,8 +956,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `[key]=` is read as a subscript, and a quoted operand after one or more unquoted compound ones is read too. A
   backslash-newline is dropped from a compound value before it is read, as bash drops it first (an `-i` or `-n`
   value keeps it, as bash does), and a `$( )` the line's own parse read is not read again, also when it holds a
-  backslash-newline (unless in single quotes or a here-document, which bash keeps there but not in the value it
-  reads again, so a copy of the body in the value is read). A command the
+  backslash-newline. A body that holds a single quote or a here-document marker (`<<`) anywhere is compared as
+  written: bash keeps a backslash-newline in single quotes or a quoted here-document but not in the value it reads
+  again, and the gate does not track where it is, so with a backslash-newline such a body is read again and asks
+  (`declare -a "b=($(ls 'x' \<newline> -l))"`, only stricter: bash runs the same command). A command the
   line runs only because bash reads a value again also asks through `indirection`, as does an expansion in a `-i` or
   `-n` value, in a `-i` element, or in a compound value the line itself expanded. So when such a command outranks
   the line's own category, a deny on that category becomes ask, never allow or log

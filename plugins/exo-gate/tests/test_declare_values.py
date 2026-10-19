@@ -315,6 +315,11 @@ def test_unquoted_compound_keeps_its_class(category, outcome, line):
     'declare -ai "b=([$(ls \\\n -l)]=1)"',
 ])
 def test_double_quoted_compound_is_read_once(monkeypatch, line):
+    assert reads(monkeypatch, line)[0] == 0
+
+
+def reads(monkeypatch, line):
+    """(bodies classified only because of the value scan, the line's category with the scan)."""
     seen = []
     real = gate.classify_shell
 
@@ -322,13 +327,14 @@ def test_double_quoted_compound_is_read_once(monkeypatch, line):
         seen.append(cmd)
         return real(cmd, depth)
 
-    monkeypatch.setattr(gate, "classify_shell", counted)
-    sh(line)
-    with_scan = len(seen)
-    seen.clear()
-    monkeypatch.setattr(gate, "_NAME_BUILTINS", {})
-    sh(line)
-    assert with_scan == len(seen)
+    with monkeypatch.context() as m:   # undone on return, so a second call measures with the scan again
+        m.setattr(gate, "classify_shell", counted)
+        category = sh(line).category
+        with_scan = len(seen)
+        seen.clear()
+        m.setattr(gate, "_NAME_BUILTINS", {})
+        sh(line)
+    return with_scan - len(seen), category
 
 
 # The line's own $( ) keeps a \newline in single quotes, but bash dropped it from the double-quoted value it reads
@@ -347,3 +353,48 @@ def test_reread_body_unlike_the_lines_own_is_read(category, line):
     assert decide(c, {"gates": {"categories": {"opaque_exec": "allow"}}}).outcome == "ask", c
     for policies in denies(category):
         assert decide(c, policies).outcome == "deny", (policies, c)
+
+
+# A body that holds a single quote or a here-document marker (`<<`, also as `<<<`) anywhere is compared as written,
+# not with its \newlines dropped: bash keeps a \newline in single quotes or a quoted here-document, and the gate
+# does not track where. So with a backslash-newline such a body is read again and asks, even where bash runs the
+# same command twice (only the gate is stricter); the same body without the marker is read once.
+REREAD_AS_WRITTEN = [
+    ('declare -a "b=($(ls \'x\' \\\n -l))"', 'declare -a "b=($(ls \\\n -l))"'),
+    ('declare -a "b=($(cat <<<x \\\n -l))"', 'declare -a "b=($(cat x \\\n -l))"'),
+]
+
+
+@pytest.mark.parametrize("marked,plain", REREAD_AS_WRITTEN)
+def test_body_with_a_quote_or_heredoc_marker_is_read_again(monkeypatch, marked, plain):
+    opaque_allowed = {"gates": {"categories": {"opaque_exec": "allow"}}}
+    c, p = sh(marked), sh(plain)
+    assert "reread" in c.signals and decide(c, opaque_allowed).outcome == "ask", c
+    assert "reread" not in p.signals and decide(p, opaque_allowed).outcome == "allow", p
+    assert reads(monkeypatch, marked) == (1, "read")
+    assert reads(monkeypatch, plain) == (0, "read")
+
+
+def test_many_values_are_compared_in_linear_time(monkeypatch):
+    """The line's bodies are made comparable once per command, not once per name operand."""
+    calls, gate_re = [], gate.re
+
+    class Counted:
+        def __getattr__(self, name):
+            return getattr(gate_re, name)
+
+        def sub(self, *a, **k):
+            calls.append(a[0])
+            return gate_re.sub(*a, **k)
+
+        def search(self, *a, **k):
+            calls.append(a[0])
+            return gate_re.search(*a, **k)
+
+    monkeypatch.setattr(gate, "re", Counted())
+    counts = []
+    for n in (40, 80):
+        calls.clear()
+        sh("declare -a " + " ".join(f'"b{i}=($(ls{i} \\\n -l))"' for i in range(n)))
+        counts.append(len(calls))
+    assert counts[1] < 2.5 * counts[0], counts

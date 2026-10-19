@@ -499,9 +499,12 @@ not read.
   does the gate: in `declare -a 'b=($\<newline>(cmd))'` cmd runs and is classified. A `\\<newline>`
   is an escaped backslash and a newline, and stays; so does a backslash-newline in an `-i` or `-n`
   value, which bash keeps. A `$( )` the line itself runs (in a double-quoted value) is read once,
-  with or without a backslash-newline in it. A backslash-newline in single quotes or a
-  here-document there is the exception: the line's run keeps it but the value bash reads again has
-  lost it, so a copy of that body in the value runs another command and is read on its own.
+  with or without a backslash-newline in it. A body that holds a single quote or a here-document
+  marker (`<<`, `<<<`) anywhere is the exception: bash keeps a backslash-newline in single quotes
+  or a quoted here-document, so the line's run may keep it while the value bash reads again has
+  lost it, and the gate does not track where it is. Such a body is compared as written, so with a
+  backslash-newline it is read again on its own and asks (`reread`), even where bash runs the same
+  command twice (`declare -a "b=($(ls 'x' \<newline> -l))"`; without `'x'` it is read once).
 - Nesting is read four levels deep. Past that the text is `opaque_exec` and asks. An `ssh` or
   `mosh` chain with more hops than that is not read either: the hops that were read keep the
   `remote host` exposure and the first host as target (so a `target:` deny on it still
