@@ -1114,12 +1114,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   key values known when the command starts. The held text stays under twice the length of all key values together. What
   still goes out: a key value learned while the command runs is cut out only inside one piece, so such a key split
   between two pieces goes out in two parts. The result is redacted whole, with every key value known when the call
-  returns. But a tool cuts its output before the result is redacted. `bash` keeps 15,000 characters at each end of a
-  longer output, `read_file` cuts a line at 2,000 characters, `grep` cuts a line at 300 and every result is cut at
-  100,000. So a key value that such a cut splits leaves a part in the result, as it did before this PR. The `bash`
-  stream is redacted before its cut, so its pieces hold no such part. As before, only key values Exo knows are redacted:
-  `known_secret_values`, or the list a caller passes (claude-cli passes the secret-named variables of its own
-  environment). Rejected: holding all output until the command ends (no live output). `docs/TOOLS.md` "Streamed output".
+  returns. But every cut made to a result comes before that: any cut a tool makes in its own output, and the registry's
+  100,000-character result cap. For example, `bash` keeps 15,000 characters at each end of a longer output, `job_output`
+  keeps the last 20,000, `read_file` cuts a line at 2,000 characters, `grep` cuts a line at 300 and `jobs` cuts a
+  command at 100. So a key value that such a cut splits leaves a part in the result, as it did before this PR. The
+  `bash` stream is redacted before its cut, so its pieces hold no such part. A background job's completion notice had no
+  redaction at all. It now cuts out the key values known when the job ends, before it cuts its command and output to
+  size, so those cuts split no key. As before, only key values Exo knows are redacted: `known_secret_values`, or the
+  list a caller passes (claude-cli passes the secret-named variables of its own environment). Rejected: holding all
+  output until the command ends (no live output). `docs/TOOLS.md` "Streamed output", `docs/JOBS.md` "The completion
+  notice".
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
