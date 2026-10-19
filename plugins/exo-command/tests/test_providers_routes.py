@@ -273,3 +273,30 @@ def test_server_source_has_no_request_logging():
     src = (Path(exo_command.__file__).parent / "server.py").read_text()
     prints = [ln.strip() for ln in src.splitlines() if "print(" in ln or "log." in ln or "logging" in ln]
     assert all("exo-command:" in p for p in prints), prints
+
+
+def test_passing_test_reloads_the_core_so_the_chat_retries_at_once(monkeypatch):
+    """A local server came back: a failed test leaves the core alone, a passing one tells it to reload that
+    provider, which clears its cooldown and route breaker (the chat used to stay blocked until they ran out)."""
+    answers = [ConnectionError(), (200, {"data": [{"id": "llama3.2"}]})]
+
+    def http(*a, **k):
+        out = answers.pop(0)
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+    monkeypatch.setattr(ps, "_http", http)
+    src = Src()
+
+    async def go(web, port):
+        down = await raw(port, "POST", "/api/providers/ollama/test", ok_headers(port), {})
+        reloads_after_failure = [c for c in src.calls if isinstance(c, s.CommandRun)]
+        up = await raw(port, "POST", "/api/providers/ollama/test", ok_headers(port), {})
+        return down, reloads_after_failure, up
+
+    (st, down, _), reloads_after_failure, (st2, up, _) = serve(go, src)
+    assert st == 200 and not down["ok"] and down["error_class"] == "not_running" and "core_reloaded" not in down
+    assert reloads_after_failure == []
+    assert st2 == 200 and up["ok"] and up["core_reloaded"] is True
+    assert [c.args for c in src.calls if isinstance(c, s.CommandRun)] == ["reload ollama"]
