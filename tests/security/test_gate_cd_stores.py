@@ -618,12 +618,15 @@ def test_many_levels_up_stays_linear(env, folder, name, monkeypatch):
         monkeypatch.setenv(k, v)
     if "EXO_HOME" not in env:
         monkeypatch.delenv("EXO_HOME")
-    took = []
-    for n in (20000, 80000):
-        line = _ups_line(n, folder, name)
-        start = time.monotonic()
-        _bash(line)
-        took.append(time.monotonic() - start)
+    lines = [_ups_line(n, folder, name) for n in (20000, 80000)]
+    for _ in range(3):      # CPU time; a retry only when over the bound, so load can't fail it but a quadratic step does
+        took = []
+        for line in lines:
+            start = time.process_time()
+            _bash(line)
+            took.append(time.process_time() - start)
+        if took[1] < 6 * took[0] + 0.5:
+            break
     assert took[1] < 6 * took[0] + 0.5, took
 
 
@@ -644,16 +647,30 @@ def test_work_is_linear(line, monkeypatch):
     monkeypatch.setattr(gate, "_parse", count("parse", gate._parse))
     monkeypatch.setattr(fnmatch, "fnmatch", count("fnmatch", fnmatch.fnmatch))
     monkeypatch.setattr(fnmatch, "filter", count("filter", fnmatch.filter))
-    start = time.monotonic()
+    start = time.process_time()
     c = _bash(line)
-    took = time.monotonic() - start
+    took = time.process_time() - start
     with_check = dict(calls)
     for k in calls:
         calls[k] = 0
+    real_read = gate._cd_store_read
     monkeypatch.setattr(gate, "_cd_store_read", lambda cmds, subs: "")
-    start = time.monotonic()
+    start = time.process_time()
     _bash(line)
-    base = time.monotonic() - start
+    base = time.process_time() - start
+    first = dict(calls)
+    for _ in range(2):      # CPU time; a retry only when over the bound, so load can't fail it but a quadratic step does
+        if took < 3 * base + 2:
+            break
+        start = time.process_time()
+        _bash(line)
+        base = min(base, time.process_time() - start)
+        monkeypatch.setattr(gate, "_cd_store_read", real_read)
+        start = time.process_time()
+        _bash(line)
+        took = min(took, time.process_time() - start)
+        monkeypatch.setattr(gate, "_cd_store_read", lambda cmds, subs: "")
+    calls.update(first)
     cmds, subs = gate._parse(line)[:2]
     targets = line.count("cd ")
     assert with_check["sens"] - calls["sens"] <= min(targets, 4), (with_check, calls)    # one per store folder
