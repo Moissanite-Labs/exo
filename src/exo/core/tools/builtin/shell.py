@@ -98,9 +98,10 @@ def kill_process_group(proc: subprocess.Popen, grace: float = TERM_GRACE) -> Non
 
 def tool_env(base: dict[str, str] | None = None, allow: Iterable[str] = (), deny: Iterable[str] = ()) -> dict[str, str]:
     """The environment a tool subprocess gets (bash and background jobs): ``exo.envscrub.scrub_env`` (D-039),
-    so no provider key, token, cloud credential, bus identity or core socket/credential variable. ``allow`` and
-    ``deny`` are the seat's ``[tools] env_allow`` and ``env_deny``. Only a copy is filtered: model providers read
-    the real environment and keep their keys."""
+    so no provider key, token, cloud credential, bus identity or core socket/credential, and none of the shell startup
+    hooks ``envscrub.EXEC_HOOKS`` names (``BASH_ENV``, ``ENV``, exported functions, ``SHELLOPTS``, ``BASHOPTS``, ``PS4``);
+    loader and interpreter hooks pass (docs/TOOLS.md). ``allow`` and ``deny`` are the seat's ``[tools] env_allow`` and
+    ``env_deny``. Only a copy is filtered: model providers read the real environment and keep their keys."""
     from exo.envscrub import scrub_env
 
     out = scrub_env(base, allow, deny)
@@ -120,9 +121,12 @@ _TRAP = ('case ${#PIPESTATUS[@]} in 1) ;; *) printf "%s\\n" "${PIPESTATUS[*]}" 2
 def wrap_pipestatus(command: str, fd: int, env: dict[str, str]) -> list[str]:
     """The argv that runs ``command`` under bash with an EXIT trap writing PIPESTATUS to ``fd`` (pass it in
     pass_fds). The trap text travels in ``env`` (EXO_PIPE_TRAP) so the prefix stays short in bash's own syntax-error
-    messages. (An ``eval`` wrapper would hide the command's PIPESTATUS from the trap.)"""
+    messages. (An ``eval`` wrapper would hide the command's PIPESTATUS from the trap.) bash gets ``--norc``: with
+    SSH_CLIENT or SSH2_CLIENT set and SHLVL unset or 0, ``bash -c`` would source ~/.bashrc and skip an allowed
+    BASH_ENV (#135); ``--norc`` still honours BASH_ENV. The /bin/sh fallback reads no rc file."""
     env["EXO_PIPE_TRAP"] = _TRAP.replace("FD", str(fd))
-    return [shutil.which("bash") or "/bin/sh", "-c", 'trap "$EXO_PIPE_TRAP" EXIT; ' + command]
+    bash = shutil.which("bash")
+    return [*([bash, "--norc"] if bash else ["/bin/sh"]), "-c", 'trap "$EXO_PIPE_TRAP" EXIT; ' + command]
 
 
 def open_side() -> tuple[int, str]:
