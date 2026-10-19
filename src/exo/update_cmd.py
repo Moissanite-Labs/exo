@@ -133,7 +133,10 @@ def _preflight(p: dict, read: Runner) -> None:
     if status.returncode or status.stdout is None:
         raise ValueError('cannot inspect checkout status; nothing updated')
     if status.stdout.strip():
-        raise ValueError('checkout has local changes or untracked files; commit, stash or remove them first')
+        paths = [line[3:] for line in status.stdout.splitlines() if len(line) > 3]
+        shown = ', '.join(paths[:5]) + (f' and {len(paths) - 5} more' if len(paths) > 5 else '')
+        raise ValueError(f'checkout has local changes or untracked files ({shown}); '
+                         'commit, stash or remove them first')
     ignored = read(_git(root, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard',
                         '--', 'src', 'scripts', 'clients', 'plugins'))
     if ignored.returncode or ignored.stdout is None:
