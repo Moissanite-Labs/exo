@@ -73,12 +73,12 @@ DISPUTE_CLASSES = [
 ]
 OPS = ["add", "remove", "set", "move"]
 
-ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
-REF_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}(:v[1-9][0-9]*)?$")
-REF_VERSIONED_RE = re.compile(r"^(?P<obj>[a-z][a-z0-9_-]{0,31}):v(?P<ver>[1-9][0-9]*)$")
-HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-APPROVAL_REF_RE = re.compile(r"^approval:[A-Za-z0-9_.:-]+$")
-ISO_Z_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
+ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}\Z")
+REF_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}(:v[1-9][0-9]*)?\Z")
+REF_VERSIONED_RE = re.compile(r"^(?P<obj>[a-z][a-z0-9_-]{0,31}):v(?P<ver>[1-9][0-9]*)\Z")
+HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
+APPROVAL_REF_RE = re.compile(r"^approval:[A-Za-z0-9_.:-]+\Z")
+ISO_Z_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z\Z")
 
 # Acts whose subject ref is expected to already exist (resolvable), as opposed
 # to being created by the act (L194, L736).
