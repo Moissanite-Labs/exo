@@ -620,10 +620,13 @@ not read.
   inside it counts only where bash expands it: in double quotes after `:-`, `:=` and the like,
   not after a pattern (`echo ${a:-'${PATH:=.}'}` and `echo "${f%'${PATH:=.}'}"` stay `allow`,
   `echo "${a:-'${PATH:=.}'}"` asks). A partly quoted value loses its quotes as
-  bash removes them, so `${GIT_SSH_COMMAND:=rm' -rf x'}` reads as `rm -rf x`. A name the gate
-  cannot read (`export $X=...`, `read -r "$v"`, `declare -n r=$X`,
-  a nameref with no target, or a glob the shell expands first such as `export PAT?=.` or
-  `read HOM[E]`) is opaque too.
+  bash removes them, so `${GIT_SSH_COMMAND:=rm' -rf x'}` reads as `rm -rf x`. The scan is
+  linear in the line: each brace, bracket and paren pair is found in one pass (a subscript ends
+  at the `]` that matches its `[`), and a nested `${..}` longer than 64 characters stands in its
+  parent's value as `${_}`, so classify, which runs in the gate hook, cannot be stalled by a
+  long run of unclosed or nested expansions. A name the gate cannot read (`export $X=...`,
+  `read -r "$v"`, `declare -n r=$X`, a nameref with no target, or a glob the shell expands
+  first such as `export PAT?=.` or `read HOM[E]`) is opaque too.
   Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
   --config` or `-c`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`)
   takes the `git -c` exec-key check, and the value of an exec key is classified as a command too,

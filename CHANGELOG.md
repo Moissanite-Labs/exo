@@ -774,6 +774,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   outside a subscript, so `git commit -m 'read ${PATH:=.}'`, `pytest -q 'test_x[HOME=/tmp]'` and `echo [HOME=x]`
   stay `allow`. A
   partly quoted value loses its quotes as bash removes them (`${GIT_SSH_COMMAND:=rm' -rf x'}` is `rm -rf x`).
+  The scan is linear in the line, so a long run of unclosed or nested expansions cannot stall the gate hook, and a
+  run of `[` that open no set no longer makes the secret-store glob check quadratic (100 KB of `${a[${b[...` took
+  two minutes on main).
   The rarer expansion forms that can still set a variable unseen are listed in `docs/GATE.md`. This is the inline
   form, distinct from #135, which drops `BASH_ENV` inherited from the parent environment (builds on #154,
   D-038).

@@ -336,7 +336,7 @@ class _Word:
     raw: str = ""              # the source text of the word, quotes kept
     locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
-    exps: list = field(default_factory=list)  # (scan text, source) of each ${..} and $((..)) bash expands here
+    exps: list = field(default_factory=list)  # (scan text, source, ${ frames) per ${..} and $((..)) bash expands
 
 
 @dataclass
@@ -366,7 +366,7 @@ class _Lexer:
         self.i = 0
         self.subs: list[str] = []          # sources of $( ), ` ` and <( ) met at this level
         self.pending: list[_Heredoc] = []
-        self.scan = scan                   # record _Word.exps (off when the lexer only finds where $( ) ends)
+        self.scan = scan                   # record _Word.exps (off where the words are not kept: only the subs are)
         self.covered = 0                   # the source before here lies in a ${..} already recorded
 
     def run(self, closer: bool = False) -> list:
@@ -479,7 +479,7 @@ class _Lexer:
                 lines.append(line.lstrip("\t") if hd.strip else line)
             hd.body = "\n".join(lines)
             if not hd.quoted:
-                sub = _Lexer(hd.body)
+                sub = _Lexer(hd.body, scan=False)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
 
@@ -540,11 +540,11 @@ class _Lexer:
                     break
             body = s[i:j]
             if "$(" in body[3:] or "`" in body:
-                sub = _Lexer(body[3:-2])
+                sub = _Lexer(body[3:-2], scan=False)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
             if self.scan and i >= self.covered:
-                w.exps.append((body, body))
+                w.exps.append((body, body, None))
             w.text += body
             w.dynamic = True
             self.i = j
@@ -564,8 +564,9 @@ class _Lexer:
             j = s.find("}", i)
             j = len(s) - 1 if j < 0 else j
             if self.scan and i >= self.covered:    # what bash reads: it may run past this first }
-                vis, close = _dollar_brace(s, i, double)
-                w.exps.append((vis, s[i:close + 1]))
+                vis, close, frames = _dollar_brace(s, i, double)
+                w.exps.append((vis, s[i:close + 1], {at - i: [end - i, None if up is None else up - i]
+                                                     for at, (end, up) in frames.items()}))
                 self.covered = close + 1
             w.text += s[i:j + 1]
             w.dynamic = True
@@ -609,33 +610,52 @@ def _skip(s: str, k: int, closer: str, escapes: bool) -> int:
 
 
 # The operators after which bash quotes single-quoted text even inside double quotes (a pattern, a case
-# change, `@`, an error message): `"${f%'$x'}"` expands nothing, `"${f:-'$x'}"` expands $x.
-_DQ_QUOTING_OP = re.compile(r"[!#]?(?:[A-Za-z_]\w*|\d+|[-@*#?$!])(?:\[[^\]]*\])?(?:[#%/^,~@?]|:\?)")
+# change, `@`, an error message): `"${f%'$x'}"` expands nothing, `"${f:-'$x'}"` expands $x. A subscript is
+# read only up to the next bracket, so a long run of `${a[` costs one step each (a nested subscript there
+# counts as no operator, and the text stays visible).
+_DQ_QUOTING_OP = re.compile(r"[!#]?(?:[A-Za-z_]\w*|\d+|[-@*#?$!])(?:\[[^\][]*\])?(?:[#%/^,~@?]|:\?)")
 
 
-def _dollar_brace(s: str, i: int, dq: bool = False, closes: dict | None = None) -> tuple[str, int]:
+def _dollar_brace(s: str, i: int, dq: bool = False) -> tuple[str, int, dict[int, list]]:
     """bash's reading of the `${` at s[i]: (its text with what bash does not expand blanked, the index of
-    its closing `}`, len(s) if none). Only a `}` outside quotes and escapes closes it, and only a nested
-    `${` opens another (a bare `{` does not). Blanked: escaped characters, a ` ` or $( ) (it runs in a
-    subshell), and single-quoted or $'..' text, except where bash still expands it: in double quotes (`dq`)
-    after an operator other than _DQ_QUOTING_OP's (`"${a:-'$x'}"`). `closes` collects start: close for
-    each ${ that closes."""
-    def open_(at: int, dq: bool) -> list:      # [text so far, in a "..." inside it, sq expands, dq, start]
-        return [["${"], False, dq and not _DQ_QUOTING_OP.match(s, at + 2), dq, at]
+    its closing `}`, len(s) if none, and start: [close, parent start] for every `${` met on the way, one
+    that never closes closing at len(s)). Only a `}` outside quotes and escapes closes it, and only a
+    nested `${` opens another (a bare `{` does not). Blanked: escaped characters, a ` ` or $( ) (it runs in
+    a subshell), and single-quoted or $'..' text, except where bash still expands it: in double quotes
+    (`dq`) after an operator other than _DQ_QUOTING_OP's (`"${a:-'$x'}"`); a `${` in such text is read
+    within it. One pass over s from i, every character once, so a long or deeply nested line stays linear
+    (classify runs inside the gate hook)."""
+    frames: dict[int, list] = {}
 
-    stack, j = [open_(i, dq)], i + 2                      # one entry per ${ still open, no recursion
+    def open_(at: int, dq: bool, parent: int | None) -> list:   # [in a "..." inside it, sq expands, dq, start]
+        frames[at] = [len(s), parent]
+        return [False, dq and not _DQ_QUOTING_OP.match(s, at + 2), dq, at]
+
+    def quoted_text(a: int, b: int, parent: int) -> str:
+        # single-quoted text bash expands: the visible text, and the frames of the ${ in it, read within it
+        seg = s[a:b]
+        vis = re.sub(r"\\.", "  ", seg, flags=re.S)
+        p = vis.find("${")
+        while p >= 0:
+            _, close, inner = _dollar_brace(seg, p)
+            for at, (end, up) in inner.items():
+                frames[a + at] = [a + end, parent if up is None else a + up]
+            p = vis.find("${", close + 1)
+        return vis
+
+    out, stack, j = ["${"], [open_(i, dq, None)], i + 2   # one entry per ${ still open, no recursion
     while j < len(s):
-        out, inq, sq, fdq, _ = stack[-1]
+        inq, sq, fdq, start = stack[-1]
         ch, k = s[j], j + 1
         if ch == "\\":
             k = min(j + 2, len(s))
             out.append(" " * (k - j))
         elif s.startswith("$'", j) and not inq:      # where bash expands '..' it expands $'..' too
             k = _skip(s, j + 2, "'", True)
-            out.append(" " + re.sub(r"\\.", "  ", s[j + 1:k], flags=re.S) if sq else " " * (k - j))
+            out.append(" " + quoted_text(j + 1, k, start) if sq else " " * (k - j))
         elif ch == "'" and not inq:
             k = _skip(s, j + 1, "'", False)
-            out.append(re.sub(r"\\.", "  ", s[j:k], flags=re.S) if sq else " " * (k - j))
+            out.append(quoted_text(j, k, start) if sq else " " * (k - j))
         elif ch == "`" or (s.startswith("$(", j) and not s.startswith("$((", j)):
             if ch == "`":
                 k = _skip(s, j + 1, "`", True)
@@ -646,20 +666,20 @@ def _dollar_brace(s: str, i: int, dq: bool = False, closes: dict | None = None) 
                 k = lx.i
             out.append(" " * (k - j))
         elif s.startswith("${", j):
-            stack.append(open_(j, fdq or inq))
+            stack.append(open_(j, fdq or inq, start))
+            out.append("${")
             k = j + 2
         elif ch == "}" and not inq:
-            if closes is not None:
-                closes[stack[-1][4]] = j
+            frames[start][0] = j
             stack.pop()
+            out.append("}")
             if not stack:
-                return "".join(out) + "}", j
-            stack[-1][0].append("".join(out) + "}")
+                return "".join(out), j, frames
         else:
-            stack[-1][1] = inq ^ (ch == '"')
+            stack[-1][0] = inq ^ (ch == '"')
             out.append(ch)
         j = k
-    return "".join("".join(f[0]) for f in stack), len(s)
+    return "".join(out), len(s), frames
 
 
 def _literal_heredoc(toks: list) -> str | None:
@@ -1028,37 +1048,63 @@ def _env_hazard(name: str, value: str | None = None) -> str:
 # Only what bash expands counts: the ${..} and $((..)) the lexer met outside single quotes (_Word.exps), each
 # read to the } bash closes it with and with quoted text blanked (_dollar_brace), and a bracket only as the
 # subscript of a name (`echo [HOME=x]` is a glob, `'${PATH:=.}'` and `${a:-'${PATH:=.}'}` are text).
-_PARAM_SET = re.compile(r"\$\{([A-Za-z_]\w*)(?:\[[^\]]*\])?:?=")
+_PARAM_NAME = re.compile(r"\$\{([A-Za-z_]\w*)")            # then a subscript, and `:=` or `=` to assign
 _ARITH_SET = re.compile(r"\b([A-Za-z_]\w*)\s*[-+*/%&|^]?=(?!=)")
 _SUBSCRIPT = re.compile(r"[A-Za-z_]\w*\[([^\]]*)\]")
 _EXP_SUBSCRIPT = re.compile(r"\$\{[#!]?[A-Za-z_]\w*\[")
 _FD_VAR = re.compile(r"\{([A-Za-z_]\w*)\}")
+_LONG_VALUE = 64   # a nested ${..} longer than this stands in a value as `${_}`, so no text is copied twice
 
 
-def _balanced(text: str, start: int, opener: str, closer: str) -> str:
-    """The substring from `start` up to the `closer` that matches an opener already counted (depth 1)."""
-    depth, i = 1, start
-    while i < len(text):
-        depth += (text[i] == opener) - (text[i] == closer)
-        if depth == 0:
-            return text[start:i]
-        i += 1
-    return text[start:]
-
-
-def _arith_bodies(text: str) -> list[str]:
-    """The bodies of every `$(( ))` in `text` (arithmetic, where a bare `NAME=n` assigns)."""
-    out, i = [], 0
-    while (j := text.find("$((", i)) >= 0:
-        depth, k = 0, j + 1                               # start on the first paren of `$((`
-        while k < len(text):
-            depth += (text[k] == "(") - (text[k] == ")")
-            k += 1
-            if depth == 0:
-                break
-        out.append(text[j + 3:k - 1])
-        i = k
+def _pairs(text: str, opener: str, closer: str) -> dict[int, int]:
+    """Each `opener` in text: the index of the `closer` that matches it, as bash counts them (len(text) if none).
+    One stack pass, so a long run of unclosed openers stays linear."""
+    out, stack = {}, []
+    for m in re.finditer(re.escape(opener) + "|" + re.escape(closer), text):
+        if m.group() == opener:
+            stack.append(m.start())
+        elif stack:
+            out[stack.pop()] = m.start()
+    out.update(dict.fromkeys(stack, len(text)))
     return out
+
+
+def _spans(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """(arithmetic bodies, expansion subscripts) in `text` as (start, end): the body of each `$(( ))` not inside
+    another, and the subscript of each `${a[`, `${#a[` or `${!a[` to its matching `]`; arithmetic, where a bare
+    `NAME=n` assigns."""
+    parens, brackets = _pairs(text, "(", ")"), _pairs(text, "[", "]")
+    arith, i = [], 0
+    while (j := text.find("$((", i)) >= 0:
+        end = parens[j + 1] if parens[j + 1] < len(text) else len(text) - 1
+        arith.append((j + 3, end))
+        i = max(end, j + 3)
+    return arith, [(m.end(), brackets[m.end() - 1]) for m in _EXP_SUBSCRIPT.finditer(text)]
+
+
+def _covered(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The spans merged into disjoint ones, in order."""
+    out: list[tuple[int, int]] = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def _brace_value(src: str, frames: dict, at: int, start: int) -> str:
+    """The text of the `${` at `at` from `start` to its close, with each nested ${..} longer than _LONG_VALUE as
+    `${_}`: each character is copied into one value at most, however deep the nesting."""
+    pieces, pos = [], start
+    for child in frames[at][2]:
+        end = frames[child][0]
+        if end < pos:
+            continue
+        pieces += [src[pos:child]] if child >= pos else []
+        pieces.append(src[child:end + 1] if child >= pos and end + 1 - child <= _LONG_VALUE else "${_}")
+        pos = end + 1
+    return "".join(pieces) + src[pos:frames[at][0]]
 
 
 def _unquote_value(v: str) -> str:
@@ -1074,28 +1120,42 @@ def _subscript_sets(name: str) -> list[str]:
 
 
 def _hidden_sets(k: "_Cmd", names: list[str]) -> list[tuple[str, str | None]]:
-    """(name, value) for each variable the command assigns without a plain NAME=value word. value is None
-    when the gate does not see it (an fd number, an arithmetic result). Covers parameter-expansion
+    """(name, value) for each variable the command assigns without a plain NAME=value word, each pair once. value
+    is None when the gate does not see it (an fd number, an arithmetic result). Covers parameter-expansion
     assignment, arithmetic, a subscript in an expansion (`${a[PATH=10]}`, also `${a[PATH=${i}]}`) or in
     `names` (the words bash reads as a variable name: assignments, exporter and unset arguments), and a
-    `{NAME}>` redirection."""
+    `{NAME}>` redirection. Linear in the line: brackets, parens and braces are each matched in one pass."""
     out: list[tuple[str, str | None]] = []
     for w in [*k.words, *(t for _, t in k.redirs), *k.herestrings]:
-        for vis, src in w.exps:                           # only real expansions, quoted text blanked in vis
-            closes: dict[int, int] | None = None          # the value runs to the } that closes its ${
-            for m in _PARAM_SET.finditer(vis):
-                if closes is None:
-                    closes = {}
-                    _dollar_brace(src, 0, closes=closes)
-                end = closes[m.start()] if m.start() in closes else _dollar_brace(src, m.start())[1]
-                out.append((m.group(1), _unquote_value(src[m.end():end])))
-            subs = [_balanced(vis, m.end(), "[", "]") for m in _EXP_SUBSCRIPT.finditer(vis)]
-            for region in _arith_bodies(vis) + subs:
-                out += [(m.group(1), None) for m in _ARITH_SET.finditer(region)]
+        for vis, src, frames in w.exps:                   # only real expansions, quoted text blanked in vis
+            if frames is None:                            # a $((..)): its ${..} as the lexer reads one
+                frames = _dollar_brace(src, 0)[2]
+            frames = {at: [end, up, []] for at, (end, up) in frames.items()}
+            for at, (_, up, _) in frames.items():         # in order of start, so each child list is too
+                if up in frames:
+                    frames[up][2].append(at)
+            brackets, asked, close_at = _pairs(vis, "[", "]"), 0, -1
+            for m in _PARAM_NAME.finditer(vis):
+                pos = m.end()
+                if vis.startswith("[", pos):              # a subscript: PATH[0] is PATH
+                    pos = brackets[pos] + 1
+                op = 2 if vis.startswith(":=", pos) else 1 if vis.startswith("=", pos) else 0
+                if not op:
+                    continue
+                if m.start() not in frames:               # not a ${ the scan opened: up to the next }
+                    if not asked <= pos <= close_at:      # the last answer holds while pos stays before it
+                        asked, close_at = pos, src.find("}", pos)
+                        close_at = len(src) if close_at < 0 else close_at
+                    frames[m.start()] = [close_at, None, []]
+                out.append((m.group(1), _unquote_value(_brace_value(src, frames, m.start(), pos + op))))
+            arith, subs = _spans(vis)
+            for region in (arith, subs):
+                for a, b in _covered(region):
+                    out += [(m.group(1), None) for m in _ARITH_SET.finditer(vis, a, b)]
     out += [(n, None) for name in names for n in _subscript_sets(name)]
     if k.redirs:                                          # `{NAME}>file`: the fd number goes into NAME
         out += [(fm.group(1), None) for w in k.words if not w.quoted and (fm := _FD_VAR.fullmatch(w.text))]
-    return out
+    return list(dict.fromkeys(out))
 
 
 def _unreadable_name(w: "_Word") -> bool:
@@ -3640,10 +3700,26 @@ def _glob_word(tok: str, home: str, samples: list[str], secrets: list[str], runs
     return any(rx.match(x) for x in xs)
 
 
+def _closed_sets(pat: str) -> str:
+    """``pat`` with each `[` that opens no set written `[[]`, which fnmatch reads the same way (a literal `[`).
+    fnmatch.translate looks for the `]` from every such `[`, so a long run of them was quadratic. Sets are read as
+    fnmatch reads them: a `!` and then a `]` first in a set are members, and the set ends at the next `]`."""
+    ends = [m.start() for m in re.finditer(r"\]", pat)]
+    out, i = [], 0
+    while (j := pat.find("[", i)) >= 0:
+        out.append(pat[i:j])
+        k = j + 1 + pat.startswith("!", j + 1)
+        k += pat.startswith("]", k)
+        e = bisect.bisect_left(ends, k)
+        out.append("[[]" if e == len(ends) else pat[j:ends[e] + 1])
+        i = j + 1 if e == len(ends) else ends[e] + 1
+    return "".join(out) + pat[i:]
+
+
 @functools.lru_cache(maxsize=4096)
 def _glob_rx(tok: str) -> re.Pattern[str]:
     """fnmatch's pattern for ``tok``, also matching after any `/` when ``tok`` is relative."""
-    return re.compile(("" if tok.startswith("/") else r"(?s:.*/)?") + fnmatch.translate(tok))
+    return re.compile(("" if tok.startswith("/") else r"(?s:.*/)?") + fnmatch.translate(_closed_sets(tok)))
 
 
 # D-038: the Exo store is credentials. Its policies, state (approval grants), ledger, keys, seat files and
