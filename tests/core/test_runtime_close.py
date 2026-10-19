@@ -183,3 +183,174 @@ def test_a_closed_scheduler_refuses_to_start(tmp_path):
     asyncio.run(eng.close())
     with pytest.raises(RuntimeError, match="closed"):
         eng.scheduler.start()
+
+
+def test_close_still_closes_the_scheduler_and_store_when_peers_or_jobs_fail(tmp_path):
+    class BadPeers:
+        async def stop(self):
+            raise RuntimeError("peers boom")
+
+    eng = _engine(tmp_path / "home", tmp_path)
+    eng.peers = BadPeers()
+
+    async def bad_jobs_close():
+        raise ValueError("jobs boom")
+
+    eng.jobs.close = bad_jobs_close
+    with pytest.raises(RuntimeError, match="peers boom"):  # the first error wins
+        asyncio.run(eng.close())
+    assert eng.store._conn is None
+    with pytest.raises(sqlite3.ProgrammingError):
+        eng.scheduler.db.execute("SELECT 1")
+
+
+# ---- trace sinks: copy on write, safe under garbage-collector re-entry ----
+
+_REENTRY = '''
+import faulthandler, logging
+logging.disable(logging.CRITICAL)
+from exo.core import trace
+faulthandler.dump_traceback_later(40, exit=True)
+class Owner:
+    def on(self, body, session): pass
+class Reporter:
+    def __init__(self): self.me = self
+    def __del__(self): trace.report("finalizer", "late")
+live = [Owner() for _ in range(3)] + [Owner() for _ in range(50)]
+for o in live: trace.add_sink(o.on)
+for i in range(20000):
+    Reporter()
+    trace.report("main", "x")
+print("survived")
+'''
+
+
+def test_a_finalizer_that_reports_during_a_report_does_not_hang():
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    try:
+        out = subprocess.run([sys.executable, "-c", _REENTRY], capture_output=True, text=True, timeout=90, env=env)
+    except subprocess.TimeoutExpired:
+        pytest.fail("trace.report hung under finalizer re-entry")
+    assert "survived" in out.stdout, out.stderr[-800:]
+
+
+def test_a_sink_added_by_a_finalizer_during_pruning_is_not_lost():
+    from exo.core import trace
+
+    class Owner:
+        def on(self, body, session):
+            pass
+
+    added = []
+
+    class Late:
+        def on(self, body, session):
+            added.append(body.where)
+
+    late = Late()
+    dead = Owner()
+    trace.add_sink(dead.on)
+    del dead  # the entry is dead; the next report prunes it
+    real_tuple = tuple
+    fired = []
+
+    def tuple_hook(*a):
+        if not fired:  # the allocation inside pruning: a finalizer adds a sink on this same thread
+            fired.append(1)
+            trace.add_sink(late.on)
+        return real_tuple(*a)
+
+    import builtins
+    trace_globals = trace.__dict__
+    trace_globals["tuple"] = tuple_hook
+    try:
+        trace.report("one", "boom")
+    finally:
+        del trace_globals["tuple"]
+    try:
+        assert fired
+        trace.report("two", "boom")
+        assert added == ["two"]
+    finally:
+        trace.remove_sink(late.on)
+    assert builtins.tuple is real_tuple
+
+
+def test_concurrent_add_remove_report_and_gc_have_no_errors():
+    import gc
+    import sys
+    import threading
+    import time
+    from exo.core import trace
+
+    class Persistent:
+        def __init__(self):
+            self.n = 0
+            self.lk = threading.Lock()
+
+        def on(self, body, session):
+            with self.lk:
+                self.n += 1
+
+    class Cyclic:
+        def __init__(self):
+            self.me = self
+
+        def on(self, body, session):
+            pass
+
+    keep = [Persistent() for _ in range(3)]
+    for k in keep:
+        trace.add_sink(k.on)
+    errors, reports = [], [0]
+    stop = threading.Event()
+    start = threading.Barrier(9)
+
+    def reporter():
+        start.wait()
+        n = 0
+        while not stop.is_set():
+            try:
+                trace.report("stress", "boom")
+                n += 1
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+        reports[0] += n
+
+    def churn():
+        start.wait()
+        while not stop.is_set():
+            try:
+                o = Persistent()
+                trace.add_sink(o.on)
+                trace.remove_sink(o.on)
+                for _ in range(20):
+                    trace.add_sink(Cyclic().on)
+                gc.collect(0)
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+            time.sleep(0)
+
+    threads = [threading.Thread(target=reporter) for _ in range(5)] + [threading.Thread(target=churn) for _ in range(4)]
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        for t in threads:
+            t.start()
+        time.sleep(1.5)
+        stop.set()
+        for t in threads:
+            t.join(30)
+        assert not any(t.is_alive() for t in threads), "deadlock"
+    finally:
+        sys.setswitchinterval(old)
+        for k in keep:
+            trace.remove_sink(k.on)
+    gc.collect()
+    trace.report("drain", "prune")
+    assert errors == []
+    assert all(k.n >= reports[0] for k in keep)
+    assert trace._sinks == ()

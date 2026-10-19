@@ -329,16 +329,32 @@ class CoreRuntime:
         self._writer = None
         trace.remove_sink(self._on_harness_error)
         await self.stop_channels()
+        errors: list[BaseException] = []  # every step runs; the first error is raised at the end
+        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
+            try:
+                await step()  # jobs end with exod
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                errors.append(exc)
+        try:
+            self.store.close()  # last: the hub is closed before this (serve), so nothing writes events after it
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+        if errors:
+            raise errors[0]
+
+    async def _stop_peers(self) -> None:
         if self.peers is not None:
             await self.peers.stop()
-        await self.jobs.close()  # jobs end with exod
+
+    async def _close_scheduler(self) -> None:
         if self.scheduler is not None:
             await self.scheduler.stop()
             self.scheduler.close()
+
+    async def _close_mcp(self) -> None:
         if self._started is not None:
             await self.mcp.close()
             self._started = None
-        self.store.close()  # last: the hub is closed before this (serve), so nothing writes events after it
 
     def _main_ref(self) -> str:
         chain = self.router.chain("main")
