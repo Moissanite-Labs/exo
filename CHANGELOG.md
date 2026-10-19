@@ -144,6 +144,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Terminal approval cards wait for removal before the next queued card mounts (#276). Answering a card or
   reconciling a closed request no longer mounts two widgets under the same approval id. Close, restore and
   thread-switch transitions share a lock, and stale answers or close events cannot remove the next request's card.
+  After an answer the composer gets the focus back unless you moved it, so the next prompt is sent and the next
+  approval of the thread shows its card.
 - `exo update` names up to five of the files that block it when the checkout has local changes or untracked
   files, instead of only saying that some exist.
 - `edit_file` after whitespace drift: when only the whitespace-normalized strategy matched (one stray double

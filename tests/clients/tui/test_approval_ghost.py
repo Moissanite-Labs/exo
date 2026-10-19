@@ -6,6 +6,7 @@ from __future__ import annotations
 import time
 
 from exo.protocol import schema as s
+from exo_tui.widgets import ApprovalCard
 from test_tui import pending_approval, run, send, until
 
 
@@ -83,6 +84,60 @@ def test_stopping_a_turn_closes_its_approval_card(tmp_path):
         await pilot.press("ctrl+c")
         await until(lambda: app.card is None, pilot)
         assert not app.approvals
+
+    run(tmp_path, sc)
+
+
+def test_after_an_answer_the_next_request_of_the_thread_gets_its_card(tmp_path):
+    """The removal hands the focus to the card's neighbour (the transcript here) at once; that is not the user moving
+    it, so the composer gets it back and the next prompt is sent and asked about (regression from #284)."""
+    async def sc(app, pilot, client, eng):
+        await send(app, pilot, "ask")
+        await until(lambda: app.card is not None, pilot)
+        await pilot.press("ctrl+f")
+        await pilot.press("o")
+        await until(lambda: app.card is None and "after ask" in app.transcript_text() and not app.busy, pilot)
+        await until(lambda: app.composer.has_focus, pilot)
+        await send(app, pilot, "ask again")
+        await until(lambda: app.card is not None, pilot)
+        await pilot.press("ctrl+f")
+        await pilot.press("d")
+        await pilot.press("enter")  # from the deny note, inside the card
+        await until(lambda: len(responds(app)) == 2 and app.card is None, pilot)
+        await until(lambda: app.composer.has_focus, pilot)
+
+    run(tmp_path, sc)
+
+
+def test_answering_a_card_mounts_the_one_queued_behind_it(tmp_path):
+    """#276: the next card reuses the widget id, so it mounts once the answered one is gone. A request of no thread (a
+    held peer message) comes first here, as in the report."""
+    async def sc(app, pilot, client, eng):
+        for rid, session in (("r1", None), ("r2", app.session), ("r3", app.session)):
+            pending_approval(eng, session, s.ApprovalRequested(request_id=rid, summary=rid, options=["allow", "deny"]))
+        await until(lambda: len(app.approvals) == 3 and app.card is not None, pilot)
+        for rid in ("r1", "r2", "r3"):
+            await until(lambda: app.card is not None and app.card.req.request_id == rid, pilot)
+            assert len(app.query(ApprovalCard)) == 1
+            await pilot.press("ctrl+f")
+            await pilot.press("o")
+            await until(lambda: app.composer.has_focus, pilot)
+        await until(lambda: len(responds(app)) == 3 and app.card is None, pilot)
+        assert [r.request_id for r in responds(app)] == ["r1", "r2", "r3"]
+        assert "DuplicateIds" not in app.transcript_text()
+
+    run(tmp_path, sc)
+
+
+def test_reconciling_a_closed_card_mounts_the_one_queued_behind_it(tmp_path):
+    async def sc(app, pilot, client, eng):
+        for rid, session in (("r1", None), ("r2", app.session)):
+            pending_approval(eng, session, s.ApprovalRequested(request_id=rid, summary=rid, options=["allow", "deny"]))
+        await until(lambda: len(app.approvals) == 2 and app.card is not None, pilot)
+        del eng.approvals.open["r1"]  # closed behind the clients' backs: no approval.resolved goes out
+        app.reconcile_every = 0.05
+        await until(lambda: app.card is not None and app.card.req.request_id == "r2", pilot)
+        assert len(app.query(ApprovalCard)) == 1 and "DuplicateIds" not in app.transcript_text()
 
     run(tmp_path, sc)
 
