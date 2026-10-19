@@ -1,6 +1,7 @@
 # Installing Exo
 
-The README has the short version (`## Install`). This page has the full detail.
+The README has the short version (`## Quick start`). This page has the full detail. The repository is a private
+preview during the early build. Access is on request from [Aska Digital](https://digital.askaconsult.com).
 
 One script installs Exo for any user on macOS or Linux (D-004). It never touches an existing
 `~/.hermes` unless you name it.
@@ -28,14 +29,16 @@ export PATH="$HOME/.local/bin:$PATH"   # zsh: ~/.zshrc, bash: ~/.bashrc, fish: f
 
 `--modify-path` appends that line to the rc file once (a second run sees it and adds nothing). A file already at
 `~/.local/bin/exo` that is not this installer's link is left alone, with a warning. The installer never reads or
-writes model keys; the first `exo` run with no working provider opens the providers panel (`/providers`).
+writes model keys. The first `exo` run with no working provider says so in a note and opens the providers panel.
+If one provider is set up but no main model is chosen, the model picker opens instead. Type `/providers` to open
+the panel again.
 
 `exo update` checks the checkout for tracked changes, untracked files and ignored source files before pulling with
 `--ff-only`. When it stops, it names up to five of the paths that block it. Commit, stash (including untracked
 files), or remove local changes before updating. It
 checks the target Python for pip first; when pip is absent (for example after `uv sync`), it uses
 `uv pip --python` for that same environment. If neither installer is available, it stops before the
-pull. Installer-managed installs also refresh their plugins with `install.sh --no-pip --no-interview`.
+pull. Installer-managed installs also refresh their plugins and skill pack with `install.sh --no-pip --no-interview`.
 For a `uv tool install`, it runs `uv tool upgrade exo`. After installation a fresh Python process checks
 imports, the protocol export and `exo models`. `exo update --dry-run` only prints the plan: it runs no
 subprocesses, preflight probes, upgrades or checks.
@@ -99,7 +102,7 @@ commit must be signed.
 | 2 | Creates `$EXO_HOME` (default `~/.exo`, mode 700) with `keys/`, `principals/` and `bin/`. |
 | 3 | Only with `--with-hermes`. Pins Hermes with `scripts/pin-hermes.sh` into `$EXO_HOME/hermes`: the latest stable tag, or `--tag`. If a patch does not apply to that tag, the installer skips it, warns, and retries. `PINNED` and `config.json` (`hermes_patch_skip`) record the skip. `--strict-patches` fails instead. At the end it prints a warning list of every patch that did not apply and exits 1. |
 | 4 | Creates a venv at `$EXO_HOME/venv` and pip installs the `exo` package with the terminal client (`exo[tui]`), then links `exo` into `~/.local/bin`. With `--with-hermes` it also installs the pinned Hermes checkout (editable). |
-| 5 | Copies the Exo plugins (every `plugins/*/plugin.yaml`, or `--plugins`) into `$EXO_HOME/plugins/`, where the standalone core discovers them, without tests. With `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME`, it also copies them into `<HERMES_HOME>/plugins/`. Each copy carries a `.exo-managed` marker. A plugin folder without the marker is never overwritten. |
+| 5 | Copies the Exo plugins (every `plugins/*/plugin.yaml`, or `--plugins`) into `$EXO_HOME/plugins/`, where the standalone core discovers them, without tests. With `--with-hermes`, `--hermes-home` or `EXO_HERMES_HOME`, it also copies them into `<HERMES_HOME>/plugins/`. Each copy carries a `.exo-managed` marker. A plugin folder without the marker is never overwritten. It also copies the skill pack (`skills/` with `MANIFEST.json`) into `$EXO_HOME/skills/`, where the core's skill index and exo-orchestra find it. `/intro` needs its `exo-intro` skill. Each pack skill is its own marked folder, so a skill you add there is kept, and a folder of yours with a pack skill's name is left alone with a warning (yours wins). An unmarked exact copy of a pack skill, say from copying `skills/` by hand, is adopted as the pack's. A link is never replaced: a `skills` folder, skill or `MANIFEST.json` that links into the checkout keeps the pack live there and is left alone. A skill the pack no longer has is removed only when its marker names it. A copy of a pack skill carries the marker of the skill it came from, so a copy or a renamed pack skill is yours: it is kept, with a warning (delete its `.exo-managed` to stop the warning). |
 | 6 | Only with `--with-hermes`. Writes `<HERMES_HOME>/config.yaml` only if it does not exist: `plugins.enabled`, `memory.provider: exo-memory`, `context.engine: exo-context`. An existing file is left alone and the lines to add are printed. |
 | 7 | Writes `$EXO_HOME/env.sh` and `$EXO_HOME/config.json`. With `--with-hermes` it also writes `$EXO_HOME/bin/exo-hermes` (runs the pinned Hermes with Exo's `HERMES_HOME`). |
 | 8 | Offers `exo init <id> --interview`. With `--principal ID` it runs without asking. Add `--answers FILE` for a scripted interview. With `--no-interview`, or without a terminal, it is skipped: memory stays off, with one quiet notice, until you run `exo init <id>`. |
@@ -111,6 +114,7 @@ commit must be signed.
 | `$EXO_HOME/hermes` | the pinned Hermes checkout (owned by `pin-hermes.sh`) |
 | `$EXO_HOME/venv` | Python for Hermes and Exo |
 | `$EXO_HOME/plugins` | plugins discovered by the standalone core |
+| `$EXO_HOME/skills` | the skill pack (marked folders and `MANIFEST.json`) beside skills you add yourself |
 | `$EXO_HOME/hermes-home` | the default optional `HERMES_HOME`: Exo-owned, separate from `~/.hermes` |
 | `$EXO_HOME/principals/<id>` | principal stores |
 | `$EXO_HOME/keys` | signing keys (0600) |
@@ -149,13 +153,13 @@ Use `--hermes-home` or `EXO_HERMES_HOME`.
 
 - Refuses a `HERMES_HOME`, Hermes checkout, venv or `EXO_HOME` inside `~/.hermes`, unless
   `--hermes-home` names it explicitly.
-- Idempotent. A second run re-checks: plugins that match are left alone, an existing store is
+- Idempotent. A second run re-checks: plugins and pack skills that match are left alone, an existing store is
   not re-created, the venv is reused, and pip is skipped when the pinned tree and the exo commit
   have not changed.
 - `pin-hermes.sh` has its own guards (see `PINNING.md`).
 
 The core refuses tool execution if no approval callback is registered, or if an approval callback fails.
-Re-run the installer to restore missing plugins. If `core_plugins` or a seat's plugins list limits what loads,
+Re-run the installer to restore missing plugins or skills. If `core_plugins` or a seat's plugins list limits what loads,
 include `exo-gate`, then restart Exo.
 
 ## Adopting an existing store

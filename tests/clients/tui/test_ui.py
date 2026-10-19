@@ -297,11 +297,11 @@ def test_boot_sequence_runs_marks_real_steps_and_ends(tmp_path, monkeypatch):
 
     async def sc(app, pilot):
         assert isinstance(app.screen, BootScreen)
-        await until(lambda: app.ready.is_set(), pilot)
-        assert set(app.boot_screen.done) == {"core", "agent", "memory", "model"}
+        await until(lambda: set(app.boot_screen.done) == {"core", "agent", "memory", "model"}, pilot)
         assert isinstance(app.screen, BootScreen)  # every step is done, but the sequence has a minimum length
+        assert not app.ready.is_set()  # boot waits for the sequence to end before a first-run screen may open
         clock.now = boot.MIN_SECONDS
-        await until(lambda: not isinstance(app.screen, BootScreen), pilot, timeout=3)
+        await until(lambda: app.ready.is_set() and not isinstance(app.screen, BootScreen), pilot, timeout=3)
         assert isinstance(app.focused, Composer)
 
     boot_run(tmp_path, sc)
