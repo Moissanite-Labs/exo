@@ -735,6 +735,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   skills users add there. Rejected: removing every marked folder the pack lacks, because that deleted copies made to
   change a skill. Rejected: shipping the pack as package data, because exo-orchestra and the documented search
   order read `$EXO_HOME/skills`.
+  *Amendment 2026-10-19 (#268):* plugins follow the same rule. A `--plugins` list removes a marked plugin folder it
+  leaves out only when the marker names that folder, so a `cp -r` copy of a plugin is kept with a warning. A marker
+  with no name line comes from an install before markers named their folder. Exo cannot tell that folder from a
+  copy, so it is kept too, and a warning names it. A selected plugin with such a marker is refreshed and its marker
+  gains the name. Rejected: treating a marker with no name as Exo's, because that deletes copies made before this
+  change. Rejected: comparing the folder with the checkout's plugin, because an older install of a plugin that has
+  changed since differs from it as much as an edited copy does.
 
 ## D-036 (2026-10-12) `exo` and `exo web` in any order share one core
 - **Why:** a live bug. `exo web` connected to `run/exod.sock`, found no `exo serve`, and the chat page showed
