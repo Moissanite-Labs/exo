@@ -35,6 +35,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from . import crypto
+from .core.private import atomic_write
 
 FILE = "registry.json"
 
@@ -100,12 +101,7 @@ class KeyRegistry:
 
     def _write(self) -> None:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        tmp = self.path.with_name(f".{FILE}.{os.getpid()}.tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(self.to_dict(), fh, indent=1, sort_keys=True)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self.path)
+        atomic_write(self.path, json.dumps(self.to_dict(), indent=1, sort_keys=True))
 
     @contextlib.contextmanager
     def _locked(self) -> Iterator[None]:

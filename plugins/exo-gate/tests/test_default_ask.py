@@ -5,6 +5,7 @@ table adds the indirection forms the audit named. The everyday table is the cost
 commands must stay `allow`, or the gate asks so often that people learn to click yes.
 """
 import json
+import shlex
 
 import pytest
 
@@ -58,6 +59,42 @@ def test_audit_table(action, category, want):
         assert c.category == category, c
     assert decide(c).outcome == want, c
     assert decide(c, load_policies(TEMPLATE)).outcome == want, c
+
+
+# A github_post deny in both forms the policy file offers (GATE.md "Known limits").
+DENY_GH = {
+    "categories": gate.normalize_policies({"gates": {"categories": {"github_post": "deny"}}}),
+    "deny-list": gate.normalize_policies({"gates": {"deny": ["github_post"]}}),
+}
+
+# (wrapper, what the card says at the cap): the outermost wrapper, not the cap (D-038, amendment for #137).
+WRAPPERS = [("bash -c", "bash runs shell commands"), ("sh -c", "sh runs shell commands"),
+            ("eval", "eval runs text as a command")]
+
+
+@pytest.mark.parametrize("policy", sorted(DENY_GH))
+@pytest.mark.parametrize("wrapper,capped", WRAPPERS, ids=[w for w, _ in WRAPPERS])
+@pytest.mark.parametrize("wrappers,category,want", [(4, "github_post", "deny"), (5, "opaque_exec", "ask")])
+def test_shell_inspection_depth_limit(policy, wrapper, capped, wrappers, category, want):
+    """Pin the documented boundary without executing the command or sending a post."""
+    command = GH
+    for _ in range(wrappers):
+        command = f"{wrapper} " + shlex.quote(command)
+    c = classify(sh(command))
+    assert c.category == category, c
+    assert "indirection" in c.signals
+    assert c.summary == (capped if wrappers > gate._DEPTH else "GitHub PR comment on #3"), c.summary
+    assert decide(c, DENY_GH[policy]).outcome == want
+
+
+def test_category_deny_sees_the_dominant_part_only():
+    """A compound line keeps its most severe part, and `categories:` applies to that category alone, so the
+    inspected post is not denied and the line asks for the delete (GATE.md "Known limits"; tracked in #191). The
+    `deny:` list matches every part (D-075), so it denies the line."""
+    c = classify(sh(f"{GH} && rm -rf build"))
+    assert c.category == "delete", c
+    assert decide(c, DENY_GH["categories"]).outcome == "ask"
+    assert decide(c, DENY_GH["deny-list"]).outcome == "deny"
 
 
 # Indirection: none of these may run without the principal. Where the gate can see inside, the inner
