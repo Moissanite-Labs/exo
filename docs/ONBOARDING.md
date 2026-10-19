@@ -15,12 +15,23 @@ a question about what you are used to (Claude Code, ChatGPT, Hermes), then topic
 mentioning `/tutorial`. It is a conversation, so ask anything. (`/handoff` also uses its own skill, `exo-handoff`, for the note's template.) A test checks every slash command in `/help`
 appears in the skill, so the two cannot drift.
 
+The installer copies the skill pack into `$EXO_HOME/skills` (`docs/INSTALL.md`, step 5). A source checkout also
+finds it in `skills/`. Before sending the turn, the client asks the core for its skills. When none is `exo-intro`
+(say, a pip install without the installer), it sends no turn, because the agent could only improvise. It shows a
+short orientation panel instead, drawn from the same facts (what Exo is, memory, three things for day one,
+`/tutorial`), with a note that running `scripts/install.sh` from a checkout adds the full one (`exo update` does
+not, on a pip or `uv tool` install). A test checks that every command the short version names exists and appears in
+the skill. If the core cannot answer, the turn is sent as before.
+
 ### First run
-`$EXO_HOME/state/onboarding.json` holds `{"onboarded": <time>, "hints_seen": [...]}`. When `onboarded` is
-missing, `exo` runs `/intro` at launch and turns tutorial mode on. The marker is written when the intro
-turn actually starts, so a crash before that shows the intro again next time. It does not run when you resume
-a session (`--resume`, `--session`), and never in tests, `exo serve` or headless runs, because only the
-`exo` entry point asks for it.
+`$EXO_HOME/state/onboarding.json` holds `{"onboarded": <time>, "intro_started": <time>, "hints_seen": [...]}`. When
+neither `onboarded` nor `intro_started` is set, `exo` runs `/intro` at launch. `intro_started` is written when that
+intro turn actually starts, so a crash before that shows the intro again next time. An intro that started but failed,
+was stopped or got no reply is not sent again at each launch: until one completes, the composer offers `/intro`
+instead. `onboarded` is written when an intro gets a real reply (not the offline fake model) or the short
+orientation shows. Until then every `/intro`, typed or taken from the composer, counts as the first run, so the one
+that completes turns tutorial mode on. The automatic intro does not run when you resume a session (`--resume`,
+`--session`), and never in tests, `exo serve` or headless runs, because only the `exo` entry point asks for it.
 - `exo --no-intro` skips it and records the home as onboarded.
 - `EXO_NO_INTRO=1` skips it for that launch and writes nothing.
 - Delete the file (or run `/tutorial reset` for tips only) to see it again.
