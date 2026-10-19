@@ -47,7 +47,7 @@ def _raw_id(raw: str | bytes) -> str:
     try:
         data = json.loads(raw)
         return data["id"] if isinstance(data, dict) and isinstance(data.get("id"), str) else ""
-    except ValueError:
+    except (ValueError, RecursionError):
         return ""
 
 
@@ -66,6 +66,8 @@ class Dispatcher:
             cmd = s.Command.from_json(raw)
         except s.ProtocolError as exc:
             return None, _fail(_raw_id(raw), exc.code, exc.message)
+        except Exception as exc:  # a decoder bug must not kill the connection or the stdio transport
+            return None, _fail(_raw_id(raw), "internal", f"{type(exc).__name__}: {exc}")
         return cmd, await self.run(cmd, caller)
 
     async def run(self, cmd: s.Command, caller: str | None = None) -> s.Response:
@@ -79,21 +81,21 @@ class Dispatcher:
 
     async def _run(self, cmd: s.Command) -> s.Response:
         body = cmd.body
-        if isinstance(body, s.Hello):
-            if body.protocol != s.PROTOCOL_VERSION:
-                return _fail(cmd.id, "protocol_mismatch", f"server speaks {s.PROTOCOL_VERSION}, client {body.protocol}")
-            result = {"protocol": s.PROTOCOL_VERSION, "server": "exod", "capabilities": SERVER_CAPABILITIES,
-                      "seq": self.hub.head(), "instance": self.hub.instance, "heartbeat": HEARTBEAT}
-            return s.Response(id=cmd.id, result=result)
-        if isinstance(body, s.EventsSubscribe):
-            # Without a stream, subscribe is a one-shot replay; HTTP clients stream from GET /events.
-            events = self.hub.since(body.since, body.session)
-            return s.Response(id=cmd.id, result={"events": [e.to_dict() for e in events], "seq": self.hub.head()})
         try:
+            if isinstance(body, s.Hello):
+                if body.protocol != s.PROTOCOL_VERSION:
+                    return _fail(cmd.id, "protocol_mismatch", f"server speaks {s.PROTOCOL_VERSION}, client {body.protocol}")
+                result = {"protocol": s.PROTOCOL_VERSION, "server": "exod", "capabilities": SERVER_CAPABILITIES,
+                          "seq": self.hub.head(), "instance": self.hub.instance, "heartbeat": HEARTBEAT}
+                return s.Response(id=cmd.id, result=result)
+            if isinstance(body, s.EventsSubscribe):
+                # Without a stream, subscribe is a one-shot replay; HTTP clients stream from GET /events.
+                events = self.hub.since(body.since, body.session)
+                return s.Response(id=cmd.id, result={"events": [e.to_dict() for e in events], "seq": self.hub.head()})
             result = await self.engine.handle(cmd, self.hub)
         except CommandFailed as exc:
             return _fail(cmd.id, exc.code, exc.message, exc.retryable)
-        except Exception as exc:  # an engine bug must not kill the connection
+        except Exception as exc:  # an engine or replay bug (since past SQLite's 64 bits) must not kill the connection
             return _fail(cmd.id, "internal", f"{type(exc).__name__}: {exc}")
         return s.Response(id=cmd.id, result=to_dict(result or {}))
 
@@ -295,13 +297,14 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
 
     async def pump(since: int, session: str | None) -> None:
         cursor.update(seq=since, session=session)
-        sub = dispatcher.hub.subscribe(since, session)
-        try:
-            async for ev in sub:
-                write(ev.to_json())
-                cursor["seq"] = ev.seq
-        finally:
-            sub.close()
+        while not dispatcher.hub.closed:  # a stream ended for lag (D-079) resumes after the last event written
+            sub = dispatcher.hub.subscribe(cursor["seq"], session)
+            try:
+                async for ev in sub:
+                    write(ev.to_json())
+                    cursor["seq"] = ev.seq
+            finally:
+                sub.close()
 
     try:
         while (line := await lines()) is not None:

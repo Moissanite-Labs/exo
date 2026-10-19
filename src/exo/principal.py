@@ -301,6 +301,7 @@ def token_path(sock: str | os.PathLike) -> Path:
 def issue(sock: str | os.PathLike, instance: str = "") -> str:
     """A fresh credential for the core serving ``sock``; any old record is replaced. The record binds the token
     to this process (pid and start identity) and launch instance in one atomic write."""
+    from exo.core.private import atomic_write
     path = token_path(sock)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     token = secrets.token_urlsafe(32)
@@ -310,12 +311,7 @@ def issue(sock: str | os.PathLike, instance: str = "") -> str:
               "will be refused", file=sys.stderr)
     record = {"v": 1, "token": token, "pid": os.getpid(), "uid": os.geteuid(),
               "start": me.ident if me else "", "instance": instance}
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(json.dumps(record) + "\n")
-    os.replace(tmp, path)
+    atomic_write(path, json.dumps(record) + "\n")
     return token
 
 

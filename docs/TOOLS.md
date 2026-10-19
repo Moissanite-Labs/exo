@@ -32,8 +32,10 @@ result.
 The similarity strategies need two or more non-blank lines. A one-line `old_string` (blank lines around it do not
 count) must match up to whitespace, escaping or Unicode. When the file's line has other text, for example
 `TIMEOUT = 45` where `old_string` says `TIMEOUT = 30`, the call fails and shows the closest lines. Before, such a
-stale edit overwrote the newer line. In `apply_patch` a hunk's context lines count toward the two, so a hunk with
-one context line can still replace a `-` line that changed since it was read.
+stale edit overwrote the newer line. In `apply_patch` a hunk's context lines count toward the two, but its `-` lines
+must match the file up to the same whitespace and Unicode tolerance (a literal `\t` too). Otherwise the hunk is
+refused, naming the hunk's line and the file's line, and no file changes (#236). Similarity places only the context
+lines, and a similarity match takes the hunk's text as sent.
 
 The rule counts lines, not exact lines. So one more line, even a lone `}` or the `def` line, lets a stale line match
 again. On a file that holds `def f():`, `    TIMEOUT = 45` and `}`, the `old_string` `    TIMEOUT = 30` plus a line
@@ -143,12 +145,13 @@ caps inline/URL payload, not remote asset download sizes; metadata and serializa
 
 ## File safety
 
-- **Writes** (`write_file`, `edit_file`, `apply_patch`) go through a fresh temp file beside the target
-  (`.<name>.exo-tmp`, created exclusively) and a rename, so a link already sitting at the temp name is never
-  followed. A write to a symlinked file is refused, and the error names the link's target: write that path instead,
-  and the link stays. Before, the rename replaced the link with a regular file and left the target unchanged.
-  `apply_patch` checks this before it writes anything, and its Delete File removes only the link, as `rm` does.
-  A hard-linked file becomes its own copy, as with any atomic rename. A symlinked parent folder is still followed.
+- **Writes** (`write_file`, `edit_file`, `apply_patch`) go through a fresh temp file beside the target (a random
+  name from `mkstemp`, created exclusively, through `exo.core.private.atomic_write`, #273) and a rename, so a link
+  planted in the folder is never followed. A write to a symlinked file is refused, and the error names the link's
+  target: write that path instead, and the link stays. Before, the rename replaced the link with a regular file and
+  left the target unchanged. `apply_patch` checks this before it writes anything, and its Delete File removes only
+  the link, as `rm` does. A hard-linked file becomes its own copy, as with any atomic rename. A symlinked parent
+  folder is still followed.
 - **Reads** (`read_file`, `edit_file`, `apply_patch`, `grep`) open regular files only. A FIFO, socket or device, or
   a link to one, is refused before it is opened (`grep` skips it), so a FIFO cannot block the core and `/dev/zero`
   cannot fill its memory. `read_file`, `edit_file` and `apply_patch` refuse files over 50 MB (`MAX_READ_BYTES`),
