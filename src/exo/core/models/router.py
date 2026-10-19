@@ -134,11 +134,23 @@ def cooldown_until(now: float, status: int | None, strikes: int, reset_at: float
     return reset_at or now + min(SOLE_TTL * 2 ** (strikes - 1), LONG_TTL)
 
 
+def merge_provider(base: Any, spec: Any) -> Any:
+    """A provider table over the entry it overrides (the catalog's, or config.json's under a seat): the keys it sets
+    win and the rest stay. A table that sets ``base_url`` uses only the ``key_env`` and ``headers`` it sets, so a key
+    or a header token never follows a new URL. A value that is not a table replaces the entry as given."""
+    if not isinstance(spec, dict):
+        return spec
+    base = base if isinstance(base, dict) else {}
+    if "base_url" in spec:
+        base = {k: v for k, v in base.items() if k not in ("key_env", "headers")}
+    return {**base, **spec}
+
+
 class Router:
     """Resolves roles to routes and streams with fallback.
 
-    ``roles`` and ``providers`` override the catalog tables. ``instances`` maps a
-    provider name to a ready Provider object (tests, plugins, the fake provider).
+    ``roles`` override the catalog roles; each ``providers`` table merges key by key over the catalog entry of
+    its name. ``instances`` maps a provider name to a ready Provider object (tests, plugins, the fake provider).
     """
 
     def __init__(self, roles: Mapping[str, list[str]] | None = None, providers: Mapping[str, dict] | None = None,
@@ -155,7 +167,9 @@ class Router:
         self.spend = spend if spend is not None else configured(selection.config, required=selection.required)
         self._spend_required, self._spend_source = selection.required, selection.source
         cat = load_catalog() if catalog is None else catalog
-        self.providers: dict[str, dict] = {**cat.get("providers", {}), **(providers or {})}
+        self.providers: dict[str, dict] = dict(cat.get("providers", {}))
+        for name, spec in (providers or {}).items():  # a partial table keeps the catalog transport, key and roles
+            self.providers[name] = merge_provider(self.providers.get(name), spec)
         self.models: dict[str, dict] = dict(cat.get("models", {}))
         self.roles: dict[str, list[str]] = {**cat.get("roles", {}), **(roles or {})}
         self.instances = dict(instances or {})
@@ -287,7 +301,7 @@ class Router:
             exe = shutil.which(spec.get("command", cls.default_command), path=self.env.get("PATH", ""))
             if exe:
                 creds = [Credential(provider, None, cls(exe, name=provider, env=self.env, **timeout))]
-        elif spec is not None:
+        elif spec is not None and spec.get("base_url") is not None:  # no base_url: no credential, the route is skipped
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
@@ -388,16 +402,15 @@ class Router:
     def route_ok(self, ref: str) -> None:
         self.breakers.pop(ref, None)
 
-    def price(self, route: Route, usage: Usage | None, input_includes_cache: bool = False) -> Usage | None:
+    def price(self, route: Route, usage: Usage | None) -> Usage | None:
         """Fill ``cost_usd`` from the catalog price of the route that served the call (USD per million tokens).
-        None stays None when the route has no price (never 0). ``input_includes_cache``: the provider counts cached
-        tokens inside ``input_tokens`` (OpenAI style), so they are charged at the cache-read rate only."""
+        None stays None when the route has no price (never 0). ``input_tokens`` is the uncached input on every
+        transport (D-080); cache reads and writes are charged at their own rates on top."""
         info = self.models.get(route.ref)
         if usage is None or usage.cost_usd is not None or not info or "input" not in info:
             return usage
         inp = info["input"]
-        fresh = usage.input_tokens - (usage.cache_read_tokens if input_includes_cache else 0)
-        cost = (max(fresh, 0) * inp + usage.output_tokens * info.get("output", 0)
+        cost = (max(usage.input_tokens, 0) * inp + usage.output_tokens * info.get("output", 0)
                 + usage.cache_read_tokens * info.get("cache_read", inp * 0.1)
                 + usage.cache_write_tokens * info.get("cache_write", inp * 1.25)) / 1e6
         return Usage(**{**vars(usage), "cost_usd": round(cost, 8)})
@@ -560,7 +573,7 @@ class Router:
             if ev.kind in ("text", "reasoning", "tool_call"):
                 started = True
             elif ev.kind in ("usage", "done"):
-                ev.usage = self.price(route, ev.usage, getattr(cred.provider, "input_includes_cache", False))
+                ev.usage = self.price(route, ev.usage)
                 ev.route = route.ref  # the route that served this call, after any fallback
                 if ev.kind == "done":
                     note("ok")
@@ -573,7 +586,7 @@ class Router:
 
     def _exhausted(self, role: str, tried: list[str], last: ProviderEvent | None) -> ProviderEvent:
         now = self.clock()
-        waits = [cd.until - now for cd in self.cooldowns.values() if cd.until > now]
+        waits = [until - now for until, _, _ in self._chain_cooldowns(role, now)]
         wait = min(waits) if waits else None
         if not self.chain(role):
             return error_event(f"no model configured for role {role!r}; use /providers and choose a default model",
@@ -589,21 +602,26 @@ class Router:
         return error_event(f"all routes for {role!r} failed or are cooling down{why}{hint}",
                            last.status if last is not None else 429, retryable=True, retry_after=wait)
 
+    def _chain_cooldowns(self, role: str, now: float) -> list[tuple[float, str, Cooldown]]:
+        """Live cooldowns that bear on ``role``: a credential of a chain provider, or a credential|model cooldown on a
+        model of the chain. A gate side call (D-081) cools a model this role never asks, and another provider's
+        cooldown says nothing about this role's routes, so neither moves the wait hint or the refusal."""
+        routes = {(r.provider, r.model) for r in self.chain(role)}
+        out: list[tuple[float, str, Cooldown]] = []
+        for key, cd in self.cooldowns.items():
+            cred, scoped, model = key.partition("|")
+            name = cred.partition("#")[0]
+            if cd.until > now and ((name, model) in routes if scoped else any(name == n for n, _ in routes)):
+                out.append((cd.until, name, cd))
+        return out
+
     def _refused(self, role: str, tried: list[str], last: ProviderEvent | None,
                  now: float) -> tuple[int | None, str] | None:
         """Status and message when waiting cannot help: the provider refused the key or login (401, 402, 403; on a
         later call too, while that credential, or a model of the chain on it, reopens first), or a local server is
         not running."""
         if last is None:  # nothing ran: the first of this chain's cooldowns to reopen holds the cause
-            routes = {(r.provider, r.model) for r in self.chain(role)}
-            cooling: list[tuple[float, str, Cooldown]] = []
-            for key, cd in self.cooldowns.items():
-                cred, scoped, model = key.partition("|")
-                name = cred.partition("#")[0]
-                # A credential|model cooldown counts only for a model of this chain. A gate side call (D-081) cools a
-                # model this role never asks, and that model's refusal says nothing about this role's routes.
-                if cd.until > now and ((name, model) in routes if scoped else any(name == n for n, _ in routes)):
-                    cooling.append((cd.until, name, cd))
+            cooling = self._chain_cooldowns(role, now)
             _, name, cd = min(cooling, key=lambda c: c[0], default=(0.0, "", Cooldown()))
             status, err = cd.status, cd.error or f"HTTP {cd.status}"
         else:

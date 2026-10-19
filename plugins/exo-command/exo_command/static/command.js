@@ -90,7 +90,7 @@ export function mount(app) {
         h("div", { class: "xc-card-top" }, h("h3", null, a.summary), h("div", { class: "xc-tags" }, pill(a.risk + " risk", a.risk === "high" ? "alert" : "warn"))),
         a.call ? h("div", { class: "xc-tool" }, h("span", null, "tool"), " ", a.call.name) : null,
         a.call ? h("pre", { class: "xc-pre-body xc-args" }, JSON.stringify(a.call.arguments || {}, null, 2)) : null,   // the whole call, never cut or boxed: a redraw resets a scroll box
-        h("div", { class: "xc-foot" }, h("span", null, "asked " + ago(a.requested_at)), a.session_title ? h("span", null, a.session_title) : null, choices(a)));
+        h("div", { class: "xc-foot" }, h("span", null, a.requested_at ? "asked " + ago(a.requested_at) : ""), a.session_title ? h("span", null, a.session_title) : null, choices(a)));
     })) : empty("No approvals waiting.", "When an agent asks before it acts, the request shows here and in Chat.");
     return panel("approvals", "Approvals", "answered here or in any other client", body, d.ok === false ? d.error : null);
   }
@@ -178,7 +178,8 @@ export function mount(app) {
         h("tbody", null, d.top.map(function (s) {
           return h("tr", null, h("td", { title: s.session_id }, short(s.title || s.session_id, 48)), h("td", null, s.seat), h("td", null, short(s.models.join(", "), 28)),
             h("td", { class: "xc-num" }, tok(s.input_tokens) + " / " + tok(s.output_tokens)), h("td", { class: "xc-num" }, s.messages),
-            h("td", { class: "xc-num" + (s.priced ? "" : " xc-faint") }, s.priced ? usd(s.cost_usd) : "unpriced"), h("td", { class: "xc-dim" }, ago(s.last_activity)));
+            h("td", { class: "xc-num" + (s.priced && !s.rolled_up ? "" : " xc-faint"), title: s.rolled_up ? "Counted in its parent session's cost" : null },
+              s.priced ? usd(s.cost_usd) : "unpriced", s.rolled_up ? " in parent" : null), h("td", { class: "xc-dim" }, ago(s.last_activity)));
         })))));
     return panel("costs", "Cost per session", "last " + d.window_days + "d, " + usd(d.total_usd) + " over " + d.priced_sessions + " priced sessions", body);
   }
