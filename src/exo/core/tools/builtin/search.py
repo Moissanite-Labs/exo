@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from exo.core.tools.builtin.patch import read_regular
 from exo.core.tools.registry import Registry, ToolContext, ToolError
 from exo.gate import StoreSkip
 
@@ -108,10 +109,8 @@ def grep(args: dict[str, Any], ctx: ToolContext) -> str:
         if include and not _matches(rel, include):
             continue
         try:
-            if p.stat().st_size > MAX_FILE_BYTES:
-                continue
-            raw = p.read_bytes()
-        except OSError:
+            raw = read_regular(p, MAX_FILE_BYTES)  # skips FIFOs and devices, which would block or never end
+        except (OSError, ToolError):
             continue
         if b"\x00" in raw[:8192]:
             continue

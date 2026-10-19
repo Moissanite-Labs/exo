@@ -18,16 +18,32 @@ Whitepaper changes are not part of the commit. They are batched per wave, and th
 whitepaper still lacks. `tests/docs/test_docs_map.py` fails when a `## D-0NN` heading has no row in the map, or when
 the map links a file that does not exist.
 
+**The four layers.** Each change can touch up to four kinds of doc, for four kinds of reader:
+
+- **Whitepaper** (`docs/WHITEPAPER.md`): the long paper. What Exo is, why it is built this way, and what is built
+  versus designed. For someone deciding whether to trust the design.
+- **User guide** (`docs/USER-GUIDE.md`): what a person types, presses and sees, in task order.
+- **Developer guide** (this file): how to extend, test and land a change, with pointers.
+- **Technical docs** (the other `docs/*.md` pages, plus `DECISIONS.md`): the reference for one part: fields, rules,
+  files, the reason for each choice.
+
+**The map.** In `docs/DOCS-MAP.md` each cell for a layer holds a file plus section, `n/a` (the layer does not apply
+to this change), or `MISSING`. A cell stays `MISSING` only when the feature is not on main yet or the layer has
+nothing real to say about it. Do not fill a cell with a vague link to make the gap vanish. The whitepaper is
+batched per wave: each batch is a new version (`vX.Y`), with its own header, changelog line and tag (section 8).
+
 ## 1. Repo layout
 
 | Path | What lives there |
 |---|---|
 | `src/exo/core/` | The core: loop, engine, router, tools, sessions, context tree, approvals, ingress, jobs, plugin loader. Small on purpose. |
-| `src/exo/compose.py` | Builds the engine `exo serve` runs and attaches what lives outside the core: peers, the scheduler, learning. |
+| `src/exo/compose.py` | `create()`, the factory `exo serve` runs: config, seat, executor, plugins. It attaches what lives outside the core: peers, the scheduler, learning. |
 | `src/exo/peers.py`, `src/exo/scheduler.py` | The peer transport (D-026) and scheduled jobs (D-022), outside the core since D-067. |
 | `src/exo/protocol/` | The wire protocol: `schema.py` (commands and events), `client.py`, `export.py`, `generated/`. |
 | `src/exo/server/` | The server that carries the protocol (Unix socket, TCP with a token, or stdio). |
-| `src/exo/*.py` | The generic mechanism: store, ledger, crypto, gate, capture, consolidate, eval, brief, onboard, CLI. |
+| `src/exo/diagnostics.py` | The read-only views (`/context`, `/compact`, `/trace`, `/findings`, handoff facts) and the built-in `command.run` names, as functions over the engine. |
+| `src/exo/subagents.py` | List, open, steer and stop a running subagent (D-070). |
+| `src/exo/*.py` | The rest of the generic mechanism: store, ledger, crypto, gate, capture, consolidate, eval, brief, onboard, CLI. |
 | `src/exo/learn/` | The learning loop (`docs/LEARNING.md`). |
 | `src/exo/baseline/` | The house taste (D-044): pack loader, taste layers, privacy check, `exo taste export-house` (`docs/TASTE-BASELINE.md`). |
 | `plugins/` | The six plugins: `exo-memory`, `exo-context`, `exo-gate`, `exo-bus`, `exo-command` (web), `exo-orchestra`. |
@@ -38,6 +54,21 @@ the map links a file that does not exist.
 | `tests/` | The root suite. Plugin suites live in each plugin's `tests/`. |
 | `site/` | The project site. `docs/WHITEPAPER.md` is the long paper. |
 | `DECISIONS.md` | Every significant choice: what, why, what was rejected. |
+
+**The compose and diagnostics split (#46, `docs/ENGINE-SPLIT.md` "Progress").** `exo.compose:create` builds the
+engine that `exo serve` runs; `exo.core.engine:create` forwards to it. The diagnostic views and the built-in
+`command.run` names live in `src/exo/diagnostics.py`, outside the counted core. The rule for contributors: new wiring
+goes in compose, new read-only views go in diagnostics, and neither goes into `CoreEngine`. These modules still read
+some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the split will replace with public queries.
+
+**The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the
+lines in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py`
+(generated protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
+`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the
+headroom left (run it with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the
+rules (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on
+the engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol
+has its own cap (section 2).
 
 **Core, plugins, clients.** The core does the work and holds the state. Plugins add tools, commands, hooks, a memory
 provider, a context engine, channels and skills. Clients only speak the protocol. A client never reads another
@@ -71,9 +102,10 @@ Source of truth: `src/exo/protocol/schema.py`. Commands go in, events come out, 
 client resumes with `events.subscribe(since=seq)`. Reference: `docs/CORE-V2-INTERFACES.md` and
 `docs/STANDALONE.md` section 5.
 
-The protocol is capped at 30 commands and under 30 events. A test enforces it. All 30 command slots are used, so
-a new feature does not get a new command type. Add a field to an existing type, or add a built-in
-`command.run` command (below).
+The protocol is capped at 30 commands and under 30 events. `MAX_COMMANDS` and `MAX_EVENTS` in `schema.py` make
+registering a 31st type raise an error, and `tests/protocol/test_schema.py` keeps events under 30. All 30 command
+slots and all 29 event slots are used, so a new feature does not get a new command or event type. Add a field to an
+existing type, or add a built-in `command.run` command (below).
 
 The 30 commands:
 
@@ -87,9 +119,9 @@ The 30 commands:
 | Learning and panels | `taste.list`, `taste.edit`, `feedback.send`, `ui.respond` |
 | Scheduling and peers | `schedule.edit`, `peers` |
 
-The events (28 of the 29 allowed): `session.created`, `session.updated`, `turn.started`, `turn.completed`,
+The 29 events (every slot): `session.created`, `session.updated`, `turn.started`, `turn.completed`,
 `message.delta`, `message.completed`, `reasoning.delta`, `tool.started`, `tool.output`, `tool.completed`,
-`approval.requested`, `approval.resolved`, `question.asked`, `context.compacted`, `memory.summarized`,
+`approval.requested`, `approval.resolved`, `steer.cancelled` (D-045), `question.asked`, `context.compacted`, `memory.summarized`,
 `job.updated`, `handoff.written`, `task.updated`, `usage.updated`, `decision.queued`, `taste.updated`, `ui.panel`,
 `peer.message`, `peer.delivery`, `model.call`, `harness.error`, `notice`, `error`.
 
@@ -122,17 +154,33 @@ After any change to the schema, regenerate the exports and commit them:
 
 `command.run` takes `name`, `args` and `session`. The core answers a few names itself, in
 `builtin_command` in `src/exo/diagnostics.py`: `context`, `compact`, `trace`, `findings`,
-`handoff_facts`, `harness_error`, `memory_status`, `subagent` (list, open, steer and stop a running child, with the rules in
+`handoff_facts`, `harness_error`, `memory_status`, `providers` (status, or `reload [name]`, D-034), `subagent` (list, open, steer and stop a running child; the rules live in
 `src/exo/subagents.py`, outside the counted core, D-070), `unsteer` (pull a queued steer message back; args is its id, empty means the
 newest; publishes `steer.cancelled`, D-045) and `rename` (set the session title; principal only; publishes
-`session.updated`, D-069). Anything else goes to a command a plugin registered. To add one:
+`session.updated`, D-069). `builtin_command` returns `MISSING` for a name it does not know, so a plugin command
+gets its turn. Anything else goes to a command a plugin registered. To add one:
 
-1. For a core command, add a branch in `_builtin_command` and an entry in `_commands_list` so it shows in
-   `commands.list`. Return a string, dict or list.
-2. For a plugin command, call `ctx.register_command(name, handler, description=..., args_hint=...)` (section 4).
+1. **A core command.** Add a branch in `builtin_command` (`src/exo/diagnostics.py`). If it is more than a few lines,
+   put the logic in a module outside the core, as `subagents.command` does, and call it from the branch.
+   - Check who is asking with `is_principal(current_caller())` (`src/exo/principal.py`). For an action only the
+     principal may take, raise `CommandFailed("forbidden", ...)` (D-052).
+   - Raise `CommandFailed("bad_request", ...)` for missing or bad arguments.
+   - Announce a state change with an event that already exists, for example `session.updated` as `rename` does. Do
+     not add an event type.
+   - Return a string, a dict or a list. A client gets it as `{"output": ...}`.
+   - List it in `_commands_list` (`src/exo/core/engine.py`) only if a person should see it in menus. Today that is
+     `context`, `compact`, `trace` and `findings`. Commands for clients to call (`rename`, `subagent`) stay off it.
+2. **A plugin command.** Call `ctx.register_command(name, handler, description=..., args_hint=...)` (section 4).
    The handler gets the raw argument string.
-3. For a TUI command, add a row to the `COMMANDS` table in `clients/tui/exo_tui/app.py`. `/help` is built from it.
-   A test checks that every command in `/help` appears in `skills/exo-intro/SKILL.md`, so update the skill too.
+3. **A TUI command.** Add a row to the `COMMANDS` table in `clients/tui/exo_tui/app.py`, and a branch in
+   `ExoApp.slash` if the client does the work. `/help` is built from the table. A test checks that every command in
+   `/help` appears in `skills/exo-intro/SKILL.md`, so add its line to the skill too.
+4. **Tests and docs.** `tests/core/test_rename.py` is a good model: it covers the principal path, the `forbidden`
+   path, bad arguments, the published event and menu completion. Then add a row to `docs/COMMANDS.md` (and to the user guide's
+   command table if a person types it).
+
+Worked examples: `rename` (D-069) is a short branch with a principal check and an existing event. `subagent` (D-070)
+is a thin branch that calls `src/exo/subagents.py`, which holds the rules and adds no protocol command or event.
 
 ## 3. Add a tool
 
@@ -254,6 +302,12 @@ user message into role `other`, which the capture extractors skip. A new way for
 `meta.author` itself (pass it as `meta` to `loop.send`, or set it on the stored `Message`), never derive it from
 the text. A new ledger writer that records the principal's words writes them under a principal id; anything the
 agent decides on its own is written under the agent's name.
+
+**State files (#273).** Write a file that replaces an earlier one with `exo.core.private.atomic_write(path, data)`.
+It writes a temporary file that `mkstemp` makes in the same folder, fsyncs it and renames it over the path. The mode
+is 0600 unless you pass `mode` (`None` gives what a plain open gives). A file written many times a minute, such as
+a cursor or a cache, can pass `sync=False` to skip the fsync. Do not write `<file>.tmp` and rename it, and do not
+open the final name for writing: a symlink planted at either name turns the write into a write to another file.
 
 ## 5. Add a seat
 
@@ -425,25 +479,64 @@ Private data and secrets never go in the repo. The principal store is separate f
 
 ### Cutting a release
 
-Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). To release Exo: bump the version in
-`pyproject.toml` and the files that section lists, move `[Unreleased]` in `CHANGELOG.md` under a new
-`[X.Y.Z] (codename) - date` heading, run the suites (`tests/test_versioning.py` fails if they drift), merge, then tag
-main with an annotated `exo-vX.Y.Z`. Site deploys take `--version`; see `scripts/deploy-site.sh`.
+Names, branches and tags are in [`docs/VERSIONING.md`](VERSIONING.md). Four things are versioned on their own.
+
+**Exo** (SemVer, tag `exo-vX.Y.Z`, with a codename per MAJOR: `exo 0.2.0 (egg)`).
+
+1. Merge the work. Pick the next version: MINOR for a milestone, PATCH for fixes only.
+2. Bump the number in `pyproject.toml` and the files that VERSIONING section 1 lists (`src/exo/__init__.py`,
+   `clients/tui/pyproject.toml`, `plugins/*/plugin.yaml`, `plugins/exo-command/exo_command/__init__.py`, `uv.lock`).
+3. In `CHANGELOG.md`, move `[Unreleased]` under a new `[X.Y.Z] (codename) - date` heading.
+4. Run the root suite and the plugin suites. `tests/test_versioning.py` fails if the version files or the changelog drift.
+5. After the merge, sign the tag on main with `git tag -s exo-vX.Y.Z -m "one-line summary"` and push the tag.
 
 **Signing releases (D-073).** Users who set `update.require_signed` (`docs/INSTALL.md`) accept only commits signed
 by a key in `trust/allowed_signers`, in the format `ssh-keygen -Y verify` reads: `<principal> <key type> <public key>`,
 one per line (add `namespaces="git"` after the principal to limit the key to git). Sign the commits that land on
 main (`git config gpg.format ssh`, `git config user.signingkey ~/.ssh/<key>.pub`, `git config commit.gpgsign true`;
-for merges made on GitHub, use a merge you sign locally, since GitHub's web signature is not an SSH key). Also sign the
-tag, `git tag -s exo-vX.Y.Z`, for people who check it by hand. To change keys, add the new key in a commit signed by an
-old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the list. `--pin-trust`
-refuses a new list unless the commit that set it on main (the merge, if it came in through one) carries a good
-signature from a key the user already pinned. Never remove the
-old key from the list in the same commit that the old key must sign.
+for merges made on GitHub, use a merge you sign locally, since GitHub's web signature is not an SSH key). The signed
+tag of step 5 is for people who check it by hand. `exo update` checks the commit. To change keys, add the new key in
+a commit signed by an old key, announce it, and have users run `exo update --pin-trust @{u}` after reviewing the
+list. `--pin-trust` refuses a new list unless the commit that set it on main (the merge, if it came in through one)
+carries a good signature from a key the user already pinned. Never remove the old key from the list in the same
+commit that the old key must sign.
+
+**The site** (`site-vMAJOR.MINOR`). MAJOR is for a redesign. MINOR goes up per production deploy.
+
+1. Deploy to staging first. A staging candidate may carry `--version site-vX.Y-rc.N`.
+2. Before production, archive the outgoing version: branch `archive/site-vX.Y` and a local tarball.
+3. Run `scripts/deploy-site.sh --prod --version site-vX.Y`. It refuses if the tag exists, then tags the deployed commit.
+
+**The whitepaper** (`whitepaper-vX.Y`).
+
+1. Edit `docs/WHITEPAPER.md` and update the version and month in its header line, the line after the title, which
+   reads `Version X.Y, Month YYYY. Aska Digital.`. The page takes both from that line only, and the build stops with
+   a message if the line is missing or reworded.
+2. Run `python3 scripts/build_whitepaper.py` to regenerate `site/whitepaper/index.html`. Never edit the HTML by hand:
+   `tests/docs/test_build_whitepaper.py` fails when the committed page differs from a fresh build.
+3. Add a line to `CHANGELOG.md`.
+4. Tag `whitepaper-vX.Y` only when the paper is published, meaning deployed to production. A merged but unpublished
+   draft has no tag.
+
+**The house taste pack** (`house-vX.Y.Z`). The version is `"version"` in `src/exo/baseline/house-taste/MANIFEST.json`.
+Export with `exo taste export-house --version X.Y.Z`, review and tick the pack, then tag `house-vX.Y.Z`.
+
+### The local-first workflow
+
+1. Build each change on its own local branch, one change per branch. Prefixes are in VERSIONING section 6 (`feat/`,
+   `fix/`, `docs/`, `chore/`, and so on).
+2. When several changes are ready, the principal tests them together on the canary seat, from a local integration
+   branch named like `test/local-round-N`. Nothing goes to GitHub before that.
+3. Then open one pull request per change. A reviewer reads it and merges to `main`.
+4. Site changes deploy to staging first (D-047, D-055) and to production only with `--prod`.
+5. Whitepaper and site tags come at publication, not at merge.
+
+Unmerged work counts as in progress, even when it was tested locally (`docs/SITE-STATUS.md`). Do not describe it as
+built in any doc.
 
 ## 9. Recipes
 
-Short, working patterns for four things people ask about. Each one names the file to read next.
+Short, working patterns for things people ask about. Each one names the file to read next.
 
 ### Open a panel from a tool
 
@@ -530,6 +623,45 @@ when a subscription is only reachable through the vendor's own login. The rules:
 6. Test with a fake script on `PATH` (`tests/core/models/test_muse_cli.py`). No network, no real keychain.
 7. Add the vendor's login and logout commands to the gate's credential rules.
 
+### Work with subagents
+
+A subagent is a child session the agent starts with the `delegate` tool (`src/exo/core/agents/delegate.py`). The
+parent's tool call turns each task into a typed brief (`exo.wire`, SYM-2P), runs a child loop on the same engine with
+a narrower toolset (`BLOCKED_TOOLS` lists what it never gets), and returns one receipt per child. Detail:
+`docs/AGENT-WIRE.md` section 6.
+
+- **Tiers.** Each child runs on `fast`, `standard` or `deep`, the cheapest that fits. A task item may carry `tier`.
+  Otherwise its role picks one (`delegation.role_tiers`). A child never runs above its parent's tier unless
+  `delegation.allow_upgrade` is true, and a failed child is retried once one tier up (`delegation.escalate_on_fail`).
+  A seat can run on a tier with `[models] tier = "fast"` in its seat file (`docs/SEATS.md`).
+- **Limits** (`Limits` in `delegate.py`): depth 1 (flat), 10 tasks per call, 4 running children at once, 24 tool
+  rounds, 200,000 tokens and 900 seconds per child. Cancelling the parent's tool call interrupts every child.
+- **The wire.** Check or read a packet with `exo wire check` and `exo wire render` (`docs/COMMANDS.md`). Models only
+  ever read the English form.
+- **Control (D-070).** The built-in `command.run` name `subagent` has the verbs `list`, `open`, `send` and `stop`, and
+  lives in `src/exo/subagents.py`. Through this built-in only the principal may act: `command()` calls `steer` and
+  `stop` without `by`, so the parent-session path (`by=<parent session id>`, which speaks as `delegate`, D-040) is
+  in the rules but nothing on main calls it yet. Anyone else gets `forbidden`. A finished child answers `conflict`.
+  A note typed by the principal is stored with author `principal`. The receipt records "steered by principal" or
+  "stopped by principal". The built-in is not the only path: a child is a session, so any local caller can still steer
+  it with `turn.send` or stop it with `turn.interrupt` on its session id (D-070 "Limits"). Such a note is stored with
+  that caller's author and leaves no mark on the receipt.
+  Tests: `tests/agents/test_delegate.py` and `tests/clients/tui/test_subagents.py`.
+
+### Set up a provider from a client
+
+One engine, `src/exo/providers_setup.py` (D-034), sits behind `exo providers` (`src/exo/providers_cmd.py`), the TUI
+`/providers` panel and the web Providers page. Reuse it. Do not write a second key path.
+
+- **Keys are write-only.** No function there returns a stored value. A key never goes through `config.set` or any
+  protocol command. A client reads the masked field, calls `set_key`, and shows only status.
+- **After a client stores a key**, it sends `command.run` with name `providers` and args `reload <name>`. The core
+  re-reads its credentials without a restart (`reload` of an unknown name is `not_found`). `providers` with no
+  arguments returns the status rows.
+- To add a provider, wire it as in "Add a CLI-backed provider" (rows and `test_provider` in `providers_setup.py`).
+
+User-facing steps: `docs/PROVIDERS.md` "Set up with the app or the TUI".
+
 ### Use the bus
 
 The bus carries signed, hash-chained messages between seats. Reference: `plugins/exo-bus/README.md` and
@@ -569,6 +701,75 @@ treat input from a peer as an approval (`docs/GATE.md`, `docs/PEERS.md`).
 From a shell: `python -m exo.bus keygen|post|inbox|tail|thread|verify|relay|registry|checkpoint` (flags in
 `src/exo/bus/cli.py`). Tests: `tests/bus/` runs a relay in a temp folder. Use a bus address that goes nowhere for
 plugin tests, as section 7 says.
+
+### Write to the signed ledger
+
+The ledger is a signed, hash-chained SQLite log (`src/exo/ledger.py`). Reference: `docs/CORE.md` "Python API".
+
+```python
+from exo import crypto
+from exo.ledger import Ledger
+
+led = Ledger(store.ledger_path, crypto.Signer("agent-one", key))   # no signer: read only
+ev = led.append("note", {"text": "hello"}, "agent-one", session="s1", refs=[])
+led.verify(trusted)       # recomputes ids, chain links and signatures; returns {"ok": ..., "checked": ..., ...}
+```
+
+- `append(kind, body, author, session, refs)` signs and stores one event. Kinds are listed in `docs/CORE.md`.
+  Triggers make the table append-only.
+- `verify(trusted)` takes a map of author to allowed public keys, or a `KeyRegistry` (`src/exo/keyring.py`). An event
+  signed by a key the registry does not pin for that author fails (D-040).
+- **Head anchors.** `append` also writes the current head to anchor files outside the database, and `verify` checks
+  them, so a ledger cut short or rolled back fails. `Ledger.anchor()` writes them by hand for an older store.
+- **Do not open a signing ledger directly in product code.** Use `open_writable_ledger(path, author, key_path)` from
+  `exo.ledger_authority.factory`, as `onboard.py`, `ask.py` and `consolidate.py` do. With
+  `EXO_LEDGER_AUTHORITY_REQUIRED=1` a `Ledger` built with a signer raises, and the factory routes the append to the
+  installed authority instead (`docs/LEDGER-AUTHORITY.md`).
+- Only a principal author's events count as the principal's words (D-040). Write the principal's words under a
+  principal id, and nothing else under it.
+
+### Use retrieval
+
+`exo.retrieve.assemble(store, query, budget=1500, ranker=None)` returns an `Assembly` with `text`, `node_ids` and
+`tokens`: the best nodes packed under a token budget. The `Ranker` protocol is the seam: an object with
+`rank(store, query) -> [(node_id, score)]`. The default is `BM25Ranker`, which calls `store.find`. To change how nodes
+are chosen, write a `Ranker` and pass it in. Do not edit `assemble`. The same call backs `exo ctx`.
+
+Only this much is built. The staged pipeline in `docs/STORE-V2.md` section 3 (pack, router pins, BM25 plus embedding
+candidates, fusion, a budget fill) is designed, not built, and its signature there differs from the code. Test with a
+made-up store, as in `tests/`.
+
+### Track upstream
+
+Code lifted from an upstream project (Hermes) is recorded so we can see what changed there since we took it. Reference:
+`docs/STANDALONE.md` section 3 and `docs/PINNING.md`.
+
+1. Start the lifted file with the one-line header `# Lifted from NousResearch/hermes-agent <path> @ <commit> (MIT,
+   Copyright (c) 2025 Nous Research). See PROVENANCE.toml.`
+2. Add a `[[module]]` entry for it to `PROVENANCE.toml` (or to a `PROVENANCE*.part.toml` file, then run
+   `exo upstream merge`). `tests/upstream/test_provenance.py` fails when a file with the header has no entry, or an
+   entry's `exo` path does not exist.
+3. `exo upstream report` ranks upstream changes since each recorded commit. After you port or refuse them, run
+   `exo upstream mark <exo-path> --commit SHA` (add `--rejected REASON` for a refusal). A commit only moves forward.
+4. `exo upstream check` validates the file against the tree. Flags are in `docs/COMMANDS.md`.
+
+### Schedule a job
+
+A scheduled job is a prompt on a timer (`docs/SCHEDULE.md`, D-022). The scheduler is `src/exo/scheduler.py`
+(`Scheduler`), outside the core since D-067. `exo.compose` attaches it (`attach_scheduler=Scheduler`) and the engine
+holds it as `engine.scheduler`. An engine built without composition has none, and `schedule.edit` answers
+`unsupported` there. `exo serve` runs its timer.
+
+- **Create and manage** with the protocol command `schedule.edit`: `action` is `list`, `add`, `remove`, `pause`,
+  `resume` or `run_now`, with `when` (cron or `every 30m`), `prompt`, `title`, `seat`, `tier` and `deliver`. The web
+  Schedule page calls it through `POST /api/schedule` (`plugins/exo-command/exo_command/api.py`). There is no TUI
+  command and no agent tool for it. The name `cronjob_manage` is only in the gate's category table and the
+  subagent blocked list.
+- **Run.** Each run is an ordinary turn (D-041) in a fresh session of kind `scheduled`: the same context tree, memory
+  provider, soul refresh and hooks, with the job's model tier, a narrowed toolset and an unattended-job prompt. It
+  reports through `task.updated` and a `notice`. The gate still applies, so an approval can stall a run.
+- Jobs live in `$EXO_HOME/schedule.sqlite`. A one-shot engine, such as a test, does not run the timer, so drive
+  `Scheduler` directly in tests. Set `schedule` to `false` in `config.json` to turn it off.
 
 ### Work on the learning loop
 
