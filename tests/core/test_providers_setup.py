@@ -186,6 +186,16 @@ def test_rows_status_shapes(monkeypatch, tmp_path):
     assert ps.any_ready(r, prober=lambda url: "11434" in url) is True
 
 
+def test_rows_provider_without_base_url_cannot_answer_even_with_its_key(monkeypatch):
+    monkeypatch.setattr(ps.shutil, "which", lambda name, path=None: None)
+    r = Router(catalog={"providers": {}, "models": {}, "roles": {}}, env={"MINE_API_KEY": FAKE},
+               providers={"mine": {"transport": "openai", "key_env": "MINE_API_KEY"}}, roles={"main": ["mine:m"]})
+    [row] = ps.rows(r, probe_local=False)
+    assert (row["key"], row["source"], row["status"], row["ready"]) == ("found", "env", "no base_url", False)
+    assert r.credentials("mine") == [] and ps.any_ready(r, prober=lambda url: False) is False
+    assert "no base_url" in ps.render([row]) and FAKE not in ps.render([row])
+
+
 # ---------------------------------------------------------------- live test
 
 

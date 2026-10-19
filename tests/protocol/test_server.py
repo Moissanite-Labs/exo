@@ -217,6 +217,118 @@ def test_stdio_lines():
     assert events[0]["type"] == "session.created"
 
 
+MALFORMED = [
+    (json.dumps({"id": "m1", "type": [], "body": {}}), "m1", "unknown_command"),
+    (json.dumps({"id": "m2", "type": {}, "body": {}}), "m2", "unknown_command"),
+    (json.dumps({"id": "m3", "type": "events.subscribe", "body": {"since": "5"}}), "m3", "bad_body"),
+    (json.dumps({"id": "m4", "type": "session.undo", "body": {"session": "s", "turns": 1.5}}), "m4", "bad_body"),
+    ("[" * 100_000, "", "bad_json"),
+]
+
+
+def test_malformed_command_over_http_gets_a_typed_reply(sock_dir):
+    async def main():
+        srv, where = await _start(sock_dir)
+        try:
+            # Raw first: the connection must carry a full reply, not close empty.
+            r, w = await asyncio.open_unix_connection(where["socket"])
+            body = MALFORMED[0][0].encode()
+            w.write(b"POST /command HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+            await w.drain()
+            raw = await asyncio.wait_for(r.read(), 5)
+            w.close()
+            async with Client(**where) as c:
+                replies = [await c.send_raw(text) for text, _id, _code in MALFORMED]
+                hello = await c.call(s.Hello(client="t"))
+            return raw, replies, hello
+        finally:
+            await srv.close()
+
+    raw, replies, hello = _run(main())
+    head, _, payload = raw.partition(b"\r\n\r\n")
+    # Every Response, an error one too, rides on HTTP 200, so the client keeps its typed code.
+    assert head.startswith(b"HTTP/1.1 200")
+    first = s.Response.from_json(payload)
+    assert (first.id, first.ok, first.error.code) == ("m1", False, "unknown_command")
+    assert [(r.id, r.ok, r.error.code) for r in replies] == [(i, False, code) for _t, i, code in MALFORMED]
+    assert hello["protocol"] == s.PROTOCOL_VERSION
+
+
+def test_stdio_keeps_serving_after_a_malformed_line():
+    async def main():
+        d = Dispatcher(EchoEngine())
+        lines = [s.Command.of(s.SessionCreate(title="x"), id="c1").to_json(),
+                 *(text for text, _id, _code in MALFORMED),
+                 s.Command.of(s.SessionList(), id="c9").to_json()]
+        out: list[str] = []
+
+        async def read():
+            return lines.pop(0) if lines else None
+
+        await serve_lines(d, read, out.append)
+        return [json.loads(x) for x in out if '"ok"' in x]
+
+    replies = asyncio.run(asyncio.wait_for(main(), 10))
+    assert [r["id"] for r in replies] == ["c1", *(i for _t, i, _code in MALFORMED), "c9"]
+    assert replies[0]["ok"] and replies[-1]["ok"]
+    assert [r["error"]["code"] for r in replies[1:-1]] == [code for _t, _i, code in MALFORMED]
+
+
+def test_dispatcher_answers_a_decoder_bug_instead_of_raising(monkeypatch):
+    def broken(raw):
+        raise TypeError("decoder bug")
+
+    monkeypatch.setattr(s.Command, "from_json", broken)
+    cmd, resp = asyncio.run(Dispatcher(EchoEngine()).dispatch(json.dumps({"id": "c1", "type": "hello", "body": {}})))
+    assert cmd is None and resp.id == "c1" and not resp.ok
+    assert resp.error.code == "internal" and "TypeError: decoder bug" in resp.error.message
+
+
+# A since past SQLite's 64-bit range is a well-typed int, so it decodes, but the durable log cannot read it.
+HUGE_SINCE = [(f"h{i}", json.dumps({"id": f"h{i}", "type": "events.subscribe", "body": {"since": n}}))
+              for i, n in enumerate([2**63, -2**63 - 1, 10**40])]
+
+
+def _durable_hub():
+    from exo.core.engine import SqliteLog
+    from exo.core.sessions import SessionStore
+
+    return Hub(SqliteLog(SessionStore()))
+
+
+def test_a_replay_fault_over_stdio_is_a_typed_reply_and_the_transport_lives():
+    async def main():
+        d = Dispatcher(EchoEngine(), hub=_durable_hub())
+        lines = [text for _id, text in HUGE_SINCE] + [s.Command.of(s.SessionList(), id="c9").to_json()]
+        out: list[str] = []
+
+        async def read():
+            return lines.pop(0) if lines else None
+
+        await serve_lines(d, read, out.append)
+        return [json.loads(x) for x in out if '"ok"' in x]
+
+    replies = asyncio.run(asyncio.wait_for(main(), 10))
+    assert [r["id"] for r in replies] == [i for i, _t in HUGE_SINCE] + ["c9"]
+    assert all(r["error"]["code"] == "internal" for r in replies[:-1]) and replies[-1]["ok"]
+
+
+def test_a_replay_fault_over_http_is_a_typed_reply(sock_dir):
+    async def main():
+        srv = HttpServer(Dispatcher(EchoEngine(), hub=_durable_hub()), heartbeat=0.2)
+        await srv.start_unix(sock_dir / "exod.sock")
+        try:
+            async with Client(socket=str(sock_dir / "exod.sock")) as c:
+                replies = [await c.send_raw(text) for _id, text in HUGE_SINCE]
+                return replies, await c.call(s.Hello(client="t"))
+        finally:
+            await srv.close()
+
+    replies, hello = _run(main())
+    assert [(r.id, r.ok, r.error.code) for r in replies] == [(i, False, "internal") for i, _t in HUGE_SINCE]
+    assert hello["protocol"] == s.PROTOCOL_VERSION
+
+
 def test_unix_socket_path_too_long_is_a_clear_error(tmp_path):
     srv = HttpServer(None)
     long_path = tmp_path / ("d" * 120) / "exod.sock"

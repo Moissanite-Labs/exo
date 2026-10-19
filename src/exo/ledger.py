@@ -29,9 +29,12 @@ head. It refuses when the one beside the ledger still trails, or when none is at
 appends never go on more than one event past every anchor. `verify` checks every anchor it finds: the ledger must
 hold at least that many events and the chain hash at that position must match. A ledger file that is gone while an
 anchor remains fails too (`missing_ledger_problem`). A ledger file that is a symlink fails verify, and append and
-anchor refuse it. `append` also refuses to write past an anchor that does not match, so a truncated ledger cannot be
-papered over by the next event, and `anchor()` will not overwrite one unless forced. A trigger found missing when
-the ledger is opened is recreated, and `verify` reports it.
+anchor refuse it. Without an authority such a file is opened read-only, and only when it is a regular file, so
+opening it writes nothing through the link. The one exception is SQLite's own `-shm` file beside a target that
+already has a `-wal` file. `verify` warns when the anchors are more than one event apart. `append` also refuses to
+write past an anchor that does not match, so a truncated ledger cannot be papered over by the next event, and
+`anchor()` will not overwrite one unless forced. A trigger found missing when the ledger is opened is recreated, and
+`verify` reports it.
 
 What anchoring does not protect against: a process running as the same user that rewrites the database and both
 anchor files together, or deletes both anchors (verify then reports the ledger as unanchored, not as broken).
@@ -47,7 +50,6 @@ import logging
 import os
 import sqlite3
 import stat
-import tempfile
 import threading
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
@@ -56,6 +58,7 @@ from typing import Any, NamedTuple
 from nacl.signing import SigningKey
 
 from . import crypto
+from .core.private import atomic_write
 from .crypto import GENESIS, Signer
 
 KINDS = frozenset({
@@ -149,6 +152,11 @@ class Ledger:
         if isinstance(signer, SigningKey):
             signer = Signer("", signer)
         self.signer = signer
+        self._lock = threading.Lock()
+        self.missing_triggers: list[str] = []
+        if authority is None and self.path.is_symlink():  # opened without writing through the link (#277)
+            self.db = _open_symlinked(self.path)
+            return
         self.db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None, timeout=30)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=30000")
@@ -157,7 +165,6 @@ class Ledger:
             logger.warning("ledger %s: append-only trigger(s) %s were missing; recreated", self.path,
                            ", ".join(self.missing_triggers))
         self.db.executescript(SCHEMA)
-        self._lock = threading.Lock()
 
     def _missing_triggers(self) -> list[str]:
         """Triggers absent from an existing events table (a fresh database has neither table nor triggers)."""
@@ -565,9 +572,13 @@ class Ledger:
         why = self.check_anchors()
         if why:
             return {"ok": False, "error": why, "checked": checked, "head": prev}
-        seqs = [a["seq"] for _, a in self.anchors() if isinstance(a.get("seq"), int)]
-        return {"ok": True, "checked": checked, "head": prev, "anchored": bool(seqs),
-                "anchored_seq": min(seqs) if seqs else None}
+        found = sorted((a["seq"], str(p)) for p, a in self.anchors() if isinstance(a.get("seq"), int))
+        res = {"ok": True, "checked": checked, "head": prev, "anchored": bool(found),
+               "anchored_seq": found[0][0] if found else None}
+        if found and found[-1][0] - found[0][0] > 1:  # appends go on while one anchor cannot be written (#277)
+            res["warning"] = (f"head anchor {found[0][1]} is at seq {found[0][0]}, {found[-1][0] - found[0][0]} "
+                              "events behind the other: it is not being written")
+        return res
 
 
 def missing_ledger_problem(path: str | os.PathLike) -> str:
@@ -584,24 +595,36 @@ def missing_ledger_problem(path: str | os.PathLike) -> str:
     return ""
 
 
+def _open_symlinked(path: Path) -> sqlite3.Connection:
+    """A ledger file that is a symlink, opened read-only (SQLite's `mode=ro`): no WAL switch, no schema, no file
+    made at a dangling target. Only a regular file is opened: opening a FIFO would block. `immutable=1` keeps SQLite
+    from making `-wal` and `-shm` files beside a WAL target. Without a `-wal` file there, all its data is in the main
+    file. A target that is gone, not a regular file, not a database or without an events table reads as an empty
+    ledger kept in memory. Reads see the target's events, verify reports the link, and append and anchor refuse."""
+    target, db = Path(os.path.realpath(path)), None
+    try:
+        if target.is_file():
+            ro = "mode=ro" if Path(f"{target}-wal").exists() else "mode=ro&immutable=1"
+            db = sqlite3.connect(f"{target.as_uri()}?{ro}", uri=True, check_same_thread=False, isolation_level=None,
+                                 timeout=30)
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
+                return db
+    except sqlite3.DatabaseError:
+        pass
+    if db is not None:
+        db.close()
+    db = sqlite3.connect(":memory:", check_same_thread=False, isolation_level=None)
+    db.executescript(SCHEMA)
+    return db
+
+
 def _atomic_write(path: Path, data: bytes) -> None:
-    """Write `data` to a new temporary file beside `path` (0600), then rename it over `path`. mkstemp picks a
-    random name and opens it with O_EXCL and O_NOFOLLOW, so a symlink planted in the folder cannot redirect the
-    write. The rename replaces a symlink at `path` itself, not what it points to."""
+    """Write an anchor (0600) through `atomic_write`: a symlink planted in the folder cannot redirect it. No fsync,
+    as before #273, so an append, which writes two anchors, costs what it did."""
     if not path.parent.exists():  # keys/heads under $EXO_HOME: private like the rest of keys/
         path.parent.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         path.parent.mkdir(mode=0o700, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write(path, data, sync=False)
 
 
 def _bad(ev: dict, reason: str, checked: int) -> dict:
