@@ -34,7 +34,7 @@ from . import provenance
 from .store import PrincipalStore, exo_home, principal_root
 
 FORMAT_VERSION = 1
-PIN_OPEN, PIN_CLOSE = '<exo-pinned>', '</exo-pinned>'
+PIN_OPEN, PIN_CLOSE = provenance.PIN_OPEN, provenance.PIN_CLOSE
 HEADER_RE = re.compile(r'<!--\s*exo-handoff\s+(.*?)\s*-->', re.S)
 ATTR_RE = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 # Text that marks a host-written compaction summary; its body is not the principal speaking.

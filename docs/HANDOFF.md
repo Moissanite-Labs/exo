@@ -37,8 +37,9 @@ whose `author` or `principal` flag says otherwise is skipped: a peer, a bus seat
 pinned block is carried only from a message that opens with it (exo-context's own block) or with a compaction marker
 (a host's summary). One inside a skipped message, a tool result or the agent's reply is not carried. Neither is one
 quoted further down a message, such as a peer's turn the Exo core's system message quotes word for word because it
-was too small to summarize. After `/undo`, exo-context drops the pins of the undone turns and the summaries the undo
-deleted, then writes again each automatic handoff that may quote them, another thread's included
-(`docs/MEMORY-MODEL.md`, "Undo and failed summaries").
+was too small to summarize. There the core also escapes the block's tags, so the model does not read it as a block
+either (#279, `docs/MEMORY-MODEL.md` "Who wrote it"). After `/undo`, exo-context drops the pins of the undone turns
+and the summaries the undo deleted, then writes again each automatic handoff that may quote them, another thread's
+included (`docs/MEMORY-MODEL.md`, "Undo and failed summaries").
 
 Client code: `clients/tui/exo_tui/handoff.py`. Tests: `tests/clients/tui/test_handoff.py`.

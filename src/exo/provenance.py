@@ -15,6 +15,9 @@ Authors, by ingress path:
 
 Only ``principal`` is the principal's voice. Capture, consolidation and learning treat text as a ruling, a
 correction or an answer from the principal only when its author is the principal; everything else is data.
+Where the harness prints a message for the model (the core's view, a context note, a summarizer's source), text by
+any other author has its pinned-block tags escaped (``defuse_pins``), so it cannot pose as exo-context's block of
+the principal's words.
 
 Ledger events carry the author as written by whoever recorded them. ``principal_names`` says which ledger
 authors are the principal for a store: ``principal``, the store's own id, and any principal id pinned in the key
@@ -22,6 +25,7 @@ registry (exo.keyring).
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -36,6 +40,12 @@ SYSTEM = "system"
 
 # Ledger kinds that speak in the principal's voice. The agent may not write them for itself.
 PRINCIPAL_VOICE_KINDS = frozenset({"ruling", "answer", "verdict"})
+
+# The tags of exo-context's pinned block (exo.handoff): the principal's rulings and corrections, word for word.
+PIN_OPEN, PIN_CLOSE = "<exo-pinned>", "</exo-pinned>"
+# Either tag as a model may read it: any case, with spaces, "_" or invisible characters around or inside the name,
+# or with attributes.
+_PIN_TAG = re.compile(r"<((?:[^\w<>]|_){0,4}exo(?:[^\w<>]|_){0,3}pinned\b[^<>]*)>", re.I)
 
 
 def peer(name: str) -> str:
@@ -87,6 +97,13 @@ def infer(role: Any, meta: Mapping[str, Any] | None) -> str:
 
 def is_principal_author(author: Any) -> bool:
     return author == PRINCIPAL
+
+
+def defuse_pins(text: str) -> str:
+    """``text`` with each pinned-block tag escaped, ``<exo-pinned>`` as ``&lt;exo-pinned&gt;``. Nothing else changes
+    and nothing is removed: the words stay readable, but they no longer open or close a block of the principal's
+    words (#279). For text that is not the principal's, printed where the model reads it."""
+    return _PIN_TAG.sub(r"&lt;\1&gt;", text)
 
 
 def flat(msg: Any) -> dict[str, Any]:
