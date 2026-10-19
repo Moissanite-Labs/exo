@@ -131,8 +131,6 @@ class SessionStore:
 
     def __init__(self, path: str | Path = ":memory:", migrate: bool = True):
         self.path = str(path)
-        if self.path != ":memory:":
-            private_file(self.path)
         self._lock = threading.RLock()
         self._conn: sqlite3.Connection | None = self._open()
         with self._lock:
@@ -165,6 +163,8 @@ class SessionStore:
             self.migrate_agents()
 
     def _open(self) -> sqlite3.Connection:
+        if self.path != ":memory:":
+            private_file(self.path)  # owner-only, also when a late reader reopens a file that was removed
         db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")  # per connection; WAL mode stays set in the file itself
@@ -184,7 +184,12 @@ class SessionStore:
         return db
 
     def close(self) -> None:
-        """Release the connection and its file handles. Using the store afterwards opens it again."""
+        """Release the connection and its file handles.
+
+        Not final: any later use opens the file again, so a reader or writer that runs after
+        ``CoreRuntime.close()`` (a turn finishing, a test that inspects) keeps working, and holds a
+        handle until the next close. Only a ``:memory:`` store stays closed.
+        """
         with self._lock:
             if self._conn is not None:
                 self._conn.close()

@@ -52,7 +52,10 @@ commands. Its collaborators have small interfaces:
 - `engine.peers` is the `PeerService` from `exo.peers`, or `None`. `exo.compose` passes
   `attach_peers=exo.peers.attach`. A test that needs peers does the same, then calls `await engine.peers.start(sock)`.
 - `engine.scheduler` is the `Scheduler` from `exo.scheduler`, or `None`. `exo.compose` passes
-  `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`.
+  `attach_scheduler=Scheduler`; without it `schedule.edit` answers `unsupported`. `stop()` keeps it restartable;
+  `close()` closes schedule.sqlite and is final.
+- `await engine.close()` stops jobs, peers, channels and the scheduler, then closes schedule.sqlite and the
+  session store. The store is not final: a later read or write reopens sessions.sqlite (#281).
 - `engine.run_turn(body, meta)` runs one turn with the lifecycle hooks around it. Product code outside the core
   (the scheduler) uses it, not the loop's private state.
 - A plugin callback that may be sync or async goes through `exo.core.hooks.maybe_await`. One that may not declare
@@ -231,7 +234,9 @@ methods matter for the principal's words:
   `checkpoint(reason="pre_compress")` and `on_compacted(session, node)` are optional siblings.
 
 Do not log or print message text from these hooks. Report errors through `exo.core.trace.report` so they show as
-`harness.error` and become findings.
+`harness.error` and become findings. `trace.add_sink(fn)` subscribes to those reports. A bound method is held
+weakly and does not keep its owner alive, so keep the owner referenced for as long as it should receive reports
+(the engine registers its own and removes it in `close()`).
 
 **Context engine hooks.** `select_context(messages, session_id=)` gets each message with `author` and `principal`,
 like the memory hooks. After `session.undo` the core calls `on_session_switch(session, rewound=True, messages=,

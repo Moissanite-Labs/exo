@@ -114,6 +114,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- The core releases its SQLite handles (#281). `CoreRuntime.close()` closes the session store and schedule.sqlite, the
+  spend journal closes the connection that creates it, and the harness-error sink list holds engines weakly, so an
+  engine nobody closed can be collected. The root suite no longer climbs to about 930 open files, and runs in a
+  macOS Terminal at its default 256. A closed session store reopens on its next use, and `Scheduler.close()` is
+  final (`stop()` stays restartable).
 - Terminal approval cards wait for removal before the next queued card mounts (#276). Answering a card or
   reconciling a closed request no longer mounts two widgets under the same approval id. Close, restore and
   thread-switch transitions share a lock, and stale answers or close events cannot remove the next request's card.

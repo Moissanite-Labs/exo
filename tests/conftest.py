@@ -15,7 +15,10 @@ def pytest_configure(config):
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     want = 4096 if hard == resource.RLIM_INFINITY else min(4096, hard)
     if soft != resource.RLIM_INFINITY and soft < want:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+        except (ValueError, OSError):  # a platform that refuses: run with the limit it gives
+            pass
 
 
 @pytest.fixture
