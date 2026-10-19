@@ -333,14 +333,14 @@ def test_pin_trust_rotation_verifies_the_commit_that_set_the_list(tmp_path, caps
 @pytest.mark.parametrize("pinned", [False, True])
 def test_pin_trust_refuses_a_list_that_is_not_utf8(tmp_path, capsys, pinned):
     """git's output keeps bytes that are not UTF-8 as surrogates. Such a list is refused before anything is written,
-    so no `allowed_signers.tmp` is left behind and the pin stays as it was."""
+    so no temporary file is left behind and the pin stays as it was."""
     before = write_pin() if pinned else None
     git = FakeGit(trust="t@example.com ssh-ed25519 B\udce9\n")
     assert update_verify.pin_trust(tmp_path, "@{u}", read=git) == 1
     assert "not UTF-8" in capsys.readouterr().err
     p = update_verify.pin_file()
     assert (p.read_text() if pinned else p.exists()) == ("t@example.com ssh-ed25519 AAAA\n" if before else False)
-    assert not p.with_name(p.name + ".tmp").exists()
+    assert not [f.name for f in p.parent.iterdir() if f.name.endswith(".tmp")] if p.parent.exists() else True
 
 
 def test_pin_trust_refuses_an_option_as_revision(tmp_path):

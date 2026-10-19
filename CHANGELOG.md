@@ -119,6 +119,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `-t DIR`, the last operand and its parent, with options anywhere on the line (`ln REL LINK -s`). `docs/GATE.md`
   lists what stays open (hardlinks, protected entries that link out of the store, case-insensitive filesystems,
   glob and brace spellings, `/dev/fd/N` magic links, #217).
+- State files are written through a temporary file from `mkstemp`, never through a fixed temporary name (#273). The
+  key registry, the `exo update` pin, the composer history, `exo taste export-house`, handoffs, the agent's file
+  tools (`write_file`, `edit_file`, `patch`), the gate's grants and the bus cursor and session map each wrote
+  `<file>.tmp` (or a name like it) with a plain open and renamed it. A process that could create a file in the
+  folder could plant a symlink at that name and turn the next write into a write to any file the user can write.
+  One helper, `exo.core.private.atomic_write`, now does these writes. It removes the temporary file when a write
+  fails, and each file keeps its mode. The `.pub` file `exo keygen` writes and the episodic view cache were written
+  straight to their final names. They are replaced the same way now. The principal token, `config.json`, provider
+  state, peer presence and the ledger anchors were not open to this and use the same helper now. The helper fsyncs
+  the file and its folder, so these writes take a millisecond or two more on a disk. The ledger anchors, the bus
+  cursor and the view cache are written often and skip the fsync, as before, so an append costs what it did.
 - Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
   retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
   `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
@@ -161,9 +172,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   changes merged up to October 19, 2026: the security wave (D-038 to D-040) with its limits stated (allowlisted
   programs are trusted by name; the principal credential check, with D-060's kernel peer checks (#175), still passes
   a same-user process that detaches; the run folder is a secret store since #185 (for #169), but a shell walk from a
-  folder above it is an ordinary read; `config.json` is an ordinary write until D-074; a command inside `${...}` or
-  in a quoted compound, `-i` or `-n` value given to `declare` is not classified (#143, #188), while array subscripts
-  (#189, for #179), wrappers such as `setsid` (#196, for #160) and a compound's heredoc (#198, for #161) are read; a
+  folder above it is an ordinary read; `config.json` is an ordinary write until D-074; a command inside `${...}` is
+  not classified (#143), while array subscripts (#189, for #179), values given to `declare` (#194, for #188), wrappers such as `setsid` (#196, for #160) and a compound's heredoc (#198, for #161) are read; a
   deny past four `bash -c` nesting levels or `ssh` hops only asks (#137, #153); a `deny:` entry holds for every part
   of a line while a `categories:` setting or a rule sees only the most severe one (D-075, #126; #191); a store write
   by a relative name from the tool's working folder, by a glob or hard-link spelling (docs/GATE.md), or back through
@@ -178,8 +188,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (D-037, D-043, D-045, D-046), the house taste wave 1 (D-044), the engine split and the core budget ratchet (#46,
   D-067, D-077), turns that do not wait for memory upkeep (D-068), versioning (D-056), the web sub-pages (D-061),
   subagent controls and `/rename` (D-069, D-070), and an "In progress" section that names the open changes and
-  issues (#96, #107, #125, #158, #194) and the work on branches with no PR yet, and names what #164, #175, #177,
-  #185, #186, #189, #196, #198, #201, #213, #228, #287 and #288 changed on main. The user guide, developer guide,
+  issues (#96, #107, #125, #158) and the work on branches with no PR yet, and names what #164, #175, #177,
+  #185, #186, #189, #194, #196, #198, #201, #213, #228, #287 and #288 changed on main. The user guide, developer guide,
   command reference and docs map are brought up to date with main, and the docs map has one coverage table.
   `scripts/build_whitepaper.py` takes the version and the month from the paper's header line only, and stops with a
   message when that line is missing or reworded.
@@ -193,6 +203,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- `apply_patch` no longer replaces a changed `-` line by similarity (#236). A hunk with context, such as
+  `-TIMEOUT = 30` over `TIMEOUT = 45` plus `RETRIES = 3`, passed the two-line rule through its context line and
+  silently overwrote the 45. Each `-` line must now match its file line up to whitespace, Unicode or a literal `\t`;
+  similarity places only the context lines. A hunk that fails names both lines and no file changes. See docs/TOOLS.md
+  "Edit matching".
+- A held answer key on a focused terminal approval card sends one answer (#297). Repeats of the key, posted before
+  the first was handled, each wrote `approval: allow` to the transcript and sent `ApprovalRespond` again; only the
+  call that closes the request's card now notes and sends, so a repeat is dropped and the next queued request is
+  not answered by it.
 - Terminal approval cards wait for removal before the next queued card mounts (#276). Answering a card or
   reconciling a closed request no longer mounts two widgets under the same approval id. Close, restore and
   thread-switch transitions share a lock, and stale answers or close events cannot remove the next request's card.
@@ -263,6 +282,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Trace findings (#100, D-025): a fixed finding is verified only by quiet turns that could have tripped it
   (20) or by 3 days with such turns; unrelated turns and idle days no longer count. `exo_trace` lists open
   findings by default and counts the rest.
+- Gate docs (#137, #141, D-038 amendment): `docs/GATE.md` "Known limits" records the four-level shell inspection
+  depth and what the card says at the cap; that a deny under `categories:` fires only on the category a compound
+  line ends up with, so approving the card can run the denied part (#191), while a `deny:` entry matches every part
+  (D-075); and, in one list each, the paths where a deny becomes an ask and the forms still allowed outright on
+  main (`${...}` bodies, text fed to `ssh` on stdin, `git clone -c`; each with its issue
+  and any open PR), with where a `command:` regex still sees only raw text. The two lists D-075 added are folded into
+  these. "What the search tools read" adds that a search rooted at `~/.config/gh` is allowed and leaves out its
+  `hosts.yml` (#241). The template's `deny:` comment says a deny entry is checked against every command on the line
+  and a `categories:` line only against the most severe part, and the user guide says that a few forms run without
+  asking and to read the whole command before allowing it. No behaviour change; the test pins the boundary and the
+  compound-line case under both policy forms.
 - A core that `exo web` (or any client) starts is no longer that client's child (refs #145, D-036): a short helper
   starts a new session, forks the core and exits, so init (or the nearest subreaper) adopts the core. Process
   ancestry changed; the principal and tool checks did not. `exo stop` from another terminal now stops a core whose
@@ -303,8 +333,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `-` line) beyond whitespace, escaping or Unicode. A stale `TIMEOUT = 30` used to replace the file's newer
   `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
   closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
-  In `apply_patch` a hunk's context lines count toward the two, so a hunk with one context line can still replace a
-  changed `-` line.
+  In `apply_patch` a hunk's context lines count toward the two; since #236 each `-` line must also match its file
+  line, so a changed `-` line is refused there too.
 - Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
   is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
   only a string names a principal.
@@ -439,8 +469,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `exo log anchor` reports an anchor it cannot write in one line instead of a traceback. `exo log verify` reports
   `anchored_seq`. An append costs what it did before. A ledger file swapped for a symlink to a truncated copy no
   longer verifies clean: the anchor under `keys/heads/` keeps its name, and a symlinked ledger fails verify and is
-  refused by append and `exo log anchor`. An anchor that is a symlink is unreadable, and a symlink planted at an
-  anchor's temporary name no longer redirects the write to another file.
+  refused by `exo log anchor`. Append refuses it too for a direct-key ledger (an authority-mode ledger trusts its
+  signed checkpoints). An anchor that is a symlink is unreadable, and a symlink planted at an anchor's temporary
+  name no longer redirects the write to another file.
+- Opening a direct-key ledger whose `ledger.sqlite` is a symlink no longer writes through the link (#277). Before
+  verify and append refused it, the open switched the target to WAL mode and added the ledger's tables, and a
+  dangling link made the file it pointed at. The file is now opened read-only, and only when it is a regular file. A
+  target that is missing, is not a regular file or holds no ledger reads as empty. SQLite adds no `-wal` or `-shm`
+  file beside the target, except that it may add or rewrite a `-shm` file beside a target that already has a `-wal`
+  file. `exo log verify` and `exo memory verify` also warn, without failing, when the two head anchors are more than
+  one event apart. The copy under `keys/heads/` is best effort, so appends go on when it cannot be written. A store
+  folder replaced by a symlink to another folder is listed as not covered in `docs/CORE.md` and D-040.
 - `exo import-store` of a store Exo made no longer fails partway and leaves a half-copied store. The ledger's
   `.head` anchor is skipped with the ledger, and a stale anchor a deleted store left for the destination is dropped.
 - `exo memory verify` fails a store whose `ledger.sqlite` was deleted while a head anchor remains. It used to print
