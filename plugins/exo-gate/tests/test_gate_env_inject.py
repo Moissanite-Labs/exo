@@ -57,7 +57,7 @@ INJECT_AUDIT = ["GCONV_PATH", "DYLD_FRAMEWORK_PATH", "DYLD_FALLBACK_LIBRARY_PATH
 FORMS = [
     "{v}=/tmp/x ls",
     "{v}=/tmp/x git log",
-    "{v}=/tmp/x python -m pytest -q",
+    "{v}=/tmp/x python -m json.tool f",          # before pytest PYTHONPATH adds nothing (see below)
     "FOO=1 {v}=/tmp/x ls",
     "{v}+=:/tmp/x ls",
     "env {v}=/tmp/x ls",
@@ -676,3 +676,77 @@ def test_ext_transport_switches_ask(cmd, mention):
 def test_git_config_that_runs_nothing_is_unchanged(cmd, category, outcome):
     c = classify(sh(cmd))
     assert (c.category, decide(c).outcome) == (category, outcome), c
+
+
+# --- review of e7f7b19: PS4 is expanded before every traced command, also in a non-interactive shell -----
+
+@pytest.mark.parametrize("cmd", [
+    f"export PS4='$({RM}) '; set -x; ls",
+    f"declare -x PS4='$({RM})'; set -o xtrace; ls",
+    f"PS4='`{RM}`' bash -xc ls",
+    f": ${{PS4:='$({RM})'}}; set -x; ls",
+    f"export PS4='\\$({RM})'; set -x; ls",                # bash decodes the prompt's \$ before it expands
+])
+def test_ps4_command_substitution_is_classified(cmd):
+    c = classify(sh(cmd))
+    assert c.category == "delete", c
+    assert decide(c).outcome == "ask" and decide(c, DENY).outcome == "deny", c
+
+
+def test_ps4_without_a_substitution_and_an_unseen_ps4():
+    c = classify(sh("export PS4='+ '; set -x; ls"))
+    assert (c.category, decide(c).outcome) == ("read", "allow"), c
+    asks("read -r PS4 < f; set -x; ls", "PS4 is expanded")
+
+
+# --- review of e7f7b19: arithmetic assigns with ++, -- and the shift operators too ----------------
+
+@pytest.mark.parametrize("cmd", ["echo $(( PATH++ ))", "echo $(( ++PATH ))", "echo $(( PATH-- ))",
+                                 "echo $((--HOME))", "echo $(( PATH<<=1 ))", "echo $((PATH>>=1))",
+                                 "echo ${a[PATH++]}"])
+def test_increment_and_shift_assignments_ask(cmd):
+    asks(cmd, "PATH" if "PATH" in cmd else "HOME")
+
+
+# --- review of e7f7b19: values that change nothing keep the line's class; the rest ask on purpose -------
+
+@pytest.mark.parametrize("cmd,category", [
+    ("LD_PRELOAD= ls", "read"),
+    ("LD_LIBRARY_PATH= ls", "read"),
+    ("DYLD_INSERT_LIBRARIES= ls", "read"),
+    ("GIT_CONFIG_GLOBAL=/dev/null git status", "read"),
+    ("GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null git log", "read"),
+    ("PATH=$PATH:./node_modules/.bin eslint .", "shell"),
+    ("PATH=${PATH}:node_modules/.bin eslint .", "shell"),
+    ('export PATH="$PWD/.venv/bin:$PATH"', "read"),
+    ("PATH=/usr/local/bin:/usr/bin:/bin ls", "read"),
+    ("PATH+=:/usr/local/bin ls", "read"),
+    ("PYTHONPATH=src python -m pytest -q", "shell"),
+    ("PYTHONPATH=src pytest -q", "shell"),
+    ("PYTHONPATH=/tmp/x python3 -m pytest -q", "shell"),   # conftest.py already runs the project's code
+    ("env PYTHONPATH=src:tests pytest -q", "shell"),
+])
+def test_a_value_that_changes_nothing_keeps_the_class(cmd, category):
+    c = classify(sh(cmd))
+    assert (c.category, decide(c).outcome) == (category, "allow"), c
+
+
+@pytest.mark.parametrize("cmd,name", [
+    ("PATH= ls", "PATH"),                                  # an empty element is the current folder
+    ("PATH=$PATH: ls", "PATH"),
+    ("PATH=:$PATH ls", "PATH"),
+    ("PATH=$PATH::/usr/bin ls", "PATH"),
+    ('export PATH="$HOME/.local/bin:$PATH"', "PATH"),      # a folder the agent can write to, first
+    ("PATH=$PATH:/tmp/bin rg x", "PATH"),                  # appended: it supplies what the machine lacks
+    ("PATH+=/x ls", "PATH"),                               # glued onto the last folder
+    ("PATH=$X:$PATH ls", "PATH"),
+    ("LD_LIBRARY_PATH=: ls", "LD_LIBRARY_PATH"),
+    ("LD_PRELOAD=$X ls", "LD_PRELOAD"),
+    ("GIT_CONFIG_GLOBAL=/tmp/g git status", "GIT_CONFIG_GLOBAL"),
+    ("PYTHONPATH=src python3 -m json.tool f", "PYTHONPATH"),
+    ("export PYTHONPATH=src; pytest -q", "PYTHONPATH"),
+    ("PYTHONPATH=src python -B -m pytest", "PYTHONPATH"),
+    ("CDPATH+= cd src", "CDPATH"),
+])
+def test_values_that_can_change_what_runs_still_ask(cmd, name):
+    asks_naming(cmd, name)

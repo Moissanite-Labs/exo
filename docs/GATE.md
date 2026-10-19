@@ -566,7 +566,9 @@ gate does not read:
   `GH_EDITOR`, `GH_BROWSER`, `PSQL_PAGER`, `PSQL_EDITOR`, `SUDO_ASKPASS`, `SUDO_EDITOR`,
   `PROMPT_COMMAND`, `LESSOPEN` or `LESSCLOSE` before the program (also through `env`, `sudo` or
   `timeout`). An `export NAME=value` or a bare `NAME=value` counts when the value is a known
-  hazard.
+  hazard. `PS4` counts the same way, read as the double-quoted text bash expands before every
+  traced command (`set -x`, interactive or not): `export PS4='$(rm -rf /srv/data) '; set -x; ls`
+  is `delete`, `export PS4='+ '` stays `allow`.
 - Options are read as the program's `getopt` reads them: an unambiguous abbreviation of the long
   name, one letter or more (`--to-com=`, `psql --o`), and for `tar --checkpoint-action` any
   abbreviation longer than `--checkpoint`, which is an option of its own (`--checkpoint-a=exec=`,
@@ -607,16 +609,28 @@ gate does not read:
   and `~/.exo`), `XDG_CONFIG_HOME`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
   `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `PYTHONSTARTUP`, `PYTHONPATH`,
   `PYTHONHOME`, `PYTHONUSERBASE`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`, `RUBYOPT`, `RUBYLIB`,
-  `NODE_OPTIONS`, `NODE_PATH`, `PSQLRC`, `GIT_ALLOW_PROTOCOL`, the option variables `MANOPT`, `ZIPOPT` and
-  `RIPGREP_CONFIG_PATH` (their command-line forms `man -P`, `zip -TT` and `rg --pre` already
-  count), `LESS` when it holds a `+` command (`LESS=-R` stays `allow`), and a non-empty `CDPATH`,
-  which moves a relative `cd` into the Exo store unseen (`CDPATH= cd src` stays `allow`). The
+  `NODE_OPTIONS`, `NODE_PATH`, `PSQLRC`, `GIT_ALLOW_PROTOCOL`, the option variables `MANOPT`,
+  `ZIPOPT` and `RIPGREP_CONFIG_PATH` (their command-line forms `man -P`, `zip -TT` and `rg --pre`
+  already count), `LESS` when it holds a `+` command (`LESS=-R` stays `allow`), and a non-empty
+  `CDPATH`, which moves a relative `cd` into the Exo store unseen (`CDPATH= cd src` stays
+  `allow`). A value that changes nothing the gate relies on keeps the line's class: an empty
+  loader variable (`LD_PRELOAD= ls`; the loader skips it), `GIT_CONFIG_GLOBAL` or
+  `GIT_CONFIG_SYSTEM` set to `/dev/null`, a `PATH` made only of the current one (`$PATH`) and
+  folders the gate already trusts a program from by path, a system bin folder, a virtualenv's
+  `bin` or `node_modules/.bin` (`PATH=$PATH:./node_modules/.bin eslint .`,
+  `export PATH="$PWD/.venv/bin:$PATH"`; `PATH+=:/usr/local/bin` is `$PATH:/usr/local/bin`), and
+  `PYTHONPATH` before `pytest` or `python -m pytest`, which already run the project's code.
+  These still ask, on purpose: an empty `PATH` element, which is the current folder (`PATH= ls`,
+  `PATH=$PATH: ls`), any other folder in `PATH`, appended or not, since it supplies every program
+  the folders before it lack (`export PATH="$HOME/.local/bin:$PATH"`), `PYTHONPATH` before any
+  other program (`PYTHONPATH=/tmp/p python3 -m json.tool x` loads a `json` module from there) or
+  exported, and `GIT_CONFIG_GLOBAL` set to a file. The
   line sets one before the program, through a prefix, exported or bare (`export -p` and
   `readonly -p` assign too, while `declare -p` only prints), as a parameter-expansion assignment
   (`${PATH:=.}` or `${PATH=.}`, also in double quotes or a here-string), as the name `read` (also
   `-a`) or `printf -v` fills, as a `for` variable, through a nameref (`declare -n r=PATH`), or as
   an integer through arithmetic, an array subscript, or a `{PATH}>` redirection (`$((PATH=10))`,
-  `a[PATH=10]=1`, `${a[PATH=10]}`). A subscript counts where bash reads the word as a variable
+  `$((PATH++))`, `$((--PATH))`, `$((PATH<<=1))`, `a[PATH=10]=1`, `${a[PATH=10]}`). A subscript counts where bash reads the word as a variable
   name: an assignment, `${a[...]}`, and the name an exporter, `unset`, `read`, `printf -v`, a
   nameref or `test -v` takes. `mapfile` and `getopts` already ask. Parameter expansion that
   only reads or substitutes (`${PATH}`, `${PATH:-/usr/bin}`, `${PATH#/x}`) assigns nothing and

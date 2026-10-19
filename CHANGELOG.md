@@ -810,6 +810,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`gpg.ssh.defaultKeyCommand`, `core.alternateRefsCommand`), `interactive.diffFilter`,
   `remote.<name>.uploadpack`/`receivepack` and a tool's `.path`; `protocol.allow`, `protocol.ext.allow`, an
   `ext::` URL rewrite or remote URL and `GIT_ALLOW_PROTOCOL` ask, since an `ext::` URL is a command git runs. A quoted `NAME=VALUE` after `env` or `sudo` is the assignment those programs read it as.
+  `PS4` is read as the text bash expands before every traced command, so `export PS4='$(rm -rf x) '; set -x` is a
+  delete; `$((PATH++))`, `$((--PATH))` and `$((PATH<<=1))` assign too. A value that changes nothing keeps the line's
+  class: an empty loader variable (`LD_PRELOAD= ls`), `GIT_CONFIG_GLOBAL=/dev/null`, a `PATH` of `$PATH` and system,
+  virtualenv or `node_modules/.bin` folders, and `PYTHONPATH` before `pytest` or `python -m pytest`; any other
+  `PATH` folder (`export PATH="$HOME/.local/bin:$PATH"`) and an empty `PATH` element still ask.
   `IFS=`, `CDPATH=`, `LESS=-R`, `PAGER=cat` and other harmless assignments are unchanged, and so is text bash
   does not expand: single-quoted text (also inside an unquoted `${a:-'...'}`), a quoted here-doc and a bracket
   outside a subscript, so `git commit -m 'read ${PATH:=.}'`, `pytest -q 'test_x[HOME=/tmp]'` and `echo [HOME=x]`
