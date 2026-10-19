@@ -1272,6 +1272,22 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   deferred `keys/heads/` scan and must allow for the M1 migration in `docs/ARCHITECTURE.md` (symlink first, then
   move). Since #277 a ledger file that is a symlink is opened read-only when there is no authority, and `verify`
   warns, without failing, when the two anchors are more than one event apart.
+- *Amendment 2026-10-19 (#279):* PR #216 stopped a block quoted further down a message from being carried into a
+  handoff, but the model still read it as one: the core's system message printed a peer's, bus seat's, job's or
+  tool's `<exo-pinned>` block word for word. Where the harness prints a message for the model, text whose author is
+  not `principal` now has each pinned-block tag escaped (`exo.provenance.defuse_pins`: `&lt;exo-pinned&gt;`). That
+  is `render_message` (the verbatim spans and the summarizer's source), the note on other threads' turns, and
+  recalled memory. Every summary is escaped as it is made, whatever it summarizes, since a summarizer can decode the
+  escaped tag or write one: the core's summary nodes (`TreeContext._run`) and the summary in exo-context's
+  `[CONTEXT COMPACTION]` message, its own compressor's or a host's, before exo-context adds its own block. So is the
+  handoff that `/exo resume` puts into the system message (`exo.handoff.resume_text`); the handoff records the
+  principal's rulings as quoted items, never as a pinned block. The match takes any case, any run of spaces,
+  punctuation or invisible characters before, between or inside the letters of the name, and a missing `>`. The
+  tags are escaped, not removed, so nothing anyone wrote vanishes. The principal's own words keep them outside a
+  summary. exo-context's inner compressor keeps each message's author on its way to the summarizer, and the note
+  names a bus seat's turn `bus`, not `user`. Not covered: the verbatim tail, where each turn reaches the model as its
+  own message inside its ingress tag; a summary that restates a block in other words; full-width brackets and
+  look-alike letters from other scripts.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
@@ -1901,6 +1917,76 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** the budget test, `tests/docs`, `tests/test_privacy.py`, `tests/test_versioning.py`, `ruff check`.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
+
+## D-079 (2026-10-16) A stalled event subscriber is ended and resumes with since
+- **Status:** Accepted 2026-10-16.
+- **Why:** `Hub.publish` put every event in an unbounded queue per subscriber. A client that stops reading blocks
+  its SSE loop in `drain()`, so its queue grew one for one with the stream and one stalled client could grow the
+  core's memory without bound (the audit of main 35b7de8 left 29,792 of 30,000 notices queued).
+- **Decision:** a subscriber whose queue holds `MAX_LAG` (4,096) unread events is ended on the next publish. The hub
+  drops what it has not read and queues the end marker it already uses on shutdown, so the stream closes right after
+  the last event the client read and the publisher never waits. `Hub.closed` tells this close from a shutdown.
+  - Every client in the repo resumes with `since`: the protocol client with `reconnect`, the exo-bus link, the
+    terminal window's `LocalClient` and stdio `serve_lines` (they subscribe again until the hub closes, so a window
+    that took over keeps its core), and `exo web`, whose re-bootstrap replays from the last event it applied. It
+    does so for up to `4 * MAX_LAG` (16,384) missed events. A longer gap, such as a long outage while the core kept
+    working, replays the newest 5,000 as on start, so one response never carries an unbounded backlog (a
+    100,000-event gap took 2 s in one reply).
+  - A reader that keeps up must stay far below the cap. Tool threads hand output to the loop with
+    `call_soon_threadsafe`, and every callback queued between two loop turns runs before any reader does. On main one
+    chatty shell command queued 7,946 publishes in one turn. `run_tool` now joins a thread's chunks into one
+    `tool.output` per loop turn, so a turn publishes a handful: a delta per provider chunk, an output per running tool.
+- **Rejected:** dropping the oldest events, since a gap with no close corrupts a client's view. Blocking the
+  publisher, since one slow client would stall every turn and every other client. Refilling the stalled
+  subscription from the event log inside the hub, which hides the stall from a remote client and moves reconnect
+  logic into the hub. Closing on a stall measured in seconds, since one long loop turn looks the same and memory
+  still grows while the timer runs.
+- **Revisit if:** a client that keeps up is ever ended in normal use, or new code publishes from a thread once per
+  item instead of once per loop turn.
+- **Docs:** `docs/CORE-V2-INTERFACES.md` `events.subscribe` and `tool.output`, `docs/STANDALONE.md` §5.1,
+  `docs/ui/WEB.md`, `plugins/exo-command/README.md`, `CHANGELOG.md`.
+
+## D-080 (2026-10-16) One meaning for `Usage.input_tokens`, and what the per-child token budget counts
+- **Status:** Accepted 2026-10-16. It replaces the `input_includes_cache` flag that D-032 #6 added for pricing.
+- **Why:** the two transports filled `Usage.input_tokens` differently. Anthropic reports only the uncached input,
+  with cache reads and writes apart. The OpenAI transport copied `prompt_tokens`, which already holds the cached
+  tokens. Only pricing knew. Every other reader assumed one meaning and got the other half the time:
+  - The delegate budget (200,000 tokens per child) counted `input + output`. On Anthropic, where caching is on by
+    default, it ignored the cached context and barely acted. On OpenAI-style routes it counted the whole cached
+    prompt on every call, and a child with a 92k prompt was stopped after 3 calls.
+  - The TUI context gauge read about double on OpenAI routes (182,012 for a 92,012-token prompt), and the cache
+    share read 49% where 98% was real.
+  - Context-engine plugins got `prompt_tokens` = `input_tokens`, so on Anthropic they saw only the uncached tail
+    and usage-driven compression never fired.
+- **Decision:**
+  - `input_tokens` is the uncached input on every transport. Cache reads and writes are counted apart, so the
+    prompt a call sent is the sum of the three. The OpenAI transport reports `prompt_tokens - cached_tokens` as
+    input and the cached count as cache reads. A cached count it cannot split (above the prompt, negative, not
+    an integer) makes the usage incomplete, so the spend boundary refuses it and keeps the reservation. Without a
+    spend policy the whole prompt stays uncached input. The router prices `input_tokens` directly. Cost and
+    settled spend are unchanged on both transports.
+  - The per-child budget counts what the child newly processes: uncached input plus cache writes plus output.
+    Cache reads do not count. The receipt's tokens in are the same count.
+  - Readers that need the prompt size add the three counters: the TUI and web context gauges, the cache share
+    (cache reads over the whole prompt), and the `prompt_tokens` handed to context engines.
+  - A context engine gets the usage of the turn's last model call (`TurnResult.last_usage`), so `prompt_tokens`
+    is one prompt. The turn's sum would count the cached context once per call: three calls of a 30k prompt read
+    as 90k, so a 75% threshold could fire after one tool-using turn with the window less than a third full.
+- **Rejected:**
+  - Keeping the flag and teaching every reader about it: each new reader would have to know, and four did not.
+  - Counting all context processed (`input + cache read + cache write + output`) for the budget: every round
+    re-reads the cached context, so a child re-reading 25k tokens a round would stop after about 8 rounds, where
+    today it effectively never stops on the default provider.
+  - Counting only uncached input plus output: cache writes are new tokens at a higher price, and leaving them
+    out keeps the budget blind on Anthropic.
+- **Revisit if:** a transport reports cache counters in yet another shape, or children hit `budget` on routes that
+  report no cache counts at all (local servers with their own prompt cache), where every call's full prompt counts.
+- **Follow-up:** `spend.py` and `billing.Price.actual` still take an `includes_cache` argument, now always false.
+  Remove it once PR #129 (tiered spend rates, same files) lands.
+- **Validation:** `tests/core/models` (transport split, router price, spend settlement), `tests/agents`,
+  `tests/clients/tui`, `tests/core/plugins`, `tests/trace`, the core budget test, `ruff check`, the mypy baseline.
+- **Docs:** `docs/TRACE.md` "Cost", `docs/MODEL-SPEND.md`, `docs/CORE-V2-INTERFACES.md`, `docs/AGENT-WIRE.md`
+  "Limits", `docs/UI.md`, `CHANGELOG.md`.
 
 ## D-081 (2026-10-17) The gate's decision call never uses the main model
 - **Status:** Accepted 2026-10-17 by the lead (reversible). It amends D-019 for the gate only. The gate's chain is

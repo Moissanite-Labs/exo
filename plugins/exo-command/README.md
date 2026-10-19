@@ -61,7 +61,10 @@ Web routes: `GET /`, `GET /api/snapshot?sections=a,b&fresh=true`, `GET /api/sect
 The server binds to loopback, and a POST from another origin is refused.
 
 On start the client reads the last 5000 events so recent approvals, usage and task moves are not missed.
-A client that drops resumes from the last `seq`.
+When its stream ends (a core restart, or a stream the core ended for falling behind, D-079), it replays from the
+last event it applied, so it misses nothing. That holds up to 16,384 missed events (`RESUME_GAP`, four times the
+core's limit). After a longer gap, such as a long outage while the core kept working, it reads the last 5000
+events as on start, so one reply never carries the whole gap. An approval asked before those does not show.
 
 ## The web UI
 
@@ -177,6 +180,13 @@ Per session cost is the core's `session_total.cost_usd` from `usage.updated`. A 
 not price (a local model, an unknown rate) shows its tokens and `unpriced`. The model shown is the one
 named by the newest `turn.started`. Cost per accepted output needs verdict events from the ledger and is
 left for when `exo.eval` publishes them.
+
+A subagent's spend counts once. When a delegated child finishes, the core adds its total to the parent's
+`session_total` and publishes `usage.updated` on the parent. From then on the table keeps the child's row,
+marked `in parent` (`rolled_up` in the data), and the total, the seat and model bars and the session counts
+leave it out. That spend then shows under the parent's seat and model. A child that is still running, the
+session of a scheduled job and a fork are summed as their own sessions, because the core rolls none of them
+into a parent.
 
 ## Tests
 

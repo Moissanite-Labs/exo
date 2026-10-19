@@ -57,14 +57,18 @@ class LocalClient:
 
     async def events(self, since: int = 0, session: str | None = None,
                      reconnect: bool = False, backoff: float = 0.5) -> AsyncIterator[s.Event]:
+        """Ends only when this core shuts down. A stream the core ended because this window fell MAX_LAG events
+        behind (D-079) resumes from the last event seen, so nothing is missed and the core keeps running."""
         await self._serve()
-        sub = self.dispatcher.hub.subscribe(since, session)
-        try:
-            async for ev in sub:
-                self.last_seq = ev.seq
-                yield ev
-        finally:
-            sub.close()
+        hub, last = self.dispatcher.hub, since
+        while not hub.closed:
+            sub = hub.subscribe(last, session)
+            try:
+                async for ev in sub:
+                    self.last_seq = last = ev.seq
+                    yield ev
+            finally:
+                sub.close()
 
     async def aclose(self) -> None:
         if self._server is not None:
