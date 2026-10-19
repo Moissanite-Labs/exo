@@ -35,7 +35,7 @@ class Listing(FakeSource):
         if type(body).TYPE == "approvals.list":
             if self.before:
                 self.before()
-            return {"approvals": [{"request_id": r, "summary": "x"} for r in self.open_ids]}
+            return {"approvals": [{"request_id": r, "summary": "x", "session": "s1"} for r in self.open_ids]}
         return await super().call(body)
 
 
@@ -72,6 +72,44 @@ def test_bootstrap_replays_an_old_request_and_then_drops_it():
         c = CommandCentre(load_settings({}), src)
         await c.bootstrap()
         assert pending(c) == []
+
+    asyncio.run(go())
+
+
+def test_reconcile_adds_an_open_approval_older_than_the_replay_window():
+    async def go():
+        src = Listing(open_ids=["old"])
+        src.answers["events.subscribe"] = {"events": [], "seq": 9}
+        c = CommandCentre(load_settings({}), src)
+        await c.bootstrap()
+        assert pending(c) == ["old"]
+        assert c.section("approvals")["pending"][0]["requested_at"] is None
+        # follow() replays the same request later: still one card, one count
+        c.state.apply(asks(10, "old"))
+        assert pending(c) == ["old"]
+        assert c.state.sessions["s1"]["pending_approvals"] == 1
+        c.state.apply(ev(11, "approval.resolved", {"request_id": "old", "decision": "allow"}, "s1"))
+        assert pending(c) == []
+        assert c.state.sessions["s1"]["pending_approvals"] == 0
+
+    asyncio.run(go())
+
+
+def test_a_replayed_request_is_not_counted_twice():
+    c = CommandCentre(load_settings({}), Listing())
+    c.state.apply(asks(5))
+    c.state.apply(asks(6))
+    assert pending(c) == ["r1"]
+    assert c.state.sessions["s1"]["pending_approvals"] == 1
+
+
+def test_reconcile_does_not_re_add_a_request_resolved_while_the_list_was_in_flight():
+    async def go():
+        resolve = ev(9, "approval.resolved", {"request_id": "old", "decision": "allow"}, "s1")
+        c = CommandCentre(load_settings({}), Listing(open_ids=["old", "kept"], before=lambda: c.state.apply(resolve)))
+        await c.reconcile_approvals()
+        assert pending(c) == ["kept"]  # "old" was open when the core listed it, resolved before the page applied it
+        assert c.state.sessions["s1"]["pending_approvals"] == 1
 
     asyncio.run(go())
 
