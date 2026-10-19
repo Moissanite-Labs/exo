@@ -278,13 +278,16 @@ def test_a_text_read_once_still_counts_for_each_command_that_gets_it(first, then
 def test_a_long_word_is_read_in_linear_time(shape):
     # Looking for function names from every position inside an unbroken word cost its length squared: a
     # 50,000-character quoted word took 26 s. Linear work is about 4x from 25 KB to 100 KB; that was 16x.
-    took = []
-    for n in (25_000, 100_000):
-        line = shape(("QUJD" * n)[:n])
-        start = time.perf_counter()
-        _classify(line)
-        took.append(time.perf_counter() - start)
-    assert took[1] < 8 * took[0] + 1, took
+    lines = [shape(("QUJD" * n)[:n]) for n in (25_000, 100_000)]
+    for _ in range(3):      # CPU time; a retry only when over the bound, so load can't fail it but a quadratic step does
+        took = []
+        for line in lines:
+            start = time.process_time()
+            _classify(line)
+            took.append(time.process_time() - start)
+        if took[1] < 8 * took[0] + 0.2:
+            break
+    assert took[1] < 8 * took[0] + 0.2, took
 
 
 @pytest.mark.parametrize("prog", ["ls", "bash", "python3", "command bash"])
@@ -302,10 +305,10 @@ def test_nested_groups_of_plain_commands_after_an_ambiguous_delimiter_stay_near_
     # main reads each body once, on the closer, in levels + 1 calls.
     levels = 4
     line = _fed_groups(20, levels, PUSH, "ls", "$'")
-    start = time.perf_counter()
+    start = time.process_time()
     assert _classify(line).category == "vcs_push"
     assert counted["shell"] <= levels + 2, counted
-    assert time.perf_counter() - start < 10      # main takes a few hundredths of a second
+    assert time.process_time() - start < 10      # main takes a few hundredths of a second
 
 
 @pytest.mark.parametrize("command", [
@@ -340,11 +343,11 @@ def test_many_texts_fed_to_many_shells_stay_linear(shape, counted):
     # and each shell's stdin is listed once, not shells times texts.
     n = 1000
     line = shape(n)
-    start = time.perf_counter()
+    start = time.process_time()
     assert _classify(line).category == "vcs_push"
     assert counted["shell"] <= 2 * n + 5, counted
     assert counted["texts"] <= 3 * n + 5, counted
-    assert time.perf_counter() - start < 60      # main takes about a second; only a hang fails this
+    assert time.process_time() - start < 60      # main takes about a second; only a hang fails this
 
 
 @pytest.fixture
