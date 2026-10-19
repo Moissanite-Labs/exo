@@ -126,6 +126,23 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   (`a[b[0]+$(cmd)]`) is read to its end. A `\$` or `` \` `` at the subscript's top level is literal, as bash
   reads it; bash before 5.2 expands a nested subscript again, so there the gate reads the command. Past the
   nesting limit such a command is `opaque_exec`.
+- The gate reads the values `declare`, `typeset`, `local`, `readonly` and `export` evaluate again (#188, D-038).
+  With `-a` or `-A` a compound value `(..)` is parsed again as words even when quoted (the gate reads it with or
+  without them), a `-i` value is arithmetic and a `-n` value is a name whose subscript runs when used, so
+  `declare -a 'b=($(gh pr comment ...))'`, `export -a 'b=(<(gh ...))'`, `declare -i x='a[$(gh ...)]'` and
+  `declare -n r='a[$(gh ...)]'` were allowed and are now a `github_post`. A command there, and an expansion bash
+  evaluates again, also asks (`declare -a 'b=($(date))'`, `local -i n=$1`, `local -n ref=$1`,
+  `declare -a 'a=([$i]=1)'` and `declare -a "b=($x)"` were allowed and now ask). When such a command outranks the
+  line's own category, a category line or rule that denies the line's category asks, never allow or log, also when
+  the policy names `opaque_exec` (`declare -a 'b=($(sudo ls))' > /tmp/f` under `categories: {local_write: deny}`,
+  until #191); a `deny:` list entry still denies it (D-075). A command nested deeper
+  than the gate reads asks. A backslash-newline in a compound value is dropped before it is read, as bash drops
+  it (`declare -a 'b=($\<newline>(gh ...))'` was allowed and is now a `github_post`; a `$( )` the line itself runs
+  in a double-quoted value is still read once, unless it holds a single quote or a here-document marker `<<`
+  anywhere: such a body is compared as written, so with a backslash-newline it is read again and asks, as in
+  `declare -a "b=($(ls 'x' \<newline> -l))"`), and a quoted operand after
+  two unquoted compound values (`declare -a b=(1) x=(2) 'c=($(gh ...))'`, `opaque_exec` before) belongs to the same
+  declare and is a `github_post` too.
 
 ### Added
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit

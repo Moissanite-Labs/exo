@@ -480,18 +480,58 @@ not read.
   `printf -v 'a[$(gh pr comment 3 --body hi)]' %s x` is a `github_post`. Its output is evaluated
   as well, so any expansion or quoting in the subscript (`$(cat f)`, `$i`, `${x}`, `$(( ))`, `"k"`)
   also adds the `indirection` signal and asks: a value such as `b[$(cmd)]` runs cmd. It is a
-  signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
-  without expansion (`a[0]`; for a bare name such as `a[i]` see the known limit below) and the
-  other arguments (printf's format, read's prompt) change nothing. The subscript runs to the `]`
-  that ends it as bash finds it: a nested `[ ]` (`a[b[0]+$(cmd)]`), a quoted `]` or a `\]` does
-  not end it. At the subscript's top level a `\$` or `` \` `` is literal, as in bash
-  (`a[\$(cmd)]` runs no command); bash before 5.2 expands a nested subscript (`a[b[\$(cmd)]]`)
-  again and runs it, so the gate reads it there. Past the nesting limit a command there is
-  `opaque_exec`, as an unquoted `$( )` is. A command read
-  from the subscript is a part of the line like any `$( )`, so it can outrank the line's own
-  category: `printf -v 'a[$(git push origin main)]' %s x > /tmp/f` is a `vcs_push` and asks. A
-  `deny:` entry for `local_write` still denies it (D-075); a `categories: {local_write: deny}`
-  line only asks until #191 lands.
+  signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A command
+  there also carries `reread` (below), so a policy that names `opaque_exec` does not lower its
+  ask (#188). A subscript without expansion (`a[0]`; for a bare name such as `a[i]` see the
+  known limit below) and the other arguments (printf's format, read's prompt) change nothing.
+  The subscript runs to the `]` that ends it as bash finds it: a nested `[ ]`
+  (`a[b[0]+$(cmd)]`), a quoted `]` or a `\]` does not end it. At the subscript's top level a
+  `\$` or `` \` `` is literal, as in bash (`a[\$(cmd)]` runs no command); bash before 5.2
+  expands a nested subscript (`a[b[\$(cmd)]]`) again and runs it, so the gate reads it there.
+  Past the nesting limit a command there is `opaque_exec`, as an unquoted `$( )` is. A command
+  read from the subscript is a part of the line like any `$( )`, so it can outrank the line's
+  own category: `printf -v 'a[$(git push origin main)]' %s x > /tmp/f` is a `vcs_push` and
+  asks. A `deny:` entry for `local_write` still denies it (D-075); a `categories: {local_write:
+  deny}` line only asks until #191 lands.
+- `declare`, `typeset`, `local`, `readonly` and `export` also evaluate the value of a
+  `NAME=VALUE` operand again, so it is read too (#188). With `-a` or `-A` (or for a variable that
+  is already an array) bash parses a compound value `(..)` again as words even when it is
+  quoted, so `declare -a 'b=($(cmd))'` and `export -a 'b=(<(cmd))'` run cmd. The gate reads a
+  compound value with or without `-a`, which is only stricter: each `$( )`, backticks, `<( )` or
+  `>( )` in it is classified like a `$( )`, and each `[key]=` is read like a subscript above.
+  With `-i` (declare, typeset, local) the value, or each element, is arithmetic, and with `-n`
+  it is a name whose subscript bash evaluates when the nameref is used; both are read like a
+  subscript. So `declare -i x='a[$(gh pr comment 3 --body hi)]'` is a `github_post`.
+- Any expansion in such a `-i` or `-n` value (`local -i n=$1`, `local -n ref=$1`,
+  `declare -n r='a[$i]'`) asks, as does a compound value the line itself expanded
+  (`declare -a "b=($x)"`: bash parses x's value as code) and every command in a quoted compound
+  value, which runs only because bash reads the value again. That is the `indirection` signal,
+  and the command ranks after the line's own parts, as it would unquoted, so a redirection's
+  `local_write` still decides a tie and a deny on it still wins. When the command outranks the
+  line's own category, a deny on that category becomes ask, never allow or log
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` asks under `categories: {local_write: deny}`); D-075
+  (deny on any part) keeps the deny for the `deny:` list form; #191 tracks the `categories`
+  form. Such a command also carries the `reread` signal, and naming `opaque_exec`
+  (below) does not lower its ask, so the line asks under `{local_write: deny, opaque_exec: allow}`
+  too. A deny on the command's own
+  category still denies. A command in such a value or subscript nested deeper than the gate
+  reads is an `opaque_exec` part (ask), as on the line itself, and carries `reread` too. A
+  plain expansion in a compound value the line did not expand (`declare -a 'b=("$@")'`), a
+  scalar value without `-i` or `-n`, `+i`, the `-n` of `export` and `readonly` (it removes the
+  attribute) and a subscripted name given to `readonly` or `export` (bash rejects it as not a
+  valid identifier) change nothing. An unquoted compound value
+  (`declare -a b=($(ls))`) is read by the line's own parse, as before, and a quoted operand after
+  one or more of them on the same line (`declare -a b=() x=(1) 'c=($(cmd))'`) is read too. Bash
+  drops a backslash-newline from a compound value before it reads the value again as words, and so
+  does the gate: in `declare -a 'b=($\<newline>(cmd))'` cmd runs and is classified. A `\\<newline>`
+  is an escaped backslash and a newline, and stays; so does a backslash-newline in an `-i` or `-n`
+  value, which bash keeps. A `$( )` the line itself runs (in a double-quoted value) is read once,
+  with or without a backslash-newline in it. A body that holds a single quote or a here-document
+  marker (`<<`, `<<<`) anywhere is the exception: bash keeps a backslash-newline in single quotes
+  or a quoted here-document, so the line's run may keep it while the value bash reads again has
+  lost it, and the gate does not track where it is. Such a body is compared as written, so with a
+  backslash-newline it is read again on its own and asks (`reread`), even where bash runs the same
+  command twice (`declare -a "b=($(ls 'x' \<newline> -l))"`; without `'x'` it is read once).
 - Nesting is read four levels deep. Past that the text is `opaque_exec` and asks. An `ssh` or
   `mosh` chain with more hops than that is not read either: the hops that were read keep the
   `remote host` exposure and the first host as target (so a `target:` deny on it still
@@ -618,6 +658,8 @@ not read.
   example with a `command` regex for `make`). Naming it at `ask` or `deny` keeps the indirection
   floor: a command the gate reads inside a wrapper still asks at least, whatever its own category
   says (#178).
+  That does not lower the ask of a command a declaration runs as it reads a value again
+  (`reread`, above).
 
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
 `npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
@@ -804,9 +846,11 @@ arithmetic context as arithmetic too (`a[i]`, `$(( x ))`, `declare -i`), so a va
 builtins above asks; one in an assignment word (`a[$i]=v`) or an arithmetic expression
 (`$(( a[$i] ))`) does not. The gate cannot tell an associative array from an indexed one, so a
 subscript of an associative array asks too, although bash does not evaluate it as arithmetic.
-A quoted value that declare, typeset or local reads as an array or arithmetic value
-(`declare -a 'b=($(cmd))'`, `declare -i x='a[$(cmd)]'`, `declare -n`) runs cmd too and is not
-read yet (#188).
+Only a value written in the `declare` operand itself is read (#188): a later plain assignment
+to a `-i` or `-n` variable (`declare -i n; n='a[$(cmd)]'`), an element of an unquoted compound
+value given with `-i` (`declare -ai b=($x)`) and a compound value or name that comes whole
+from a variable (`declare -a b=$x`, `declare "$n=$v"`) are evaluated by bash too and are not
+read.
 Known limit (#160). Some wrapper forms are not read and ask as `opaque_exec`, as they did before:
 BSD and macOS `script -q FILE CMD`, `screen -R` and `-RR` (they start the command when no session
 is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot`, `strace`,
