@@ -161,8 +161,7 @@ version 0.3. Sections 1 to 34 keep their version 0.2 numbers, and the new parts 
   passes a same-user process that detaches (#31, WP §12.5); a shell walk from a folder above the run folder, a
   relative name under a tool's working-folder argument, or a wildcard in a folder name above the file is an
   ordinary read of the principal credential (WP §12.5, §15.4; the run folder itself is a secret store since #185);
-  a command inside `${...}`, or in a quoted compound, `-i` or `-n` value given to `declare`, is not read (#143,
-  #158; #188, #194); a deny past the `bash -c` depth cap or the `ssh` hop cap only asks (#137, #153); a
+  a command inside `${...}` is not read (#143, #158); a deny past the `bash -c` depth cap or the `ssh` hop cap only asks (#137, #153); a
   `categories:` setting or a rule sees only a line's most severe part, while `deny:` and `reserved` entries see
   every part (D-075, #191); a store write by a relative name, a glob or hard-link spelling (docs/GATE.md), or
   through `/dev/fd/N` (#217, no change open yet) is an ordinary write (all WP §7, §15.4); a post body from a file,
@@ -171,7 +170,7 @@ version 0.3. Sections 1 to 34 keep their version 0.2 numbers, and the new parts 
   the first redemption of a launch code is silent, and a browser that never runs the page's script never redeems
   it (#166, built in #177, WP §7, §12.5).
 - **Covered as in progress, not on main:** protecting `config.json` (D-074, #125), reading `${...}` words (#158),
-  reading values given to `declare` (#194), the permissionless mode (keeping the operator floor, #96), and event
+  the permissionless mode (keeping the operator floor, #96), and event
   activation (D-057 to D-059, #107) (WP §30.1). Built on branches with no PR open: the `/rounds` cap, the choice
   card, the exosphere and house taste waves 2 and 3 (WP §30.1).
 - **Covered as designed, not built:** D-011 (store version 2, WP §19), the staged retrieval pipeline (WP §21),
