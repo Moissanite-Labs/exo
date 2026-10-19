@@ -4,6 +4,7 @@ Every command string here is data for exo.gate.classify/decide; none is run."""
 import fnmatch
 import os
 import shlex
+import sys
 import time
 import tracemalloc
 
@@ -298,6 +299,12 @@ def test_any_relative_file_in_a_store_itself_is_credentials(cmd):
     "cd ~/.config/nvim && cat ${PWD%/*}/gcloud/access_tokens.db",
     "cd ~/.config/nvim/lua && cat ${PWD%/*/*}/gcloud/access_tokens.db",
     "cd ~/.config/nvim/lua && cd .. && cd .. && cat gcloud/access_tokens.db",
+    # a `cd ${PWD%/*}` is a level up too, as `cd ..`
+    "cd ~/.config/nvim && cd ${PWD%/*} && cat gcloud/access_tokens.db",
+    "cd ~/.config/nvim && cd \"${PWD%/*}\" && cat gcloud/access_tokens.db",
+    "cd ~/.config/nvim && pushd ${PWD%/*} && cat gcloud/access_tokens.db",
+    "cd ~/.config/nvim/lua && cd ${PWD%/*/*} && cat gcloud/access_tokens.db",
+    "cd ~/.config/nvim && cd ${PWD%/*} && tar czf - gcloud",
     # the folder itself when the target is a store, by any spelling
     "cd ~/.config && cd gcloud && tar -czf /tmp/g.tgz .",
     "cd ~/.config && cd gcloud && cp -r . /tmp/g",
@@ -613,18 +620,25 @@ def _ups_line(n: int, folder: str, name: str) -> str:
 ], ids=["home-at-root", "exo-home-outside-home"])
 def test_many_levels_up_stays_linear(env, folder, name, monkeypatch):
     """A plain store folder's parent reached any number of levels up is answered from the most levels up it is at,
-    not by scanning every level per name (180 KB took 30 s)."""
+    not by scanning every level per name (180 KB took 30 s). The work is counted as Python calls, not timed, so
+    load on the machine does not move it: four times the line is about four times the calls (quadratic: 16)."""
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     if "EXO_HOME" not in env:
         monkeypatch.delenv("EXO_HOME")
-    took = []
-    for n in (20000, 80000):
-        line = _ups_line(n, folder, name)
-        start = time.monotonic()
-        _bash(line)
-        took.append(time.monotonic() - start)
-    assert took[1] < 6 * took[0] + 0.5, took
+    counts = []
+    for n in (2000, 8000):
+        line, calls = _ups_line(n, folder, name), [0]
+
+        def count(frame, event, arg):
+            calls[0] += event in ("call", "c_call")
+        sys.setprofile(count)
+        try:
+            _bash(line)
+        finally:
+            sys.setprofile(None)
+        counts.append(calls[0])
+    assert counts[1] < 6 * counts[0], counts
 
 
 @pytest.mark.parametrize("line", list(SHAPES.values()), ids=list(SHAPES))
@@ -659,7 +673,8 @@ def test_work_is_linear(line, monkeypatch):
     assert with_check["sens"] - calls["sens"] <= min(targets, 4), (with_check, calls)    # one per store folder
     assert with_check["parse"] - calls["parse"] <= 2 * len(subs) + 1, (with_check, calls)
     assert with_check["fnmatch"] == calls["fnmatch"], (with_check, calls)
-    # a glob target is matched as a folder and, when relative, against the plain store folders: two per glob
-    assert with_check["filter"] <= 2 * sum(map(line.count, "*?[{")), (with_check, calls)
+    # a glob target is matched as a folder and, when relative, against the plain store folders: two per glob; a
+    # substitution in a word is read as a `*` too (#225)
+    assert with_check["filter"] <= 2 * sum(map(line.count, ("*", "?", "[", "{", "$(", "`"))), (with_check, calls)
     assert took < 3 * base + 2, (took, base)
     assert gate.decide(c).outcome in ("ask", "allow")

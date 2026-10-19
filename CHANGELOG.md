@@ -6,6 +6,49 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Gate (#225, D-038): a `$( )`, backtick pair or `$(( ))` inside a word no longer hides a secret-store name. Bash
+  drops an empty substitution, so `cat .e$(:)nv`, `cat ~/.n$(:)etrc`, `cat ~/.config/gh/ho$(:)sts.yml`,
+  `cat $HOME/.kube/c$(:)onfig`, `cat ~/.config/gh/$(:)*` and `cat` of `.env` split by an empty backtick pair
+  read the store; they were allowed reads. The store checks now also read the word with each one removed (no
+  output: `cat .e$(:)nv.local`, `cat server.k$(:)ey`, `cat cert.p$(:)em`), with each one as `*` (output:
+  `cat .e$(printf n)v`, `cat ~/.config/gh/$(printf hosts.yml)`, `cat id_ed$((25519))`) and, where one starts a
+  name, as `.*` (output that starts with a dot: `cat $(printf .e)nv`, `cat ~/$(printf .n)etrc`), and
+  `cd ~/.kube && cat c$(:)onfig` and `cd ~/.kube && cat $(ls)` ask too. Working-folder targets are read the same
+  way (as `.*` only with text after it in its part), so `cd ~/.k$(:)ube && cat config`,
+  `cd ~/$(printf .k)ube && cat config`, `env -C ~/.k$(:)ube cat config` and `tar -C ~/.k$(:)ube -czf - .` ask,
+  while `cd $(git rev-parse --show-toplevel)` enters no dot folder. The store-write checks read a word the same
+  way, so `cp x ~/.exo/polic$(:)ies/`, `tee ~/.e$(:)xo/policies/default.yaml`, `ln -s x ~/.exo/polic$(:)ies/y`,
+  `rm -rf ~/.exo/pol$(:)icies` and `cp x ~/.exo/$(printf policies)/default.yaml` are `store_write` (a write to
+  `keys/`, `tee ~/.exo/key$(:)s/a`, is `credentials` as unsplit); they were allowed `shell` writes (or `delete`).
+  One pass per word, so the work stays linear. Words that cannot spell a store name keep their class
+  (`cat notes$(date +%F).txt`, `ls $(git rev-parse --show-toplevel)/src`, `cp x ~/report-$(date +%F).txt`,
+  `cp x out/$(date +%F).json`); a substitution beside a store file name that needs its folder asks, as the same
+  glob would (`cat "$(pwd -P)/config"`, `cat $(git rev-parse --show-toplevel)/config.json`). `<( )` is a
+  `/dev/fd` path and is not read this way. Not covered: a variable in a store name (`cat ~/.n${X}etrc`), a name
+  left with fewer than three characters of its own (`cat .$(printf env)`, as for a glob), a name that a pattern
+  matches rather than a sample, split by a substitution that prints text (`cat server.k$(printf e)y`,
+  `cat .e$(printf n)v.local`, as for the glob `cat server.k*y`; `cat server.k$(:)ey` asks) and a store write whose
+  output has a `/` in it (`cp x ~/$(printf .exo/policies)/x`).
+- Gate (#269, D-038): from inside `~/.exo/run/jobs`, `cat ../exod.principal.k*`, `cat ../exod*`,
+  `cat ../agent-default*` and `grep -r x ..` read the principal credential and were allowed reads, and
+  `tar -C ~/.exo -czf - run` was an allowed `shell`. The run folder's secrets are now store file names for a line
+  that enters a store folder, and on such a line `..` from below the run folder, `run` from the folder that holds
+  it (EXO_HOME, a `.exo` folder or a principal's store) and `<name>/run` from a `principals` folder are the run
+  folder: they ask as `credentials`, also after a relative target (`cd ~/.exo && cd run/jobs && grep -r x ..`,
+  `tar -C ~/.exo -C run/jobs -czf - ..`), after a `cd ..` on the line (`cd ~/.exo/run/jobs && cd .. && grep -r .`)
+  and as a glob or substitution that could be the name, also as a `cd` target (`tar -C ~/.exo -czf - ru?`,
+  `tar -C ~/.exo -czf - r$(:)un`, `grep -r x .$(:).`, `cd .? && grep -r .`). A name is followed down from where
+  its `..` land, and one that ends at a folder holding a run folder asks as `.` in `~/.exo` did:
+  `cd ~/.exo && grep -r x principals/me/run`, `cd ~/.exo/run/jobs && grep -r x ../../principals/me/run`,
+  `cd ~/.exo/run/jobs && grep -r x ../..`, `cd ~/.exo/principals/me && grep -r x .` and
+  `tar -C ~/.exo/principals/me -czf - .`. `cd ~/.exo/run/jobs && cat 1.log`, `tail -f 3.log` and
+  `cd ~/.exo && cd run/jobs && cat 1.log` stay `read`. This fails closed on a line that enters `~/.exo`:
+  `cd ~/.exo && gh run list`, `cd ~/.exo && ls r*`, `cd ~/.exo && ls principals`,
+  `cd ~/.exo/run/jobs && tail -f $(ls -t | head -1)`, `cd ~/.exo/run/jobs && cat $(ls)`,
+  `cd ~/.exo/run/jobs && ls ..` and `ls ../..` ask. Not covered: a tool that reads its working folder without
+  naming it after a `cd ..` (`cd ~/.exo/run/jobs && cd .. && grep -r x`), and a recursive read of `~/.exo` or a
+  principal's store by its full path (`grep -r x ~/.exo`, as before). The `seats/` folder is read once per gate
+  call, not once per glob word (a line of 1,000 globs with 4,096 seat files took 10 s).
 - A pinned block in text the principal did not write no longer reads as one to the model (#279, D-040 amendment).
   The core's system message quotes each span too small to summarize word for word, so a peer's, bus seat's, job
   notice's or tool result's copy of exo-context's `<exo-pinned>` block sat there looking like the principal's pinned
