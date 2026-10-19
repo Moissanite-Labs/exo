@@ -45,7 +45,8 @@ the middle dot as separator come straight from the site.
    one line per tool with state glyph, name, short args, line count and elapsed time (ctrl+o expands); system
    lines dim; tips as `tip · ...` in dim italic; `memory · log 1-16 folded · 1781 → 153 tok` as a cold line.
 3. Panels: approval (orange rule, `APPROVAL · <risk>`, key chips `[o] once [a] always [d] deny`; both `a` and `A` wait for Enter; the card never takes focus automatically and says "tab, click or ctrl+f to answer"; it is removed when the core closes the request, when the turn is stopped, and by a check against `approvals.list` every few seconds), taste,
-   finding and `/context` report (cold rule), peer message (double cold rule, sender and trust in the header,
+   finding, `/context` report and the short orientation `INTRO` shows when the `exo-intro` skill is missing
+   (cold rule), peer message (double cold rule, sender and trust in the header,
    never styled as you). The side panel for `ui.panel` uses the same header and rule.
    The terminal waits for an approval card's removal before mounting the next queued card under the same widget id.
    Answers and close events name their request, so a late event cannot close its replacement. Thread switches and
@@ -68,6 +69,8 @@ the middle dot as separator come straight from the site.
    `memory_status` built-in: `ready`, `off, no principal store` (no store yet: a dim dash, not a green check, and a
    notice naming `exo init <id>`), `did not start` (also a dash), or `log only` (no memory plugin: the agent log and
    summary tree still run). An older core that cannot say leaves the plain label.
+   The boot screen is gone before anything opens over the start (the first-run providers panel or model
+   picker): its dismiss closes the top screen.
 
 Where the numbers come from, all from events the core already sends: `model.call` (`requested`, `route`,
 `usage.cache_read_tokens`), `usage.updated` (context tokens, session cost), `memory.summarized`,
@@ -107,7 +110,8 @@ composer, the transcript or any log, and a key typed after `/providers add <name
 not echoed. After a key change, or a test that passes, the client tells a running core to read keys again. That
 also clears the provider's cooldown and route breaker, so the next message reaches it. At start, if no provider is
 ready, one note says what the default needs: a key, a running local server (its host and port only, never a login
-in its URL), or a CLI that is installed and logged in.
+in its URL), or a CLI that is installed and logged in. Then the panel opens. If providers are ready but no main
+route uses one, the panel opens too, or the default-model picker when only one provider is ready.
 
 ## Focus, the big composer and the inverse layout (D-046)
 
