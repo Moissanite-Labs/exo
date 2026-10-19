@@ -74,3 +74,28 @@ def test_provisioning_a_spend_journal_leaves_no_connection_open(tmp_path):
     for i in range(10):
         SpendJournal.provision(tmp_path / f"journal{i}.sqlite", "alice")
     assert _open_handles() - before < 3
+
+
+def test_an_engine_nobody_closed_can_be_collected(tmp_path):
+    import gc
+    import weakref
+    from exo.core import trace
+    eng = _engine(tmp_path / "home", tmp_path)
+    ref = weakref.ref(eng)
+    del eng
+    gc.collect()
+    assert ref() is None  # the trace sink does not keep it, or its databases, alive
+    trace.report("test", "after the engine is gone")  # a dead sink is skipped, not called
+
+
+def test_a_plain_function_sink_is_kept_and_removable():
+    from exo.core import trace
+    seen = []
+    sink = lambda body, session: seen.append(body.where)  # noqa: E731
+    trace.add_sink(sink)
+    try:
+        trace.report("here", "boom")
+    finally:
+        trace.remove_sink(sink)
+    trace.report("gone", "boom")
+    assert seen == ["here"]
