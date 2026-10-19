@@ -96,12 +96,16 @@ back, and the shorter chain still links. So each append also writes the head (se
   none can be written. So appends never go on more than one event past every anchor. The refusal names the files
   to make writable again. `exo log anchor` reports an anchor beside the ledger it cannot write in one line, with
   exit code 1. A keys/heads copy it cannot write is a warning only.
-  `verify()` reports `anchored_seq`, the lowest seq an anchor holds, next to the head.
+  `verify()` reports `anchored_seq`, the lowest seq an anchor holds, next to the head. When the anchors are more
+  than one event apart, the result also carries a `warning` that names the one not being written. It still passes.
 - The anchor check before an append counts the ledger once per anchor. The write after COMMIT takes indexed
   lookups only, so an append costs what it did before the anchor moved after COMMIT.
 - The anchor under `keys/heads/` is named after the ledger's path with its folder resolved but not the file. A
   ledger file swapped for a symlink to a truncated copy still meets that anchor. A ledger file that is a symlink
-  fails `verify()`, and `append()` and `anchor()` refuse it.
+  fails `verify()`, and `append()` and `anchor()` refuse it. A `Ledger` without an authority opens such a file
+  read-only (#277), so opening it writes nothing through the link: no WAL switch, no tables, no file made at a
+  dangling target. A target that is missing or holds no ledger reads as empty. An authority-mode ledger trusts its
+  signed checkpoints: its appends skip the symlink refusal and write the projection through the link.
 - An anchor is read only as a regular file: a symlink in its place is unreadable. Anchors are written through a
   fresh temporary file (`mkstemp`, with `O_EXCL` and `O_NOFOLLOW`), so a symlink planted in the anchor's folder
   cannot redirect the write.
@@ -123,7 +127,11 @@ back, and the shorter chain still links. So each append also writes the head (se
 What this does not protect against: a process running as the same user that rewrites the database and both anchor
 files together, or deletes both anchors. The gate is what stands in the way of that: `keys/` and the store are
 credentials to it. Nor a store folder deleted whole: `exo memory verify` lists only the stores that exist, so that
-store's anchor under `keys/heads/` is read only with `--principal <id>`.
+store's anchor under `keys/heads/` is read only with `--principal <id>`. Nor a store folder replaced by a symlink to
+another folder: a crafted copy behind the link verifies clean, because the anchor under `keys/heads/` is named after
+the folder the link resolves to. A code fix is tracked with the deferred scan of `keys/heads/` (#277). It has to
+allow for the M1 migration in `docs/ARCHITECTURE.md` (symlink first, then move), where a legitimate move leaves its
+anchor under the old path.
 
 Kinds: `utterance`, `ruling`, `verdict`, `action`, `artifact`, `ingest`, `question`, `answer`,
 `belief_proposed`, `belief_accepted`, `note`.

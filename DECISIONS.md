@@ -1174,7 +1174,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `exo log anchor` refuses to replace an anchor that does not match. `--force` does, for a store an older Exo left
   one event ahead. `exo import-store` skips `.head` with the ledger and drops a stale anchor a deleted store left for
   the destination. Not covered: a store folder deleted whole. `exo memory verify` lists only the stores that exist,
-  so the deleted store's `keys/heads/` anchor is read only with `--principal <id>`.
+  so the deleted store's `keys/heads/` anchor is read only with `--principal <id>`. Nor a store folder replaced by a
+  symlink to another folder: a crafted copy behind the link verifies clean (#277). A code fix is tracked with the
+  deferred `keys/heads/` scan and must allow for the M1 migration in `docs/ARCHITECTURE.md` (symlink first, then
+  move). Since #277 a ledger file that is a symlink is opened read-only when there is no authority, and `verify`
+  warns, without failing, when the two anchors are more than one event apart.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.

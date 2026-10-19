@@ -104,6 +104,7 @@ def cmd_memory(a) -> int:
                     note = ' (matches captured authority head)'
                 else:
                     note = '' if r.get('anchored') else ' (head not anchored yet: it will be on the next write)'
+                    note += f" (warning: {r['warning']})" if r.get('warning') else ''
                 print(f"ledger {name}: {r.get('checked', r.get('local_seq', 0))} events, ok{note}")
             else:
                 where = f" at seq {r['seq']}" if 'seq' in r else ''

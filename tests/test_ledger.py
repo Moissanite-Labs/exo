@@ -293,6 +293,70 @@ def test_a_ledger_swapped_for_a_symlink_to_a_truncated_copy_fails(tmp_path, sign
     assert led.head().seq == 3
 
 
+def _refuses(led):
+    res = led.verify()
+    assert not res["ok"] and "symbolic link" in res["error"]
+    with pytest.raises(LedgerError, match="symbolic link"):
+        led.append("note", {"i": 0}, "agent")
+    with pytest.raises(LedgerError, match="symbolic link"):
+        led.anchor()
+
+
+def test_opening_a_dangling_symlinked_ledger_creates_nothing(tmp_path, signer):
+    """Opening set WAL mode and ran the schema before any symlink check, so a dangling link made the database it
+    points at (#277). It is opened read-only now, and an empty ledger in memory stands in for a missing target."""
+    planted = tmp_path / "elsewhere" / "planted.db"
+    planted.parent.mkdir()
+    path = tmp_path / "ledger.sqlite"
+    path.symlink_to(planted)
+    with Ledger(path, signer) as led:
+        _refuses(led)
+        assert led.head().seq == 0 and list(led.iter()) == []
+    assert list(planted.parent.iterdir()) == [] and not path.with_name("ledger.sqlite.head").exists()
+
+
+def test_opening_a_ledger_symlinked_to_another_database_leaves_it_as_it_was(tmp_path, signer):
+    """A link to some other SQLite database of the user's left it in WAL mode with the ledger's tables and triggers
+    added (#277). Now it stays byte for byte as it was."""
+    other = tmp_path / "notes.db"
+    db = sqlite3.connect(other)
+    db.execute("CREATE TABLE notes (t TEXT)")
+    db.execute("INSERT INTO notes VALUES ('pat')")
+    db.commit()
+    db.close()
+    before = other.read_bytes()
+    path = tmp_path / "ledger.sqlite"
+    path.symlink_to(other)
+    with Ledger(path, signer) as led:
+        _refuses(led)
+        assert led.head().seq == 0
+    assert other.read_bytes() == before
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name != "exo-home") == ["ledger.sqlite", "notes.db"]
+
+
+def test_verify_warns_when_the_anchors_are_more_than_one_event_apart(tmp_path, signer, monkeypatch):
+    """A keys/ copy that cannot be written only logs a warning per append, by design, so a frozen copy can fall far
+    behind. verify says so, without failing (#277). One event apart is the accepted lag and gets no warning."""
+    from exo import ledger as ledger_mod
+    led = Ledger(tmp_path / "l.sqlite", signer)
+    led.append("note", {"i": 0}, "agent")
+    home = led.anchor_paths()[1]
+    real = ledger_mod._atomic_write
+
+    def frozen(path, data):
+        if path == home:
+            raise PermissionError(13, "read-only", str(path))
+        return real(path, data)
+    monkeypatch.setattr(ledger_mod, "_atomic_write", frozen)
+    led.append("note", {"i": 1}, "agent")
+    res = led.verify()
+    assert res["ok"] and "warning" not in res
+    led.append("note", {"i": 2}, "agent")
+    res = led.verify()
+    assert res["ok"] and res["anchored_seq"] == 1
+    assert res["warning"] == f"head anchor {home} is at seq 1, 2 events behind the other: it is not being written"
+
+
 def test_an_anchor_write_does_not_follow_a_symlink_planted_at_its_temporary_name(tmp_path, signer):
     """The old temporary name was `.<name>.<pid>.<thread>.tmp`, opened without O_EXCL or O_NOFOLLOW: a symlink there
     turned the next anchor write into a write to any file the user can write (#221 delta review)."""
