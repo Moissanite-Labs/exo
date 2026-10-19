@@ -37,6 +37,15 @@ must match the file up to the same whitespace and Unicode tolerance (a literal `
 refused, naming the hunk's line and the file's line, and no file changes (#236). Similarity places only the context
 lines, and a similarity match takes the hunk's text as sent.
 
+In `edit_file` the rule counts lines, not exact lines. So one more line, even a lone `}` or the `def` line, lets a
+stale line match again. On a file that holds `def f():`, `    TIMEOUT = 45` and `}`, the `old_string`
+`    TIMEOUT = 30` plus a line `}` matches through `context_aware`, and so does `def f():` plus `    TIMEOUT = 30`.
+Each one replaces the line that now says 45, and the result ends in `(matched via context_aware)`. More exact lines
+do not stop this. With all three lines, `block_anchor` matches. Exact lines only make sure the match lands where you
+meant. So copy `old_string` from a fresh read of the file, with every line exact and enough of them to be unique.
+When the result names `context_aware` or `block_anchor`, the file did not hold `old_string` as written. Read the
+lines it replaced before you go on.
+
 ## Environment of bash and jobs
 
 `bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,
@@ -100,17 +109,22 @@ While a foreground `bash` command runs, its output also goes out in pieces as `t
 them live and sessions.sqlite keeps them. The output is read as one UTF-8 stream, so a character split between two
 reads stays whole in the stream and in the result. Invalid bytes, and a sequence cut off by the end of the output,
 become U+FFFD. Known key values are cut out of the stream as `[redacted]`, even when a key is split between two
-reads. The end of a read that could be the start of a key waits for the next read or for the end of the command.
-Other output is not held back. Redaction finds the keys in the output itself, longest key first, and skips a match
-that overlaps one already taken. The markers go in only after that, so no key can match across a `[redacted]`
-marker. The stream is cut only where no match that redaction could take crosses the cut, whatever output follows.
-So the stream equals redacting the whole output with the key values known when the command started, for any set
-of them. That holds when one key holds another (a URL with a password in it), when keys overlap in a chain and when
-a key holds `[` or `]`. The held text stays under twice the length of all key values together. Each piece is
-redacted once more on its way to clients. That pass keeps the markers already in the piece, so it does not change
-what the stream redaction did. It cuts out a key value learned after the command started, but only inside one
-piece, so such a key split between two pieces still goes out in two parts. The result is redacted as a whole, with
-every key value known by then, when the call returns.
+reads. The end of the unsent output that could be the start of a key waits for the next read or for the end of the
+command. Other output is not held back. Redaction finds the keys in the output itself, longest key first. Each key
+is found in the output with the spans of the keys before it blanked out, so no match overlaps one already taken. The
+markers go in only after that, so no key can match across a `[redacted]` marker. The stream is cut only where no
+match that redaction could take crosses the cut, whatever output follows. So the stream equals redacting the whole
+output with the key values known when the command started, for any set of them. That holds when one key holds
+another (a URL with a password in it), when keys overlap in a chain and when a key holds `[` or `]`. The held text
+stays under twice the length of all key values together. Each piece is redacted once more on its way to clients.
+That pass keeps the markers already in the piece, so it does not change what the stream redaction did. It cuts out a
+key value learned after the command started, but only inside one piece, so such a key split between two pieces still
+goes out in two parts. The result is redacted as a whole, with every key value known by then, when the call returns.
+But every cut made to a result comes before that: any cut a tool makes in its own output, and the 100,000-character
+cap on every result ("Result cap"). For example, `bash` keeps 15,000 characters at each end of a longer output,
+`job_output` keeps the last 20,000, `read_file` cuts a line at 2,000 characters, `grep` cuts a line at 300 and
+`jobs` cuts a command at 100. So a known key value that such a cut splits leaves a part in the result. The stream
+pieces are redacted before the cut, so they hold no such part.
 
 ## Execution brokers (D-020)
 
