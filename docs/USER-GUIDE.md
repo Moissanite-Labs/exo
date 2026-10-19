@@ -205,7 +205,9 @@ longer holds never stays on screen. If you answer a web card that was already cl
 What the gate asks about, and why:
 
 - **Credentials always ask.** Anything that reads or fills a password, token or key asks every time. An "always"
-  answer is never stored for credentials.
+  answer is never stored for credentials. A `grep` or `glob` over a folder leaves out the secret stores in it
+  (`~/.ssh`, `~/.aws`, `.env`, Exo's keys) and says how many it skipped; the agent must name one to read it,
+  which asks.
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another.
@@ -330,7 +332,7 @@ Pick the store with `--principal ID` or `--root DIR`, or set `EXO_PRINCIPAL` onc
 | `exo keygen <name>` | A signing key in `~/.exo/keys/<name>.key`, readable by you only. It will not overwrite an existing key. Keep it private. |
 | `exo log append <kind> --author NAME --text "..."` | Adds one signed event. Kinds include `note`, `ruling`, `utterance`, `question`, `answer`. Needs the author's key. |
 | `exo log verify` | Re-checks every event, link and signature. Each key must be one Exo pinned, and the ledger must still reach the last head it recorded. Prints `{"ok": true, ...}` or fails. Run it when something feels off. |
-| `exo memory verify` | The same check for every store, plus each agent's memory log. A ledger that was cut short or edited fails here. |
+| `exo memory verify` | The same check for every store, plus each agent's memory log. A ledger that was cut short, edited or deleted fails here. |
 | `exo keys` | The keys Exo trusts: its own signing keys, the bus seats it has seen, and which ledger names are you. `exo keys pin` adds or replaces one. |
 | `exo log tail` | The last events. `-n 20` for more, `--kind ruling` to filter. |
 

@@ -133,7 +133,10 @@ def _preflight(p: dict, read: Runner) -> None:
     if status.returncode or status.stdout is None:
         raise ValueError('cannot inspect checkout status; nothing updated')
     if status.stdout.strip():
-        raise ValueError('checkout has local changes or untracked files; commit, stash or remove them first')
+        paths = [line[3:] for line in status.stdout.splitlines() if len(line) > 3]
+        shown = ', '.join(paths[:5]) + (f' and {len(paths) - 5} more' if len(paths) > 5 else '')
+        raise ValueError(f'checkout has local changes or untracked files ({shown}); '
+                         'commit, stash or remove them first')
     ignored = read(_git(root, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard',
                         '--', 'src', 'scripts', 'clients', 'plugins'))
     if ignored.returncode or ignored.stdout is None:
@@ -231,8 +234,16 @@ def cmd_update(argv: list[str], run: Runner = _run, *, read: Runner | None = Non
               'Re-run scripts/install.sh from a checkout.', file=sys.stderr)
         return 1
     if '--dry-run' in argv or '-n' in argv:
+        from . import update_verify
+        try:
+            signed = update_verify.required()
+        except ValueError as e:
+            print(f'exo update: {e}', file=sys.stderr)
+            return 1
         print(f'exo update ({p["mode"]} install, now {display_version()})')
         print('preflight: clean checkout, installer, target pip or uv pip; no probes in dry run')
+        print('signed check: ' + ('on: fetch, verify the upstream tip against the pin, merge --ff-only that '
+                                  'commit instead of the pull' if signed else 'off (update.require_signed)'))
         for step in p['steps']:
             print('+ ' + ' '.join(step))
         print('dry run: nothing changed (pip step uses uv pip if pip is missing)')
