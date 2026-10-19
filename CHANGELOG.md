@@ -194,6 +194,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- exo web shows an open approval that was asked before its replay window (#234). `reconcile_approvals` only dropped
+  cards the core no longer held, so a request older than the newest 5,000 events (first start, or a reconnect after a
+  gap above `RESUME_GAP`) never showed, though the terminal client could answer it. It now also adds each open request
+  from `approvals.list` that the page lacks, with no asked-time (the card shows none, not "asked never"), and an
+  approval already shown is no longer added or counted again when the stream replays it.
 - `apply_patch` no longer replaces a changed `-` line by similarity (#236). A hunk with context, such as
   `-TIMEOUT = 30` over `TIMEOUT = 45` plus `RETRIES = 3`, passed the two-line rule through its context line and
   silently overwrote the 45. Each `-` line must now match its file line up to whitespace, Unicode or a literal `\t`;

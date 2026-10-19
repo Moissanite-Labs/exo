@@ -88,7 +88,8 @@ ASGI app (`asgi.py`) is gone: it re-exposed the routes with no checks.
 
 The stream resumes through the core’s durable event log when its cursor has fallen outside the web event ring.
 After replay the page refreshes durable messages, session activity, open panels and pending approvals. Composer
-drafts and unfinished streamed output survive that refresh. `/context` uses typed token counts (`command.run`,
+drafts and unfinished streamed output survive that refresh. A pending approval older than the replayed window is added from the core's open list (a card with no
+asked-time), and shown once. `/context` uses typed token counts (`command.run`,
 `args="json"`), while the default core command still returns the human-readable report. `/new private` creates a
 private session; malformed known commands show usage. Literal paths such as `/etc/hosts is broken` remain messages.
 

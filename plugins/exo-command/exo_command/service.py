@@ -77,18 +77,23 @@ class CommandCentre:
 
     async def reconcile_approvals(self) -> None:
         """D-045: the core's open list is the truth. A request replayed from the log whose answer was never
-        announced (a restarted core, a cancelled turn on an older core) must not stay on the page as a card."""
+        announced (a restarted core, a cancelled turn on an older core) must not stay on the page as a card.
+        The same list also adds each open request the page lacks: one asked before the replay window shows once."""
         seq0 = self.state.seq
         try:
             res = await self._need_source().call(s.ApprovalsList())
         except Exception:
             return  # an older core without the command, or down: the events still apply
-        live = {a.get("request_id") for a in res.get("approvals") or []}
+        listed = res.get("approvals") or []
+        live = {a.get("request_id") for a in listed}
         stale = [rid for rid, a in self.state.approvals.items()
                  if rid not in live and int(a.get("seq") or 0) <= seq0]
         for rid in stale:
             self.state.forget_approval(rid)
-        if stale:
+        # A request resolved while the listing was in flight is in that (older) listing: never re-add it.
+        gone = self.state.resolved_since(seq0)
+        added = [self.state.add_open_approval(a) for a in listed if a.get("request_id") not in gone]
+        if stale or any(added):
             self._notify()
 
     async def _optional(self, body: Any) -> Dict[str, Any]:

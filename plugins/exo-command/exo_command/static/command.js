@@ -90,7 +90,7 @@ export function mount(app) {
         h("div", { class: "xc-card-top" }, h("h3", null, a.summary), h("div", { class: "xc-tags" }, pill(a.risk + " risk", a.risk === "high" ? "alert" : "warn"))),
         a.call ? h("div", { class: "xc-tool" }, h("span", null, "tool"), " ", a.call.name) : null,
         a.call ? h("pre", { class: "xc-pre-body xc-args" }, JSON.stringify(a.call.arguments || {}, null, 2)) : null,   // the whole call, never cut or boxed: a redraw resets a scroll box
-        h("div", { class: "xc-foot" }, h("span", null, "asked " + ago(a.requested_at)), a.session_title ? h("span", null, a.session_title) : null, choices(a)));
+        h("div", { class: "xc-foot" }, h("span", null, a.requested_at ? "asked " + ago(a.requested_at) : ""), a.session_title ? h("span", null, a.session_title) : null, choices(a)));
     })) : empty("No approvals waiting.", "When an agent asks before it acts, the request shows here and in Chat.");
     return panel("approvals", "Approvals", "answered here or in any other client", body, d.ok === false ? d.error : null);
   }
