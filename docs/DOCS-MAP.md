@@ -164,10 +164,8 @@ version 0.3. Sections 1 to 34 keep their version 0.2 numbers, and the new parts 
   relative name under a tool's working-folder argument, or a wildcard in a folder name above the file is an
   ordinary read of the principal credential (WP §12.5, §15.4; the run folder itself is a secret store since #185);
   a command inside `${...}` is not read (#143, #158); a deny past the `bash -c` depth cap or the `ssh` hop cap only asks (#137, #153); a
-  `categories:` setting or a rule sees only a line's most severe part, while `deny:` and `reserved` entries see
-  every part (D-075, #191); a store write by a relative name, a glob or hard-link spelling (docs/GATE.md), or
-  through `/dev/fd/N` (#217, no change open yet) is an ordinary write (all WP §7, §15.4); a post body from a file,
-  stdin or a command is not swept (#208) and a harmlessly named link to a key file is a plain read (#209, WP
+  store write by a relative name, a glob or hard-link spelling (docs/GATE.md), or
+  through `/dev/fd/N` (#217, no change open yet) is an ordinary write (all WP §7, §15.4); a harmlessly named link to a key file is a plain read (#209, WP
   §15.4); the printed `#token=` link stays in browser history, the browser-to-server hop is not checked by user,
   the first redemption of a launch code is silent, and a browser that never runs the page's script never redeems
   it (#166, built in #177, WP §7, §12.5).
