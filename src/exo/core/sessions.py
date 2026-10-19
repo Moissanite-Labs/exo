@@ -133,9 +133,8 @@ class SessionStore:
         self.path = str(path)
         if self.path != ":memory:":
             private_file(self.path)
-        self._db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
-        self._db.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        self._conn: sqlite3.Connection | None = self._open()
         with self._lock:
             deadline = time.monotonic() + 2  # a new file's switch to WAL can be busy without waiting (#246)
             while True:
@@ -165,9 +164,31 @@ class SessionStore:
         if migrate:
             self.migrate_agents()
 
+    def _open(self) -> sqlite3.Connection:
+        db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys=ON")  # per connection; WAL mode stays set in the file itself
+        return db
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        """The connection, reopened if it is used after close() (a late reader at shutdown, a test that inspects)."""
+        db = self._conn
+        if db is None:
+            with self._lock:
+                if self._conn is None:
+                    if self.path == ":memory:":  # a new connection would be an empty database
+                        raise sqlite3.ProgrammingError("Cannot operate on a closed database.")
+                    self._conn = self._open()
+                db = self._conn
+        return db
+
     def close(self) -> None:
+        """Release the connection and its file handles. Using the store afterwards opens it again."""
         with self._lock:
-            self._db.close()
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     def _q(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._lock:
