@@ -1,4 +1,4 @@
-"""Diagnostic views over a running CoreEngine: /context, /compact, /trace, /findings, /handoff facts.
+"""Diagnostic views over a running CoreEngine: /context, /compact, /trace, /findings, /handoff facts, memory status.
 
 Moved out of ``exo.core.engine`` (docs/ENGINE-SPLIT.md, issue #46). Each function reads the engine's
 public state and its stores; none changes how a turn runs. ``builtin_command`` answers the built-in
@@ -18,7 +18,7 @@ from exo.core.context import AgentContext
 from exo.core.hooks import maybe_await
 from exo.core.findings import STATUSES
 from exo.core.types import to_dict
-from exo.principal import current_caller, is_principal
+from exo.principal import current_caller, demoted, is_principal
 from exo.protocol import schema as s
 from exo.server.engine import CommandFailed
 
@@ -78,8 +78,9 @@ def render_compact(res: dict[str, Any]) -> str:
 def trace_text(eng: CoreEngine, session: str | None, last: int = 10, calls: bool = False) -> str:
     """What ``exo_trace`` and ``/trace`` show: the model this session runs on, then the per-turn table."""
     info = eng.store.get_session(session) if session else None
-    rows = eng.store._q("SELECT body FROM events WHERE session=? AND type='model.call' ORDER BY seq DESC LIMIT 1",
-                          (session,)) if session else []
+    # the newest call that names its route first: a call cut short by a stop or an error names none
+    rows = eng.store._q("SELECT body FROM events WHERE session=? AND type='model.call' ORDER BY "
+                        "COALESCE(json_extract(body, '$.route'), '') = '', seq DESC LIMIT 1", (session,)) if session else []
     served = (json.loads(rows[0]["body"]).get("route") if rows else "") or "no model call recorded yet"
     head = [f"running on: {eng.loop.model or '-'} (session model {info.model if info else '-'}, last call served "
             f"by {served}); chain: {', '.join(r.ref for r in eng.router.chain('main')) or '-'}",
@@ -109,7 +110,7 @@ async def context_text(eng: CoreEngine, session: str | None) -> str:
 async def context_report(eng: CoreEngine, session: str | None) -> dict[str, Any]:
     tree = agent_ctx(eng, session)
     assert session is not None  # agent_ctx has validated the thread
-    r = tree.report(session, await eng.loop.base_system())
+    r = tree.report(session, await eng.loop.base_system(session))
     info = eng._info(session)
     model = info.model or eng.loop.model or ""
     capacity = eng.router.models.get(model, {}).get("context")
@@ -125,7 +126,7 @@ async def compact_text(eng: CoreEngine, session: str | None) -> str:
     st = eng.loop._state.get(session)
     if st is not None and st.running:
         raise CommandFailed("busy", "a turn is running in this thread; try again when it ends")
-    res = await tree.compact(session, await eng.loop.base_system())
+    res = await tree.compact(session, await eng.loop.base_system(session))
     return render_compact(res)
 
 async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = "") -> dict[str, Any]:
@@ -173,6 +174,18 @@ async def handoff_facts(eng: CoreEngine, session: str | None, path_arg: str = ""
             facts[key] = []
     return facts
 
+def memory_status(eng: CoreEngine) -> dict[str, str]:
+    """The memory slot's state: ``on``; ``off`` until a setup step (``NotConfigured``, a quiet notice);
+    ``failed`` (an error at start); ``none`` with no memory plugin (the agent log and summary tree still run)."""
+    mem = eng.plugins.slots.memory
+    if mem is None:
+        return {"state": "none", "provider": "", "text": "no memory plugin: the agent log and summary tree only"}
+    if eng.memory_off:
+        return {"state": "off", "provider": mem.name, "text": eng.memory_off}
+    if eng.memory_init_error:
+        return {"state": "failed", "provider": mem.name, "text": eng.memory_init_error}
+    return {"state": "on", "provider": mem.name, "text": ""}
+
 async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
     if b.name == "context":
         if b.args.strip() not in ("", "json"):
@@ -201,7 +214,7 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         if not b.session:
             raise CommandFailed("bad_request", "rename needs a session")
         if not is_principal(current_caller()):
-            raise CommandFailed("forbidden", "only the principal can rename a session")
+            raise CommandFailed("forbidden", "only the principal can rename a session" + demoted())
         title = " ".join(b.args.split())[:200]
         if not title:
             raise CommandFailed("bad_request", "usage: /rename <title>")
@@ -220,6 +233,8 @@ async def builtin_command(eng: CoreEngine, b: s.CommandRun) -> Any:
         table = await asyncio.to_thread(providers_setup.rows, eng.router, eng.home,
                                        prober=providers_setup.probe)
         return {"providers": table, "main": await eng._main_status(table)}
+    if b.name == "memory_status":  # what the memory plugin is doing, so a client's boot line tells the truth
+        return memory_status(eng)
     if b.name == "handoff_facts":  # D-032: the facts /handoff gives the agent; the client sends the turn
         return await eng.handoff_facts(b.session, b.args)
     if b.name == "harness_error":  # a client (the TUI) reporting an exception it caught

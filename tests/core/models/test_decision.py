@@ -8,8 +8,10 @@ import pytest
 
 from exo.cli import main
 from exo.core.models import FakeProvider, Router
+from exo.core.models.base import error_event
 from exo.core.models.decision import (DecisionError, DecisionProvider, ask_choice_result, choice_question,
                                       noul_question, tighten_only)
+from exo.core.types import ProviderEvent
 
 CHOICE = {"type": "choice", "choice": "high", "probabilities": {"low": 0.17, "medium": 0.29, "high": 0.54},
           "confidence": 0.31}
@@ -99,7 +101,7 @@ def test_generative_fallback_when_decision_route_is_down():
     assert res.probabilities == {"low": 0.0, "medium": 1.0, "high": 0.0}
     prompt = chat.calls[0]["messages"][1].text()
     assert "- medium: ok" in prompt and '"cmd": "ls"' in prompt
-    assert r.cooldowns["jev"].status == 503  # the failed route cools down
+    assert (r.cooldowns["jev"].status, r.cooldowns["jev"].strikes) == (503, 1)  # the failed route cools down once
 
 
 def test_generative_only_route_choice_and_bad_answers():
@@ -109,6 +111,45 @@ def test_generative_only_route_choice_and_bad_answers():
     assert res.probabilities == {"low": 0.0, "high": 1.0} and res.source == "generative"
     with pytest.raises(DecisionError):
         asyncio.run(ask_choice_result(r, "s", "q", ["low", "high"]))
+
+
+def chat_router(chat, **roles):
+    return Router(roles=roles, env={}, instances={"chat": chat}, catalog={"providers": {}})
+
+
+async def _main_ends(r):
+    return [e async for e in r.stream("main", [], [])][-1]
+
+
+@pytest.mark.parametrize("bad", ["no json here", '{"choice": "banana"}'])
+def test_malformed_generative_answer_does_not_cool_the_shared_credential(bad):
+    chat = FakeProvider([bad, "main still works"], name="chat")
+    r = chat_router(chat, main=["chat:big"])  # decision falls back to main: one credential for both
+    with pytest.raises(DecisionError, match="JSON|not one of the options"):
+        asyncio.run(ask_choice_result(r, "s", "q", ["allow", "deny"]))
+    assert r.cooldowns == {} and len(chat.calls) == 1  # asked once, not again on the same credential
+    assert asyncio.run(_main_ends(r)).kind == "done"  # the main role keeps working
+
+
+@pytest.mark.parametrize("bad", ["no json here", '{"choice": "banana"}'])
+def test_malformed_generative_answer_falls_through_to_the_next_model(bad):
+    chat = FakeProvider([bad, '{"choice": "deny"}'], name="chat")
+    r = chat_router(chat, aux=["chat:small"], main=["chat:big"])
+    res = asyncio.run(ask_choice_result(r, "s", "q", ["allow", "deny"]))
+    assert (res.choice, res.route, res.source) == ("deny", "chat:big", "generative")
+    assert [c["opts"]["model"] for c in chat.calls] == ["small", "big"] and r.cooldowns == {}
+
+
+@pytest.mark.parametrize("turn,key", [
+    (error_event("HTTP 503: down", 503), "chat"),
+    ([ProviderEvent(kind="text", text='{"cho'), error_event("HTTP 503: down", 503)], "chat"),  # after output started
+    (error_event("HTTP 404: no such model", 404), "chat|small"),  # a missing model cools that model only
+])
+def test_one_generative_transport_failure_is_one_strike(turn, key):
+    r = chat_router(FakeProvider([turn], name="chat"), decision=["chat:small"])
+    with pytest.raises(DecisionError) as e:
+        asyncio.run(ask_choice_result(r, "s", "q", ["a", "b"]))
+    assert list(r.cooldowns) == [key] and (r.cooldowns[key].strikes, r.cooldowns[key].status) == (1, e.value.status)
 
 
 def test_bad_question_422_does_not_fall_back():
