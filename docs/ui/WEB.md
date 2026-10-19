@@ -19,6 +19,10 @@ when this process reaped it. While it starts, the page shows "Exo core is not ru
 start, the page shows the reason and the log path. If the agent is held by a window that is not sharing it, the page
 says to close that window or run `exo stop`. The background core stays up after the page closes (`exo stop` ends it).
 With `--socket` or `--url` nothing is started; the page says the core is not reachable.
+When the core ends the event stream (a restart, or a stream 4,096 events behind, D-079), `exo web` reconnects and
+replays from the last event it applied, so no reply or approval card is lost. That holds up to 16,384 missed
+events. After a longer gap, such as a long outage while the core kept working, it replays the newest 5,000 as on
+start, so an approval asked before them does not show.
 
 ## Opening the page and the page token (D-039)
 
@@ -252,21 +256,23 @@ DevTools (`tests/browser.py`, skipped when Chrome is missing). The page has no b
 
 Cost in the strip is the session total from `usage.updated`; each row of last calls shows that call's
 `usage.cost_usd` from `model.call`. A call or session the core could not price reads `unknown`, never `$0`.
+A parent's session total includes its finished subagents, which the core rolls up, so the Command page's cost
+panel lists such a child as `in parent` and does not add it again.
 `job.updated` shows as one dim line with a cold label: `job · pytest -q · done · 12.4s`, with the exit code
 when it is not zero.
 
 ## Providers (D-034)
 
 The Providers tab (`providers.js`) shows where keys are stored, one row per provider with a status chip
-(verified with latency, key found, no key, failed with the error class, local running, cli installed), the
-source of the key (never a value), the model count and a default mark. A provider that needs a key has a
-password field with Save, Test and Remove. After Save the field is cleared at once, also on error; the key is
-read once to build the request body and is never logged, shown again, put in a URL or kept in browser storage.
-A select lists the configured routes, then the available ones, with Save default. The routes need the page
-token: `exo web` prints a link with `#token=...`; the page moves it to `sessionStorage` (this tab only),
-removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider routes also
-need a loopback peer). Without a token the tab only asks you to open that link. When no provider is ready, the Chat view shows one quiet line with a
-link to this tab.
+(verified with latency, key found, no key, no base_url, failed with the error class, local running, cli
+installed), the source of the key (never a value), the model count and a default mark. A provider that needs a
+key has a password field with Save, Test and Remove. After Save the field is cleared at once, also on error;
+the key is read once to build the request body and is never logged, shown again, put in a URL or kept in
+browser storage. A select lists the configured routes, then the available ones, with Save default. The routes
+need the page token: `exo web` prints a link with `#token=...`; the page moves it to `sessionStorage` (this
+tab only), removes it from the address bar and sends it as `X-Exo-Token` on every call (D-039; the provider
+routes also need a loopback peer). Without a token the tab only asks you to open that link. When no provider
+is ready, the Chat view shows one quiet line with a link to this tab.
 
 A Test that passes also tells the running core to reload that provider (the reply carries `core_reloaded`). A
 provider that was cooling down after a failure then takes the next message at once.

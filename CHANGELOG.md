@@ -317,6 +317,49 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   live in `exo.model_spend.admit_native`.
 
 ### Fixed
+- Protocol strict decoding: a command whose `type` is not a string is `unknown_command`, a wrong-typed `int`,
+  `float`, `str` or `bool` body field (such as `events.subscribe` `since: "5"`) is `bad_body`, and JSON nested too
+  deep is `bad_json`. An `events.subscribe` `since` past SQLite's 64-bit range is `internal`. Before, these raised
+  out of the server: over HTTP the connection closed with no reply, and on stdio one bad line ended
+  `exo serve --stdio`. The server now answers every malformed command and keeps serving. Messages an older core
+  stored load as written.
+- A client that stops reading the event stream can no longer grow the core's memory (D-079). The hub queued every
+  event for every subscriber without a limit. Now a subscriber 4,096 unread events behind has its stream ended
+  after the last event it read, and it resumes with `since`. Every client in the repo resumes and misses nothing:
+  the protocol client with `reconnect`, the terminal window (run in process, joined or taken over), stdio, the
+  exo-bus link, and `exo web`, which now replays from the last event it applied instead of the newest 5,000. It
+  does so for up to 16,384 missed events. A longer gap replays the newest 5,000, as before.
+- A shell command that prints fast no longer floods the event stream. Its output chunks went out as one
+  `tool.output` (and one database write) each, and one command could queue thousands before any client read one.
+  The chunks queued between two loop turns now go out as one event.
+- Token counts mean the same on every provider (D-080). `input_tokens` is now the uncached input on OpenAI-style
+  routes too, with cached tokens counted as cache reads, as Anthropic reports them. Before, the TUI context gauge
+  read about double on those routes and the cache share about half. Subagents there were stopped for `budget` after
+  a few calls with a large cached prompt, while on Anthropic the budget ignored cached context. The per-child budget
+  now counts uncached input, cache writes and output. Cache reads do not count. Context-engine plugins get the
+  whole prompt of the turn's last model call in `prompt_tokens`, not the sum of every call in a tool-using turn.
+  Cost and model spend are unchanged.
+- A seat's `[models]` tables (`roles`, `providers`, prices) now merge over config.json's entry by entry instead of
+  replacing the whole table. A seat that set one role used to send `main` and `aux` back to the catalog's cloud
+  defaults and drop config.json's prices. Under the `docs/SEATS.md` example, a local-only config sent aux and
+  decision calls to cloud routes. A seat's provider entry merges key by key over config.json's entry, by the rule
+  for provider tables below. A seat that sets only `read_timeout` keeps config.json's `base_url`, so a provider
+  that config.json points at a LAN server stays there and never gets the catalog key.
+- A partial `[models.providers.NAME]` table now merges over the catalog entry instead of replacing it. The
+  documented Laya port override (`base_url` only) no longer turns Laya into a chat provider open to every role,
+  and a one-key table such as `read_timeout = 300` no longer makes streams through that provider fail with
+  `'base_url'`. A provider without a `base_url` gets no credential, so its route is skipped, and the providers
+  list (`exo providers`, `/providers`, the web view) shows it as `no base_url` instead of `key found`. A table
+  that sets `base_url` uses only the `key_env` and `headers` it sets and is keyless without one, as before: the
+  catalog key (for example `OPENAI_API_KEY`) and a config.json `headers` table are never sent to that URL. Set `key_env` in that table to send a key there.
+- Command centre cost panel: a finished subagent's spend counted twice. The core rolls the child's total into its
+  parent's `session_total`, and the panel then added the child's own row again, in the total, the seat and model
+  bars and the session counts. A delegated child at $0.05 under a $0.10 parent showed $0.20 instead of $0.15. The
+  child's row now reads `in parent` and is left out of the sums. A running child, a scheduled job and a fork are
+  still summed, since nothing rolls them up.
+- `exo chat` can give a standing grant: typing `allow_always`, as the approval prompt offers it, then Enter to
+  confirm sends `allow_always`. Before, the client read only the first letter, so it sent `allow`. `Allow` no
+  longer denies.
 - SYM-2P validators (`exo.protocols.sym2p` and the `sym-protocol` skill's `sym-validate.py`) reject an id, ref, hash
   or timestamp with a trailing newline. The grammar patterns ended in `$`, which also matches before a final
   newline, so `"builder\n"` passed as an ID and slipped past the `(f, id)` duplicate check.
@@ -648,6 +691,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
+- `exo chat` approvals no longer fail open. A reply that only starts with a or y (`abort`, `yeah no`) used to
+  approve. Now a reply is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else
+  denies.
 - Skill gates fail closed. The draft pipeline's prose gate passes only when `check-prose.py` exits 0. Before, it
   passed whenever the output held the word "clean", so a draft named `cleanup.md` passed with findings. A missing
   `check-prose.py` now blocks, as does a missing `check-mermaid.py` when the draft has a mermaid fence. Both were
