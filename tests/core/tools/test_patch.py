@@ -129,5 +129,20 @@ def test_minus_line_whitespace_and_unicode_rules_unchanged(run, tmp_path):
 
 def test_changed_lone_minus_line_is_refused(run, tmp_path):
     f, res = _apply(run, tmp_path, "TIMEOUT = 45\nRETRIES = 3\n", "-TIMEOUT = 30", "+TIMEOUT = 60")
-    assert res.is_error and "'TIMEOUT = 45'" in res.text()
+    assert res.is_error
     assert f.read_text() == "TIMEOUT = 45\nRETRIES = 3\n"
+
+
+def test_stale_one_line_hunk_changes_nothing(run, tmp_path):
+    # The file's line changed since the hunk was written: '-MAX_RETRIES = 3' must not rewrite 'MAX_RETRIES = 7',
+    # with or without a blank context line, a context hint, or a second file in the patch.
+    f, other = tmp_path / "r.py", tmp_path / "o.txt"
+    other.write_text("keep\n")
+    for body in (["-MAX_RETRIES = 3", "+MAX_RETRIES = 5"],
+                 [" ", "-MAX_RETRIES = 3", "+MAX_RETRIES = 5"],
+                 ["@@ import os @@", "-MAX_RETRIES = 3", "+MAX_RETRIES = 5"]):
+        f.write_text("import os\n\nMAX_RETRIES = 7\n")
+        res = run("apply_patch", patch=P("*** Update File: o.txt", "-keep", "+changed", "*** Update File: r.py", *body))
+        assert res.is_error and "not found" in res.text() and "no files changed" in res.text(), res.text()
+        assert "MAX_RETRIES = 7" in res.text()
+        assert f.read_text() == "import os\n\nMAX_RETRIES = 7\n" and other.read_text() == "keep\n"

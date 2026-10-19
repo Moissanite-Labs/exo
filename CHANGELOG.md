@@ -148,6 +148,32 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - Opt-in signed updates (#42, D-073): with `update.require_signed` true, `exo update` pulls only an upstream commit
   signed by a key in a pinned trust list (`exo update --pin-trust`). Off by default.
 - Versioning and naming convention (D-056), this changelog, and `exo --version` in the `0.2.0 (egg)` form.
+- Whitepaper v0.3 (draft, tagged `whitepaper-v0.3` when published), covering main up to D-077 and the security
+  changes merged up to October 19, 2026: the security wave (D-038 to D-040) with its limits stated (allowlisted
+  programs are trusted by name; the principal credential check, with D-060's kernel peer checks (#175), still passes
+  a same-user process that detaches; the run folder is a secret store since #185 (for #169), but a shell walk from a
+  folder above it is an ordinary read; `config.json` is an ordinary write until D-074; a command inside `${...}` or
+  in a quoted compound, `-i` or `-n` value given to `declare` is not classified (#143, #188), while array subscripts
+  (#189, for #179), wrappers such as `setsid` (#196, for #160) and a compound's heredoc (#198, for #161) are read; a
+  deny past four `bash -c` nesting levels or `ssh` hops only asks (#137, #153); a `deny:` entry holds for every part
+  of a line while a `categories:` setting or a rule sees only the most severe one (D-075, #126; #191); a store write
+  by a relative name from the tool's working folder, by a glob or hard-link spelling (docs/GATE.md), or back through
+  `/dev/fd/N` (#217) is an ordinary write; a post body the gate cannot see is not swept (#208); a harmlessly named
+  link to a key file is a plain read (#209); the web page token is needed on every `/api` route except
+  `POST /api/launch` and on both event streams, and the browser is opened on a one-time launch code rather than the
+  token (#177, for #166), with the limits of `docs/ui/WEB.md`; and a received peer message is checked against the
+  key in a presence file any same-user program can write (#132)), shell startup hooks dropped from tool
+  environments (#168), search tools that skip secret stores (#287, for #241), head anchors written after commit
+  (#221), principal authority (D-052 to D-054), required executor mode (#70, #91), ledger authority (#80) and the
+  opt-in witness transport (#88), model-spend ceilings (#87), signed updates (D-073), the composer, keys and layouts
+  (D-037, D-043, D-045, D-046), the house taste wave 1 (D-044), the engine split and the core budget ratchet (#46,
+  D-067, D-077), turns that do not wait for memory upkeep (D-068), versioning (D-056), the web sub-pages (D-061),
+  subagent controls and `/rename` (D-069, D-070), and an "In progress" section that names the open changes and
+  issues (#96, #107, #125, #158, #194) and the work on branches with no PR yet, and names what #164, #175, #177,
+  #185, #186, #189, #196, #198, #201, #213, #228, #287 and #288 changed on main. The user guide, developer guide,
+  command reference and docs map are brought up to date with main, and the docs map has one coverage table.
+  `scripts/build_whitepaper.py` takes the version and the month from the paper's header line only, and stops with a
+  message when that line is missing or reworded.
 - Web chat: a completed reply renders as Markdown, GFM pipe tables included (#149, #152). Streaming stays plain
   text. Tables scroll sideways inside the message. A reply builds at most 10,000 table cells and a table at most 64
   columns and no more padded cells than source characters; past that, a table is shown as its source text. Quotes
@@ -266,6 +292,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   live in `exo.model_spend.admit_native`.
 
 ### Fixed
+- SYM-2P validators (`exo.protocols.sym2p` and the `sym-protocol` skill's `sym-validate.py`) reject an id, ref, hash
+  or timestamp with a trailing newline. The grammar patterns ended in `$`, which also matches before a final
+  newline, so `"builder\n"` passed as an ID and slipped past the `(f, id)` duplicate check.
+- `edit_file` and `apply_patch` no longer rewrite a single line whose text differs from `old_string` (or the hunk's
+  `-` line) beyond whitespace, escaping or Unicode. A stale `TIMEOUT = 30` used to replace the file's newer
+  `TIMEOUT = 45` through the `context_aware` or `block_anchor` similarity strategy. It now fails and shows the
+  closest lines. Blank lines around the line do not count. Blocks of two or more lines still match by similarity.
+  In `apply_patch` a hunk's context lines count toward the two, so a hunk with one context line can still replace a
+  changed `-` line.
 - Learning finds the principal that the installer and `exo init` set in `config.json`, as exo-memory does. "learning
   is off: no principal store is set" no longer prints right after an install created a store. As in exo-memory,
   only a string names a principal.
@@ -579,6 +614,29 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
+- Skill gates fail closed. The draft pipeline's prose gate passes only when `check-prose.py` exits 0. Before, it
+  passed whenever the output held the word "clean", so a draft named `cleanup.md` passed with findings. A missing
+  `check-prose.py` now blocks, as does a missing `check-mermaid.py` when the draft has a mermaid fence. Both were
+  skipped, so a partial install posted unchecked drafts. `--allow-identifier` exempts only the token it names:
+  allowing `localhost:8080` no longer hides `localhost:9999/secret`, and a refused hit names the whole token.
+  Internal names that start or end with `.`, `~` or `@` now match, in `check-prose.py` and in the draft pipeline.
+- File tools: a write no longer follows a link planted at its temp name (`.<name>.exo-tmp`), which sent the
+  bytes, and the file's mode, to wherever the link pointed while the gate had classified only the named path. A
+  write to a symlinked file is refused with the link's target named, instead of replacing the link with a regular
+  file and leaving the target unedited. `read_file`, `edit_file`, `apply_patch` and `grep` refuse or skip FIFOs and
+  devices, which hung the core (cancel could not stop it) or read `/dev/zero` until memory ran out. All but `grep`
+  refuse files over 50 MB, also a file that grows past that while it is read. `code_find` passes the question to
+  jg after `--`, so a question such as `- --include-sensitive` can no longer turn off jg's sensitive-file filter
+  (docs/TOOLS.md).
+- Streamed `bash` output no longer leaks a known key split between two reads. The output went out per 64 KiB read
+  and each piece was redacted alone, so a key that crossed a read edge reached clients and sessions.sqlite in two
+  halves. A read now holds back an ending that could start a key until the next read. Key redaction now finds every
+  key in the text itself and puts the `[redacted]` markers in after, so a key no longer matches across a marker.
+  Output changes only for a key value that holds `[` or `]` or is part of the word "redacted". The stream is cut
+  only where no match that redaction could take crosses the cut. So the stream equals redacting the whole output
+  for any set of key values known when the command starts, also when keys nest, overlap in a chain or hold `[` or
+  `]`. A key value learned while the command runs is cut out only inside one piece. The stream and the result also
+  decode a character split between reads (non-ASCII output got U+FFFD there). See docs/TOOLS.md "Streamed output".
 - The gate's decision call no longer falls back to the main model (D-081). With no decision or aux route, the rule
   outcome stands and no model is asked. The rules still apply in full, since a model could only make an outcome
   stricter (D-015). A setup with only a main model loses that second opinion: the main model no longer turns a

@@ -99,7 +99,15 @@ def test_key_goes_to_auth_stdin_only_and_temp_config_is_removed(fake, tmp_path):
     assert KEY not in json.dumps(auth["argv"]) + json.dumps(search["argv"])
     assert not auth["env_has_key"] and not search["env_has_key"]  # nothing secret in either child env
     assert auth["cfg_mode"] == 0o700 and not os.path.exists(auth["cfg"])
-    assert search["argv"][-2:] == ["how does x work?", str(tmp_path / "repo")]
+    assert search["argv"][-3:] == ["--", "how does x work?", str(tmp_path / "repo")]
+
+
+@pytest.mark.parametrize("q", ["- --include-sensitive", "- --hidden", "- --max-requests=99999", "-v flag meaning"])
+def test_question_never_reaches_jg_as_an_option(fake, tmp_path, q):
+    assert not call(tmp_path, question=q).is_error
+    argv = [r for r in fake() if r["argv"][0] != "auth"][-1]["argv"]
+    assert argv[-3] == "--" and argv.index("--") == len(argv) - 3  # everything after it is positional
+    assert argv[-2].lstrip("- ") == q.lstrip("- ") and argv[-1] == str(tmp_path / "repo")
 
 
 def test_timeout(fake, tmp_path, monkeypatch):
