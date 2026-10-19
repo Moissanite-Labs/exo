@@ -325,19 +325,23 @@ elif [ -n "$CFG_HH" ] && [ -d "$CFG_HH/plugins" ]; then  # copies an earlier run
   fi
 fi
 [ -z "$HPLUG" ] || [ "$HPLUG" = "$EXO_HOME/plugins" ] || PDIRS+=("$HPLUG")
-# The core loads every folder in $EXO_HOME/plugins, so a selection removes the ones an earlier run installed (marked
-# .exo-managed) that it leaves out. Folders you added and links stay. A Hermes home is left as is: config.yaml decides.
-if [ -n "$PLUGINS" ]; then
-  for d in "$EXO_HOME"/plugins/*/; do
-    case " ${SELECTED[*]} " in *" $(basename "$d") "*) continue ;; esac
-    if [ ! -L "${d%/}" ] && [ -f "$d.exo-managed" ]; then run rm -rf "${d%/}"; fi
-  done
-fi
 MARK=".exo-managed"
 foreign() { [ -e "$1" ] && [ ! -f "$1/$MARK" ]; }  # something is at $1 and Exo did not install it
 # Exo installed $1 under this name: its marker names it. cp -r copies the hidden marker too, so a copy or a renamed
 # folder still names the folder it came from, and it is yours.
 managed_as() { [ -f "$1/$MARK" ] && grep -qxF "name: $(basename "$1")" "$1/$MARK"; }
+# remove_managed DIR: remove a marked folder Exo no longer ships or selects, only when Exo installed it under this
+# name. A marker that names another folder came with a copy. One with no name line comes from an install before
+# markers named their folder, so Exo cannot tell it from a copy. Either way the folder stays, with a warning.
+remove_managed() {
+  if managed_as "$1"; then
+    run rm -rf "$1"
+  elif grep -q '^name: ' "$1/$MARK"; then
+    warn "$1 was not installed by Exo under this name (its $MARK came with a copy); left alone. Delete $1/$MARK to stop this warning."
+  else
+    warn "$1 has a $MARK from an older install that does not name the folder, so it may be a copy: left alone, and still loaded. Delete $1 if Exo installed it, or delete $1/$MARK to keep it."
+  fi
+}
 # A pack skill's marker also records the checksum of the SKILL.md Exo wrote, so a refresh can say it replaces an edit.
 mark_managed() {  # mark_managed DST SRC
   if [ "$DRY" -eq 1 ]; then echo "+ write $1/$MARK"; else
@@ -377,6 +381,17 @@ copy_managed() {
   fi
   mark_managed "$dst" "$src"
 }
+# The core loads every folder in $EXO_HOME/plugins, so a selection removes the ones an earlier run installed that it
+# leaves out (remove_managed: a copy of a plugin is kept, #268). Folders you added and links stay. A Hermes home is
+# left as is: config.yaml decides.
+if [ -n "$PLUGINS" ]; then
+  for d in "$EXO_HOME"/plugins/*/; do
+    d="${d%/}"
+    case " ${SELECTED[*]} " in *" $(basename "$d") "*) continue ;; esac
+    [ ! -L "$d" ] && [ -f "$d/$MARK" ] || continue
+    remove_managed "$d"
+  done
+fi
 for PDIR in "${PDIRS[@]}"; do
   [ -d "$PDIR" ] || run mkdir -p "$PDIR"
   for name in "${SELECTED[@]}"; do
@@ -420,11 +435,7 @@ elif [ -f "$SKMAN" ]; then
   for d in "$SKDIR"/*/; do
     d="${d%/}"
     [ ! -L "$d" ] && [ -f "$d/$MARK" ] && [ ! -d "$EXO_SRC/skills/$(basename "$d")" ] || continue
-    if managed_as "$d"; then
-      run rm -rf "$d"
-    else
-      warn "$d was not installed by Exo under this name (its $MARK came with a copy); left alone. Delete $d/$MARK to stop this warning."
-    fi
+    remove_managed "$d"
   done
   man="$SKDIR/MANIFEST.json"
   if [ -L "$man" ] || { [ -e "$man" ] && [ ! -f "$SKDIR/$MARK" ] && ! cmp -s "$SKMAN" "$man"; }; then
