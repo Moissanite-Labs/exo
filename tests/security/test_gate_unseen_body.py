@@ -59,6 +59,22 @@ UNSEEN = [
     f"echo clean | timeout 5 gh pr comment 5 {R} --body-file - < notes.md",
     f"gh issue create {R} -t -b -b 'Zork'",                          # -t takes `-b`; the body is Zork
     f"gh pr comment 5 {R} --body 'A note.\nF' --attach shot.png",
+    # second review: expansions without `$` (bash posts "Zork Zok", or keeps the last of two --body= words) ...
+    f"echo Zo{{r,}}k'\nF' | gh pr comment 5 {R} --body-file -",
+    f"gh pr comment 5 {R} --body=Zo{{,rk}}'\nF'",
+    f"gh pr comment 5 {R} --body Zo*'\nF'",
+    f"gh pr comment 5 {R} --body-file - <<< ~/x",
+    # ... a heredoc or here-string on another descriptor is not gh's stdin ...
+    f"cat notes.md | gh pr comment 5 {R} --body-file - 3<<'EOF'\nok\nF\nEOF",
+    f"cat notes.md | gh pr comment 5 {R} --body-file - 2<<< 'ok\nF'",
+    f"exec < notes.md; gh pr comment 5 {R} --body-file - 3<<'EOF'\nok\nF\nEOF",
+    # ... bash ends a heredoc only on the exact delimiter line, so these bodies run on to `echo Zork` ...
+    f"gh pr comment 5 {R} --body-file - <<'EOF'\nok\nF\nEOF \necho Zork\nEOF",
+    f"gh pr comment 5 {R} --body-file - <<'EOF'\nok\nF\n EOF\necho Zork\nEOF",
+    f"gh pr comment 5 {R} --body-file - <<'EOF'\nok\nF\nEOF\r\necho Zork\nEOF",
+    f"gh pr comment 5 {R} --body-file - <<'EOF'\nok\nF\n\tEOF\necho Zork\nEOF",
+    # ... and a long text option takes the next word as its value
+    f"gh issue create {R} --title --body --body 'Zork'",
 ]
 
 
@@ -87,6 +103,10 @@ SEEN = [
     f"cat <<'EOF' | gh pr comment 5 {R} --body-file -\nA note \\ ok\nF\nEOF",
     f"gh pr create {R} -t hi -b 'A note.\nF' -a me -r someone -l bug",
     f"gh pr review 5 {R} -a -b 'A note.\nF'",                       # -a is --approve here, no value
+    f"gh pr comment 5 {R} --body-file - <<-'EOF'\n\tA note.\n\tF\n\tEOF",   # <<- drops the leading tabs
+    f"gh pr comment 5 {R} --body-file - 0<<'EOF'\nA note.\nF\nEOF",
+    f"gh pr create {R} --title 'Fix {{x}}' --body 'A note.\nF'",
+    f"gh issue create {R} --title hi --body 'A note.\nF'",
 ]
 
 
@@ -209,3 +229,9 @@ def test_a_curl_request_the_gate_cannot_read_is_a_post(line):
 ])
 def test_local_and_plain_curl_calls_keep_their_category(line, category):
     assert classify(sh(line)).category == category
+
+
+def test_gh_placeholders_are_not_brace_expansions():
+    # `{owner}` has no comma or `..`, so bash keeps it; gh fills it in. The body stays readable.
+    c = classify(sh("gh api repos/{owner}/{repo}/issues/5/comments -f body='A note.\nF'"))
+    assert c.category == "github_post" and not body_unseen(c) and c.text == "A note.\nF"
