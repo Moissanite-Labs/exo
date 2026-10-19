@@ -30,6 +30,7 @@ from exo.core.models.keys import lookup_key
 from exo.core.tools.builtin.search import _root
 from exo.core.tools.builtin.shell import DEFAULT_TIMEOUT, MAX_TIMEOUT, kill_process_group, timeout_arg
 from exo.core.tools.registry import Registry, ToolContext, ToolError
+from exo.gate import holds_secret_store
 
 PACKAGE = "@dzhng/jevgrep@0.8.0"
 KEY_ENV = "TYPESAFE_API_KEY"
@@ -184,7 +185,7 @@ def _search(runner: list[str], backend: Backend, question: str, root: Path, cwd:
         if code != 0:
             return code, out, _scrub(f"jg auth failed: {err or out}", [backend.secret])[:500]
         left = max(1.0, timeout - (time.monotonic() - t0))
-        code, out, err, status = _run([*runner, "--max-output-bytes", str(MAX_JG_BYTES), question, str(root)],
+        code, out, err, status = _run([*runner, "--max-output-bytes", str(MAX_JG_BYTES), "--", question, str(root)],
                                       env, cwd, left, None, cancel)
         return code, out, _scrub(err, [backend.secret]) if status == "ok" else status
     finally:
@@ -204,10 +205,13 @@ def _page(text: str, page: int) -> str:
 
 
 def code_find(args: dict[str, Any], ctx: ToolContext) -> str:
-    question = str(args["question"]).strip().lstrip("-").strip()  # a leading dash would read as a flag
+    question = str(args["question"]).strip().lstrip("-").strip()  # jg gets it after "--"; this is a second guard
     if not question:
         raise ToolError("question must not be empty")
     root = _root(args, ctx)
+    if holds_secret_store(str(root)):  # jg reads the whole folder and cannot skip Exo's stores (#241)
+        raise ToolError(f"code_find does not search {root}: it holds secret stores (home folder, EXO_HOME, "
+                        "~/.ssh...). Name a project folder, or use grep, which skips them.")
     page = int(args.get("page") or 1)
     cache_key = (str(root), question)
     if page > 1 and cache_key in _pages:

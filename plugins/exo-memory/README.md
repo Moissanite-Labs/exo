@@ -24,6 +24,10 @@ turn is logged under that author. `exo_note` cannot write `ruling` or `answer` (
 `agent_note`), and `exo_should_have_been` is signed as the agent with `for: <principal>`. On first use the provider
 adds its configured principal id to the key registry, so consolidation reads that id as the principal.
 
+Private threads (D-028): the Exo core calls no write hook in or under a private thread (its delegate children
+included), and passes `agent_context="private"` to a tool called there. Then `exo_note` and
+`exo_should_have_been` write nothing and return an error that says why. `exo_recall` and `exo_get` still answer.
+
 A correction becomes a `verdict` event that points at the agent output it judges. If that output is not
 in the ledger yet, it is logged first.
 
@@ -49,7 +53,11 @@ Everything lives in the principal store. Nothing is written to the Exo home exce
 
 The Exo plugin loader finds this folder under `plugins/`. Select it with `memory_provider: exo-memory` in `$EXO_HOME/config.json` and set `EXO_PRINCIPAL` (or `plugin_config`).
 
-A store must exist first: `exo init <id>`.
+A store must exist first: `exo init <id>`. It also sets the active principal in `$EXO_HOME/config.json`, which the
+plugin falls back to when nothing above names one. With no principal at all, memory is off and that is a setup state,
+not a fault: `initialize` raises `exo.core.slots.NotConfigured`, the core shows one quiet notice naming
+`exo init <id>` and files no finding, and the plugin offers no tools. It turns on at the next start after the store
+exists.
 
 ## Config
 

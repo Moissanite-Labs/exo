@@ -1,4 +1,6 @@
 import os
+import shutil
+import sqlite3
 import stat
 from pathlib import Path
 
@@ -7,7 +9,7 @@ import pytest
 from exo import onboard as ob
 from exo import privacy
 from exo.config import Config
-from exo.ledger import Ledger
+from exo.ledger import Ledger, LedgerError
 from exo.store import PrincipalStore
 
 ANSWERS = """answers:
@@ -167,6 +169,55 @@ def test_import_store_include_private(tmp_path):
     st = ob.import_store(src, tmp_path / "out", include_private=True)
     assert (tmp_path / "out/corpus/private/dialogue.jsonl").read_text() == '{"secret": true}\n'
     assert st["lint"].errors == []
+
+
+def _exo_store(root: Path, events: int = 1) -> PrincipalStore:
+    """A store `exo init` made, with an anchored ledger (D-040)."""
+    store = ob.create_store("pat", root)
+    with ob._writable_ledger(store.ledger_path, "pat") as led:
+        for i in range(events):
+            led.append("note", {"i": i}, "pat")
+    return store
+
+
+def _ledger_ok(root: Path) -> int:
+    with Ledger(root / "ledger.sqlite") as led:
+        res = led.verify()
+        assert res["ok"] and res["anchored"], res
+        return len(led)
+
+
+def test_import_store_of_an_exo_store_leaves_a_working_ledger(tmp_path):
+    src = _exo_store(tmp_path / "src")
+    st = ob.import_store(src.root, tmp_path / "out")
+    assert {"ledger.sqlite", "ledger.sqlite.head"} <= set(st["skipped"])  # the anchor goes with its ledger
+    assert _ledger_ok(tmp_path / "out") == 1                               # just the ingest event
+
+
+def test_import_store_onto_the_path_of_a_deleted_store(tmp_path):
+    dest = tmp_path / "p"
+    _exo_store(dest, events=2)
+    shutil.rmtree(dest)  # its anchor under $EXO_HOME/keys/heads stays behind
+    ob.import_store(_hafiz_like(tmp_path / "kb"), dest)
+    assert _ledger_ok(dest) == 1
+
+
+def test_import_store_include_private_keeps_the_ledger_and_its_anchor(tmp_path):
+    src = _exo_store(tmp_path / "src")
+    ob.import_store(src.root, tmp_path / "out", include_private=True)
+    assert _ledger_ok(tmp_path / "out") == 2
+    old = _exo_store(tmp_path / "old", events=3)  # a deleted store whose home anchor is ahead of the copy
+    shutil.rmtree(old.root)
+    ob.import_store(src.root, old.root, include_private=True)
+    assert _ledger_ok(old.root) == 2
+    db = sqlite3.connect(src.ledger_path)  # a source cut short behind its triggers: the copied anchor catches it
+    db.execute("DROP TRIGGER events_no_delete")
+    db.execute("DELETE FROM events")
+    db.execute("CREATE TRIGGER events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'no'); END")
+    db.commit()
+    db.close()
+    with pytest.raises(LedgerError, match="events were removed"):
+        ob.import_store(src.root, tmp_path / "cut", include_private=True)
 
 
 def test_import_store_rejects_non_store(tmp_path):

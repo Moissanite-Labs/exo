@@ -6,6 +6,7 @@ each call, records the decision in the signed ledger, and turns an ask into the 
 `approval.requested`. This page covers what D-033 added: what an approval covers, who may give
 it, how long "always" lasts, and the sweep for internal names in outbound posts. D-038 made the
 shell classifier an allowlist and put the store itself behind the gate (see the last three sections).
+D-081 keeps the decision model's second opinion off the main model (see "The decision model's second opinion").
 
 ## Required executor audit
 
@@ -85,8 +86,13 @@ The core never takes the answerer from the `approval.respond` body. The transpor
   when it stops. A credential sent from a process that is a child, grandchild and so on of the
   core (a bash tool call or a background job) does not count, and neither does one from another
   user or from a process the kernel cannot name (see "Unix peer authentication" below).
-- **local**: everything else on the socket (a tool subprocess, a channel, another daemon), and
-  every stdio or TCP connection.
+- **local**: everything else on the socket (a tool subprocess, another daemon), and every stdio or
+  TCP connection.
+- **channel**: a channel exod runs in its own process (the exo-bus channel), through
+  `ChannelLink` in `src/exo/server/app.py`. It has the standing of a local caller, and only it may
+  hand the core a bus message (`docs/PEERS.md` "Bus seats"). No transport stamps it: a socket
+  client that names itself `channel` with the credential is `principal:channel`, and without it is
+  local.
 
 A principal connection answers as the principal; `client` is only a label (`principal:tui`,
 `principal:web`). A local connection can answer only as a seat, with the signature above. An
@@ -144,7 +150,9 @@ caught by this check (issue #31); an OS sandbox for tools is still the fix (D-03
 the core's log say so. This fails closed on purpose: stopping the walk at the first unreadable
 ancestor would let `tool -> sudo -u $USER exo` pass. A client in another PID namespace than the core
 is refused too. An old client against a new core sends the whole record as its token and is local
-without a message; restart `exo`, `exo web` and `exo chat` after an update.
+without a message; restart `exo`, `exo web` and `exo chat` after an update. The browser-to-web hop (the
+`exo web` page to its own server, over TCP) is not peer-checked; the page token protects it and, since
+#177, the one-time launch code (D-039, #166).
 
 **Snapshot and liveness contract.** `hello` returns `instance` (this launch) and `heartbeat` (seconds
 between `: ping` comments on `GET /events`; the capability list has `heartbeat`). The event stream
@@ -166,12 +174,63 @@ card the core still holds.
 A seat may approve one exact text with `allow`. Only a principal connection can answer
 `allow_always`; anything else is refused.
 
-Limits. The credential file is guarded by the gate: its name ends in `.key`, so reading it is a
-`credentials` act that always asks. No environment variable carries it, and `tool_env` drops
-`EXOD_*`, `EXO_PRINCIPAL*` and `EXO_*SOCK*`. A tool process is the same OS user, so code that
-both reads the file without the gate seeing it and detaches from the core's process tree could
-still pass. The full fix is an OS sandbox for tools; until then the gate and the process-tree
-check are the guard.
+The run folder is a secret store (#169), like `~/.ssh` and `keys/`. Its secrets are:
+
+- the folder itself, named as a path in any spelling: `$EXO_HOME/run`, `${EXO_HOME}/run`,
+  `~/.exo/run`, `.exo/run`, `$EXO_HOME/principals/<name>/run`, also with a trailing `/`, `/.`,
+  `//` or `jobs/..`, and through a symlink (a path is resolved as written, so `<link to
+  run/jobs>/..` is the folder);
+- the credential files in it, by name: `exod.principal.key`, `<socket stem>.principal.key` and
+  the TCP token `exod.token`;
+- a wildcard in the folder that could match one of them: `run/*`, `run/*.key`,
+  `run/exod.principal.k*`, `run/exod.tok*`, `run/agent-*`, `run/agent-default.*`. The agent keys
+  are sampled as `agent-<seat>.principal.key` for `default` (the terminal client's agent when no
+  seat is given), `$EXO_SEAT` and up to 64 seats under `$EXO_HOME/seats` (`<name>.toml`,
+  `<name>.json` or `<name>/`; other files there are skipped first, then the first 64 by name are
+  taken).
+
+A call that touches one is `credentials`, reads and writes alike, wherever the gate finds
+`~/.ssh`: shell words, redirections, `$( )`, `bash -c`, interpreter `-c` code, `execute_code`
+string literals and the path arguments of the built-in tools. So `ls`, `grep -r`, `find` or `tar`
+of the folder, the built-in `read_file`, `list_dir`, `grep` and `glob` with it as `path`,
+`cat run/*`, `rm -rf run`, `rm run/*` and `mv run/* /tmp/` all ask. Not secret, and classified
+as before: what is below the folder apart from those files, so job output in `run/jobs/` stays
+`read` (`cat run/jobs/*`, `ls run/jobs`) and deleting it stays `store_write`; the socket and pid
+files by exact name. A bare relative `run` is never the folder (`uv run`, `npm run`, `gh run
+list`, `ls run`): the gate does not resolve `run` against its own working folder, though it does
+for `keys`, so with the gate's working folder at `$EXO_HOME`, `ls keys` asks and `ls run` does
+not. Brace sets are expanded first (#184), so `run/{*,}`, `{$EXO_HOME/run,x}/*`,
+`$EXO_HOME/{run,x}/*` and `$EXO_HOME/r{u,}n/*` ask, and `run/jobs/{1,2}.log` stays `read`. A
+wildcard is matched with `.` and `..` resolved, for every secret store, so `cat ./.env*` asks like
+`cat .env*`. A wildcard with no folder is matched against the secrets' own file names, not their
+paths, and an agent's key only when the wildcard spells its `agent-` or `.principal` part: a bare
+`cat exod*`, `cat *.principal.key` or `ls agent-*` asks in any folder, as `cat id_rs*` and
+`ls seat*` already did, while `ls *run*`, `find . -name 'run*'`, `ls age*` and `ls *main*` keep
+their class, also when `main` is a seat. A wildcard with a folder reaches an agent's key the same way,
+or when its folder names a run folder or holds a literal part around its wildcards
+(`cat ~/.exo/*/*default*`, `cat .exo/run/*default*`), so `ls */*default*` and `ls ~/*test*` keep their
+class. Any wildcard that spells the folder's path still asks (`ls ~/.exo/run*`, `ls */run*`). Known friction (fails closed, no grant): a bare glob that
+matches the core's file names or spells `agent-` asks in any folder, such as `ls *prin*`,
+`ls *xod*` or `git diff -- 'agent-*'`.
+
+Limits. No environment variable carries the credential, and `tool_env` drops `EXOD_*`,
+`EXO_PRINCIPAL*` and `EXO_*SOCK*`. The gate does not catch: a walk over an ancestor
+(`grep -r token ~/.exo` or `~`, the same as for `~/.ssh`); a relative name when the folder is
+the bash tool's own `cwd` argument rather than a `cd` on the line (`{"command": "cat *", "cwd":
+"~/.exo/run"}` is `read`, as is `cat id*` with `~/.ssh` as `cwd`; `cd ~/.exo/run && cat age*`,
+`cd ~/.exo && cat run/*` and `cd ~/.exo/run/jobs && cat ../*` ask, see "The working folder" below); a wildcard
+in a folder name above a file (`principals/*/run/*`, `$EXO_HOME/r*/*`); a short wildcard for
+the folder itself (`grep -r . ~/.exo/ru?`, `ru[n]`: the last part needs three literal
+characters, the same as for `~/.ss?`; `~/.exo/r*` asks); an upper-case spelling on a
+case-insensitive filesystem (`~/.exo/RUN/*`, as `~/.SSH/*`); `${EXO_HOME:-...}`, as for
+`$EXO_HOME/keys`; a wildcard that spells part of an agent's name that is not sampled
+(`run/agent-scout*` when `scout` is neither `$EXO_SEAT` nor among the 64 sampled seats); the
+built-in `glob` with the folder in `pattern` rather than `path` (it lists names; the same for
+`~/.ssh`); and a key beside a custom `--socket`, which is caught by name only
+(`cat <dir>/exod.principal.key` asks, `cat <dir>/*` does not). A tool process is the same OS
+user, so code that both reads the file without the gate seeing it and detaches from the core's
+process tree could still pass. The full fix is an OS sandbox for tools; until then the gate and
+the process-tree check are the guard.
 
 ## Secret-store paths
 
@@ -204,6 +263,44 @@ in code is read as a shell command, so compact JSON with 11 or more objects in o
 Known limit: the folder a `cd` enters is tracked for stores matched by name (`cd ~/.aws && cat credentials`
 asks), not for stores matched only by sample paths (`cd ~/.config/gh && cat hosts.yml`; #192).
 Tests: `tests/security/test_gate_brace_sets.py`.
+
+### What the search tools read (#241)
+
+The gate checks the one `path` a `grep` or `glob` call names; the tools walk everything below it. So the tools leave
+out every folder and file below that root which `is_sensitive_path` matches, as found and as resolved
+(`exo.gate.StoreSkip`): `grep {pattern: "key", path: "~"}`, the same search of `$EXO_HOME`, or one with no path from
+a cwd of the home folder no longer returns `~/.aws/credentials`, `~/.config/gh/hosts.yml`, a project `.env`,
+`$EXO_HOME/keys/*` or `$EXO_HOME/run/exod.principal.key`. A link named `notes.txt` that points into `~/.ssh` is left
+out by where it leads, and a store folder is not entered at all. The output ends with `[skipped N secret-store
+paths; read one by name to be asked]` whenever anything was left out, so a search is never silently incomplete. The
+root itself is never left out. When the path the call names is a store (`path: "~/.aws"`), the call is `credentials`
+and asks, and once approved the tool reads that store; a link out of it into another store is still left out. That
+holds only when the folder walked is the store, as normalised and as resolved: `path: "~/.ssh/.."` also asks, but
+walks the home folder, so its stores are left out as in any other search. A store-named link to an ordinary folder
+(`backup.key` pointing at the home folder or a project) also asks, then returns nothing at all, since every path
+below it still looks like a store (fail closed). A cwd inside a store with no path reads nothing, since the gate saw
+no store. A root whose real path is `/` (`/`, `/proc/self/root`, a link to `/`) is refused with "is the whole file
+system; name a folder below it": that walk takes minutes and enters `/proc` and `/sys`. Entries are matched under
+the root's real path joined without a doubled `/`, so a root that resolves to `/` still sees a custom `$EXO_HOME`,
+`EXO_KEYS_FILE` or `CLAUDE_CONFIG_DIR`. In a repo's own `.claude` folder (one beside a `.git`, other than
+`~/.claude` and `CLAUDE_CONFIG_DIR`) the `worktrees`, `commands`, `agents` and `skills` folders are searched, so a
+worktree checkout under `<repo>/.claude/worktrees/` is too; everything else in it (`settings.local.json`, which can
+hold keys, `hooks/`) stays out, as do stores below those folders (`.env`). A `.claude` folder that holds a Claude
+login, transcripts or shell snapshots (`.credentials.json`, `projects/`, `shell-snapshots/`, `history.jsonl`) stays
+out whole, so another home below the searched folder that is a git checkout (dotfiles, `/home/alice`) keeps its
+config out; one with none of those files yet shows only its `commands`, `agents` and `skills`. `read_file`, the
+shell and `code_find` still treat every `.claude` path as a store. `code_find` hands its folder to `jg`, which
+cannot leave Exo's stores out, so it refuses a folder that is or holds a known store (the home folder, `$EXO_HOME`,
+`~/.config`, `/`). With these, the D-038 guarantee that a store read asks holds for `read_file`, the shell and the
+search tools alike. The cost is one `lstat` and one match per entry, plus a few cached existence checks per `.claude`
+folder: about 0.2 to 0.5 s of CPU on a 20,000-file tree (calling `is_sensitive_path` per entry would take about 3.5 s). Known limits: a hard link to a store file and a
+store spelt in another case on a case-insensitive filesystem are not seen, as for the other path checks. A store
+folder that is itself a link to an ordinary folder (`~/.aws` pointing into a dotfiles repo) is a store as named but
+not as resolved, so a search naming it asks and then returns nothing (fail closed); read its files by name
+(`read_file ~/.aws/credentials`, which asks). The reverse is not seen: with `~/.kube` pointing to `~/dotfiles/kube`,
+a search of the home folder finds `dotfiles/kube/config`, which `read_file` reads without asking too, since stores
+are matched by name and place.
+Tests: `tests/security/test_search_tools_skip_secret_stores.py`.
 
 ## Muse CLI credentials
 
@@ -266,6 +363,32 @@ line is built in. A principal who wants a disclosure line sets it in `posting.md
 `footer: "> Automated posting by agentic team with human oversight."`, and can limit it to public
 targets with `footer_exposures: [public]`.
 
+## The decision model's second opinion (D-015, D-081)
+
+After the rules, for any call they do not deny, the plugin asks the router's `decision` role how strictly to
+gate it (allow, log, ask or deny) and keeps the stricter of that answer and the rule outcome. A model never
+loosens an outcome. Turn it off with the plugin setting `decision_model: false` or `EXO_GATE_DECISION_MODEL=0`.
+
+- Routes: Jev (with a TypeSafe key), then local Laya, then the `aux` routes. Never a `main` route, even one also
+  listed under `aux`. A tool call never waits for a main-model turn.
+- With no decision or aux route, the rule outcome stands and no model is asked. This is the usual case with the
+  claude CLI login and no API key: a tool call then starts no claude process and adds no time. (The local Laya
+  route is still tried. With no Laya server running, the refused connection costs milliseconds.)
+- A failure or a 20 s timeout keeps the rule outcome. A failed call cools only the model that failed, never the
+  credential, so a login or key that also serves the main role keeps working. Before, one failed gate call on the
+  claude CLI route made the next turn fail with "all routes for 'main' failed or are cooling down".
+- `exo decide` and the baseline export's judge keep the full `decision` chain, with `main` last
+  (`docs/PROVIDERS.md`).
+- The ledger row of each decision names the verdict and the route that answered (`decision_model`). The call is
+  not a `model.call` event yet, so `/trace` and the turn's cost do not show it.
+
+Exo's own read-only tools are `read`: `read_file`, `grep`, `glob`, `skill` (loads a skill's instructions),
+`memory_zoom`, `exo_trace` and `ui` (a panel beside the chat). An internal gate error does not stop them (unless a
+required executor is set), and a secret-store path in their arguments still makes the call `credentials`. Before,
+`skill` was an unknown tool, so a new user's first screen could be an approval card for loading the intro skill.
+
+Tests: `plugins/exo-gate/tests/test_exo_gate_side_calls.py`, `tests/core/models/test_decision_spare.py`.
+
 ## Shell commands: an allowlist (D-038)
 
 Command regexes in `deny` and `reserved` match both the original command and a literal-word
@@ -316,14 +439,16 @@ its backslash. A NUL ends the quoted part, so `$'--forc\0x'e` is `--force`. A `\
 is no character is written as bash writes it: a few bytes that are not ASCII, or nothing at all from
 `\U80000000` on, so `$'--forc\UFFFFFFFFe'` is `--force` too.
 
-A command is `allow` only when every program in it is known and nothing is hidden:
+A command is meant to be `allow` only when every program in it is known and nothing is hidden.
+The known limits below name the paths where a known program still runs a command the gate does
+not read.
 
 - Known programs: `READ_PROGRAMS` (cat, ls, rg, head...), `SHELL_PROGRAMS` (mkdir, cp, pytest,
   ruff...), the tools with their own rules (git, gh, curl, vercel, stripe, ssh, exo...), and
   `TOOL_SUBCOMMANDS` (npm install, cargo test, go build, uv sync...). A program given by path
   runs as itself only from a system bin folder or a virtualenv or `node_modules/.bin` folder.
-- Everything else is `opaque_exec`, which asks: a variable, `$( )` or a glob in the program
-  position; a script file; `bash`/`sh`/`zsh` reading `-c`, a file, a pipe or a heredoc;
+- Everything else is `opaque_exec`, which asks. For example: a variable, `$( )` or a glob in the
+  program position; a script file; `bash`/`sh`/`zsh` reading `-c`, a file, a pipe or a heredoc;
   `python -c`, `node -e`, `perl -e`, `ruby -e`, `osascript`; `make`, `npm run`, `npm test`,
   `npx`, `uvx`; `xargs`; `find -exec`; `eval`, `source`, `.`, `alias`, `trap`, shell functions;
   git aliases and command-running git config; gh aliases and extensions; an unknown program.
@@ -331,6 +456,23 @@ A command is `allow` only when every program in it is known and nothing is hidde
   of `python -c`, a `$( )`, the command after `xargs` or `find -exec`, the program after
   `uv run`) it classifies the inner text too. The result is the most severe part, and it keeps
   the `indirection` signal, so `decide` asks even when the inner part alone would only log.
+- The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
+  `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
+  `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
+  delete is the more severe part and would otherwise set the card. Only those two lists see the
+  parts: rules, category overrides, the opaque bump, third-party escalation, posting checks and
+  the floors see the dominant part. A part carries the tool of the call it came in on
+  (`tool:execute_code` matches the `execute_code` tool, not `python -c` run from bash) and the
+  views of its line, so a `command` regex matches a part as it matches the line (`g''it push
+  origin main && rm -rf build` is denied under `{category: vcs_push, command: 'git push'}`), the
+  `ssh` hop is a part whose target is the bare host (`user@`, `ssh://` and a `:port` stripped) and
+  the destination as written, and the inner commands of an `ssh` line are `internal`. A mapping entry
+  in `reserved` or `deny` counts only its match keys: any other key (`reason`, `name`, a note, a
+  typo) is dropped, so it widens the entry instead of voiding it, and an entry left with no match
+  key matches every action. The ledger view of a classification (`as_dict`) leaves the parts out.
+  `Decision.reserved` names the parts a reserved entry matched, once each, and the exo-gate hook
+  does not let a standing grant for the line's category cover one of them. Its ledger view
+  (`Decision.as_dict`) redacts URL userinfo (`https://***@host/...`).
 - Bash evaluates an array subscript in a variable name as arithmetic, and that runs a `$( )` or
   backticks in it, even inside single quotes. So the name arguments of `printf -v`, `read` (and
   `read -a`), `declare`, `typeset`, `local`, `unset`, `test -v` and `[ -v`, and `wait -p` are read
@@ -338,17 +480,58 @@ A command is `allow` only when every program in it is known and nothing is hidde
   `printf -v 'a[$(gh pr comment 3 --body hi)]' %s x` is a `github_post`. Its output is evaluated
   as well, so any expansion or quoting in the subscript (`$(cat f)`, `$i`, `${x}`, `$(( ))`, `"k"`)
   also adds the `indirection` signal and asks: a value such as `b[$(cmd)]` runs cmd. It is a
-  signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A subscript
-  without expansion (`a[0]`; for a bare name such as `a[i]` see the known limit below) and the
-  other arguments (printf's format, read's prompt) change nothing. The subscript runs to the `]`
-  that ends it as bash finds it: a nested `[ ]` (`a[b[0]+$(cmd)]`), a quoted `]` or a `\]` does
-  not end it. At the subscript's top level a `\$` or `` \` `` is literal, as in bash
-  (`a[\$(cmd)]` runs no command); bash before 5.2 expands a nested subscript (`a[b[\$(cmd)]]`)
-  again and runs it, so the gate reads it there. Past the nesting limit a command there is
-  `opaque_exec`, as an unquoted `$( )` is. A command read
-  from the subscript is a part of the line like any `$( )`, so it can outrank the line's own
-  category: `printf -v 'a[$(git push origin main)]' %s x > /tmp/f` is a `vcs_push` and asks, and
-  until D-075 and #191 land a deny on `local_write` no longer applies to it.
+  signal, not an `opaque_exec` part, so a deny on the line's own category still wins. A command
+  there also carries `reread` (below), so a policy that names `opaque_exec` does not lower its
+  ask (#188). A subscript without expansion (`a[0]`; for a bare name such as `a[i]` see the
+  known limit below) and the other arguments (printf's format, read's prompt) change nothing.
+  The subscript runs to the `]` that ends it as bash finds it: a nested `[ ]`
+  (`a[b[0]+$(cmd)]`), a quoted `]` or a `\]` does not end it. At the subscript's top level a
+  `\$` or `` \` `` is literal, as in bash (`a[\$(cmd)]` runs no command); bash before 5.2
+  expands a nested subscript (`a[b[\$(cmd)]]`) again and runs it, so the gate reads it there.
+  Past the nesting limit a command there is `opaque_exec`, as an unquoted `$( )` is. A command
+  read from the subscript is a part of the line like any `$( )`, so it can outrank the line's
+  own category: `printf -v 'a[$(git push origin main)]' %s x > /tmp/f` is a `vcs_push` and
+  asks. A `deny:` entry for `local_write` still denies it (D-075); a `categories: {local_write:
+  deny}` line only asks until #191 lands.
+- `declare`, `typeset`, `local`, `readonly` and `export` also evaluate the value of a
+  `NAME=VALUE` operand again, so it is read too (#188). With `-a` or `-A` (or for a variable that
+  is already an array) bash parses a compound value `(..)` again as words even when it is
+  quoted, so `declare -a 'b=($(cmd))'` and `export -a 'b=(<(cmd))'` run cmd. The gate reads a
+  compound value with or without `-a`, which is only stricter: each `$( )`, backticks, `<( )` or
+  `>( )` in it is classified like a `$( )`, and each `[key]=` is read like a subscript above.
+  With `-i` (declare, typeset, local) the value, or each element, is arithmetic, and with `-n`
+  it is a name whose subscript bash evaluates when the nameref is used; both are read like a
+  subscript. So `declare -i x='a[$(gh pr comment 3 --body hi)]'` is a `github_post`.
+- Any expansion in such a `-i` or `-n` value (`local -i n=$1`, `local -n ref=$1`,
+  `declare -n r='a[$i]'`) asks, as does a compound value the line itself expanded
+  (`declare -a "b=($x)"`: bash parses x's value as code) and every command in a quoted compound
+  value, which runs only because bash reads the value again. That is the `indirection` signal,
+  and the command ranks after the line's own parts, as it would unquoted, so a redirection's
+  `local_write` still decides a tie and a deny on it still wins. When the command outranks the
+  line's own category, a deny on that category becomes ask, never allow or log
+  (`declare -a 'b=($(sudo ls))' > /tmp/f` asks under `categories: {local_write: deny}`); D-075
+  (deny on any part) keeps the deny for the `deny:` list form; #191 tracks the `categories`
+  form. Such a command also carries the `reread` signal, and naming `opaque_exec`
+  (below) does not lower its ask, so the line asks under `{local_write: deny, opaque_exec: allow}`
+  too. A deny on the command's own
+  category still denies. A command in such a value or subscript nested deeper than the gate
+  reads is an `opaque_exec` part (ask), as on the line itself, and carries `reread` too. A
+  plain expansion in a compound value the line did not expand (`declare -a 'b=("$@")'`), a
+  scalar value without `-i` or `-n`, `+i`, the `-n` of `export` and `readonly` (it removes the
+  attribute) and a subscripted name given to `readonly` or `export` (bash rejects it as not a
+  valid identifier) change nothing. An unquoted compound value
+  (`declare -a b=($(ls))`) is read by the line's own parse, as before, and a quoted operand after
+  one or more of them on the same line (`declare -a b=() x=(1) 'c=($(cmd))'`) is read too. Bash
+  drops a backslash-newline from a compound value before it reads the value again as words, and so
+  does the gate: in `declare -a 'b=($\<newline>(cmd))'` cmd runs and is classified. A `\\<newline>`
+  is an escaped backslash and a newline, and stays; so does a backslash-newline in an `-i` or `-n`
+  value, which bash keeps. A `$( )` the line itself runs (in a double-quoted value) is read once,
+  with or without a backslash-newline in it. A body that holds a single quote or a here-document
+  marker (`<<`, `<<<`) anywhere is the exception: bash keeps a backslash-newline in single quotes
+  or a quoted here-document, so the line's run may keep it while the value bash reads again has
+  lost it, and the gate does not track where it is. Such a body is compared as written, so with a
+  backslash-newline it is read again on its own and asks (`reread`), even where bash runs the same
+  command twice (`declare -a "b=($(ls 'x' \<newline> -l))"`; without `'x'` it is read once).
 - Nesting is read four levels deep. Past that the text is `opaque_exec` and asks. An `ssh` or
   `mosh` chain with more hops than that is not read either: the hops that were read keep the
   `remote host` exposure and the first host as target (so a `target:` deny on it still
@@ -357,41 +540,53 @@ A command is `allow` only when every program in it is known and nothing is hidde
 - Options of trusted programs whose value is a command are followed as a nested command, like
   `find -exec` (#154): `tar --to-command`, `-I`, `--use-compress-program`, `--rsh-command`,
   `--rmt-command`, `--set-mtime-command`, `--checkpoint-action=exec=`; `split --filter`; `sort
-  --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp` and
-  `sftp -S`, `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`, `LocalCommand`, `RemoteCommand` (with the
-  `remote host` exposure) and `KnownHostsCommand`; `git rebase -x`/`--exec`, `git bisect run`,
-  `git submodule foreach` (also after `-q`, `--quiet`), `--upload-pack` (`clone`, `fetch`,
-  `pull`, `ls-remote`), `git push --receive-pack`/`--exec`, `git archive --exec`; `rg --pre`;
-  `zip -TT`; `less +cmd` and `more +cmd` with a `!` (macOS `more` is `less`); the `.shell` and
-  `.system` dot-commands of `sqlite3` and `duckdb`, and `.once`, `.output`, `.import` and `.read`
-  with an argument starting with `|`, also after options (as an argument, via `-cmd`, or on
-  stdin); `psql -o '|cmd'`/`--output`, and `\!`, backquotes in a meta-command's arguments, and a
-  `|command` after `\o`, `\out`, `\g`, `\gx` (also after `(options)`), `\w` or `\write`, quoted
-  or not, anywhere on a `psql` line; `\!` and `system` in `mysql`; and a command set in
+  --compress-program`; `man -P`, `--pager`; `rsync -e`, `--rsh`, `--rsync-path`; `scp` and `sftp -S`,
+  `-D`; `ssh`/`scp`/`sftp -o ProxyCommand`,
+  `LocalCommand`, `RemoteCommand` (with the `remote host` exposure) and `KnownHostsCommand`; `git
+  rebase -x`/`--exec`, `git bisect run`, `git submodule foreach` (also after `-q`, `--quiet`),
+  `--upload-pack` (`clone`, `fetch`, `pull`, `ls-remote`, and its hidden synonym `git ls-remote
+  --exec`, #230), `git push --receive-pack`/`--exec`, `git archive --exec`; `rg --pre`; `zip -TT`;
+  `less +cmd` and `more +cmd` with a `!` (macOS `more` is `less`); the `.shell` and `.system`
+  dot-commands of `sqlite3` and `duckdb`, and `.once`, `.output`, `.import` and `.read` with an
+  argument starting with `|`, also after options (as an argument, via `-cmd`, or on stdin); `psql
+  -o '|cmd'`/`--output`, and `\!`, backquotes in a meta-command's arguments, and a `|command`
+  after `\o`, `\out`, `\g`, `\gx` (also after `(options)`), `\w` or `\write`, quoted or not,
+  anywhere on a `psql` line; `\!` and, at the start of a line, `system` in `mysql` (psql has no
+  `system`, so a `psql` line starting with that word is SQL, #232); and a command set in
   `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PAGER`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`,
   `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `RSYNC_RSH`, `PAGER`, `MANPAGER`, `EDITOR`,
   `VISUAL`, `LESSOPEN` or `LESSCLOSE` before the program (also through `env`; `export NAME=value`
   counts when the value is a known hazard).
 - Options are read as the program's `getopt` reads them: an unambiguous abbreviation of the long
-  name, one letter or more (`--to-com=`, `psql --o`), or the value attached to the short letter or in the next word. In a
-  cluster the first letter that takes a value ends the word (`-xIcmd`, `-oProxyCommand=cmd`,
-  `-avze ssh`), and the gate knows which letters and long options take a value for `ssh`,
-  `scp`, `sftp`, `tar` (also its old style, `tar xIf cmd a.tar`), `rsync`, `man`, `rg`, `psql`
-  and the `git` subcommands, so a value is not read as options (`ssh -oServerAliveInterval=60`
-  is not `-I`). A letter it does not know only makes it read more words. Options end at `--`;
-  `ssh` reads them before and after its destination and stops at the remote command, so `ssh
-  host curl -I URL` is the `curl` line; when a word before that may expand to no word or several
-  (`$A`, `"$@"`, a glob), the destination cannot be counted and every word is read. An `ssh -o` setting is split as ssh's config reader
-  splits it: leading whitespace, a quoted keyword, any case, and `Keyword value`,
-  `Keyword=value` or `Keyword = value`. `less` reads `+cmd` as keystrokes: `!` runs a shell
-  command after any of them (`+G!cmd`, `+:n!cmd`), while a search (`+/pattern`) takes the rest
-  as its pattern unless a newline or another control key ends it.
+  name, one letter or more (`--to-com=`, `psql --o`), and for `tar --checkpoint-action` any
+  abbreviation longer than `--checkpoint`, which is an option of its own (`--checkpoint-a=exec=`,
+  #232), or the value attached to the short letter or in the next word. In a cluster the first
+  letter that takes a value ends the word (`-xIcmd`, `-oProxyCommand=cmd`, `-avze ssh`), and the
+  gate knows which letters and long options take a value for `ssh`, `scp`, `sftp`, `tar` (also its
+  old style, `tar xIf cmd a.tar`), `rsync`, `man`, `rg`, `psql` and the `git` subcommands, so a
+  value is not read as options (`ssh -oServerAliveInterval=60` is not `-I`). A letter it does not
+  know only makes it read more words. Options end at `--`; `ssh` reads them before and after its
+  destination and stops at the remote command, so `ssh host curl -I URL` is the `curl` line; when
+  a word before that may expand to no word or several (`$A`, `"$@"`, a glob), the destination
+  cannot be counted and every word is read (`ssh {,} host -o ...` too: bash drops the empty words
+  of `{,}`). An `ssh -o` setting is split as ssh's config reader splits it: leading whitespace, a
+  quoted keyword, any case, and `Keyword value`, `Keyword=value` or `Keyword = value`. The value
+  `none` (any case, as the bare word) turns a command or library setting off, as ssh_config
+  documents, so `-o ProxyCommand=none` runs nothing and stays `allow` (#232). A keyword the gate
+  cannot read (`-o "$OPT"`, `-o $OPT`, a glob, or an unclosed quote that the expansion may close,
+  `-o '"'"$OPT"`) is `opaque_exec` and asks, like any other value in a variable (#230). `less`
+  reads `+cmd` as keystrokes: `!` runs a shell command after any of them (`+G!cmd`, `+:n!cmd`),
+  while a search (`+/pattern`) takes the rest as its pattern unless a newline or another control
+  key ends it.
 - A known program in an option's value (`tar -I zstd`, `rsync -e ssh`, `PAGER=cat`) stays
-  `allow`; a program the gate does not know asks, as it would on its own. A value the gate cannot
-  read is `opaque_exec`: a variable, a script file (`tar --info-script`, `sqlite3 -init` or
-  `--init`, `.read`, `.load`), `.once`/`.output FILE`, `.read '|cmd'` (what the command prints is
-  run), `less +!` with no command or `+!!`, `psql ... PROGRAM`, `TAR_OPTIONS`, and a library
-  `ssh` loads (`-I`, `-o PKCS11Provider`, `-o SecurityKeyProvider`). `sed` scripts with `e` or
+  `allow`; a program the gate does not know asks, as it would on its own. The compressors `tar
+  -I` usually names are known programs, none of them with an exec option: `gzip`, `bzip2`, `xz`,
+  `zstd` and `pigz`, `unpigz`, `pbzip2`, `lbzip2`, `lz4`, `lzop`, `lzip`, `lzma`, `unlzma`,
+  `zstdmt`, `brotli`. A value the gate cannot read is `opaque_exec`: a variable, a script file
+  (`tar --info-script`, `sqlite3 -init` or `--init`, `.read`, `.load`), `.once`/`.output FILE`,
+  `.read '|cmd'` (what the command prints is run), `less +!` with no command or `+!!`, `psql ...
+  PROGRAM`, `TAR_OPTIONS`, and a library `ssh` loads (`-I`, `-o PKCS11Provider`, `-o
+  SecurityKeyProvider`). `sed` scripts with `e` or
   `s///e` and `awk` programs calling `system()` were already opaque. An argument that merely
   looks like an assignment (`grep EDITOR=vim`) and a data load (`sqlite3 '.import f.csv t'`) are
   not commands.
@@ -399,9 +594,11 @@ A command is `allow` only when every program in it is known and nothing is hidde
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
   `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
   or `hatch run`, inside an `if`, `for` or `while` body, or behind a wrapper below (`setsid env`,
-  `taskset 1 printenv GITHUB_TOKEN`), classify as `credentials` just as the bare command does. A
-  runner followed by ordinary work (`uv run pytest -q`) is unchanged. `uvx`, `pipx run` and `npx`
-  stay `opaque_exec`.
+  `taskset 1 printenv GITHUB_TOKEN`), classify as `credentials` just as the bare command does.
+  Every assignment bash takes before a command counts as one, `NAME+=value` and `NAME[i]=value`
+  included, so `FOO+=1 printenv GITHUB_TOKEN` and `env FOO[0]=1` are dumps too (#230). A runner
+  followed by ordinary work (`uv run pytest -q`) is unchanged. `uvx`, `pipx run` and `npx` stay
+  `opaque_exec`.
 - Wrappers that run a command are read the same way (#160). The prefix wrappers `setsid`,
   `flock`, `chroot`, `unshare`, `nsenter`, `taskset`, `chrt`, `numactl`, `chronic`,
   `unbuffer`, `catchsegv`, `firejail`, `dbus-run-session`, `xvfb-run`, `systemd-run` and
@@ -422,10 +619,10 @@ A command is `allow` only when every program in it is known and nothing is hidde
   command's own length, each text sized before it is built; a nested `parallel` template is read
   alone, so the work stays linear in the line).
   The wrapper itself stays an `opaque_exec` part with `indirection`, so
-  the line asks as before. Until D-075 lands, a wrapped line is denied only when its inner
-  command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`: `setsid git push`); a
-  category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`:
-  `setsid systemctl enable foo`, `setsid curl URL`) still asks. `chroot`, `nsenter`,
+  the line asks as before. A `deny:` entry that matches the inner command denies the line
+  (D-075), also when its category ties with `opaque_exec` or ranks below it (`schedule`;
+  `web_read`, `local_write`: `setsid systemctl enable foo`, `setsid curl URL`). A `categories:`
+  line or a rule for such a category sees only the dominant part, so it still asks (#191). `chroot`, `nsenter`,
   `unshare` and `systemd-run` run the command with other privileges, namespaces or as a
   system unit: like `sudo`, the line carries a signal named after the wrapper and a reversible
   part counts as costly. What the gate cannot read stays `opaque_exec`: a program from a
@@ -442,27 +639,35 @@ A command is `allow` only when every program in it is known and nothing is hidde
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
   skipped; before a simple command (`coproc w echo hi`) the first word is the program.
   `function NAME { ...; }` is read the same way. An environment dump inside (`coproc env`,
-  `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Until D-075 lands, a coproc is denied
-  only when its inner command outranks `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
-  category that ties with it or ranks below it (`schedule`; `web_read`, `local_write`) still
-  asks. A heredoc after the closing `}` of a block (`coproc W { bash; } <<EOF`) attaches to the
-  `}` and is not fed to the inner command, which asks as `opaque_exec`; the same limit applies
-  to `{ ...; } <<EOF` on its own.
+  `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Before D-075, a coproc was denied
+  only when its inner command outranked `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
+  category that tied with it or ranked below it (`schedule`; `web_read`, `local_write`) still
+  asked. The inner commands are now parts, so a `deny` entry matching any of them denies
+  (`coproc w { curl https://example.com; }` under `deny: [web_read]`).
+  A heredoc after the closing `}` of a block (`coproc W { bash; } <<EOF`) is fed to the commands
+  inside it, as for `{ ...; } <<EOF` on its own (see "Compound commands" below).
 - Code (`python -c`, `execute_code`, a heredoc fed to an interpreter) is read for known calls
   and for string literals and lists of strings that parse as a command
-  (`subprocess.run(['gh','pr','comment',...])` is a `github_post`).
+  (`subprocess.run(['gh','pr','comment',...])` is a `github_post`). A literal is also read with
+  its `\n` and `\t` escapes applied. It becomes a part when any simple command in it classifies
+  as a non-benign category, whatever the order (`ls; git push` and `./build.sh; systemctl enable
+  x` alike); a literal that is all `read`, `web_read`, `local_write` and the like is dropped, and
+  code can reach a target with no literal at all.
 - The principal can lower `opaque_exec` only by naming it below ask: `categories: {opaque_exec: act}`
   or a rule whose match has `category: opaque_exec` and whose decision is `act` or `report` (for
   example with a `command` regex for `make`). Naming it at `ask` or `deny` keeps the indirection
   floor: a command the gate reads inside a wrapper still asks at least, whatever its own category
   says (#178).
+  That does not lower the ask of a command a declaration runs as it reads a value again
+  (`reread`, above).
 
 Known limit. A trusted program that runs project code (pytest runs conftest.py, git runs hooks,
 `npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
 `~/.ssh/config` with a `ProxyCommand`) can run code the agent wrote earlier with a local write.
 The same goes for options that read more options from a file (`curl --config`, `gcc -wrapper`,
-`-specs`) and for `git grep -O`, whose pager takes the matching files as arguments. The gate does
-not claim to stop that; it stops the one-step forms. A sandbox is the real fix.
+`-specs`, `ssh -F`, also from a heredoc or `<( )`: `ssh -F /dev/stdin h <<EOF`) and for
+`git grep -O`, whose pager takes the matching files as arguments. The gate does not claim to stop
+that; it stops the one-step forms. A sandbox is the real fix.
 
 The working folder (#192). A line that enters a folder that can hold a secret store, and reads a
 file there by a relative name, is `credentials`: `cd ~/.config/gh && cat hosts.yml`,
@@ -539,15 +744,113 @@ folder from more than one level above its parent (`cd / && cd srv/exo-home/keys`
 `CDPATH`, `HOME` set on the line and `shopt -s dotglob`; and a store reached through a folder
 link whose name does not say so.
 
+Compound commands (#161). The stdin of a compound command reaches the commands inside it, nested
+compounds included: a heredoc or here-string after its closing `}`, `)`, `done`, `fi` or `esac`,
+and text the gate can read piped into it (`echo ... | ( bash )`, `... | while read l; do bash; done`).
+So `{ bash; } <<EOF`, `( bash ) <<EOF` and `while ...; do bash; done <<EOF` classify the body as
+`bash <<EOF` does, and `{ python3; } <<EOF` reads it as code. `coproc W { bash; } <<EOF` and
+`function f { bash; } <<EOF` are read the same way. As in bash, a command whose stdin is already
+set keeps it and is not fed: one with its own heredoc, here-string or `<` redirection (`{ cat <<EOF;
+bash; }` feeds cat only), one piped into from a command inside (`{ curl ... | bash; } <<< 'ls'`
+stays `opaque_exec`), and the commands of a nested compound with its own closer redirection or pipe.
+Nothing more is fed after a command that may make a file the shell's stdin for good: `exec` with its
+own stdin however it is spelled or prefixed (`"exec"`, `\exec`, `command exec`, `X=1 exec`), and
+`eval`, `source`, `.`, a program name from a variable or a function defined on the line, which can
+run such an exec unseen. When the closer has its own `<`, nothing is fed (the gate keeps no order
+between a closer's redirections, so it does not guess which one bash applies last: `{ bash; } <<EOF
+< f`), and a closer heredoc or here-string wins over a pipe in. That holds for stdin (fd 0). The
+lexer drops fd numbers, so a closer heredoc on another fd (`{ bash; } 3<<EOF`), where bash leaves
+stdin alone, is read as stdin too: its body is fed (code inside can still run it, as `{ source
+/dev/fd/3; }` does), and text piped in reaches only the first command inside, as in any `echo ... |
+bash`. So `echo 'rm -rf build' | { bash; } 3<<EOF` is a `delete` whichever text bash runs, but in
+`echo 'rm -rf build' | { true; bash; } 3<<EOF` bash, which reads the pipe there, is read with the
+body only. A shell read that way still asks at least, as `bash 3<<EOF` does (main asks for these
+lines too). Outside these cases, every command inside gets all of the compound's stdin. That
+over-approximates, and the fed text can change the line's category and the summary shown when it
+asks: shells, interpreters, gh and SQL clients act on it, so `{ cat; } <<EOF` stays `read`, while
+`{ bash; }
+<<EOF` with `rm -rf build` in the body is `delete`. Each text is read once per line, however many
+commands it reaches, and so is a body after `<<$'EOF'`, which is also read as commands, and the
+stdin of a `sqlite3`, `psql` or `mysql` client. Every command it reaches still counts what that
+reading found, so a later client whose argument is a store folder is still a `store_write` when the
+text deletes. For fed shells and interpreters, a line that was `opaque_exec` now takes the inner
+category. The floor above keeps it at ask at least under a policy that names `opaque_exec` at `ask`
+or `deny`. A `deny: [opaque_exec]` entry still denies these shell and interpreter lines, since the
+shell or interpreter inside is an `opaque_exec` part (D-075). Under
+`categories: {opaque_exec: deny}` or a rule they now ask where they were denied, as
+`bash <<EOF` already does, until #191. Fed SQL clients follow their plain-input classification,
+without that floor. A compound feeding `\! git push origin main` to `psql` can therefore change
+from ask to the push's `log`. D-075 `deny` and `reserved` entries still match every retained part.
+Category overrides and ordinary rules use the combined classification. Likewise a line whose later
+command takes a store folder is `store_write`, which outranks `delete` (D-038):
+`deny: [delete]` still denies it through its delete
+part (D-075), while `categories: {delete: deny}` asks where main denied it (#191). Known limits:
+the body of `time {
+...; }` is not read at all (`{` is an unknown program there), so a heredoc after it changes nothing;
+it asks as `opaque_exec`. As on main, text piped into a command is read even when the command's own
+`<` wins (`echo ... | bash < f`), and so is the pipe into the first command of `echo ... | { bash; }
+< f`.
+
+Known limit: `deny` → `ask` (D-075). Where the gate cannot read a command it files the line as
+`opaque_exec`, which asks, so a `deny` entry on the hidden action becomes an `ask`. For example:
+nesting past the depth cap (#137, #141); `eval $(...)`; a command arriving on stdin (`echo ... |
+xargs -I{} sh -c '{}'`); the wrappers `watch`, `parallel`, `tmux`, `screen` and `setsid`. These
+are examples, not a complete list.
+
+Known limit: `deny` → `allow`. The fallback has gaps. On these paths the line is `allow` outright,
+even with the hidden action in `deny`:
+
+- `${...}` bodies, which the lexer does not read (#143; open PR #158).
+
+Since #164, an `ssh` or `mosh` chain with more hops than the gate reads asks (#153), and the
+command-valued options of allowlisted programs (`tar --to-command`, `split --filter`, `rsync -e`,
+`ssh -o ProxyCommand=...`, `less '+!...'`, `PAGER=` and the rest; #154) are read, so a `deny`
+entry on what they run applies. `git -c core.pager=...` and the other command-running git config
+keys already ask.
+
+`ssh` options are read as getopt reads them: in a cluster such as `-vp 22`, the first letter
+that takes a value ends the word, and the value is the rest of the word or the next word. Before,
+the gate took the value of `-B`, `-P`, `-I` or of a cluster ending in a value letter for the host
+and the host for the program, so `ssh -vp 22 host rm -rf /data` was `allow` even under `deny:
+[delete]`. Now the inner command is read, and a line written that way also asks, because a few
+such lines used to ask on the program the gate misread. Wherever the gate now reads another word
+as the host than it used to, the line asks and the parts of both readings are matched. A `--`
+right after the host ends `ssh`'s options, and the command after it is read (`ssh host -- rm -rf
+/data`).
+
+`mosh` reads its options with Perl's Getopt::Long in its default mode, and the gate reads them the
+same way, against mosh's own option list: `--`, `-` or `+` before the name, any case, a unique
+prefix of the name (`--serv`, `-ssh`, `--SERVER`), the value after `=` or in the next word, and
+options after the host (`mosh host --server=...`). `--` ends the options, so the command after
+`mosh host --` is read. The short options are mosh's, not ssh's: `-a`, `-n`, `-4`, `-6`, `-p
+PORT`, `-o` (`--predict-overwrite`, which takes no value) and `-l` (a prefix of `--local`). A word
+that names no single option (`--s`, which could be `--server`, `--ssh` or `--ssh-pty`;
+`--local=1`; an unknown name) stops mosh, and the line asks; the words after it, and the word
+itself once a host is read, are read as the host and command. The value of `mosh --ssh`,
+`--client` or `--server` is a command that runs, so the gate reads it as one: `mosh --serv='rm -rf
+/data' host` denies under `deny: [delete]`, and any such line asks. The `--ssh` and `--client`
+helpers run on this machine, so they keep their own exposure; `--server` runs on the remote host
+and is `internal` like the inner command. With `--local`, mosh runs the server and the command on
+this machine, so nothing on the line is marked `internal`. Another option's value that itself
+reads as `--server`, `--ssh` or `--client` (`mosh --port '--server=rm -rf /data' host`) is taken
+by mosh as that value and never run, but the gate used to read it as the command, so it still
+does and the line asks. Words after the host that mosh takes as its options or their values
+(`mosh host ls --port 'x; rm -rf /data'`) are read both ways: with `POSIXLY_CORRECT` set,
+Getopt::Long stops at the host and mosh runs them as the command, so their parts are matched as
+that command too and the line asks. The same holds where the gate used to read another word as the
+host. A `--` right after the host needs no second reading (`mosh host -- rm -rf /data` denies under
+`deny: [delete]`).
 Known limit. The gate does not model a variable's value. Bash evaluates a bare name in an
 arithmetic context as arithmetic too (`a[i]`, `$(( x ))`, `declare -i`), so a value such as
 `b[$(cmd)]` set earlier runs cmd there. Only an expansion written in the name argument of the
 builtins above asks; one in an assignment word (`a[$i]=v`) or an arithmetic expression
 (`$(( a[$i] ))`) does not. The gate cannot tell an associative array from an indexed one, so a
 subscript of an associative array asks too, although bash does not evaluate it as arithmetic.
-A quoted value that declare, typeset or local reads as an array or arithmetic value
-(`declare -a 'b=($(cmd))'`, `declare -i x='a[$(cmd)]'`, `declare -n`) runs cmd too and is not
-read yet (#188).
+Only a value written in the `declare` operand itself is read (#188): a later plain assignment
+to a `-i` or `-n` variable (`declare -i n; n='a[$(cmd)]'`), an element of an unquoted compound
+value given with `-i` (`declare -ai b=($x)`) and a compound value or name that comes whole
+from a variable (`declare -a b=$x`, `declare "$n=$v"`) are evaluated by bash too and are not
+read.
 Known limit (#160). Some wrapper forms are not read and ask as `opaque_exec`, as they did before:
 BSD and macOS `script -q FILE CMD`, `screen -R` and `-RR` (they start the command when no session
 is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot`, `strace`,
@@ -555,10 +858,10 @@ is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot
 a tmux command name cut short (`new-w`) and an alias set in a tmux config file. Two are read but
 not fully: `systemd-run --on-calendar` (and its other timer options) is read as running its
 command, not as `schedule`, and `parallel -S` carries no remote-host signal. Both still ask.
-Under a non-default `deny: [opaque_exec]`, a wrapped line whose inner command outranks
-`opaque_exec` (a wrapped env dump is `credentials`, a wrapped push is `vcs_push`) is decided by
-that inner category and asks instead of being denied, until D-075 (#126) makes a `deny:` entry
-match any part of the line.
+Under a non-default `categories: {opaque_exec: deny}` or a rule that denies it, a wrapped line
+whose inner command outranks `opaque_exec` (a wrapped env dump is `credentials`, a wrapped push
+is `vcs_push`) is decided by that inner category and asks instead of being denied (#191). A
+`deny: [opaque_exec]` entry matches the wrapper part, so it denies the line (D-075).
 
 ## The store is credentials (D-038)
 
@@ -574,11 +877,15 @@ Absolute paths are checked in both their lexical form and their resolved symlink
 missing final components, and so is the target of `cd`, `pushd` and `git -C`. This catches file and
 directory aliases into protected stores, aliases used to delete a store or its ancestors, a `cd` into
 an alias of the store, and `//` or `/proc/self/root` spellings. Resolution preserves `symlink/..`
-filesystem order; lexical protection still applies when a protected path links outside the store. A
+filesystem order. Lexical protection still applies when a protected path links outside the store. A
 path that cannot be resolved (a NUL byte) keeps its lexical check, so the floor never depends on
-resolution working. `cp -s` and `cp -l` count as writes to whatever they alias, and a relative `ln -s`
-target is read against the link's folder in the two-operand form (`ln -s TARGET LINK`). Relative paths only use the distinctive-name checks because
-the tool's working directory is unknown here.
+resolution working. `cp -s` and `cp -l` (also spelled `--sym` or `--li`) count as writes to whatever
+they alias. A relative `ln` target is read against each folder the link can land in: `-t DIR`
+(also `-tDIR`, `-st DIR` and `--target-directory`; only the last, as `ln` rejects two), the last
+operand in case it is an existing folder, and that operand's parent. Options count anywhere on the
+line (`ln REL LINK -s`), because getopt permutes them. A folder given as a relative path is not a
+base: relative paths only use the distinctive-name checks, because the tool's working directory is
+unknown here.
 
 Brace sets are expanded first, as bash does and as for secret-store paths (issue #224). A shell word is
 expanded from its source text, so only unquoted braces expand. A file tool's path is expanded as written. The
@@ -597,7 +904,9 @@ write to the outside spelling is a local write. Name and prefix checks are case-
 case-insensitive filesystem (APFS) accepts `STATE/` for `state/`. A glob spelling
 (`sta*/gate-grants.json`) is expanded by the shell, not seen here. A link planted
 and used through relative paths in one command (`cd ~ && ln -s .exo e && cd e && ...`) is not
-followed, and the bash tool's `cwd` argument is not read.
+followed, and the bash tool's `cwd` argument is not read. File-descriptor magic links (`/dev/fd/N`,
+`/proc/self/fd/N`) name whatever an earlier redirection opened, so
+`exec 3< ~/.exo/state/gate-grants.json; printf X > /dev/fd/3` is not seen as a store write (#217).
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
@@ -606,7 +915,18 @@ non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, 
 writing command after `cd` into the store. `rm -rf ~/.exo` counts (an ancestor). A
 `store_write` always asks, no policy lowers it, no standing grant covers it, and only the
 principal may answer (`PRINCIPAL_ONLY`, whatever `approvals.yaml` says). It is enforced in
-observe mode too. Reads of the store stay `read`, except `keys/`, which stays `credentials`.
+observe mode too. Reads of the store stay `read`, except `keys/` and the run folder's secrets
+(see "Who answered" above), which are `credentials`. A secret wins over the store rule: a write
+or delete that touches `keys/` or a run-folder secret (`rm -rf ~/.exo/keys`, `rm -rf ~/.exo/run`,
+`rm ~/.exo/run/*`, `mv ~/.exo/run/* /tmp/`) is `credentials`. That covers moving or replacing
+the folder that holds the core sockets too: `mv ~/.exo/run ~/.exo/run.old`,
+`mv /tmp/x ~/.exo/run`, `ln -sfn /tmp/x ~/.exo/run`, `cp -rT /tmp/x ~/.exo/run`,
+`mkdir -p ~/.exo/run` and `chmod 777 ~/.exo/run` are `credentials`, not `store_write`. It still
+always asks and is never granted, but a seat that `approvals.yaml` delegates `credentials` to
+(or a seat in `default:` with no `credentials:` line) may answer it, where only the principal
+answers a `store_write` (#169, the D-038 amendment; `keys/` was already so). A delete of job
+output only (`rm ~/.exo/run/jobs/1.log`) or of a socket by name (`rm ~/.exo/run/exod.sock`)
+stays `store_write`.
 
 ## Policy changes during a session (D-038)
 

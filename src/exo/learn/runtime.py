@@ -2,7 +2,8 @@
 
 The store root comes from config `learn.store`. If that is not set it falls back to the exo-memory
 plugin's own setting (plugin config, its profile file, then `EXO_STORE` or `EXO_PRINCIPAL` in the
-environment). With none of these, learning is off; `Learner.notice` says so once.
+environment), then to the active principal in config.json (`principal`, which `exo init` sets), the same
+rule exo-memory uses. With none of these, learning is off; `Learner.notice` says so once.
 """
 from __future__ import annotations
 
@@ -85,7 +86,9 @@ def resolve_store(engine: Any, env: Mapping[str, str] | None = None) -> Path | N
     root = plugin_cfg.get("store_root") or env.get("EXO_STORE")
     if root:
         return Path(str(root)).expanduser()
-    pid = plugin_cfg.get("principal") or env.get("EXO_PRINCIPAL")
+    # Last, the active principal in config.json (`exo init` sets it), a string only, as exo-memory reads it.
+    active = cfg.data.get("principal") if cfg else None
+    pid = plugin_cfg.get("principal") or env.get("EXO_PRINCIPAL") or (active if isinstance(active, str) else None)
     if pid and PID_RE.match(str(pid)):
         return principal_root(str(pid), home)
     return None

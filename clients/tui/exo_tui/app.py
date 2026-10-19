@@ -22,13 +22,13 @@ from exo.core.types import ContentPart, from_dict
 from exo.core.trace import money
 from exo import complete as cm
 from exo.protocol import schema as s
-from exo_tui.onboarding import INTRO_PROMPT, Onboarding, load_catalog
+from exo_tui.onboarding import INTRO_PROMPT, INTRO_SKILL, ORIENTATION, ORIENTATION_NOTE, Onboarding, load_catalog
 from exo_tui.prefs import LAYOUTS, Prefs
 from exo_tui import theme as th
 from exo_tui.hero import Hero, hero_rows
 from exo_tui.boot import STEPS as BOOT_STEPS
 from exo_tui.boot import BootScreen
-from exo_tui.providers import ProvidersScreen, refuse_key_in_composer
+from exo_tui.providers import ProvidersScreen, refuse_key_in_composer, setup_advice
 from exo_tui.widgets import (BUSY_HINT, IDLE_HINT, ApprovalCard, Block, BrandBar, Composer, ComposeHeader, CompletionMenu,
                              EditScreen, Palette, PanelView, PromptMark, StatusStrip, ToolBlock, Welcome)
 
@@ -79,6 +79,9 @@ COMMANDS = {
 LOCAL_COMMANDS = {n: d for n, (_, d) in COMMANDS.items()}
 GROUPS = ("session", "model", "tools", "other")
 SCAFFOLD = "## Goal\n\n## Context\n\n## Constraints\n\n## Done when\n"  # /compose task
+# The core's memory_status state, as the boot line and the empty start say it. Unknown (an older core) says nothing.
+MEMORY_WORDS = {"on": "ready", "off": "off, no principal store", "failed": "did not start", "none": "log only"}
+MEMORY_SHORT = ("off", "failed")  # no green check on the boot line for these
 
 
 PROMPT_IDLE = th.PROMPT  # the mark left of the composer; PromptMark redraws it with steer state
@@ -97,7 +100,8 @@ class ExoApp(App):
                   scrollbar-color-active: $accent; }
     .block { margin: 0; }
     .user, .assistant, .error, .hint { margin: 1 0; }
-    .peer, .taste, .finding, .report { margin: 1 0; background: $surface; padding: 0 1; border-left: outer $cold; }
+    .peer, .taste, .finding, .report, .intro { margin: 1 0; background: $surface; padding: 0 1;
+                                               border-left: outer $cold; }
     #welcome { margin: 1 0; }
     .peer { border-left: double $cold; }
     #activity { height: 1; color: $fg-3; padding: 0 2; background: $deep; }
@@ -188,6 +192,7 @@ class ExoApp(App):
         self.seat = seat
         self.title_arg = title
         self.model = ""
+        self.memory = ""  # the memory plugin's state (a MEMORY_WORDS key; "" unknown), read once at boot
         self.clipboard_verified = False
         self.window = DEFAULT_WINDOW
         self.capacities: dict[str, int] = {}
@@ -208,7 +213,9 @@ class ExoApp(App):
         self.last_answer: tuple[str | None, str] = (None, "")
         self.tools: dict[str, ToolBlock] = {}
         self.approvals: list[s.ApprovalRequested] = []
+        self.threadless: set[str] = set()  # requests of no thread (a held peer message): every thread shows them
         self.card: ApprovalCard | None = None
+        self._card_transition = asyncio.Lock()  # the shared widget id is reusable only after removal finishes
         self.reconcile_every = 3.0  # how often an open card is checked against the core's own list (D-045)
         self._reconciled = 0.0
         self.pending_steers: list[tuple[str, Block]] = []  # (message id, its transcript line) not yet delivered
@@ -298,14 +305,21 @@ class ExoApp(App):
         if self.busy:
             self.refresh_activity()
 
-    def boot_mark(self, step: str, detail: str = "") -> None:
+    def boot_mark(self, step: str, detail: str = "", ok: bool = True) -> None:
         if self.boot_screen is not None:
-            self.boot_screen.mark(step, detail)
+            self.boot_screen.mark(step, detail, ok)
 
     def boot_end(self) -> None:
         if self.boot_screen is not None:
             for step, _ in BOOT_STEPS:
                 self.boot_screen.mark(step, "-")
+
+    async def boot_over(self) -> None:
+        """End the boot sequence and wait until it is off the stack. Its dismiss pops the top screen, so a screen
+        pushed while it runs (the first-run model picker or providers panel) would close in its place."""
+        self.boot_end()
+        if self.boot_screen is not None:
+            await self.boot_screen.closed.wait()
 
     # ------------------------------------------------------------ helpers
     @property
@@ -449,18 +463,25 @@ class ExoApp(App):
                 pass
             self.gstate.first_run = not self.onb.onboarded
             self.update_guidance()
+            try:  # the plugin's real state, not an assumed "ready" (the core says why in a notice)
+                st = (await self.client.call(s.CommandRun(name="memory_status"))).get("output") or {}
+                self.memory = str(st.get("state") or "") if isinstance(st, dict) else ""
+            except Exception:
+                self.memory = ""
             if self.resume and not self.session:
-                rows = (await self.client.call(s.SessionList(limit=20, seat=self.seat)))["sessions"]
-                rows = [r for r in rows if r.get("kind") != "subagent"]  # resume a thread, not a child's log
+                rows = (await self.client.call(s.SessionList(limit=50, seat=self.seat)))["sessions"]
+                # a thread, not a child's log, with something in it: every launch opens one, used or not
+                rows = [r for r in rows if r.get("kind") != "subagent" and r.get("message_count")]
                 self.session = rows[0]["id"] if rows else None
             if self.session:
                 await self.resume_or_new(self.session)
             else:
                 await self.new_session(announce=False)
             self.boot_mark("agent", self.seat or "main")
-            self.boot_mark("memory", "ready")
+            self.boot_mark("memory", MEMORY_WORDS.get(self.memory, ""), ok=self.memory not in MEMORY_SHORT)
             self.run_worker(self.pump(hello.get("seq", 0)), exit_on_error=False)
-            want_intro = self.auto_intro and not self.resume and not self.onb.onboarded
+            await self.boot_over()  # the provider check below may push a screen
+            want_intro = self.auto_intro and not self.resume and self.onb.intro_due
             # A first run with no working provider goes to /providers first; the intro waits for a key,
             # because the orientation is an agent turn and would only fail without one.
             ready = await self.first_run_providers() if self.provider_check else True
@@ -565,6 +586,8 @@ class ExoApp(App):
                     and m.meta.get("author") == "principal"):
                 self.intro_turn = m.meta.get("turn_id") or ""
                 self.intro_reply = False
+                if self.intro_pending == "first":  # it started: a failure or no reply does not resend it every launch
+                    self.onb.mark_intro_started()
             elif self.intro_turn and m.role == "assistant" and m.meta.get("turn_id") == self.intro_turn:
                 route = str(m.meta.get("model") or "")
                 provider, sep, model = route.partition(":")
@@ -609,13 +632,16 @@ class ExoApp(App):
             else:
                 self.update_older_tool(b.result.call_id, b.result.text(), status="error" if b.result.is_error else "done")
         elif isinstance(b, s.ApprovalRequested):
+            if ev.session is None:  # no live session could take it (D-026): the card stays across thread switches
+                self.threadless.add(b.request_id)
             self.approvals.append(b)
             self.show_approval()
             self.hint("approval")
         elif isinstance(b, s.ApprovalResolved):
             self.approvals = [a for a in self.approvals if a.request_id != b.request_id]
+            self.threadless.discard(b.request_id)
             if self.card is not None and self.card.req.request_id == b.request_id:
-                self.close_card()
+                self.run_worker(self.close_card(b.request_id), exit_on_error=False)
         elif isinstance(b, s.SteerCancelled):
             if self.intro_pending and b.text == INTRO_PROMPT:
                 self.intro_pending, self.intro_turn, self.intro_reply = "", "", False
@@ -709,10 +735,13 @@ class ExoApp(App):
         """Before another thread opens: the pump drops this one's events from now on, so a turn.completed or
         approval.resolved for it would never arrive. Its turn state, card, queued steers and numbers go now. Its COST
         counts wait for a return to it: the core's session_total keeps counting the whole thread, so the '+' for an
-        unpriced call must stay with it (D-032). `to` gets back what this window last saw of it, if anything."""
-        if self.card is not None:  # it keeps its slot until gone (a new card reuses its id); no await after this one
-            await self.card.remove()
-        self.card, self.approvals = None, []
+        unpriced call must stay with it (D-032). `to` gets back what this window last saw of it, if anything.
+        A request of no thread stays: it is every thread's."""
+        async with self._card_transition:
+            if self.card is not None and self.card.req.request_id not in self.threadless:
+                await self.card.remove()  # keep its slot until gone; close/restore use the same transition
+                self.card = None
+            self.approvals = [a for a in self.approvals if a.request_id in self.threadless]
         self.busy, self.turn_t0, self.running_tools, self.cur_id, self.question = False, 0.0, 0, None, None
         self.pending_steers.clear()
         self.agents.clear()
@@ -877,7 +906,8 @@ class ExoApp(App):
             rows = hero_rows(self.size.height)
             if rows:
                 self.transcript.mount(Hero(rows))
-            self.transcript.mount(Welcome(self.seat or "main", self.model))
+            self.transcript.mount(Welcome(self.seat or "main", self.model, MEMORY_WORDS.get(self.memory, "")))
+        await self.restore_approvals()  # a request of no thread shows in a new thread too (D-026)
         self.refresh_status()
 
     # ------------------------------------------------------------ sending
@@ -1153,6 +1183,10 @@ class ExoApp(App):
             self.pending_steers.append((resp.result["message_id"], block))
             block.pending = True
             block.flush()
+        elif resp.ok and resp.result.get("steered") and resp.result.get("message_id"):  # core steered a plain send into a child (D-070)
+            self.pending_steers.append((resp.result["message_id"], block))
+            block.steer = block.pending = True
+            block.flush()
 
     def keep_text(self, text: str) -> None:
         """A message whose delivery is unknown goes back in an empty composer, to send again or drop."""
@@ -1361,11 +1395,19 @@ class ExoApp(App):
         """Send the orientation as a normal user turn. It shows as "/intro"; the agent gets the longer prompt."""
         if self.intro_pending:
             return
+        if not self.onb.onboarded:  # until an intro completes, /intro (the composer offers it) is still the first run
+            kind = "first"
         if self.provider_check and not await self.first_run_providers():
-            self.intro_after_providers = kind == "first" or not self.onb.onboarded
+            self.intro_after_providers = kind == "first"
             return
         self.add(Block("/intro", "user"))
         self.close_cur()
+        if await self.intro_skill_missing():  # the turn could only improvise: show the short version instead
+            self.add(Block(ORIENTATION, "intro", head="Exo in brief", meta=ORIENTATION_NOTE))
+            self.onb.mark_onboarded()
+            if kind == "first":
+                self.run_worker(self.set_tutorial(True, quiet=True), exit_on_error=False)
+            return
         self.intro_pending = kind
         self.intro_turn, self.intro_reply = "", False
         try:
@@ -1379,6 +1421,14 @@ class ExoApp(App):
             return
         if not resp.ok:
             self.intro_pending = ""  # the turn never started, so a first run stays un-onboarded
+
+    async def intro_skill_missing(self) -> bool:
+        """The core listed its skills and none is exo-intro (a pip install without the installer's skill pack)."""
+        try:
+            rows = (await self.client.call(s.SkillsList())).get("skills", [])
+        except Exception:
+            return False  # cannot tell: send the turn as before
+        return not any(str(r.get("name", "")).split(":")[-1].lower() == INTRO_SKILL for r in rows)
 
     def intro_completed(self, stop_reason: str) -> None:
         """Only a successful real reply from this exact intro turn completes orientation."""
@@ -1589,7 +1639,7 @@ class ExoApp(App):
                     self.note(f"{needs[0]} is set up; choose a default model before /intro.")
                     await self.pick_provider_default(needs[0])
                 else:
-                    self.note("No model provider is set up yet. Type /providers to add a key." if not needs
+                    self.note(setup_advice((result.get("output") or {}).get("providers") or []) if not needs
                               else "Choose a default main model in /providers before /intro.")
                     self.open_providers()
             except Exception:  # the app closed while the check ran
@@ -1670,7 +1720,7 @@ class ExoApp(App):
     async def reconcile_approvals(self) -> None:
         """D-045: the core's list is the truth. A card whose request the core no longer holds (a missed
         approval.resolved, a restarted core, a replayed old request) is removed instead of lingering."""
-        if not (self.approvals or self.card) or not self.session:
+        if not (self.approvals or self.card):
             return
         now = time.monotonic()
         if now - self._reconciled < self.reconcile_every:
@@ -1679,48 +1729,60 @@ class ExoApp(App):
         # Only requests already shown when the list was asked for can be stale: one that arrives while the list is
         # in flight is newer than the answer and must not be closed by it.
         before = {a.request_id for a in self.approvals} | ({self.card.req.request_id} if self.card else set())
-        try:
-            resp = await self.client.send(s.ApprovalsList(session=self.session))
+        try:  # the whole list: a session filter would leave out the requests of no thread, which show here too
+            resp = await self.client.send(s.ApprovalsList())
         except Exception:
             return
         if not resp.ok:
             return
         gone = before - {a.get("request_id") for a in resp.result.get("approvals", [])}
         self.approvals = [a for a in self.approvals if a.request_id not in gone]
+        self.threadless -= gone
         if self.card is not None and self.card.req.request_id in gone:
-            self.close_card()
+            await self.close_card(self.card.req.request_id)
 
     async def restore_approvals(self) -> None:
         """After an answer whose reply was lost: the core's list is the truth, so a request it still holds gets its
-        card back."""
+        card back. So does a request of no thread (D-026), which every thread shows."""
         try:
-            resp = await self.client.send(s.ApprovalsList(session=self.session))
+            resp = await self.client.send(s.ApprovalsList())
         except Exception:
             return
         if not resp.ok:
             return
-        shown = {a.request_id for a in self.approvals} | ({self.card.req.request_id} if self.card else set())
-        for a in resp.result.get("approvals", []):
-            if a.get("request_id") not in shown:
+        async with self._card_transition:
+            shown = {a.request_id for a in self.approvals} | ({self.card.req.request_id} if self.card else set())
+            for a in resp.result.get("approvals", []):
+                if a.get("session") not in (None, self.session) or a.get("request_id") in shown:
+                    continue
+                if a.get("session") is None:
+                    self.threadless.add(a.get("request_id", ""))
                 self.approvals.append(from_dict(s.ApprovalRequested, a, strict=False))
-        if self.card is None:  # the answered card may still be on its way out, and the new one reuses its id
-            for old in self.query(ApprovalCard):
-                await old.remove()
-        self.show_approval()
+            self.show_approval()
 
-    def close_card(self) -> None:
-        restore = self.card is not None and (self.focused is self.card or self.card.has_focus_within)
-        if self.card is not None:
-            self.card.remove()
+    async def close_card(self, request_id: str) -> bool:
+        """True when this call closed the request's card; False when it was already gone."""
+        async with self._card_transition:
+            card = self.card
+            if card is None or card.req.request_id != request_id:
+                return False  # a resolved event or another closer already replaced this request's card
+            restore = self.focused is card or card.has_focus_within
+            removal = card.remove()
+            moved = self.focused  # removal hands the focus to a neighbour at once; only a later move is the user's
+            await removal
             self.card = None
-        self.show_approval()
-        if restore:
-            self.query_one(Composer).focus()
+            self.show_approval()
+            if restore and self.focused is moved and not self.modal_open():
+                self.query_one(Composer).focus()
+            return True
 
-    def on_approval_card_answered(self, msg: ApprovalCard.Answered) -> None:
+    async def on_approval_card_answered(self, msg: ApprovalCard.Answered) -> None:
         self.approvals = [a for a in self.approvals if a.request_id != msg.request_id]
+        # A queued click must never close the replacement card, and a repeat of a key (the card is already gone)
+        # answers nothing: only the call that closed this request's card notes and sends.
+        if not await self.close_card(msg.request_id):
+            return
         self.note(f"approval: {msg.decision}" + (f" ({msg.note})" if msg.note else ""))
-        self.close_card()
         self.run_worker(self.answer_approval(s.ApprovalRespond(request_id=msg.request_id, decision=msg.decision,
                                                                note=msg.note, client=CLIENT_ID)), exit_on_error=False)
 

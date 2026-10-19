@@ -12,9 +12,9 @@ keeps the loop independent of the registry, router and slot modules.
 Memory call sites (all optional, sync or async): ``system_prompt_block()``,
 ``prefetch(query, session_id=)``, ``on_turn_start(turn_number, message, session_id=, author=)``,
 ``sync_turn(user_content, assistant_content, session_id=, turn_author={"author": ...})``,
-``checkpoint(session_id=, messages=, reason=)``. ``author`` is the turn message's author (exo.provenance, D-040);
-each message dict carries ``author`` and, for user messages, ``principal``. Keywords a provider does not
-declare are dropped.
+``checkpoint(session_id=, messages=, reason=)``; the last three never in or under a private thread (D-028).
+``author`` is the turn message's author (exo.provenance, D-040); each message dict carries ``author`` and,
+for user messages, ``principal``. Keywords a provider does not declare are dropped.
 Context call sites: ``note(session_id)``, ``await build(session_id, system)``,
 optional ``on_turn_complete(session_id, usage)`` and an ``on_event`` attribute.
 """
@@ -36,6 +36,9 @@ from exo.core.types import ContentPart, Message, Provider, ToolCall, ToolResult,
 from exo.protocol import schema as ev
 
 ToolRunner = Callable[[ToolCall, dict[str, Any]], "ToolResult | Awaitable[ToolResult]"]
+# The session's real cwd, as the authoritative value: a CLI route's own environment note names its private folder.
+WORKDIR_LINE = ("Your working directory is {cwd}. Tools run there and relative paths resolve against it; "
+                "this overrides any other working directory an environment note names.")
 
 
 @dataclass
@@ -128,11 +131,12 @@ class Loop:
         return info
 
     async def resume(self, session: str) -> ev.SessionInfo:
-        """Reattach after a restart: repair a half-finished tool round, restart summaries."""
+        """Reattach after a restart: repair a half-finished tool round (not a running turn's own), restart summaries."""
         info = self.store.get_session(session)
         if info is None:
             raise KeyError(session)
-        await self._repair(session)
+        if not self.state(session).running:
+            await self._repair(session)
         if hasattr(self.context, "note"):
             await maybe_await(self.context.note(session))
         return self.store.get_session(session)  # type: ignore[return-value]
@@ -187,6 +191,7 @@ class Loop:
             st.steer.append(msg)
             return None
         async with st.lock:
+            self.store.assert_open(session)  # locked while this send waited (a child that finished): no turn runs
             st.running = st.accepting_steers = True
             st.interrupt.clear()
             try:
@@ -225,7 +230,9 @@ class Loop:
         await self._emit(ev.TurnStarted(turn_id=turn_id, model=self.model or "", soul=soul), session)
         turn_no = sum(1 for _ in self.store.messages(session) if _.role == "user" and not _.meta.get("note"))
         author = provenance.author_of(user)
-        await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
+        remembered = not self.store.private(session)  # D-028: no memory write sees a private thread or its child
+        if remembered:
+            await self._memory("on_turn_start", turn_no, user.text(), session_id=session, author=author)
         result = TurnResult(turn_id=turn_id, stop_reason="end")
         try:
             await self._rounds(session, turn_id, user, st, result)
@@ -254,8 +261,9 @@ class Loop:
         await self._emit(ev.TurnCompleted(turn_id=turn_id, stop_reason=result.stop_reason,
                                           usage=result.usage, timing=timing), session)
         reply = result.message.text() if result.message else ""
-        await self._memory("sync_turn", user.text(), reply, session_id=session, turn_author={"author": author})
-        if self.memory is not None and hasattr(self.memory, "checkpoint"):
+        if remembered:
+            await self._memory("sync_turn", user.text(), reply, session_id=session, turn_author={"author": author})
+        if remembered and self.memory is not None and hasattr(self.memory, "checkpoint"):
             recent = [provenance.flat(m) for m in self.store.messages(session)[-40:]]  # D-040: author per message
             await self._memory("checkpoint", session_id=session, messages=recent, reason="turn")
         if hasattr(self.context, "on_turn_complete"):
@@ -278,14 +286,17 @@ class Loop:
             return False
         return "recall" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
-    async def base_system(self) -> str:
-        """The stable part of the system text: system prompt and the memory provider's block (no recall)."""
+    async def base_system(self, session: str | None = None) -> str:
+        """The stable part of the system text: system prompt, memory block (no recall) and the session's cwd line."""
         extra = self.system_extra() if self.system_extra else ""  # last: never moves what comes before it (D-030)
-        return "\n\n".join(p for p in (self.system_prompt, await self._memory("system_prompt_block") or "", extra) if p)
+        info = self.store.get_session(session) if session else None
+        where = WORKDIR_LINE.format(cwd=info.cwd) if info and info.cwd else ""
+        parts = (self.system_prompt, await self._memory("system_prompt_block") or "", where, extra)
+        return "\n\n".join(p for p in parts if p)
 
     async def _system(self, session: str, query: str) -> tuple[str, str]:
         """(system text, recall). Recall is folded into the system text unless the context engine takes it."""
-        base = await self.base_system()
+        base = await self.base_system(session)
         parts = [base]
         recall = await self._memory("prefetch", query, session_id=session) or ""
         if recall and not self._takes_recall():
@@ -302,7 +313,7 @@ class Loop:
                 await maybe_await(self.context.note(session))
             messages = await self.context.build(session, system, **extra)
             msg_id = new_id("m")
-            stream = await self._call(session, messages, msg_id, st, result)
+            stream = await self._call(session, messages, msg_id, st, result, _)
             if await self._settle(session, turn_id, stream, msg_id, _, st, result):
                 result.stop_reason = "error"
                 return
@@ -349,7 +360,7 @@ class Loop:
             messages = await self.context.build(session, system, **extra)
             messages.append(Message.user(WRAP_UP_PROMPT.format(n=self.max_iterations)))
             msg_id = new_id("m")
-            stream = await self._call(session, messages, msg_id, st, result, tool_choice="none")
+            stream = await self._call(session, messages, msg_id, st, result, self.max_iterations, tool_choice="none")
             settled = await self._settle(session, turn_id, stream, msg_id, self.max_iterations, st, result)
             if settled or not (stream.text or stream.reasoning):
                 return
@@ -386,7 +397,7 @@ class Loop:
         await self._emit(ev.Error(code=code, message=result.error, retryable=stream.error.retryable), session)
         return True
 
-    async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState) -> None:
+    async def _record_call(self, session: str, s: _Stream, iteration: int, st: _SessionState, stop: str = "") -> None:
         """The model.call event (what was asked, who served, every attempt) and the turn's running totals."""
         role = self.provider.name.split(":", 1)[1] if self.provider.name.startswith("router:") else ""
         st.stats["model_calls"] += 1
@@ -398,7 +409,7 @@ class Loop:
         await self._emit(ev.ModelCall(
             iteration=iteration + 1, role=role, requested=self.model or "", route=served,
             attempts=s.attempts, ttft_ms=s.first_ms, total_ms=s.total_ms, usage=s.usage,
-            stop_reason=(s.done.stop_reason or "") if s.done is not None else "",
+            stop_reason=(s.done.stop_reason or "") if s.done is not None else stop,
             error=trace.scrub(s.error.error, 300) if s.error is not None else "", retries=s.retries), session)
 
     def _assemble(self, s: _Stream, msg_id: str) -> Message:
@@ -418,8 +429,10 @@ class Loop:
     # ---------------------------------------------------------------- provider call
 
     async def _call(self, session: str, messages: list[Message], msg_id: str, st: _SessionState,
-                    result: TurnResult, *, tool_choice: str = "") -> _Stream:
+                    result: TurnResult, iteration: int = 0, *, tool_choice: str = "") -> _Stream:
         """Stream one model call with retry. Retries only while nothing was shown."""
+        if st.interrupt.is_set():  # stopped before the call began: nothing reached the provider, so no record
+            raise _Interrupted()
         opts = dict(self.provider_opts)
         if self.model:
             opts["model"] = self.model
@@ -434,8 +447,12 @@ class Loop:
         while True:
             s = _Stream(t0=t0)
             try:
+                if attempt:  # the backoff is inside the try: a stop during it still records the failed tries
+                    await self._interruptible(asyncio.sleep(self.retry_delay * 2 ** (attempt - 1)), st)
                 await self._interruptible(self._consume(session, messages, specs, opts, msg_id, s), st)
-            except _Interrupted:
+            except _Interrupted:  # the wait up to the stop is model time, not harness time (like f_8e7f52cd)
+                s.total_ms, s.retries, s.attempts = int((time.monotonic() - t0) * 1000), attempt, history + s.attempts
+                await self._record_call(session, s, iteration, st, stop="interrupted")
                 if s.text or s.reasoning:
                     partial = self._assemble(_Stream(text=s.text, reasoning=s.reasoning), msg_id)
                     partial.meta["interrupted"] = True
@@ -455,7 +472,6 @@ class Loop:
             history = s.attempts
             await self._emit(ev.Notice(text=f"retrying model call ({attempt}/{self.max_retries}):"
                                        f" {s.error.error}", level="warn"), session)
-            await self._interruptible(asyncio.sleep(self.retry_delay * 2 ** (attempt - 1)), st)
 
     async def _consume(self, session: str, messages: list[Message], specs: list[ToolSpec],
                        opts: dict[str, Any], msg_id: str, s: _Stream) -> None:
@@ -470,7 +486,8 @@ class Loop:
                 elif pe.kind == "reasoning" and pe.text:
                     s.reasoning.append(pe.text)
                     await self._emit(ev.ReasoningDelta(message_id=msg_id, text=pe.text), session)
-                elif pe.kind == "notice":
+                elif pe.kind == "notice":  # a fallback notice carries the router's tries: a stop on the next route keeps them
+                    s.attempts = pe.attempts or s.attempts
                     await self._emit(ev.Notice(text=pe.text, level="warn"), session)
                 elif pe.kind == "tool_call" and pe.tool_call is not None:
                     s.calls.append(pe.tool_call)
