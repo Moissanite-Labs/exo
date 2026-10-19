@@ -335,6 +335,7 @@ class _Word:
     started: bool = False
     raw: str = ""              # the source text of the word, quotes kept
     locale: bool = False       # holds $".." (bash may swap in a translation and expand it)
+    redir_after: bool = False  # a redirection, heredoc or here-string follows it before the next word (#207)
     dollar_quote: bool = False  # holds $'..' or $".." (dash and ash keep the $ and the quotes' contents)
     fd: str = ""               # a redirection target: the descriptor number written before its operator (`3< f`)
 
@@ -651,6 +652,8 @@ def _parse(src: str) -> tuple[list[_Cmd], list[str], bool]:
 
     while i < len(toks):
         kind, v = toks[i]
+        if kind in ("redir", "hd") and cur.words:
+            cur.words[-1].redir_after = True
         if kind == "op":
             last = cur.words[-1] if cur.words else None
             # a NAME=( after an earlier NAME=(..) is still an operand of that earlier command
@@ -1825,19 +1828,23 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             # bash: `coproc [NAME] compound_command`, `function NAME compound_command`. The name is
             # skipped before a compound opener; before a simple command (`coproc w echo hi`) the first
             # word is the program. Keep the original words so quotes, expansion flags and stdin survive.
-            body = words[1:]
+            body, alt = words[1:], []
             if len(body) > 1 and not body[1].quoted and body[1].text in _COMPOUND:
+                if prog == "coproc" and (words[0].redir_after or body[0].redir_after):
+                    # A redirection between `coproc`, the name and the opener: bash reads a simple command that
+                    # runs the name (#207). The skipped reading stays too, so nothing it caught is lost.
+                    alt = body
                 body = body[1:]
             elif prog == "function":
                 body = []                        # `function f() { ...; }`: the body is parsed as its own command
-            parts += inner_words(body)
+            parts += inner_words(body) + inner_words(alt)
             # An environment dump is credentials; classify_shell looks for one only in top-level commands.
-            i = 0
-            while i < len(body) and not body[i].quoted and body[i].text in _OPENERS:
-                i += 1
-            if _env_dump(_strip_prefixes_keep_env([w.text for w in body[i:]])[0]):
-                parts.append(_make("credentials", summary="shell touching environment dump", command=cmd,
-                                   signals=["secret store"]))
+            for ws in (body, alt):
+                i = next((n for n, w in enumerate(ws) if w.quoted or w.text not in _OPENERS), len(ws))
+                if _env_dump(_strip_prefixes_keep_env([w.text for w in ws[i:]])[0]):
+                    parts.append(_make("credentials", summary="shell touching environment dump", command=cmd,
+                                       signals=["secret store"]))
+                    break
         if prog == "trap" and len(argv) > 1 and depth < _DEPTH:
             parts.append(classify_shell(argv[1], inner_depth))
         return parts
@@ -1936,16 +1943,9 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
                     if o2 in ("ssh", "client", "server"):
                         runs.append((o2, v2))
                         moved = moved or f"--{opt}: takes a value that reads as --{o2}"
-        while prog == "ssh" and i < len(rest) and rest[i].startswith("-"):
-            w = rest[i]
-            i += 1
-            if w.startswith("--"):
-                continue
-            # Short options cluster as in getopt: the first letter that takes a value ends the word, and the
-            # value is the rest of it or the next word (`-vp 22`, `-oPort=22`, `-B eth0`).
-            v = next((j for j, ch in enumerate(w[1:], 1) if ch in _SSH_VALUE_OPTS), 0)
-            if v and v == len(w) - 1:
-                i += 1
+        flags = ""
+        if prog == "ssh":
+            i, flags = _ssh_options(rest, 0)
         dest = rest[i] if i < len(rest) else ""
         host = _ssh_host(dest)
         tail = rest[i + 1:]
@@ -1961,6 +1961,12 @@ def _classify_program(words: list, k: _Cmd, cmd: str, depth: int, ctx: dict,
             c = classify_shell(inner, inner_depth)
         else:
             c = _make("shell", summary=f"ssh {dest}", command=cmd)
+        if prog == "ssh" and _ssh_stdin_runs(words, k, piped, i, flags):
+            # #240: the login shell on the host runs ssh's stdin. It is read as shell, as for `bash -s`, and asks.
+            fed = [_opaque(f"ssh {dest} runs its stdin as commands on the remote host"[:120], cmd)]
+            if depth < _DEPTH:
+                fed += _once(ctx, (classify_shell, inner_depth), k, piped, lambda t: [classify_shell(t, inner_depth)])
+            c = _combine([c, *fed], cmd)
         dests = [host, dest]
         if dest != old_dest:
             # The gate used to read another word as the host. The line asks and both readings' parts are
@@ -2115,6 +2121,46 @@ def _option_values(argv: list[str], names: tuple, start: int = 1, takes: str = "
                         out.append(value)
                     break
     return out
+
+
+def _ssh_options(args: list[str], i: int, after: bool = False) -> tuple[int, str]:
+    """Where ssh's options from args[i] end, and the letters of its flags among them. Short options cluster as in
+    getopt: the first letter that takes a value ends the word, and the value is the rest of it or the next word
+    (`-vp 22`, `-oPort=22`, `-B eth0`). Before the host a word starting with `--` is passed over, as the gate has
+    read it since D-075. After the host (`after`) ssh reads options again, up to its remote command, and `--`
+    ends them."""
+    letters = ""
+    while i < len(args) and args[i].startswith("-") and not (after and args[i] == "-"):
+        w = args[i]
+        i += 1
+        if w.startswith("--"):
+            if after and w == "--":
+                break
+            continue
+        v = next((j for j, ch in enumerate(w[1:], 1) if ch in _SSH_VALUE_OPTS), 0)
+        letters += w[1:v or None]
+        if v and v == len(w) - 1:
+            i += 1
+    return i, letters
+
+
+def _ssh_stdin_runs(words: list, k: _Cmd, piped: str | None, i: int, flags: str) -> bool:
+    """Whether the login shell on the remote host runs ssh's stdin as commands (#240). That takes a stdin the line
+    gives ssh (a pipe, a heredoc, a here-string, a `<` from anything but /dev/null), none of `-n`, `-N` and `-f`
+    (ssh then does not read it) and no remote command: ssh reads options after the host too (`ssh host -T`), up
+    to the command, and an empty word is no command. A word that may expand to no word or several (`$A`, a glob)
+    among the options and the host, or as every word of the command, leaves them uncountable, so the stdin is read
+    then too. `words` is ssh's argv as words; `i` is the host's index in words[1:], `flags` the letters before it."""
+    if not (k.piped_in or piped is not None or k.heredocs or k.herestrings
+            or any(op in _READ_REDIRS and not (op == "<" and t.text == "/dev/null") for op, t in k.redirs)):
+        return False
+    texts = [w.text for w in words[1:]]
+    wild = [w.dynamic or (not w.quoted and (w.glob or bool(re.search(r"\{[^}]*(,|\.\.)[^}]*\}", w.text))))
+            for w in words[1:]]
+    j, late = (i + 1, "") if "--" in texts[:i] else _ssh_options(texts, i + 1, after=True)
+    if any(wild[:j]):
+        return True
+    return not set(flags + late) & set("nNf") and (" ".join(texts[j:]) == "" or all(wild[j:]))
 
 
 def _ssh_setting(text: str) -> tuple[str, str]:
