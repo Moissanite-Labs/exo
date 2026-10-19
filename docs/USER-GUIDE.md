@@ -267,6 +267,8 @@ What the gate asks about, and why:
   wildcard or a folder walk of the folder that holds Exo's own connection secret (`run/`) is not yet seen as a
   credentials read (#169, fix in review). Nor is a harmlessly named symbolic link to a key file, read by its own
   name (#209).
+  A `grep` or `glob` over a folder leaves out the secret stores in it (`~/.ssh`, `~/.aws`, `.env`, Exo's keys)
+  and says how many it skipped; the agent must name one to read it, which asks.
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another.
