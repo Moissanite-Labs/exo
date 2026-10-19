@@ -6,6 +6,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Security
+- Provider status rows and `exo models` redact URL userinfo (#271). Basic-auth logins no longer appear in
+  these displays or client status payloads. Connection endpoints remain unchanged. Invalid URLs produce a
+  generic label; secrets in URL paths, queries or fragments remain outside this redaction's scope.
 - Tool subprocesses (bash, background jobs, `code_find`) drop inherited shell startup hooks (#135, D-039
   amendment): bash itself acts on `BASH_ENV`, exported functions (`BASH_FUNC_<name>%%`), `SHELLOPTS` and
   `BASHOPTS` at startup; `ENV` is read by interactive POSIX shells a command starts; `PS4` matters once xtrace is

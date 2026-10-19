@@ -64,7 +64,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | D-031 UI/UX overhaul, terminal half | `docs/UI.md`, `docs/ui/WEB.md` | §2 | §7 (colour token test) | WP §24 "Instruments, not chrome" |
 | D-032 Background jobs, principal capture, trace, commands | `docs/JOBS.md`, `docs/MEMORY-MODEL.md` "Principal capture is a mechanism", `docs/TRACE.md` "Cost", `docs/TOOLS.md`, `docs/HANDOFF.md`, `docs/SEATS.md` | §3, §4, §5, §9 | §4, §5 | WP §5, §13.5, §15.5, §17.4, §23, §24 (`/handoff`) |
 | D-033 Approvals bound to exact text, who approves, outbound scrub | `docs/GATE.md` | §6 | §3 | WP §7, §15.3, §15.4, §26 |
-| D-034 Providers setup: one engine, CLI, TUI panel, web view | `docs/PROVIDERS.md` "Set up with the app or the TUI", `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md` | §1, §3, §10 | MISSING | MISSING (written after v0.2) |
+| D-034 Providers setup: one engine, CLI, TUI panel, web view (amended 2026-10-19, #271: status URLs redact userinfo) | `docs/PROVIDERS.md` "Set up with the app or the TUI", `docs/COMMANDS.md`, `docs/UI.md`, `docs/ui/WEB.md` | §1, §3, §10 | MISSING | MISSING (written after v0.2) |
 | Slash commands (the full list) | `docs/COMMANDS.md` Part 1 | §3 | §2 "Extend through `command.run`" | WP §24 (the three prefixes only) |
 | CLI commands (`exo ...`) | `docs/COMMANDS.md` Part 2 | §9 (trace), §11 (store and ledger) | §2 "Extend through `command.run` built-ins" | n/a |
 | Plugins, hooks and slots | `docs/STANDALONE.md` §4, `docs/CORE-V2-INTERFACES.md` | n/a | §4 | WP §18 |
