@@ -7,6 +7,7 @@ the other changes course at its next step. In Exo this works between Exo session
 
 - `/peers` (TUI) or the `peers` tool lists live sessions on the machine: name, running or idle, folder.
   A seat with one session is just its name (`razi`); with several it is `razi/3fa91c2b`.
+  Subagents and scheduled runs are not listed, and a message to a bare seat name never lands in one.
 - `/send <peer> <text>` (you typing) or the `peer_send` tool (an agent) sends a message.
 - A running target takes it at its next tool round. An idle target queues it for its next turn, and wakes
   only if its seat allows (`wake`).
@@ -27,7 +28,8 @@ the other changes course at its next step. In Exo this works between Exo session
 Hold means an approval card (TUI and web) shows the sender and text. Allow delivers it; deny drops it;
 nothing happens in 30 minutes and it expires. A held message never enters the model's context. When the sender
 named no session and none is live (running, or used within `active_hours`, 12 by default), the card belongs to no
-thread: both clients show it in every thread, and allow opens a new thread for the message.
+thread: both clients show it in every thread, and allow opens a new thread of the seat for the message. If that
+thread cannot open, the message closes as not delivered and a notice says why.
 
 Change it per seat in the seat file (or `peers` in config.json):
 
@@ -44,7 +46,10 @@ enabled = true
 
 The exo-bus channel brings messages from other seats on the Exo Bus. It does not start turns itself. For each
 inbox envelope it calls the `peers` command with action `bus`, and the core takes it from there
-(`src/exo/bus/ingress.py`):
+(`src/exo/bus/ingress.py`). Only a channel exod runs can do this: exod gives its channels an in-process link
+stamped with the caller `channel`, which no socket, stdio or TCP connection ever gets (`docs/GATE.md` "Who
+answered"). Any other caller, a tool subprocess on the socket or the principal's own client, is refused as
+`forbidden`, so it cannot pin a seat's key or speak as a seat.
 
 1. **Check the signature against the seat's pinned key.** The first message from a seat pins the key the bus
    registry lists for it (in `$EXO_HOME/keys/registry.json`). Every later message must verify against that pinned
@@ -57,9 +62,13 @@ inbox envelope it calls the `peers` command with action `bus`, and the core take
 3. **Deliver it as the seat, not as you.** It lands in the bus session for that chat, framed as `[bus message from
    <seat> ...]`, with author `bus:<seat>`. Memory capture and learning never read it as your words.
 4. **Reply only when the policy said auto.** The channel posts the turn's final answer back to the bus only for a
-   turn that a message the policy delivered on its own started. A held message you released, a denied one, and your
-   own typing in a bus session post nothing. The agent can still answer with the `bus_post` tool, which the gate
-   checks like any post.
+   turn that a message the policy delivered on its own opened: the turn's first message is that envelope. A held
+   message you released, a denied one, and your own typing in a bus session post nothing. Neither does a message
+   steered or queued into a turn that was already running (yours included), nor an auto turn that you or a job
+   typed into. The agent can still answer with the `bus_post` tool, which the gate checks like any post.
+
+A body sealed to this seat that cannot be opened (malformed, or sealed to a key this seat no longer holds) arrives
+as `<encrypted body could not be opened>`. It is checked and held like any message, and the inbox moves past it.
 
 ## What a peer cannot do
 

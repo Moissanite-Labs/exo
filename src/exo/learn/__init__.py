@@ -5,8 +5,8 @@
     attach(engine)                   register the fast loop on the engine's hooks
     nightly(engine)                  the slow loop (async): promote, climb, check regressions
 
-The store comes from config `learn.store`, else the exo-memory plugin's store. With neither, learning is off and
-says so once.
+The store comes from config `learn.store`, else the exo-memory plugin's store, else the active principal in
+config.json (`exo init` sets it). With none, learning is off and says so once.
 """
 from __future__ import annotations
 

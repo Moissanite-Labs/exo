@@ -12,12 +12,13 @@ import types
 from exo import principal as pr
 from exo.core.engine import CoreEngine
 from exo.core.ingress import Ingress, IngressPath
+from exo.core.seats import Seat
 from exo.protocol import schema as s
 
 
-def _engine(tmp_path, active_hours: float) -> CoreEngine:
+def _engine(tmp_path, active_hours: float, seat: Seat | None = None) -> CoreEngine:
     return CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path), env={},
-                      peers={"active_hours": active_hours})
+                      peers={"active_hours": active_hours}, seat=seat)
 
 
 async def _until(fn, secs: float = 5.0) -> None:
@@ -105,6 +106,42 @@ def test_allow_with_a_live_session_still_goes_there(tmp_path):
             assert [r.state for r in receipts] == ["released"]
             assert [i.id for i in eng.store.list_sessions(10)] == [live]
             assert any("can you look at the build?" in m.text() for m in eng.store.messages(live))
+        finally:
+            await eng.close()
+
+    asyncio.run(run())
+
+
+def test_the_new_thread_is_in_the_seat(tmp_path):
+    """A seated window's --resume lists only its seat's threads, so the new thread carries the seat."""
+    eng = _engine(tmp_path, active_hours=1e-9, seat=Seat(name="desk"))
+
+    async def run():
+        try:
+            _, receipts = await _hold_and_answer(eng, "allow")
+            assert [r.state for r in receipts] == ["released"]
+            (new,) = eng.store.list_sessions(10)
+            assert new.seat == "desk"
+        finally:
+            await eng.close()
+
+    asyncio.run(run())
+
+
+def test_a_thread_that_cannot_open_closes_the_message_and_says_so(tmp_path):
+    """Before, the failure stayed in an unretrieved task and the allowed message waited until it expired."""
+    eng = _engine(tmp_path, active_hours=1e-9)
+
+    async def broken(_body):
+        raise OSError("disk full")
+    eng._session_create = broken
+
+    async def run():
+        try:
+            _, receipts = await _hold_and_answer(eng, "allow")
+            assert [(r.state, r.detail) for r in receipts] == [("denied", "no session here can take a message")]
+            notes = [e.body.text for e in eng.hub.since(0) if isinstance(e.body, s.Notice)]
+            assert any("no thread could open" in n and "disk full" in n for n in notes), notes
         finally:
             await eng.close()
 

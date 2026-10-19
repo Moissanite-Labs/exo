@@ -247,6 +247,67 @@ def test_non_outward_grant_is_scoped_to_rule_and_target(tmp_path):
     assert call(ctx2, "mcp_notes_create_page", {"target": "notes:other", "title": "t"})["action"] == "approve"
 
 
+def test_a_grant_never_covers_a_reserved_part_of_the_line(tmp_path):
+    # D-075: the push grant covers the push. A reserved merge on the same line keeps the principal's ask.
+    store = tmp_path / "st3"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text("categories: {vcs_push: ask}\nreserved: [vcs_merge]\n")
+    key = tmp_path / "k3.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": "git push origin feature"})
+    assert r["action"] == "approve"
+    answer(ctx, r, "always")
+    [g] = json.loads((store / "state" / "approval-grants.json").read_text())
+    assert g["rule"] == "vcs_push" and g["target"] == "origin"
+    assert call(ctx, "terminal", {"command": "git push origin feature"}) is None
+    r = call(ctx, "terminal", {"command": "git push origin feature && gh pr merge 3 --squash"})
+    assert r["action"] == "approve" and "reserved for the principal" in r["message"], r
+    assert events(store)[-1]["decision"]["reserved"] == [["vcs_merge", "#3"]]
+
+
+def test_a_grant_for_one_push_does_not_cover_a_second_push_with_other_credentials(tmp_path):
+    # D-075: the ledger view redacts URL userinfo, but the grant check compares the hits as written, so a
+    # second push to the same URL under other credentials is not taken for the push the grant was given for.
+    store = tmp_path / "st5"
+    (store / "policies").mkdir(parents=True)
+    (store / "policies" / "gates.yaml").write_text("categories: {vcs_push: ask}\nreserved: [vcs_push]\n")
+    key = tmp_path / "k5.key"
+    crypto.save_key(crypto.keygen(), key)
+    _, ctx = make_gate(store, key)
+    push_a = "git push https://alice:tokA@example.com/acme/app.git main"
+    r = call(ctx, "terminal", {"command": push_a})
+    assert r["action"] == "approve"
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": push_a}) is None
+    r = call(ctx, "terminal", {"command": push_a + " && git push https://bob:tokB@example.com/acme/app.git main"})
+    assert r["action"] == "approve" and "reserved for the principal" in r["message"], r
+    row = json.dumps(events(store)[-1]["decision"])
+    assert "tokA" not in row and "tokB" not in row and "https://***@example.com/acme/app.git" in row
+
+
+def test_a_reserved_entry_added_by_a_pending_policy_also_holds_off_a_grant(tmp_path):
+    # D-038 + D-075: the reserved entry arrives after the grant and is not yet accepted. Both policies
+    # ask about the line, so the pinned decision is kept; the pending policy's reserved hit must still
+    # reach the grant check.
+    store = tmp_path / "st4"
+    (store / "policies").mkdir(parents=True)
+    gates = store / "policies" / "gates.yaml"
+    gates.write_text("categories: {vcs_push: ask}\n")
+    key = tmp_path / "k4.key"
+    crypto.save_key(crypto.keygen(), key)
+    g, ctx = make_gate(store, key)
+    r = call(ctx, "terminal", {"command": "git push origin feature"})
+    answer(ctx, r, "always")
+    assert call(ctx, "terminal", {"command": "git push origin feature"}) is None
+    gates.write_text("categories: {vcs_push: ask}\nreserved: [vcs_merge]\n")
+    assert g.changed_policies() is not None
+    r = call(ctx, "terminal", {"command": "git push origin feature && gh pr merge 3 --squash"})
+    assert r["action"] == "approve" and "policy files changed this session" in r["message"], r
+    assert events(store)[-1]["decision"]["reserved"] == [["vcs_merge", "#3"]]
+    assert call(ctx, "terminal", {"command": "git push origin feature"}) is None
+
+
 def test_a_seat_never_makes_a_standing_grant(keyed_store):
     store, key = keyed_store
     _, ctx = make_gate(store, key)

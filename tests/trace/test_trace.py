@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 import pytest
 
@@ -14,7 +15,7 @@ from exo.core.models.fake import FakeProvider
 from exo.core.models.router import Router
 from exo.core.sessions import SessionStore
 from exo.core.trace import Call, TaskRow, Thresholds, ToolRow, TurnTrace
-from exo.core.types import ProviderEvent, ToolCall, Usage
+from exo.core.types import Message, ProviderEvent, ToolCall, Usage
 from exo.protocol import schema as s
 
 TH = Thresholds()
@@ -112,6 +113,82 @@ def test_harness_errors_are_persisted_and_scrubbed(tmp_path):
     assert "sk-abc" not in text and "abcdef123456" not in text and "[redacted]" in text
     assert "RuntimeError" in errs[0].traceback
     assert any(f["signature"].startswith("harness.error:hook on_turn_start") for f in eng.findings.list())
+
+
+def test_a_setup_state_is_not_a_harness_error(tmp_path, caplog):
+    """A NotConfigured that reaches trace.report (from a hook, or a direct call) files nothing: no harness.error event,
+    no finding and no notice. The hook runner still logs its own warning with the traceback, a real fault beside it is
+    still an event and a finding, and a tool handler that raises it is still a tool error. Only the memory provider's
+    initialize turns it into a notice (docs/TRACE.md; that path is tested in
+    plugins/exo-memory/tests/test_exo_memory_no_principal.py)."""
+    from exo.core.plugins import PluginManager, ToolEntry
+    from exo.core.slots import NotConfigured
+    from exo.core.types import ToolSpec
+
+    def off(*args, **kw):  # a hook and a tool handler of a plugin that is off until set up
+        raise NotConfigured("the relay is off: no relay address is set yet")
+
+    pm = PluginManager(config={})
+    pm.tools["relay_send"] = ToolEntry(ToolSpec(name="relay_send", description="send", parameters={"type": "object"}),
+                                       off, plugin="relay")
+    eng = engine(tmp_path, [{"match": "hi", "steps": [{"tool": "relay_send", "args": {}}, "done"]}], plugins=pm)
+
+    def bad_hook(**kw):
+        raise KeyError("real fault")
+
+    eng.plugins.hooks.register("on_turn_start", off, plugin="setup")
+    eng.plugins.hooks.register("on_turn_start", bad_hook, plugin="broken")
+    assert issubclass(NotConfigured, RuntimeError)  # hosts that catch RuntimeError keep working
+
+    async def go():
+        info = await eng.loop.create_session(title="t")
+        await eng.handle(s.Command.of(s.TurnSend(session=info.id, text="hi")), eng.hub)
+        await asyncio.sleep(0.2)
+        trace.report("direct caller", NotConfigured("off until set up"), info.id)
+        return info.id
+
+    caplog.set_level(logging.INFO, logger="exo")
+    sid = run(go())
+    errs = [e.body for e in types(eng, sid) if isinstance(e.body, s.HarnessError)]
+    assert [e.where for e in errs] == ["hook on_turn_start (broken)"]
+    assert not [e for e in types(eng, sid) if isinstance(e.body, s.Notice) and "relay" in e.body.text]
+    assert [d.is_error for d in (e.body for e in types(eng, sid)) if isinstance(d, s.ToolCompleted)] == [True]
+    sigs = [f["signature"] for f in eng.findings.list()]
+    harness = [x for x in sigs if x.startswith("harness.error")]
+    assert harness and all("(broken)" in x for x in harness), sigs
+    assert [x for x in sigs if x.startswith("tool.error:relay_send") and "notconfigured" in x], sigs
+    logged = [(r.levelno, r.getMessage(), bool(r.exc_info)) for r in caplog.records]
+    assert (logging.WARNING, "hook on_turn_start from setup failed", True) in logged, logged  # the hook runner's own
+    assert (logging.INFO, "direct caller is off until set up: off until set up", False) in logged, logged
+    assert not [m for lv, m, _ in logged if lv >= logging.WARNING and m.startswith("harness error in hook on_turn_start "
+                                                                                   "(setup)")], logged
+
+
+def test_a_setup_state_in_a_tool_approval_hook_still_blocks(tmp_path):
+    """A pre_tool_call hook that raises NotConfigured fails like any approval hook (fail closed): the call is blocked,
+    with a tool.error finding for the block and no harness.error event or finding (docs/TRACE.md)."""
+    from exo.core.slots import NotConfigured
+
+    (tmp_path / "a.txt").write_text("x")
+    eng = engine(tmp_path, [{"match": "go", "steps": [{"tool": "read_file", "args": {"path": "a.txt"}}, "done"]}])
+
+    def off(**kw):
+        raise NotConfigured("the audit hook is off: no audit sink is set yet")
+
+    eng.plugins.hooks.register("pre_tool_call", off, plugin="audit")
+
+    async def go():
+        info = await eng.loop.create_session(title="t")
+        await eng.loop.send(info.id, "go")
+        return info.id
+
+    sid = run(go())
+    done = [e.body for e in types(eng, sid) if isinstance(e.body, s.ToolCompleted)]
+    assert [d.is_error for d in done] == [True] and "Blocked: Tool approval hook failed" in done[0].result.text()
+    assert not [e for e in types(eng, sid) if isinstance(e.body, s.HarnessError)]
+    sigs = [f["signature"] for f in eng.findings.list()]
+    assert [x for x in sigs if x.startswith("tool.error:read_file:blocked")], sigs
+    assert not [x for x in sigs if x.startswith("harness.error")], sigs
 
 
 def test_scrub_removes_secrets_and_cuts():
@@ -251,6 +328,15 @@ def test_rule_model_slow_flags_the_route_per_call():
     f = next(f for f in trace.detect(big, TH) if f.signature == "model.slow:p:a")
     assert f.severity == "bug" and "slow, not the harness" in f.detail
     assert Thresholds.of({"model_call_s": 45, "model_call_routes": {"p:a": 200, "p:z": -1}}).model_call_routes == {"p:a": 200.0}
+
+
+def test_rule_model_slow_charges_no_route_for_a_call_whose_only_tries_timed_out():
+    """A call stopped on the fallback route keeps only the timeout before it: model.timeout names that route, and
+    the call's total (the timeout plus the fallback's stream) is not filed as model.slow against it."""
+    stopped = tt(calls=[Call(route="", total_ms=130_000, ttft_ms=70_500,
+                             attempts=[{"route": "p:a", "outcome": "timeout", "ms": 60_000}])])
+    got = sigs(stopped)
+    assert "model.timeout:p:a" in got and not [x for x in got if x.startswith("model.slow")]
 
 
 def test_turn_total_wall_is_a_separate_high_cap():
@@ -604,6 +690,34 @@ def test_agent_tools(tmp_path):
     assert "running on: fake:x" in out and "harness " in out and "findings 1: 1 open, 0 fixed (awaiting re-verification)" in out
 
 
+def test_trace_header_after_a_stop_names_the_route_that_served_the_last_call(tmp_path, monkeypatch):
+    """A call cut short by a stop names no route (usage comes at the end of a stream); the header skips it."""
+    eng = engine(tmp_path, [{"match": "go", "steps": ["ok"]}])
+    fake = eng.router.credentials("fake")[0].provider
+
+    async def stall(messages, tools, **opts):
+        yield ProviderEvent(kind="text", text="long answer")
+        await asyncio.Event().wait()
+
+    async def go():
+        sid = (await eng.loop.create_session(title="t")).id
+        await eng.loop.send(sid, "go")
+        monkeypatch.setattr(fake, "stream", stall)
+        task = asyncio.create_task(eng.loop.send(sid, "go on"))
+        while not any(e.type == "message.delta" and e.body.text == "long answer" for e in types(eng, sid)):
+            await asyncio.sleep(0.01)
+        assert eng.loop.interrupt(sid)
+        assert (await asyncio.wait_for(task, 5)).stop_reason == "interrupted"
+        return sid
+
+    sid = run(go())
+    calls = [e.body for e in types(eng, sid) if e.type == "model.call"]
+    assert [(c.route, c.stop_reason) for c in calls] == [("fake:x", "end"), ("", "interrupted")]
+    out = eng.trace_text(sid, 5)
+    assert "last call served by fake:x" in out.splitlines()[0]
+    assert "calls in turn 2" in out
+
+
 def test_trace_tools_are_not_for_subagents_and_seats_keep_them(tmp_path):
     from exo.core.agents import BLOCKED_TOOLS
 
@@ -623,6 +737,29 @@ def test_principal_reject_files_a_finding_and_accept_does_not(tmp_path):
     run(d.run(s.Command.of(s.FeedbackSend(session=sid, verdict="should_have_been", text="use X"))))
     rows = eng.findings.list()
     assert len(rows) == 2 and {r["source"] for r in rows} == {"principal"}
+
+
+def test_principal_reject_in_a_private_thread_files_no_finding(tmp_path):
+    """D-028: findings are global (exo_trace in every thread, /findings, /handoff), so a verdict on a private
+    thread's answer files none: its note would carry the private thread into the others. The same holds for its
+    delegate child and that child's child, which a client opens with /tasks and /open."""
+    eng = engine(tmp_path)
+    from exo.server.app import Dispatcher
+    d = Dispatcher(eng, caller="principal:tui")
+    priv = run(d.run(s.Command.of(s.SessionCreate(kind="private")))).result["session"]["id"]
+    normal = run(d.run(s.Command.of(s.SessionCreate()))).result["session"]["id"]
+    kid = eng.store.create_session(title="researcher: zebracorn", parent=priv, agent=eng.agent, kind="subagent").id
+    grandkid = eng.store.create_session(title="checker: zebracorn", parent=kid, agent=eng.agent, kind="subagent").id
+    assert eng.store.thread(priv)[1] == "private"
+    for sid in (priv, kid, grandkid):
+        eng.store.append_message(sid, Message.assistant("Zebracorn: $40M, closes Friday."))
+        for verdict in ("reject", "should_have_been"):
+            out = run(d.run(s.Command.of(s.FeedbackSend(session=sid, verdict=verdict, text="zebracorn is $50M"))))
+            assert out.ok and out.result["recorded"] is False
+    assert eng.findings.list() == []
+    assert "zebracorn" not in call(eng, "exo_trace", {}, normal).text()
+    run(d.run(s.Command.of(s.FeedbackSend(session=normal, verdict="reject", text="wrong file"))))
+    assert [r["session"] for r in eng.findings.list()] == [normal]  # a normal thread still files one
 
 
 def test_trace_and_findings_commands_and_client_error_report(tmp_path):

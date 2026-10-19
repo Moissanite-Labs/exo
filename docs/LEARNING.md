@@ -6,7 +6,11 @@ notes are in `research/LEARNING-LOOP.md`. This page is the short reference.
 ## Where learning needs a store
 
 Learning writes to your principal store and its signed ledger. The store comes from config `learn.store`, else the
-`exo-memory` plugin's store. With neither, learning is off and says so once as a notice.
+`exo-memory` plugin's store (its config, then `EXO_STORE` or `EXO_PRINCIPAL`), else the active principal in
+`$EXO_HOME/config.json`. That last one is what `exo init` and the installer set, and exo-memory falls back to it the
+same way, so memory and learning use one store. With none of these, learning is off and says so once. With no
+principal at all, that notice is logged at info level and not printed, since exo-memory already shows one quiet
+notice in the client. It names `exo init <id>`.
 
 ## Signals in
 
@@ -17,6 +21,11 @@ Learning writes to your principal store and its signed ledger. The store comes f
 | A correction or ruling in chat | principal capture (MEMORY-MODEL.md) |
 
 Each signal becomes a ledger event. An edit also stores a preference pair: the answer, and your better version.
+
+A private thread gives no signal (D-028), and neither does a session under it (its delegate children, at any depth).
+The loop captures no correction from them and starts no review for them. `feedback.send` on one of their answers
+returns `recorded: false` and files no finding. `ui.respond` on a panel a private thread opened or updated is not
+noted.
 
 Only your own words are signals (D-040). The loop reads a ruling, verdict, answer or utterance only when its author is
 you (`exo.provenance.principal_names`: `principal`, your store's id, and the principal ids in the key registry). A

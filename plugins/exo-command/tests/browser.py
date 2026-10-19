@@ -107,7 +107,7 @@ class Browser:
         atexit.register(self.close)  # never leave a browser behind, even when a test dies
         port_file = Path(self.profile) / "DevToolsActivePort"
         end = time.monotonic() + 20
-        while not port_file.exists() and time.monotonic() < end:
+        while not (port_file.exists() and port_file.read_text().strip()) and time.monotonic() < end:  # written, not only made
             time.sleep(0.05)
         port = port_file.read_text().split()[0]
         targets = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=10).read())

@@ -104,6 +104,7 @@ def test_single_child_round_trip(tmp_path):
     first = next(c for c in fake.calls if "CHILD-A" in c["user"])
     assert [t for t in first["tools"] if t != "code_find"] == ["glob", "grep", "read_file"]  # scout (code_find is low risk, present when jg runs): low risk only, no delegate, no bash
     assert first["system"].startswith(CHILD_PROMPT) and str(tmp_path) in first["system"]
+    assert first["system"].count(str(tmp_path)) == 1 and f"Your working directory is {child.cwd}." in first["system"]
     assert "Done when: name the file." in first["user"] and "Context: Python repo" in first["user"]
 
     async def listed():
@@ -267,7 +268,10 @@ def test_receipts_are_signed_and_restart_fails_stale_tasks(tmp_path):
 
     eng.store._q("UPDATE tasks SET status='running', receipt=NULL")
     again = CoreEngine(tmp_path / "home", {"roles": {"main": ["fake:x"], "aux": ["fake:x"]}}, cwd=str(tmp_path))
+    assert [r["status"] for r in again.agents.list()] == ["running"]  # building a core is not owning the agent
+    again.claim_writer()  # the writer sweeps the agent's leftover tasks
     assert [r["status"] for r in again.agents.list()] == ["failed"]
+    asyncio.run(again.close())
 
 
 def test_task_events_render_for_clients(tmp_path):

@@ -14,7 +14,8 @@ and Events (have ``seq``). ``events.subscribe`` starts the event feed.
 
 Every command runs with a caller the transport stamps (D-039, ``exo.principal``): ``principal`` only for an
 in-process client or a Unix socket request that carries the per-launch credential in ``X-Exo-Principal`` from a
-process that is not a descendant of the core; ``local`` for everything else, including stdio and TCP.
+process that is not a descendant of the core; ``channel`` for the channels exod runs (``ChannelLink``, in process);
+``local`` for everything else, including stdio and TCP.
 """
 
 from __future__ import annotations
@@ -82,12 +83,12 @@ class Dispatcher:
             if body.protocol != s.PROTOCOL_VERSION:
                 return _fail(cmd.id, "protocol_mismatch", f"server speaks {s.PROTOCOL_VERSION}, client {body.protocol}")
             result = {"protocol": s.PROTOCOL_VERSION, "server": "exod", "capabilities": SERVER_CAPABILITIES,
-                      "seq": self.hub.seq, "instance": self.hub.instance, "heartbeat": HEARTBEAT}
+                      "seq": self.hub.head(), "instance": self.hub.instance, "heartbeat": HEARTBEAT}
             return s.Response(id=cmd.id, result=result)
         if isinstance(body, s.EventsSubscribe):
             # Without a stream, subscribe is a one-shot replay; HTTP clients stream from GET /events.
             events = self.hub.since(body.since, body.session)
-            return s.Response(id=cmd.id, result={"events": [e.to_dict() for e in events], "seq": self.hub.seq})
+            return s.Response(id=cmd.id, result={"events": [e.to_dict() for e in events], "seq": self.hub.head()})
         try:
             result = await self.engine.handle(cmd, self.hub)
         except CommandFailed as exc:
@@ -122,6 +123,9 @@ class HttpServer:
         if len(os.fsencode(str(path))) >= 104:  # macOS limit is 104 bytes, Linux 108; stay under both
             raise ValueError(f"socket path too long ({len(os.fsencode(str(path)))} bytes, max 103): {path}. "
                              "Use a shorter EXO_HOME.")
+        from exo.ensure_core import probe  # never take a live server's socket; only a stale file is replaced
+        if probe(path) == "alive":
+            raise ValueError(f"another server is listening on {path}; stop it, or give this one its own --socket")
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if path.exists():
             path.unlink()
@@ -230,7 +234,7 @@ class HttpServer:
             return await self._sse(writer, since, q.get("session", [None])[0])
         if url.path == "/health":
             return await self._json(writer, 200, {"ok": True, "protocol": s.PROTOCOL_VERSION,
-                                                  "seq": self.dispatcher.hub.seq})
+                                                  "seq": self.dispatcher.hub.head()})
         return await self._json(writer, 404, {"error": "not found"})
 
     def _caller(self, headers: dict[str, str], peer: pr.Peer) -> str:
@@ -307,7 +311,7 @@ async def serve_lines(dispatcher: Dispatcher, lines: Callable[[], Awaitable[str 
             if cmd is not None and isinstance(cmd.body, s.EventsSubscribe) and resp.ok:
                 if feed:
                     feed.cancel()
-                resp = s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.seq})
+                resp = s.Response(id=cmd.id, result={"subscribed": True, "seq": dispatcher.hub.head()})
                 write(resp.to_json())
                 feed = asyncio.create_task(pump(cmd.body.since, cmd.body.session))
                 await asyncio.sleep(0)  # start the replay before the next command
@@ -362,6 +366,29 @@ def load_engine(spec: str = DEFAULT_ENGINE) -> Engine:
     return engine
 
 
+class ChannelLink:
+    """The link exod gives the channels it runs: the same commands in process, as the caller ``channel``, which no
+    transport stamps. Only this caller may hand the core a bus message, which pins a seat's key (D-040)."""
+
+    def __init__(self, dispatcher: Dispatcher):
+        self.d = dispatcher
+
+    async def call(self, body: Any) -> dict[str, Any]:
+        resp = await self.d.run(s.Command.of(body), pr.CHANNEL)
+        if not resp.ok:
+            from exo.protocol.client import ClientError
+            raise ClientError(resp.error)
+        return resp.result
+
+    async def events(self, since: int = 0, session: str | None = None) -> Any:
+        sub = self.d.hub.subscribe(since, session)
+        try:
+            async for ev in sub:
+                yield ev
+        finally:
+            sub.close()
+
+
 async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tuple[str, int] | None = None,
                 token: str | None = None, stdio: bool = False, hub: Hub | None = None,
                 ready: Callable[[str], None] | None = None) -> None:
@@ -391,12 +418,9 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
             ready(f"http://{tcp[0]}:{port}")
     if not servers:
         raise ValueError("nothing to serve: give a socket, tcp or stdio")
-    link = None
     try:
-        if getattr(engine, "_channel_cfg", None):  # channels talk to the server over a real protocol Client
-            from exo.protocol.client import Client
-            link = Client(socket=str(socket)) if socket else Client(url=f"http://{tcp[0]}:{port}", token=token)
-            for name, err in (await engine.start_channels(link)).items():
+        if getattr(engine, "_channel_cfg", None):
+            for name, err in (await engine.start_channels(ChannelLink(dispatcher))).items():
                 if err:
                     print(f"exod: channel {name}: {err}", file=sys.stderr)
         await asyncio.gather(*(srv.serve_forever() for srv in servers))
@@ -404,8 +428,6 @@ async def serve(engine: Engine, socket: str | os.PathLike | None = None, tcp: tu
         dispatcher.hub.close()
         if (close := getattr(engine, "close", None)) is not None:
             await close()
-        if link is not None:
-            await link.aclose()
         for srv in servers:
             await srv.close()
         if socket:

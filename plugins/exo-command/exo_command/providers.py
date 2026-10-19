@@ -55,8 +55,20 @@ def _is_loopback_ip(peer: Optional[str]) -> bool:
 
 def guard(headers: Mapping[str, str], peer: Optional[str], token: str) -> Optional[Reply]:
     """None when the request may use a key route, else the refusal. Checks are listed in the module docstring."""
+    refused = guard_peer(headers, peer)
+    if refused is not None:
+        return refused
+    sent = headers.get(TOKEN_HEADER, "")
+    if not token or not sent or not hmac.compare_digest(sent.encode(), token.encode()):
+        return 403, {"error": "missing or wrong page token: open the link `exo web` printed"}
+    return None
+
+
+def guard_peer(headers: Mapping[str, str], peer: Optional[str]) -> Optional[Reply]:
+    """Every check of ``guard`` but the token: loopback peer, loopback Host, same Origin, Sec-Fetch-Site. The
+    launch-code route (#166) uses it alone, since the page has no token yet."""
     if not _is_loopback_ip(peer):
-        return 403, {"error": "provider routes answer loopback clients only"}
+        return 403, {"error": "this route answers loopback clients only"}
     host = headers.get("host", "")
     if _host_name(host) not in LOOPBACK_NAMES:
         return 403, {"error": "bad Host header: open the page at 127.0.0.1 or localhost"}
@@ -68,9 +80,6 @@ def guard(headers: Mapping[str, str], peer: Optional[str], token: str) -> Option
     site = headers.get("sec-fetch-site")
     if site is not None and site not in ("same-origin", "none"):
         return 403, {"error": "cross-site request refused"}
-    sent = headers.get(TOKEN_HEADER, "")
-    if not token or not sent or not hmac.compare_digest(sent.encode(), token.encode()):
-        return 403, {"error": "missing or wrong page token: open the link `exo web` printed"}
     return None
 
 
@@ -128,6 +137,8 @@ async def handle(centre, method: str, path: str, body: Dict[str, Any],
                 out["core_reloaded"] = await _reload(centre, name)
                 return 200, {"ok": True, **out}
             out = await asyncio.to_thread(ps.test_provider, name, router=router)
+            if out.get("ok"):  # the core retries it now: its cooldown and route breaker clear
+                out["core_reloaded"] = await _reload(centre, name)
             return 200, out
         if method not in ("GET", "POST"):
             return 405, {"error": "method not allowed"}
