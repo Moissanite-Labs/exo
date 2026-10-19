@@ -79,9 +79,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `store_write`.
 - Absolute symlink aliases into protected Exo stores retain the principal-only write approval floor (#130),
   including missing leaves, deletion of store ancestors, and `cd`, `pushd` or `git -C` into an alias of the store.
-  A path the gate cannot resolve (a NUL byte) keeps its lexical check instead of raising. `cp -s`, `cp -l` and a
-  relative `ln -s` target that alias the store ask too. `docs/GATE.md` lists what stays open (hardlinks, protected
-  entries that link out of the store, case-insensitive filesystems, glob and brace spellings).
+  A path the gate cannot resolve (a NUL byte) keeps its lexical check instead of raising. `cp -s`, `cp -l` (also
+  `--sym`, `--li`) and a relative `ln` target that alias the store ask too. The `ln` target is read against
+  `-t DIR`, the last operand and its parent, with options anywhere on the line (`ln REL LINK -s`). `docs/GATE.md`
+  lists what stays open (hardlinks, protected entries that link out of the store, case-insensitive filesystems,
+  glob and brace spellings, `/dev/fd/N` magic links, #217).
 - Inspect commands inside `coproc` without losing quotes (or, in the simple form, the heredoc), while
   retaining the indirection floor (#131). A name before a compound command (`coproc w { ...; }`,
   `coproc w while ...`, `coproc w if ...`) is skipped as bash does, so the inner command is classified;
@@ -328,6 +330,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   exited 0. A failed copy or deploy now exits non-zero before tagging, a failed tag push exits non-zero, the script
   refuses to run without `rsync` (it used to deploy a near-empty site), and a versioned deploy refuses uncommitted
   changes under `site/`.
+- Two processes opening one `sessions.sqlite` at once no longer crash (#246). The second core, seat or client
+  died with "duplicate column name" when both added a column a new or older file lacked, or with "database is
+  locked" when both switched a new file to WAL. The columns are now added in one write transaction, and a busy
+  switch to WAL is tried again for up to two seconds.
 
 ### Security
 - `exo web` no longer puts the page token in the browser launcher's argv, which other users of the host can read in
