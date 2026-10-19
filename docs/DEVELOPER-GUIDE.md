@@ -294,7 +294,17 @@ text as the principal's only when `principal` is true; `exo.provenance.principal
 user message into role `other`, which the capture extractors skip. A new way for text to reach a session must stamp
 `meta.author` itself (pass it as `meta` to `loop.send`, or set it on the stored `Message`), never derive it from
 the text. A new ledger writer that records the principal's words writes them under a principal id; anything the
-agent decides on its own is written under the agent's name.
+agent decides on its own is written under the agent's name. New code that prints a stored message's text where the
+model reads it (a view, a note, a summarizer's source) uses `exo.core.context.render_message`, or passes text whose
+author is not `principal` through `exo.provenance.defuse_pins`, so it cannot carry a live `<exo-pinned>` block (#279).
+A summarizer's output is model text, never the principal's: pass it through `defuse_pins` where it is made, before
+anything adds a real block to it.
+
+**State files (#273).** Write a file that replaces an earlier one with `exo.core.private.atomic_write(path, data)`.
+It writes a temporary file that `mkstemp` makes in the same folder, fsyncs it and renames it over the path. The mode
+is 0600 unless you pass `mode` (`None` gives what a plain open gives). A file written many times a minute, such as
+a cursor or a cache, can pass `sync=False` to skip the fsync. Do not write `<file>.tmp` and rename it, and do not
+open the final name for writing: a symlink planted at either name turns the write into a write to another file.
 
 ## 5. Add a seat
 

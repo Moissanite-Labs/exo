@@ -320,7 +320,9 @@ What the gate asks about, and why:
   post can cover a later body (#208).
 - **Code the gate cannot see into asks (D-038).** A script file, `python -c`, `node -e`, a heredoc fed to a shell,
   `make`, `npm run` or `npm test`, `npx`, `xargs`, `find -exec`, a variable or `$( )` in the program's place, a shell
-  function, `source`, or a program the gate does not know: each asks once, for that exact command. Plain work still
+  function, `source`, or a program the gate does not know: each asks once, for that exact command. Read the whole
+  command before you allow it: the card names only the most severe part of the line, and approving runs all of it,
+  including code the gate could not see into. Plain work still
   runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like. These are
   trusted by name, so a test runner still runs your project's files. Options of trusted programs that run a
   command (`tar --to-command`, `rsync -e`, `ssh -o ProxyCommand` and the like) are read as the command they run
@@ -469,7 +471,7 @@ Pick the store with `--principal ID` or `--root DIR`, or set `EXO_PRINCIPAL` onc
 | `exo keygen <name>` | A signing key in `~/.exo/keys/<name>.key`, readable by you only. It will not overwrite an existing key. Keep it private. |
 | `exo log append <kind> --author NAME --text "..."` | Adds one signed event. Kinds include `note`, `ruling`, `utterance`, `question`, `answer`. Needs the author's key. |
 | `exo log verify` | Re-checks every event, link and signature. Each key must be one Exo pinned, and the ledger must still reach the last head it recorded. Prints `{"ok": true, ...}` or fails. Run it when something feels off. |
-| `exo memory verify` | The same check for every store, plus each agent's memory log. A ledger that was cut short, edited or deleted fails here. |
+| `exo memory verify` | The same check for every store, plus each agent's memory log. A ledger that was cut short, edited or deleted fails here. A warning after `ok` (in `exo log verify`, a `warning` field) means the copy of the head it names is not being written: make that file writable again. |
 | `exo keys` | The keys Exo trusts: its own signing keys, the bus seats it has seen, and which ledger names are you. `exo keys pin` adds or replaces one. |
 | `exo log tail` | The last events. `-n 20` for more, `--kind ruling` to filter. |
 

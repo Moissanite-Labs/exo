@@ -31,10 +31,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import provenance
+from .core.private import atomic_write
 from .store import PrincipalStore, exo_home, principal_root
 
 FORMAT_VERSION = 1
-PIN_OPEN, PIN_CLOSE = '<exo-pinned>', '</exo-pinned>'
+PIN_OPEN, PIN_CLOSE = provenance.PIN_OPEN, provenance.PIN_CLOSE
 HEADER_RE = re.compile(r'<!--\s*exo-handoff\s+(.*?)\s*-->', re.S)
 ATTR_RE = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 # Text that marks a host-written compaction summary; its body is not the principal speaking.
@@ -613,9 +614,7 @@ def write_handoff(topic: str, messages: list[dict], store: PrincipalStore | None
         principal = Path(store.root).name
     text = render_handoff(topic, sig, path=path, created=now.strftime('%Y-%m-%dT%H:%M:%SZ'),
                           session=session, principal=principal, summary=summary)
-    tmp = path.with_suffix('.md.tmp')
-    tmp.write_text(text, encoding='utf-8')
-    os.replace(tmp, path)
+    atomic_write(path, text, mode=None)
     return path
 
 
@@ -659,7 +658,9 @@ def load_handoff(path: str | os.PathLike) -> Handoff:
 
 
 def resume_text(handoff: Handoff, store: PrincipalStore | None = None, budget: int = 1500) -> str:
-    """Working context for a fresh session: the handoff plus a retrieval pass over the store."""
+    """Working context for a fresh session: the handoff plus a retrieval pass over the store. It goes into the
+    system message, so every pinned-block tag in it is escaped (#279): the file quotes the agent's report and a
+    summary, and records the principal's words as quoted items under their own headings, never as a pinned block."""
     parts = [f'Resuming "{handoff.topic}" from the handoff at {handoff.path}. The quoted rulings and '
              'corrections are the principal\'s own words; follow them.', '', handoff.text.strip()]
     if store is not None and store.exists():
@@ -671,4 +672,4 @@ def resume_text(handoff: Handoff, store: PrincipalStore | None = None, budget: i
                 parts += ['', '## Retrieved from the principal store', got.text.strip()]
         except Exception as e:  # retrieval is a bonus; the handoff stands alone
             parts += ['', f'(Retrieval pass skipped: {e})']
-    return '\n'.join(parts).rstrip() + '\n'
+    return provenance.defuse_pins('\n'.join(parts).rstrip() + '\n')
