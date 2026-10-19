@@ -19,6 +19,22 @@ asked]`. A store named as `path` is read, after the gate asks (#241, `docs/GATE.
 read"). In a repo's own `.claude` folder only `worktrees`, `commands`, `agents` and `skills` are searched. A
 search of the whole file system (`/`, or a path that resolves to it) is refused; name a folder below it.
 
+## Edit matching
+
+`edit_file` finds `old_string`, and `apply_patch` finds each hunk's context and `-` lines, with the fuzzy matcher
+lifted from Hermes (`exo.core.tools.builtin.fuzzy`). Its strategies run in order and the first that finds the text
+wins: exact, trimmed lines, collapsed whitespace, unescaped `\n` and `\t`, Unicode punctuation read as ASCII, then
+two similarity strategies. `block_anchor` needs the first and last lines to match and scores the lines between them.
+`context_aware` takes a block whose every non-blank line is at least 80% similar. Without `replace_all` the match
+must be unique, and `replace_all` refuses several similarity matches. `edit_file` names a non-exact strategy in its
+result.
+
+The similarity strategies need two or more non-blank lines. A one-line `old_string` (blank lines around it do not
+count) must match up to whitespace, escaping or Unicode. When the file's line has other text, for example
+`TIMEOUT = 45` where `old_string` says `TIMEOUT = 30`, the call fails and shows the closest lines. Before, such a
+stale edit overwrote the newer line. In `apply_patch` a hunk's context lines count toward the two, so a hunk with
+one context line can still replace a `-` line that changed since it was read.
+
 ## Environment of bash and jobs
 
 `bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,
@@ -76,6 +92,24 @@ earlier stage failed with a code other than 141 (SIGPIPE) and the last stage suc
 line in the job's end notice. Only the command's last pipeline is checked, and a command that sets its own EXIT trap
 turns the note off. The trace rule `shell.masked_exit` (docs/TRACE.md) flags it.
 
+## Streamed output
+
+While a foreground `bash` command runs, its output also goes out in pieces as `tool.output` events: clients show
+them live and sessions.sqlite keeps them. The output is read as one UTF-8 stream, so a character split between two
+reads stays whole in the stream and in the result. Invalid bytes, and a sequence cut off by the end of the output,
+become U+FFFD. Known key values are cut out of the stream as `[redacted]`, even when a key is split between two
+reads. The end of a read that could be the start of a key waits for the next read or for the end of the command.
+Other output is not held back. Redaction finds the keys in the output itself, longest key first, and skips a match
+that overlaps one already taken. The markers go in only after that, so no key can match across a `[redacted]`
+marker. The stream is cut only where no match that redaction could take crosses the cut, whatever output follows.
+So the stream equals redacting the whole output with the key values known when the command started, for any set
+of them. That holds when one key holds another (a URL with a password in it), when keys overlap in a chain and when
+a key holds `[` or `]`. The held text stays under twice the length of all key values together. Each piece is
+redacted once more on its way to clients. That pass keeps the markers already in the piece, so it does not change
+what the stream redaction did. It cuts out a key value learned after the command started, but only inside one
+piece, so such a key split between two pieces still goes out in two parts. The result is redacted as a whole, with
+every key value known by then, when the call returns.
+
 ## Execution brokers (D-020)
 
 An installed broker can mediate every registered tool after pre-hooks and
@@ -92,6 +126,20 @@ across the result's text parts.
 Image results have a separate 4 MiB aggregate cap on UTF-8 `data` and `url` field payload. Over-budget parts are
 omitted whole with a visible marker, even when the text budget is exhausted. Base64 is never truncated. This
 caps inline/URL payload, not remote asset download sizes; metadata and serialization overhead are separate.
+
+## File safety
+
+- **Writes** (`write_file`, `edit_file`, `apply_patch`) go through a fresh temp file beside the target
+  (`.<name>.exo-tmp`, created exclusively) and a rename, so a link already sitting at the temp name is never
+  followed. A write to a symlinked file is refused, and the error names the link's target: write that path instead,
+  and the link stays. Before, the rename replaced the link with a regular file and left the target unchanged.
+  `apply_patch` checks this before it writes anything, and its Delete File removes only the link, as `rm` does.
+  A hard-linked file becomes its own copy, as with any atomic rename. A symlinked parent folder is still followed.
+- **Reads** (`read_file`, `edit_file`, `apply_patch`, `grep`) open regular files only. A FIFO, socket or device, or
+  a link to one, is refused before it is opened (`grep` skips it), so a FIFO cannot block the core and `/dev/zero`
+  cannot fill its memory. `read_file`, `edit_file` and `apply_patch` refuse files over 50 MB (`MAX_READ_BYTES`),
+  also a file that grows past that while it is read, so an edit never writes back a cut copy. Use `grep`, or
+  `sed -n` in `bash`, for those, and `bash` to move or delete them. `grep` skips files over 2 MB.
 
 ## code_find (D-029)
 
@@ -117,7 +165,8 @@ ranked file list and verbatim excerpts. Use it for unfamiliar code and "where or
   (`page=2` serves the rest from memory), jg itself capped at 256 KB. Read-only, so risk low, but it sends
   eligible source files to the backend; jg skips ignored and known sensitive files. It refuses a folder that is
   or holds one of Exo's known secret stores (the home folder, `$EXO_HOME`, `~/.config`, `/`), since jg cannot
-  leave those out (#241).
+  leave those out (#241). The question goes to jg after `--`, so it can never act as a jg flag such as
+  `--include-sensitive`.
 - **Trace:** a normal tool call in `exo trace` (`tool.completed` with `duration_ms`); backend and duration are the
   first line of the result.
 - Skill: `skills/jevgrep` (adapted from dzhng/jevgrep's skill, MIT).

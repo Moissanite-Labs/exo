@@ -73,11 +73,12 @@ picks the seat, `--title TEXT` names a new thread. Keys:
 
 | Key or prefix | Does |
 |---|---|
-| `ctrl+c` | Stops the running turn. Your draft stays. With nothing running it does nothing (`ctrl+q` quits). `/stop` does the same. |
+| `ctrl+c` | Stops the running turn. Your draft stays. With nothing running it only shows a hint that `ctrl+q` quits; a single press never quits. `/stop` does the same. |
 | `Esc` | Never stops a turn. It closes the menu or ghost text, clears a tip, or leaves a panel. |
 | typing while a turn runs | Steers it: the text lands at the next tool step. The prompt shows `steer ›`, and the line reads `steer queued` until it lands. |
 | `Up` in an empty composer, or `/unsteer` | Pulls your newest queued steer back into the composer to edit, if it has not landed yet. On the web page, the `×` on the queued chip does the same. It never stops the turn. |
 | `/tasks`, `/open <task>`, `/steer <task> <text>`, `/stop <task>` | List the subagents your session handed work to, watch one's session, send a running one a note (it lands at its next tool step) or stop it. A finished subagent answers with a clear error and nothing changes. The parent's receipt says it was steered or stopped. On the web page the Tasks cards have Open, Steer and Stop. |
+| `F6` | Loads 60 earlier messages when the top of the transcript says "N earlier messages" (with `/layout inverse` it is the bottom). Scrolling to that end does the same. |
 | `ctrl+f` | Puts the focus on an approval card, wherever you are. Your draft stays. |
 | `@path` | Adds that file to your message. |
 | `!command` | Asks the agent to run that shell command and show the output. |
@@ -100,7 +101,10 @@ Set `EXO_REDUCED_MOTION=1` to turn motion off. `NO_COLOR` turns colour off.
 
 **Web (`exo web`).** Run `exo web` in a terminal. It opens the page in your browser for you. If it does not (no
 browser, `--no-open`, or a `--host` other than `127.0.0.1`, `localhost`, `::1` or a wildcard bind), open the link it prints: `http://127.0.0.1:7342/#token=...`. The part after `#token=` is a
-key for this launch only; the page needs it for everything and refuses requests without it. After you restart
+key for this launch only. The page sends it with every data request (every `/api` route except `POST /api/launch`,
+and both event streams), and the server refuses those without it; only the page itself, its static files and the
+launch route load without it. The browser `exo web` opens gets a one-time code (`#code=...`) instead of the key: it
+works once, within 120 seconds, and the page trades it for the key at the launch route. After you restart
 `exo web`, use the new link: the old one stops working. Run `exo` and `exo web` in either order: both
 see the same agent and threads. `exo web` joins a terminal window's core, or `exo serve`, if one is running; if
 none is, it starts `exo serve` in the background (log `$EXO_HOME/logs/exod.log`). That background core keeps running
@@ -108,6 +112,11 @@ after you close the web page, so a later `exo` joins it. `exo stop` ends it.
 It shows approvals, decisions waiting on you, live sessions, tasks, projects and cost. Screenshots are
 `docs/media/web-*.png`, and the Providers tab is `docs/ui/web-providers.png`. Details are in `docs/ui/WEB.md` and
 `plugins/exo-command/README.md`.
+
+The web page has its own sub-pages for Tasks, Schedule, Command and Providers. Its composer runs `/context`,
+`/findings`, `/trace`, `/new`, `/rename` and `/layout`. Type `/` for the menu. The Layout button in the page does what
+`/layout` does. Double-click a thread in the list to rename it. Anything else you type there goes to the agent as a
+message. Add `--no-open` to `exo web` if you do not want it to open a browser tab.
 
 ## 3. Slash commands
 
@@ -127,7 +136,8 @@ The technical reference, with arguments and where each command is implemented, i
 | `/context` | Show what the next model call carries, part by part, with token counts. Read-only. |
 | `/compact` | Summarize now what is eligible, then show tokens before and after. |
 | `/restart` | Reopen this session in a new terminal tab and exit this one. |
-| `/stop` | Stops the running turn. What was done is kept. |
+| `/stop` | Stops the running turn. What was done is kept. `/stop <task>` stops a running subagent instead (see "Subagents" in section 5). |
+| `/unsteer` | Pull your newest queued steer message back into the composer, if it has not landed yet. It never stops the turn. |
 | `/exit`, `/quit` | Quit. |
 | `/model [ref]` | Pick the model for this session, or set it with a reference. `/model default <ref>` sets the default. |
 | `/default [ref]` | Set the default model for new sessions, or pick one. |
@@ -143,14 +153,20 @@ The technical reference, with arguments and where each command is implemented, i
 | `/intro` | The agent's orientation: what Exo is and how to use it. |
 | `/tutorial on`, `off`, `reset` | Tips the first time something comes up. Bare `/tutorial` shows the state. |
 | `/panel` | Reopen the last panel. |
+| `/tasks` | List the subagents this session handed work to, with their status. |
+| `/open <task>` | Watch a subagent's session. `<task>` is a task id, the start of one, or the subagent's session id. |
+| `/steer <task> <text>` | Send a note to a running subagent. |
+| `/copy [error\|all]` | Copy the last answer to the clipboard. `/copy error` copies the last error, `/copy all` the whole transcript. |
+| `/compose [task\|edit]` | Open the big editor for a long prompt (also `ctrl+g`). `task` starts it with headings, `edit` opens `$EDITOR`. |
+| `/layout [inverse\|classic]` | Put the input on top with the newest message under it, or back to the usual order. Saved. |
 | `/help` | List every command. |
 
 Plugins add commands. They show in `/help` under `other`. `/exo` (the dispatcher) and `/orchestra` are examples when
 those plugins load. The core answers `/context`, `/compact`, `/trace` and `/findings` itself. `/grants` comes from
-the `exo-gate` plugin. The web client runs `/context`, `/findings` and `/trace` from its composer, and `/model` and
-`/default` (with a reference, or bare for a picker; `/default` only on a page opened at 127.0.0.1 or localhost). A
-command it does not run, such as `/grants` or `/help`, stays in the box with a note; a line like `/tmp is full` is sent
-as a message.
+the `exo-gate` plugin. The web client runs `/context`, `/findings`, `/trace`, `/new`, `/rename` and `/layout` from
+its composer, and `/model` and `/default` (with a reference, or bare for a picker; `/default` only on a page opened at
+127.0.0.1 or localhost). A command it does not run, such as `/grants` or `/help`, stays in the box with a note; a line
+like `/tmp is full` is sent as a message.
 
 ### Typing help
 
@@ -207,7 +223,7 @@ Safety settings (approvals, budget, posting rules) are not taste. They never com
 change when you edit them. Changing taste slowly to fit you, and the `/taste` view, are still to come. Details:
 `docs/TASTE-BASELINE.md`.
 
-## 5. Background jobs
+## 5. Background jobs and subagents
 
 The agent can start a long command, such as a build or a test run, and keep working. It uses `bash` with
 `background: true`, then `jobs`, `job_output` and `job_kill`. When the job ends, the thread gets a short notice with
@@ -215,6 +231,51 @@ the exit code and the last lines of output. The notice is never from you and can
 
 - Stopping a turn (ctrl+c or `/stop`) does not stop a job. Ending the core does.
 - Limits (four at a time, two hours each) are per seat. See `docs/JOBS.md`.
+
+### Subagents
+
+A subagent is a helper the agent starts with its `delegate` tool, to do a part of the work in its own session while
+the main thread carries on. Each one runs on the cheapest model tier that can do the job: `fast` for reading, search
+and simple edits, `standard` for building and tests, `deep` only for hard judgment. If a subagent fails, it is tried
+once more one tier up. Limits keep it small: by default a subagent cannot start its own helpers, at most four run at
+once, and each has a cap on tool rounds, tokens and time. The briefs and receipts it passes are in
+`docs/AGENT-WIRE.md` section 6.
+
+You can watch and control them:
+
+- `/tasks` lists them with their status. `/open <task>` shows one's session (read only).
+- `/steer <task> <text>` sends a running subagent a note. It lands at its next tool step.
+- `/stop <task>` stops one subagent and leaves the rest. A bare `/stop` stops the main turn.
+- On the web page, the Tasks cards have Open, Steer and Stop buttons.
+- A subagent that has finished, failed or been cancelled is locked: steering or stopping it gives a clear error and
+  changes nothing.
+- The agent's receipt for the task records what you did: "steered by principal" or "stopped by principal".
+
+Through these commands, only you can steer or stop a subagent. The rules also allow the agent that started it,
+but nothing on main gives that agent the path yet. Other sessions and peers get a refusal (D-070). A subagent is
+still a session, though, so a program on your machine that sends to or stops its session directly can reach it.
+Such a note is recorded as that program's, never as yours.
+
+### Scheduled jobs
+
+A scheduled job is a prompt that runs by itself on a timer, such as a morning brief or a test run every six hours.
+Each run is a fresh unattended session, and it ends with a short plain-English result that arrives as a notice.
+The run goes through the same gate as any turn, so an action that needs your approval waits for it and the run can
+stall there.
+
+The place to manage jobs is the **Schedule** page of `exo web`. The form takes:
+
+- **When**: a cron line such as `0 9 * * 1-5` (minute, hour, day of month, month, day of week), or `every 30m`,
+  `every 2h`, `every 1d`.
+- **Prompt**: what the run should do. **Title**: an optional label.
+- **Tier**: `fast` (the default), `standard` or `deep`. Pick the cheapest that can do the job.
+
+Each job shows as a card with its next and last run. The card has buttons to pause or resume it, run it now (the run
+appears on the Tasks page) and remove it. Jobs are kept in `$EXO_HOME/schedule.sqlite`, and `exo serve` (which `exo web`
+starts if needed) runs the timer. A run missed while Exo was down happens once at the next start.
+
+There is no terminal command for jobs, and the agent has no tool to create them. The web page and the protocol
+command `schedule.edit` are the entry points. Details: `docs/SCHEDULE.md`.
 
 ## 6. Approvals
 
@@ -242,22 +303,47 @@ longer holds never stays on screen. If you answer a web card that was already cl
 
 What the gate asks about, and why:
 
-- **Credentials always ask.** Anything that reads or fills a password, token or key asks every time. An "always"
-  answer is never stored for credentials. A `grep` or `glob` over a folder leaves out the secret stores in it
-  (`~/.ssh`, `~/.aws`, `.env`, Exo's keys) and says how many it skipped; the agent must name one to read it,
-  which asks.
+- **Credentials always ask.** Anything the gate sees reading or filling a password, token or key asks every time.
+  An "always" answer is never stored for credentials. The folder that holds Exo's own connection secret (`run/`)
+  is a secret store: a read of it or of a wildcard in it (`cat ~/.exo/run/*`, `grep -r token ~/.exo/run`) asks
+  (#169, fixed in #185). A `grep` or `glob` over a folder leaves out the secret stores in it (`~/.ssh`, `~/.aws`,
+  `.env`, Exo's keys and `run/`) and says how many it skipped; the agent must name one to read it, which asks
+  (#241). The gate judges a read by the path it names, so a shell walk from a folder above (`grep -r token
+  ~/.exo`) is still an ordinary read, and so is a harmlessly named symbolic link to a key file, read by its own
+  name (#209). `docs/GATE.md` lists the other spellings it misses.
 - **Outward acts are bound to the exact text.** A post, message, email, social post, payment, or anything public or
   irreversible is approved for the exact text, title and target you saw. If the agent changes one character, you
   are asked again. This is so a draft you read cannot be swapped for another.
 - **Posts to public places are swept for internal names**, such as seat names, home paths and model ids. A hit holds
-  the post and lists what it found.
+  the post and lists what it found. The sweep and the exact-text check see only text in the command itself: a body
+  that comes from standard input, a command or a file the gate cannot load is not swept, and an "always" for that
+  post can cover a later body (#208).
 - **Code the gate cannot see into asks (D-038).** A script file, `python -c`, `node -e`, a heredoc fed to a shell,
   `make`, `npm run` or `npm test`, `npx`, `xargs`, `find -exec`, a variable or `$( )` in the program's place, a shell
   function, `source`, or a program the gate does not know: each asks once, for that exact command. Plain work still
-  runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like.
-- **Your store is like a key (D-038).** A write to your store's `policies/`, `state/` (your standing grants), the
-  ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always" covers it. Reading your
-  policies does not ask.
+  runs: `pytest`, `uv run pytest`, `git status`, `ls`, `rg`, `npm install`, `cargo test` and the like. These are
+  trusted by name, so a test runner still runs your project's files. Options of trusted programs that run a
+  command (`tar --to-command`, `rsync -e`, `ssh -o ProxyCommand` and the like) are read as the command they run
+  (#164). A `$( )` inside a single-quoted array subscript given to `printf -v`, `unset`, `declare`, `read` and the
+  like (`printf -v 'a[$(...)]'`) is read (#179, fixed in #189), and so is a command run behind a wrapper such as
+  `setsid`, `flock` or `watch` (#160, fixed in #196), and a heredoc or pipe into a group such as `{ bash; }`
+  (#161, fixed in #198). The gate finds programs only in the shell forms its parser reads. A command inside a
+  parameter expansion such as `${x:-$(...)}` is not seen, so it runs without asking (#143, fix in review in
+  #158). A command nested more than four levels deep
+  (`bash -c` inside `bash -c` and so on) or an `ssh` or `mosh` chain more than four hops deep (#153) asks, even
+  when your policy denies it (#137).
+- **A deny holds for every command on a line (D-075).** A `deny:` or `reserved` entry in your policy is checked
+  against each command the gate reads on a line, so with pushes denied `git push origin main && rm -rf build` is
+  denied, not asked about the delete. A `categories:` setting or a rule still sees only the line's most severe
+  command, so it can ask where a `deny:` entry would deny (#191).
+- **Your store is like a key (D-038).** A write the gate sees going to your store's `policies/`, `state/` (your
+  standing grants), the ledger, `keys/`, seat files, or the core's socket asks you every time, and no "always"
+  covers it. Reading your policies does not ask. `config.json` is not on that list yet: a change in review (D-074,
+  #125) adds it. The gate resolves symbolic links in an absolute path (#130), but otherwise goes by the path as the
+  command spells it, so some writes are not seen as store writes yet: a relative name such as `gates.yaml` written
+  by a tool whose working folder is `policies/`, a glob spelling, a hard link, and a store file opened on a numbered
+  file descriptor and written back through `/dev/fd/3` (#217). A brace spelling (`polic{i..i}es`) is seen (#224).
+  `docs/GATE.md` lists the rest.
 - **Policy edits during a session only tighten (D-038).** If a policy file changes while Exo runs, the stricter of
   the old and new policy applies. Run `/gate accept` to adopt the change, or restart. `/gate` shows the state.
 - **Hard to undo, or visible to others.** Under the default policy, an act that cannot be undone asks. So does an
@@ -266,7 +352,15 @@ What the gate asks about, and why:
 Who may approve: you can always, from the terminal window or the web page. A policy file can let named seats or
 roles approve some kinds of act, and they must sign. A peer never can. A message from a peer that tries to approve
 something is refused and shown to you. The agent cannot answer its own approvals: a command it runs that talks to
-Exo is not you, whatever it claims, and only you can answer "always".
+Exo is not you, whatever it claims, and only you can answer "always". The check has limits. A program running as
+you that obtains your window's secret and detaches from Exo can pass (`docs/GATE.md` "Who answered"). The web
+page's link carries its own secret, so a program that reads the link can answer from the page too, and the link
+stays in your browser's history once you open it. When `exo web` opens the browser itself, the launcher's command
+line, which other programs on the machine can read, holds only the one-time code, never the key (#166, fixed in
+#177). If a used code comes back, `exo web` replaces the key, closes the page's connections and prints a warning
+with a new link: paste it into the browser that is already open. A program that uses the code before your browser
+does gets the key without a sound; only your browser's later use of the code replaces the key and warns. A browser
+that never runs the page's script never uses its code, so then nothing warns (`docs/ui/WEB.md`).
 
 "Always" answers become standing grants. They expire (7 days for outward acts, 30 days for others) and an outward
 grant covers one exact text. `/grants` lists them. `/grants revoke <id>` removes one.
@@ -282,6 +376,9 @@ Peers are other live sessions on the machine: Exo sessions, Hermes agents and bu
 - Your own sessions deliver at once. A message from another person, or from a bus seat, is held until you allow it.
   A held message that nobody answers expires after 30 minutes.
 - A peer message shows as "from another session, not from you". It is input, not an order.
+- The receiving side trusts the key in the sender's presence file, which any program running as you can write. So
+  such a program can send a message that is labelled as you typing in another client, or as one of your sessions,
+  and is delivered at once (#132).
 - A bus seat's message is checked against the key Exo pinned for that seat the first time, held for you by default,
   and answered on the bus only if your rules let that seat through on its own. `exo keys` shows the pinned seats.
 
@@ -381,6 +478,19 @@ Example: make a key, write a note, check the chain.
     exo keygen me
     exo log append note --author me --text "Prefer short answers."
     exo log verify
+
+**Review what Exo learned.** These commands read your store and its ledger. None of them calls a model API on its own.
+They need `--principal ID` or `--root DIR`, like the others.
+
+| Command | What you get |
+|---|---|
+| `exo brief` | The morning brief in Markdown. `--html` prints HTML. `--write` also saves `reports/brief-YYYY-MM-DD.md` and `.html` in the store. |
+| `exo ask list` | The questions Exo wants to put to you, with how much each is worth asking. `exo ask next` gives the next few within your daily interruption budget (`-n 3` by default). `exo ask answer <id> "text" --author NAME` records your answer in the ledger, signed with that author's key. |
+| `exo consolidate` | Turns new ledger events into proposed changes to what Exo believes. `--dry-run` reports without writing. |
+| `exo proposals` | Lists those proposals. `show <id>` reads one. `accept <id>` applies it. `reject <id> --reason "..."` and `revert <id> --reason "..."` need a reason. `--all` includes decided ones. |
+| `exo eval` | A report that measures Exo against your own questions and past choices (files in the store's `training/` folder). `--no-write` prints it without saving. |
+
+Details and the rules inside each: `docs/TOOLS-CLI.md`, and `docs/LEARNING.md` for the loop that uses them.
 
 Every flag is in `docs/COMMANDS.md`. How the ledger and store work: `docs/CORE.md` and `docs/STORE-V2.md`. To review
 what Exo proposes to learn from the ledger, see `exo consolidate` and `exo proposals` in `docs/TOOLS-CLI.md`.

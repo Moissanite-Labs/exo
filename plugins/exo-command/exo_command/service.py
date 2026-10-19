@@ -82,7 +82,9 @@ class CommandCentre:
                  if rid not in live and int(a.get("seq") or 0) <= seq0]
         for rid in stale:
             self.state.forget_approval(rid)
-        added = [self.state.add_open_approval(a) for a in listed]
+        # A request resolved while the listing was in flight is in that (older) listing: never re-add it.
+        gone = self.state.resolved_since(seq0)
+        added = [self.state.add_open_approval(a) for a in listed if a.get("request_id") not in gone]
         if stale or any(added):
             self._notify()
 
