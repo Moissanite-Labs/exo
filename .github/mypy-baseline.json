@@ -933,12 +933,6 @@
     },
     {
       "path": "src/exo/ledger.py",
-      "message": "Argument 2 to \"Head\" has incompatible type \"list[str] | Mapping[Any, Any] | str | None\"; expected \"str | None\"",
-      "code": "arg-type",
-      "count": 1
-    },
-    {
-      "path": "src/exo/ledger.py",
       "message": "Argument 2 to \"chain_hash\" has incompatible type \"list[str] | Mapping[Any, Any] | str | None\"; expected \"str\"",
       "code": "arg-type",
       "count": 1
@@ -1007,12 +1001,6 @@
       "path": "src/exo/server/app.py",
       "message": "\"Engine\" has no attribute \"start_channels\"",
       "code": "attr-defined",
-      "count": 1
-    },
-    {
-      "path": "src/exo/server/app.py",
-      "message": "Value of type \"tuple[str, int] | None\" is not indexable",
-      "code": "index",
       "count": 1
     },
     {
