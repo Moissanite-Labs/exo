@@ -305,7 +305,7 @@ Add or change a provider in config under `[models.providers.NAME]` with `transpo
 `key_env`. A table for a catalog provider merges over the catalog entry key by key: the keys you set win and
 the rest stay. So `base_url` alone keeps Laya's `decision` transport, `local` flag and decision-only `roles`,
 and `read_timeout` alone keeps Anthropic's URL and key. A table that sets `base_url` uses only the `key_env`
-it sets, never the catalog's. With only `base_url = "http://127.0.0.1:1234/v1"` under
+and `headers` it sets, never the catalog's. With only `base_url = "http://127.0.0.1:1234/v1"` under
 `[models.providers.openai]` (a LAN vLLM or LM Studio behind the `openai` name), the endpoint is keyless and no
 OpenAI key is ever sent to it. To send a key along with your `base_url`, set `key_env` in the same table: the
 catalog's variable or one of your own. A new provider needs a `base_url` (a CLI transport needs none). Without

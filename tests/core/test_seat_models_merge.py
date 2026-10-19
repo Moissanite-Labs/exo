@@ -63,6 +63,21 @@ def test_seat_provider_adds_to_config_providers_and_its_base_url_drops_config_ke
     assert eng.router.providers["p1"] == seat_p1  # no key_env carried over to the seat's base_url
 
 
+def test_seat_base_url_drops_config_headers_unless_the_seat_sets_its_own(engine):
+    corp = {"transport": "openai", "base_url": "https://gw.corp.example/v1", "headers": {"authorization": "Bearer X"}}
+    config = {"providers": {"corp": corp}}
+    kept = engine(config, {"providers": {"corp": {"read_timeout": 300}}})
+    [cred] = kept.router.credentials("corp")
+    assert cred.provider.extra_headers == {"authorization": "Bearer X"}  # same URL: the table stays
+    moved = engine(config, {"providers": {"corp": {"base_url": "http://other.example/v1"}}})
+    assert "headers" not in moved.router.providers["corp"]
+    [cred] = moved.router.credentials("corp")
+    assert cred.provider.base_url == "http://other.example/v1" and cred.provider.extra_headers == {}
+    own = engine(config, {"providers": {"corp": {"base_url": "http://other.example/v1", "headers": {"x-team": "a"}}}})
+    [cred] = own.router.credentials("corp")
+    assert cred.provider.extra_headers == {"x-team": "a"}
+
+
 LAN = "http://127.0.0.1:1234/v1"
 
 

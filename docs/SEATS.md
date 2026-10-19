@@ -71,7 +71,7 @@ A provider entry merges one level deeper, key by key over config.json's entry of
 a provider table over the catalog (`docs/PROVIDERS.md`). The keys the seat sets win and the rest stay. So a seat
 that sets only `read_timeout = 300` under `[models.providers.openai]` keeps the `base_url` config.json gave that
 provider, a LAN server for example, and sends no key there unless config.json named one. A seat entry that sets
-`base_url` drops config.json's `key_env`: no key follows a new URL unless the seat names it.
+`base_url` drops config.json's `key_env` and `headers`: no key or header token follows a new URL unless the seat names it.
 
 When a thread starts, or a shell call works (its `cwd` argument or a leading `cd`) in a folder that is not inside
 a git repo, the user gets one warning line, once per folder per thread. It is not shown to the model.

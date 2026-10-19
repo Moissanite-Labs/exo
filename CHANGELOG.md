@@ -323,8 +323,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   and a one-key table such as `read_timeout = 300` no longer makes streams through that provider fail with
   `'base_url'`. A provider without a `base_url` gets no credential, so its route is skipped, and the providers
   list (`exo providers`, `/providers`, the web view) shows it as `no base_url` instead of `key found`. A table
-  that sets `base_url` uses only the `key_env` it sets and is keyless without one, as before: the catalog key
-  (for example `OPENAI_API_KEY`) is never sent to that URL. Set `key_env` in that table to send a key there.
+  that sets `base_url` uses only the `key_env` and `headers` it sets and is keyless without one, as before: the
+  catalog key (for example `OPENAI_API_KEY`) and a config.json `headers` table are never sent to that URL. Set `key_env` in that table to send a key there.
 - Command centre cost panel: a finished subagent's spend counted twice. The core rolls the child's total into its
   parent's `session_total`, and the panel then added the child's own row again, in the total, the seat and model
   bars and the session counts. A delegated child at $0.05 under a $0.10 parent showed $0.20 instead of $0.15. The

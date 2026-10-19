@@ -136,13 +136,13 @@ def cooldown_until(now: float, status: int | None, strikes: int, reset_at: float
 
 def merge_provider(base: Any, spec: Any) -> Any:
     """A provider table over the entry it overrides (the catalog's, or config.json's under a seat): the keys it sets
-    win and the rest stay. A table that sets ``base_url`` uses only the ``key_env`` it sets, so a key never follows a
-    new URL. A value that is not a table replaces the entry as given."""
+    win and the rest stay. A table that sets ``base_url`` uses only the ``key_env`` and ``headers`` it sets, so a key
+    or a header token never follows a new URL. A value that is not a table replaces the entry as given."""
     if not isinstance(spec, dict):
         return spec
     base = base if isinstance(base, dict) else {}
     if "base_url" in spec:
-        base = {k: v for k, v in base.items() if k != "key_env"}
+        base = {k: v for k, v in base.items() if k not in ("key_env", "headers")}
     return {**base, **spec}
 
 
@@ -301,7 +301,7 @@ class Router:
             exe = shutil.which(spec.get("command", cls.default_command), path=self.env.get("PATH", ""))
             if exe:
                 creds = [Credential(provider, None, cls(exe, name=provider, env=self.env, **timeout))]
-        elif spec is not None and spec.get("base_url"):  # no base_url: no credential, the route is skipped
+        elif spec is not None and spec.get("base_url") is not None:  # no base_url: no credential, the route is skipped
             transport = TRANSPORTS[spec.get("transport", "openai")]
             envs = spec.get("key_env") or []
             envs = [envs] if isinstance(envs, str) else list(envs)
