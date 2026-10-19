@@ -453,13 +453,13 @@ def test_bash_5_3_function_substitution_is_read_as_commands(line):
 
 
 def test_hidden_push_beside_a_visible_delete_decides_as_the_line_written_out():
-    """The push a word hid from main now outranks the delete beside it, as it does on the same line written out:
-    one category decides a line, so deny: [delete] asks there. A deny on any part of a line is D-075 (#126)."""
+    """The push a word hid from main now outranks the delete beside it, as it does on the same line written out,
+    and deny: [delete] still denies both, since a deny matches any part of a line (D-075, #126)."""
     policy = {"gates": {"deny": ["delete"]}}
     hidden = classify_shell("echo ${X:-$(git push --force origin main)} && rm -rf ./work")
     shown = classify_shell("git push --force origin main && rm -rf ./work")
     assert hidden.category == shown.category == "force_push"
-    assert decide(hidden, policy).outcome == decide(shown, policy).outcome == "ask"
+    assert decide(hidden, policy).outcome == decide(shown, policy).outcome == "deny"
 
 
 @pytest.mark.parametrize("line", [

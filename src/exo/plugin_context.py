@@ -18,8 +18,8 @@ from exo.core.types import Message, Usage
 
 def _usage_dict(u: Usage | None) -> dict[str, int]:
     u = u or Usage()
-    return {"prompt_tokens": u.input_tokens, "completion_tokens": u.output_tokens,
-            "total_tokens": u.input_tokens + u.output_tokens}
+    prompt = u.input_tokens + u.cache_read_tokens + u.cache_write_tokens  # OpenAI style: cached tokens included
+    return {"prompt_tokens": prompt, "completion_tokens": u.output_tokens, "total_tokens": prompt + u.output_tokens}
 
 
 class ContextAdapter:
@@ -35,6 +35,11 @@ class ContextAdapter:
         tree.on_pre_compress = self._pre_compress
         tree.on_capture = self._capture if hasattr(memory, "capture_principal") else None
         tree.on_compacted = self._compacted
+
+    def _private(self, session: str) -> bool:
+        """D-028: a private thread is never shown to the context plugin, so no handoff or pin it writes carries it."""
+        private = getattr(getattr(self.tree, "store", None), "private", None)
+        return private is not None and private(session)
 
     def transcript(self, session: str, last: int | None = None) -> list[dict[str, Any]]:
         """Recent messages as OpenAI-style dicts, for plugin hooks."""
@@ -87,7 +92,7 @@ class ContextAdapter:
 
     def note(self, session: str) -> None:
         self.tree.note(session)
-        if self.plugin is not None and session not in self._started:
+        if self.plugin is not None and session not in self._started and not self._private(session):
             self._started.add(session)
             safe_plugin_call(self.plugin, "on_session_start", session, platform="exo")
 
@@ -99,9 +104,11 @@ class ContextAdapter:
             msgs = await self.tree.build(session, (system + "\n\n" if system else "") + "# Recalled memory\n" + recall
                                          if recall else system)
         pick = getattr(self.plugin, "select_context", None)
-        if pick is None:
+        if pick is None or self._private(session):
             return msgs
-        flat = [{"role": m.role, "content": m.text()} for m in msgs]
+        # D-040: author and principal flag by author, so exo-context pins only what the principal wrote. A fork's
+        # copy of the principal's message is still theirs (is_principal, the capture test, skips it as a copy).
+        flat = [provenance.flat(m) for m in msgs]
         try:
             out = await maybe_await(call_plugin(pick, flat, conversation_messages=flat, budget_tokens=0,
                                            session_id=session))
@@ -112,8 +119,25 @@ class ContextAdapter:
             return msgs
         return apply_selection(msgs, flat, out)
 
+    def rewound(self, session: str) -> None:
+        """After undo: ``on_session_switch(session, rewound=True, messages=, summaries=)`` with every message still
+        visible in the thread and ``{tree key: ids of its summary nodes still stored}`` for the tree the thread's
+        view reads, so the context plugin drops what it kept from the undone turns: their pins, and each summary
+        node (``on_compacted``) the undo deleted (D-041)."""
+        if self.plugin is None or getattr(self, "_private", lambda _s: False)(session):  # D-028: never a private thread
+            return
+        flat = [provenance.flat(m) for m in self.tree.transcript(session, 1 << 30)]  # the whole thread, not a window
+        stored = getattr(getattr(self.tree, "store", None), "summaries", None)
+        agent_key = getattr(self.tree, "_agent_key", None)  # an agent thread reads its agent's tree
+        key = (agent_key(session) if agent_key else None) or session  # node.session of the nodes on_compacted got
+        summaries = {key: [n.id for n in stored(key)]} if stored else None
+        safe_plugin_call(self.plugin, "on_session_switch", session, rewound=True, messages=flat, summaries=summaries,
+                         session_id=session)
+
     def on_turn_complete(self, session: str, usage: Usage) -> None:
-        if self.plugin is not None:
+        """``usage`` is the turn's last model call (the loop's ``TurnResult.last_usage``), so ``prompt_tokens`` is
+        the size of the last prompt, not the sum of every call in a tool-using turn."""
+        if self.plugin is not None and not self._private(session):
             safe_plugin_call(self.plugin, "update_from_response", _usage_dict(usage))
             safe_plugin_call(self.plugin, "on_turn_complete", self.transcript(session), usage=_usage_dict(usage),
                   session_id=session)

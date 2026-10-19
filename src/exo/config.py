@@ -7,6 +7,7 @@ It holds the machine-level choices the installer and the plugins share:
     hermes_home   the HERMES_HOME Exo installed its plugins into
     venv          the Python environment that runs Hermes and Exo
     plugins       the Exo plugins installed into hermes_home
+    plugin_selection  the installer's `--plugins` list (or "all"), kept for re-runs and `exo update`
     plugin_config per-plugin settings, keyed by plugin name
     principals    optional explicit store roots, keyed by principal id
     update        `exo update` settings: `update.require_signed` (default false) refuses a target
@@ -25,10 +26,10 @@ import json
 import os
 import re
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
+from .core.private import atomic_write
 from .store import ID_RE, exo_home
 
 VERSION = 1
@@ -158,17 +159,7 @@ class Config:
         """Atomic write, mode 0600. Unknown keys written by newer tools are kept."""
         self.home.mkdir(parents=True, exist_ok=True)
         out = {'version': VERSION, **{k: v for k, v in self.data.items() if k != 'version'}}
-        fd, tmp = tempfile.mkstemp(prefix='.config.', dir=self.home)
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(out, f, indent=2, sort_keys=True)
-                f.write('\n')
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, self.path)
-        except BaseException:
-            Path(tmp).unlink(missing_ok=True)
-            raise
-        return self.path
+        return atomic_write(self.path, json.dumps(out, indent=2, sort_keys=True) + '\n')
 
     # --- generic access --------------------------------------------------------
 

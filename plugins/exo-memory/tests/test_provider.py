@@ -28,7 +28,7 @@ def body_types(p, kind="note"):
 def test_unavailable_without_principal(tmp_path):
     p = ExoMemoryProvider()
     assert not p.is_available()
-    assert "EXO_PRINCIPAL" in p.unavailable_reason()
+    assert "exo init" in p.unavailable_reason()  # the one command a first user needs, not the env variables
     p = ExoMemoryProvider({"principal": "nobody"})
     assert "exo init" in p.unavailable_reason()
 
@@ -292,6 +292,22 @@ def test_exo_should_have_been(provider):
     assert provider._state().rt.ledger.verify()["ok"]
 
 
+def test_write_tools_refuse_a_private_thread_and_reads_still_answer(provider, store):
+    """D-028: the host passes agent_context="private" for a tool called in a private thread. exo_note and
+    exo_should_have_been then write nothing; recall and exo_get still read."""
+    _populate(store, 3)
+    before = evs(provider)
+    for name, args in (("exo_note", {"text": "the zebracorn launch is Friday"}),
+                       ("exo_should_have_been", {"target": "last", "wanted": "no zebracorn"})):
+        r = json.loads(provider.handle_tool_call(name, args, session_id="p1", agent_context="private"))
+        assert "private thread" in r["error"] and "nothing was written" in r["error"]
+    assert evs(provider) == before
+    r = json.loads(provider.handle_tool_call("exo_recall", {"query": "deploy staging"}, agent_context="private"))
+    assert r["node_ids"]
+    assert "id" in json.loads(provider.handle_tool_call("exo_get", {"id": r["node_ids"][0]}, agent_context="private"))
+    assert call(provider, "exo_note", text="a normal note")["ok"]  # no agent_context: the primary context writes
+
+
 def test_exo_recall_zoom_date(provider, store):
     _populate(store, 3)
     provider.sync_turn("the staging bucket is blue", "noted", session_id="s1")
@@ -502,3 +518,23 @@ def test_lazy_init_keeps_the_host_log(tmp_path, store):
         assert st.core_log is log and st.rt.episodic is None
     finally:
         p.shutdown()
+
+
+def test_the_episodic_view_cache_does_not_follow_a_symlink(tmp_path):
+    """`view.json` was opened with O_TRUNC at its final name and then chmodded, and both follow a symlink there. It
+    is replaced through mkstemp now (#273): the link is replaced, and the file is owner-only."""
+    import stat
+    from exo_memory.episodic.tree import SummaryTree
+    from exo_memory.episodic.view import View
+    victim = tmp_path / "victim.txt"
+    victim.write_text("do not touch\n")
+    path = tmp_path / "epi" / "view.json"
+    view = View(SummaryTree(tmp_path / "epi"), 100)
+    view.fold_to(2)
+    path.symlink_to(victim)
+    view.save(path)
+    assert victim.read_text() == "do not touch\n"
+    st = os.lstat(path)
+    assert stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600
+    assert json.loads(path.read_text())["folded"] == 2
+    assert sorted(p.name for p in path.parent.iterdir()) == ["tree", "view.json"]

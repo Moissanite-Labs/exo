@@ -121,6 +121,34 @@ def test_model_call_drives_served_model_and_cache_share(tmp_path):
     run(tmp_path, sc)
 
 
+
+def test_context_gauge_and_cache_share_count_the_prompt_once(tmp_path):
+    """D-080: an OpenAI-chat call over a 92,012-token prompt with 90,000 of it cached shows 92,012 tokens of
+    context and a 98% cache share (it read 182,012 and 49% when input_tokens still held the cached tokens).
+    Cache writes are part of the prompt but were not served from the cache."""
+    import json
+
+    import httpx
+    from exo.core.models.openai_chat import OpenAIChatProvider
+
+    sse = "".join(f"data: {json.dumps(c)}\n\n" for c in [
+        {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"prompt_tokens": 92_012, "completion_tokens": 300,
+                                  "prompt_tokens_details": {"cached_tokens": 90_000}}}]) + "data: [DONE]\n\n"
+
+    async def sc(app, pilot, client, eng):
+        http = httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, text=sse)))
+        prov = OpenAIChatProvider("https://api.openai.com/v1", "k", client=http)
+        u = [ev async for ev in prov.stream([s.Message.user("hi")], [], model="m")][-1].usage
+        for usage in (u, s.Usage(input_tokens=12, cache_read_tokens=80_000, cache_write_tokens=12_000)):
+            app.ctx_tokens, app.cache_share = 0, None
+            eng.hub.publish(s.ModelCall(requested="fake:x", route="fake:x", usage=usage), app.session)
+            eng.hub.publish(s.UsageUpdated(usage=usage, session_total=usage, model="fake:x"), app.session)
+            await until(lambda: app.ctx_tokens and app.cache_share is not None, pilot)
+            assert app.ctx_tokens == 92_012 and app.cache_share == pytest.approx(usage.cache_read_tokens / 92_012)
+
+    run(tmp_path, sc)
+
 def test_brand_bar_live_dot_and_names(tmp_path):
     async def sc(app, pilot, client, eng):
         assert "E X O" in plain(app.brand.render()) and "exo-razi" not in plain(app.brand.render())
@@ -297,14 +325,59 @@ def test_boot_sequence_runs_marks_real_steps_and_ends(tmp_path, monkeypatch):
 
     async def sc(app, pilot):
         assert isinstance(app.screen, BootScreen)
-        await until(lambda: app.ready.is_set(), pilot)
-        assert set(app.boot_screen.done) == {"core", "agent", "memory", "model"}
+        await until(lambda: set(app.boot_screen.done) == {"core", "agent", "memory", "model"}, pilot)
         assert isinstance(app.screen, BootScreen)  # every step is done, but the sequence has a minimum length
+        assert not app.ready.is_set()  # boot waits for the sequence to end before a first-run screen may open
         clock.now = boot.MIN_SECONDS
-        await until(lambda: not isinstance(app.screen, BootScreen), pilot, timeout=3)
+        await until(lambda: app.ready.is_set() and not isinstance(app.screen, BootScreen), pilot, timeout=3)
         assert isinstance(app.focused, Composer)
 
     boot_run(tmp_path, sc)
+
+
+def test_boot_line_and_empty_start_tell_the_memory_plugins_real_state(tmp_path):
+    """The memory check reads the core's memory_status, never an assumed "ready": with no principal store the
+    plugin is off, and both the boot line and the empty-start card say so."""
+    async def boot(state):
+        eng = make_engine(tmp_path / state)
+        if state != "none":
+            eng.plugins.slots.memory = type("Mem", (), {"name": "exo-memory"})()
+        eng.memory_off = "memory is off: no principal store yet" if state == "off" else ""
+        eng.memory_init_error = "ledger is locked" if state == "failed" else ""
+        app = ExoApp(FakeServerClient(eng), seat="tester", boot_anim=True)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await until(lambda: app.ready.is_set(), pilot)
+            return (app.boot_screen.done["memory"], "memory" in app.boot_screen.short,
+                    plain(app.query_one(Welcome).shown, 100).split("\n")[1])
+
+    for state, word in (("off", "off, no principal store"), ("failed", "did not start"), ("none", "log only"),
+                        ("on", "ready")):
+        line, short, card = asyncio.run(boot(state))
+        assert line == word and short == (state in ("off", "failed")), state  # no green check when it is not on
+        assert f"memory {word}" in card and (state == "on" or "memory ready" not in card), card
+
+
+def test_boot_line_says_nothing_about_memory_when_the_core_cannot_tell(tmp_path):
+    """An older core has no memory_status: the line keeps its plain label and the card claims nothing."""
+    eng = make_engine(tmp_path)
+    client = FakeServerClient(eng)
+    real = client.send
+
+    async def send(body):
+        if isinstance(body, s.CommandRun) and body.name == "memory_status":
+            return s.Response(id="x", ok=False, error=s.ErrorInfo(code="not_found", message="no command /memory_status"))
+        return await real(body)
+
+    client.send = send
+
+    async def main():
+        app = ExoApp(client, seat="tester", boot_anim=True)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await until(lambda: app.ready.is_set(), pilot)
+            assert app.boot_screen.done["memory"] == ""
+            assert "memory" not in plain(app.query_one(Welcome).shown, 100).split("\n")[1]
+
+    asyncio.run(main())
 
 
 def test_boot_is_skippable_with_any_key(tmp_path):
