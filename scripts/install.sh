@@ -338,10 +338,18 @@ foreign() { [ -e "$1" ] && [ ! -f "$1/$MARK" ]; }  # something is at $1 and Exo 
 # Exo installed $1 under this name: its marker names it. cp -r copies the hidden marker too, so a copy or a renamed
 # folder still names the folder it came from, and it is yours.
 managed_as() { [ -f "$1/$MARK" ] && grep -qxF "name: $(basename "$1")" "$1/$MARK"; }
+# A pack skill's marker also records the checksum of the SKILL.md Exo wrote, so a refresh can say it replaces an edit.
 mark_managed() {  # mark_managed DST SRC
   if [ "$DRY" -eq 1 ]; then echo "+ write $1/$MARK"; else
     printf 'installed by exo scripts/install.sh from %s\nname: %s\n' "$2" "$(basename "$1")" > "$1/$MARK"
+    [ ! -f "$1/SKILL.md" ] || printf 'skill_md: %s\n' "$(cksum < "$1/SKILL.md")" >> "$1/$MARK"
   fi
+}
+marked_now() { managed_as "$1" && { [ ! -f "$1/SKILL.md" ] || grep -q '^skill_md: ' "$1/$MARK"; }; }
+edited() {  # edited DST: its SKILL.md is not the one Exo wrote
+  local was
+  was="$(sed -n 's/^skill_md: //p' "$1/$MARK" 2>/dev/null)"
+  [ -f "$1/SKILL.md" ] && [ -n "$was" ] && [ "$was" != "$(cksum < "$1/SKILL.md")" ]
 }
 # copy_managed SRC DST LABEL [keep-tests]: copy a folder Exo ships to DST without caches (and without tests/ unless
 # keep-tests), then mark DST as Exo's. Says LABEL is up to date when nothing changed. Check foreign() first.
@@ -349,9 +357,12 @@ copy_managed() {
   local src="$1" dst="$2" label="$3" skip=tests
   [ "${4:-}" = keep-tests ] && skip=.pytest_cache
   if [ -f "$dst/$MARK" ] && diff -rq -x "$MARK" -x "$skip" -x __pycache__ -x .pytest_cache "$src" "$dst" >/dev/null 2>&1; then
-    managed_as "$dst" || mark_managed "$dst" "$src"  # an adopted copy, or a marker from before markers named it
+    marked_now "$dst" || mark_managed "$dst" "$src"  # an adopted copy, or a marker from an older install
     [ -z "$label" ] || say "$label is up to date"
     return 0
+  fi
+  if [ -e "$dst" ] && edited "$dst"; then
+    warn "$dst/SKILL.md was edited since Exo installed it, and the pack's copy replaces it. To change a pack skill, copy it to a new folder and set a new name: in its SKILL.md (docs/INSTALL.md step 5)."
   fi
   [ -e "$dst" ] && run rm -rf "$dst"
   run mkdir -p "$dst"

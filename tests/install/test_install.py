@@ -250,6 +250,49 @@ def test_rerun_keeps_a_skill_you_copied_from_the_pack(box):
     assert (skills / "my-intro" / "SKILL.md").read_text().endswith("my intro\n")
 
 
+def test_rerun_warns_when_it_replaces_an_edited_pack_skill(box):
+    """abu-aska's review of #213: an edit inside a pack skill folder was replaced with no word. The folder is Exo's
+    and is still replaced, as INSTALL step 5 says, but the marker records the SKILL.md Exo wrote, so a re-run says
+    so first. An upstream change alone does not warn."""
+    src = checkout_copy(box)
+    args = ("--no-pip", "--no-interview", "--yes", "--exo-source", str(src))
+    assert run(box, *args).returncode == 0
+    skills = box / "exo" / "skills"
+    with open(skills / "council" / "SKILL.md", "a") as f:
+        f.write("\nmy edit\n")
+    with open(src / "skills" / "exo-intro" / "SKILL.md", "a") as f:  # the pack changed, you did not
+        f.write("\n## New fact\n")
+    r = run(box, *args)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert r.stderr.count("was edited since Exo installed it") == 1
+    assert f"{skills / 'council' / 'SKILL.md'} was edited since Exo installed it" in r.stderr
+    assert "my edit" not in (skills / "council" / "SKILL.md").read_text()  # replaced, as documented
+    assert (skills / "exo-intro" / "SKILL.md").read_text().endswith("## New fact\n")
+    r = run(box, *args)
+    assert r.returncode == 0 and "was edited" not in r.stderr
+
+
+def test_a_changed_pack_skill_needs_a_new_folder_and_a_new_name(box):
+    """INSTALL step 5: the skill index is first-wins by frontmatter name over sorted folders, so a copy that keeps
+    the pack's name is hidden behind the pack's skill (or hides it). A copy with a new name shows beside it."""
+    from exo.core.skills import SkillIndex
+    src = checkout_copy(box)
+    args = ("--no-pip", "--no-interview", "--yes", "--exo-source", str(src))
+    assert run(box, *args).returncode == 0
+    skills = box / "exo" / "skills"
+    shutil.copytree(skills / "council", skills / "my-council")
+    with open(skills / "my-council" / "SKILL.md", "a") as f:
+        f.write("\nmy change\n")
+    idx = SkillIndex.discover([skills])
+    assert idx.skills["council"].path == skills / "council" / "SKILL.md" and "my-council" not in idx.skills
+    text = (skills / "my-council" / "SKILL.md").read_text()
+    (skills / "my-council" / "SKILL.md").write_text(text.replace("name: council", "name: my-council", 1))
+    assert run(box, *args).returncode == 0
+    idx = SkillIndex.discover([skills])
+    assert idx.skills["council"].path == skills / "council" / "SKILL.md"
+    assert "my change" in idx.load("my-council")
+
+
 def test_skill_pack_leaves_folders_it_did_not_install(box):
     skills = box / "exo" / "skills"
     (skills / "exo-intro").mkdir(parents=True)
