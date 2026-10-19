@@ -198,9 +198,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   live in `exo.model_spend.admit_native`.
 
 ### Fixed
-- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
-  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
-  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - Private threads are not remembered again (D-028). Their turns no longer reach exo-memory's signed ledger: the
   loop skips `on_turn_start`, `sync_turn` and `checkpoint` for them. `exo_note` and `exo_should_have_been` refuse
   in them. The learning loop and `feedback.send` ignore them: a reject or should_have_been on one files no finding.
@@ -237,6 +234,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   handoffs too, and each handoff that may quote them is written again at once, including another thread's on an
   agent tree. The pinned block no longer links a handoff written before the undo. A ruling that was only summarized
   stays pinned.
+- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
+  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
+  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - The signed ledger's head anchor (D-040) is now written after the append's COMMIT, so a writer killed in between
   leaves it one event behind, never ahead. Before, a kill at that moment made the ledger report "events were
   removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match, which
