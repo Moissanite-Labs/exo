@@ -499,7 +499,7 @@ def test_every_path_mention_is_guarded_at_every_token_start(start):
 
 
 @pytest.mark.parametrize("text", [
-    "fix this:\n@app.route('/x')\n@login_required\ndef f(): ...", "@media (max-width: 600px) { a { color: red } }",
+    "fix this:\n" "@app.route('/x')\n@login_required\ndef f(): ...", "@media (max-width: 600px) { a { color: red } }",
     "@@ -1,3 +1,4 @@\n-a\n+b", "write to a@b.c", "@p, see @peer-bot", "@@a", "@import url(x.css);",
     "(@/p)", '"@/p"', "x:@/p", "a@/p", "x\uff0c@/p", "x\uff1b@/p", "x\uff1a@/p", "\u300c@/p", "x\u200b@/p"])
 def test_code_mail_and_non_token_at_signs_pass_as_typed(text):
@@ -517,7 +517,7 @@ def test_a_dotdot_path_is_guarded_and_code_reaches_the_model_as_typed(tmp_path, 
     canary = tmp_path / "canary.txt"
     canary.write_text("CANARY")
     up = f"look at @x{'/..' * 40}{canary}"
-    code = ["fix this:\n@app.route('/x')\n@login_required\ndef f(): ...", "@media print { a { color: red } }",
+    code = ["fix this:\n" "@app.route('/x')\n@login_required\ndef f(): ...", "@media print { a { color: red } }",
             "@@ -1,3 +1,4 @@\n-a\n+b", "write to a@b.c", "@p, see @peer-bot"]
     r = router(tmp_path)
     with monkeypatch.context() as m:
