@@ -51,7 +51,8 @@ loads every folder in `$EXO_HOME/plugins`, so a list also removes the plugins an
 list leaves out. Folders without the `.exo-managed` marker stay, and a Hermes home is left as is, since its
 `config.yaml` decides what loads. An install from before `plugin_selection` existed has no list on record, so its
 next refresh installs every plugin. After that update, run `scripts/install.sh --no-pip --plugins LIST` once: it
-records your list and removes the plugins the refresh added.
+records your list and removes the plugins the refresh added. A remembered name that this checkout no longer has
+gets a warning, and the refresh goes on without it.
 
 After updating, finish active turns, close your clients, run `exo stop`, then reopen `exo` or `exo web`.
 The running shared core and clients retain their loaded code until restarted. The updater prints this
@@ -74,12 +75,23 @@ upstream tip with `git verify-commit` (SSH signatures, `ssh-keygen`) against a *
 and continue; otherwise it stops before changing the tree. It applies to checkout and installer installs, not
 `uv tool` installs. The project does not sign releases yet, so leave it off until it does.
 
+Only SSH signatures count. An OpenPGP or X.509 signature is refused whatever your gpg keyring holds, and so is
+GitHub's signature on a merge made in its web interface. If `config.json` exists but cannot be read (invalid
+JSON, or written by a newer Exo), or `update.require_signed` is not `true` or `false`, `exo update` refuses until
+you fix it. A missing `config.json` means the check is off. `exo update --dry-run` says whether the check is on.
+
 The pin is separate from the repo on purpose: a new commit that edits `trust/allowed_signers` cannot make
 itself trusted. You create it once with `exo update --pin-trust`, which copies `trust/allowed_signers` from
 `HEAD` (the code you already run) and prints it; read it before relying on it. After a key rotation, the new
-list arrives in a signed commit that the old pin still verifies; fetch, review `git show @{u}:trust/allowed_signers`, and
-run `exo update --pin-trust @{u}`. Until then, updates signed only by the new key are refused. Tag
-signatures are not consulted: the tip commit must be signed.
+list arrives in a commit signed by a key you already pinned. Fetch, review `git show @{u}:trust/allowed_signers`,
+and run `exo update --pin-trust @{u}`. Until then, updates signed only by the new key are refused. Once a pin
+exists, `--pin-trust REV` finds the commit that last changed the list in REV's first-parent history (the merge,
+if the list came in through one) and takes the list only if that commit verifies against the current pin.
+Otherwise it refuses and the pin stays as it was. A list that is not UTF-8 is refused too. Pinning the list you
+already have always works. If a pinned key is lost or compromised, edit `$EXO_HOME/update/allowed_signers` by
+hand. That is the only override. The check cannot tell an old list from a new one: a list that a pinned key
+signed earlier can be pinned again, so read what `--pin-trust` prints. Tag signatures are not consulted: the tip
+commit must be signed.
 
 ## What it does
 
@@ -124,7 +136,7 @@ pinned checkout. Hermes exact-pins its dependencies, so the result matches upstr
 | `--tag TAG` | Hermes release tag (needs `--with-hermes`) |
 | `--exo-source SRC` | a local exo checkout or a git URL (cloned into `$EXO_HOME/src/exo`) |
 | `--python PY` | interpreter for the venv |
-| `--plugins LIST` | comma list, for example `exo-memory,exo-context`. Remembered for re-runs and `exo update`. `all` means every plugin. Removes the other plugins an earlier run installed in `$EXO_HOME/plugins`. |
+| `--plugins LIST` | comma list, for example `exo-gate,exo-memory,exo-context`. Remembered for re-runs and `exo update`. `all` means every plugin. Removes the other plugins an earlier run installed in `$EXO_HOME/plugins`. Always keeps `exo-gate`: without it the core refuses every tool call. A name given here that matches no plugin stops the installer before it removes a plugin or writes config.json (the check runs after the venv and pip steps). A remembered name only warns. |
 | `--principal ID`, `--answers FILE` | run the interview without prompts |
 | `--no-pin`, `--no-pip`, `--no-interview` | skip a step |
 | `--strict-patches` | fail when a patch does not apply (needs `--with-hermes`) |

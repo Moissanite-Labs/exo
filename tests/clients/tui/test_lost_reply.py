@@ -66,6 +66,20 @@ def test_lost_approval_answer_puts_back_the_card_the_core_still_holds(tmp_path):
     run(tmp_path, sc)
 
 
+def test_lost_question_answer_keeps_the_question_open_and_the_text(tmp_path):
+    async def sc(app, pilot, client, eng):
+        client.lose = (s.QuestionAnswer,)
+        eng.hub.publish(s.QuestionAsked(question_id="q1", text="which file?"), app.session)
+        await until(lambda: app.question == "q1", pilot)
+        await send(app, pilot, "the second one")
+        await until(lambda: "may not have been delivered" in app.transcript_text(), pilot)
+        assert app.question == "q1"  # the next line still answers it
+        assert app.composer.text == "the second one"
+        assert sum(isinstance(b, s.QuestionAnswer) for b in app.sent) == 1
+
+    run(tmp_path, sc)
+
+
 def test_lost_unsteer_reply_leaves_the_steer_pending(tmp_path):
     async def sc(app, pilot, client, eng):
         client.lose = ()  # the turn and the steer go through

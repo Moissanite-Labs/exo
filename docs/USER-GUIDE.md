@@ -140,7 +140,10 @@ The technical reference, with arguments and where each command is implemented, i
 
 Plugins add commands. They show in `/help` under `other`. `/exo` (the dispatcher) and `/orchestra` are examples when
 those plugins load. The core answers `/context`, `/compact`, `/trace` and `/findings` itself. `/grants` comes from
-the `exo-gate` plugin. The web client runs `/context`, `/findings` and `/trace` from its composer.
+the `exo-gate` plugin. The web client runs `/context`, `/findings` and `/trace` from its composer, and `/model` and
+`/default` (with a reference, or bare for a picker; `/default` only on a page opened at 127.0.0.1 or localhost). A
+command it does not run, such as `/grants` or `/help`, stays in the box with a note; a line like `/tmp is full` is sent
+as a message.
 
 ### Typing help
 
@@ -352,7 +355,7 @@ Pick the store with `--principal ID` or `--root DIR`, or set `EXO_PRINCIPAL` onc
 | `exo keygen <name>` | A signing key in `~/.exo/keys/<name>.key`, readable by you only. It will not overwrite an existing key. Keep it private. |
 | `exo log append <kind> --author NAME --text "..."` | Adds one signed event. Kinds include `note`, `ruling`, `utterance`, `question`, `answer`. Needs the author's key. |
 | `exo log verify` | Re-checks every event, link and signature. Each key must be one Exo pinned, and the ledger must still reach the last head it recorded. Prints `{"ok": true, ...}` or fails. Run it when something feels off. |
-| `exo memory verify` | The same check for every store, plus each agent's memory log. A ledger that was cut short or edited fails here. |
+| `exo memory verify` | The same check for every store, plus each agent's memory log. A ledger that was cut short, edited or deleted fails here. |
 | `exo keys` | The keys Exo trusts: its own signing keys, the bus seats it has seen, and which ledger names are you. `exo keys pin` adds or replaces one. |
 | `exo log tail` | The last events. `-n 20` for more, `--kind ruling` to filter. |
 
