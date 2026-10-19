@@ -198,9 +198,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   live in `exo.model_spend.admit_native`.
 
 ### Fixed
-- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
-  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
-  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - Protocol strict decoding: a command whose `type` is not a string is `unknown_command`, a wrong-typed `int`,
   `float`, `str` or `bool` body field (such as `events.subscribe` `since: "5"`) is `bad_body`, and JSON nested too
   deep is `bad_json`. An `events.subscribe` `since` past SQLite's 64-bit range is `internal`. Before, these raised
@@ -244,6 +241,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 - `exo chat` can give a standing grant: typing `allow_always`, as the approval prompt offers it, then Enter to
   confirm sends `allow_always`. Before, the client read only the first letter, so it sent `allow`. `Allow` no
   longer denies.
+- Git in bash and background jobs no longer fails with "missing config key GIT_CONFIG_KEY_0" when the core starts
+  with `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` set (#159). The scrub dropped only the keys;
+  it now keeps or drops the family as one unit (`docs/TOOLS.md` "Environment of bash and jobs").
 - The signed ledger's head anchor (D-040) is now written after the append's COMMIT, so a writer killed in between
   leaves it one event behind, never ahead. Before, a kill at that moment made the ledger report "events were
   removed" and refuse every later append. `exo log anchor` no longer overwrites an anchor that does not match, which
@@ -426,6 +426,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   family with `[tools] env_allow = ["GIT_CONFIG_COUNT"]` and `GIT_CONFIG_PARAMETERS` by naming it.
 
 ### Security
+- `exo chat` approvals no longer fail open. A reply that only starts with a or y (`abort`, `yeah no`) used to
+  approve. Now a reply is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else
+  denies.
 - Unix peer authentication (#175, D-060): principal clients ask the kernel who serves the socket before the
   credential moves, and the core asks who connected before it stamps the principal. The credential file
   (`run/<socket>.principal.key`) is now a JSON launch record, so restart the core and every running `exo`, `exo web`
@@ -474,9 +477,6 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `$'\u2d\u2d'force` and `$'--forc\545'` are now `force_push`, and `curl $'https://evil\u2e'example/x` has the target
   `evil.example`, so category and target denies apply. A `\U` value from 0x80000000 on is dropped, as bash
   drops it, so `$'--forc\UFFFFFFFFe'` is a force push as well.
-- `exo chat` approvals no longer fail open. A reply that only starts with a or y (`abort`, `yeah no`) used to
-  approve. Now a reply is an option as shown, in any case, or `a`, `y` or `yes` for allow, and anything else
-  denies.
 - Bus channel: a bus message steered into a turn you typed in a bus session no longer posts your answer to the
   sending seat, and neither does your next turn after one. The channel replies only for the turn that an
   auto-delivered message itself opened (D-040).
