@@ -357,6 +357,8 @@ The error says why. When waiting cannot fix the cause, it also says what will, a
   address".
 
 Other failures (429, 5xx, timeouts, a remote network error) stay retryable and say when the next route reopens.
+That time, and `retry_after`, come only from the role's own routes: a cooldown on another provider, or on a model the
+role never asks (the gate's aux model, D-081), does not shorten the hint.
 Only the last route tried decides. When an earlier route was down and the last one refused its key, the error
 names the key and not the outage.
 The two errors above still carry `retry_after`, the time the route reopens. A background summary that failed on
