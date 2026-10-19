@@ -35,6 +35,15 @@ count) must match up to whitespace, escaping or Unicode. When the file's line ha
 stale edit overwrote the newer line. In `apply_patch` a hunk's context lines count toward the two, so a hunk with
 one context line can still replace a `-` line that changed since it was read.
 
+The rule counts lines, not exact lines. So one more line, even a lone `}` or the `def` line, lets a stale line match
+again. On a file that holds `def f():`, `    TIMEOUT = 45` and `}`, the `old_string` `    TIMEOUT = 30` plus a line
+`}` matches through `context_aware`, and so does `def f():` plus `    TIMEOUT = 30`. Each one replaces the line that
+now says 45, and the result ends in `(matched via context_aware)`. More exact lines do not stop this. With all three
+lines, `block_anchor` matches. Exact lines only make sure the match lands where you meant. So copy `old_string` from
+a fresh read of the file, with every line exact and enough of them to be unique. When the result names
+`context_aware` or `block_anchor`, the file did not hold `old_string` as written. Read the lines it replaced before
+you go on.
+
 ## Environment of bash and jobs
 
 `bash`, background jobs and `code_find` run with a filtered copy of the environment, all through one function,
