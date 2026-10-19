@@ -248,6 +248,11 @@ user message into role `other`, which the capture extractors skip. A new way for
 the text. A new ledger writer that records the principal's words writes them under a principal id; anything the
 agent decides on its own is written under the agent's name.
 
+**State files (#273).** Write a file that replaces an earlier one with `exo.core.private.atomic_write(path, data)`.
+It writes a temporary file that `mkstemp` makes in the same folder, fsyncs it and renames it over the path. The mode
+is 0600 unless you pass `mode` (`None` gives what a plain open gives). Do not write `<file>.tmp` and rename it: a
+symlink planted at that fixed name turns the write into a write to another file.
+
 ## 5. Add a seat
 
 A seat is a TOML file in `$EXO_HOME/seats/<name>.toml`, or `<name>/seat.toml` with a `SOUL.md`. The full format is

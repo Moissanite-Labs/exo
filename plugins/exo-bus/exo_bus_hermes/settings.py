@@ -10,6 +10,7 @@ from pathlib import Path
 from exo.bus import Client
 from exo.bus.config import exo_home
 from exo.core.models.keys import lookup_key
+from exo.core.private import atomic_write
 
 SECRET_NAMES = ()  # no bus setting is a provider secret; seat keys live in files, outside this lookup
 NAMES = ("URL", "SEAT", "KEYS_DIR", "STATE_DIR", "POLL_SECONDS", "HOME_CHANNEL")
@@ -50,6 +51,4 @@ class Cursor:
 
     def set(self, seq: int) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"since": int(seq)}))
-        tmp.replace(self.path)
+        atomic_write(self.path, json.dumps({"since": int(seq)}), mode=None)

@@ -47,7 +47,6 @@ import logging
 import os
 import sqlite3
 import stat
-import tempfile
 import threading
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
@@ -56,6 +55,7 @@ from typing import Any, NamedTuple
 from nacl.signing import SigningKey
 
 from . import crypto
+from .core.private import atomic_write
 from .crypto import GENESIS, Signer
 
 KINDS = frozenset({
@@ -585,23 +585,11 @@ def missing_ledger_problem(path: str | os.PathLike) -> str:
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
-    """Write `data` to a new temporary file beside `path` (0600), then rename it over `path`. mkstemp picks a
-    random name and opens it with O_EXCL and O_NOFOLLOW, so a symlink planted in the folder cannot redirect the
-    write. The rename replaces a symlink at `path` itself, not what it points to."""
+    """Write an anchor (0600) through `atomic_write`: a symlink planted in the folder cannot redirect it."""
     if not path.parent.exists():  # keys/heads under $EXO_HOME: private like the rest of keys/
         path.parent.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         path.parent.mkdir(mode=0o700, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write(path, data)
 
 
 def _bad(ev: dict, reason: str, checked: int) -> dict:

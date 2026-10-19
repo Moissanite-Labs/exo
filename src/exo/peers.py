@@ -35,6 +35,7 @@ from exo.bus import wire
 from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.ingress import Ingress, IngressPath, PeerConfig, Receipt, Target
+from exo.core.private import atomic_write
 from exo.core.seats import ensure_key, key_path
 from exo.core.sessions import new_id
 from exo.core.tools.registry import ToolContext, ToolError
@@ -103,11 +104,7 @@ class Directory:
             os.chmod(self.path, 0o700)
         except OSError:
             pass
-        tmp = self.path / f".{p.daemon}.{secrets.token_hex(3)}.tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            json.dump(asdict(p), fh)
-        tmp.replace(self._file(p.daemon))
+        atomic_write(self._file(p.daemon), json.dumps(asdict(p)))
 
     def remove(self, daemon: str) -> None:
         self._file(daemon).unlink(missing_ok=True)
