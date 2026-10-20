@@ -578,7 +578,9 @@ def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, cr
 
     L += ['', '## State']
     if summary.strip():
-        L += [summary.strip(), '']
+        # Quoted like the brief and the last report: summary text is model text, and a line of it
+        # must never open a section of its own (#315) next to the principal's quoted words.
+        L += [_quote(summary), '']
     if signals.last_state:
         L += ['Last report in the session:', _quote(signals.last_state)]
     if not summary.strip() and not signals.last_state:
@@ -621,7 +623,9 @@ def write_handoff(topic: str, messages: list[dict], store: PrincipalStore | None
 def _sections(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for m in re.finditer(r'^## (.+?)\s*$(.*?)(?=^## |\Z)', text, re.S | re.M):
-        out[m.group(1).strip()] = m.group(2).strip('\n')
+        # First of a name wins: a later duplicate (an old file's unquoted summary, a hand edit)
+        # never replaces the real section, which the writer puts first (#315).
+        out.setdefault(m.group(1).strip(), m.group(2).strip('\n'))
     return out
 
 
