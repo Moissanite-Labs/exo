@@ -12,10 +12,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   limit and the same `[N more matches; narrow the search]` line. The refusals are unchanged too: a file that is
   not regular, over the 2 MB cap (including growing past it while read), or binary in its first bytes is skipped
   whole, matches already seen in it included.
+- `Config.load()` read and parsed `config.json` on every call (#255, W1-3). It is called from engine setup, the CLI
+  and plugin code, so one process read the same unchanged file many times. The parsed file is now cached on its
+  size and `mtime_ns`, each load hands out a deep copy, and `save()` refreshes the cache with what it wrote. An
+  external edit is seen when its size or `mtime_ns` moves. A `set()` whose `save()` then fails, and a caller
+  mutating a value `get()` returned, no longer reach the next load.
 - Listing sessions ran one extra database query per session (#255, W1-2). `list_sessions` counted each session's
   messages with its own `COUNT`, so a list of 500 sessions ran 501 queries. The count now comes from the same
-  query as the list (a `LEFT JOIN` grouped by session), so listing always runs one query. Results, filters and
-  order are unchanged.
+  query as the list, as a correlated count evaluated only for the rows the limit keeps, so listing always runs
+  one query and a small limit never visits other sessions' messages. Results, filters and order are unchanged.
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
   `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
