@@ -955,11 +955,10 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   summary win ties in `_combine`, a classifier change for its own PR, so that remedy stays open. A category deny under
   `categories:` then fired only when the denied category was the line's most severe part: on a compound line a more severe
   part took over and the line asked, and approving it ran the denied action
-  (`gh pr comment 3 --body hi && rm -rf build` is `delete`; #191, lifted by the D-075 amendment
-  for #191, 2026-10-19). An entry in the `deny:` list has matched every part
+  (`gh pr comment 3 --body hi && rm -rf build` is `delete`; lifted by the D-075 amendment for #191, 2026-10-19). An entry in the `deny:` list has matched every part
   the gate reads since D-075, so it denies that line; a `coproc` or `function NAME {` block whose inner command ranks
-  at or below `opaque_exec` splits the same way (denied under `deny: [web_read]`, asked under
-  `categories: {web_read: deny}`). The known unread forms below are allowed outright on main, not asked, and no entry
+  at or below `opaque_exec` split the same way (denied under `deny: [web_read]`; asked under
+  `categories: {web_read: deny}`, lifted by the D-075 amendment for #191, 2026-10-19, to deny as well). The known unread forms below are allowed outright on main, not asked, and no entry
   for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158). Two forms left this list on
   2026-10-19: text piped or fed by heredoc to `ssh` with no remote command (#240), read since #303, and `git clone -c`
   with a command-running key, read as `git -c` is since #231. A `command:`
@@ -1004,7 +1003,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `bash <<EOF` already did (lifted by the D-075 amendment for #191, 2026-10-19). Fed SQL clients follow their plain-input classification,
   without that floor. A compound feeding `\! git push origin main` to `psql` can change from ask
   to the push's `log`. D-075 `deny` and `reserved` entries still match every retained part.
-  Category overrides and ordinary rules use the combined classification. `coproc W { ...; }
+  A category line or rule that denies a part denies the line (#191); other category lines and rules use the combined classification. `coproc W { ...; }
   <<EOF` and `function NAME { ...; } <<EOF` are fed the same way, as #181 reads their bodies; the body of `time { ...;
   }` is not read at all, so it still asks as `opaque_exec`. A closer heredoc wins over a pipe in on stdin only; the
   lexer drops fd numbers, so one on another fd (`{ bash; } 3<<EOF`) is read as stdin: its body is fed, and text piped
@@ -1088,7 +1087,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   for the `deny:` list form, and the D-075 amendment for #191 (2026-10-19) lifted the `categories` form
   too, so that line denies now. That command also carries the `reread` signal,
   and naming `opaque_exec` does not lower its ask, which stands in for the line's own deny:
-  `{local_write: deny, opaque_exec: allow}` asks too. Past the
+  `{local_write: deny, opaque_exec: allow}` asked too, lifted by the D-075 amendment for #191,
+  2026-10-19, to deny; the line denies now. Past the
   depth limit such a command, or one in a subscript, is an `opaque_exec` part, as on the line itself, with `reread`.
   A plain expansion in a compound element without `-i` (`'b=("$@")'`) is expanded once and asks nothing, and the
   unquoted compound form keeps the line parse's reading. readonly and export never evaluate a name's subscript, so
