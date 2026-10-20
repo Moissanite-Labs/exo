@@ -202,6 +202,7 @@ async def test_job_events_cut_known_key_values_out_of_the_command_before_its_cut
         assert "[redacted" in e.command and not any(key[i:i + 6] in e.command for i in range(len(key) - 5)), e.state
     assert {e.command for e in evs if "sleep" not in e.command} == {f"echo {'x' * 275} [redacted]"}
 
+
 def test_the_notice_tail_redacts_the_whole_log_so_no_key_part_is_left(tmp_path):
     from exo.core.jobs import JobConfig, tail_text
 
@@ -251,6 +252,7 @@ async def test_the_notice_of_a_job_whose_log_rotated_inside_a_key_holds_no_part_
     assert "rotated: earlier output is in" in text and "[redacted]\nend" in text
     assert not any(key[i:i + 6] in text for i in range(len(key) - 5))
     await eng.close()
+
 
 def test_the_notice_tail_splits_only_the_end_of_the_log_and_gets_the_same_lines(tmp_path):
     import random
@@ -612,6 +614,7 @@ async def test_a_restart_reports_running_jobs_as_lost(tmp_path):
     eng2 = CoreEngine(tmp_path / "home", MODELS, cwd=str(tmp_path), env={}, seat=Seat(name="tester"), jobs={"wake": True})
     lost = await eng2.jobs.recover()
     assert lost == ["j_dead01"]
+    await asyncio.gather(*eng2.jobs._tasks)  # a worker thread builds the notice
     row = eng2.jobs.get("j_dead01")
     assert row["state"] == "lost" and "may still be running" in row["detail"]
     assert [(e.job_id, e.state) for e in events(eng2)] == [("j_dead01", "lost")]
@@ -620,6 +623,29 @@ async def test_a_restart_reports_running_jobs_as_lost(tmp_path):
     assert not eng2.loop.state(sid).running  # even with wake on, a lost notice only queues
     assert await eng2.jobs.recover() == []  # once
     await eng2.close()
+
+
+@pytest.mark.parametrize("lost", [False, True])
+@aio
+async def test_first_commands_at_once_start_the_runtime_once(tmp_path, lost):
+    """Every command calls engine.start(). The writer's start() calls jobs.recover() before it marks the runtime
+    started, so recover() must never wait: two first commands at once would start the runtime twice, and the second
+    MCP start would leave the first one's servers running with nothing to stop them."""
+    eng = engine(tmp_path)
+    sid = (await eng.loop.create_session(agent="tester")).id
+    if lost:
+        eng.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, pid, started, log) VALUES "
+                     "('j_dead01','tester',?,'make all','/tmp','running',999999,?,'/tmp/none.log')", (sid, time.time()))
+    eng.claim_writer()
+    runs = []
+
+    async def runtime():
+        runs.append(1)
+    eng._start_runtime = runtime
+    await asyncio.gather(eng.start(), eng.start(), eng.start())
+    assert len(runs) == 1 and eng.jobs.recovered
+    await eng.close()
+    assert len([m for m in eng.store.messages(sid) if m.meta.get("job")]) == int(lost)  # close() waited for it
 
 
 # ---------------------------------------------------------------- gate and ingress

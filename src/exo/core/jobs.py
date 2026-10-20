@@ -320,6 +320,9 @@ class JobManager:
         async with self._order:
             return await asyncio.to_thread(self._notice, *args)
 
+    async def _queue(self, *args: Any) -> None:
+        await self.target.queue(args[6], await self._built(*args))  # queued in order, as _built hands each on
+
     def _notice(self, job_id: str, state: str, code: int | None, command: str, started: float, ended: float | None,
                 session: str | None, detail: str = "") -> Ingress:
         head = {"done": "finished, exit 0", "failed": f"failed, exit {code}", "timeout": "timed out and was killed",
@@ -385,13 +388,10 @@ class JobManager:
 
     async def recover(self) -> list[str]:
         """After a restart: jobs the database says were running are ``lost``. Each owning thread gets a notice
-        (queued, never waking it). Old finished jobs and their logs are pruned. close() waits for this."""
+        (queued, never waking it). Old finished jobs and their logs are pruned. Never awaits, so start() runs once."""
         if self.recovered:
             return []
         self.recovered = True
-        return await self._spawn(self._recover())
-
-    async def _recover(self) -> list[str]:
         lost = []
         for r in self.e.store._q("SELECT * FROM jobs WHERE agent=? AND state='running'", (self.e.agent,)):
             if r["id"] in self.live:
@@ -402,9 +402,8 @@ class JobManager:
             lost.append(r["id"])
             sid = r["session"]
             self.e.hub.publish(self._body(r["id"], "lost", r["command"], None, r["started"], now, detail, r["log"]), sid)
-            if sid and self.e.store.get_session(sid) is not None:
-                await self.target.queue(sid, await self._built(r["id"], "lost", None, r["command"], r["started"], now,
-                                                               sid, detail))
+            if sid and self.e.store.get_session(sid) is not None:  # built in a task close() waits for
+                self._spawn(self._queue(r["id"], "lost", None, r["command"], r["started"], now, sid, detail))
         cutoff = time.time() - KEEP_DAYS * 86400
         for r in self.e.store._q("SELECT id, log FROM jobs WHERE agent=? AND state!='running' AND ended<?",
                                  (self.e.agent, cutoff)):
