@@ -18,6 +18,17 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   still binds.
 
 ### Security
+- Gate (#328, D-038): a quoted heredoc delimiter with a space hid the commands after the heredoc. The lexer ended a
+  body at the first line that equalled the delimiter once its surrounding whitespace was stripped, so a delimiter such
+  as `<<'EOF '`, `<<"EOF "`, `<<' EOF'` or `<<EOF\ ` never matched and every later line, the real terminator included,
+  was read as body: `cat <<'EOF ' ... EOF ` then `git push --force`, `rm -rf build` or `gh pr merge` ran under the
+  default policy as an allowed `cat`. The lexer now ends the body on the line that equals the delimiter exactly, as
+  bash does (the delimiter is the opener word after quote removal, for every quoting form; leading tabs dropped on the
+  terminator only for `<<-`), so the commands after it are classified and denied. When no line ends the body it fails
+  closed and reads the body as commands. A `{var}<<` heredoc or `{var}<<<` here-string (bash 4.1+ puts it on a new
+  descriptor, not stdin) is no longer read as a command's stdin, as a numbered `3<<` already was (#306): a post whose
+  real body comes from a pipe is not mistaken for the heredoc, and its body stays unseen. (Known limit kept: a `~`
+  after `=` in a word such as `body=~/F` is not yet treated as an expansion, so the home-path scrub reads it literally.)
 - Gate policy (#191, #211, #208). A `categories: {X: deny}` line or a rule with `decision: deny` now denies a line
   when any part of it is X, as a `deny:` entry has since D-075: `echo $(git push origin main) > /tmp/f` was `log`
   under `categories: {local_write: deny}`, and a wrapped or fed-shell line asked under `categories: {opaque_exec:

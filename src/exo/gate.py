@@ -434,8 +434,10 @@ class _Lexer:
                 w.text += "<(..)"
                 w.dynamic = w.started = True
             elif ch in "<>" or (ch == "&" and nxt == ">"):
-                if w.started and w.text.isdigit() and not w.quoted:
-                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text    # an fd number belongs to the operator
+                # an fd number, or `{name}` (bash 4.1+ gives it a new descriptor, #328), belongs to the operator
+                if w.started and not w.quoted and (w.text.isdigit()
+                        or re.fullmatch(r"\{[A-Za-z_]\w*\}", cast(_Word, w).text)):
+                    state["w"], start, fd = _Word(), -1, cast(_Word, w).text
                 else:
                     flush()
                 op = next(o for o in _REDIR_OPS if s.startswith(o, self.i))
@@ -469,22 +471,35 @@ class _Lexer:
         while self.pending:
             hd = self.pending.pop(0)
             lines: list[str] = []
+            found = False
             while self.i < len(s):
                 j = s.find("\n", self.i)
                 end = len(s) if j < 0 else j
                 line, start = s[self.i:end], self.i
                 self.i = len(s) if j < 0 else j + 1
-                bare = line.lstrip("\t" if hd.strip else "").strip()
-                if bare == hd.delim:
-                    # bash ends a heredoc only on the exact line (leading tabs dropped for <<-): `EOF `, ` EOF` or
-                    # `EOF` and a CR does not end it, so the body bash reads is not the one read here (#208).
-                    hd.ambiguous = hd.ambiguous or (line.lstrip("\t") if hd.strip else line) != hd.delim
+                cand = line.lstrip("\t") if hd.strip else line   # bash drops leading tabs for <<- here too
+                if cand == hd.delim:
+                    # bash ends the body on the line that equals the delimiter exactly (#328). The delimiter
+                    # is the word after quote removal, so a space, tab or other character in it (`EOF `, ` EOF`,
+                    # `EOF\ `, `E"O"F`) is part of it: `cat <<'EOF '` ends on `EOF `, never on bare `EOF`.
+                    found = True
                     break
-                if bare.startswith(hd.delim) and bare[len(hd.delim):].strip(" )") == "":
+                if cand.startswith(hd.delim) and ")" in cand[len(hd.delim):] \
+                        and cand[len(hd.delim):].strip(" )") == "":
                     self.i = start + line.index(")", line.index(hd.delim))  # `EOF)` closes a $( ) too
+                    found = True
+                    break
+                if cand.strip() == hd.delim.strip():
+                    # the line ends the body only once surrounding whitespace is dropped (a trailing CR, stray
+                    # spaces, a tab, or dash's rules for a $'..'/$".." delimiter): bash may end elsewhere, so
+                    # fail closed -- end here and read the body as commands too (#208, #328).
+                    hd.ambiguous = True
+                    found = True
                     break
                 lines.append(line.lstrip("\t") if hd.strip else line)
             hd.body = "\n".join(lines)
+            if not found:
+                hd.ambiguous = True   # no terminator at all: fail closed and read the body as commands (#328)
             if not hd.quoted:
                 sub = _Lexer(hd.body)
                 sub._dquote(_Word(), until_end=True)
