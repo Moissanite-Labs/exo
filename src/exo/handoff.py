@@ -544,6 +544,11 @@ def _quoted_items(signals: list[Signal]) -> str:
     return '\n\n'.join(out)
 
 
+def _one_line(text: str) -> str:
+    """One physical line, words kept: a field rendered as a list item must never open a section (#353)."""
+    return ' '.join(str(text).splitlines())
+
+
 def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, created: str | None = None,
                    session: str | None = None, principal: str | None = None, summary: str = '') -> str:
     created = created or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -552,7 +557,7 @@ def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, cr
         meta += f' session="{_attr(session)}"'
     if principal:
         meta += f' principal="{_attr(principal)}"'
-    L = [f'<!-- exo-handoff {meta} -->', f'# Handoff: {topic}',
+    L = [f'<!-- exo-handoff {meta} -->', f'# Handoff: {_one_line(topic)}',
          f'Written {created} by exo-context from {signals.message_count} messages. '
          'Self-contained: a fresh session needs this file, the principal pack and the router.', '',
          '## How to resume',
@@ -574,7 +579,7 @@ def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, cr
         L.append('None recorded in this session.')
 
     L += ['', '## Open decisions']
-    L += [f'{n}. {s.text}' for n, s in enumerate(signals.open_decisions, 1)] or ['None found.']
+    L += [f'{n}. {_one_line(s.text)}' for n, s in enumerate(signals.open_decisions, 1)] or ['None found.']
 
     L += ['', '## State']
     if summary.strip():
@@ -587,16 +592,16 @@ def render_handoff(topic: str, signals: Signals, *, path: Path | None = None, cr
         L.append('No assistant report yet.')
 
     L += ['', '## Live processes mentioned']
-    L += [f'- {s.text}' for s in signals.processes] or ['None mentioned.']
+    L += [f'- {_one_line(s.text)}' for s in signals.processes] or ['None mentioned.']
 
     L += ['', '## Files touched']
-    L += [f'- written: {p}' for p in signals.files_written]
-    L += [f'- mentioned: {p}' for p in signals.files_mentioned]
+    L += [f'- written: {_one_line(p)}' for p in signals.files_written]
+    L += [f'- mentioned: {_one_line(p)}' for p in signals.files_mentioned]
     if not signals.files_written and not signals.files_mentioned:
         L.append('None recorded.')
 
     L += ['', '## Next steps']
-    L += [f'{n}. {s}' for n, s in enumerate(signals.next_steps, 1)] or [
+    L += [f'{n}. {_one_line(s)}' for n, s in enumerate(signals.next_steps, 1)] or [
         'None written down. Start from the open decisions and the last report.']
     return '\n'.join(L).rstrip() + '\n'
 
@@ -650,6 +655,10 @@ def load_handoff(path: str | os.PathLike) -> Handoff:
         tm = re.search(r'^# (?:Handoff:\s*)?(.+)$', text, re.M)
         topic = tm.group(1).strip() if tm else p.stem
     secs = _sections(text)
+    # Next steps is the one section the writer puts after every untrusted one, so its genuine copy
+    # is the last in the file; a forged earlier copy (an old file's unquoted summary) loses (#353).
+    for m in re.finditer(r'^## Next steps\s*$(.*?)(?=^## |\Z)', text, re.S | re.M):
+        secs['Next steps'] = m.group(1).strip('\n')
     decided = secs.get("Decisions made (principal's words, verbatim)", '')
     open_body = secs.get('Open decisions', '')
     return Handoff(

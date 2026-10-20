@@ -43,7 +43,9 @@ either (#279, `docs/MEMORY-MODEL.md` "Who wrote it"). Every summary has its tags
 the agent's last report and a summary, and it records the principal's rulings and corrections as quoted items under
 their own headings, never as a pinned block, so they read the same after the escape. The summary under `## State`
 is quoted too, and `load_handoff` keeps the first section of each name, so a summary that holds its own `## `
-heading (a second "Decisions made", say) cannot replace the principal's section or drop a real ruling (#315). After `/undo`, exo-context drops
+heading (a second "Decisions made", say) cannot replace the principal's section or drop a real ruling (#315).
+List fields and the topic line are flattened to one line for the same reason, and Next steps, the one section
+written after every untrusted one, reads from its last copy in the file (#353). After `/undo`, exo-context drops
 the pins of the undone turns and the summaries the undo deleted, then writes again each automatic handoff that may
 quote them, another thread's included (`docs/MEMORY-MODEL.md`, "Undo and failed summaries").
 
