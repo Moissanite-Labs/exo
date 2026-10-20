@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- `Config.load()` read and parsed `config.json` on every call (#255, W1-3). It is called from engine setup, the CLI
+  and plugin code, so one process read the same unchanged file many times. The parsed file is now cached on its
+  size and `mtime_ns`, each load hands out a deep copy, and `save()` refreshes the cache with what it wrote. An
+  external edit is seen when its size or `mtime_ns` moves. A `set()` whose `save()` then fails, and a caller
+  mutating a value `get()` returned, no longer reach the next load.
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
   `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
