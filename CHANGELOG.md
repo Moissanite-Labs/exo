@@ -15,7 +15,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   start does not wait for them, so two first commands at once still start the MCP servers only once. A turn still
   running when such a notice is built takes it at its next tool round. A hard stop that cancels a notice while it is
   built still sends the job's end event. Shutting down waits for that build to end too, and then stops the notice
-  thread, which no close stopped before (docs/JOBS.md "The completion notice").
+  thread, which no close stopped before. A notice that fails while exod shuts down is recorded as a `harness.error`
+  event. The engine dropped its trace sink before it stopped anything, so such an error was only logged. It now drops
+  it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP servers are
+  recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
   `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a

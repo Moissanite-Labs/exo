@@ -852,6 +852,39 @@ async def test_a_lost_job_notice_that_fails_is_reported(tmp_path, monkeypatch):
 
 
 @aio
+async def test_a_lost_job_notice_that_fails_while_exod_shuts_down_is_reported(tmp_path, monkeypatch):
+    """close() waits in jobs.close for a notice still being built. A notice that fails there is still recorded as a
+    harness error event: the engine keeps its trace sink until its close steps end, and drops it before the store
+    closes, so a report after close() records nothing."""
+    import threading
+
+    from exo.core import jobs, trace
+    eng = engine(tmp_path)
+    sid = (await eng.loop.create_session(agent="tester")).id
+    entered, release = threading.Event(), threading.Event()
+
+    def broken(*args):
+        entered.set()
+        release.wait(10)
+        raise RuntimeError("the log could not be read")
+    monkeypatch.setattr(jobs, "tail_text", broken)
+    eng.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, pid, started, log) VALUES "
+                 "('j_dead01','tester',?,'make all','/tmp','running',999999,?,'/tmp/none.log')", (sid, time.time()))
+    assert await eng.jobs.recover() == ["j_dead01"]
+    await until(entered.is_set)
+    closing = asyncio.ensure_future(eng.close())
+    await asyncio.sleep(0.2)
+    assert not closing.done() and eng.jobs.target.closed  # close() has begun and waits for the notice
+    release.set()
+    await asyncio.wait_for(closing, 5)
+    errors = [(e.where, e.message) for e in events(eng, s.HarnessError)]
+    assert errors == [("jobs.notice", "the log could not be read")], errors
+    trace.report("jobs.notice", RuntimeError("after close"), sid)
+    assert len(events(eng, s.HarnessError)) == 1
+    eng.store.close()
+
+
+@aio
 async def test_a_lost_job_notice_built_during_a_turn_never_splits_a_tool_round(tmp_path, monkeypatch):
     """recover() leaves a lost job's notice to a task, so a turn can start before it is built. The notice must not
     land between the turn's tool call and its result. The turn takes it at its next tool round, as it takes a
