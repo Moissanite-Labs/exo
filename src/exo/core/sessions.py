@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
 import sqlite3
 import threading
 import time
@@ -25,7 +24,7 @@ from exo.core import trace
 from exo.core.hooks import maybe_await
 from exo.core.private import private_file
 from exo.core.types import Message, from_dict, to_dict
-from exo.protocol.schema import EVENTS, Event, SessionInfo, now_ts
+from exo.protocol.schema import EVENTS, Event, SessionInfo, new_id, now_ts
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -78,10 +77,6 @@ UPGRADES = (("sessions", "agent", "TEXT"), ("sessions", "kind", "TEXT NOT NULL D
             ("findings", "quiet", "TEXT"))  # D-025: {"turns", "days"} quiet since the fix (fixed_turns is unused)
 LOGGED_KINDS = ("thread", "scheduled", "private")  # thread kinds whose messages enter the agent log
 SCHEMA_VERSION = 2
-
-
-def new_id(prefix: str) -> str:
-    return f"{prefix}_{secrets.token_hex(8)}"
 
 
 def canonical_cwd(path: str | None) -> str | None:
@@ -143,7 +138,6 @@ class SessionStore:
                     if "locked" not in str(exc) or time.monotonic() >= deadline:
                         raise
                     time.sleep(0.05)
-            self._db.execute("PRAGMA foreign_keys=ON")
             # One write transaction: two processes opening the file at once cannot both add a column (#246).
             # BEGIN goes inside the script because executescript commits a pending transaction first.
             try:
@@ -296,8 +290,7 @@ class SessionStore:
     # ---------------------------------------------------------------- messages
 
     def last_seq(self, sid: str) -> int:  # counts hidden rows too, so a seq is never reused
-        (seq,) = self._q("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=?", (sid,))[0]
-        return seq
+        return self._q("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session=?", (sid,))[0][0]
 
     def append_message(self, sid: str, msg: Message, turn_id: str | None = None) -> Message:
         """Store ``msg`` (assigning ``id`` and ``meta['seq']``) and return it."""
@@ -422,8 +415,7 @@ class SessionStore:
     # ---------------------------------------------------------------- agent log (D-028)
 
     def last_pos(self, agent: str) -> int:
-        (pos,) = self._q("SELECT COALESCE(MAX(pos), 0) FROM messages WHERE agent=?", (agent,))[0]
-        return pos
+        return self._q("SELECT COALESCE(MAX(pos), 0) FROM messages WHERE agent=?", (agent,))[0][0]
 
     def log(self, agent: str, since: int = 0, upto: int | None = None) -> list[LogEntry]:
         """Agent log entries with ``since < pos <= upto``, in order, hidden ones included (flagged)."""
@@ -579,8 +571,7 @@ class SessionStore:
         return out
 
     def last_event_seq(self) -> int:
-        (seq,) = self._q("SELECT COALESCE(MAX(seq), 0) FROM events")[0]
-        return seq
+        return self._q("SELECT COALESCE(MAX(seq), 0) FROM events")[0][0]
 
 
 Subscriber = Callable[[Event], Any]

@@ -472,7 +472,12 @@ class ExoContextEngine(ContextEngine):
         if self.inner is None:  # the core never calls update_model: build the default inner now
             self._build_inner(model='', context_length=0)
         try:
+            pins = self._observe(messages)  # #371: pins observed from principal text carry across summaries
             signals = sg.extract(messages)
+            signals = dataclasses.replace(
+                signals,
+                rulings=sg.merge(signals.rulings, [hf.Signal('ruling', t) for t in pins['ruling']]),
+                corrections=sg.merge(signals.corrections, [hf.Signal('correction', t) for t in pins['correction']]))
         except Exception as e:  # never block compaction on extraction
             logger.warning('exo-context: signal extraction failed: %s', e)
             signals = None
@@ -481,7 +486,7 @@ class ExoContextEngine(ContextEngine):
         result = self.inner.compress(messages, **_accepted_kwargs(self.inner.compress, call))
         if result is messages or not isinstance(result, list):
             return result
-        idx = self._summary_index(result)
+        idx = self._summary_index(result, messages)
         if idx is None:
             return result  # inner made no summary (no-op or structural skip)
         raw, result[idx] = result[idx], self._defused(result[idx])
@@ -504,21 +509,32 @@ class ExoContextEngine(ContextEngine):
             result[idx] = self._with_block(result[idx], block)
         return result
 
-    def _summary_index(self, msgs: list[dict[str, Any]]) -> Optional[int]:
+    def _summary_index(self, msgs: list[dict[str, Any]], source: Any = ()) -> Optional[int]:
+        """The summary the inner just made: flag first, then the inner's own test, then the end marker.
+
+        A message the inner returned as part of its input (a protected head or tail message) is never it,
+        however much it quotes the marker (#322 item 2); the scans fall back to any match only when no
+        fresh message matches, for an inner that rewrites a message in place."""
         is_summary = getattr(self.inner, '_is_context_summary_message', None)
-        for i, m in enumerate(msgs):
-            if not isinstance(m, dict):
-                continue
-            if m.get(SUMMARY_FLAG):
-                return i
-            if callable(is_summary):
-                try:
-                    if is_summary(m):
+
+        def by_flag(m: dict[str, Any]) -> bool:
+            return bool(m.get(SUMMARY_FLAG))
+
+        def by_test(m: dict[str, Any]) -> bool:
+            try:
+                return bool(callable(is_summary) and is_summary(m))
+            except Exception:
+                return False
+
+        def by_marker(m: dict[str, Any]) -> bool:
+            return END_MARKER in hf.message_text(m)
+
+        old = {id(m) for m in source}
+        for fresh in (True, False):
+            for test in (by_flag, by_test, by_marker):
+                for i, m in enumerate(msgs):
+                    if isinstance(m, dict) and (not fresh or id(m) not in old) and test(m):
                         return i
-                except Exception:
-                    pass
-            if END_MARKER in hf.message_text(m):
-                return i
         return None
 
     @staticmethod

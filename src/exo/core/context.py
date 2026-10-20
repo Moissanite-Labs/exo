@@ -244,8 +244,6 @@ class DefaultCompressor:
                         done_text = ev.message.text() if ev.message else None
                     elif ev.kind == "error":
                         last_error, retryable = ev.error or "provider error", ev.retryable or bool(ev.retry_after)
-            except asyncio.CancelledError:
-                raise
             except Exception as exc:  # transport failure: treat as retryable
                 last_error = str(exc) or type(exc).__name__
                 continue
@@ -459,8 +457,6 @@ class TreeContext:
                 # compact only when it shrinks: a too-small span or a summary not smaller than its source stays verbatim
                 node.text, node.status = (text, "done") if text and estimate_tokens(text) < estimate_tokens(source) \
                     else ("", "skipped")
-            except asyncio.CancelledError:
-                raise
             except Exception as exc:
                 node.status, node.text = "failed", str(exc)
                 node.attempts += 1
@@ -507,8 +503,6 @@ class TreeContext:
             return
         try:
             took = await maybe_await(self.on_capture(self._hook_session(node.session), context))
-        except asyncio.CancelledError:
-            raise
         except Exception:
             took = False
         if took:
@@ -544,7 +538,7 @@ class TreeContext:
     def _body(self, node: SummaryNode) -> str:
         """What a node puts in the view: its summary, or its messages verbatim when it was skipped."""
         if node.status == "done":
-            return node.text
+            return provenance.defuse_pins(node.text)  # a node stored before #302 may hold a live block (#322)
         if node.id not in self._verbatim_cache:
             if node.level and node.status == "skipped":  # a merge left as is: its two children, not the raw span
                 self._verbatim_cache[node.id] = "\n\n".join(self._body(c) for c in self._children(node))
@@ -643,7 +637,7 @@ class TreeContext:
         parts = []
         for n in top:
             if n.status == "done":
-                parts.append(f"## {label} {n.start}-{n.end}\n{n.text}")
+                parts.append(f"## {label} {n.start}-{n.end}\n{self._body(n)}")
             elif n.lane == "import" and n.status != "skipped":
                 parts.append(f"## {label} {n.start}-{n.end}\n[imported history, summary in progress]")
             elif n.status == "skipped":  # a level above 0 is two summaries kept as they are
@@ -830,8 +824,6 @@ class AgentContext(TreeContext):
         if todo and self.on_capture is not None:
             try:
                 ok = await maybe_await(self.on_capture(self._hook_session(key), self._with_context(key, todo)))
-            except asyncio.CancelledError:
-                raise
             except Exception:
                 ok = False
             if ok:
@@ -847,9 +839,7 @@ class AgentContext(TreeContext):
     # ---- context notes: what other threads did since this thread last looked
 
     def _note_text(self, entries: list[Any]) -> str:
-        import time as _time
-
-        now, lines, cur = _time.time(), [NOTE_HEAD], None
+        now, lines, cur = time.time(), [NOTE_HEAD], None
         for e in entries:
             m, out = e.message, []
             text, author = m.text().strip(), provenance.author_of(m)

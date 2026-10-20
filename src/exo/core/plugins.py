@@ -126,16 +126,12 @@ class LoadedPlugin:
         return self.error is None
 
 
-def _parse_yaml(text: str) -> Any:
-    from exo.gate import parse_yaml  # stdlib YAML subset already used for policies
-    return parse_yaml(text)
-
-
 def read_manifest(folder: Path) -> Manifest:
+    from exo.gate import parse_yaml  # stdlib YAML subset already used for policies
     folder = Path(folder)
     f = folder / MANIFEST
     try:
-        raw = _parse_yaml(f.read_text(encoding="utf-8")) or {}
+        raw = parse_yaml(f.read_text(encoding="utf-8")) or {}
     except Exception as e:
         raise PluginError(f"{f}: {e}") from None
     if not isinstance(raw, dict) or not raw.get("name"):
