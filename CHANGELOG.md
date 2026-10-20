@@ -6,6 +6,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A pinned-block tag with an invisible unicode tag character inside its name is escaped again (#381). The
+  fold added for #322 item 4 turned each tag character into its ASCII letter before matching, so a tag
+  character sitting in the name as filler broke the match and the tag passed through live. Detection now
+  runs over three same-length views of the text and escapes the union. The views are the text itself, the
+  fold of every character whose NFKC form is one ASCII character, and that fold with tag characters decoded.
+  The small brackets, mathematical and circled letters and other single-character NFKC folds are escaped too.
+  Only the bracket characters change.
 - A pinned-block tag spelled in unicode tag characters or full-width forms is now escaped like the ASCII
   tag (#322, item 4). Before, those spellings passed `defuse_pins` untouched, and anything downstream that
   folds them back to ASCII would have revived the live tag. Only the brackets change. The quoted words
