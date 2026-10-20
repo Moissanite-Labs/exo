@@ -335,11 +335,31 @@ class CoreRuntime:
         self._writer = None
         trace.remove_sink(self._on_harness_error)
         await self.stop_channels()
+        errors: list[BaseException] = []  # every step runs; the first error is raised at the end
+        for step in (self._stop_peers, self.jobs.close, self._close_scheduler, self._close_mcp):
+            try:
+                await step()  # jobs end with exod
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                errors.append(exc)
+        try:
+            self.store.close()  # last: the hub is closed before this (serve), so nothing writes events after it
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+        if errors:
+            raise errors[0]
+
+    async def _stop_peers(self) -> None:
         if self.peers is not None:
             await self.peers.stop()
-        await self.jobs.close()  # jobs end with exod
+
+    async def _close_scheduler(self) -> None:
         if self.scheduler is not None:
-            await self.scheduler.stop()
+            try:
+                await self.scheduler.stop()
+            finally:  # close() is final and runs even if stop() raised
+                self.scheduler.close()
+
+    async def _close_mcp(self) -> None:
         if self._started is not None:
             await self.mcp.close()
             self._started = None
@@ -398,7 +418,8 @@ class CoreRuntime:
     def _hook_kw(self, call: ToolCall, ctx: ToolContext) -> dict[str, Any]:
         return {"tool_name": call.name, "args": call.arguments, "session_id": ctx.session or "",
                 "task_id": ctx.session or "", "tool_call_id": call.id, "turn_id": ctx.meta.get("turn_id", ""),
-                "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low"}
+                "risk": tool.spec.risk if (tool := self.registry.get(call.name)) else "low",
+                "cwd": str(ctx.cwd or "")}   # the folder relative paths resolve from (the gate reads them there, #209)
 
     async def _pre_hook(self, call: ToolCall, spec: ToolSpec, ctx: ToolContext) -> Any:
         bound_mode = self.registry.executor_required

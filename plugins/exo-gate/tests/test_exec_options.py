@@ -290,17 +290,17 @@ def test_ssh_remote_command_keeps_the_remote_host_exposure():
 @pytest.mark.parametrize("prog", ["psql", "sqlite3", "mysql"])
 def test_long_stdin_text_is_read_in_linear_time(prog):
     body = "   \n" * 20000 + ".shell rm -rf /srv/data\n"
-    start = time.perf_counter()
+    start = time.process_time()
     c = classify(sh(f"{prog} x.db <<EOF\n{body}EOF"))
-    assert time.perf_counter() - start < 2.0
+    assert time.process_time() - start < 2.0
     if prog == "sqlite3":
         assert c.category == "delete"
 
 
 def test_less_keystrokes_are_read_in_linear_time():
-    start = time.perf_counter()
+    start = time.process_time()
     c = classify(sh("less $'+" + "/" * 50000 + "\\x01' f"))
-    assert time.perf_counter() - start < 2.0
+    assert time.process_time() - start < 2.0
     assert decide(c).outcome == "allow", c
 
 
