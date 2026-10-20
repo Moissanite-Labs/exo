@@ -934,6 +934,43 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `~/.exo/{policies,x}/default.yaml` were allowed local writes, so one tool call could rewrite the gate's policy
   or grants without a card. They are `store_write` now and ask the principal. Quoted and escaped braces stay
   literal, as in bash. The store checks have their own brace budget, so no secret-store outcome changes.
+- Environment variables that load code or move where programs and config are found (`LD_PRELOAD`, `PATH`,
+  `PYTHONPATH`, `NODE_OPTIONS`, `BASH_ENV`, `HOME` and the rest of the audited list in `docs/GATE.md`) are
+  `opaque_exec` and ask, named in the summary, when set before a program, through `env`, `sudo` or `timeout`,
+  exported or bare (`export -p` and `readonly -p` assign too), as a parameter-expansion assignment
+  (`${PATH:=.}`, `${PATH=.}`), through `read`, `printf -v`, a `for` loop or a nameref, or as an integer through
+  arithmetic, an array subscript or a `{PATH}>` redirection (`$((PATH=10))`, `a[PATH=10]=1`). So does an
+  exporter, `read` or `printf -v` name the gate cannot read, whether spliced from a variable (`export $X=...`)
+  or a glob the shell expands first (`export PAT?=.`, `read HOM[E]`). So do `MANOPT`, `ZIPOPT`,
+  `RIPGREP_CONFIG_PATH`, `LESS` with a
+  `+` command, and a non-empty `CDPATH`, which moved a `cd` into the Exo store unseen. More command-valued
+  variables are read as commands (`GIT_PROXY_COMMAND`, `GH_PAGER`, `PSQL_PAGER`, `SUDO_ASKPASS`...). Git config
+  from the environment (`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`), `git
+  --config-env` in both forms and `git clone --config`/`-c` take the `git -c` exec-key check, and the value of
+  an exec key is classified as a command, `git -c` included, so a `deny: [delete]` fires on it. A key that loads
+  another config file or a template (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as do `git
+  clone --template` and `git init --template`. `git config set`, `-f FILE`, `-t X`, `--type X` and `--default X`,
+  also abbreviated as git allows (`--fil`, `--ty`), no longer hide the key, `git config rename-section` asks, and a
+  value `git config` sets for an exec key is read as the command it is. More keys run a command: any whose last part
+  ends in `command` or `cmd` (`gpg.ssh.defaultKeyCommand`, `core.alternateRefsCommand`), `interactive.diffFilter`,
+  `remote.<name>.uploadpack`/`receivepack` and a tool's `.path`; `protocol.allow`, `protocol.ext.allow`, an `ext::`
+  URL rewrite or remote URL and `GIT_ALLOW_PROTOCOL` ask, since an `ext::` URL is a command git runs. A quoted
+  `NAME=VALUE` after `env` or `sudo` is the assignment those programs read it as.
+  `PS4` is read as the text bash expands before every traced command, so `export PS4='$(rm -rf x) '; set -x` is a
+  delete; `$((PATH++))`, `$((--PATH))` and `$((PATH<<=1))` assign too. A value that changes nothing keeps the line's
+  class: an empty loader variable (`LD_PRELOAD= ls`), `GIT_CONFIG_GLOBAL=/dev/null`, a `PATH` of `$PATH` and system,
+  virtualenv or `node_modules/.bin` folders, and `PYTHONPATH` before `pytest` or `python -m pytest`; any other
+  `PATH` folder (`export PATH="$HOME/.local/bin:$PATH"`), an empty `PATH` element, a folder written with `..` and a
+  `$PATH` bash does not expand (`export PATH='$PATH:/usr/bin'`) still ask.
+  `IFS=`, `CDPATH=`, `LESS=-R`, `PAGER=cat` and other harmless assignments are unchanged, and so is text bash
+  does not expand: single-quoted text (also inside an unquoted `${a:-'...'}`), a quoted here-doc and a bracket
+  outside a subscript, so `git commit -m 'read ${PATH:=.}'`, `pytest -q 'test_x[HOME=/tmp]'` and `echo [HOME=x]`
+  stay `allow`. A
+  partly quoted value loses its quotes as bash removes them (`${GIT_SSH_COMMAND:=rm' -rf x'}` is `rm -rf x`).
+  The scan is linear in the line, so a long run of unclosed or nested expansions cannot stall the gate hook.
+  The rarer expansion forms that can still set a variable unseen are listed in `docs/GATE.md`. This is the inline
+  form, distinct from #135, which drops `BASH_ENV` inherited from the parent environment (builds on #154,
+  D-038).
 - The web Command tab granted `allow always` on one click, with no confirmation, and showed only 160 characters of
   the call. Allow always now waits for a separate Confirm always click, as on the Chat card and in the terminal, and
   the card shows every argument of the call.
