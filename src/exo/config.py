@@ -26,6 +26,7 @@ import json
 import os
 import re
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -137,12 +138,43 @@ class Config:
     def path(self) -> Path:
         return self.home / FILENAME
 
+    # Parsed file contents per path, keyed on (size, mtime_ns); None means the file was missing.
+    # load() is on hot paths (every engine setup, every CLI call), and the file rarely changes.
+    _cache: dict[str, tuple[tuple[int, int] | None, dict]] = {}
+    _cache_lock = threading.Lock()
+
+    @staticmethod
+    def _stamp(path: Path) -> tuple[int, int] | None:
+        try:
+            st = path.stat()
+        except FileNotFoundError:
+            return None
+        return st.st_size, st.st_mtime_ns
+
+    @classmethod
+    def _cached(cls, path: Path, stamp: tuple[int, int] | None, data: dict) -> None:
+        with cls._cache_lock:
+            if len(cls._cache) > 64:  # test suites load many throwaway homes; drop, never grow
+                cls._cache.clear()
+            cls._cache[str(path)] = (stamp, copy.deepcopy(data))
+
     @classmethod
     def load(cls, home: str | os.PathLike | None = None) -> 'Config':
+        """Cached on the file's size and mtime_ns (#255 W1-3): an unchanged file is read and parsed
+        once, and each load hands out a deep copy, so mutating one load's values, or set() before a
+        save() that fails, never reaches the next load. An external edit that keeps the same size
+        and mtime_ns is not seen until one of them moves."""
         cfg = cls(home=home)
+        stamp = cls._stamp(cfg.path)
+        with cls._cache_lock:
+            hit = cls._cache.get(str(cfg.path))
+        if hit is not None and hit[0] == stamp:
+            cfg.data = copy.deepcopy(hit[1])
+            return cfg
         try:
             raw = cfg.path.read_text(encoding='utf-8')
         except FileNotFoundError:
+            cls._cached(cfg.path, None, {})
             return cfg
         try:
             data = json.loads(raw)
@@ -152,6 +184,8 @@ class Config:
             raise ConfigError(f'{cfg.path}: top level must be an object')
         if int(data.get('version', VERSION)) > VERSION:
             raise ConfigError(f'{cfg.path}: version {data["version"]} is newer than this exo ({VERSION})')
+        if cls._stamp(cfg.path) == stamp:  # unchanged while it was read; a changed file re-reads next load
+            cls._cached(cfg.path, stamp, data)
         cfg.data = data
         return cfg
 
@@ -159,7 +193,11 @@ class Config:
         """Atomic write, mode 0600. Unknown keys written by newer tools are kept."""
         self.home.mkdir(parents=True, exist_ok=True)
         out = {'version': VERSION, **{k: v for k, v in self.data.items() if k != 'version'}}
-        return atomic_write(self.path, json.dumps(out, indent=2, sort_keys=True) + '\n')
+        path = atomic_write(self.path, json.dumps(out, indent=2, sort_keys=True) + '\n')
+        stamp = self._stamp(path)
+        if stamp is not None:  # the next load serves what was just written, without re-reading it
+            self._cached(path, stamp, out)
+        return path
 
     # --- generic access --------------------------------------------------------
 

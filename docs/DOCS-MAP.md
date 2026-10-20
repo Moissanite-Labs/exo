@@ -156,6 +156,7 @@ developer-guide sections are written `§N`. Whitepaper sections are written `WP 
 | Fix sweep of October 18, 2026: 45 branches, merge order, held findings, notes for parallel agents | `docs/FIX-SWEEP.md`, patches in `docs/fix-sweep/` | n/a (status report) | n/a | n/a |
 | Router wait hint and `retry_after` come from the role's own routes only (#239, D-081) | `docs/PROVIDERS.md` "Other failures" | n/a | n/a | n/a |
 | Optimization program of October 18, 2026: Hermes-style audit, 12 ranked findings, Waves 0-3 with per-unit ownership and acceptance commands (issues #252-#266) | `docs/OPTIMIZATION.md` | n/a (plan) | n/a | n/a |
+| #255 W1-2 `list_sessions` reads its message counts in the list query itself (a correlated count per kept row), one query at any limit instead of one COUNT per session | `docs/OPTIMIZATION.md` (#255 status row, W1-2), `CHANGELOG.md`, `src/exo/core/sessions.py` | n/a (no user commands changed) | n/a | n/a |
 
 ## Whitepaper gaps
 
