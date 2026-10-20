@@ -67,7 +67,7 @@ headroom (D-077); read it before sizing any CORE unit.
 |-------|---------|----------------|-------|
 | #253 | `_decode` primitives (rank 1) | Open. Fix in open PR #218 (strict decode, "Closes #253") | #218 |
 | #254 | Session/store hot paths (rank 2) | Open, no PR. `messages()` gained `since`/`upto` bounds (merged privacy sweep #216) but still loads and parses every row in range; `store.find` and `events_since(limit=1<<30)` unchanged (`engine.py:78`, `trace.py:484`, `diagnostics.py:155`) | none |
-| #255 | N+1 and per-call reloads (rank 3a-c) | Open, no PR. `list_sessions` still runs one COUNT per row; `Config.load()` still reads and parses per call; grep still reads each whole file (now through `read_regular`, #222 merged, a safety change only) | none |
+| #255 | N+1 and per-call reloads (rank 3a-c) | W1-2 done: `list_sessions` reads its counts in one LEFT JOIN query (501 -> 1 at limit 500, query-count test). Still open: `Config.load()` reads and parses per call (W1-3); grep still reads each whole file (W1-4, now through `read_regular`, #222 merged, a safety change only) | W1-2 this PR |
 | #256 | Ledger anchor writes (rank 3d) | Partly changed. Merged #221 (`e55183c1`, `066f5768`) removed the O(n) COUNT from append (indexed lookups), made append refuse past a frozen or mismatched anchor, and lets the anchor trail the ledger by at most one event. Two anchor atomic writes per append remain. Open PR #296 also changes `ledger.py` | #221 merged, #296 open |
 | #257 | Split `gate.py` (rank 4) | Open, no split. `gate.py` is 4,700 LOC and six open PRs change it (section 1b) | none |
 | #258 | Site asset pipeline (rank 5) | Open, no PR. No `vercel.json`; media unchanged | none |
