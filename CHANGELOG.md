@@ -10,11 +10,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   job's whole log (up to `output_cap`, 5 MB). That ran on the event loop, and one emoji in a log made it take a few
   hundred ms. Four jobs that ended together froze streams, approval cards and other turns for 2 to 3 seconds. A thread
   of its own now builds each notice, one at a time and in the order the jobs ended. The longest stall measured for those
-  four fell from 1.6 to 3.0 seconds to about 30 to 110 ms. Shutting down still waits for a notice being built and keeps
-  it for the next turn. The notices of jobs lost in a restart are built the same way, and the core's start does not wait
-  for them, so two first commands at once still start the MCP servers only once. A turn that starts first takes such a
-  notice at its next tool round. A hard stop that cancels a notice while it is built still sends the job's end event
-  (docs/JOBS.md "The completion notice").
+  four fell from 1.6 to 3.0 seconds to about 30 to 110 ms. Shutting down still waits for a notice being built and, when
+  no turn runs, keeps it for the next turn. The notices of jobs lost in a restart are built the same way, and the core's
+  start does not wait for them, so two first commands at once still start the MCP servers only once. A turn still
+  running when such a notice is built takes it at its next tool round. A hard stop that cancels a notice while it is
+  built still sends the job's end event (docs/JOBS.md "The completion notice").
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
   `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
@@ -31,9 +31,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   completion notice, or its two parts in `job_output` (follow-up to #321). While the notice redacts the log, the end of
   `<id>.log.1` now stands in for the rotation note at its start. `job_output` joined both files with the note between
   the two parts of the key, so redaction missed it. It now drops the note when it reads `<id>.log.1`, so the key is
-  whole and is redacted. The `job.updated` events carried the job's command unredacted to clients and the events table.
-  They now cut known key values out of it before they cut it to 300 characters, as the notice does (docs/JOBS.md "The
-  completion notice").
+  whole and is redacted. A key split inside a character outside ASCII, or one whose end repeats its start, can still
+  leave a part. The `job.updated` events carried the job's command unredacted to clients and the events table. They now
+  cut known key values out of it before they cut it to 300 characters, as the notice does (docs/JOBS.md "The completion
+  notice").
 - Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
   ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
   answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the
