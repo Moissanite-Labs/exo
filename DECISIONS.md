@@ -1394,10 +1394,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   block only from a message that opens with it (exo-context's own block) or with a compaction marker (a host's
   summary). A block quoted further down a message is data: the core's system message quotes small spans word for
   word, peer turns included.
-  *Amendment 2026-10-20 (#322 item 4):* `defuse_pins` also escapes the tag spelled in unicode tag characters
-  (U+E0020-E007E) or full-width forms (U+FF01-FF5E), which a downstream normalizer may fold back to the ASCII
-  tag. Detection folds those characters to ASCII in a same-length copy and escapes the original text at the
-  same offsets. The quoted spans themselves are not normalized.
+  *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
+  downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
+  decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
+  forms, the small brackets, mathematical and circled letters are in that second group. Detection runs over
+  same-length views of the text and escapes the union of their matches in the original at the same offsets. The
+  views are the text itself, the NFKC fold with tag characters left in place, and that fold with tag characters
+  decoded. One folded view alone is not enough. It turns a tag character inside the name into a letter and breaks
+  the match the unfolded view makes, where that character is filler. The quoted spans themselves are not
+  normalized. Still open, as look-alike territory: characters whose NFKC form runs to more than one character,
+  accent stripping (NFKD, then dropping combining marks), and look-alike letters from other scripts.
 - *Amendment 2026-10-18 (fix sweep, #221):* the anchors are written after the append's COMMIT, from the committed
   head, so a writer killed in between leaves them one event behind, never ahead. That lag of one event is accepted.
   The copy under `keys/heads/` is written even when the anchor beside the ledger fails. Before it writes, an append
@@ -1430,8 +1436,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   tags are escaped, not removed, so nothing anyone wrote vanishes. The principal's own words keep them outside a
   summary. exo-context's inner compressor keeps each message's author on its way to the summarizer, and the note
   names a bus seat's turn `bus`, not `user`. Not covered: the verbatim tail, where each turn reaches the model as its
-  own message inside its ingress tag; a summary that restates a block in other words; full-width brackets and
-  look-alike letters from other scripts.
+  own message inside its ingress tag; a summary that restates a block in other words; look-alike letters from
+  other scripts. Full-width brackets moved to covered by the #322 item 4 amendment above.
 - *Amendment 2026-10-20 (#315):* the handoff writer put the compaction summary under `## State` unquoted, and the
   reader kept the last section of each name. A summary holding a `## Decisions made (principal's words, verbatim)`
   line therefore replaced the principal's section in `load_handoff`: the summary's ruling came back as the
