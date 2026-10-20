@@ -11,7 +11,19 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   of the bytes, the text and every line at once. Output is unchanged: the same rows, the same counts past the
   limit and the same `[N more matches; narrow the search]` line. The refusals are unchanged too: a file that is
   not regular, over the 2 MB cap (including growing past it while read), or binary in its first bytes is skipped
-  whole, matches already seen in it included.
+  whole, matches already seen in it included. One limit stays: a file with no line breaks still buffers its
+  single line whole, as it did before, and searching such a file is slower than the old whole-file read.
+- The `scripts/deploy-site.sh` untracked-file guard no longer has three gaps (#350). A submodule under `site/` is
+  one entry in the parent index, so the inventory never saw the ignored or untracked files inside it, yet `rsync`
+  copied them; any submodule under `site/` now refuses the deploy (the tracked site has none). The inventory's exit
+  status was dropped, so a corrupt index gave an empty list and the deploy went on; a failed inventory now stops the
+  deploy with exit 1. An empty `EXO_VERCEL_CLI` fell back to the pin; it now exits 2 like any malformed value, in the
+  environment or in `deploy.conf`. Found by independent review of #347.
+- Two more `scripts/deploy-site.sh` gaps closed (#358, #359). A failed `git status` of `site/` read as a clean tree, so a
+  versioned deploy could upload uncommitted bytes and tag `HEAD`; it now refuses with exit 1 and tags nothing. A `site/`
+  that is itself a symlink (untracked, or tracked with mode 120000) hid its target from the inventory while `rsync`
+  followed it; it now refuses. Symlinks inside `site/` are unchanged: `rsync -a` keeps them as links. Found by independent
+  review of #352.
 - `Config.load()` read and parsed `config.json` on every call (#255, W1-3). It is called from engine setup, the CLI
   and plugin code, so one process read the same unchanged file many times. The parsed file is now cached on its
   size and `mtime_ns`, each load hands out a deep copy, and `save()` refreshes the cache with what it wrote. An
