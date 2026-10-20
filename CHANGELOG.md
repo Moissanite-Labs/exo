@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A no-behaviour-change reduction took 40 lines out of the counted core (#373), undoing the #346 headroom
+  raise. Dead job-notice overrides now inherit, a duplicate id helper now imports from the schema, two git
+  helpers merged, and four exception clauses the next handler could never reach are gone. `CORE_HEADROOM`
+  is back at 1,000 (D-077), and the counted core stands at 15,801 against a ceiling of 15,813.
 - A pinned-block tag with an invisible unicode tag character inside its name is escaped again (#381). The
   fold added for #322 item 4 turned each tag character into its ASCII letter before matching, so a tag
   character sitting in the name as filler broke the match and the tag passed through live. Detection now
