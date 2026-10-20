@@ -819,7 +819,14 @@ gate does not read:
   included file can set any exec key, and the hooks in a template run. So is a switch that lets
   git reach a remote through `ext::`, whose URL is a command git runs: `protocol.allow`,
   `protocol.ext.allow`, a `url.ext::<...>.insteadOf` or `pushInsteadOf` rewrite, a remote `url`
-  or `pushurl` that starts with `ext::`, and the `GIT_ALLOW_PROTOCOL` variable.
+  or `pushurl` that starts with `ext::`, and the `GIT_ALLOW_PROTOCOL` variable. Such a key
+  never hides git's subcommand (#334): its part stands beside the subcommand's own category, so
+  `git -c include.path=/dev/null push --force origin main` is `force_push`, asks, and is denied
+  under `deny: [force_push]` or `categories: {force_push: deny}`. On a read (`git -c
+  core.pager=less log`) the key's part decides, and the line asks. Only an unknown subcommand,
+  which the config may define as an alias, is opaque on its own, and its card names the config.
+  `git config include.path FILE` asks and keeps its `local_write` part, so a deny on
+  `local_write` still fires.
   `git config` is read as git reads it: the subcommand (`set`, `get`, `unset`...) and the values
   of `-f`, `-t`, `--file`, `--blob`, `--type`, `--default`, `--comment`, `--value` and `--url`
   are not the key, also when a long option is shortened to a prefix git accepts (`--fil`,
