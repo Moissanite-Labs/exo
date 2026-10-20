@@ -231,6 +231,16 @@ def test_a_command_after_a_quoted_heredoc_delimiter_that_crosses_the_cap(classif
     assert gate.decide(c, DELETE).outcome == "deny", c
 
 
+@pytest.mark.parametrize("opener", ['"{}"', "{}"], ids=["quoted", "plain"])
+def test_a_delimiter_with_a_literal_heredoc_beside_the_unread_part(classified, opener):
+    """`$(cat <<'E')` in a delimiter is the here-doc's text to the levels around (_literal_heredoc), so its end line
+    is spelt by a lexer that reads the delimiter as they do, from the first level, not from the cap."""
+    nest = "$(echo " * 17 + "y" + ")" * 17
+    line = ("echo $(echo $(cat <<" + opener.format("$(cat <<'E')x" + nest) + "\neb\nE\nb\nx" + nest
+            + "\n); rm -rf /srv/data))")
+    assert gate.decide(classified(line), DELETE).outcome == "deny"
+
+
 STAND_IN = "__exo_gate_nested_too_deep__"     # gate._TOO_DEEP, spelt out so this module loads on main too
 
 

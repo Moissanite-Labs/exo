@@ -435,7 +435,8 @@ class _Lexer:
                     at = self.i - len(w.raw)
                     if bisect.bisect_left(self.cuts, (at,)) < len(self.cuts):     # it holds a part not read
                         spelt = self._source(at, self.i)   # as the levels around spell it, read as a lexer reads it
-                        hd.cut = next((t[1].text for t in _Lexer(spelt, scan=False, nest=_NEST).run() if t[0] == "w"),
+                        # from the first level, as the levels around read it ($(cat <<'E') is its text)
+                        hd.cut = next((t[1].text for t in _Lexer(spelt, scan=False).run() if t[0] == "w"),
                                       spelt)                # its end line is spelt so too (_read_heredocs)
                     self.pending.append(hd)
                     toks.append(("hd", hd))
