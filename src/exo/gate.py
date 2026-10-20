@@ -356,6 +356,7 @@ class _Heredoc:
     ambiguous: bool = False    # delimiter spelled with $'..' or $"..": bash and dash end the body on different lines
     body: str = ""
     fd: str = ""               # the descriptor number before `<<` (`3<<EOF`); "" or 0 is stdin (#208)
+    cut: str = ""              # the delimiter as the levels around spell it, when it holds a part not read (#334)
 
 
 @dataclass
@@ -386,7 +387,8 @@ class _Lexer:
         """The $( ) or <( ) at s[a] lies past _NEST levels and is not read. The line lists _TOO_DEEP for it, and the
         sources of the levels around it hold a short stand-in, so its text is not read again. The word's text is
         what the lexer would give it. A here-doc from before it whose body lies inside gets its body, read as at the
-        cap (a $( ) in it is not read either)."""
+        cap (a $( ) in it is not read either), and the stand-in ends that body with an empty one, so a level read
+        again does not take the lines after the part for the body."""
         s = self.s
         b, read = _nest_end(s, a + 2, self.pending)
         for hd in read:
@@ -394,7 +396,8 @@ class _Lexer:
                 sub = _Lexer(hd.body, scan=False, nest=_NEST)
                 sub._dquote(_Word(), until_end=True)
                 self.subs += sub.subs
-        self.cuts.append((a, b, s[a] + "(" + _TOO_DEEP + ")"))
+        ends = "".join("\n" + (hd.cut or hd.delim) for hd in read) + "\n" if read else ""
+        self.cuts.append((a, b, s[a] + "(" + _TOO_DEEP + ends + ")"))
         self.subs.append(_TOO_DEEP)
         w.text += "<(..)" if s[a] in "<>" else "$(" + s[a + 2:max(a + 2, b - 1)] + ")"
         w.dynamic = w.started = True
@@ -428,6 +431,9 @@ class _Lexer:
                 if state["delim"] is not None:
                     hd = _Heredoc(w.text, state["delim"], w.quoted, w.dollar_quote)
                     hd.fd = w.fd
+                    at = self.i - len(w.raw)
+                    if w.text == w.raw and bisect.bisect_left(self.cuts, (at,)) < len(self.cuts):
+                        hd.cut = self._source(at, self.i)      # its end line is spelt so too (_read_heredocs)
                     self.pending.append(hd)
                     toks.append(("hd", hd))
                     state["delim"] = None
@@ -523,6 +529,9 @@ class _Lexer:
                 self.subs += sub.subs
                 if sub.cuts:                   # the levels around hold a stand-in for the body, as for a cut
                     self.cuts.append((first, last, "$(" + _TOO_DEEP + ")\n"))
+            if hd.cut and last < len(self.s):  # and its end line as they spell the delimiter, so the two still pair
+                at = self.s.find(hd.delim, last)
+                self.cuts.append((at, at + len(hd.delim), hd.cut))
 
     def _dquote(self, w: _Word, until_end: bool = False) -> None:
         s = self.s
@@ -3964,8 +3973,9 @@ def _unread_nest() -> Classification:
 
 
 def _classify_shell(cmd: str, depth: int) -> Classification:
-    if cmd == _TOO_DEEP:
-        return _unread_nest()
+    first, _, rest = (cmd or "").partition("\n")
+    if first == _TOO_DEEP:     # a stand-in (_Lexer._cut). Lines after it end here-doc bodies, and are read as any line
+        return _combine([_unread_nest(), classify_shell(rest, depth)], cmd) if rest else _unread_nest()
     cmds, subs, func = _parse(cmd or "")
     ctx: dict = {"subs": subs}
     parts: list[Classification] = []

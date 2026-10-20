@@ -25,7 +25,7 @@ FORCE = gate.normalize_policies({"gates": {"deny": ["force_push"]}})
 DELETE = gate.normalize_policies({"gates": {"deny": ["delete"]}})
 PUSH = "git push --force origin main"
 BOUND = 4.0       # CPU seconds per line; each takes under 0.8 s here (main: 0.9 s at 20 levels, a minute at 200)
-LEXERS = 1000     # lexers one line may build at any depth; about 200 here (main: 15,185 at 20 levels, 41,845 at 25)
+LEXERS = 1000     # lexers one line may build at any depth; at most 520 here (main: 15,185 at 20 levels, 41,845 at 25)
 
 
 @pytest.fixture(autouse=True)
@@ -174,6 +174,63 @@ def test_a_heredoc_delimiter_holding_a_deep_nest(classified, line):
 def test_heredocs_nested_in_one_another_s_bodies(classified, k):
     _denied(classified("echo " + _bodies(k) + "; " + PUSH))
     _denied(classified("export PROMPT_COMMAND='" + _bodies(k) + "'; " + PUSH))
+
+
+# --- the levels around an unread part pair here-docs as the line does ----------------------------------------
+# A level's source holds a stand-in for the part it does not read. Before, a here-doc delimiter holding such a part
+# no longer matched its end line there, and a body read inside the part left its here-doc waiting there. Read again,
+# the level took the lines after it for a body, so a deny on a command at a shallow level became an ask. Main read
+# these to the end and denied them, slowly.
+
+def _delim_first(k: int, m: int) -> str:
+    """At level k, a here-doc whose delimiter is an m-level nest and whose body holds an open one, then `rm`."""
+    d = "$(" * m + "x" + ")" * m
+    deep = "$(cat <<" + d + "\n" + "$(" * m + "\n" + d + "\necho x\n)"
+    return "$(echo " * (k - 1) + "$(echo " + deep + "; rm -rf /srv/data)" + ")" * (k - 1)
+
+
+def _body_in_nest(k: int, m: int, delim: str = "EOF", end: str = "EOF") -> str:
+    """At level k, a here-doc whose body lies in an m-level nest opened on its own line, then `rm` on a new line."""
+    inner = "$(cat <<" + delim + " " + "$(echo " * m + "x\nbody\n" + end + "\n" + ")" * m + "\nrm -rf /srv/data\n)"
+    return "$(echo " * (k - 1) + inner + ")" * (k - 1)
+
+
+VALUE = {"top": "echo {}", "dq": 'echo "{}"', "PROMPT_COMMAND": "export PROMPT_COMMAND='{}'",
+         "GIT_PAGER": "GIT_PAGER='{}' git log"}
+
+
+@pytest.mark.parametrize("k,m", [(2, 24), (8, 17), (15, 16)])
+@pytest.mark.parametrize("carrier", VALUE)
+def test_a_command_after_a_heredoc_whose_delimiter_crosses_the_cap(classified, carrier, k, m):
+    c = classified(VALUE[carrier].format(_delim_first(k, m)))
+    assert gate.decide(c, DELETE).outcome == "deny", c
+
+
+@pytest.mark.parametrize("k,m,delim,end", [
+    (3, 30, "EOF", "EOF"), (12, 12, "'EOF'", "EOF"), (8, 20, "-EOF", "\tEOF"),
+    (6, 14, "$($($($($($($($($($($($(x))))))))))))", "$($($($($($($($($($($($(x))))))))))))"),
+], ids=["plain", "quoted", "tab", "delimiter-past-the-cap-too"])
+@pytest.mark.parametrize("carrier", ["top", "PROMPT_COMMAND"])
+def test_a_command_after_a_heredoc_whose_body_lies_in_the_unread_part(classified, carrier, k, m, delim, end):
+    if "'" in delim and "'" in VALUE[carrier]:
+        carrier = "dq"
+    c = classified(VALUE[carrier].format(_body_in_nest(k, m, delim, end)))
+    assert gate.decide(c, DELETE).outcome == "deny", c
+
+
+STAND_IN = "__exo_gate_nested_too_deep__"     # gate._TOO_DEEP, spelt out so this module loads on main too
+
+
+@pytest.mark.parametrize("line", [
+    STAND_IN + "\nrm -rf /srv/data",
+    "echo $(" + STAND_IN + "\nrm -rf /srv/data\n)",
+    "export GIT_PAGER='$(" + STAND_IN + "\nrm -rf /srv/data\n)'",
+])
+def test_a_stand_in_written_on_the_line_hides_no_command(line):
+    """A level's stand-in can carry the end lines of bodies read in the part, and those lines are read as any line.
+    So the stand-in's name written on the line by hand hides nothing after it (guard: main reads these too)."""
+    c = gate.classify({"tool": "bash", "args": {"command": line}})
+    assert gate.decide(c, DELETE).outcome == "deny", c
 
 
 # --- the end of a nest past the cap is where the lexer ends it ---------------------------------------------
