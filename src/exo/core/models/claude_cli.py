@@ -217,7 +217,6 @@ class ClaudeCliProvider(CliProvider):
 
     name = "claude-cli"
     default_command = "claude"
-    default_read = 60.0
 
     def _diagnostic(self, text: Any, limit: int = 300) -> str:
         # Scrub token/header patterns and credentials already in the caller's environment. Do not read a key

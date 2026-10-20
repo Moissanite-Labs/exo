@@ -164,10 +164,7 @@ class Loop:
         removed and the list is empty. ``principal=False`` (a local caller) never removes the principal's words."""
         st = self.state(session)
         mine = [m for m in st.steer if principal or not provenance.is_principal_author(provenance.author_of(m))]
-        if message_id:
-            gone = [m for m in mine if m.id == message_id]
-        else:
-            gone = mine[-1:]
+        gone = [m for m in mine if m.id == message_id] if message_id else mine[-1:]
         for m in gone:
             st.steer.remove(m)
         return gone
@@ -251,9 +248,7 @@ class Loop:
             await self._emit(ev.Error(code="turn_failed", message=result.error), session)
             await self._emit(trace.error_body("turn loop", exc), session)
         st.accepting_steers = False  # no round can take a steer now: a later one waits for a new turn (#147)
-        for m in st.steer:  # a message that arrived after the last tool round is context for the next turn, not lost
-            await self._add(session, m, turn_id)
-        st.steer.clear()
+        await self._drain_steer(session, turn_id, st)  # arrived after the last tool round: context for the next turn
         wall, approval = int((time.monotonic() - t0) * 1000), self.approval_ms.get(session, 0) - waited
         timing = {"wall_ms": wall, "model_ms": st.stats["model_ms"], "approval_ms": approval,
                   "tool_ms": max(0, st.stats["tool_ms"] - approval), "model_calls": st.stats["model_calls"],
@@ -278,6 +273,11 @@ class Loop:
             except Exception as exc:  # observation never breaks a turn, but it is recorded
                 await self._emit(trace.error_body("turn observer", exc), session)
         return result
+
+    async def _drain_steer(self, session: str, turn_id: str, st: _SessionState) -> None:
+        for m in st.steer:
+            await self._add(session, m, turn_id)
+        st.steer.clear()
 
     def _takes_recall(self) -> bool:
         """True when the context engine places per-turn recall itself (AgentContext, D-028), so the system
@@ -327,9 +327,7 @@ class Loop:
                 if result.stop_reason == "tool_use":
                     result.stop_reason = "end"
                 if st.steer and result.stop_reason == "end":  # a message came in during this call: answer it now
-                    for m in st.steer:
-                        await self._add(session, m, turn_id)
-                    st.steer.clear()
+                    await self._drain_steer(session, turn_id, st)
                     continue
                 return
             spend = getattr(getattr(self.provider, "router", None), "spend", None)
@@ -341,10 +339,7 @@ class Loop:
                     await self._emit(ev.Error(code="model_spend_stopped", message=result.error, retryable=False), session)
                     return
             await self._tools(session, turn_id, reply.tool_calls, st)
-            if st.steer:
-                for m in st.steer:
-                    await self._add(session, m, turn_id)
-                st.steer.clear()
+            await self._drain_steer(session, turn_id, st)
         result.stop_reason = "max_iterations"
         await self._emit(ev.Notice(text=f"stopped after {self.max_iterations} tool rounds",
                                    level="warn"), session)

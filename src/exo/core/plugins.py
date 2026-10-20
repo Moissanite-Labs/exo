@@ -297,17 +297,16 @@ class PluginContext:
         self._track("command", clean, lambda: cmds.pop(clean, None))
         return entry
 
-    def register_memory_provider(self, provider: Any) -> bool:
-        active = self.manager.slots.fill("memory", provider, self.plugin)
-        self._track("memory_provider", str(provider.name),
-                    lambda: self.manager.slots.release("memory", provider))
+    def _fill(self, slot: str, kind: str, obj: Any) -> bool:
+        active = self.manager.slots.fill(slot, obj, self.plugin)
+        self._track(kind, str(obj.name), lambda: self.manager.slots.release(slot, obj))
         return active
 
+    def register_memory_provider(self, provider: Any) -> bool:
+        return self._fill("memory", "memory_provider", provider)
+
     def register_context_engine(self, engine: Any) -> bool:
-        active = self.manager.slots.fill("context", engine, self.plugin)
-        self._track("context_engine", str(engine.name),
-                    lambda: self.manager.slots.release("context", engine))
-        return active
+        return self._fill("context", "context_engine", engine)
 
     def register_channel(self, name: str, factory: Callable[..., Any], description: str = "",
                          **meta: Any) -> ChannelEntry:

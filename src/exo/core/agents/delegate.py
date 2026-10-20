@@ -237,9 +237,7 @@ class Delegator:
 
     def _cap(self, parent: str, tier: str) -> str:
         top = self._ceiling(parent)
-        if self.allow_upgrade or TIERS.index(tier) <= TIERS.index(top):
-            return tier
-        return top
+        return tier if self.allow_upgrade or TIERS.index(tier) <= TIERS.index(top) else top
 
     def route(self, tier: str) -> tuple[Any, str]:
         """(provider, "provider:model") for a tier. No usable tier route means the parent's own model."""
