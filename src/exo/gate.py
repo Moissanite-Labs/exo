@@ -5317,19 +5317,31 @@ def _list_matches(entries: Iterable, c: Classification, line: Callable[[str], bo
     return ""
 
 
-def _scoped(c: Classification, scopes: Mapping, tool: str = "") -> Classification:
+def _scoped(c: Classification, scopes: Mapping, tool: str = "", seen: dict | None = None) -> Classification:
     """``c`` with the principal's scopes applied, and the same for every simple command it was built from.
-    A part carries the tool of the call it came in on, so a `tool:` entry matches it too."""
-    exposure, third = apply_scopes(c, scopes)
-    tool = c.tool or tool
-    return replace(c, exposure=exposure, third_party=third, tool=tool, parts=[_scoped(p, scopes, tool) for p in c.parts])
+    A part carries the tool of the call it came in on, so a `tool:` entry matches it too. A part shared by
+    several results (_shell_seen) is scoped once and stays shared."""
+    seen = {} if seen is None else seen
+    key = (id(c), tool)
+    if key not in seen:
+        exposure, third = apply_scopes(c, scopes)
+        inner = c.tool or tool
+        seen[key] = replace(c, exposure=exposure, third_party=third, tool=inner,
+                            parts=[_scoped(p, scopes, inner, seen) for p in c.parts])
+    return seen[key]
 
 
 def _each_part(c: Classification) -> Iterator[Classification]:
-    """The classification and every simple command it was built from, nested ones included."""
-    yield c
-    for p in c.parts:
-        yield from _each_part(p)
+    """The classification and every simple command it was built from, nested ones included, each once."""
+    seen: set[int] = set()
+    todo = [c]
+    while todo:
+        p = todo.pop()
+        if id(p) in seen:
+            continue
+        seen.add(id(p))
+        yield p
+        todo.extend(reversed(p.parts))
 
 
 def _line_matcher(c: Classification) -> Callable[[str], bool]:

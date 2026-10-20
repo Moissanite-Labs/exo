@@ -361,3 +361,32 @@ def test_a_line_read_again_spends_the_budget_again():
     assert c.category == "credentials", c
     c = gate.classify({"tool": "bash", "args": {"command": "echo" + " $(echo {1..1000})" * 4}})
     assert c.category == "read", c
+
+
+# --- decide on a result whose parts the memo shares ----------------------------------------------------------
+
+def test_decide_scopes_and_walks_each_shared_part_once(classified, monkeypatch):
+    """Identical nests on one line share their parts (_shell_seen), so the result is a graph, not a tree. decide
+    walked it as a tree: this 5,338-byte line classified in 0.1 s, but one decide took 7.9 s and scoped 846,181
+    parts. Now each part is scoped and walked once, so decide is linear in the line too."""
+    line = ("echo " + "$(" * 17 + "x" + ")" * 17 + "; ") * 90 + PUSH
+    c = classified(line)
+    distinct, todo = set(), [c]
+    while todo:
+        p = todo.pop()
+        if id(p) not in distinct:
+            distinct.add(id(p))
+            todo += p.parts
+    scoped = [0]
+    apply_scopes = gate.apply_scopes
+
+    def counting(*a, **kw):
+        scoped[0] += 1
+        return apply_scopes(*a, **kw)
+
+    monkeypatch.setattr(gate, "apply_scopes", counting)
+    t = time.process_time()
+    d = gate.decide(c, FORCE)
+    took = time.process_time() - t
+    assert d.outcome == "deny" and took < BOUND, (d, took)
+    assert scoped[0] <= len(distinct) and len(list(gate._each_part(c))) == len(distinct), (scoped[0], len(distinct))
