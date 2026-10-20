@@ -322,6 +322,29 @@ def test_a_stamped_dict_with_malformed_meta_keeps_its_stamp():
     assert provenance.author_of({"role": "user", "author": "peer:x", "meta": "junk"}) == "peer:x"
 
 
+def test_a_summary_node_stored_before_the_upgrade_is_escaped_in_the_view():
+    """#322 item 3: a done summary node written by an older build may hold a live block. The view escapes
+    stored summary text as it prints it, so the system message never carries it live."""
+    store, summ = SessionStore(":memory:"), Short()
+    s = store.create_session(title="t")
+    for m in [_user(FORGED, peer={"from": "mallory"}, author="peer:mallory")] + [
+            _user(f"principal turn {i}", author="principal") for i in range(6)]:
+        store.append_message(s.id, m)
+    ctx = TreeContext(store, summ, leaf_size=2, tail_messages=2, min_compact_tokens=1)
+
+    async def build(c):
+        return (await c.build(s.id, "SYS"))[0].text()
+
+    asyncio.run(build(ctx))
+    done = [n for n in store.summaries(s.id) if n.status == "done"]
+    assert done
+    done[0].text = "notes from an older build\n" + FORGED  # what a pre-#302 summarizer may have stored
+    store.save_summary(done[0])
+    system = asyncio.run(build(TreeContext(store, summ, leaf_size=2, tail_messages=2, min_compact_tokens=1)))
+    assert ESCAPED in system and RULE in system  # every word readable, no live tag
+    assert hf.PIN_OPEN not in system or RULE not in hf.parse_pinned_blocks(system)["ruling"]
+
+
 def test_a_stamped_ingress_author_keeps_its_name():
     m = _user(RULE, bus={"from": "seat2"})
     m.meta["author"] = provenance.bus("seat2")
