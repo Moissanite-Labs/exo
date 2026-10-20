@@ -28,7 +28,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   completion notice, or its two parts in `job_output` (follow-up to #321). While the notice redacts the log, the end of
   `<id>.log.1` now stands in for the rotation note at its start. `job_output` joined both files with the note between
   the two parts of the key, so redaction missed it. It now drops the note when it reads `<id>.log.1`, so the key is
-  whole and is redacted (docs/JOBS.md "The completion notice").
+  whole and is redacted. The `job.updated` events carried the job's command unredacted to clients and the events table.
+  They now cut known key values out of it before they cut it to 300 characters, as the notice does (docs/JOBS.md "The
+  completion notice").
 - Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
   ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
   answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the

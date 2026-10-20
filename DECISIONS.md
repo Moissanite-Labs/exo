@@ -1313,10 +1313,11 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   does it cut its command and output to size, so those cuts split no key. A key split where that file rotates at
   `output_cap` is cut out too (a follow-up to PR #321): while the log is redacted, the end of the older file stands in
   for the rotation note at its start. `job_output` drops that note when it reads the older file, so such a key is whole
-  in its result and is redacted there too. As before, only key values Exo knows are redacted: `known_secret_values`, or
-  the list a caller passes (claude-cli passes the secret-named variables of its own environment). Rejected: holding all
-  output until the command ends (no live output). `docs/TOOLS.md` "Streamed output", `docs/JOBS.md` "The completion
-  notice".
+  in its result and is redacted there too. The `job.updated` events did not redact the command they carry. They now cut
+  known key values out of it before they cut it to 300 characters. As before, only key values Exo knows are redacted:
+  `known_secret_values`, or the list a caller passes (claude-cli passes the secret-named variables of its own
+  environment). Rejected: holding all output until the command ends (no live output). `docs/TOOLS.md` "Streamed output",
+  `docs/JOBS.md` "The completion notice".
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys

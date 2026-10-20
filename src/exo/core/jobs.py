@@ -170,11 +170,16 @@ class JobManager:
             return
         loop.call_soon_threadsafe(fn, *args)
 
+    def _known(self) -> list[str]:
+        with contextlib.suppress(Exception):  # a failed key lookup never loses a notice or an event
+            return keys.known_secret_values()  # cut out before each cut (D-039)
+        return []
+
     def _body(self, job_id: str, state: str, command: str, code: int | None, started: float, ended: float | None,
               detail: str = "", log: str | None = None) -> s.JobUpdated:
-        return s.JobUpdated(job_id=job_id, state=state, command=command[:300], exit_code=code,
-                            elapsed_ms=int(_elapsed(started, ended) * 1000), log=log or str(self.log_path(job_id)),
-                            detail=detail)
+        return s.JobUpdated(job_id=job_id, state=state, command=keys.redact_secrets(command, self._known())[:300],
+                            exit_code=code, elapsed_ms=int(_elapsed(started, ended) * 1000),
+                            log=log or str(self.log_path(job_id)), detail=detail)
 
     def log_path(self, job_id: str) -> Path:
         return self.dir / f"{job_id}.log"
@@ -320,12 +325,9 @@ class JobManager:
         head = {"done": "finished, exit 0", "failed": f"failed, exit {code}", "timeout": "timed out and was killed",
                 "killed": "was killed", "lost": "lost"}.get(state, state)
         head += f", {fmt_elapsed(_elapsed(started, ended))}"
-        from exo.core.models.keys import known_secret_values, redact_secrets
-        vals: list[str] = []
-        with contextlib.suppress(Exception):  # a failed key lookup never loses a notice
-            vals = known_secret_values()  # cut out before each cut below (D-039)
+        vals = self._known()
         out = tail_text(self.log_path(job_id), self.cfg.notice_lines, self.cfg.notice_chars, vals)
-        body = (f"command: {redact_secrets(command, vals)[:300]}\n" + (f"{detail}\n" if detail else "")
+        body = (f"command: {keys.redact_secrets(command, vals)[:300]}\n" + (f"{detail}\n" if detail else "")
                 + (f"last output:\n{out}\n" if out else "no output\n") + f"full log: {self.log_path(job_id)} "
                 f"(job_output {job_id})")
         return Ingress("job", "harness", "local", body, session=session, id=new_id("jn"),
