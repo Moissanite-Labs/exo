@@ -93,6 +93,7 @@ These close the blockers and most majors in READINESS.md.
 | fix/chat-allow-always | `exo chat` can grant allow_always after a confirmation. An unknown reply denies. |
 | fix/cron-dst | A cron job does not run again and again in the hour the clocks go back. |
 | fix/serve-socket-takeover | A second `exo serve` refuses a live core's socket and leaves its pid file alone. |
+| fix/serve-start-lock-242 | Two cores started at once leave exactly one: the socket's start is under a lock file. |
 
 ### Privacy and provenance
 

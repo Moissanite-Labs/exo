@@ -19,11 +19,15 @@ Optional observer hook failures remain optional. Observe mode still asks, and
 `exo-gate` must load. Ordinary Exo retains its existing logging-only behavior
 when no ledger is available.
 
-Required mode blocks `gh --body-file` requests before inspecting the selected
-host path, including symlinks, even when body-file reading is disabled. The gate
-cannot approve unseen contents. Pass inline text for inspection; the executor
-then applies its own operation policy. Policy and grant files remain trusted
-configuration outside the worker's writable workspace.
+Required mode refuses every post whose body the gate cannot read on the line
+(#208): a `gh --body-file` path, which it never opens (symlinks included, and
+even when body-file reading is disabled), and also stdin (`--body-file -` with a
+pipe or `<`), `gh api` fields read with `@` and `--input`, `$( )`, backticks or
+a variable in the text, and the HTTP clients' file and stdin bodies (see "What an
+approval covers"). The refusal is a recorded `deny` decision (rule `required`).
+The gate cannot approve unseen contents. Pass inline text for inspection; the
+executor then applies its own operation policy. Policy and grant files remain
+trusted configuration outside the worker's writable workspace.
 
 Concurrent identical requests keep separate approval tokens and audit
 references. The reusable rule key still scopes a standing grant; it does not
@@ -43,6 +47,51 @@ An outward act is a post, message, email, social post, payment or account action
 the gate marks public or irreversible. For those, the gate hashes the exact text, title, target,
 tool and arguments (`approval_binding`). Text read from a `--body-file` counts too. The hash is
 sent as `binding` on `approval.requested`.
+
+The hash covers only text the gate can see, so a body it cannot read asks (#208). The classifier
+marks such a post with the `unseen_body` signal, and `gate.body_unseen` also counts a body file
+nobody read:
+
+- `gh`: `--body-file -` (or `-F -`, `--notes-file -`) unless the line spells out stdin and bash
+  changes nothing in it: one heredoc on descriptor 0 (`<<` or `0<<`; a `3<<` heredoc is not gh's
+  stdin) with a quoted delimiter, or with no `$`, backtick or backslash in the body (bash expands
+  those and joins a line that ends in `\`), ended by the exact delimiter line (bash does not end it
+  at `EOF `, ` EOF`, `EOF` and a CR, or a tab-indented `EOF` under plain `<<`; such a body is
+  unseen); one here-string on descriptor 0 with no expansion; or a pipe from one simple command: `cat` with such a heredoc or here-string, `echo`
+  with no option word and no backslash, or `printf` with one format that has no `%` or backslash.
+  `printf` formats, `echo -e` and `-n`, a subshell or group before the pipe
+  (`(cat notes.md; echo F) |`, `{ ...; } |`, a loop) and any other writer are unseen, because
+  only one simple command's output can be read whole. Also unseen: `gh api` fields with `@` and
+  `--input`; `--fill`, `--template`, `--editor`, `--recover` and generated release notes, which gh
+  writes itself; `--attach`, which uploads a file; a gist's files; any word bash may expand (`$X`,
+  `$( )`, backticks, a brace expansion such as `Zo{r,}k`, a glob character, a leading `~`), since
+  any word can be an option such as `--body-file=f`. `{owner}` with no comma or `..` is not a brace
+  expansion and stays readable. A
+  `$(cat <<'EOF' ... EOF)` body is plain text and is read. Text options are read as gh reads them,
+  with gh's own list of options that take a value for each posting command (gh 2.102): when a
+  repeated option (gh keeps the last), a short-option cluster (`-db text`) or an option's value
+  (`-t -b -b text` or `--title --body --body text`: the title is `-b` or `--body`) gives another
+  value than the gate's reading, the post is unseen. `gh release` reads `--notes` and `--notes-file` as its text.
+- `curl`: `-d @f`, `--data-binary @-`, `--data-ascii @f`, `--json @f`, `--data-urlencode name@f`,
+  `-F k=@f` or `k=<f`, `-T`, `--expand-data`, and a word from an expansion other than the value of
+  `-H`, `-u`, `-A` or `--oauth2-bearer` (a token in a header leaves the body readable). An attached
+  value (`-d@f`) makes the call a POST, as a spaced one does, and so does `--data-ascii`. `-K` reads
+  options, data and URLs from a file, so the call counts as a POST whose body is unseen, never as a
+  local one. A POST whose host the gate cannot read (`curl -d x "$URL"`) is not a local write
+  either. `wget`: `--post-file`, `--body-file`, `-e`,
+  `--config`, or an expansion outside `--header` and the login options. httpie: `k=@f`, `k:=@f`,
+  `k@f`, a pipe or `<` into it, or an expansion outside `-a`.
+- The exo-gate hook reads a body file only by an absolute path, up to 256 KiB, with
+  `read_body_files` on. A relative or `~` path names a file in the command's folder or home, which
+  the hook cannot pin down: it gets the session's folder (#209), but a `cd` or `pushd` on the line,
+  or the call's `cwd` argument, moves it (`cd docs && gh ... --body-file notes.md` read `notes.md`
+  from exod's own folder before). A path under `/dev` or `/proc`, as written or resolved
+  (`/dev/stdin`, `/proc/self/fd/3`), names what the reading process holds, so the hook would read
+  exod's own; it is never read. A missing, larger or unreadable file stays unseen.
+
+Under the posting rules (`posting.applies_to`) an unseen body adds the violation "the gate cannot
+read the body ..." and asks. In any category it offers no "always" (`once`) and no standing grant
+matches it, since its binding hashes only the line. A post the line spells out is checked as before.
 
 - An answer covers that hash only. If the agent edits one character, the next call has a new
   hash and is asked again. This is the same rule as a review verdict that a new head sha voids.
@@ -66,7 +115,8 @@ Entries are `principal`, `seat:<name>` or `role:<name>`. The principal can alway
 no file, only the principal can, which is the behaviour of a single-user install. A peer or
 ingress client never can (D-026). The allowed list is sent as `approvers` on
 `approval.requested` so a client can show who must answer; the engine refuses anyone else as
-`forbidden`.
+`forbidden`. While a changed `approvals.yaml` waits for `/gate accept`, the list holds only those
+both files allow (`gate.strictest_approvers`); see "Policy changes during a session".
 
 A client answers as a seat by setting `client` to `seat:<name>` and signing the answer with that
 seat's Ed25519 key: `sig = exo.core.approvals.sign_approval(key, request_id, decision, binding,
@@ -407,8 +457,12 @@ logged with the grant id.
 - Credentials and store writes never get a grant; they ask every time (`gate.NO_GRANT`).
 - Code the gate cannot see into (`opaque_exec`, or any call with the `indirection` signal) is
   granted for the exact command only, like an outward act.
+- A post whose body the gate did not read never gets a grant, and an older grant does not cover it
+  (#208, "What an approval covers").
 - Only the principal can create a grant.
-- Set a value to 0 to turn standing grants off for that kind.
+- Set a value to 0 to turn standing grants off for that kind. While a changed `approvals.yaml` waits
+  for `/gate accept`, a new grant lasts the shorter of the two values ("Policy changes during a
+  session").
 - `/grants` (a `command.run` command, no new protocol command) lists live grants;
   `/grants revoke <id>` removes one and writes a ledger row (`phase: revoke`).
 
@@ -435,14 +489,16 @@ cannot be taken back. So the sweep leans to holding. Put a word in `posting.scru
 a false positive that keeps recurring, or rename the seat.
 
 The sweep runs on public targets only (`posting.scrub.exposures`). Internal team chats and the
-principal's own channels are not swept.
+principal's own channels are not swept. A body the gate cannot read cannot be swept, so it asks
+(#208, "What an approval covers").
 
 ## The footer
 
 `posting.footer` is the exact line an outbound post must end with. It is empty by default, so no
 line is built in. A principal who wants a disclosure line sets it in `posting.md`, for example
 `footer: "> Automated posting by agentic team with human oversight."`, and can limit it to public
-targets with `footer_exposures: [public]`.
+targets with `footer_exposures: [public]`. The footer is checked on text the gate can read; a body
+it cannot read asks whatever the footer setting (#208).
 
 ## The decision model's second opinion (D-015, D-081)
 
@@ -541,9 +597,14 @@ gate does not read:
 - The simple commands a line was built from stay on the result (`parts`), and `decide` checks the
   `reserved` and `deny` lists against every one of them, nested ones included (D-075). So
   `git push origin main && rm -rf build` is denied when `vcs_push` is in `deny`, although the
-  delete is the more severe part and would otherwise set the card. Only those two lists see the
-  parts: rules, category overrides, the opaque bump, third-party escalation, posting checks and
-  the floors see the dominant part. A part carries the tool of the call it came in on
+  delete is the more severe part and would otherwise set the card. A category line or rule that
+  denies a part denies the line too (#191): each part below the dominant one is decided as it
+  would be alone, by its category's line and then the first rule that matches it (or a deny rule
+  whose `command` regex matches a decoded view of the line), and a `deny` there denies the line,
+  with a reason that names the part (`denied by policy (category local_write: write /tmp/f)`). Only
+  a deny reaches the parts: allow, log and ask lines and rules, the opaque bump, third-party
+  escalation, posting checks and the floors see the dominant part (a `reserved:` entry gives an ask
+  on any part). A part carries the tool of the call it came in on
   (`tool:execute_code` matches the `execute_code` tool, not `python -c` run from bash) and the
   views of its line, so a `command` regex matches a part as it matches the line (`g''it push
   origin main && rm -rf build` is denied under `{category: vcs_push, command: 'git push'}`), the
@@ -573,8 +634,8 @@ gate does not read:
   Past the nesting limit a command there is `opaque_exec`, as an unquoted `$( )` is. A command
   read from the subscript is a part of the line like any `$( )`, so it can outrank the line's
   own category: `printf -v 'a[$(git push origin main)]' %s x > /tmp/f` is a `vcs_push` and
-  asks. A `deny:` entry for `local_write` still denies it (D-075); a `categories: {local_write:
-  deny}` line only asks until #191 lands.
+  asks. A `deny:` entry for `local_write` still denies it (D-075), and so does a `categories:
+  {local_write: deny}` line or a rule that denies `local_write` (#191).
 - `declare`, `typeset`, `local`, `readonly` and `export` also evaluate the value of a
   `NAME=VALUE` operand again, so it is read too (#188). With `-a` or `-A` (or for a variable that
   is already an array) bash parses a compound value `(..)` again as words even when it is
@@ -590,12 +651,12 @@ gate does not read:
   value, which runs only because bash reads the value again. That is the `indirection` signal,
   and the command ranks after the line's own parts, as it would unquoted, so a redirection's
   `local_write` still decides a tie and a deny on it still wins. When the command outranks the
-  line's own category, a deny on that category becomes ask, never allow or log
-  (`declare -a 'b=($(sudo ls))' > /tmp/f` asks under `categories: {local_write: deny}`); D-075
-  (deny on any part) keeps the deny for the `deny:` list form; #191 tracks the `categories`
-  form. Such a command also carries the `reread` signal, and naming `opaque_exec`
-  (below) does not lower its ask, so the line asks under `{local_write: deny, opaque_exec: allow}`
-  too. A deny on the command's own
+  line's own category, a deny on that category still denies through the line's own part: D-075
+  for the `deny:` list form, #191 for a category line or rule (`declare -a 'b=($(sudo ls))' >
+  /tmp/f` is denied under `categories: {local_write: deny}`, and under `{local_write: deny,
+  opaque_exec: allow}` too). Such a command also carries the `reread` signal, and naming
+  `opaque_exec` (below) does not lower its ask, so with no deny on the line the line asks under
+  `{opaque_exec: allow}`. A deny on the command's own
   category still denies. A command in such a value or subscript nested deeper than the gate
   reads is an `opaque_exec` part (ask), as on the line itself, and carries `reread` too. A
   plain expansion in a compound value the line did not expand (`declare -a 'b=("$@")'`), a
@@ -704,7 +765,7 @@ gate does not read:
   the line asks as before. A `deny:` entry that matches the inner command denies the line
   (D-075), also when its category ties with `opaque_exec` or ranks below it (`schedule`;
   `web_read`, `local_write`: `setsid systemctl enable foo`, `setsid curl URL`). A `categories:`
-  line or a rule for such a category sees only the dominant part, so it still asks (#191). `chroot`, `nsenter`,
+  line or a rule that denies such a category denies the line too (#191). `chroot`, `nsenter`,
   `unshare` and `systemd-run` run the command with other privileges, namespaces or as a
   system unit: like `sudo`, the line carries a signal named after the wrapper and a reversible
   part counts as costly. What the gate cannot read stays `opaque_exec`: a program from a
@@ -714,8 +775,8 @@ gate does not read:
   outranks `opaque_exec` (`setsid git push`) takes the line's category, so a deny on
   `opaque_exec` itself no longer reaches it: under `deny: [opaque_exec]`, `categories:
   {opaque_exec: deny}` or a rule on `opaque_exec` with decision `deny` the line asks (the
-  `indirection` floor below), where it was denied before. D-075 makes such a deny apply to
-  every part.
+  `indirection` floor below), where it was denied before. D-075 makes a `deny:` entry, and #191
+  a category line or rule that denies, apply to every part, so the wrapper part denies the line.
 - `coproc` inspects the inner command's original words, preserving quotes (and, in the simple
   form `coproc bash <<EOF`, the heredoc), while retaining `indirection`. As in bash, a name
   before a compound command (`coproc w { ...; }`, `coproc w while ...`, `coproc w if ...`) is
@@ -725,8 +786,8 @@ gate does not read:
   `coproc rm <<<x while ...`) gives a simple command that runs the name. The gate then reads the
   name as the program too, and keeps the skipped reading beside it (#207). A redirection after the
   opener, in the body or after the closing `}`, changes nothing. Such a line now takes the name's
-  category (`delete` for `rm`), so, as for wrappers, `categories: {opaque_exec: deny}` asks there
-  where main denied; `deny: [opaque_exec]` still denies through the coproc part (D-075).
+  category (`delete` for `rm`), but the coproc stays an `opaque_exec` part, so `deny: [opaque_exec]`
+  (D-075) and `categories: {opaque_exec: deny}` or a rule that denies it (#191) still deny the line.
   `function NAME { ...; }` is read the same way. An environment dump inside (`coproc env`,
   `coproc w { printenv GITHUB_TOKEN; }`) is `credentials`. Before D-075, a coproc was denied
   only when its inner command outranked `opaque_exec` (`delete`, `vcs_push`, `credentials`); a
@@ -772,19 +833,18 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   first host as its target, so a `target:` deny on that host still denies it (#153, fixed by
   #164). Past the cap the line asks unless the principal has set a policy for `opaque_exec` (a
   `command:` deny entry or a deny rule that matches the text still denies it).
-- **`categories:` sees the part the line ends up with (#191).** `classify_shell` keeps the most
-  severe part of a compound line, and a `categories:` line or a rule applies to that category
-  only. With `categories: {github_post: deny}`, `gh pr comment 3 --body hi && rm -rf build` is
-  fully inspected, but it is `delete`, the card reads `rm build`, the line asks, and approving
-  it sends the denied post. The `deny:` and `reserved:` lists do not have this gap: since D-075
-  an entry there matches every part the gate reads, nested ones included, so the same line is
-  denied under `deny: [github_post]` (see above). A `coproc` or `function NAME {` block splits
-  the same way: its inner command is a part, but the block is `opaque_exec`, so
+- **Only a deny reaches every part of a line.** `classify_shell` keeps the most severe part of
+  a compound line, which sets the card. A deny reaches every part the gate reads, nested ones
+  included: a `deny:` entry since D-075, and a `categories:` line or rule that denies a part
+  since #191. So `gh pr comment 3 --body hi && rm -rf build` is denied under
+  `categories: {github_post: deny}` as under `deny: [github_post]`, and
   `coproc w { curl https://example.com; }` (and `function f { curl https://example.com; }`) is
-  denied under `deny: [web_read]` and asks under `categories: {web_read: deny}`, since
-  `web_read` ranks below `opaque_exec`. Under either form the four-wrapper example above is
-  denied and the five-wrapper example asks as `opaque_exec`. So approving an opaque card or a
-  compound line can run an action that would be denied on its own. Read the whole command
+  denied under `categories: {web_read: deny}`, though the block is `opaque_exec`. An allow, log
+  or ask line or rule applies to the line's own category only: under
+  `categories: {github_post: ask}` the line above asks for the delete, and approving it sends
+  the post too. Use `reserved:` to ask on any part. Under either deny form the four-wrapper
+  example above is denied and the five-wrapper example asks as `opaque_exec`. So approving an
+  opaque card or a compound line can run an action the gate did not show. Read the whole command
   before approving it: an approval does not vouch for what the gate did not classify.
 - **Deny becomes ask.** Where the gate cannot read the command it files the line as
   `opaque_exec`, which asks, so a `deny:` or `categories:` entry for the hidden action becomes
@@ -947,15 +1007,15 @@ reading found, so a later client whose argument is a store folder is still a `st
 text deletes. For fed shells and interpreters, a line that was `opaque_exec` now takes the inner
 category. The floor above keeps it at ask at least under a policy that names `opaque_exec` at `ask`
 or `deny`. A `deny: [opaque_exec]` entry still denies these shell and interpreter lines, since the
-shell or interpreter inside is an `opaque_exec` part (D-075). Under
-`categories: {opaque_exec: deny}` or a rule they now ask where they were denied, as
-`bash <<EOF` already does, until #191. Fed SQL clients follow their plain-input classification,
-without that floor. A compound feeding `\! git push origin main` to `psql` can therefore change
-from ask to the push's `log`. D-075 `deny` and `reserved` entries still match every retained part.
-Category overrides and ordinary rules use the combined classification. Likewise a line whose later
+shell or interpreter inside is an `opaque_exec` part (D-075), and since #191 so do
+`categories: {opaque_exec: deny}` and a rule that denies `opaque_exec`. Fed SQL clients follow
+their plain-input classification, without that floor. A compound feeding `\! git push origin main`
+to `psql` can therefore change from ask to the push's `log`. D-075 `deny` and `reserved` entries
+still match every retained part, and a category line or rule that denies a part denies the line
+(#191); other category lines and rules use the combined classification. Likewise a line whose later
 command takes a store folder is `store_write`, which outranks `delete` (D-038):
-`deny: [delete]` still denies it through its delete
-part (D-075), while `categories: {delete: deny}` asks where main denied it (#191). Known limits:
+`deny: [delete]` still denies it through its delete part (D-075), and so does `categories:
+{delete: deny}` (#191). Known limits:
 the body of `time {
 ...; }` is not read at all (`{` is an unknown program there), so a heredoc after it changes nothing;
 it asks as `opaque_exec`. As on main, text piped into a command is read even when the command's own
@@ -989,9 +1049,9 @@ the rest of the line. So `echo 'rm -rf /data' | ssh prod-db`, and `ssh prod-db <
 `rm -rf /data` in the body, deny under `deny: [delete]`, and text the gate cannot read (`ssh host
 < script.sh`, `generate | ssh host`) asks. As for `ssh host 'rm -rf /data'`, the most severe
 command in the text sets the line's category and target. `deny` and `reserved` entries see every
-part, so a `target:<host>` entry still matches through the hop part; a setting that sees only that
-command (`categories: {shell: deny}`, a rule keyed on the host as `target`) no longer reaches these
-lines, which ask where main denied them. ssh reads options after the host too, up to the
+part, so a `target:<host>` entry still matches through the hop part, and since #191 so does a
+category setting or rule that denies the hop (`categories: {shell: deny}`, a rule keyed on the host
+as `target`): these lines are denied as on main. ssh reads options after the host too, up to the
 remote command, so `ssh host -T` and `ssh host --` have no command, and an empty word (`ssh host
 ''`) is none either. `-n`, `-N` and `-f` keep ssh from running its stdin, and a remote command
 takes the stdin as its own input; those lines keep their reading. A word that may expand to no
@@ -1043,10 +1103,10 @@ is detached), `su -c`, `runuser`, `sg`, `pkexec`, `faketime`, `bwrap`, `fakeroot
 a tmux command name cut short (`new-w`) and an alias set in a tmux config file. Two are read but
 not fully: `systemd-run --on-calendar` (and its other timer options) is read as running its
 command, not as `schedule`, and `parallel -S` carries no remote-host signal. Both still ask.
-Under a non-default `categories: {opaque_exec: deny}` or a rule that denies it, a wrapped line
-whose inner command outranks `opaque_exec` (a wrapped env dump is `credentials`, a wrapped push
-is `vcs_push`) is decided by that inner category and asks instead of being denied (#191). A
-`deny: [opaque_exec]` entry matches the wrapper part, so it denies the line (D-075).
+A wrapped line whose inner command outranks `opaque_exec` (a wrapped env dump is `credentials`, a
+wrapped push is `vcs_push`) takes that inner category, but the wrapper stays an `opaque_exec` part,
+so a `deny: [opaque_exec]` entry (D-075), a `categories: {opaque_exec: deny}` line or a rule that
+denies `opaque_exec` (#191) denies the line.
 
 ## The store is credentials (D-038)
 
@@ -1153,6 +1213,15 @@ later, it loads the new one, writes a `policy_change` ledger row with the files'
 decides each call under both. The stricter outcome wins. So a change can tighten at once and
 can never loosen until the principal runs `/gate accept` (ledger row `policy_accept`), or the
 core restarts. `/gate` says whether a change is waiting.
+
+The same holds for `approvals.yaml` (#211). An ask lists only the approvers both files allow, in
+the pinned order (`gate.strictest_approvers`, an ordered intersection; the principal is first in
+both, so the list is never empty), and an "always" answer lasts the shorter of the pinned and
+changed `always` values, so a 0 in either writes no grant. A seat the principal removes cannot
+answer the next ask; a seat they add waits for `/gate accept`. A changed file that does not load
+counts as the defaults: the principal alone, 30 and 7 days. Limits: an ask already open keeps the
+approvers it was sent with, and grants written before the change still match until they expire or
+`/grants revoke` removes them.
 
 ## Principal authority for policy and settings changes
 
