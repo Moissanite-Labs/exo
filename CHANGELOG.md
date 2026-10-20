@@ -6,12 +6,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
-- A host summary in an assistant row carries the principal's pinned block again (#371). Hosts that alternate
-  roles put the summary in an assistant row, which read as the agent's since #368, so the block dropped out at
-  the next compaction and out of the handoff. The row's in-process `_compressed_summary` flag, which no model
-  text can set, now marks it as the host's summary. A stamped author, an ingress tag, `principal: False` or
-  tool calls on the row still refuse. A `meta` that is not a mapping no longer raises in `author_of` or the
-  carry check. It names no tag and no author, as it did before the veto read it.
+- The principal's pinned block no longer drops out when a host summary rides in an assistant row (#371).
+  Hosts that alternate roles put the summary there, and the row reads as the agent's, so it carries nothing
+  itself. That stays so. A host can also build summary rows exo-context never escaped, and the host's
+  `_compressed_summary` flag does not tell the two apart. Compaction now merges the session's pins, observed
+  only from the principal's own messages and persisted per session, the way the handoff write already did.
+  A `meta` that is not a mapping no longer raises in `author_of` or the carry check. It names no tag and no
+  author, as it did before the veto read it.
 - A pinned-block tag with an invisible unicode tag character inside its name is escaped again (#381). The
   fold added for #322 item 4 turned each tag character into its ASCII letter before matching, so a tag
   character sitting in the name as filler broke the match and the tag passed through live. Detection now
