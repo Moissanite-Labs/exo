@@ -238,11 +238,13 @@ class SessionStore:
         return self._info(rows[0]) if rows else None
 
     def list_sessions(self, limit: int = 50, seat: str | None = None, agent: str | None = None) -> list[SessionInfo]:
+        # One query, with each count as a correlated subquery: SQLite evaluates it only for the rows
+        # the LIMIT keeps, so a small limit never visits other sessions' messages (#351 review).
         cols = {k: v for k, v in (("seat", seat), ("agent", agent)) if v is not None}
-        sql = ("SELECT s.*, COUNT(m.id) AS message_count FROM sessions s"
-               " LEFT JOIN messages m ON m.session=s.id AND m.hidden=0"
+        sql = ("SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.session=s.id AND m.hidden=0)"
+               " AS message_count FROM sessions s"
                + (" WHERE " + " AND ".join(f"s.{k}=?" for k in cols) if cols else ""))
-        rows = self._q(sql + " GROUP BY s.id ORDER BY s.updated DESC, s.id LIMIT ?", (*cols.values(), limit))
+        rows = self._q(sql + " ORDER BY s.updated DESC, s.id LIMIT ?", (*cols.values(), limit))
         return [self._info(r, r["message_count"]) for r in rows]
 
     def thread(self, sid: str) -> tuple[str | None, str]:

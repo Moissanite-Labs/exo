@@ -8,8 +8,8 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ### Fixed
 - Listing sessions ran one extra database query per session (#255, W1-2). `list_sessions` counted each session's
   messages with its own `COUNT`, so a list of 500 sessions ran 501 queries. The count now comes from the same
-  query as the list (a `LEFT JOIN` grouped by session), so listing always runs one query. Results, filters and
-  order are unchanged.
+  query as the list, as a correlated count evaluated only for the rows the limit keeps, so listing always runs
+  one query and a small limit never visits other sessions' messages. Results, filters and order are unchanged.
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
   `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
