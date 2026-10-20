@@ -1220,23 +1220,23 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   bounded the depth, so 40 levels in `PROMPT_COMMAND` took 15 s, and from about 500 levels the lexer's recursion
   raised RecursionError. The hook then asked for the whole line, so a deny on a command after the value became an
   ask. *Read once.* One top-level classify_shell call parses each line once and classifies it once per depth and
-  state of the brace and store budgets (`_shell_seen`). A result read again sets the budgets to what reading it left,
-  so every line classifies as before, budget refusals included. A caller gets its own copy of the result and shares
-  the parts it was built from (D-075). The ssh hop, the only caller that changes parts in place, marks a copy.
-  *A depth cap.* A lexer reads 16 levels of `$( )`, `<( )` and `$(( ))` inside one another (`_NEST`). Past them
-  `_nest_end` finds where the nest ends as the lexer would end it, in one pass with a stack of open parts and no
-  here-doc body read again, and the line lists an unread part (`opaque_exec`, signal `unread nest`). An exported
-  value keeps that part, where export drops other values it cannot read. The sources of the levels around hold a
-  short stand-in, so classifying them never reads the deep text again, and a word keeps the text the lexer would
-  give it. On 80,000 random texts (3,000 in the test) `_nest_end` ends where the lexer ends and leaves the same
-  here-docs waiting. On a wider set it still ends there, but a delimiter word holding `$(cat <<X ...)` can leave a
-  here-doc waiting for other text, since the lexer reads that `$( )` as its body. Each level around the unread part
-  pairs every here-doc with its end line, also when the delimiter holds that part, quoted or not (the line is spelt
-  the way the level reads the delimiter) or the body lies inside it (the stand-in ends the body), so a command after
-  the here-doc is still read. A run of stand-in lines, one written by hand too, is read in one step, and a command
-  after it is still read. The cost: a command inside the unread part is not read, so a deny on it asks, and a
-  here-doc delimiter there longer than 1,024 characters ends no body. *git -c (#335).* #231 widened the keys `git -c`
-  flags and kept the early return that made the whole line opaque for one, so
+  state of the brace and store budgets (`_shell_seen`). The budgets only fall, so a line met again after one fell is
+  read again and spends it again: every line classifies as before, budget refusals included. A caller gets its own
+  copy of the result and shares the parts it was built from (D-075). The ssh hop, the only caller that changes parts
+  in place, marks a copy. *A depth cap.* A lexer reads 16 levels of `$( )`, `<( )` and `$(( ))` inside one another
+  (`_NEST`). Past them `_nest_end` finds where the nest ends as the lexer would end it, in one pass with a stack of
+  open parts and no here-doc body read again, and the line lists an unread part (`opaque_exec`, signal
+  `unread nest`). An exported value keeps that part, where export drops other values it cannot read. The sources of
+  the levels around hold a short stand-in, so classifying them never reads the deep text again, and a word keeps the
+  text the lexer would give it. On 80,000 random texts (3,000 in the test) `_nest_end` ends where the lexer ends and
+  leaves the same here-docs waiting. On a wider set it still ends there, but a delimiter word holding
+  `$(cat <<X ...)` can leave a here-doc waiting for other text, since the lexer reads that `$( )` as its body. Each
+  level around the unread part pairs every here-doc with its end line, also when the delimiter holds that part,
+  quoted or not (the line is spelt the way the level reads the delimiter) or the body lies inside it (the stand-in
+  ends the body), so a command after the here-doc is still read. A run of stand-in lines, one written by hand too, is
+  read in one step, and a command after it is still read. The cost: a command inside the unread part is not read, so
+  a deny on it asks, and a here-doc delimiter there longer than 1,024 characters ends no body. *git -c (#335).* #231
+  widened the keys `git -c` flags and kept the early return that made the whole line opaque for one, so
   `git -c include.path=/dev/null push --force origin main` asked where the gate before #231 denied it. A flagged
   key's part now stands beside the subcommand's own category (`_exec_options` already added it), and only an unknown
   subcommand, which the config may define, is opaque on its own. `git config` with a flagged key keeps its

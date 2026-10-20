@@ -355,7 +355,7 @@ def test_a_part_marked_remote_stays_private_to_the_ssh_line():
 
 def test_a_line_read_again_spends_the_budget_again():
     """Five copies of one $( ) spend the brace budget five times, as on main, so the line still counts as one that
-    could name a secret store. A result read from the memo sets the budget to what reading it left."""
+    could name a secret store. The memo key holds the budget, which only falls, so each copy is read again."""
     line = "echo" + " $(echo {1..1000})" * 5
     c = gate.classify({"tool": "bash", "args": {"command": line}})
     assert c.category == "credentials", c
