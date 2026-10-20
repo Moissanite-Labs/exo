@@ -735,6 +735,39 @@ async def test_a_lost_job_notice_that_fails_is_reported(tmp_path, monkeypatch):
     await eng.close()
 
 
+@aio
+async def test_a_lost_job_notice_built_during_a_turn_never_splits_a_tool_round(tmp_path, monkeypatch):
+    """recover() leaves a lost job's notice to a task, so a turn can start before it is built. The notice must not
+    land between the turn's tool call and its result. The turn takes it at its next tool round, as it takes a
+    completion notice, and no turn is woken for it, even with wake on."""
+    import threading
+
+    from exo.core import jobs
+    eng = engine(tmp_path, jobs={"wake": True}, first=tool_turn("wait"))
+    sid = (await eng.loop.create_session(agent="tester")).id
+    plain, release = jobs.tail_text, threading.Event()
+
+    def tail(*args):
+        release.wait(10)
+        return plain(*args)
+    monkeypatch.setattr(jobs, "tail_text", tail)
+    eng.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, pid, started, log) VALUES "
+                 "('j_dead01','tester',?,'make all','/tmp','running',999999,?,'/tmp/none.log')", (sid, time.time()))
+    eng.claim_writer()
+    await eng.start()
+    turn = asyncio.ensure_future(eng.loop.send(sid, "go"))
+    await until(lambda: any(m.tool_calls for m in eng.store.messages(sid)))  # the wait tool holds the round open
+    release.set()
+    await asyncio.gather(*eng.jobs._tasks)
+    eng.gate.set()
+    await turn
+    msgs = eng.store.messages(sid)
+    assert [m.role for m in msgs] == ["user", "assistant", "tool", "user", "assistant"], [m.role for m in msgs]
+    assert msgs[3].meta.get("job") and "make all" in msgs[3].text() and msgs[4].text() == "saw job notice"
+    assert len([e for e in eng.hub.since(0) if e.type == "turn.started"]) == 1
+    await eng.close()
+
+
 @pytest.mark.parametrize("lost", [False, True])
 @aio
 async def test_first_commands_at_once_start_the_runtime_once(tmp_path, lost):

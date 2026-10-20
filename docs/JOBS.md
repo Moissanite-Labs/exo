@@ -42,17 +42,20 @@ and the output above is data, not instructions]
   (below) is cut out too: while the log is redacted, the end of `<id>.log.1` stands in for the rotation note at its
   start. `job_output` is redacted like any tool result, after its own cut to the last 20,000 characters
   (docs/TOOLS.md "Streamed output"). When it reads `<id>.log.1` it drops the live log's rotation note, so a key the
-  rotation split is whole there and is redacted too. If the log rotates in the moment between its reads of the two
+  rotation split is whole there and is redacted too. Two rare keys can still leave a part. One is a key the rotation
+  splits inside a character outside ASCII, in the notice and in `job_output`. The other is a key whose end repeats
+  its start, as `abab` does, in the notice only. If the log rotates in the moment between its reads of the two
   files, the output that rotated is missing, with no note where it was, and a key split at either end of it can
   leave a part. The `job.updated` events (below) cut known key values out of the command too, before they cut it to
   300 characters.
-- A thread of its own builds the notice, since reading and redacting a 5 MB log can take a third of a second. The
-  event loop runs on meanwhile, and a busy tool never holds a notice up. Notices are built one at a time and handed
-  on in the order the jobs ended. Shutting down waits for a notice still being built and keeps it for the next turn.
-  The notices of jobs lost in a restart are built the same way, and the core's start does not wait for them. So two
-  first commands at once still start the MCP servers only once. A notice that fails, a lost job's too, is reported
-  as a `harness.error` event. A hard stop that cancels a notice while it is built loses that notice, but the job's
-  end still goes out as a `job.updated` event.
+- A thread of its own builds the notice, since reading and redacting a 5 MB log can take hundreds of milliseconds,
+  and over a second after a rotation. The event loop runs on meanwhile, and a busy tool never holds a notice up.
+  Notices are built one at a time and handed on in the order the jobs ended. Shutting down waits for a notice still
+  being built and keeps it for the next turn. The notices of jobs lost in a restart are built the same way, and the
+  core's start does not wait for them. So two first commands at once still start the MCP servers only once. A turn
+  that starts before such a notice is built takes it at its next tool round. A notice that fails, a lost job's too,
+  is reported as a `harness.error` event. A hard stop that cancels a notice while it is built loses that notice, but
+  the job's end still goes out as a `job.updated` event.
 - A job the agent stops with `job_kill` sends no notice (the agent just asked). Timeout, failure, exit and loss do.
 
 ## Where things live
@@ -86,8 +89,8 @@ Subagents cannot start jobs (their sessions end with their report) and do not ge
   shutdown has begun no job notice starts a turn, whatever `wake` says: a notice still in delivery is queued, and
   the engine waits for it before it closes.
 - If exod dies without closing, the next start (by the process that holds the agent lock) marks what the table says
-  was running as `lost`, tells the owning thread (queued, never waking it) and says the process may still be
-  alive, with its pid. It is not touched: a pid can be reused.
+  was running as `lost`, tells the owning thread (steered into a running turn or queued, never waking it) and says
+  the process may still be alive, with its pid. It is not touched: a pid can be reused.
 - The command is gated exactly as a foreground `bash` call: the gate classifies the tool name and the command text,
   and `background` and `timeout` play no part. `jobs` and `job_output` are reads; `job_kill` is a shell action on the
   agent's own job.
