@@ -32,10 +32,13 @@ needs nothing else. See the skill for the template.
 pinned verbatim blocks. The `exo-context` plugin uses it for `/exo branch`, `/exo handoff` and `/exo resume`.
 The TUI `/handoff` command does not use it.
 
-Its rulings and corrections, the pins included, come only from the principal's own messages (D-040). A user message
-whose `author` or `principal` flag says otherwise is skipped: a peer, a bus seat, a job notice, a context note. A
+Its rulings and corrections, the pins included, come only from the principal's own messages (D-040). Message dicts
+are read through `provenance.author_of`, meta tags included. A user message whose author is not the principal is
+skipped: a peer, a bus seat, a job notice, a context note. A peer, bus or job tag in `meta` refuses at any role. A
 pinned block is carried only from a message that opens with it (exo-context's own block) or with a compaction marker
-(a host's summary). One inside a skipped message, a tool result or the agent's reply is not carried. Neither is one
+(a host's summary). A host summary in an assistant row carries nothing itself. exo-context keeps the continuity
+from its session pins, observed only from the principal's own messages. One
+inside a skipped message, a tool result or the agent's reply is not carried. Neither is one
 quoted further down a message, such as a peer's turn the Exo core's system message quotes word for word because it
 was too small to summarize. There the core also escapes the block's tags, so the model does not read it as a block
 either (#279, `docs/MEMORY-MODEL.md` "Who wrote it"). Every summary has its tags escaped as it is made, and
