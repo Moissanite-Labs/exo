@@ -58,17 +58,36 @@ def bus(seat: str) -> str:
     return f"bus:{seat}"
 
 
+def _ingress_author(meta: Mapping[str, Any]) -> str:
+    """The author an ingress tag in ``meta`` names, or ``""`` when there is none (D-040, #370).
+
+    Presence is what counts: an empty tag (``{}``, ``""``) still marks the message as ingress."""
+    b = meta.get("bus")
+    if b is not None:
+        return bus(str((b.get("from") if isinstance(b, Mapping) else b) or "unknown"))
+    p = meta.get("peer")
+    if p is not None:
+        return peer(str((p.get("from") if isinstance(p, Mapping) else p) or "unknown"))
+    if meta.get("job") is not None:
+        return JOB
+    return ""
+
+
 def author_of(msg: Any) -> str:
     """The author of a core ``Message`` (or a message dict with ``role`` and ``meta``/``author``).
 
     A message the core stored with ``meta["author"]`` keeps it. An older message without one is read the way
-    the core read it before D-040: a peer or job tag, a harness note or an import is not the principal."""
+    the core read it before D-040: a peer or job tag, a harness note or an import is not the principal. A
+    peer, bus or job tag in ``meta`` outranks any stamped author, the way core capture reads it (#370)."""
     if isinstance(msg, Mapping):
-        role, meta = msg.get("role"), msg.get("meta") or {}
-        if msg.get("author"):
-            return str(msg["author"])
+        role, meta, stamped = msg.get("role"), msg.get("meta") or {}, msg.get("author")
     else:
-        role, meta = getattr(msg, "role", None), getattr(msg, "meta", None) or {}
+        role, meta, stamped = getattr(msg, "role", None), getattr(msg, "meta", None) or {}, None
+    tag = _ingress_author(meta)
+    if tag:
+        return tag
+    if stamped:
+        return str(stamped)
     if meta.get("author"):
         return str(meta["author"])
     return infer(role, meta)
@@ -83,13 +102,9 @@ def infer(role: Any, meta: Mapping[str, Any] | None) -> str:
         return TOOL
     if role != "user":
         return SYSTEM
-    if isinstance(meta.get("bus"), Mapping):
-        return bus(str(meta["bus"].get("from") or "unknown"))
-    if meta.get("peer"):
-        p = meta["peer"]
-        return peer(str(p.get("from") if isinstance(p, Mapping) else p or "unknown"))
-    if meta.get("job"):
-        return JOB
+    tag = _ingress_author(meta)
+    if tag:
+        return tag
     if meta.get("note") or meta.get("local") or meta.get("origin") == "import":
         return SYSTEM
     if meta.get("log_kind", "thread") not in ("thread", ""):
