@@ -64,8 +64,7 @@ some private state (`loop._state`, `store._q`, tree `_view`) that step 1 of the 
 **The core budget (D-077).** `test_core_line_budget` in `tests/integration/test_wave1_acceptance.py` counts the lines
 in `src/exo/core`, `src/exo/protocol`, `src/exo/server`, `src/exo/cli_chat.py` and `src/exo/upstream.py` (generated
 protocol files excluded). It is a ratchet with headroom: it fails when the count reaches `CORE_FLOOR` plus
-`CORE_HEADROOM`. Today that is 14,813 plus 1,029, a ceiling of 15,842: 1,000, plus the minimum raise D-077 point 4
-gave the #346 fixes until the reduction it calls for. The test prints the current count and the headroom left (run it
+`CORE_HEADROOM`. Today that is 14,813 plus 1,000, a ceiling of 15,813. The test prints the current count and the headroom left (run it
 with `-s`). A real reduction lowers the floor, and the floor never rises. Section 7 has the rules
 (`docs/ENGINE-SPLIT.md` "Budget policy"). Never exclude counted modules to pass. Put a product feature built on the
 engine outside the counted core, as compose, diagnostics, `subagents.py` and `turn_settle.py` do. The protocol has

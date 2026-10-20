@@ -11,6 +11,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   with a compaction marker now carries nothing, whatever its role. Only a message that opens with the block
   itself carries one. The session pins take open decisions beside rulings and corrections, so everything a
   pinned block held still survives compaction, now by the pins.
+- A no-behaviour-change reduction took 40 lines out of the counted core (#373), undoing the #346 headroom
+  raise. Dead job-notice overrides now inherit, a duplicate id helper now imports from the schema, two git
+  helpers merged, and four exception clauses the next handler could never reach are gone. `CORE_HEADROOM`
+  is back at 1,000 (D-077), and the counted core stands at 15,801 against a ceiling of 15,813.
 - The principal's pinned block no longer drops out when a host summary rides in an assistant row (#371).
   Hosts that alternate roles put the summary there, and the row reads as the agent's, so it carries nothing
   itself. That stays so. A host can also build summary rows exo-context never escaped, and the host's
