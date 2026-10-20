@@ -20,6 +20,14 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `harness.error` event. The engine dropped its trace sink before it stopped anything, so such an error was only logged.
   It now drops it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP
   servers are recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
+- Parsing pinned blocks no longer stalls on a run of unclosed `<exo-pinned>` open tags (#322, item 5). The
+  lazy match rescanned to the end of the text from every open with no close after it, so 96 KB of unclosed
+  opens took about five seconds in `parse_pinned_blocks` and `strip_pinned`. Both now share a linear scan
+  that stops at the first open with no close after it. Block boundaries and contents read as before.
+- A pinned-block tag spelled in unicode tag characters or full-width forms is now escaped like the ASCII
+  tag (#322, item 4). Before, those spellings passed `defuse_pins` untouched, and anything downstream that
+  folds them back to ASCII would have revived the live tag. Only the brackets change. The quoted words
+  stay as written.
 - A summary node stored before the #302 upgrade no longer reaches the system message with a live pinned
   block (#322, item 3). New summaries are escaped as they are made, but the tree view printed a stored
   node's text as it was. Stored summary text is now escaped where the view prints it. The escape is
