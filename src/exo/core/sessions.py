@@ -226,8 +226,9 @@ class SessionStore:
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?)", (sid, title, seat, model, cwd, parent, fork_seq, ts, ts, agent, kind))
         return self.get_session(sid)  # type: ignore[return-value]
 
-    def _info(self, row: sqlite3.Row) -> SessionInfo:
-        (count,) = self._q("SELECT COUNT(*) FROM messages WHERE session=? AND hidden=0", (row["id"],))[0]
+    def _info(self, row: sqlite3.Row, count: int | None = None) -> SessionInfo:
+        if count is None:
+            (count,) = self._q("SELECT COUNT(*) FROM messages WHERE session=? AND hidden=0", (row["id"],))[0]
         return SessionInfo(id=row["id"], title=row["title"], seat=row["seat"], model=row["model"],
                            cwd=row["cwd"], parent=row["parent"], created=row["created"],
                            updated=row["updated"], message_count=count, agent=row["agent"], kind=row["kind"] or "")
@@ -237,10 +238,14 @@ class SessionStore:
         return self._info(rows[0]) if rows else None
 
     def list_sessions(self, limit: int = 50, seat: str | None = None, agent: str | None = None) -> list[SessionInfo]:
+        # One query, with each count as a correlated subquery: SQLite evaluates it only for the rows
+        # the LIMIT keeps, so a small limit never visits other sessions' messages (#351 review).
         cols = {k: v for k, v in (("seat", seat), ("agent", agent)) if v is not None}
-        sql = "SELECT * FROM sessions" + (" WHERE " + " AND ".join(f"{k}=?" for k in cols) if cols else "")
-        rows = self._q(sql + " ORDER BY updated DESC, id LIMIT ?", (*cols.values(), limit))
-        return [self._info(r) for r in rows]
+        sql = ("SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.session=s.id AND m.hidden=0)"
+               " AS message_count FROM sessions s"
+               + (" WHERE " + " AND ".join(f"s.{k}=?" for k in cols) if cols else ""))
+        rows = self._q(sql + " ORDER BY s.updated DESC, s.id LIMIT ?", (*cols.values(), limit))
+        return [self._info(r, r["message_count"]) for r in rows]
 
     def thread(self, sid: str) -> tuple[str | None, str]:
         """(agent, kind) of a session; (None, "") outside any agent."""
