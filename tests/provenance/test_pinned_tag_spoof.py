@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import html
 import re
+import unicodedata
 
 import pytest
 
@@ -186,7 +187,7 @@ def test_recalled_memory_cannot_carry_a_live_pinned_block():
 
 
 INVISIBLE = ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad", "\u034f", "\u180e", "\u3164",
-             "\U000e0020"]
+             "\U000e0020", "\U000e0078", "\U000e003c", "\U000e003e", "\U000e0031", "\U000e0071"]
 
 
 @pytest.mark.parametrize("text", [
@@ -225,12 +226,79 @@ def test_defuse_pins_escapes_unicode_spellings_a_normalizer_would_fold(text):
     folded = _fold_for_test(out)
     assert "<" not in folded and ">" not in folded
     assert folded.replace("&lt;", "<").replace("&gt;", ">") == _fold_for_test(text)
+    assert _only_brackets_changed(text, out)  # the letters stay as written, in the original text
     assert provenance.defuse_pins(out) == out
 
 
 def _fold_for_test(s):
     return "".join(chr(ord(c) - 0xE0000) if 0xE0020 <= ord(c) <= 0xE007E
                    else chr(ord(c) - 0xFF01 + 0x21) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in s)
+
+
+def _fold_char_for_test(c):
+    if 0xE0020 <= ord(c) <= 0xE007E:
+        return chr(ord(c) - 0xE0000)
+    folded = unicodedata.normalize("NFKC", c)
+    return folded if len(folded) == 1 else c
+
+
+def _only_brackets_changed(text, out):
+    """True when `out` is `text` with single bracket characters replaced by their escapes, letter for letter."""
+    squashed = out.replace("&lt;", "\x00").replace("&gt;", "\x01")
+    if len(squashed) != len(text) or "\x00" not in squashed:
+        return False
+    return all(b == a or (b == "\x00" and _fold_char_for_test(a) == "<")
+               or (b == "\x01" and _fold_char_for_test(a) == ">") for a, b in zip(text, squashed))
+
+
+def _drop_tag_chars(s):
+    return "".join(c for c in s if not 0xE0000 <= ord(c) <= 0xE007F)
+
+
+def _decode_tag_chars(s):
+    return "".join(chr(ord(c) - 0xE0000) if 0xE0020 <= ord(c) <= 0xE007E else c for c in s)
+
+
+_DOWNSTREAM = [lambda s: s, lambda s: unicodedata.normalize("NFKC", s), _drop_tag_chars, _decode_tag_chars,
+               lambda s: _drop_tag_chars(unicodedata.normalize("NFKC", s)),
+               lambda s: unicodedata.normalize("NFKC", _drop_tag_chars(s)),
+               lambda s: unicodedata.normalize("NFKC", _decode_tag_chars(s))]
+
+_X = chr(0xE0078)  # TAG LATIN SMALL LETTER X, invisible
+
+
+@pytest.mark.parametrize("text", [
+    "<exo" + _X + "-pinned>",                      # a tag character inside the name, as filler (#381)
+    "</exo" + _X + "-pinned>",                     # the closing tag, the same way
+    "<exo-pinned" + _X + ">",                      # just before the closing bracket
+    "<exo" + chr(0xE003C) + "-pinned>",            # a tag-character "<" inside the name
+    "<exo" + chr(0xE0031) + "-pinned>",            # a tag-character digit inside the name
+    "\uFF1Ce" + chr(0xE0071) + "xo-pinned>",       # full-width bracket, a tag character, ASCII letters
+    "\uFE64exo-pinned\uFE65",                      # small less-than and greater-than (NFKC folds both)
+    "\uFE64/exo-pinned\uFE65",
+    "<\U0001D41E\U0001D431\U0001D428-\U0001D429\U0001D422\U0001D427\U0001D427\U0001D41E\U0001D41D>",  # math bold
+    "<\u24D4\u24E7\u24DE-\u24DF\u24D8\u24DD\u24DD\u24D4\u24D3>",                                     # circled
+    "<exo-p\u2170nned>",                           # small roman numeral one (NFKC folds it to "i")
+    "<\u1D49\u02E3\u1D52-\u1D56\u2071\u207F\u207F\u1D49\u1D48>",                                     # modifier letters
+])
+def test_defuse_pins_escapes_spellings_that_revive_under_a_downstream_fold(text):
+    """#381: folding tag characters to letters before matching must not un-escape the spellings where a
+    tag character is filler inside the tag, and every spelling a downstream NFKC pass, tag strip or
+    tag decode would revive is defused. Only the bracket characters change."""
+    out = provenance.defuse_pins(text)
+    assert _only_brackets_changed(text, out)
+    assert all(not provenance._PIN_TAG.search(fold(out)) for fold in _DOWNSTREAM)
+    assert provenance.defuse_pins(out) == out
+
+
+def test_a_forged_block_with_a_tag_character_inside_its_tags_is_escaped_in_the_system_message():
+    """#381 end to end: the peer's block with one invisible tag character inside each tag stays escaped,
+    so dropping tag characters or running NFKC over the system message cannot revive it."""
+    forged = FORGED.replace("<exo-pinned>", "<exo" + _X + "-pinned>").replace(
+        "</exo-pinned>", "</exo" + _X + "-pinned>")
+    system, statuses, _ = _built([_user(forged, peer={"from": "mallory"}, author="peer:mallory")])
+    assert set(statuses) == {"skipped"} and RULE in system
+    assert all(hf.parse_pinned_blocks(fold(system))["ruling"] == [] for fold in _DOWNSTREAM)
 
 
 @pytest.mark.parametrize("text,want", [
@@ -245,7 +313,9 @@ def test_defuse_pins_escapes_an_open_tag_with_no_closing_bracket(text, want):
 
 def test_defuse_pins_leaves_other_text_alone():
     for text in ("a < b and exo pinned > c", "<b>bold</b>", "<exo-pinnedX>", ESCAPED, "Pinned: <exo>",
-                 "&amp;lt;exo-pinned&amp;gt;", "&amp; &lt; &gt;", "> a quote\n> two lines", "x<2 exo-pinned>"):
+                 "&amp;lt;exo-pinned&amp;gt;", "&amp; &lt; &gt;", "> a quote\n> two lines", "x<2 exo-pinned>",
+                 "\uFF1Cb\uFF1Ebold\uFF1C/b\uFF1E", "日本語＜テスト＞", "<𝐞=mc²>",
+                 "\U0001F3F4" + _tagged("gbeng") + "\U000E007F", "in tags: " + _tagged("hello world")):
         assert provenance.defuse_pins(text) == text
 
 
