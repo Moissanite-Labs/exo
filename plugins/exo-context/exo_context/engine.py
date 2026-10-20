@@ -449,7 +449,7 @@ class ExoContextEngine(ContextEngine):
         window = [] if windowless else self._x_messages
         topic = topic or self._topic_for(sid)
         try:
-            signals = sg.extract(window)
+            signals = sg.extract(self._extraction_view(window))
             pins = self._load_pins(sid)
             signals = dataclasses.replace(
                 signals,
@@ -464,6 +464,24 @@ class ExoContextEngine(ContextEngine):
             self._x_handoffs.pop(sid, None)  # the file on disk may be stale: an undo must not link it
             logger.warning('exo-context: handoff write failed: %s', e)
 
+    def _extraction_view(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The messages signal extraction may carry pinned blocks out of (#385).
+
+        A block carries only out of a summary row the inner wrote: flagged `_compressed_summary`,
+        defused when it was made, with exo-context's own block added after. Any other row holding
+        a block — a stock host summary restored from state as a user row is the case in #385 —
+        is read with its pin tags escaped: the text stays, the block does not carry. Nothing the
+        principal actually pinned is lost: the callers merge this session's pins, observed from
+        the principal's own turns, into what extraction returns.
+        """
+        out = []
+        for m in messages:
+            if isinstance(m, dict) and not m.get(SUMMARY_FLAG) and hf.PIN_OPEN in hf.message_text(m):
+                out.append(self._defused(m))
+            else:
+                out.append(m)
+        return out
+
     # --- compaction --------------------------------------------------------------
 
     def compress(self, messages: list[dict[str, Any]], current_tokens: Optional[int] = None,
@@ -473,7 +491,7 @@ class ExoContextEngine(ContextEngine):
             self._build_inner(model='', context_length=0)
         try:
             pins = self._observe(messages)  # #371: pins observed from principal text carry across summaries
-            signals = sg.extract(messages)
+            signals = sg.extract(self._extraction_view(messages))
             signals = dataclasses.replace(
                 signals,
                 rulings=sg.merge(signals.rulings, [hf.Signal('ruling', t) for t in pins['ruling']]),
