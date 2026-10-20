@@ -48,6 +48,11 @@ PIN_OPEN, PIN_CLOSE = "<exo-pinned>", "</exo-pinned>"
 # "_", "/", invisible characters), then the rest of the line up to an optional ">".
 _GAP = r"[^a-z0-9<>]*"
 _PIN_TAG = re.compile("<(" + _GAP + _GAP.join("exopinned") + r"(?![a-z0-9])[^<>\n]*)(>?)", re.I)
+# A downstream normalizer may fold these back to ASCII later, reviving the tag an escaping step already
+# passed over: unicode tag characters (U+E0020-E007E mirror printable ASCII) and full-width forms
+# (U+FF01-FF5E). Detection folds them to ASCII in a same-length copy and edits the original at the same
+# offsets, so no other character changes (#322 item 4).
+_FOLD = {**{0xE0020 + i: chr(0x20 + i) for i in range(95)}, **{0xFF01 + i: chr(0x21 + i) for i in range(94)}}
 
 
 def peer(name: str) -> str:
@@ -83,7 +88,7 @@ def author_of(msg: Any) -> str:
         role, meta, stamped = msg.get("role"), msg.get("meta") or {}, msg.get("author")
     else:
         role, meta, stamped = getattr(msg, "role", None), getattr(msg, "meta", None) or {}, None
-    tag = _ingress_author(meta)
+    tag = _ingress_author(meta) if isinstance(meta, Mapping) else ""
     if tag:
         return tag
     if stamped:
@@ -121,7 +126,15 @@ def defuse_pins(text: str) -> str:
     always, its ``>`` when it closes the tag on the same line. Nothing else changes and nothing is removed: the words
     stay readable, but they no longer open or close a block of the principal's words (#279). Escaping again changes
     nothing. For text that is not the principal's, printed where the model reads it."""
-    return _PIN_TAG.sub(lambda m: "&lt;" + m[1] + ("&gt;" if m[2] else ""), text)
+    folded = text.translate(_FOLD)
+    if folded == text:
+        return _PIN_TAG.sub(lambda m: "&lt;" + m[1] + ("&gt;" if m[2] else ""), text)
+    out = list(text)
+    for m in _PIN_TAG.finditer(folded):
+        out[m.start()] = "&lt;"
+        if m[2]:
+            out[m.end() - 1] = "&gt;"
+    return "".join(out)
 
 
 def flat(msg: Any) -> dict[str, Any]:

@@ -6,6 +6,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A pinned-block tag spelled in unicode tag characters or full-width forms is now escaped like the ASCII
+  tag (#322, item 4). Before, those spellings passed `defuse_pins` untouched, and anything downstream that
+  folds them back to ASCII would have revived the live tag. Only the brackets change. The quoted words
+  stay as written.
+- A summary node stored before the #302 upgrade no longer reaches the system message with a live pinned
+  block (#322, item 3). New summaries are escaped as they are made, but the tree view printed a stored
+  node's text as it was. Stored summary text is now escaped where the view prints it. The escape is
+  idempotent, so current summaries are unchanged.
+- exo-context defused the wrong message when a protected head message quoted the end-of-summary marker
+  (#322, item 2). The summary picker took the first message containing the marker, so the head message was
+  escaped and pinned into instead of the summary the compressor just made, and a block the summarizer had
+  copied stayed live. The picker now checks the summary flag and the compressor's own test first, and never
+  picks a message the compressor merely returned from its input.
+- A stamped host dict with malformed `meta` keeps its stamp again instead of raising (#375). The ingress
+  veto read `meta` before the stamp, so a non-mapping `meta` crashed `author_of` where it previously
+  returned the stamped author. The veto now skips a `meta` it cannot read.
 - An empty ingress tag (`meta.bus: {}`, `""`) no longer reads as an untagged principal turn (#370
   follow-up). The veto added for #370 tested the tag's truthiness, so an empty bus mapping fell through to
   the legacy inference and a bus-marked message minted a principal ruling. Presence is what counts now,
