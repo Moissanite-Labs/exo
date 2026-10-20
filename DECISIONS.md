@@ -560,6 +560,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   is attached). Limits: 4 concurrent per agent, 2 h wall, 5 MB output. Jobs end with exod; after a crash the next
   start reports them `lost` (the process is not touched: a pid can be reused). The gate classifies the command exactly
   as foreground bash (a test compares classifications and decisions).
+  *Amendment 2026-10-20 (PR #346, a follow-up to PR #321):* a thread of its own builds each completion notice. Since
+  #321 the notice reads and redacts the job's whole log, and on the event loop that took hundreds of milliseconds for
+  a 5 MB log. The thread belongs to the job manager, not to the loop's default pool, so a busy tool thread never holds
+  a notice up. Notices are built one at a time and handed on in the order the jobs ended. Shutting down waits for a
+  notice still being built and, when no turn runs, keeps it for the next turn. A hard stop that cancels a notice while
+  it is built loses that notice, but the job's end still goes out as a `job.updated` event. The notices of jobs lost
+  in a restart are built the same way, in tasks the core's start does not wait for, so two first commands at once
+  still start the runtime once. A turn still running when such a notice is built takes it at its next tool round, as
+  it takes a completion notice. Before, a lost job's notice was queued before any turn could start. A lost job's
+  notice that fails is reported as a `harness.error` event, as a completion notice that fails is. Rejected: the
+  loop's default pool (`asyncio.to_thread`), where busy tool threads held the notice up and `close()` with it.
+  `docs/JOBS.md` "The completion notice".
 - **Item 4, principal capture as a mechanism (docs/MEMORY-MODEL.md).** (a) The summary template has a verbatim
   `Principal Directives` section, and a harness check restores any ruling or correction the model dropped; (b) before
   a leaf with principal messages is summarized, the span is offered to the memory provider's `capture_principal`
