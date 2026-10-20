@@ -3,7 +3,8 @@
 The engine wraps; it does not summarise. It does two jobs.
 
 On the Exo core loop (``select_context`` on every turn):
-1. classifies the principal's messages with ``exo.capture`` and pins each ruling and correction
+1. classifies the principal's messages with ``exo.capture`` and pins each ruling, correction
+   and open decision
    it sees, per session, on disk (a message whose author is not the principal is skipped, D-040);
 2. when a pinned item is no longer verbatim in the prompt (the core's summary tree folded it away),
    adds a ``<exo-pinned>`` block with it, word for word, to the system message;
@@ -263,8 +264,52 @@ class ExoContextEngine(ContextEngine):
     def on_session_start(self, session_id: str, **kwargs) -> None:
         self._x_session_id = session_id or ''
         _set_live(self)
+        old = kwargs.get('old_session_id')
+        if kwargs.get('boundary_reason') == 'compression' and old and str(old) != str(session_id):
+            self._carry_pins(str(old), str(session_id))  # in_place false: the pins follow the child (#391)
         if self.inner is not None and hasattr(self.inner, 'on_session_start'):
             self.inner.on_session_start(session_id, **kwargs)
+
+    def bind_session_state(self, session_db: Any, session_id: str) -> None:
+        """A reset-only switch (/new, /resume, /branch): Hermes hands the session db and the new id and
+        sends no on_session_start, so rebind here or the engine keeps the previous session's pins. A branch
+        child inherits its parent's pins, the way a fork's copies keep their author."""
+        self._bind(session_id)
+        parent = self._parent_of(session_db, str(session_id or ''))
+        if parent and parent != str(session_id):
+            self._carry_pins(parent, str(session_id))
+        if self.inner is not None and hasattr(self.inner, 'bind_session_state'):
+            self.inner.bind_session_state(session_db, session_id)
+
+    @staticmethod
+    def _parent_of(session_db: Any, sid: str) -> str:
+        try:
+            for name in ('get_session', 'get'):
+                fn = getattr(session_db, name, None)
+                if not callable(fn):
+                    continue
+                row = fn(sid)
+                parent = row.get('parent_session_id') if isinstance(row, dict) else getattr(
+                    row, 'parent_session_id', None)
+                if parent:
+                    return str(parent)
+        except Exception:
+            pass  # an unreadable db names no parent; binding still stands
+        return ''
+
+    def _carry_pins(self, old_sid: str, new_sid: str) -> None:
+        """Merge one session's pins into another's, oldest first, dropping repeats."""
+        try:
+            old, new = self._load_pins(old_sid), self._load_pins(new_sid)
+            merged = {}
+            for kind in ('ruling', 'correction', 'open_decision'):
+                have = {hf.Signal(kind, t).key() for t in old[kind]}
+                merged[kind] = list(old[kind]) + [t for t in new[kind] if hf.Signal(kind, t).key() not in have]
+            if merged != new:
+                self._x_pins[new_sid] = merged
+                self._save_pins(merged, new_sid)
+        except Exception as e:  # a failed carry must never block the switch
+            logger.warning('exo-context: pin carry failed: %s', e)
 
     def on_session_reset(self) -> None:
         self._x_messages = []
@@ -310,8 +355,8 @@ class ExoContextEngine(ContextEngine):
         held = [hf.Signal('', hf.message_text(m)).key() for m in provenance.principal_view(messages)
                 if m.get('role') == 'user']
         try:  # a pin is the classified sentence, whitespace folded: classify what is left the same way
-            found = {f'{s.kind}:{s.key()}' for group in (*sg.classified(messages), sg.open_decisions(messages))
-                     for s in group}
+            found = {f'{s.kind}:{s.key()}'
+                     for group in (*sg.classified(messages), sg.pinned_open_decisions(messages)) for s in group}
         except Exception as e:
             logger.warning('exo-context: signal extraction failed: %s', e)
             found = set()
@@ -397,7 +442,7 @@ class ExoContextEngine(ContextEngine):
         pins = self._load_pins()
         try:
             rulings, corrections = sg.classified([m for m in msgs if isinstance(m, dict)])
-            decisions = sg.open_decisions(msgs)
+            decisions = sg.pinned_open_decisions(msgs)
         except Exception as e:  # never block a turn on extraction
             logger.warning('exo-context: signal extraction failed: %s', e)
             return pins
