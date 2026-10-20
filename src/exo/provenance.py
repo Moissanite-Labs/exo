@@ -26,6 +26,7 @@ registry (exo.keyring).
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -48,11 +49,13 @@ PIN_OPEN, PIN_CLOSE = "<exo-pinned>", "</exo-pinned>"
 # "_", "/", invisible characters), then the rest of the line up to an optional ">".
 _GAP = r"[^a-z0-9<>]*"
 _PIN_TAG = re.compile("<(" + _GAP + _GAP.join("exopinned") + r"(?![a-z0-9])[^<>\n]*)(>?)", re.I)
-# A downstream normalizer may fold these back to ASCII later, reviving the tag an escaping step already
-# passed over: unicode tag characters (U+E0020-E007E mirror printable ASCII) and full-width forms
-# (U+FF01-FF5E). Detection folds them to ASCII in a same-length copy and edits the original at the same
-# offsets, so no other character changes (#322 item 4).
-_FOLD = {**{0xE0020 + i: chr(0x20 + i) for i in range(95)}, **{0xFF01 + i: chr(0x21 + i) for i in range(94)}}
+# A downstream step may fold a character back to ASCII later, reviving a tag an escaping step already
+# passed over: an NFKC pass folds full-width forms (U+FF01-FF5E), the small brackets, mathematical and
+# circled letters and more onto ASCII, and unicode tag characters (U+E0020-E007E) may be decoded to the
+# printable ASCII they mirror or dropped outright. Detection therefore runs over same-length views of
+# the text (see defuse_pins) and edits the original at the same offsets, so no other character changes
+# (#322 item 4, #381).
+_TAG_RANGE = range(0xE0020, 0xE007F)
 
 
 def peer(name: str) -> str:
@@ -121,19 +124,57 @@ def is_principal_author(author: Any) -> bool:
     return author == PRINCIPAL
 
 
+def _fold_views(text: str) -> list[str]:
+    """Same-length views of `text` under the folds a downstream step may apply (#381): the text itself,
+    each character whose NFKC form is one ASCII character folded to it (unicode tag characters left as
+    they are, so they still read as filler), and that fold plus tag characters decoded to the ASCII they
+    mirror. Views that change nothing, or repeat an earlier one, are skipped."""
+    compat: dict[int, str] = {}
+    decoded: dict[int, str] = {}
+    for ch in set(text):
+        cp = ord(ch)
+        if cp < 128:
+            continue
+        if cp in _TAG_RANGE:
+            decoded[cp] = chr(cp - 0xE0000)
+            continue
+        folded = unicodedata.normalize("NFKC", ch)
+        if len(folded) == 1 and ord(folded) < 128:
+            compat[cp] = decoded[cp] = folded
+    views = [text]
+    if compat:
+        views.append(text.translate(compat))
+    if decoded and decoded != compat:
+        views.append(text.translate(decoded))
+    return views
+
+
 def defuse_pins(text: str) -> str:
     """``text`` with each pinned-block tag escaped, ``<exo-pinned>`` as ``&lt;exo-pinned&gt;``: the tag's ``<``
     always, its ``>`` when it closes the tag on the same line. Nothing else changes and nothing is removed: the words
     stay readable, but they no longer open or close a block of the principal's words (#279). Escaping again changes
-    nothing. For text that is not the principal's, printed where the model reads it."""
-    folded = text.translate(_FOLD)
-    if folded == text:
+    nothing. For text that is not the principal's, printed where the model reads it.
+
+    Detection runs over the views in `_fold_views` and escapes the union of their matches in the
+    original, at the same offsets. One view alone is not enough: folding a tag character to its letter
+    first would break the match for a tag character sitting inside the tag as filler, the spelling the
+    unfolded view catches (#381)."""
+    if text.isascii():
         return _PIN_TAG.sub(lambda m: "&lt;" + m[1] + ("&gt;" if m[2] else ""), text)
+    starts: set[int] = set()
+    ends: set[int] = set()
+    for view in _fold_views(text):
+        for m in _PIN_TAG.finditer(view):
+            starts.add(m.start())
+            if m[2]:
+                ends.add(m.end() - 1)
+    if not starts:
+        return text
     out = list(text)
-    for m in _PIN_TAG.finditer(folded):
-        out[m.start()] = "&lt;"
-        if m[2]:
-            out[m.end() - 1] = "&gt;"
+    for i in ends - starts:
+        out[i] = "&gt;"
+    for i in starts:
+        out[i] = "&lt;"
     return "".join(out)
 
 

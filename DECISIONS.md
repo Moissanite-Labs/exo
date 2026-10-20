@@ -560,6 +560,22 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   is attached). Limits: 4 concurrent per agent, 2 h wall, 5 MB output. Jobs end with exod; after a crash the next
   start reports them `lost` (the process is not touched: a pid can be reused). The gate classifies the command exactly
   as foreground bash (a test compares classifications and decisions).
+  *Amendment 2026-10-20 (PR #346, a follow-up to PR #321):* a thread of its own builds each completion notice. Since
+  #321 the notice reads and redacts the job's whole log, and on the event loop that took hundreds of milliseconds for
+  a 5 MB log. The thread belongs to the job manager, not to the loop's default pool, so a busy tool thread never holds
+  a notice up. Notices are built one at a time and handed on in the order the jobs ended. Shutting down waits for a
+  notice still being built and, when no turn runs, keeps it for the next turn. A shutdown that runs to its end waits for
+  the last build and then stops the thread, so no worker outlives the engine. A hard stop that cancels that wait loses
+  the notice being built, but the job's end still goes out as a `job.updated` event. `close()` then shuts the thread
+  down without waiting, so it takes no more work. That build runs on to its end, and the process waits for it as it
+  exits. The notices of jobs lost in a restart are built the same way, in tasks the core's start does not wait for, so
+  two first commands at once still start the runtime once. A turn still running when such a notice is built takes it at
+  its next tool round, as it takes a completion notice. Before, a lost job's notice was queued before any turn could
+  start. A lost job's notice that fails is reported as a `harness.error` event, as a completion notice that fails is. So
+  is a notice that fails while exod shuts down: `close()` keeps the engine's trace sink until its steps end and drops it
+  just before the session store closes. Before, it dropped the sink first. Rejected: the loop's default pool
+  (`asyncio.to_thread`), where busy tool threads held the notice up and `close()` with it. `docs/JOBS.md` "The
+  completion notice".
 - **Item 4, principal capture as a mechanism (docs/MEMORY-MODEL.md).** (a) The summary template has a verbatim
   `Principal Directives` section, and a harness check restores any ruling or correction the model dropped; (b) before
   a leaf with principal messages is summarized, the span is offered to the memory provider's `capture_principal`
@@ -1342,10 +1358,26 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   `bash` stream is redacted before its cut, so its pieces hold no such part. A background job's completion notice had no
   redaction at all. It now reads the job's whole log file and cuts out the key values known when the job ends. Only then
   does it cut its command and output to size, so those cuts split no key. A key split where that file rotates at
-  `output_cap` can still leave a part. As before, only key values Exo knows are redacted: `known_secret_values`, or the
-  list a caller passes (claude-cli passes the secret-named variables of its own environment). Rejected: holding all
-  output until the command ends (no live output). `docs/TOOLS.md` "Streamed output", `docs/JOBS.md` "The completion
-  notice".
+  `output_cap` is cut out too (a follow-up to PR #321): while the log is redacted, the end of the older file stands in
+  for the rotation note at its start. `job_output` drops that note when it reads the older file, so such a key is whole
+  in its result and is redacted there too. If the log rotates in the moment between its reads of the two files, the
+  output that rotated is missing, and a key split at either end of it can leave a part there. The `job.updated` events
+  did not redact the command they carry. They now cut known key values out of it before they cut it to 300 characters.
+  As before, only key values Exo knows are redacted: `known_secret_values`, or the list a caller passes (claude-cli
+  passes the secret-named variables of its own environment). Rejected: holding all output until the command ends (no
+  live output). `docs/TOOLS.md` "Streamed output", `docs/JOBS.md` "The completion notice".
+  *Amendment 2026-10-20 (PR #346):* each match blanks out text that a later key would match. So keys that overlap
+  each other, or a key whose end repeats its start, can change the matches further back than one key's length. A
+  chain of three keys left the last 8 characters of the third in a completion notice. The end of the older file put
+  in front of the live log now doubles, up to the whole file, until the text before it can change no match in the
+  live log. Such text can change a value's matches up to its length less one in. A match that starts where matches
+  may change moves that point to its end, for the values after it as well. So the notice never keeps a character
+  that redacting both files as one text would cut out. Only a key split inside a character outside ASCII still
+  leaves a part. The notice reads more of the older file only when a match nears the rotation, at most all of it, so
+  the cost stays linear in `output_cap`. The cut `job_output` makes before redaction can leave a part of a key next
+  to the key it splits, when keys overlap each other. The `bash` stream has no such gap, since it equals redacting
+  the whole output. Rejected: reading the whole older file for every notice after a rotation (5 MB by default).
+  `docs/JOBS.md` "The completion notice".
 - **Rejected:** dropping `EXO_HOME` from tools (the default path is guessable, and tools run `exo`); a token in a
   cookie for the event streams (rides cross-site requests); trusting the TCP bearer token as the principal (TCP
   has no peer process to check); a one-time bootstrap code for the page (more moving parts than the fragment buys
@@ -1425,10 +1457,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   block only from a message that opens with it (exo-context's own block) or with a compaction marker (a host's
   summary). A block quoted further down a message is data: the core's system message quotes small spans word for
   word, peer turns included.
-  *Amendment 2026-10-20 (#322 item 4):* `defuse_pins` also escapes the tag spelled in unicode tag characters
-  (U+E0020-E007E) or full-width forms (U+FF01-FF5E), which a downstream normalizer may fold back to the ASCII
-  tag. Detection folds those characters to ASCII in a same-length copy and escapes the original text at the
-  same offsets. The quoted spans themselves are not normalized.
+  *Amendment 2026-10-20 (#322 item 4, #381):* `defuse_pins` also escapes the tag spelled in characters a
+  downstream step may fold back to ASCII. That is unicode tag characters (U+E0020-E007E), which a reader may
+  decode to the ASCII they mirror or drop, and every character whose NFKC form is one ASCII character. Full-width
+  forms, the small brackets, mathematical and circled letters are in that second group. Detection runs over
+  same-length views of the text and escapes the union of their matches in the original at the same offsets. The
+  views are the text itself, the NFKC fold with tag characters left in place, and that fold with tag characters
+  decoded. One folded view alone is not enough. It turns a tag character inside the name into a letter and breaks
+  the match the unfolded view makes, where that character is filler. The quoted spans themselves are not
+  normalized. Still open, as look-alike territory: characters whose NFKC form runs to more than one character,
+  accent stripping (NFKD, then dropping combining marks), and look-alike letters from other scripts.
 - *Amendment 2026-10-18 (fix sweep, #221):* the anchors are written after the append's COMMIT, from the committed
   head, so a writer killed in between leaves them one event behind, never ahead. That lag of one event is accepted.
   The copy under `keys/heads/` is written even when the anchor beside the ledger fails. Before it writes, an append
@@ -1461,8 +1499,8 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   tags are escaped, not removed, so nothing anyone wrote vanishes. The principal's own words keep them outside a
   summary. exo-context's inner compressor keeps each message's author on its way to the summarizer, and the note
   names a bus seat's turn `bus`, not `user`. Not covered: the verbatim tail, where each turn reaches the model as its
-  own message inside its ingress tag; a summary that restates a block in other words; full-width brackets and
-  look-alike letters from other scripts.
+  own message inside its ingress tag; a summary that restates a block in other words; look-alike letters from
+  other scripts. Full-width brackets moved to covered by the #322 item 4 amendment above.
 - *Amendment 2026-10-20 (#315):* the handoff writer put the compaction summary under `## State` unquoted, and the
   reader kept the last section of each name. A summary holding a `## Decisions made (principal's words, verbatim)`
   line therefore replaced the principal's section in `load_handoff`: the summary's ruling came back as the
@@ -2141,6 +2179,7 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
 - **Validation:** the budget test, `tests/docs`, `tests/test_privacy.py`, `tests/test_versioning.py`, `ruff check`.
 - *2026-10-19 (#314, fixes #242):* CORE_HEADROOM raised by 58 to 1,058 for the serve start lock, a robustness fix; the lead schedules a reduction this week.
 - **Amendment 2026-10-19 (reduction, #332):** a no-behavior-change reduction (dead code, merged duplicates, shorter equivalent forms) took the counted core from 15,870 on main to 15,776 (94 lines; it was 15,800 before #314). `CORE_FLOOR` stays 14,813: the count was already above the floor, and the floor never goes up, so setting it to the new count would have lifted the ceiling by about 960 lines. `CORE_HEADROOM` is back at 1,000 after #314's temporary raise to 1,058, so the rule-4 raise is undone by the reduction it called for. Ceiling 15,813, headroom left 37.
+- *2026-10-20 (#346, follow-up to #321):* CORE_HEADROOM raised by 29 to 1,029 for the job notice fixes (key redaction and event loop robustness). The lead schedules a reduction this week.
 - **Docs:** `docs/ENGINE-SPLIT.md` "Budget policy", `docs/CORE.md`, `docs/DEVELOPER-GUIDE.md` §7, `docs/WHITEPAPER.md`
   §11 and §27, `CHANGELOG.md`.
 
