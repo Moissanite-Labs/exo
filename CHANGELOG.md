@@ -20,6 +20,9 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   `harness.error` event. The engine dropped its trace sink before it stopped anything, so such an error was only logged.
   It now drops it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP
   servers are recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
+- A stamped host dict with malformed `meta` keeps its stamp again instead of raising (#375). The ingress
+  veto read `meta` before the stamp, so a non-mapping `meta` crashed `author_of` where it previously
+  returned the stamped author. The veto now skips a `meta` it cannot read.
 - An empty ingress tag (`meta.bus: {}`, `""`) no longer reads as an untagged principal turn (#370
   follow-up). The veto added for #370 tested the tag's truthiness, so an empty bus mapping fell through to
   the legacy inference and a bus-marked message minted a principal ruling. Presence is what counts now,
