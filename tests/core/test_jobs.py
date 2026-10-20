@@ -180,6 +180,28 @@ async def test_the_notice_cuts_known_key_values_out_before_it_cuts_the_output(tm
     await eng.close()
 
 
+@aio
+async def test_job_events_cut_known_key_values_out_of_the_command_before_its_cut(tmp_path, monkeypatch):
+    """job.updated carries the command cut to 300 characters. Known key values go first, as in the notice: on start,
+    on the end, on shutdown and for a lost job. The key here crosses the 300th character."""
+    key = "sk-fake-QWERTYUIOPASDFGHJKLZX"
+    monkeypatch.setenv("EXO_NOTICE_TEST_API_KEY", key)
+    eng = engine(tmp_path)
+    sid = (await eng.loop.create_session(agent="tester")).id
+    cmd = f"echo {'x' * 275} {key}"
+    eng.jobs.start(cmd, str(tmp_path), sid)
+    await until(lambda: any(e.state == "done" for e in events(eng)))
+    eng.jobs.start(f"sleep 60; {cmd}", str(tmp_path), sid)
+    eng.store._q("INSERT INTO jobs (id, agent, session, command, cwd, state, pid, started, log) VALUES "
+                 "('j_lost01','tester',?,?,'/tmp','running',999999,?,'/tmp/none.log')", (sid, cmd, time.time()))
+    assert await eng.jobs.recover() == ["j_lost01"]
+    await eng.close()
+    evs = events(eng)
+    assert sorted(e.state for e in evs) == ["done", "killed", "lost", "running", "running"]
+    for e in evs:
+        assert "[redacted" in e.command and not any(key[i:i + 6] in e.command for i in range(len(key) - 5)), e.state
+    assert {e.command for e in evs if "sleep" not in e.command} == {f"echo {'x' * 275} [redacted]"}
+
 def test_the_notice_tail_redacts_the_whole_log_so_no_key_part_is_left(tmp_path):
     from exo.core.jobs import JobConfig, tail_text
 
