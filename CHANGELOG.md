@@ -6,6 +6,11 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A peer, bus or job tag in a host dict's `meta` now outranks a stamped `principal` author everywhere, not
+  only on the carried-block path (#370, follow-up to #368; D-040). Before, a tagged dict carrying
+  `author: "principal"` still yielded a fresh ruling and exo-context minted it into its live pinned block,
+  and a scalar `meta.bus` string read as an untagged principal turn. `provenance.author_of` applies the
+  ingress veto itself, so extraction, the summarizer source and the minted pins all read the tag.
 - On the host path, a pinned block inside a peer, bus or job dict was lifted as the principal's rulings when the
   tag rode in `meta` or the dict carried no `author` at all (#322, item 1; D-040). An untagged assistant message
   opening with the block, or a user dict tagged only by `meta`, now classifies by its author as the core path
