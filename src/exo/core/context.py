@@ -544,7 +544,7 @@ class TreeContext:
     def _body(self, node: SummaryNode) -> str:
         """What a node puts in the view: its summary, or its messages verbatim when it was skipped."""
         if node.status == "done":
-            return node.text
+            return provenance.defuse_pins(node.text)  # a node stored before #302 may hold a live block (#322)
         if node.id not in self._verbatim_cache:
             if node.level and node.status == "skipped":  # a merge left as is: its two children, not the raw span
                 self._verbatim_cache[node.id] = "\n\n".join(self._body(c) for c in self._children(node))
@@ -643,7 +643,7 @@ class TreeContext:
         parts = []
         for n in top:
             if n.status == "done":
-                parts.append(f"## {label} {n.start}-{n.end}\n{n.text}")
+                parts.append(f"## {label} {n.start}-{n.end}\n{self._body(n)}")
             elif n.lane == "import" and n.status != "skipped":
                 parts.append(f"## {label} {n.start}-{n.end}\n[imported history, summary in progress]")
             elif n.status == "skipped":  # a level above 0 is two summaries kept as they are
