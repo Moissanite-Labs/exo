@@ -6,6 +6,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- A pinned-block tag with an invisible unicode tag character inside its name is escaped again (#381). The
+  fold added for #322 item 4 turned each tag character into its ASCII letter before matching, so a tag
+  character sitting in the name as filler broke the match and the tag passed through live. Detection now
+  runs over three same-length views of the text and escapes the union. The views are the text itself, the
+  fold of every character whose NFKC form is one ASCII character, and that fold with tag characters decoded.
+  The small brackets, mathematical and circled letters and other single-character NFKC folds are escaped too.
+  Only the bracket characters change.
 - A background job's completion notice no longer stalls the core (follow-up to #321). The notice reads and redacts the
   job's whole log (up to `output_cap`, 5 MB). That ran on the event loop, and one emoji in a log made it take a few
   hundred ms. Four jobs that ended together froze streams, approval cards and other turns for 2 to 3 seconds. A thread
