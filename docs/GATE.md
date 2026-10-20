@@ -1351,5 +1351,7 @@ or observing gate refuses bypass. Each lowered call records its exact argument d
 `decided_by: bypass` and a reference to its signed mode consent. Failure to commit that record blocks the call.
 
 The command handler receives a validated session ID and the existing approval desk through optional arguments.
+Dispatch reuses `call_plugin` to pass accepted keywords, including both to handlers taking `**kwargs`, and
+`maybe_await` to accept sync or async results. Unknown commands are rejected before session validation.
 Legacy plugin handlers retain their one-argument contract. Tests use temporary homes, fake models, fixture keys
 and classification-only shell strings. No test enables the installed runtime or runs a protected command.
