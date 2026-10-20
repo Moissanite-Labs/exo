@@ -692,6 +692,35 @@ async def test_close_shuts_the_notice_thread_down_once_its_last_build_ends(tmp_p
     await eng.jobs.close()  # a second close() finds the pool shut down and says nothing
 
 
+@aio
+async def test_a_hard_stop_while_close_stops_running_jobs_still_shuts_the_notice_thread(tmp_path, monkeypatch):
+    """A hard stop can land while close() still stops running jobs, before it waits for the notices. The notice
+    thread takes no more work after it either."""
+    import threading
+
+    from exo.core import jobs
+    eng = engine(tmp_path)
+    sid = (await eng.loop.create_session(agent="tester")).id
+    entered, release = threading.Event(), threading.Event()
+
+    def kill(proc, grace=None):
+        entered.set()
+        release.wait(10)
+    monkeypatch.setattr(jobs, "kill_process_group", kill)
+    eng.jobs.live["j_run01"] = jobs.Handle("j_run01", None, sid, "sleep 60", time.time())
+    closing = asyncio.ensure_future(eng.close())
+    await until(entered.is_set)
+    closing.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(closing, 5)
+    finally:
+        release.set()
+    assert eng.jobs._pool._shutdown
+    with pytest.raises(RuntimeError):
+        eng.jobs._pool.submit(int)
+
+
 @pytest.mark.parametrize("lost", [False, True])
 @aio
 async def test_close_waits_for_a_notice_still_being_built(tmp_path, monkeypatch, lost):
