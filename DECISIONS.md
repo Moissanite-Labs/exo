@@ -564,15 +564,16 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   #321 the notice reads and redacts the job's whole log, and on the event loop that took hundreds of milliseconds for
   a 5 MB log. The thread belongs to the job manager, not to the loop's default pool, so a busy tool thread never holds
   a notice up. Notices are built one at a time and handed on in the order the jobs ended. Shutting down waits for a
-  notice still being built and, when no turn runs, keeps it for the next turn. A hard stop that cancels a notice while
-  it is built loses that notice, but the job's end still goes out as a `job.updated` event. Shutting down waits for
-  that build to end too, and then stops the thread, so no worker outlives the engine. The notices of jobs lost
-  in a restart are built the same way, in tasks the core's start does not wait for, so two first commands at once
-  still start the runtime once. A turn still running when such a notice is built takes it at its next tool round, as
-  it takes a completion notice. Before, a lost job's notice was queued before any turn could start. A lost job's
-  notice that fails is reported as a `harness.error` event, as a completion notice that fails is. So is a notice
-  that fails while exod shuts down: `close()` keeps the engine's trace sink until its steps end and drops it just
-  before the session store closes. Before, it dropped the sink first. Rejected: the loop's default pool
+  notice still being built and, when no turn runs, keeps it for the next turn. A shutdown that runs to its end waits for
+  the last build and then stops the thread, so no worker outlives the engine. A hard stop that cancels that wait loses
+  the notice being built, but the job's end still goes out as a `job.updated` event. `close()` then shuts the thread
+  down without waiting, so it takes no more work. That build runs on to its end, and the process waits for it as it
+  exits. The notices of jobs lost in a restart are built the same way, in tasks the core's start does not wait for, so
+  two first commands at once still start the runtime once. A turn still running when such a notice is built takes it at
+  its next tool round, as it takes a completion notice. Before, a lost job's notice was queued before any turn could
+  start. A lost job's notice that fails is reported as a `harness.error` event, as a completion notice that fails is. So
+  is a notice that fails while exod shuts down: `close()` keeps the engine's trace sink until its steps end and drops it
+  just before the session store closes. Before, it dropped the sink first. Rejected: the loop's default pool
   (`asyncio.to_thread`), where busy tool threads held the notice up and `close()` with it. `docs/JOBS.md` "The
   completion notice".
 - **Item 4, principal capture as a mechanism (docs/MEMORY-MODEL.md).** (a) The summary template has a verbatim

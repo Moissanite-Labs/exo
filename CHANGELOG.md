@@ -14,11 +14,12 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   no turn runs, keeps it for the next turn. The notices of jobs lost in a restart are built the same way, and the core's
   start does not wait for them, so two first commands at once still start the MCP servers only once. A turn still
   running when such a notice is built takes it at its next tool round. A hard stop that cancels a notice while it is
-  built still sends the job's end event. Shutting down waits for that build to end too, and then stops the notice
-  thread, which no close stopped before. A notice that fails while exod shuts down is recorded as a `harness.error`
-  event. The engine dropped its trace sink before it stopped anything, so such an error was only logged. It now drops
-  it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP servers are
-  recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
+  built still sends the job's end event. A shutdown that runs to its end now waits for the last build and then stops the
+  notice thread, which no close stopped before. After a hard stop the thread takes no more work, and the build being
+  made runs on. The process waits for it as it exits. A notice that fails while exod shuts down is recorded as a
+  `harness.error` event. The engine dropped its trace sink before it stopped anything, so such an error was only logged.
+  It now drops it just before the session store closes, so errors in stopping channels, peers, the scheduler and MCP
+  servers are recorded too (docs/JOBS.md "The completion notice", docs/DEVELOPER-GUIDE.md §1).
 - `Config.load()` read and parsed `config.json` on every call (#255, W1-3). It is called from engine setup, the CLI
   and plugin code, so one process read the same unchanged file many times. The parsed file is now cached on its
   size and `mtime_ns`, each load hands out a deep copy, and `save()` refreshes the cache with what it wrote. An
