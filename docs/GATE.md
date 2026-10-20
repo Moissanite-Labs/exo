@@ -127,7 +127,9 @@ on that same connection, and only on `POST /command`. Any failure is a connectio
 (`PrincipalRefused`, a `ConnectError`) that names the reason, with no byte written: a replaced socket, a
 stale record (a dead core, or a reused pid), a symlink, a shared file, a record from a core that predates
 D-060, a core in another PID namespace (the kernel names pid 0), or a platform with no peer call. The web
-page shows that reason with a restart hint (`exo stop`, then reopen the page) instead of "not reachable".
+page shows that reason with a restart hint (`exo stop`, then reopen the page) instead of "not reachable". The
+terminal says `not sent: <reason>` and keeps the typed text; a command whose connection never opened is never
+reported as "may not have been delivered" (#226).
 There is no fallback to a credential-less or unchecked principal mode.
 
 **The core, before accepting.** The core takes the kernel's peer pid and uid, and that pid's process
@@ -156,14 +158,16 @@ without a message; restart `exo`, `exo web` and `exo chat` after an update. The 
 `exo web` page to its own server, over TCP) is not peer-checked; the page token protects it and, since
 #177, the one-time launch code (D-039, #166).
 
-**Snapshot and liveness contract.** `hello` returns `instance` (this launch) and `heartbeat` (seconds
-between `: ping` comments on `GET /events`; the capability list has `heartbeat`). The event stream
-opens with `: exod instance=<id> heartbeat=<s>`. `approvals.list` returns
+**Snapshot and liveness contract.** `hello` returns `instance` (this launch). Over HTTP (the Unix
+socket and TCP) it also returns `heartbeat`, that server's seconds between `: ping` comments on
+`GET /events`, and the capability list has `heartbeat`. Stdio and in-process callers get no pings, so
+their `hello` has neither (#226). The event stream opens with `: exod instance=<id> heartbeat=<s>`. `approvals.list` returns
 `{approvals, cursor: {instance, seq}}`, copied in one await-free step: replace pending cards with it,
 then apply events above `seq`; a different `instance` means the core restarted and its pending asks
 are gone. The Python client ends a stream that brings no complete frame (an event or a heartbeat) for
-`idle` seconds (45 by default); partial bytes do not count. A frame over 16 Mi characters is skipped: the client
-resumes after that frame's seq, since resuming at it would replay it forever, with or without `reconnect`, so a
+`idle` seconds (45 by default); partial bytes do not count. A frame over 16 Mi characters is skipped. The client
+splits the stream into lines itself (CRLF, LF or CR, as SSE defines them) and holds at most that much of one line,
+so it refuses a longer frame before reading the rest of it (#226). It resumes after that frame's seq, since resuming at it would replay it forever, with or without `reconnect`, so a
 caller that keeps its own `since` (the exo-bus channel) gets the next event. The core writes frames
 as raw UTF-8 (escaping U+0085, U+2028, U+2029 and lone surrogates, which line readers split on or
 cannot encode), so a frame stays near the size of the request that made it; text made of those
