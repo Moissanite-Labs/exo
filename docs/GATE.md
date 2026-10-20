@@ -697,9 +697,14 @@ gate does not read:
   anywhere on a `psql` line; `\!` and, at the start of a line, `system` in `mysql` (psql has no
   `system`, so a `psql` line starting with that word is SQL, #232); and a command set in
   `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_PAGER`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`,
-  `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `SSH_ASKPASS`, `RSYNC_RSH`, `PAGER`, `MANPAGER`, `EDITOR`,
-  `VISUAL`, `LESSOPEN` or `LESSCLOSE` before the program (also through `env`; `export NAME=value`
-  counts when the value is a known hazard).
+  `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `GIT_PROXY_COMMAND`, `SSH_ASKPASS`, `RSYNC_RSH`,
+  `RSYNC_CONNECT_PROG`, `PAGER`, `MANPAGER`, `EDITOR`, `VISUAL`, `BROWSER`, `GH_PAGER`,
+  `GH_EDITOR`, `GH_BROWSER`, `PSQL_PAGER`, `PSQL_EDITOR`, `SUDO_ASKPASS`, `SUDO_EDITOR`,
+  `PROMPT_COMMAND`, `LESSOPEN` or `LESSCLOSE` before the program (also through `env`, `sudo` or
+  `timeout`). An `export NAME=value` or a bare `NAME=value` counts when the value is a known
+  hazard. `PS4` counts the same way, read as the double-quoted text bash expands before every
+  traced command (`set -x`, interactive or not): `export PS4='$(rm -rf /srv/data) '; set -x; ls`
+  is `delete`, `export PS4='+ '` stays `allow`.
 - Options are read as the program's `getopt` reads them: an unambiguous abbreviation of the long
   name, one letter or more (`--to-com=`, `psql --o`), and for `tar --checkpoint-action` any
   abbreviation longer than `--checkpoint`, which is an option of its own (`--checkpoint-a=exec=`,
@@ -732,7 +737,81 @@ gate does not read:
   SecurityKeyProvider`). `sed` scripts with `e` or
   `s///e` and `awk` programs calling `system()` were already opaque. An argument that merely
   looks like an assignment (`grep EDITOR=vim`) and a data load (`sqlite3 '.import f.csv t'`) are
-  not commands.
+  not commands. A variable that loads code or decides where programs, modules and config files
+  are found is `opaque_exec`, named in the summary: `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`,
+  `GCONV_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH`, `DYLD_FRAMEWORK_PATH`,
+  `DYLD_FALLBACK_LIBRARY_PATH`, `DYLD_FALLBACK_FRAMEWORK_PATH`, `OPENSSL_CONF`,
+  `OPENSSL_ENGINES`, `OPENSSL_MODULES`, `PATH`, `HOME` (it picks `~/.gitconfig`, `~/.ssh/config`
+  and `~/.exo`), `XDG_CONFIG_HOME`, `BASH_ENV`, `ENV`, `ZDOTDIR`, `GIT_EXEC_PATH`,
+  `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `PYTHONSTARTUP`, `PYTHONPATH`,
+  `PYTHONHOME`, `PYTHONUSERBASE`, `PERL5OPT`, `PERL5LIB`, `PERLLIB`, `RUBYOPT`, `RUBYLIB`,
+  `NODE_OPTIONS`, `NODE_PATH`, `PSQLRC`, `GIT_ALLOW_PROTOCOL`, the option variables `MANOPT`,
+  `ZIPOPT` and `RIPGREP_CONFIG_PATH` (their command-line forms `man -P`, `zip -TT` and `rg --pre`
+  already count), `LESS` when it holds a `+` command (`LESS=-R` stays `allow`), and a non-empty
+  `CDPATH`, which moves a relative `cd` into the Exo store unseen (`CDPATH= cd src` stays
+  `allow`). A value that changes nothing the gate relies on keeps the line's class: an empty
+  loader variable (`LD_PRELOAD= ls`; the loader skips it), `GIT_CONFIG_GLOBAL` or
+  `GIT_CONFIG_SYSTEM` set to `/dev/null`, a `PATH` made only of the current one (`$PATH`) and
+  folders the gate already trusts a program from by path, a system bin folder, a virtualenv's
+  `bin` or `node_modules/.bin` (`PATH=$PATH:./node_modules/.bin eslint .`,
+  `export PATH="$PWD/.venv/bin:$PATH"`; `PATH+=:/usr/local/bin` is `$PATH:/usr/local/bin`; `$PATH`
+  counts as the current PATH only where bash expands it, so `export PATH='$PATH:/usr/bin'` and
+  `env 'PATH=$PATH' ls`, where it is a folder named `$PATH`, ask; so does a folder written with
+  `..`, such as `/tmp/s/../../usr/bin`, which the system resolves through links), and
+  `PYTHONPATH` before `pytest` or `python -m pytest`, which already run the project's code.
+  These still ask, on purpose: an empty `PATH` element, which is the current folder (`PATH= ls`,
+  `PATH=$PATH: ls`), any other folder in `PATH`, appended or not, since it supplies every program
+  the folders before it lack (`export PATH="$HOME/.local/bin:$PATH"`), `PYTHONPATH` before any
+  other program (`PYTHONPATH=/tmp/p python3 -m json.tool x` loads a `json` module from there) or
+  exported, and `GIT_CONFIG_GLOBAL` set to a file. The
+  line sets one before the program, through a prefix, exported or bare (`export -p` and
+  `readonly -p` assign too, while `declare -p` only prints), as a parameter-expansion assignment
+  (`${PATH:=.}` or `${PATH=.}`, also in double quotes or a here-string), as the name `read` (also
+  `-a`) or `printf -v` fills, as a `for` variable, through a nameref (`declare -n r=PATH`), or as
+  an integer through arithmetic, an array subscript, or a `{PATH}>` redirection (`$((PATH=10))`,
+  `$((PATH++))`, `$((--PATH))`, `$((PATH<<=1))`, `a[PATH=10]=1`, `${a[PATH=10]}`). A subscript
+  counts where bash reads the word as a variable name: an assignment, `${a[...]}`, and the name an
+  exporter, `unset`, `read`, `printf -v`, a nameref or `test -v` takes. `mapfile` and `getopts`
+  already ask. Parameter expansion that
+  only reads or substitutes (`${PATH}`, `${PATH:-/usr/bin}`, `${PATH#/x}`) assigns nothing and
+  stays `allow`. So does text bash does not expand: single-quoted text, a quoted here-doc, and
+  a bracket outside a subscript, which is a glob (`git commit -m 'read ${PATH:=.}'`,
+  `pytest -q 'test_x[HOME=/tmp]'`, `echo [HOME=x]`). An expansion runs to the `}` bash closes
+  it with, past a nested `${b}` but not into quoted or escaped text, and the single-quoted text
+  inside it counts only where bash expands it: in double quotes after `:-`, `:=` and the like,
+  not after a pattern (`echo ${a:-'${PATH:=.}'}` and `echo "${f%'${PATH:=.}'}"` stay `allow`,
+  `echo "${a:-'${PATH:=.}'}"` asks). A partly quoted value loses its quotes as
+  bash removes them, so `${GIT_SSH_COMMAND:=rm' -rf x'}` reads as `rm -rf x`. The scan is
+  linear in the line: each brace, bracket and paren pair is found in one pass (a subscript ends
+  at the `]` that matches its `[`), and a nested `${..}` longer than 64 characters stands in its
+  parent's value as `${_}`, so classify, which runs in the gate hook, cannot be stalled by a
+  long run of unclosed or nested expansions. A name the gate cannot read (`export $X=...`,
+  `read -r "$v"`, `declare -n r=$X`, a nameref with no target, or a glob the shell expands
+  first such as `export PAT?=.` or `read HOM[E]`) is opaque too.
+  Git config set on the line (`git -c`, `git --config-env`, attached or not, `git clone
+  --config` or `-c`, `git config`, `GIT_CONFIG_KEY_<n>` with `GIT_CONFIG_VALUE_<n>`,
+  `GIT_CONFIG_PARAMETERS`) takes one exec-key check, and the value of an exec key is classified
+  as a command too, so a `deny: [delete]` fires on `core.sshCommand='rm -rf ...'`. An exec key
+  is an alias, the pager, the editor, `core.sshCommand`, a hook path, a filter or diff driver, a
+  credential helper, `interactive.diffFilter`, `remote.<name>.uploadpack` or `receivepack`, the
+  `.path` of a difftool, mergetool, man or browser tool, any key whose last part ends in
+  `command` or `cmd` (`gpg.ssh.defaultKeyCommand`, `core.alternateRefsCommand`,
+  `sendemail.sendmailCmd`), or any key with a `!` value. A key that loads another config file or
+  a template (`include.path`, `includeIf.<condition>.path`, `init.templateDir`) is opaque: the
+  included file can set any exec key, and the hooks in a template run. So is a switch that lets
+  git reach a remote through `ext::`, whose URL is a command git runs: `protocol.allow`,
+  `protocol.ext.allow`, a `url.ext::<...>.insteadOf` or `pushInsteadOf` rewrite, a remote `url`
+  or `pushurl` that starts with `ext::`, and the `GIT_ALLOW_PROTOCOL` variable.
+  `git config` is read as git reads it: the subcommand (`set`, `get`, `unset`...) and the values
+  of `-f`, `-t`, `--file`, `--blob`, `--type`, `--default`, `--comment`, `--value` and `--url`
+  are not the key, also when a long option is shortened to a prefix git accepts (`--fil`,
+  `--ty`, `--rename-sec`), so `git config set include.path x` and `git config -f .git/config core.fsmonitor x`
+  ask as `git config include.path x` does, and `git config rename-section x include` asks too:
+  it can turn `x.path` into `include.path`. A key the gate cannot read, a `--config-env` value
+  (it comes from a variable) for an exec key, and `git clone --template` or `git init
+  --template` are opaque. `env` and `sudo` read `NAME=VALUE` from their
+  own argv, so a quoted one after them (`env 'LD_PRELOAD=x' ls`) is an assignment. `IFS` is left
+  out: it does not change how literal words split, and `while IFS= read -r line` is everyday.
 - Environment dumps count as `credentials` wherever a prefix or runner is stripped (#155):
   `printenv`, a bare `env`, `set`, `export -p`, `declare -x` and the like behind `sudo`, `nice`,
   `timeout`, `env`, `ionice`, `stdbuf`, `coproc`, `uv run`, `poetry run`, `pdm run`, `pipenv run`
@@ -860,18 +939,18 @@ Known limits. Each one is true of main today; where a fix is open, its PR is nam
   or `reserved:`. An entry that matches the command text does (a `command:` regex, or a rule
   with a `command` match). Since #136 that regex also sees the literal-word view of the text
   the gate reads, so quoting does not evade it there: the command-valued options read since
-  #164 and #288, the array subscripts read since #189 and the `declare` values read since #194
-  are denied under `command:gh pr comment` (`tar --to-command='g"h" pr comment 3 --body hi'`,
+  #164 and #288, the array subscripts read since #189, the `declare` values read since #194 and
+  the git config values read since #231 are denied under `command:gh pr comment`
+  (`tar --to-command='g"h" pr comment 3 --body hi'`,
   `git ls-remote --exec='g"h" pr comment 3 --body hi' origin`,
   `printf -v 'a[$(g"h" pr comment 3 --body hi)]' %s x`,
-  `declare -a 'b=($(g"h" pr comment 3 --body hi))'`). In the forms below the regex sees only
+  `declare -a 'b=($(g"h" pr comment 3 --body hi))'`,
+  `git clone -c core.sshCommand='g"h" pr comment 3 --body hi' git@host:x/y`; the last is also
+  denied under `deny: [github_post]`). In the forms below the regex sees only
   the raw text, so quoting still evades it: `echo ${X:-$(g'h' pr comment 3 --body hi)}` is
   allowed under `command:gh pr comment`. The known forms:
   - `${...}` bodies are skipped by the lexer, so `echo ${X:-$(gh pr comment 3 --body hi)}` is
     `read` and allowed (#143; open PR #158).
-  - `git clone -c` (or `--config`) with a command-running key is not checked as `git -c` is:
-    `git clone -c core.sshCommand='gh pr comment 3 --body hi' git@host:x/y` is `local_write` and
-    allowed (open PR #231 reads it).
 - **Project code.** A trusted program that runs project code (pytest runs conftest.py, git runs
   hooks, `npm install` runs package scripts) or reads a startup file (`~/.sqliterc`, `~/.psqlrc`,
   `~/.ssh/config` with a `ProxyCommand`) can run code the agent wrote earlier with a local write.
@@ -1107,6 +1186,13 @@ A wrapped line whose inner command outranks `opaque_exec` (a wrapped env dump is
 wrapped push is `vcs_push`) takes that inner category, but the wrapper stays an `opaque_exec` part,
 so a `deny: [opaque_exec]` entry (D-075), a `categories: {opaque_exec: deny}` line or a rule that
 denies `opaque_exec` (#191) denies the line.
+
+The gate reads the common ways a line sets a variable. A shell's rarer expansion forms can still
+set one unseen: an unquoted here-doc body fed to a builtin (`${NAME:=v}` or `$((NAME=n))` in
+it), a brace expansion in a name (`export {PATH,FOO}=x`), indirect expansion (`${!ref:=v}`),
+arithmetic in a substring offset (`${x:PATH=1}`), the old `$[...]` arithmetic, an integer
+variable (`declare -i x; x=PATH=5`), `wait -p NAME` and `{NAME}<<<x`. This is one more reason
+the sandbox is the real fix.
 
 ## The store is credentials (D-038)
 

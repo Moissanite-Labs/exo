@@ -943,11 +943,13 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   the gate reads since D-075, so it denies that line; a `coproc` or `function NAME {` block whose inner command ranks
   at or below `opaque_exec` splits the same way (denied under `deny: [web_read]`, asked under
   `categories: {web_read: deny}`). The known unread forms below are allowed outright on main, not asked, and no entry
-  for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158), text piped or fed by heredoc
-  to `ssh` with no remote command (#240), and `git clone -c` with a command-running key (open PR #231). A `command:`
+  for the hidden action's category reaches them: `${...}` bodies (#143, open PR #158). Two forms left this list on
+  2026-10-19: text piped or fed by heredoc to `ssh` with no remote command (#240), read since #303, and `git clone -c`
+  with a command-running key, read as `git -c` is since #231. A `command:`
   regex reaches them on the raw text only: the literal-word view (#136) is built from text the gate reads, so quoting
   still evades the regex inside these forms, while it no longer does inside an array subscript (read since #189), a
-  value given to `declare` (read since #194, for #188) or a command-valued option (read since #164 and #288). The
+  value given to `declare` (read since #194, for #188), a command-valued option (read since #164 and #288) or a git
+  config value (read since #231). The
   other deny-to-ask paths (`eval $(...)`, stdin-fed `xargs -I{} sh -c '{}'`, the body of `time { ...; }`, and the
   wrapper forms #160 left unread, such as `su -c`, `bwrap` and tmux `if-shell`) are listed in `docs/GATE.md` "Known
   limits".
@@ -1136,6 +1138,55 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   setting, which ssh_config documents as switching the setting off (CLEAR_ON_NONE, any case, the bare word only), and
   a `psql` line starting with `system`, which is mysql's command and SQL in psql.
   Rejected: keeping them as fail-safe asks, since they are ordinary spellings and the gate's docs never claimed them.
+  *Amendment 2026-10-19 (#231):* a variable set on the line was read only when its value is a command (#154), so a
+  variable that loads code or moves where programs and config files are found was dropped unread: `LD_PRELOAD=/t/x.so
+  ls`, `PATH=/tmp/bin ls` and `HOME=/tmp/h git log` were `read` (allow). *Variables.* The loader variables
+  (`LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `GCONV_PATH`, the `DYLD_*` paths, `OPENSSL_CONF`, `OPENSSL_ENGINES`,
+  `OPENSSL_MODULES`), the lookup and startup variables (`PATH`, `HOME`, `XDG_CONFIG_HOME`, `BASH_ENV`, `ENV`,
+  `ZDOTDIR`, `GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, the Python, Perl, Ruby
+  and Node module paths and startup files, `PSQLRC`), the option variables (`TAR_OPTIONS`, `NODE_OPTIONS`, `PERL5OPT`,
+  `RUBYOPT`, `MANOPT`, `ZIPOPT`, `RIPGREP_CONFIG_PATH`, `LESS` with a `+` command) and a non-empty `CDPATH` are
+  `opaque_exec`, named in the summary (`gate._EXEC_ENV_OPAQUE`; the list with reasons is in `docs/GATE.md`). That
+  holds wherever the line sets one: before a program, through `env`, `sudo`, `nice` or `timeout`, exported or bare,
+  as a parameter-expansion assignment (`${PATH:=.}`), through `read`, `printf -v`, a `for` loop or a nameref, or as an
+  integer through arithmetic, a subscript or a `{PATH}>` redirection. A name the gate cannot read asks too. More
+  command-valued variables (`GIT_PROXY_COMMAND`, `GH_PAGER`, `PSQL_PAGER`, `SUDO_ASKPASS`, `PROMPT_COMMAND`...) are
+  read as commands under #154's rule. Only text bash expands counts: the lexer records each `${..}` and `$((..))` it
+  expands, read to the `}` bash closes it with, so single-quoted text, a quoted here-doc and a glob bracket never
+  ask. The scan is linear in the line (brace, bracket and paren pairs are each found in one pass, a nested value
+  longer than 64 characters stands in its parent's value as `${_}`), because classify runs inside the gate hook:
+  the first form re-read the line for every unclosed `${NAME:=` and took 145 s for 64 KB. *One git config check.*
+  `_git_config_kind` reads a key the same way wherever it is set: `git -c`, `git config`, `git clone -c` or
+  `--config`, `git --config-env` (attached or not), `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` and
+  `GIT_CONFIG_PARAMETERS`. The value of an exec key is classified as a command, so a category deny fires on it
+  (`git clone -c core.sshCommand='rm -rf ...'` is `delete`); a key that loads another config file or a template
+  (`include.path`, `includeIf.*.path`, `init.templateDir`) asks, as do `git clone --template` and `git init
+  --template`. `git config` is read as git reads it: its subcommand (`set`, `get`...) and the values of `-f`, `-t`,
+  `--file`, `--blob`, `--type`, `--default`, `--comment`, `--value` and `--url` are not the key, also under any
+  unique prefix git accepts for a long option (`--fil`, `--ty`, `--rename-sec`), a value set for an
+  exec key is classified as the command it is, and `rename-section` asks (it can turn `x.path` into
+  `include.path`). The exec keys also cover any key whose last part ends in `command` or `cmd`,
+  `interactive.diffFilter`, `remote.<name>.uploadpack`/`receivepack` and a difftool, mergetool, man or browser
+  `.path`; and a switch that lets git run an `ext::` URL asks (`protocol.allow`, `protocol.ext.allow`, an `ext::`
+  `insteadOf` rewrite, a remote URL that starts with `ext::`, `GIT_ALLOW_PROTOCOL`). *env and sudo.*
+  Both read `NAME=VALUE` from their own argv, quoted or not, so a quoted one after them is read as the assignment it
+  is: the variable is checked, and the rest is the command it is (`env 'FOO=a b' ls` is `ls`, where it was an
+  unknown program; `env 'X=1' rm -rf /srv/data` is `delete`). After `nice`, `timeout` and the other prefixes a
+  quoted `NAME=VALUE` is still the program, as the shell runs it. Left out: `IFS`, which does not change how
+  literal words split. `PS4` is read as a command-valued variable, as the double-quoted text bash expands before
+  every traced command (`set -x` needs no interactive shell, unlike `PROMPT_COMMAND`; #168 scrubs an inherited one
+  for the same reason). Arithmetic assigns with `++`, `--` and `<<=`/`>>=` too. Known limits (rarer expansion forms
+  that can still set a variable unseen) are listed in `docs/GATE.md`. *Cost, and what stays allowed.* A line that
+  sets one of these variables asks where it was allowed, except for values that change nothing the gate relies on:
+  an empty loader variable, `GIT_CONFIG_GLOBAL`/`SYSTEM` set to `/dev/null`, a `PATH` of `$PATH` and folders the
+  gate already trusts a program from by path (system bin folders, a virtualenv's `bin`, `node_modules/.bin`), and
+  `PYTHONPATH` before `pytest` or `python -m pytest`, which already run the project's code. `$PATH` counts as the
+  current value only where bash expands it: an assignment whose source holds single quotes, `$'..'` or a backslash
+  gets no PATH exemption, since there `$PATH` can be a folder of that name (`export PATH='$PATH:/usr/bin'`).
+  Deliberate asks: an empty `PATH` element (the current folder), a folder written with `..` (resolved through
+  links, not lexically), any other `PATH` folder, appended or not, since it supplies every program the earlier
+  folders lack (`export PATH="$HOME/.local/bin:$PATH"`), and `PYTHONPATH` before any other program or exported. Rejected: exempting any append-only `PATH`, which lets a planted program stand in for one the
+  gate trusts by name but the machine lacks.
   *Amendment 2026-10-19 (issues #209, #202, #225, #199):* four spellings reached a secret store without its name,
   and the gate read them as plain reads. A link is judged by where it leads: a path is resolved from the gate's own
   folder, from the session's working folder (the core passes it to tool hooks as `cwd`; each hook gets only the
