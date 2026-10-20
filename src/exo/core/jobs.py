@@ -325,8 +325,9 @@ class JobManager:
             return await asyncio.get_running_loop().run_in_executor(self._pool, self._notice, *args)
 
     async def _queue(self, *args: Any) -> None:
-        try:
-            await self.target.queue(args[6], await self._built(*args))  # queued in order, as _built hands each on
+        try:  # in order, as _built hands each on. A turn that started meanwhile takes it at its next tool round
+            if not await self.target.steer(args[6], ing := await self._built(*args)):
+                await self.target.queue(args[6], ing)  # never a wake
         except Exception as exc:  # a lost job's notice that fails is reported, as _announce reports one
             trace.report("jobs.notice", exc, args[6])
 
@@ -394,8 +395,8 @@ class JobManager:
         await self.path.close()
 
     async def recover(self) -> list[str]:
-        """After a restart: jobs the database says were running are ``lost``. Each owning thread gets a notice
-        (queued, never waking it). Old finished jobs and their logs are pruned. Never awaits, so start() runs once."""
+        """After a restart: jobs the database says were running are ``lost``. Each owning thread gets a notice that
+        is steered or queued, never a wake. Old finished jobs and logs are pruned. No awaits, so start() runs once."""
         if self.recovered:
             return []
         self.recovered = True
