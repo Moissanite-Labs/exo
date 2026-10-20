@@ -734,7 +734,7 @@ def test_a_spent_join_budget_asks(monkeypatch):
     """Past the budget the line counts as reaching the store (fails closed); under it the line is read as before."""
     line = "cd ~/.exo/run/jobs && cat " + " ".join(f"f{i}.log" for i in range(300))
     assert _bash(line).category == "read"
-    monkeypatch.setattr(gate, "_EXO_JOINS", 100)
+    monkeypatch.setattr(gate, "_EXO_PARTS", 1000)
     c = _bash(line)
     assert c.category == "credentials" and "too many to resolve" in c.summary
 
@@ -744,14 +744,19 @@ _NEAR_CAP = ("cd ~/.exo/" + "/".join(f"d{j}" for j in range(62)) + "; cd " + "/"
 SUB_SHAPES = {
     "nested-substitutions": lambda k: "".join(f"$(echo $(echo $(echo $({_NEAR_CAP})))) " for _ in range(k)),
     "substitutions": lambda k: "".join(f"$({_NEAR_CAP}) " for _ in range(k)),
+    # few joins, each a deep glob: the budget counts path parts, not joins (5.8 s at 77 KB when it counted joins)
+    "deep-glob-names": lambda k: _NEAR_CAP.split("; cat ")[0] + "; ls " + " ".join(
+        "/".join(f"x{j}*" for j in range(60)) + f"/f{i}" for i in range(k)),
 }
 
 
-@pytest.mark.parametrize("shape, units", [("nested-substitutions", 2), ("substitutions", 8)], ids=list(SUB_SHAPES))
+@pytest.mark.parametrize("shape, units", [("nested-substitutions", 2), ("substitutions", 8), ("deep-glob-names", 250)],
+                         ids=list(SUB_SHAPES))
 def test_the_join_budget_is_shared_by_every_substitution(shape, units, monkeypatch):
-    """Each `$( )` is classified again by its own classify_shell, nested ones too. The join budget is kept in the
-    classify call's memo, so they all draw on one budget and a line pays it once, not once per substitution (a fresh
-    budget each made these lines 34x to 41x slower than without the check). Timed through gate.classify, CPU time,
+    """Each `$( )` is classified again by its own classify_shell, nested ones too. The budget is kept in the classify
+    call's memo, so they all draw on one budget and a line pays it once, not once per substitution (a fresh budget
+    each made these lines 34x to 41x slower than without the check). It counts path parts, so a few deep glob names
+    spend it as fast as many short ones. Timed through gate.classify, CPU time,
     against the same call with the check stubbed out, at two sizes: a ratio with a margin, not a limit."""
     lines = [SUB_SHAPES[shape](units), SUB_SHAPES[shape](2 * units)]
     took, base = [], []

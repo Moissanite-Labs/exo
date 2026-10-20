@@ -899,14 +899,14 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   process-folder path (`/dev/fd/N`, `/dev/stdin`, `/proc/<pid>/{fd,cwd,root,map_files}`) is `store_write`, other
   than the writer's own stdout and stderr, and so is a store path opened for reading on a numbered descriptor; the
   lexer keeps a redirection's fd number for that; on stdout and stderr any target the gate cannot pin to a path (a
-  variable, a glob, a relative name) counts. The `$EXO_HOME` resolution charges each join as it is made to one
-  budget per tool call (16,384), shared by every `$( )`, and asks once it is spent or past 64 store folders, so it
-  stays linear in the line. Chosen over resolving those paths, which the gate can only do in its own process, and
-  over making every write to `/dev/fd/1` ask. Left out: trusting the bus registry for seat keys only when
-  `EXO_BUS_LEADER_PUBKEY` is set (#210's defence in depth), which changes who can answer. Not done: a write back
-  through a link to a descriptor path, `/dev` or `/proc/self` made out of the gate's sight, after an open on
-  descriptor 3 or above the gate cannot read; a hardlink to a store file opened on stdout; and a walk over a
-  folder above the run folder.
+  variable, a glob, a relative name) counts. The `$EXO_HOME` resolution charges each join, as it is made, the path
+  parts it builds, to one budget per tool call (65,536 parts) shared by every `$( )`, and asks once it is spent or
+  past 64 store folders, so it stays linear in the line. Chosen over resolving those paths, which the gate can
+  only do in its own process, and over making every write to `/dev/fd/1` ask. Left out: trusting the bus registry
+  for seat keys only when `EXO_BUS_LEADER_PUBKEY` is set (#210's defence in depth), which changes who can answer.
+  Not done: a write back through a link to a descriptor path, `/dev` or `/proc/self` made out of the gate's sight,
+  after an open on descriptor 3 or above the gate cannot read; a hardlink to a store file opened on stdout; and a
+  walk over a folder above the run folder.
 - **Decision, policy reload:** pin the policy at first load. A changed file is loaded and logged (`policy_change`
   row with file hashes) and each call is decided under both; the stricter wins. Loosening takes effect only after
   `/gate accept` or a restart. Chosen because it is simple and sound: a tool cannot loosen policy by any write path,

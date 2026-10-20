@@ -946,13 +946,13 @@ climb; an absolute target is also resolved, so a link into `run/jobs` counts. Fr
 the store, a name that spells the store's folder name is joined too (`cd /srv && tar czf -
 exo-home/run` with `EXO_HOME=/srv/exo-home`). The run folder's credential file names are store file
 names as well (`exod.principal.key`, `exod.token`, the sampled `agent-<seat>.principal.key`), so
-`cat ../exod*` asks on any line that enters a store folder. A `cd ..` counts once, as levels up, so
-`cd ~/.exo/run/jobs/7 && cd .. && ls` lists `run/jobs` and stays `read`. Each join of a folder with a
-target or name, and each level up, is charged as it is made to one budget of 16,384 for the whole tool
-call, which every `$( )` shares (each is classified again, nested ones too), so the work stays linear
-in the line. Past the budget, or on a line that reaches more than 64 such folders, the line asks (fails
-closed, no grant). A line that names no store folder makes no join. A folder spelt with a wildcard is
-left to the store-folder check above.
+`cat ../exod*` asks on any line that enters a store folder. A `cd ..` counts once, as levels up, so `cd
+~/.exo/run/jobs/7 && cd .. && ls` lists `run/jobs` and stays `read`. Each join of a folder with a target
+or name, and each level up, is charged the path parts it builds, as it is made, to one budget of 65,536
+parts for the whole tool call, which every `$( )` shares (each is classified again, nested ones too), so
+the work stays linear in the line however deep the names are. Past the budget, or on a line that reaches
+more than 64 such folders, the line asks (fails closed, no grant). A line that names no store folder
+makes no join. A folder spelt with a wildcard is left to the store-folder check above.
 
 A line that enters no store folder, and names none, is classified as before. The work is linear
 in the line: set lookups per word, at most two small `fnmatch` matches per glob, at most 64
@@ -1184,7 +1184,11 @@ opened on stdout (`exec 1< /tmp/hardlink; printf X > /dev/stdout`), as for any h
 tracked in #324. Known friction (fails closed, no grant): a descriptor path used as an input of a command that
 writes asks too, since the words of a writing command are not told apart (`jq . /dev/stdin > out.json`,
 `cat /dev/stdin > f`, `patch -i /dev/stdin`, `diff /proc/self/fd/3 x > out`); `jq . < /dev/stdin >
-out.json` does not.
+out.json` does not. So does a post whose body file is a descriptor path written out
+(`gh pr comment 5 --body-file /dev/stdin`): it is this store write, which only the principal answers, never
+granted, rather than the unseen-body ask of a post (#208), which a seat may answer; its card says the
+path is one the gate cannot resolve, not that the command writes it. A body file that only links to one
+(`--body-file notes.md`, a link to `/dev/stdin`) keeps the unseen-body ask.
 
 Any write is `store_write`: `write_file`, `edit_file`, `patch`, `apply_patch`, a redirection, a
 non-read program with a store path argument (`rm`, `mv`, `cp`, `tee`, `sed -i`, `chmod`,
