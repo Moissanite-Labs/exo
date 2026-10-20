@@ -243,6 +243,13 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   grows as it renders. Markdown panels share the renderer, so they too keep their line breaks and render quotes.
 
 ### Fixed
+- The core releases its SQLite handles (#281). `CoreRuntime.close()` closes the session store and schedule.sqlite, the
+  spend journal closes the connection that creates it, and the harness-error sink list holds engines weakly, so an
+  engine nobody closed can be collected; the sink list is copy-on-write and no sink runs under a lock, so a
+  garbage-collector finalizer that reports or adds a sink cannot hang the thread. `close()` still closes the scheduler
+  and the store when the peers or jobs step raises, then raises the first error. The root suite no longer climbs to
+  about 930 open files, and runs in a macOS Terminal at its default 256. A closed session store reopens on its next use,
+  and `Scheduler.close()` is final (`stop()` stays restartable).
 - The router's wait hint and `retry_after` count only the role's own routes (#239). They took the earliest reopening
   over every cooldown, so a cooldown on another provider, or on a model outside the chain (the gate's aux side call,
   D-081), could make a main call say "next route reopens in 20s" while main's own key reopened later, and the loop
@@ -252,6 +259,15 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   gap above `RESUME_GAP`) never showed, though the terminal client could answer it. It now also adds each open request
   from `approvals.list` that the page lacks, with no asked-time (the card shows none, not "asked never"), and an
   approval already shown is no longer added or counted again when the stream replays it.
+- Peer authentication follow-ups (#226, D-060). The terminal says `not sent: <reason>` when a command never left
+  (its peer check refused the core, or the core could not be reached), instead of "connection lost; this may not
+  have been delivered", and keeps the text. `hello` names a heartbeat only where the transport sends one: over HTTP
+  it is that server's interval, and stdio and in-process callers get no `heartbeat` key or capability. The Python
+  client holds at most 16 Mi characters of one event-stream line, so it skips an oversized frame without reading
+  all of it (a 40 MiB line was read in full), and it ends lines only at CRLF, LF or CR, as SSE does. The core's
+  parent walk reads one stat line per ancestor instead of the boot id and all of `/proc/stat` each time. A core
+  that cannot read its own start identity names its platform's cause instead of a hidden `/proc`. The unused
+  `principal.peer_pid` is gone, and the macOS peer-credential and process-lookup branches are tested.
 - `apply_patch` no longer replaces a changed `-` line by similarity (#236). A hunk with context, such as
   `-TIMEOUT = 30` over `TIMEOUT = 45` plus `RETRIES = 3`, passed the two-line rule through its context line and
   silently overwrote the 45. Each `-` line must now match its file line up to whitespace, Unicode or a literal `\t`;

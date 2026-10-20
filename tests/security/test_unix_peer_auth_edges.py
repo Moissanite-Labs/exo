@@ -501,3 +501,193 @@ def test_refused_principal_is_a_connect_error_subclass(sock_dir):
         finally:
             srv.close()
     asyncio.run(main())
+
+
+# ---------------------------------------------------------------- #226 follow-ups
+
+
+def test_a_line_over_the_frame_bound_is_not_read_in_full():
+    """httpx's line reader held a whole line before the frame bound saw it, so a 40 MiB line was read in full. The
+    client now stops reading a line once it passes the bound, and skips that frame by its seq as before (#226)."""
+    pulled = [0]
+
+    async def big():
+        yield b": exod instance=i_1 heartbeat=15\n\nid: 2\nevent: notice\ndata: "
+        chunk = b"x" * 65536
+        while pulled[0] < 3 * FRAME:
+            pulled[0] += len(chunk)
+            yield chunk
+        yield b"\n\n"
+
+    async def main():
+        def handler(request: httpx.Request) -> httpx.Response:
+            since = int(request.url.params["since"])
+            body = big() if since == 0 else b": exod instance=i_1 heartbeat=15\n\n"
+            return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=body)
+        c = Client(url="http://exod")
+        c._http = httpx.AsyncClient(base_url="http://exod", transport=httpx.MockTransport(handler))
+        try:
+            got = [ev.seq async for ev in c.events(0)]
+            return got, c.last_seq
+        finally:
+            await c.aclose()
+    assert asyncio.run(asyncio.wait_for(main(), 60)) == ([], 2)
+    assert pulled[0] <= FRAME + 65536
+
+
+def test_event_stream_lines_split_where_sse_splits():
+    """CRLF, LF and CR end a line, a CRLF split across chunks is one end, and the other str.splitlines breaks (which
+    httpx's reader also split on) stay in the line; a line past the bound is refused before its end (#226)."""
+    from exo.peerauth import LineTooLong, bounded_lines
+
+    async def lines(chunks, limit=64):
+        async def gen():
+            for c in chunks:
+                yield c
+        return [ln async for ln in bounded_lines(gen(), limit)]
+    got = asyncio.run(lines(["a\r", "\nb\rc\n", "", "d e\x85f\x0bg\r\n", "\n", "tail"]))
+    assert got == ["a", "b", "c", "d e\x85f\x0bg", "", "tail"]
+    with pytest.raises(LineTooLong):
+        asyncio.run(lines(["x" * 40, "y" * 40, "\n"]))
+    assert asyncio.run(lines(["x" * 40 + "\n" + "y" * 40 + "\n"])) == ["x" * 40, "y" * 40]
+
+
+def test_principal_keeps_no_unused_peer_helpers():
+    """``peer_pid`` (#175's walker changes) and ``read`` (#248) lost their callers; the kernel is asked only through
+    ``peer_cred``, ``accepted`` and ``verify_daemon`` (#226)."""
+    assert not hasattr(pr, "peer_pid") and not hasattr(pr, "read")
+
+
+def _fake_linux_proc(monkeypatch, parents: dict[int, int]) -> dict[str, int]:
+    """A Linux /proc in memory: one stat line per pid (starttime 1000 + pid), the boot id and btime. Returns the
+    number of reads per path."""
+    files = {f"/proc/{pid}/stat": f"{pid} (a b) S {ppid} " + " ".join(["0"] * 17) + f" {1000 + pid} 0 0\n"
+             for pid, ppid in parents.items()}
+    files["/proc/sys/kernel/random/boot_id"] = "b00t\n"
+    files["/proc/stat"] = "cpu 1 2 3\nbtime 1700000000\nprocesses 9\n"
+    reads: dict[str, int] = {}
+    real = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if (key := str(self)) in files:
+            reads[key] = reads.get(key, 0) + 1
+            return files[key]
+        if key.startswith("/proc/"):
+            raise FileNotFoundError(key)
+        return real(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(pr, "_BOOT_ID", "", raising=False)
+    return reads
+
+
+def test_parent_walk_reads_one_stat_line_per_ancestor(monkeypatch):
+    """The walk read the whole start identity per ancestor (the boot id and all of /proc/stat) on the event loop,
+    per connection. Now it reads one stat line per ancestor; the boot id is read once per process, and btime only
+    where a start is wanted (#226)."""
+    reads = _fake_linux_proc(monkeypatch, {4242: 4000, 4000: 3000, 3000: 1})
+    assert pr.lineage(4242) == [4000, 3000, 1]
+    assert reads == {"/proc/4242/stat": 1, "/proc/4000/stat": 1, "/proc/3000/stat": 1}
+    first, again = pr.proc_info(4242), pr.proc_info(4242)
+    assert first == again and first.ppid == 4000 and first.ident == "b00t:5242"
+    assert first.start == 1_700_000_000 + 5242 / os.sysconf("SC_CLK_TCK")
+    assert reads["/proc/sys/kernel/random/boot_id"] == 1 and reads["/proc/stat"] == 2
+
+
+@pytest.mark.parametrize("platform, hint", [("linux", "/proc hidden by hidepid"), ("darwin", "libproc"),
+                                            ("freebsd14", "only on Linux and macOS, and this is freebsd14")])
+def test_core_without_its_start_identity_names_the_platform_cause(sock_dir, monkeypatch, capsys, platform, hint):
+    """Off Linux, the core and the client blamed a hidden /proc; each now names its platform's cause (#226)."""
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(pr, "proc_info", lambda pid: None)
+    pr.issue(sock_dir / "exod.sock")
+    err = capsys.readouterr().err
+    assert "cannot read this process's own start identity" in err and hint in err
+    with pytest.raises(pr.PeerRefused, match="could not read its own process start identity") as e:
+        pr.read_record(sock_dir / "exod.sock")
+    assert hint in str(e.value)
+    if platform != "linux":
+        assert "/proc" not in err and "/proc" not in str(e.value)
+
+
+# ---------------------------------------------------------------- the macOS branches (#226 item 7)
+
+
+class _DarwinSock:
+    """``getsockopt`` as macOS answers it: LOCAL_PEERCRED gives a struct xucred, LOCAL_PEERPID an int."""
+
+    def __init__(self, version: int, uid: int, pid: int, size: int = 76):
+        self.raw = struct.pack("IIh2x16I", version, uid, 1, *range(16))[:size]
+        self.pid = pid
+
+    def getsockopt(self, level, opt, size=None):
+        assert level == 0 and opt in (0x001, 0x002)
+        return self.raw if opt == 0x001 else self.pid
+
+
+@pytest.mark.parametrize("sock, want", [
+    (_DarwinSock(0, 501, 4242), (4242, 501)),
+    (_DarwinSock(0, 3_000_000_000, 4242), (4242, 3_000_000_000)),  # uid_t is unsigned
+    (_DarwinSock(1, 501, 4242), None),  # an xucred version this code does not know
+    (_DarwinSock(0, 501, 0), None),  # no pid named
+    (_DarwinSock(0, 501, 4242, size=6), None),  # a short answer
+])
+def test_darwin_peer_credentials_parse(monkeypatch, sock, want):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert pr.peer_cred(sock) == want
+
+
+class _LibProc:
+    """``proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, buf, 136)`` writing a struct proc_bsdinfo: pbi_pid and pbi_ppid at
+    offset 12, pbi_start_tvsec and pbi_start_tvusec at offset 120."""
+
+    def __init__(self, pid: int, ppid: int, sec: int, usec: int, size: int = 136):
+        self.raw = bytearray(136)
+        struct.pack_into("2I", self.raw, 12, pid, ppid)
+        struct.pack_into("2Q", self.raw, 120, sec, usec)
+        self.size = size
+
+    def proc_pidinfo(self, pid, flavor, arg, buf, size):
+        import ctypes
+
+        assert flavor.value == 3 and size.value == 136
+        ctypes.memmove(buf, bytes(self.raw), 136)
+        return self.size
+
+
+@pytest.mark.parametrize("lib, want", [
+    (_LibProc(4242, 4000, 1_700_000_000, 5), pr.Proc(4000, 1_700_000_000.000005, "1700000000.000005")),
+    (_LibProc(4243, 4000, 1_700_000_000, 5), None),  # the answer is for another pid
+    (_LibProc(4242, 4000, 1_700_000_000, 5, size=0), None),  # gone, or not ours to read
+])
+def test_darwin_process_info_parse(monkeypatch, lib, want):
+    monkeypatch.setattr(pr, "_LIBPROC", lib)
+    assert pr._proc_darwin(4242) == want
+
+
+@pytest.mark.skipif(not sys.platform.startswith(("linux", "darwin")), reason="the kernel's own answers")
+def test_kernel_answers_for_this_process_and_a_child():
+    """No mocks: the real peer call on a socket pair, and the real process lookup and parent walk for this process
+    and a child it starts. On macOS this runs ``LOCAL_PEERCRED``, ``LOCAL_PEERPID`` and libproc (#226 item 7)."""
+    a, b = socket.socketpair(socket.AF_UNIX)
+    try:
+        assert pr.peer_cred(a) == (os.getpid(), os.geteuid())
+        assert pr.accepted(a).ident == pr.proc_info(os.getpid()).ident
+    finally:
+        a.close()
+        b.close()
+    me = pr.proc_info(os.getpid())
+    assert me is not None and me.ppid == os.getppid()
+    before = time.time()
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    after = time.time()
+    try:
+        info = pr.proc_info(child.pid)
+        assert info is not None and info.ppid == os.getpid() and info.ident != me.ident
+        assert pr.proc_info(child.pid).ident == info.ident
+        assert before - 1.5 <= info.start <= after + 0.5  # Linux btime is whole seconds
+        assert pr.lineage(child.pid)[:2] == [os.getpid(), os.getppid()]
+        assert pr.descends_from(child.pid, os.getpid()) and not pr.descends_from(os.getpid(), child.pid)
+    finally:
+        child.kill()
+        child.wait()
