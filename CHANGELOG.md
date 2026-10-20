@@ -6,6 +6,10 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
 ## [Unreleased]
 
 ### Fixed
+- Listing sessions ran one extra database query per session (#255, W1-2). `list_sessions` counted each session's
+  messages with its own `COUNT`, so a list of 500 sessions ran 501 queries. The count now comes from the same
+  query as the list (a `LEFT JOIN` grouped by session), so listing always runs one query. Results, filters and
+  order are unchanged.
 - Two `exo serve` started at once leave exactly one (#242). The socket start (probe, unlink, bind) ran with no lock, so
   two cores could both bind, and the loser could remove the winner's pid file. It now runs under an exclusive
   `flock` on an owner-only `<socket>.lock`, held until the server closes (which removes the socket, then the lock, so a
@@ -32,6 +36,22 @@ follow [docs/VERSIONING.md](docs/VERSIONING.md): SemVer, with a codename per MAJ
   --force origin main` is a `force_push` again (it asks, and `deny: [force_push]` denies it), where #231 made it an
   `opaque_exec` that only asked. `git config include.path FILE` keeps its `local_write` part, and an unknown
   subcommand still names the config that may define it.
+- A forged `## Next steps` heading in a handoff can no longer beat the genuine one (#353, D-040). #349 kept the
+  first section of each name, which is right for the principal's sections but wrong for Next steps, the one section
+  written last: a multiline tool path or an old file's unquoted summary could put a forged copy first, and its
+  steps reached the resume counts and the retrieval query. List fields (files, processes, open decisions, next
+  steps, the topic line) now lose their newlines when written, and `load_handoff` reads Next steps from its last
+  copy in the file. Principal sections still read the first. For files written before #349 this fixes the parsed
+  fields only: `resume_text` still carries the raw file, forged headings included.
+- A compaction summary in a handoff's `## State` can no longer forge a principal section (#315, D-040). The summary
+  was written unquoted, so a `## Decisions made (principal's words, verbatim)` line in model text made a second
+  section of that name, and `load_handoff` kept the later one: the forged ruling in, the principal's real ruling
+  dropped, and the agent's last report read as a ruling. The summary is now quoted like the brief and the last
+  report, and the reader keeps the first section of each name, so the parsed fields of an old file with a
+  duplicate heading read the writer's real section. `resume_text` still carries the raw file text.
+- `scripts/deploy-site.sh` pins the Vercel CLI (64.1.0, was `vercel@latest`) and refuses any deploy, versioned or
+  not, when `site/` has untracked files. An unversioned staging deploy used to copy the whole folder, so an untracked
+  private `site/pitch/` would have shipped. `.DS_Store` is skipped. `EXO_VERCEL_CLI` must be an exact `X.Y.Z`.
 - Gate store protection (#210, #269, #217, D-038). Three writes or reads of the gate's own inputs were allowed and now
   ask. (1) The bus folder is a store path: a write to `$EXO_HOME/bus/registry.json` (the seat keys signed approval
   answers trust), `relay.sqlite` and its `-wal`/`-shm`/`-journal` files, or the folder itself is `store_write` (the

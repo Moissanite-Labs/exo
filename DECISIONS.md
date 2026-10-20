@@ -1451,6 +1451,18 @@ Format: `D-NNN (date) title` then Decision / Why / Rejected / Revisit if.
   names a bus seat's turn `bus`, not `user`. Not covered: the verbatim tail, where each turn reaches the model as its
   own message inside its ingress tag; a summary that restates a block in other words; full-width brackets and
   look-alike letters from other scripts.
+- *Amendment 2026-10-20 (#315):* the handoff writer put the compaction summary under `## State` unquoted, and the
+  reader kept the last section of each name. A summary holding a `## Decisions made (principal's words, verbatim)`
+  line therefore replaced the principal's section in `load_handoff`: the summary's ruling came back as the
+  principal's, the quoted last report after it came back as one too, and the real ruling was dropped. The writer
+  now quotes the summary like the brief and the last report, so no line of model text opens a section, and
+  `_sections` keeps the first section of each name, so a duplicate heading in an older file reads the writer's
+  section in the parsed fields (`resume_text` still carries the raw file). The summary's words stay in the file, quoted.
+- *Amendment 2026-10-20 (#353):* first-wins had the opposite effect on `Next steps`, the one section written
+  after every untrusted one. A multiline tool path or command in a list field, or a pre-#349 file's unquoted
+  summary, could put a forged `## Next steps` first and beat the genuine copy, retrieval query included. List
+  fields and the topic line are now flattened to one line when written, and `load_handoff` reads Next steps from
+  its last copy in the file. Every other section still reads the first.
 
 ## D-041 (2026-10-12) Audit correctness fixes: eight bugs no test caught
 - **Why:** an external audit read `src/exo/core` and found bugs the suite passed over. Each got a failing test first.
